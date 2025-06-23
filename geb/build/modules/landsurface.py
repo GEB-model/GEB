@@ -91,7 +91,7 @@ class LandSurface:
         ],
     ):
         """For configuration of DEMs parameters, see
-        https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html
+        https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html.
         """
         if not DEMs:
             DEMs = []

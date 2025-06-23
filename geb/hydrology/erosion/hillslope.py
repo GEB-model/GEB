@@ -25,7 +25,7 @@ from geb.module import Module
 
 
 def get_kinetic_energy_direct_throughfall(direct_throughfall, precipitation_intensity):
-    """Calculate the kinetic energy of rainfall
+    """Calculate the kinetic energy of rainfall.
 
     Parameters
     ----------
@@ -52,7 +52,7 @@ def get_kinetic_energy_direct_throughfall(direct_throughfall, precipitation_inte
 
 
 def get_kinetic_energy_leaf_drainage(leaf_drainage, plant_height):
-    """Calculate the kinetic energy of leaf drainage
+    """Calculate the kinetic energy of leaf drainage.
 
     Parameters
     ----------
@@ -97,7 +97,7 @@ def get_detachment_from_flow(
 
 
 def get_particle_fall_velocity(particle_diameter, rho_s, rho, eta, g=9.81):
-    """See https://doi.org/10.1002/esp.1530 equation 31
+    """See https://doi.org/10.1002/esp.1530 equation 31.
 
     Parameters
     ----------
@@ -121,7 +121,7 @@ def get_particle_fall_velocity(particle_diameter, rho_s, rho, eta, g=9.81):
 def get_particle_fall_number(
     particle_diameter, velocity, water_depth, rho_s, rho, eta, slope, cell_length
 ):
-    """See https://doi.org/10.1002/esp.1530 equations 28-30
+    """See https://doi.org/10.1002/esp.1530 equations 28-30.
 
     Parameters
     ----------
@@ -154,7 +154,7 @@ def get_particle_fall_number(
 
 def get_deposition(particle_fall_number):
     """Gets the percentage of particles deposited on the soil surface.
-    Parameters
+    Parameters.
     ----------
     particle_fall_number : np.array
 

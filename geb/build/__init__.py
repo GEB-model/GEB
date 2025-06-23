@@ -68,8 +68,7 @@ def convert_timestamp_to_string(timestamp):
 
 @contextmanager
 def suppress_logging_warning(logger):
-    """A context manager to suppress logging warning messages temporarily.
-    """
+    """A context manager to suppress logging warning messages temporarily."""
     current_level = logger.getEffectiveLevel()
     logger.setLevel(logging.ERROR)  # Set level to ERROR to suppress WARNING messages
     try:

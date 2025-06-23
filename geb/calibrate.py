@@ -3,7 +3,7 @@
 """Calibration tool for Hydrological models
 using a distributed evolutionary algorithms in python
 DEAP library
-https://github.com/DEAP/deap/blob/master/README.md
+https://github.com/DEAP/deap/blob/master/README.md.
 
 Félix-Antoine Fortin, François-Michel De Rainville, Marc-André Gardner, Marc Parizeau and Christian Gagné, "DEAP: Evolutionary Algorithms Made Easy", Journal of Machine Learning Research, vol. 13, pp. 2171-2175, jul 2012
 
@@ -47,7 +47,7 @@ def KGE_calculation(s, o):
             s: simulated
             o: observed
     output:
-            KGE: Kling Gupta Efficiency
+            KGE: Kling Gupta Efficiency.
     """
     B = np.mean(s) / np.mean(o)
     y = (np.std(s) / np.mean(s)) / (np.std(o) / np.mean(o))
@@ -1575,8 +1575,7 @@ def run_model(individual, config, gauges, observed_streamflow):
 
 
 def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu):
-    """Initialize the global variables for the process pool.
-    """
+    """Initialize the global variables for the process pool."""
     global ctrl_c_entered
     global default_sigint_handler
     ctrl_c_entered = False

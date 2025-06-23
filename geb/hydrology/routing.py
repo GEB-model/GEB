@@ -318,7 +318,7 @@ class KinematicWave(Router):
         river_length,
         dt,
     ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
-        """Kinematic wave routing
+        """Kinematic wave routing.
 
         Parameters
         ----------

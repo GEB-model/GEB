@@ -884,8 +884,7 @@ def crop_profit_difference_njit_parallel(
     p_droughts,
     past_window,
 ):
-    """Parallelized only over unique crop groups; everything else follows your original logic exactly.
-    """
+    """Parallelized only over unique crop groups; everything else follows your original logic exactly."""
     n_groups = len(unique_crop_groups)
     n_calendars = len(unique_crop_calendars)
     n_rotation = unique_crop_calendars.shape[1]

@@ -28,7 +28,7 @@ from geb.workflows import balance_check
 
 
 class SnowFrost(Module):
-    """RAIN AND SNOW
+    """RAIN AND SNOW.
 
     Domain: snow calculations evaluated for center points of up to 7 sub-pixel
     snow zones 1 -7 which each occupy a part of the pixel surface
@@ -201,7 +201,7 @@ class SnowFrost(Module):
         self.HRU.var.extfrost_index = False
 
     def step(self):
-        """Dynamic part of the snow module
+        """Dynamic part of the snow module.
 
         Distinguish between rain/snow and calculates snow melt and glacier melt
         The equation is a modification of:

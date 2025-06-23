@@ -43,7 +43,7 @@ class LiveStockFarmers(AgentBaseClass):
 
     def update_water_demand(self):
         """Dynamic part of the water demand module - livestock
-        read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
+        read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day].
 
         """
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365

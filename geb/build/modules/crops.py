@@ -89,8 +89,7 @@ class Crops:
         source: Union[str, None] = "MIRCA2000",
         crop_specifier: Union[str, None] = None,
     ):
-        """Sets up the crops data for the model.
-        """
+        """Sets up the crops data for the model."""
         self.logger.info("Preparing crops data")
 
         assert source in ("MIRCA2000",), (

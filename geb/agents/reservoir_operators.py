@@ -350,8 +350,7 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         n_monthly_substeps,
     ):
-        """https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py
-        """
+        """https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py."""
         # Based on Shin et al. (2019)
         # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
         M = 0.1
@@ -422,7 +421,7 @@ class ReservoirOperators(AgentBaseClass):
         qin = inflow                                                (m^3/s)
         Sini = initial storage                                      (m^3)
         mtifl = annual mean total annual inflow                     (m^3/s)
-        alpha = reservoir capacity reduction factor                 (dimensionless)
+        alpha = reservoir capacity reduction factor                 (dimensionless).
         """
         # flood Reservoirs
         # initialization

@@ -108,7 +108,7 @@ class Hydrology:
             ].Q_obs_to_GEB_upstream_area_ratio
 
             def create_validation_df():
-                """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station"""
+                """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station."""
                 # select data closest to meerssen point
                 GEB_discharge_station = GEB_discharge.isel(
                     x=snapped_xy_coords[0], y=snapped_xy_coords[1]
@@ -148,7 +148,7 @@ class Hydrology:
             else:
 
                 def calculate_validation_metrics():
-                    """Calculate the validation metrics for the current station"""
+                    """Calculate the validation metrics for the current station."""
                     # calculate kupta coefficient
                     y_true = validation_df["Q_obs"].values
                     y_pred = validation_df["Q_sim"].values
@@ -167,7 +167,7 @@ class Hydrology:
                 KGE, NSE, R = calculate_validation_metrics()
 
                 def plot_validation_graphs(ID):
-                    """Plot the validation results for the current station"""
+                    """Plot the validation results for the current station."""
                     # scatter plot
                     fig, ax = plt.subplots()
                     ax.scatter(validation_df["Q_obs"], validation_df["Q_sim"])
@@ -282,7 +282,7 @@ class Hydrology:
 
         # plot the evaluation metrics (R, KGE, NSE) on a 1x3 subplot
         def plot_validation_map():
-            """Plot the validation results on a map"""
+            """Plot the validation results on a map."""
             fig, ax = plt.subplots(1, 3, figsize=(20, 10))
 
             # Plot evaluation metrics without default colorbars

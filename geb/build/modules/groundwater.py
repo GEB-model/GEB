@@ -20,7 +20,7 @@ class GroundWater:
         force_one_layer=True,
     ):
         """Sets up the MODFLOW grid for GEB. This code is adopted from the GLOBGM
-        model (https://github.com/UU-Hydro/GLOBGM). Also see ThirdPartyNotices.txt
+        model (https://github.com/UU-Hydro/GLOBGM). Also see ThirdPartyNotices.txt.
 
         Parameters
         ----------

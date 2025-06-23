@@ -27,7 +27,7 @@ from .landcover import OPEN_WATER, SEALED
 
 
 class SealedWater(Module):
-    """Sealed and open water runoff
+    """Sealed and open water runoff.
 
     calculated runoff from impermeable surface (sealed) and into water bodies
 
@@ -64,7 +64,7 @@ class SealedWater(Module):
         pass
 
     def step(self, capillar, open_water_evaporation):
-        """Dynamic part of the sealed_water module
+        """Dynamic part of the sealed_water module.
 
         runoff calculation for open water and sealed areas
 

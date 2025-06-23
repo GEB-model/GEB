@@ -196,7 +196,7 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
     """"The critical soil moisture content is defined as the quantity of stored soil moisture below
     which water uptake is impaired and the crop begins to close its stomata. It is not a fixed
     value. Restriction of water uptake due to water stress starts at a higher water content
-    when the potential transpiration rate is higher" (Van Diepen et al., 1988: WOFOST 6.0, p.86)
+    when the potential transpiration rate is higher" (Van Diepen et al., 1988: WOFOST 6.0, p.86).
 
     A higher p value means that the critical soil moisture content is higher, i.e. the plant can
     extract water from the soil at a lower soil moisture content. Thus when p is 1 the critical
@@ -211,7 +211,7 @@ def get_fraction_easily_available_soil_water(
     crop_group_number, potential_evapotranspiration
 ):
     """Calculate the fraction of easily available soil water, based on crop group number and potential evapotranspiration
-    following Van Diepen et al., 1988: WOFOST 6.0, p.87
+    following Van Diepen et al., 1988: WOFOST 6.0, p.87.
 
     Parameters
     ----------
@@ -1443,7 +1443,7 @@ class Soil(Module):
         natural_available_water_infiltration,
         actual_irrigation_consumption,
     ):
-        """Dynamic part of the soil module
+        """Dynamic part of the soil module.
 
         For each of the land cover classes the vertical water transport is simulated
         Distribution of water holding capiacity in 3 soil layers based on saturation excess overland flow, preferential flow

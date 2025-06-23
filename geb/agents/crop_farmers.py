@@ -85,8 +85,7 @@ def shift_and_update(array, update):
 
 
 def shift_and_reset_matrix(matrix: np.ndarray) -> None:
-    """Shifts columns to the right in the matrix and sets the first column to zero.
-    """
+    """Shifts columns to the right in the matrix and sets the first column to zero."""
     matrix[:, 1:] = matrix[:, 0:-1]  # Shift columns to the right
     matrix[:, 0] = 0  # Reset the first column to 0
 
@@ -855,8 +854,7 @@ class CropFarmers(AgentBaseClass):
         ) = self.update_field_indices_numba(self.HRU.var.land_owners)
 
     def set_social_network(self) -> None:
-        """Determines for each farmer a group of neighbors which constitutes their social network
-        """
+        """Determines for each farmer a group of neighbors which constitutes their social network."""
         nbits = 19
         radius = self.model.config["agent_settings"]["farmers"]["social_network"][
             "radius"
@@ -1244,7 +1242,7 @@ class CropFarmers(AgentBaseClass):
     def get_yield_ratio_numba_GAEZ(
         crop_map: np.ndarray, evap_ratios: np.ndarray, KyT
     ) -> float:
-        """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031
+        """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031.
 
         Args:
             crop_map: array of currently harvested crops.
@@ -1277,7 +1275,7 @@ class CropFarmers(AgentBaseClass):
         P0: np.ndarray,
         P1: np.ndarray,
     ) -> float:
-        """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031
+        """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031.
 
         Args:
             crop_map: array of currently harvested crops.

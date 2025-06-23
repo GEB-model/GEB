@@ -508,15 +508,14 @@ class ModFlowSimulation:
             return False
 
     def bmi_return(self, success):
-        """Parse libmf6.so and libmf6.dll stdout file
-        """
+        """Parse libmf6.so and libmf6.dll stdout file."""
         fpth = os.path.join("mfsim.stdout")
         with open(fpth) as f:
             lines = f.readlines()
         return success, lines
 
     def load_bmi(self, heads):
-        """Load the Basic Model Interface"""
+        """Load the Basic Model Interface."""
         success = False
 
         # Current model version 6.5.0 from https://github.com/MODFLOW-USGS/modflow6/releases/tag/6.5.0
@@ -716,11 +715,11 @@ class ModFlowSimulation:
         self.mf6.prepare_time_step(dt)
 
     def set_recharge_m(self, recharge):
-        """Set recharge, value in m/day"""
+        """Set recharge, value in m/day."""
         self.recharge_m = recharge
 
     def set_groundwater_abstraction_m3(self, groundwater_abstraction):
-        """Set well rate, value in m3/day"""
+        """Set well rate, value in m3/day."""
         assert not np.isnan(groundwater_abstraction).any()
 
         assert (self.available_groundwater_m3 >= groundwater_abstraction).all(), (

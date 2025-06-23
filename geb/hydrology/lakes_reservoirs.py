@@ -50,7 +50,7 @@ if SHAPE == "rectangular":
         return lake_factor * height_above_outflow**1.5
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """Inverse function of estimate_lake_outflow"""
+        """Inverse function of estimate_lake_outflow."""
         return (outflow / lake_factor) ** (2 / 3)
 
 elif SHAPE == "parabola":
@@ -60,7 +60,7 @@ elif SHAPE == "parabola":
         return lake_factor * height_above_outflow**2
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """Inverse function of estimate_lake_outflow"""
+        """Inverse function of estimate_lake_outflow."""
         return np.sqrt(outflow / lake_factor)
 
 else:
@@ -127,7 +127,7 @@ def get_lake_outflow(
     lake_area,
     outflow_height,
 ):
-    """Calculate outflow and storage for a lake using the Modified Puls method
+    """Calculate outflow and storage for a lake using the Modified Puls method.
 
     Parameters
     ----------
@@ -396,7 +396,7 @@ class LakesReservoirs(Module):
         """Lake routine to calculate lake outflow
         :param inflowC: inflow to lakes and reservoirs [m3]
         :param NoRoutingExecuted: actual number of routing substep
-        :return: QLakeOutM3DtC - lake outflow in [m3] per subtime step
+        :return: QLakeOutM3DtC - lake outflow in [m3] per subtime step.
         """
         is_lake = self.is_lake
         # check if there are any lakes in the model
@@ -417,7 +417,7 @@ class LakesReservoirs(Module):
         return lake_outflow_m3
 
     def routing_reservoirs(self, n_routing_substeps, current_substep):
-        """Routine to update reservoir volumes and calculate reservoir outflow
+        """Routine to update reservoir volumes and calculate reservoir outflow.
 
         Parameters
         ----------
@@ -530,8 +530,7 @@ class LakesReservoirs(Module):
         return array
 
     def step(self):
-        """Dynamic part set lakes and reservoirs for each year
-        """
+        """Dynamic part set lakes and reservoirs for each year."""
         # if first timestep, or beginning of new year
         if self.model.current_timestep == 1 or (
             self.model.current_time.month == 1 and self.model.current_time.day == 1
