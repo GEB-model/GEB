@@ -1,4 +1,4 @@
-def setup_donor_countries(self, countries_with_data):
+def setup_donor_countries(self, countries_with_data, alternative_countries=None):
     """
     Sets up the donor countries for GEB.
     Output: a dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
@@ -30,8 +30,12 @@ def setup_donor_countries(self, countries_with_data):
 
     potential_donors["HDI"] = dev_index.loc[potential_donors.index, "HDI"].values
 
-    # find countries in model domain
-    region_countries = self.geoms["regions"]["ISO3"].unique().tolist()
+    # find countries in model domain(or alternative countries, e.g. all ISO3 codes within the GLOBIOM regions inside the model domain)
+    if alternative_countries is not None:
+        # if GLOBIOM regions are provided, use the globiom regions
+        region_countries = alternative_countries.copy()
+    else:
+        region_countries = self.geoms["regions"]["ISO3"].unique().tolist()
 
     # find countries in model domain that do not have data
     countries_without_data = list(set(region_countries) - set(countries_with_data))

@@ -487,7 +487,8 @@ class Crops:
         3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
         4. Drops the 'ISO3' column before returning the updated DataFrame.
 
-        Note: some countries are not in the GLOBIOM dataset (e.g Liechtenstein (LIE)). For these countries, we cannot assess which donor we should take, and the country_data will be empty for these countries. Therefore, we first estimate the most similar country based on the setup_donor_countries function.
+        Note: some countries without data are also not in the GLOBIOM dataset (e.g Liechtenstein (LIE)). For these countries, we cannot assess which donor we should take, and the country_data will be empty for these countries. Therefore, we first estimate the most similar country based on the setup_donor_countries function.
+        The ISO3 of these countries will be replaced by the ISO3 of the donor. However, the region_id will remain the same, so that only the data is used from the donor, but still the original region is used.
         """
 
         # create a copy of the data to avoid using data that was adjusted in this function
@@ -508,7 +509,14 @@ class Crops:
                 self.logger.info(
                     f"Missing donor data for {region['ISO3']}, using donor country {ISO3}"
                 )
+                assert ISO3 is not None, (
+                    f"Could not find a donor country for {region['ISO3']}. Please check the donor countries setup."
+                )
                 country_data = donor_data[donor_data["ISO3"] == ISO3]
+                assert not country_data.empty, (
+                    f"Donor country {ISO3} has no data for {region['ISO3']}. Please check the donor countries setup."
+                )
+                # note: it can be that a country is donor for another in the first donor step (outside this function) (e.g. Isreal for cyprus), and that here cyprus is again selected as a donor country for another country (e.g. Liechtenstein)
 
             GLOBIOM_region = GLOBIOM_regions.loc[
                 GLOBIOM_regions["ISO3"] == ISO3, "Region37"
