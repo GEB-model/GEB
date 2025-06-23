@@ -181,7 +181,7 @@ def test_drainage():
     drainage = np.nansum(sim.drainage_m3)
     assert drainage.sum() > 0
 
-    assert np.nansum(sim.drainage_m * sim.area) == np.nansum(drainage)
+    assert math.isclose(np.nansum(sim.drainage_m * sim.area), np.nansum(drainage))
 
     groundwater_content = np.nansum(sim.groundwater_content_m3)
 
