@@ -42,7 +42,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
         tbb_compressed_file: str = f"{tbb_platform}.zip"
     elif platform.system() == "Darwin":
         tbb_platform: str = "mac"
-        tbb_file: Path = Path("lib") / "libtbb.12.dylib"
+        tbb_file: Path = Path("libtbb.12.dylib")
         tbb_compressed_file: str = f"{tbb_platform}.tgz"
     else:
         raise RuntimeError(f"Unsupported platform: {platform.system()}")
