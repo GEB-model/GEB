@@ -42,6 +42,13 @@ def weighted_sum_per_reservoir(
 
 
 class WaterDemand(Module):
+    """Water demand module for the hydrological model.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology

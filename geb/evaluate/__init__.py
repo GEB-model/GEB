@@ -4,6 +4,12 @@ from .hydrology import Hydrology
 
 
 class Evaluate(Hydrology):
+    """The main class that implements all evaluation procedures for the GEB model.
+
+    Args:
+        model: The GEB model instance.
+    """
+
     def __init__(self, model):
         self.model = model
 

@@ -51,51 +51,21 @@ MAX_ITERS: int = 10
 
 
 class Router:
-    def __init__(
-        self,
-        dt: float | int,
-        river_network: pyflwdir.FlwdirRaster,
-        Q_initial: np.ndarray,
-        waterbody_id: np.ndarray,
-        is_waterbody_outflow: np.ndarray,
-    ) -> None:
-        """Prepare the routing for the model.
+    """Generic routing class.
 
-        Parameters
-        ----------
-        dt: float
-            The time step in seconds, must be greater than 0.
-        river_network: pyflwdir.pyflwdir.FlwdirRaster
-            The river network as a FlwdirRaster object, which contains the flow
+    This class is the base class for all routing algorithms. It provides the
+    basic functionality for routing, such as the upstream matrix and the
+    indices of the cells in the river network.
+
+    Args:
+        dt: The time step in seconds, must be greater than 0.
+        river_network: The river network as a FlwdirRaster object, which contains the flow
             direction and other information about the river network.
-        Q_initial: np.ndarray
-            The initial discharge array, which is a 1D array which is only valid for the masked.
-        is_waterbody_outflow: np.ndarray
-            A 1D array with the same shape as the grid, which is True for the outflow cells.
-        waterbody_id: np.ndarray
-            A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
+        Q_initial: The initial discharge array, which is a 1D array which is only valid for the masked.
+        is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
+        waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
 
-        Sets the following attributes:
-        -------------------------------
-        upstream_matrix_from_up_to_downstream: np.ndarray
-            A 2-D array with the upstream matrix from the river network. The first
-            dimension is the number of cells in the river network, and the second
-            is the index of the upstream cell in the river network. The value is -1
-            if there is no upstream cell. For example, if a cell has two
-            upstream cells, the value may be [0, 1, -1, -1].
-            Uses masked indices (see below).
-        idxs_up_to_downstream: np.ndarray
-            Indices of the cells in the river network, sorted from upstream to
-            downstream. Of course many orderings are possible, but this is one of
-            them with the up- to downstream property.
-            Uses masked indices (see below).
-        pits: np.ndarray
-            The indices of the pits in the river network. These are the cells
-            where the flow ends. The value is -1 if there is no pit.
-            Uses masked indices (see below).
-
-        Notes:
-        -----
+    Notes:
         The ldd is a 2D array with the same shape as the grid, where each cell
         contains the flow direction of the cell. The following keys are used:
 
@@ -117,7 +87,34 @@ class Router:
         All outputs are masked with the mask, so that only the cells that are
         selected in the mask are included. All indices also refer to the index
         in the mask rather than the original ldd.
-        """
+
+        Sets the following attributes:
+            upstream_matrix_from_up_to_downstream: np.ndarray
+                A 2-D array with the upstream matrix from the river network. The first
+                dimension is the number of cells in the river network, and the second
+                is the index of the upstream cell in the river network. The value is -1
+                if there is no upstream cell. For example, if a cell has two
+                upstream cells, the value may be [0, 1, -1, -1].
+                Uses masked indices (see below).
+            idxs_up_to_downstream: np.ndarray
+                Indices of the cells in the river network, sorted from upstream to
+                downstream. Of course many orderings are possible, but this is one of
+                them with the up- to downstream property.
+                Uses masked indices (see below).
+            pits: np.ndarray
+                The indices of the pits in the river network. These are the cells
+                where the flow ends. The value is -1 if there is no pit.
+                Uses masked indices (see below).
+    """
+
+    def __init__(
+        self,
+        dt: float | int,
+        river_network: pyflwdir.FlwdirRaster,
+        Q_initial: np.ndarray,
+        waterbody_id: np.ndarray,
+        is_waterbody_outflow: np.ndarray,
+    ) -> None:
         assert dt > 0, "dt must be greater than 0"
         self.dt = dt
 
@@ -228,17 +225,34 @@ def update_node_kinematic(
 
 
 class KinematicWave(Router):
+    """Kinematic wave routing algorithm.
+
+    This class implements the kinematic wave routing algorithm for river networks.
+
+    Args:
+        dt: length of the time step in seconds.
+        river_network: The river network as a FlwdirRaster object, which contains the flow
+            direction and other information about the river network.
+        Q_initial: Initial discharge array, which is a 1D array that is only valid for the masked.
+        river_width: The width of the river in each cell.
+        river_length: The length of the river in each cell,.
+        river_alpha: The alpha parameter for the kinematic wave equation.
+        river_beta: The beta parameter for the kinematic wave equation.
+        waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
+        is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
+    """
+
     def __init__(
         self,
-        dt,
-        river_network,
-        Q_initial,
-        river_width,
-        river_length,
-        river_alpha,
-        river_beta,
-        waterbody_id,
-        is_waterbody_outflow,
+        dt: float | int,
+        river_network: pyflwdir.FlwdirRaster,
+        Q_initial: npt.NDArray[np.float32],
+        river_width: npt.NDArray[np.float32],
+        river_length: npt.NDArray[np.float32],
+        river_alpha: npt.NDArray[np.float32],
+        river_beta: float,
+        waterbody_id: npt.NDArray[np.int32],
+        is_waterbody_outflow: npt.NDArray[np.bool_],
     ):
         super().__init__(
             dt, river_network, Q_initial, waterbody_id, is_waterbody_outflow
@@ -417,7 +431,27 @@ class KinematicWave(Router):
 
 
 class Accuflux(Router):
-    def __init__(self, dt, river_network, *args, **kwargs):
+    """Accuflux routing algorithm.
+
+    In each step, the algorithm calculates the new discharge for each cell
+    based on the inflow from upstream cells, sideflow, and waterbody outflow.
+
+    The algorithm works as follows:
+
+    1. For each cell, it calculates the inflow from upstream cells.
+    2. It adds the sideflow and waterbody outflow to the inflow.
+    3. It calculates the new discharge for each cell based on the inflow.
+    4. It updates the waterbody storage based on the outflow.
+
+    Args:
+        dt: length of the time step in seconds.
+        river_network: The river network as a FlwdirRaster object, which contains the flow
+            direction and other information about the river network.
+    """
+
+    def __init__(
+        self, dt: float | int, river_network: pyflwdir.FlwdirRaster, *args, **kwargs
+    ):
         super().__init__(dt, river_network, *args, **kwargs)
 
     def get_available_storage(
@@ -520,6 +554,13 @@ class Accuflux(Router):
 
 
 class Routing(Module):
+    """Routing module of the hydrological model.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
 

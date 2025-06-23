@@ -42,6 +42,17 @@ from .water_demand import WaterDemand
 
 
 class Hydrology(Data, Module):
+    """The hydrological module of the GEB model.
+
+    This module handles all hydrological processes, including potential evapotranspiration,
+    snow and frost dynamics, land cover interactions, soil processes, evaporation, groundwater
+    management, interception, sealed water bodies, runoff concentration, routing of water,
+    lakes and reservoirs management, water demand, and hillslope erosion.
+
+    Args:
+        model: The GEB model instance.
+    """
+
     def __init__(self, model):
         """Create the hydrology module."""
         Data.__init__(self, model)

@@ -29,6 +29,15 @@ from .model import ModFlowSimulation
 
 
 class GroundWater(Module):
+    """Implements groundwater hydrology submodel, responsible for flow, abstraction, outflow, and percolation.
+
+    This model communicates with the ModFlow simulation to manage groundwater flow and storage.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology

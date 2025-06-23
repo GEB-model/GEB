@@ -1,4 +1,9 @@
 class HazardDriver:
+    """Class that manages the simulation of short-lived hazards such as floods.
+
+    Currently it only supports floods but can be extended to include other hazards such as landslides in the future.
+    """
+
     def __init__(self):
         if self.config["hazards"]["floods"]["simulate"]:
             # exract the longest flood event in days

@@ -22,6 +22,13 @@ from .update_model_forcing import update_sfincs_model_forcing
 
 
 class SFINCS:
+    """The class that implements all methods to setup, run, and post-process the SFINCS hydrodynamic model.
+
+    Args:
+        model: The GEB model instance.
+        n_timesteps: The number of timesteps to keep in memory for discharge calculations (default is 10).
+    """
+
     def __init__(self, model, n_timesteps=10):
         self.model = model
         self.config = (

@@ -17,6 +17,8 @@ from geb.workflows.io import to_zarr
 
 
 class Hydrology:
+    """Implements several functions to evaluate the hydrological module of GEB."""
+
     def __init__(self):
         pass
 

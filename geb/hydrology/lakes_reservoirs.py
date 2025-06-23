@@ -172,6 +172,15 @@ def get_lake_outflow(
 
 
 class LakesReservoirs(Module):
+    """Implements all lakes and reservoir operations in the hydrological model.
+
+    For reservoir it gets the outflow from the reservoir operator agents.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology

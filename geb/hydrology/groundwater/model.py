@@ -26,6 +26,7 @@ import platform
 from contextlib import contextmanager
 from pathlib import Path
 from time import time
+from typing import Callable
 
 import flopy
 import numpy as np
@@ -148,21 +149,40 @@ def distribute_well_rate_per_layer(
 
 
 class ModFlowSimulation:
+    """Implements an instance of the MODFLOW model as well as methods to interact with it.
+
+    Args:
+        model: The GEB model instance.
+        topography: The topography or surface elevation of the model grid.
+        gt: The geotransform of the model grid (GDAL-style).
+        specific_storage: The specific storage of the model grid, in m-1.
+        specific_yield: The specific yield of the model grid, in m-1.
+        layer_boundary_elevation: The elevation of the layer boundaries, in m.
+        basin_mask: A boolean mask indicating the active cells in the model grid.
+        hydraulic_conductivity: The hydraulic conductivity of the model grid, in m/day.
+        heads: The initial heads of the model grid, in m.
+        heads_update_callback: A callback function to update the heads in the GEB model after each time step.
+        min_remaining_layer_storage_m: The minimum remaining layer storage in m, defaults to 0.1. More storage cannot be abstracted with wells.
+        verbose: Whether to print debug information, defaults to False.
+        never_load_from_disk: Whether to never load the model from disk, defaults to False. If set to False, the model input
+            will be loaded from disk if it exists and the input parameters have not changed.
+    """
+
     def __init__(
         self,
         model,
-        topography,
-        gt,
-        specific_storage,
-        specific_yield,
-        layer_boundary_elevation,
-        basin_mask,
-        hydraulic_conductivity,
-        heads,
-        heads_update_callback,
-        min_remaining_layer_storage_m=0.1,
-        verbose=False,
-        never_load_from_disk=False,
+        topography: npt.NDArray[np.float32],
+        gt: tuple[float, float, float, float, float, float],
+        specific_storage: npt.NDArray[np.float32],
+        specific_yield: npt.NDArray[np.float32],
+        layer_boundary_elevation: npt.NDArray[np.float32],
+        basin_mask: npt.NDArray[np.bool_],
+        hydraulic_conductivity: npt.NDArray[np.float32],
+        heads: npt.NDArray[np.float64],
+        heads_update_callback: Callable,
+        min_remaining_layer_storage_m: float = 0.1,
+        verbose: bool = False,
+        never_load_from_disk: bool = False,
     ):
         self.name = "MODEL"  # MODFLOW requires the name to be uppercase
         self.model = model
