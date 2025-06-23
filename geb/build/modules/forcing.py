@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 import time
@@ -156,28 +157,37 @@ def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
     return da
 
 
-def process_ERA5(variable, folder, start_date, end_date, bounds, logger):
-    da = download_ERA5(folder, variable, start_date, end_date, bounds, logger)
+def process_ERA5(
+    variable: str,
+    folder: Path,
+    start_date: datetime,
+    end_date: datetime,
+    bounds: tuple[float, float, float, float],
+    logger: logging.Logger,
+) -> xr.DataArray:
+    da: xr.DataArray = download_ERA5(
+        folder, variable, start_date, end_date, bounds, logger
+    )
     # assert that time is monotonically increasing with a constant step size
     assert (
         da.time.diff("time").astype(np.int64)
         == (da.time[1] - da.time[0]).astype(np.int64)
     ).all(), "time is not monotonically increasing with a constant step size"
     if da.attrs["GRIB_stepType"] == "accum":
-        da = xr.where(
+        da: xr.DataArray = xr.where(
             da.isel(time=slice(1, None)).time.dt.hour == 1,
             da.isel(time=slice(1, None)),
             da.diff(dim="time", n=1),
         )
 
     elif da.attrs["GRIB_stepType"] == "instant":
-        da = da
+        pass
     else:
         raise NotImplementedError
 
-    da = da.rio.set_crs(4326)
+    da: xr.DataArray = da.rio.set_crs(4326)
     da.raster.set_crs(4326)
-    da = interpolate_na_along_time_dim(da)
+    da: xr.DataArray = interpolate_na_along_time_dim(da)
 
     return da
 
