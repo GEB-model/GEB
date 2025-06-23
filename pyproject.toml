@@ -57,7 +57,6 @@ dependencies = [
     "scipy>=1.14.0,<1.16",  # update blocked until https://github.com/statsmodels/statsmodels/issues/9584 is fixed
     "setuptools>=75.8.0",
     "statsmodels>=0.14.4",
-    "tbb>=2022.0.0",
     "tqdm>=4.66.1",
     "xarray>=2025.3.0",
     "xarray-regrid[accel]>=0.4.1",

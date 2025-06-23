@@ -2,6 +2,7 @@ import asyncio
 import os
 import shutil
 import tempfile
+import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,10 +12,12 @@ import numpy as np
 import pandas as pd
 import pyproj
 import rasterio.crs
+import requests
 import xarray as xr
 import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
+from tqdm import tqdm
 
 all_async_readers: list = []
 
@@ -615,3 +618,77 @@ class WorkingDirectory:
     def __exit__(self, exc_type, exc_val, exc_tb):
         # Change back to the original directory
         os.chdir(self._original_path)
+
+
+def fetch_and_save(
+    url: str,
+    file_path: str | Path,
+    overwrite: bool = False,
+    max_retries: int = 3,
+    delay: float | int = 5,
+    chunk_size: int = 16384,
+) -> bool:
+    """Fetches data from a URL and saves it to a temporary file, with a retry mechanism.
+
+    Moves the file to the destination if the download is complete.
+    Removes the temporary file if the download is interrupted.
+
+    Args:
+        url: path or URL to the file to download.
+        file_path: path to the file to save the downloaded data.
+        overwrite: whether to overwrite the file if it already exists. Default is False.
+        max_retries: maximum number of retries in case of failure. Default is 3.
+        delay: delay between retries in seconds. Default is 5 seconds.
+        chunk_size: size of the chunks to read from the response.
+
+    Returns:
+        Returns True if the file was downloaded successfully and saved to the specified path.
+        Raises an exception if all attempts to download the file fail.
+
+    """
+    if not overwrite and file_path.exists():
+        return True
+
+    attempts = 0
+    temp_file = None
+
+    while attempts < max_retries:
+        try:
+            print(f"Downloading {url} to {file_path}")
+            # Attempt to make the request
+            response = requests.get(url, stream=True)
+            response.raise_for_status()  # Raises HTTPError for bad status codes
+
+            # Create a temporary file
+            temp_file = tempfile.NamedTemporaryFile(delete=False)
+
+            # Write to the temporary file
+            total_size = int(response.headers.get("content-length", 0))
+            progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
+            for data in response.iter_content(chunk_size=chunk_size):
+                temp_file.write(data)
+                progress_bar.update(len(data))
+            progress_bar.close()
+
+            # Close the temporary file
+            temp_file.close()
+
+            # Move the temporary file to the destination
+            shutil.move(temp_file.name, file_path)
+
+            return True  # Exit the function after successful write
+
+        except requests.RequestException as e:
+            # Log the error
+            print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+
+            # Remove the temporary file if it exists
+            if temp_file is not None and os.path.exists(temp_file.name):
+                os.remove(temp_file.name)
+
+            # Increment the attempt counter and wait before retrying
+            attempts += 1
+            time.sleep(delay)
+
+    # If all attempts fail, raise an exception
+    raise Exception("All attempts to download the file have failed.")
