@@ -6,6 +6,7 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import cftime
 import numpy as np
@@ -22,7 +23,7 @@ from tqdm import tqdm
 all_async_readers: list = []
 
 
-def load_table(fp):
+def load_table(fp: Path | str) -> pd.DataFrame:
     return pd.read_parquet(fp, engine="pyarrow")
 
 
@@ -99,7 +100,7 @@ def calculate_scaling(
     return scaling_factor, out_dtype
 
 
-def open_zarr(zarr_folder) -> xr.DataArray:
+def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     # it is rather odd, but in some cases using mask_and_scale=False is necessary
     # or dtypes start changing, seemingly randomly
     # consolidated metadata is off-spec for zarr, therefore we set it to False
@@ -119,7 +120,7 @@ def open_zarr(zarr_folder) -> xr.DataArray:
     return da
 
 
-def to_wkt(crs_obj):
+def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
     if isinstance(crs_obj, int):  # EPSG code
         return CRS.from_epsg(crs_obj).to_wkt()
     elif isinstance(crs_obj, CRS):  # Pyproj CRS
@@ -130,7 +131,7 @@ def to_wkt(crs_obj):
         raise TypeError("Unsupported CRS type")
 
 
-def check_attrs(da1, da2):
+def check_attrs(da1: dict[str, Any], da2: dict[str, Any]) -> bool:
     if "_CRS" in da1.attrs:
         del da1.attrs["_CRS"]
     if "_CRS" in da2.attrs:
@@ -156,7 +157,11 @@ def check_attrs(da1, da2):
     return True
 
 
-def check_buffer_size(da, chunks_or_shards, max_buffer_size=2147483647):
+def check_buffer_size(
+    da: xr.DataArray,
+    chunks_or_shards: dict[str, int],
+    max_buffer_size: int = 2147483647,
+):
     buffer_size = (
         np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
     )
