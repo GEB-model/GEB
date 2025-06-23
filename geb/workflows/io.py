@@ -479,6 +479,13 @@ def get_window(
 
 
 class AsyncForcingReader:
+    """Asynchronous reader for a forcing variable stored in a zarr file.
+
+    This class allows for asynchronous reading of a forcing variable from a zarr file.
+    It supports preloading the next timestep to improve performance when reading
+    multiple timesteps sequentially.
+    """
+
     def __init__(self, filepath, variable_name):
         self.variable_name = variable_name
         self.filepath = filepath

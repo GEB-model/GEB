@@ -929,6 +929,8 @@ class HRUs(BaseVariables):
 
 
 class Modflow(BaseVariables):
+    """This class is to store data for the MODFLOW model. It inherits from `BaseVariables` and initializes the variables needed for the MODFLOW model."""
+
     def __init__(self, data, model):
         self.data = data
         self.model = model

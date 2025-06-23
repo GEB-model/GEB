@@ -57,6 +57,8 @@ for layer in range(NLAY):
 
 
 class DummyGrid:
+    """A dummy grid class to simulate the grid structure."""
+
     def __init__(self):
         pass
 
@@ -65,11 +67,15 @@ class DummyGrid:
 
 
 class DummyHydrology:
+    """A dummy hydrology class to simulate the hydrology structure."""
+
     def __init__(self):
         self.grid = DummyGrid()
 
 
 class DummyModel:
+    """A dummy model class to simulate the MODFLOW model structure."""
+
     def __init__(self):
         self.simulation_root_spinup = tmp_folder / "modflow"
         self.hydrology = DummyHydrology()
