@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any, Union
 
+import dask
 import numpy as np
 import pandas as pd
 import xarray
@@ -287,7 +288,25 @@ def _fill_in_coords(target_coords, source_coords, data_dims):
     return coords
 
 
-def resample_chunked(source, target, method="bilinear"):
+def resample_chunked(
+    source: xr.DataArray, target: xr.DataArray, method: str = "bilinear"
+) -> xr.DataArray:
+    """Resample a source DataArray to match the grid of a target DataArray using block-based resampling.
+
+    This function uses the pyresample library to perform block-based resampling,
+    which is suitable for large datasets that do not fit into memory.
+
+    Args:
+        source: DataArray to be resampled, must have spatial dimensions "y" and "x".
+        target: DataArray that defines the target grid, must have spatial dimensions "y" and "x".
+        method: Resampling method, must be 'bilinear' or 'nearest'. Defaults to "bilinear".
+
+    Raises:
+        ValueError: If the method is not 'bilinear' or 'nearest'.
+
+    Returns:
+        A new DataArray that has been resampled to match the target's grid.
+    """
     if method == "nearest":
         interpolator = block_nn_interpolator
     elif method == "bilinear":
@@ -297,10 +316,10 @@ def resample_chunked(source, target, method="bilinear"):
 
     assert target.dims == ("y", "x")
 
-    source_geo = get_area_definition(source)
-    target_geo = get_area_definition(target)
+    source_geo: geometry.AreaDefinition = get_area_definition(source)
+    target_geo: geometry.AreaDefinition = get_area_definition(target)
 
-    indices = resample_blocks(
+    indices: dask.Array = resample_blocks(
         gradient_resampler_indices_block,
         source_geo,
         [],
@@ -309,7 +328,7 @@ def resample_chunked(source, target, method="bilinear"):
         dtype=np.float64,
     )
 
-    resampled_data = resample_blocks(
+    resampled_data: dask.Array = resample_blocks(
         interpolator,
         source_geo,
         [source.data],
@@ -321,7 +340,7 @@ def resample_chunked(source, target, method="bilinear"):
     )
 
     # Convert result back to xarray DataArray
-    da = xr.DataArray(
+    da: xr.DataArray = xr.DataArray(
         resampled_data,
         dims=source.dims,
         coords=_fill_in_coords(target.coords, source.coords, source.dims),
