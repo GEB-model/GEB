@@ -4,6 +4,8 @@ import numpy as np
 
 
 class TimingModule:
+    """A timing module to measure the time taken for different parts of a workflow."""
+
     def __init__(self, name):
         self.name = name
         self.times = [time()]

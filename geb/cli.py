@@ -4,6 +4,7 @@ import importlib
 import logging
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -46,7 +47,9 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
         return mapping
 
 
-def parse_config(config_path, current_directory=None):
+def parse_config(
+    config_path: dict | Path | str, current_directory: Path | None = None
+) -> dict:
     """Parse config."""
     if current_directory is None:
         current_directory = Path.cwd()
@@ -126,15 +129,24 @@ def click_config(func):
     return wrapper
 
 
+def working_directory_option(func):
+    @click.option(
+        "--working-directory",
+        "-wd",
+        default=".",
+        help="Working directory for model. Default is the current directory.",
+    )
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 def click_run_options():
     def decorator(func):
         @click_config
-        @click.option(
-            "--working-directory",
-            "-wd",
-            default=".",
-            help="Working directory for model.",
-        )
+        @working_directory_option
         @click.option(
             "--gui",
             is_flag=True,
@@ -173,7 +185,7 @@ def click_run_options():
 
 def run_model_with_method(
     method: str | None,
-    profiling,
+    profiling: bool,
     config,
     working_directory,
     gui,
@@ -181,8 +193,9 @@ def run_model_with_method(
     port,
     timing,
     optimize,
+    method_args: dict = {},
     close_after_run=True,
-):
+) -> GEBModel | None:
     """Run model."""
     # check if we need to run the model in optimized mode
     # if the model is already running in optimized mode, we don't need to restart it
@@ -218,7 +231,7 @@ def run_model_with_method(
 
             geb = GEBModel(**model_params)
             if method is not None:
-                getattr(geb, method)()
+                getattr(geb, method)(**method_args)
             if close_after_run:
                 geb.close()
 
@@ -285,9 +298,7 @@ def exec(method, *args, **kwargs):
 
 @cli.command()
 @click_config
-@click.option(
-    "--working-directory", "-wd", default=".", help="Working directory for model."
-)
+@working_directory_option
 def calibrate(config, working_directory):
     with WorkingDirectory(working_directory):
         config = parse_config(config)
@@ -296,9 +307,7 @@ def calibrate(config, working_directory):
 
 @cli.command()
 @click_config
-@click.option(
-    "--working-directory", "-wd", default=".", help="Working directory for model."
-)
+@working_directory_option
 def sensitivity(config, working_directory):
     with WorkingDirectory(working_directory):
         config = parse_config(config)
@@ -307,9 +316,7 @@ def sensitivity(config, working_directory):
 
 @cli.command()
 @click_config
-@click.option(
-    "--working-directory", "-wd", default=".", help="Working directory for model."
-)
+@working_directory_option
 def multirun(config, working_directory):
     with WorkingDirectory(working_directory):
         config = parse_config(config)
@@ -331,12 +338,7 @@ def click_build_options(build_config="build.yml"):
             type=str,
             help="name of custom preprocessing model",
         )
-        @click.option(
-            "--working-directory",
-            "-wd",
-            default=".",
-            help="Working directory for model.",
-        )
+        @working_directory_option
         @click.option(
             "--data-catalog",
             "-d",
@@ -383,9 +385,10 @@ def get_model_builder_class(custom_model):
 
 def customize_data_catalog(data_catalogs, data_root=None):
     """This functions adds the GEB_DATA_ROOT to the data catalog if it is set as an environment variable.
-    This enables reading the data catalog from a different location than the location of the yml-file
-    without the need to specify root in the meta of the data catalog."""
 
+    This enables reading the data catalog from a different location than the location of the yml-file
+    without the need to specify root in the meta of the data catalog.
+    """
     if data_root:
         customized_data_catalogs = []
         for data_catalog in data_catalogs:
@@ -418,6 +421,121 @@ def get_builder(config, data_catalog, custom_model, data_provider, data_root):
     return get_model_builder_class(custom_model)(**arguments)
 
 
+def init_fn(
+    config: str | Path,
+    build_config: str | Path,
+    update_config: str | Path,
+    working_directory: str | Path,
+    from_example: str,
+    basin_id: str | None = None,
+    overwrite: bool = False,
+) -> None:
+    """Create a new model.
+
+    Args:
+        config: Path to the model configuration file to create.
+        build_config: Path to the model build configuration file to create.
+        update_config: Path to the model update configuration file to create.
+        working_directory: Working directory for the model.
+        from_example: Name of the example to use as a base for the model.
+        basin_id:Basin ID(s) to use for the model. Can be a comma-separated list of integers.
+            If not set, the basin ID is taken from the config file.
+        overwrite: If True, overwrite existing config and build config files. Defaults to False.
+
+    """
+    config: Path = Path(config)
+    build_config: Path = Path(build_config)
+    update_config: Path = Path(update_config)
+    working_directory: Path = Path(working_directory)
+
+    if not working_directory.exists():
+        working_directory.mkdir(parents=True, exist_ok=True)
+
+    with WorkingDirectory(working_directory):
+        if config.exists() and not overwrite:
+            raise FileExistsError(
+                f"Config file {config} already exists. Please remove it or use a different name, or use --overwrite."
+            )
+
+        if build_config.exists() and not overwrite:
+            raise FileExistsError(
+                f"Build config file {build_config} already exists. Please remove it or use a different name, or use --overwrite."
+            )
+
+        if update_config.exists() and not overwrite:
+            raise FileExistsError(
+                f"Update config file {update_config} already exists. Please remove it or use a different name, or use --overwrite."
+            )
+
+        example_folder: Path = (
+            Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / "examples" / from_example
+        )
+        if not example_folder.exists():
+            raise FileNotFoundError(
+                f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
+            )
+
+        config_dict: dict = yaml.load(
+            open(example_folder / "model.yml", "r"),
+            Loader=DetectDuplicateKeysYamlLoader,
+        )
+
+        if basin_id is not None:
+            # Allow passing a comma-separated list of integers
+            if "," in basin_id:
+                basin_ids: list[int] = [
+                    int(x) for x in basin_id.split(",") if x.strip()
+                ]
+            else:
+                basin_ids: int = int(basin_id)
+
+            config_dict["general"]["region"]["subbasin"] = basin_ids
+
+        with open(config, "w") as f:
+            yaml.dump(config_dict, f, default_flow_style=False)
+
+        shutil.copy(example_folder / "build.yml", build_config)
+        shutil.copy(example_folder / "update.yml", update_config)
+
+
+@cli.command()
+@click_config
+@click.option(
+    "--build-config",
+    "-b",
+    default="build.yml",
+    help="Path of the model build configuration file.",
+)
+@click.option(
+    "--update-config",
+    "-u",
+    default="update.yml",
+    help="Path of the model update configuration file.",
+)
+@click.option(
+    "--from-example",
+    default="geul",
+    help="Name of the example to use as a base for the model. Defaults to 'geul'.",
+)
+@click.option(
+    "--basin-id",
+    default=None,
+    type=str,
+    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="If set, overwrite existing config and build config files.",
+)
+@working_directory_option
+def init(*args, **kwargs):
+    """Initialize a new model."""
+    # Initialize the model with the given config and build config
+    init_fn(*args, **kwargs)
+
+
 def build_fn(
     data_catalog,
     config,
@@ -428,7 +546,6 @@ def build_fn(
     data_root,
 ):
     """Build model."""
-
     with WorkingDirectory(working_directory):
         model = get_builder(
             config,
@@ -511,16 +628,18 @@ def update(*args, **kwargs):
 
 @cli.command()
 @click_run_options()
-def evaluate(*args, **kwargs):
-    run_model_with_method(method="evaluate", *args, **kwargs)
-
-
 @click.option(
-    "--working-directory",
-    "-wd",
-    default=".",
-    help="Working directory for model.",
+    "--methods", default=None, help="Comma-seperated list of methods to evaluate."
 )
+def evaluate(methods: list | None, *args, **kwargs) -> None:
+    # If no methods are provided, pass None to run_model_with_method
+    methods: list | None = None if not methods else methods.split(",")
+    run_model_with_method(
+        method="evaluate", method_args={"methods": methods}, *args, **kwargs
+    )
+
+
+@working_directory_option
 @click.option(
     "--name",
     "-n",
@@ -542,21 +661,20 @@ def evaluate(*args, **kwargs):
 @cli.command()
 def share(working_directory, name, include_preprocessing, include_output):
     """Share model."""
-
     with WorkingDirectory(working_directory):
         # create a zip file called model.zip with the folders input, and model files
         # in the working directory
-        folders = ["input"]
+        folders: list = ["input"]
         if include_preprocessing:
             folders.append("preprocessing")
         if include_output:
             folders.append("output")
-        files = ["model.yml", "build.yml"]
-        optional_files = ["update.yml", "data_catalog.yml"]
-        optional_folders = ["data"]
-        zip_filename = f"{name}.zip"
+        files: list = ["model.yml", "build.yml"]
+        optional_files: list = ["update.yml", "data_catalog.yml"]
+        optional_folders: list = ["data"]
+        zip_filename: str = f"{name}.zip"
         with zipfile.ZipFile(zip_filename, "w") as zipf:
-            total_files = (
+            total_files: int = (
                 sum(
                     [
                         sum(len(files) for _, _, files in os.walk(folder))
@@ -573,7 +691,7 @@ def share(working_directory, name, include_preprocessing, include_output):
                 + len(files)
                 + len(optional_files)
             )  # Count total number of files
-            progress = 0  # Initialize progress counter
+            progress: int = 0  # Initialize progress counter
             for folder in folders:
                 for root, _, filenames in os.walk(folder):
                     for filename in filenames:

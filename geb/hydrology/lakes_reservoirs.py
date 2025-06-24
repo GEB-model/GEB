@@ -27,10 +27,10 @@ from geb.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import balance_check
 
-OFF = 0
-LAKE = 1
-RESERVOIR = 2
-LAKE_CONTROL = 3  # currently modelled as normal lake
+OFF: int = 0
+LAKE: int = 1
+RESERVOIR: int = 2
+LAKE_CONTROL: int = 3  # currently modelled as normal lake
 
 
 def laketotal(values, areaclass, nan_class):
@@ -39,28 +39,28 @@ def laketotal(values, areaclass, nan_class):
     return class_totals.astype(values.dtype)
 
 
-GRAVITY = 9.81
-SHAPE = "parabola"
+GRAVITY: float = 9.81
+SHAPE: str = "parabola"
 # http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
 
 if SHAPE == "rectangular":
-    overflow_coefficient_mu = 0.577
+    overflow_coefficient_mu: float = 0.577
 
     def estimate_lake_outflow(lake_factor, height_above_outflow):
         return lake_factor * height_above_outflow**1.5
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """inverse function of estimate_lake_outflow"""
+        """Inverse function of estimate_lake_outflow."""
         return (outflow / lake_factor) ** (2 / 3)
 
 elif SHAPE == "parabola":
-    overflow_coefficient_mu = 0.612
+    overflow_coefficient_mu: float = 0.612
 
     def estimate_lake_outflow(lake_factor, height_above_outflow):
         return lake_factor * height_above_outflow**2
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """inverse function of estimate_lake_outflow"""
+        """Inverse function of estimate_lake_outflow."""
         return np.sqrt(outflow / lake_factor)
 
 else:
@@ -73,8 +73,7 @@ def get_lake_height_from_bottom(lake_storage, lake_area):
 
 
 def get_lake_storage_from_height_above_bottom(lake_height, lake_area):
-    """
-    Calculate the storage of a lake given its height above the bottom and area.
+    """Calculate the storage of a lake given its height above the bottom and area.
 
     Parameters
     ----------
@@ -83,7 +82,7 @@ def get_lake_storage_from_height_above_bottom(lake_height, lake_area):
     lake_area : float
         Area of the lake in m2
 
-    Returns
+    Returns:
     -------
     float
         Storage of the lake in m3
@@ -128,8 +127,7 @@ def get_lake_outflow(
     lake_area,
     outflow_height,
 ):
-    """
-    Calculate outflow and storage for a lake using the Modified Puls method
+    """Calculate outflow and storage for a lake using the Modified Puls method.
 
     Parameters
     ----------
@@ -150,7 +148,7 @@ def get_lake_outflow(
     outflow_height : float
         Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
 
-    Returns
+    Returns:
     -------
     outflow : float
         New outflow from the lake in m3/s
@@ -174,6 +172,15 @@ def get_lake_outflow(
 
 
 class LakesReservoirs(Module):
+    """Implements all lakes and reservoir operations in the hydrological model.
+
+    For reservoir it gets the outflow from the reservoir operator agents.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology
@@ -190,15 +197,13 @@ class LakesReservoirs(Module):
 
     def spinup(self):
         # load lakes/reservoirs map with a single ID for each lake/reservoir
-        waterBodyID_unmapped = self.grid.load(
+        waterBodyID_unmapped: np.ndarray = self.grid.load(
             self.model.files["grid"]["waterbodies/water_body_id"]
         )
         self.grid.var.waterBodyID, self.var.waterbody_mapping = (
             self.map_water_bodies_IDs(waterBodyID_unmapped)
         )
 
-        # we need to re-calculate the outflows, because the ID might have changed due
-        # to the earlier operations. This is the final one as IDs have now been mapped
         self.grid.var.waterbody_outflow_points = self.get_outflows(
             self.grid.var.waterBodyID
         )
@@ -313,15 +318,18 @@ class LakesReservoirs(Module):
 
     def get_outflows(self, waterBodyID):
         # calculate biggest outlet = biggest accumulation of ldd network
+        upstream_area_n_cells = self.hydrology.routing.river_network.upstream_area(
+            unit="cell"
+        )[~self.grid.mask]
         upstream_area_within_waterbodies = np.zeros_like(
-            self.hydrology.routing.router.upstream_area_n_cells,
+            upstream_area_n_cells,
             shape=waterBodyID.max() + 2,
         )
         upstream_area_within_waterbodies[-1] = -1
         np.maximum.at(
             upstream_area_within_waterbodies,
             waterBodyID[waterBodyID != -1],
-            self.hydrology.routing.router.upstream_area_n_cells[waterBodyID != -1],
+            upstream_area_n_cells[waterBodyID != -1],
         )
         upstream_area_within_waterbodies = np.take(
             upstream_area_within_waterbodies, waterBodyID
@@ -337,8 +345,7 @@ class LakesReservoirs(Module):
         outflow_elevation = self.grid.compress(outflow_elevation)
 
         waterbody_outflow_points = np.where(
-            self.hydrology.routing.router.upstream_area_n_cells
-            == upstream_area_within_waterbodies,
+            upstream_area_n_cells == upstream_area_within_waterbodies,
             waterBodyID,
             -1,
         )
@@ -394,12 +401,15 @@ class LakesReservoirs(Module):
 
         return waterbody_outflow_points
 
-    def routing_lakes(self, routing_step_length_seconds):
-        """
-        Lake routine to calculate lake outflow
-        :param inflowC: inflow to lakes and reservoirs [m3]
-        :param NoRoutingExecuted: actual number of routing substep
-        :return: QLakeOutM3DtC - lake outflow in [m3] per subtime step
+    def routing_lakes(self, routing_step_length_seconds: int | float):
+        """Lake routine to calculate lake outflow.
+
+        Args:
+            routing_step_length_seconds: length of the routing step in seconds.
+
+        Returns:
+            lake_outflow_m3: Outflow from the lakes in m3 per routing step.
+
         """
         is_lake = self.is_lake
         # check if there are any lakes in the model
@@ -420,8 +430,7 @@ class LakesReservoirs(Module):
         return lake_outflow_m3
 
     def routing_reservoirs(self, n_routing_substeps, current_substep):
-        """
-        Routine to update reservoir volumes and calculate reservoir outflow
+        """Routine to update reservoir volumes and calculate reservoir outflow.
 
         Parameters
         ----------
@@ -430,7 +439,7 @@ class LakesReservoirs(Module):
         n_routing_substeps : int
             Number of routing substeps per time step
 
-        Returns
+        Returns:
         -------
         reservoir_release_m3 : np.ndarray
             Outflow from the reservoirs in m3 per routing substep
@@ -441,8 +450,6 @@ class LakesReservoirs(Module):
                 current_substep=current_substep,
             )
         )
-
-        self.reservoir_storage = self.reservoir_storage - command_area_release_m3
 
         assert (main_channel_release_m3 <= self.reservoir_storage).all()
         assert (self.reservoir_storage >= 0).all()
@@ -459,13 +466,14 @@ class LakesReservoirs(Module):
             prestorage = self.var.storage.copy()
 
         outflow_to_drainage_network_m3 = np.zeros_like(self.var.storage)
+        command_area_release_m3 = np.zeros_like(self.var.storage)
 
         outflow_to_drainage_network_m3[self.is_lake] = self.routing_lakes(
             routing_step_length_seconds
         )
         (
             outflow_to_drainage_network_m3[self.is_reservoir],
-            command_area_release_m3,
+            command_area_release_m3[self.is_reservoir],
         ) = self.routing_reservoirs(n_routing_substeps, current_substep)
 
         assert (outflow_to_drainage_network_m3 <= self.var.storage).all()
@@ -475,15 +483,13 @@ class LakesReservoirs(Module):
                 name="command_area_release",
                 how="cellwise",
                 influxes=[],
-                outfluxes=[
-                    command_area_release_m3,
-                ],
+                outfluxes=[],
                 prestorages=[prestorage[self.is_reservoir]],
                 poststorages=[self.var.storage[self.is_reservoir]],
                 tollerance=1,  # 1 m3
             )
 
-        return outflow_to_drainage_network_m3
+        return outflow_to_drainage_network_m3, command_area_release_m3
 
     @property
     def is_reservoir(self):
@@ -537,9 +543,7 @@ class LakesReservoirs(Module):
         return array
 
     def step(self):
-        """
-        Dynamic part set lakes and reservoirs for each year
-        """
+        """Dynamic part set lakes and reservoirs for each year."""
         # if first timestep, or beginning of new year
         if self.model.current_timestep == 1 or (
             self.model.current_time.month == 1 and self.model.current_time.day == 1

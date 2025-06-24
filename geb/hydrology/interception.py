@@ -37,9 +37,7 @@ from .landcover import (
 
 
 class Interception(Module):
-    """
-    INTERCEPTION
-
+    """INTERCEPTION.
 
     **Global variables**
 
@@ -119,16 +117,6 @@ class Interception(Module):
         rain: np.ndarray,
         snow_melt: np.ndarray,
     ):
-        """
-        Dynamic part of the interception module
-        calculating interception for each land cover class
-
-        :param coverType: Land cover type: forest, grassland  ...
-        :param No: number of land cover type: forest = 0, grassland = 1 ...
-        :return: interception evaporation, interception storage, reduced pot. transpiration
-
-        """
-
         if __debug__:
             interception_storage_pre = self.HRU.var.interception_storage.copy()
 

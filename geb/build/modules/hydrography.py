@@ -160,10 +160,9 @@ class Hydrography:
         pass
 
     def setup_mannings(self) -> None:
-        """
-        Sets up the Manning's coefficient for the model.
+        """Sets up the Manning's coefficient for the model.
 
-        Notes
+        Notes:
         -----
         This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
         and topography of the grid. It first calculates the upstream area of each cell in the grid using the
@@ -449,10 +448,9 @@ class Hydrography:
         command_areas=None,
         custom_reservoir_capacity=None,
     ):
-        """
-        Sets up the waterbodies for GEB.
+        """Sets up the waterbodies for GEB.
 
-        Notes
+        Notes:
         -----
         This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
         specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
@@ -554,6 +552,28 @@ class Hydrography:
                 np.int32
             )
 
+            # Dissolve command areas with same reservoir
+            command_areas = command_areas.dissolve(by="waterbody_id", as_index=False)
+
+            # Set lakes with command area to reservoirs and reservoirs without command area to lakes
+            ids_with_command: set = set(command_areas["waterbody_id"])
+            waterbodies.loc[
+                waterbodies["waterbody_id"].isin(ids_with_command),
+                "waterbody_type",
+            ] = RESERVOIR
+
+            # Lastly remove command areas that have no associated water body
+            reservoir_ids: set = set(
+                waterbodies.loc[
+                    waterbodies["waterbody_type"] == RESERVOIR, "waterbody_id"
+                ]
+            )
+            command_areas_dissolved = command_areas[
+                command_areas["waterbody_id"].isin(reservoir_ids)
+            ].reset_index(drop=True)
+
+            assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
+
             self.set_grid(
                 self.grid.raster.rasterize(
                     command_areas,
@@ -575,10 +595,6 @@ class Hydrography:
                 name="waterbodies/subcommand_areas",
             )
 
-            # set all lakes with command area to reservoir
-            waterbodies.loc[
-                waterbodies.index.isin(command_areas["waterbody_id"]), "waterbody_type"
-            ] = RESERVOIR
         else:
             command_areas = self.full_like(
                 self.grid["mask"],

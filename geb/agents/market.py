@@ -69,7 +69,7 @@ class Market(AgentBaseClass):
             extra_dims=(n_years,),
             extra_dims_names=("years",),
         )
-        self.var.total_farmer_profit = DynamicArray(
+        self.var.total_farmer_income = DynamicArray(
             n=n_crops,
             max_n=n_crops,
             dtype=np.float32,
@@ -91,7 +91,7 @@ class Market(AgentBaseClass):
             :,
             estimation_start_year:estimation_end_year,
         ]
-        total_farmer_profit = self.var.total_farmer_profit[
+        total_farmer_income = self.var.total_farmer_income[
             :,
             estimation_start_year:estimation_end_year,
         ]
@@ -104,7 +104,7 @@ class Market(AgentBaseClass):
             X = sm.add_constant(np.log(production[crop]))
 
             # Defining the dependent variable
-            price = total_farmer_profit[crop] / production[crop]
+            price = total_farmer_income[crop] / production[crop]
 
             y = np.log(price)
 
@@ -145,7 +145,7 @@ class Market(AgentBaseClass):
     def track_production_and_price(self) -> None:
         if self.model.current_day_of_year == 1:
             self.var.production[:, self.year_index] = 0
-            self.var.total_farmer_profit[:, self.year_index] = 0
+            self.var.total_farmer_income[:, self.year_index] = 0
         mask = self.agents.crop_farmers.var.harvested_crop != -1
         # TODO: This does not yet diffentiate per region
         yield_per_crop = np.bincount(
@@ -153,15 +153,15 @@ class Market(AgentBaseClass):
             weights=self.agents.crop_farmers.var.actual_yield_per_farmer[mask],
             minlength=self.var.production.shape[0],
         )
-        profit_per_crop = np.bincount(
+        income_per_crop = np.bincount(
             self.agents.crop_farmers.var.harvested_crop[mask],
-            weights=self.agents.crop_farmers.profit_farmer[mask],
+            weights=self.agents.crop_farmers.income_farmer[mask],
             minlength=self.var.production.shape[0],
         )
         self.var.production[:, self.year_index] += yield_per_crop
         # TODO: This assumes that the inflation is the same for all crops
-        self.var.total_farmer_profit[:, self.year_index] += (
-            profit_per_crop / self.var.cumulative_inflation_per_region[self.year_index]
+        self.var.total_farmer_income[:, self.year_index] += (
+            income_per_crop / self.var.cumulative_inflation_per_region[self.year_index]
         )
 
     def step(self) -> None:

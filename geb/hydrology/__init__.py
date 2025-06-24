@@ -42,12 +42,19 @@ from .water_demand import WaterDemand
 
 
 class Hydrology(Data, Module):
+    """The hydrological module of the GEB model.
+
+    This module handles all hydrological processes, including potential evapotranspiration,
+    snow and frost dynamics, land cover interactions, soil processes, evaporation, groundwater
+    management, interception, sealed water bodies, runoff concentration, routing of water,
+    lakes and reservoirs management, water demand, and hillslope erosion.
+
+    Args:
+        model: The GEB model instance.
+    """
+
     def __init__(self, model):
-        """
-        Init part of the initial part
-        defines the mask map and the outlet points
-        initialization of the hydrological modules
-        """
+        """Create the hydrology module."""
         Data.__init__(self, model)
         Module.__init__(self, model)
 
@@ -122,9 +129,7 @@ class Hydrology(Data, Module):
         self.report(self, locals())
 
     def finalize(self) -> None:
-        """
-        Finalize the model
-        """
+        """Finalize the model."""
         # finalize modflow model
         if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
             self.groundwater.modflow.finalize()
@@ -190,7 +195,7 @@ class Hydrology(Data, Module):
                 ],
                 prestorages=[self.var.system_storage],
                 poststorages=[current_storage],
-                tollerance=100_000,
+                tollerance=10_000,
             )
 
         # update the storage for the next timestep

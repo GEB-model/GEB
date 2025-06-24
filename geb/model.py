@@ -1,7 +1,9 @@
 import copy
 import datetime
+import os
 from pathlib import Path
 from time import time
+from typing import Any
 
 import numpy as np
 import xarray as xr
@@ -23,12 +25,11 @@ from .hydrology import Hydrology
 class GEBModel(Module, HazardDriver, ABM_Model):
     """GEB parent class.
 
-    Parameters
-    ----------
-    config: Filepath of the YAML-configuration file (e.g. model.yml).
-    files: Dictionary with the paths of the input files.
-    mode: Mode of the model. Either `w` (write) or `r` (read).
-    timing: Boolean indicating if the model steps should be timed.
+    Args:
+        config: Filepath of the YAML-configuration file (e.g. model.yml).
+        files: Dictionary with the paths of the input files.
+        mode: Mode of the model. Either `w` (write) or `r` (read).
+        timing: Boolean indicating if the model steps should be timed.
     """
 
     def __init__(
@@ -79,7 +80,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     def multiverse(
         self, return_mean_discharge: bool = False
-    ) -> None | dict[str, float]:
+    ) -> None | dict[Any, float]:
         # copy current state of timestep and time
         store_timestep = copy.copy(self.current_timestep)
 
@@ -136,8 +137,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             return None
 
     def step(self) -> None:
-        """
-        Forward the model by the given the number of steps.
+        """Forward the model by the given the number of steps.
 
         Args:
             step_size: Number of steps the model should take. Can be integer or string `day`, `week`, `month`, `year`, `decade` or `century`.
@@ -212,8 +212,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.store.load()
 
         if self.simulate_hydrology:
-            if load_data_from_store:
-                self.hydrology.routing.set_router()
+            self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
             self.hydrology.soil.set_global_variables()
 
@@ -426,6 +425,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @property
     def input_folder(self):
         return Path(self.config["general"]["input_folder"])
+
+    @property
+    def bin_folder(self) -> Path:
+        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
     @property
     def crs(self):

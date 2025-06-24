@@ -2,6 +2,7 @@ import asyncio
 import os
 import shutil
 import tempfile
+import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,19 +12,21 @@ import numpy as np
 import pandas as pd
 import pyproj
 import rasterio.crs
+import requests
 import xarray as xr
 import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
+from tqdm import tqdm
 
-all_async_readers = []
+all_async_readers: list = []
 
 
 def load_table(fp):
     return pd.read_parquet(fp, engine="pyarrow")
 
 
-def load_array(fp):
+def load_array(fp: Path) -> np.ndarray:
     if fp.suffix == ".npz":
         return np.load(fp)["data"]
     elif fp.suffix == ".zarr":
@@ -32,11 +35,12 @@ def load_array(fp):
         raise ValueError(f"Unsupported file format: {fp.suffix}")
 
 
-def calculate_scaling(min_value, max_value, precision, offset=0):
-    """
-    This function calculates the scaling factor and output dtype for
-    a fixed scale and offset codec. The expected minimum and maximum
-    values along with the precision are used to determine the number
+def calculate_scaling(
+    min_value: float, max_value: float, precision: float, offset=0.0
+) -> tuple[float, str]:
+    """This function calculates the scaling factor and output dtype for a fixed scale and offset codec.
+
+    The expected minimum and maximum values along with the precision are used to determine the number
     of bits required to represent the data. The scaling factor is then
     calculated to scale the original data to the required integer
     range. The output dtype is determined based on the number of bits
@@ -46,65 +50,56 @@ def calculate_scaling(min_value, max_value, precision, offset=0):
     there may be some issues due to rounding and the given factors may
     become slighly imprecise.
 
-    Parameters
-    ----------
-    min_value : float
-        The minimum expected value of the original data. Outside this range
-        the data may start to behave unexpectedly.
-    max_value : float
-        The maximum expected value of the original data. Outside this range
-        the data may start to behave unexpectedly.
-    precision : float
-        The precision of the data, i.e. the maximum difference between the
-        original and decoded data.
-    offset : float, optional
-        The offset to apply to the original data before scaling.
+    Args:
+        min_value: The minimum expected value of the original data. Outside this range
+            the data may start to behave unexpectedly.
+        max_value: The maximum expected value of the original data. Outside this range
+            the data may start to behave unexpectedly.
+        precision: The precision of the data, i.e. the maximum difference between the
+            original and decoded data.
+        offset: The offset to apply to the original data before scaling.
 
-    Returns
-    -------
-    scaling_factor : float
-        The scaling factor to apply to the original data.
-    out_dtype : str
-        The output dtype to use for the fixed scale and offset codec.
+    Returns:
+        scaling_factor: The scaling factor to apply to the original data.
+        out_dtype: The output dtype to use for the fixed scale and offset codec.
     """
-
     assert min_value < max_value, "min_value must be less than max_value"
     assert precision > 0, "precision must be greater than 0"
 
-    min_with_offset = min_value + offset
-    max_with_offset = max_value + offset
+    min_with_offset: float = min_value + offset
+    max_with_offset: float = max_value + offset
 
-    max_abs_value = max(abs(min_with_offset), abs(max_with_offset))
+    max_abs_value: float = max(abs(min_with_offset), abs(max_with_offset))
 
-    steps_required = int(max_abs_value / precision / 2) + 1
+    steps_required: int = int(max_abs_value / precision / 2) + 1
 
-    bits_required = steps_required.bit_length()
+    bits_required: int = steps_required.bit_length()
 
-    steps_available = 2**bits_required
+    steps_available: int = 2**bits_required
 
     if min_with_offset < 0:
         bits_required += 1  # need to account for the sign bit
-        out_dtype_prefix = ""
+        out_dtype_prefix: str = ""
     else:
-        out_dtype_prefix = "u"
+        out_dtype_prefix: str = "u"
 
-    scaling_factor = steps_available / max_abs_value
+    scaling_factor: float = steps_available / max_abs_value
 
     if bits_required <= 8:
-        out_dtype = out_dtype_prefix + "int8"
+        out_dtype: str = out_dtype_prefix + "int8"
     elif bits_required <= 16:
-        out_dtype = out_dtype_prefix + "int16"
+        out_dtype: str = out_dtype_prefix + "int16"
     elif bits_required <= 32:
-        out_dtype = out_dtype_prefix + "int32"
+        out_dtype: str = out_dtype_prefix + "int32"
     elif bits_required <= 64:
-        out_dtype = out_dtype_prefix + "int64"
+        out_dtype: str = out_dtype_prefix + "int64"
     else:
         raise ValueError("Too many bits required for precision and range")
 
     return scaling_factor, out_dtype
 
 
-def open_zarr(zarr_folder):
+def open_zarr(zarr_folder) -> xr.DataArray:
     # it is rather odd, but in some cases using mask_and_scale=False is necessary
     # or dtypes start changing, seemingly randomly
     # consolidated metadata is off-spec for zarr, therefore we set it to False
@@ -182,9 +177,8 @@ def to_zarr(
     filters: list = [],
     compressor=None,
     progress: bool = True,
-):
-    """
-    Save an xarray DataArray to a zarr file.
+) -> xr.DataArray:
+    """Save an xarray DataArray to a zarr file.
 
     Parameters
     ----------
@@ -212,7 +206,7 @@ def to_zarr(
     progress : bool, optional
         Whether to show a progress bar. Default is True.
 
-    Returns
+    Returns:
     -------
     da_disk : xarray.DataArray
         The xarray DataArray saved to disk.
@@ -244,7 +238,7 @@ def to_zarr(
             f"Fill value must be nan, not {da.attrs['_FillValue']}"
         )
 
-    path = Path(path)
+    path: Path = Path(path)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_zarr = Path(tmp_dir) / path.name
@@ -261,6 +255,7 @@ def to_zarr(
                     "x": min(x_chunksize, da.sizes["x"]),
                 }
             )
+            da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
         if "time" in da.dims:
             chunks.update({"time": min(time_chunksize, da.sizes["time"])})
@@ -300,8 +295,6 @@ def to_zarr(
             check_buffer_size(da, chunks_or_shards=chunks)
 
         da = da.chunk(shards if shards is not None else chunks)
-
-        da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
 
         # to display maps in QGIS, the "other" dimensions must have a chunk size of 1
         chunks = tuple((chunks[dim] if dim in chunks else 1) for dim in da.dims)
@@ -349,7 +342,7 @@ def to_zarr(
             shutil.rmtree(path)
         shutil.move(tmp_zarr, folder)
 
-    da_disk = open_zarr(path)
+    da_disk: xr.DataArray = open_zarr(path)
 
     # perform some asserts to check if the data was written and read correctly
     assert da.dtype == da_disk.dtype, "dtype mismatch"
@@ -368,8 +361,7 @@ def get_window(
     raise_on_out_of_bounds: bool = True,
     raise_on_buffer_out_of_bounds: bool = True,
 ) -> dict[str, slice]:
-    """
-    Get a window for the given x and y coordinates based on the provided bounds and buffer.
+    """Get a window for the given x and y coordinates based on the provided bounds and buffer.
 
     Parameters
     ----------
@@ -386,7 +378,7 @@ def get_window(
     raise_on_buffer_out_of_bounds : bool, optional
         Whether to raise an error if the buffer goes out of the x or y coordinate range. Default is True.
 
-    Returns
+    Returns:
     -------
     dict
         A dictionary with slices for the x and y coordinates, e.g. {"x": slice(start, stop), "y": slice(start, stop)}.
@@ -407,7 +399,7 @@ def get_window(
         raise ValueError("y must not be empty")
 
     # So that we can do item assignment
-    bounds = list(bounds)
+    bounds: list = list(bounds)
 
     if bounds[0] < x[0]:
         if raise_on_out_of_bounds:
@@ -490,6 +482,13 @@ def get_window(
 
 
 class AsyncForcingReader:
+    """Asynchronous reader for a forcing variable stored in a zarr file.
+
+    This class allows for asynchronous reading of a forcing variable from a zarr file.
+    It supports preloading the next timestep to improve performance when reading
+    multiple timesteps sequentially.
+    """
+
     def __init__(self, filepath, variable_name):
         self.variable_name = variable_name
         self.filepath = filepath
@@ -557,7 +556,7 @@ class AsyncForcingReader:
         # that the dataset is the same as the previous one or the next one in line,
         # so we can just check the current index and the next one. Only if those do not match
         # we have to search for the correct index.
-        numpy_date = np.datetime64(date, "ns")
+        numpy_date: np.datetime64 = np.datetime64(date, "ns")
         if self.datetime_index[self.current_index] == numpy_date:
             return self.current_index
         elif self.datetime_index[self.current_index + 1] == numpy_date:
@@ -590,8 +589,7 @@ class AsyncForcingReader:
 
 
 class WorkingDirectory:
-    """
-    A context manager for temporarily changing the current working directory.
+    """A context manager for temporarily changing the current working directory.
 
     Usage:
         with WorkingDirectory('/path/to/new/directory'):
@@ -599,8 +597,7 @@ class WorkingDirectory:
     """
 
     def __init__(self, new_path):
-        """
-        Initializes the context manager with the path to change to.
+        """Initializes the context manager with the path to change to.
 
         Args:
             new_path (str): The path to the directory to change into.
@@ -621,3 +618,77 @@ class WorkingDirectory:
     def __exit__(self, exc_type, exc_val, exc_tb):
         # Change back to the original directory
         os.chdir(self._original_path)
+
+
+def fetch_and_save(
+    url: str,
+    file_path: str | Path,
+    overwrite: bool = False,
+    max_retries: int = 3,
+    delay: float | int = 5,
+    chunk_size: int = 16384,
+) -> bool:
+    """Fetches data from a URL and saves it to a temporary file, with a retry mechanism.
+
+    Moves the file to the destination if the download is complete.
+    Removes the temporary file if the download is interrupted.
+
+    Args:
+        url: path or URL to the file to download.
+        file_path: path to the file to save the downloaded data.
+        overwrite: whether to overwrite the file if it already exists. Default is False.
+        max_retries: maximum number of retries in case of failure. Default is 3.
+        delay: delay between retries in seconds. Default is 5 seconds.
+        chunk_size: size of the chunks to read from the response.
+
+    Returns:
+        Returns True if the file was downloaded successfully and saved to the specified path.
+        Raises an exception if all attempts to download the file fail.
+
+    """
+    if not overwrite and file_path.exists():
+        return True
+
+    attempts = 0
+    temp_file = None
+
+    while attempts < max_retries:
+        try:
+            print(f"Downloading {url} to {file_path}")
+            # Attempt to make the request
+            response = requests.get(url, stream=True)
+            response.raise_for_status()  # Raises HTTPError for bad status codes
+
+            # Create a temporary file
+            temp_file = tempfile.NamedTemporaryFile(delete=False)
+
+            # Write to the temporary file
+            total_size = int(response.headers.get("content-length", 0))
+            progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
+            for data in response.iter_content(chunk_size=chunk_size):
+                temp_file.write(data)
+                progress_bar.update(len(data))
+            progress_bar.close()
+
+            # Close the temporary file
+            temp_file.close()
+
+            # Move the temporary file to the destination
+            shutil.move(temp_file.name, file_path)
+
+            return True  # Exit the function after successful write
+
+        except requests.RequestException as e:
+            # Log the error
+            print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+
+            # Remove the temporary file if it exists
+            if temp_file is not None and os.path.exists(temp_file.name):
+                os.remove(temp_file.name)
+
+            # Increment the attempt counter and wait before retrying
+            attempts += 1
+            time.sleep(delay)
+
+    # If all attempts fail, raise an exception
+    raise Exception("All attempts to download the file have failed.")

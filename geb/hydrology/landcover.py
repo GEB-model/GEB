@@ -93,6 +93,13 @@ def get_crop_kc_and_root_depths(
 
 
 class LandCover(Module):
+    """Implements all land cover processes in the hydrological model.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology
