@@ -62,7 +62,7 @@ def bounds_are_within(small_bounds, large_bounds, tollerance=0):
 
 
 def pad_xy(
-    self,
+    array_rio,
     minx: float,
     miny: float,
     maxx: float,
@@ -75,6 +75,7 @@ def pad_xy(
     """Pad the array to x,y bounds.
 
     Args:
+        array_rio: rio assecor of xarray DataArray
         minx: Minimum bound for x coordinate.
         miny: Minimum bound for y coordinate.
         maxx: Maximum bound for x coordinate.
@@ -82,6 +83,7 @@ def pad_xy(
         constant_values: scalar, tuple or mapping of hashable to tuple
             The value used for padding. If None, nodata will be used if it is
             set, and np.nan otherwise.
+        return_slice: If True, returns a dictionary with slices for x and y.
 
     Returns:
         Padded DataArray with new x and y coordinates.
@@ -91,12 +93,12 @@ def pad_xy(
     data.
 
     """
-    left, bottom, right, top = self._internal_bounds()
-    resolution_x, resolution_y = self.resolution()
+    left, bottom, right, top = array_rio._internal_bounds()
+    resolution_x, resolution_y = array_rio.resolution()
     y_before = y_after = 0
     x_before = x_after = 0
-    y_coord: Union[xarray.DataArray, np.ndarray] = self._obj[self.y_dim]
-    x_coord: Union[xarray.DataArray, np.ndarray] = self._obj[self.x_dim]
+    y_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.y_dim]
+    x_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.x_dim]
 
     if top - resolution_y < maxy:
         new_y_coord: np.ndarray = np.arange(bottom, maxy, -resolution_y)[::-1]
@@ -121,17 +123,17 @@ def pad_xy(
         right = x_coord[-1]
 
     if constant_values is None:
-        constant_values = np.nan if self.nodata is None else self.nodata
+        constant_values = np.nan if array_rio.nodata is None else array_rio.nodata
 
-    superset = self._obj.pad(
+    superset = array_rio._obj.pad(
         pad_width={
-            self.x_dim: (x_before, x_after),
-            self.y_dim: (y_before, y_after),
+            array_rio.x_dim: (x_before, x_after),
+            array_rio.y_dim: (y_before, y_after),
         },
         constant_values=constant_values,  # type: ignore
-    ).rio.set_spatial_dims(x_dim=self.x_dim, y_dim=self.y_dim, inplace=True)
-    superset[self.x_dim] = x_coord
-    superset[self.y_dim] = y_coord
+    ).rio.set_spatial_dims(x_dim=array_rio.x_dim, y_dim=array_rio.y_dim, inplace=True)
+    superset[array_rio.x_dim] = x_coord
+    superset[array_rio.y_dim] = y_coord
     superset.rio.write_transform(inplace=True)
     if return_slice:
         return superset, {
