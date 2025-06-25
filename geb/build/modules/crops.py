@@ -293,10 +293,6 @@ class Crops:
 
             data = self.inter_and_extrapolate_prices(data, unique_regions)
 
-            # remove columns that are not needed anymore
-            data = data.drop(columns=["_crop_price_inflation"])
-            data = data.drop(columns=["_crop_price_LCU_USD"])
-
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
             crop_data = self.dict["crops/crop_data"]["data"]
@@ -679,6 +675,10 @@ class Crops:
                     data.loc[region_id, crop] = crop_data / conversion_data
                 else:
                     data.loc[region_id, crop] = crop_data
+
+        # remove columns that are not needed anymore
+        data = data.drop(columns=["_crop_price_inflation"])
+        data = data.drop(columns=["_crop_price_LCU_USD"])
 
         return data
 
