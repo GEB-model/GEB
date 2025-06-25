@@ -39,6 +39,7 @@ dependencies = [
     "numba>=0.61.0",
     "numpy>=2.1",
     "openpyxl>=3.1.2",
+    "pandas>=2.3.0",
     "permetrics>=2.0.0",
     "pyarrow>=17.0.0",
     "pyextremes>=2.3.3",
