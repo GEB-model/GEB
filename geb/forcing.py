@@ -10,6 +10,15 @@ from .workflows.io import AsyncGriddedForcingReader, open_zarr
 
 
 class Forcing(Module):
+    """Module to handle climate forcing data.
+
+    This module is responsible for loading and validating climate forcing data such as temperature, humidity, pressure, and radiation.
+    It provides methods to load specific datasets and ensures that the data meets certain validation criteria.
+
+    Args:
+        model: The GEB model instance.
+    """
+
     def __init__(self, model):
         self.model = model
         self.forcings = {}
