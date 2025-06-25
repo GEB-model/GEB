@@ -470,7 +470,7 @@ def get_window(
     return {"x": xslice, "y": yslice}
 
 
-class AsyncForcingReader:
+class AsyncGriddedForcingReader:
     """Asynchronous reader for a forcing variable stored in a zarr file.
 
     This class allows for asynchronous reading of a forcing variable from a zarr file.

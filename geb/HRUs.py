@@ -13,8 +13,6 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import cKDTree
 
-from geb.workflows.io import AsyncForcingReader
-
 
 def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
     """This function finds the nearest river cell to each HRU.
@@ -86,7 +84,7 @@ def load_geom(filepath):
     return gpd.read_parquet(filepath)
 
 
-def load_forcing_xr(filepath):
+def load_water_demand_xr(filepath):
     return xr.open_dataset(
         zarr.storage.LocalStore(
             filepath,
@@ -356,14 +354,6 @@ class Grid(BaseVariables):
             data = self.data.grid.compress(data)
         return data
 
-    def load_forcing_ds(self, name):
-        reader = AsyncForcingReader(
-            self.model.files["other"][f"climate/{name}"],
-            name,
-        )
-        assert reader.ds["y"][0] > reader.ds["y"][-1]
-        return reader
-
     def load_forcing(self, reader, time, compress=True):
         data = reader.read_timestep(time)
         if compress:
@@ -372,80 +362,39 @@ class Grid(BaseVariables):
 
     @property
     def hurs(self):
-        if not hasattr(self, "hurs_ds"):
-            self.hurs_ds = self.load_forcing_ds("hurs")
-        hurs = self.load_forcing(self.hurs_ds, self.model.current_time)
-        assert (hurs > 1).all() and (hurs <= 100).all(), "hurs out of range"
-        return hurs
+        return self.compress(self.model.forcing.load("hurs"))
 
     @property
     def pr(self):
-        if not hasattr(self, "pr_ds"):
-            self.pr_ds = self.load_forcing_ds("pr")
-        pr = self.load_forcing(self.pr_ds, self.model.current_time)
-        assert (pr >= 0).all(), "Precipitation must be positive or zero"
-        return pr
+        return self.compress(self.model.forcing.load("pr"))
 
     @property
     def ps(self):
-        if not hasattr(self, "ps_ds"):
-            self.ps_ds = self.load_forcing_ds("ps")
-        ps = self.load_forcing(self.ps_ds, self.model.current_time)
-        assert (ps > 30_000).all() and (ps < 120_000).all(), (
-            "ps out of range"
-        )  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
-        return ps
+        return self.compress(self.model.forcing.load("ps"))
 
     @property
     def rlds(self):
-        if not hasattr(self, "rlds_ds"):
-            self.rlds_ds = self.load_forcing_ds("rlds")
-        rlds = self.load_forcing(self.rlds_ds, self.model.current_time)
-        rlds = rlds.astype(np.float32)
-        assert (rlds >= 0).all(), "rlds must be positive or zero"
-        return rlds
+        return self.compress(self.model.forcing.load("rlds"))
 
     @property
     def rsds(self):
-        if not hasattr(self, "rsds_ds"):
-            self.rsds_ds = self.load_forcing_ds("rsds")
-        rsds = self.load_forcing(self.rsds_ds, self.model.current_time)
-        assert (rsds >= 0).all(), "rsds must be positive or zero"
-        return rsds
+        return self.compress(self.model.forcing.load("rsds"))
 
     @property
     def tas(self):
-        if not hasattr(self, "tas_ds"):
-            self.tas_ds = self.load_forcing_ds("tas")
-        tas = self.load_forcing(self.tas_ds, self.model.current_time)
-        assert (tas > 170).all() and (tas < 370).all(), "tas out of range"
-        return tas
+        return self.compress(self.model.forcing.load("tas"))
 
     @property
     def tasmin(self):
-        if not hasattr(self, "tasmin_ds"):
-            self.tasmin_ds = self.load_forcing_ds("tasmin")
-        tasmin = self.load_forcing(self.tasmin_ds, self.model.current_time)
-        assert (tasmin > 170).all() and (tasmin < 370).all(), "tasmin out of range"
-        return tasmin
+        return self.compress(self.model.forcing.load("tasmin"))
 
     @property
     def tasmax(self):
-        if not hasattr(self, "tasmax_ds"):
-            self.tasmax_ds = self.load_forcing_ds("tasmax")
-        tasmax = self.load_forcing(self.tasmax_ds, self.model.current_time)
-        assert (tasmax > 170).all() and (tasmax < 370).all(), "tasmax out of range"
-        return tasmax
+        return self.compress(self.model.forcing.load("tasmax"))
 
     @property
     def sfcWind(self):
-        if not hasattr(self, "sfcWind_ds"):
-            self.sfcWind_ds = self.load_forcing_ds("sfcwind")
-        sfcWind = self.load_forcing(self.sfcWind_ds, self.model.current_time)
-        assert (sfcWind >= 0).all() and (sfcWind < 150).all(), (
-            "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
-        )
-        return sfcWind
+        return self.compress(self.model.forcing.load("sfcwind"))
 
     @property
     def spei_uncompressed(self):
@@ -458,9 +407,6 @@ class Grid(BaseVariables):
         SPEI value does not exist, in which case we want to keep using the
         last SPEI value available.
         """
-        if not hasattr(self, "spei_ds"):
-            self.spei_ds = self.load_forcing_ds("SPEI")
-
         current_time: datetime = self.model.current_time
 
         # Determine the nearest first day of the month
@@ -478,14 +424,13 @@ class Grid(BaseVariables):
                 )
 
             # Check if we ran out of SPEI data. If we did, revert to using the last month
-            if np.datetime64(spei_time, "ns") > self.spei_ds.datetime_index[-1]:
+            if (
+                np.datetime64(spei_time, "ns")
+                > self.model.forcing.forcings["SPEI"].datetime_index[-1]
+            ):
                 spei_time: datetime = current_time.replace(day=1)
 
-        spei = self.load_forcing(self.spei_ds, spei_time, compress=False)
-        assert not np.isnan(
-            spei[~self.mask]
-        ).any()  # Ensure no NaN values in non-masked cells
-        return spei
+        return self.model.forcing.load("SPEI", time=spei_time)
 
     @property
     def spei(self):
@@ -965,13 +910,13 @@ class Data:
         )
 
     def load_water_demand(self):
-        self.model.industry_water_consumption_ds = load_forcing_xr(
+        self.model.industry_water_consumption_ds = load_water_demand_xr(
             self.model.files["other"]["water_demand/industry_water_consumption"]
         )
-        self.model.industry_water_demand_ds = load_forcing_xr(
+        self.model.industry_water_demand_ds = load_water_demand_xr(
             self.model.files["other"]["water_demand/industry_water_demand"]
         )
-        self.model.livestock_water_consumption_ds = load_forcing_xr(
+        self.model.livestock_water_consumption_ds = load_water_demand_xr(
             self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
 

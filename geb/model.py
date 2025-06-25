@@ -18,6 +18,7 @@ from geb.reporter import Reporter
 from geb.store import Store
 
 from .evaluate import Evaluate
+from .forcing import Forcing
 from .HRUs import load_geom
 from .hydrology import Hydrology
 
@@ -194,6 +195,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.config["general"]["spinup_time"], datetime.time(0)
         )
         self.timestep_length = timestep_length
+
+        self.forcing = Forcing(self)
 
         if self.simulate_hydrology:
             self.hydrology = Hydrology(self)
