@@ -354,12 +354,6 @@ class Grid(BaseVariables):
             data = self.data.grid.compress(data)
         return data
 
-    def load_forcing(self, reader, time, compress=True):
-        data = reader.read_timestep(time)
-        if compress:
-            data = self.compress(data)
-        return data
-
     @property
     def hurs(self):
         return self.compress(self.model.forcing.load("hurs"))
@@ -431,14 +425,6 @@ class Grid(BaseVariables):
                 spei_time: datetime = current_time.replace(day=1)
 
         return self.model.forcing.load("SPEI", time=spei_time)
-
-    @property
-    def spei(self):
-        if not hasattr(self, "spei_ds"):
-            self.spei_ds = self.load_forcing_ds("spei")
-        spei = self.load_forcing(self.spei_ds, self.model.current_time)
-        assert not np.isnan(spei).any()
-        return spei
 
     @property
     def gev_c(self):
