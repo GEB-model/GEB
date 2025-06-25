@@ -915,10 +915,20 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def _mask_forcing(self, da, value):
-        da_ = xr.where(~self.grid["mask"], da, value, keep_attrs=True)
-        da_ = da_.rio.write_crs(da.rio.crs)
-        da = da_.transpose(*da.dims)
+    def _mask_forcing(self, da: xr.DataArray, value: int | float) -> xr.DataArray:
+        """Mask the forcing data where the grid mask is False.
+
+        Args:
+            da: DataArray to mask.
+            value: Value to use for masking where the grid mask is False.
+
+        Returns:
+            DataArray with replaced values with the same dimensions as the input DataArray.
+        """
+        da_: xr.DataArray = xr.where(~self.grid["mask"], da, value, keep_attrs=True)
+        da_: xr.DataArray = da_.rio.write_crs(da.rio.crs)
+        # restore the original dimensions order which can be changed by the mask operation
+        da: xr.DataArray = da_.transpose(*da.dims)
         return da
 
     def set_ps(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
@@ -1917,7 +1927,7 @@ class Forcing:
                 SPEI.attrs = {
                     "_FillValue": np.nan,
                 }
-                SPEI = to_zarr(
+                SPEI: xr.DataArray = to_zarr(
                     SPEI,
                     tmp_spei_file,
                     x_chunksize=temp_xy_chunk_size,
