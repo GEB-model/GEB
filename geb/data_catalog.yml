@@ -21,6 +21,10 @@ GRDC:
     source_url: https://grdc.bafg.de/
   path: rivers/discharge/GRDC/GRDC-Daily_V2.nc
 
+GHS_OBAT:
+  data_type: Dataset
+  path: buildings/ghs_obat/GHS_OBAT_CSV_{iso3}_E2020_R2024A_V1_0.csv
+
 SWORD:
   data_type: GeoDataFrame
   driver: vector

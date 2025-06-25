@@ -31,7 +31,7 @@ from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_lo
 from ..workflows.general import (
     clip_with_grid,
 )
-from ..workflows.population import load_GLOPOP_S
+from ..workflows.population import load_GLOPOP_S, load_GHS_OBAT
 
 
 class Agents:
@@ -1176,6 +1176,54 @@ class Agents:
 
         farmers = pd.concat(all_agents, ignore_index=True)
         self.setup_farmers(farmers)
+
+    def setup_buildings(self):
+        GDL_regions = self.data_catalog.get_geodataframe(
+            "GDL_regions_v4",
+            geom=self.region,
+            variables=["GDLcode", "iso_code"],
+        )
+        GDL_regions = GDL_regions[
+            GDL_regions["GDLcode"] != "NA"
+        ]  # remove regions without GDL code
+
+        buildings_df = pd.DataFrame()
+
+        # load GHS_OBAT for countries in model
+        for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
+            iso_code = GDL_region["iso_code"]
+            ghs_obat = load_GHS_OBAT(self.data_catalog, iso_code)
+
+            _, GLOPOP_GRID_region = load_GLOPOP_S(
+                self.data_catalog, GDL_region["GDLcode"]
+            )
+            GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
+            res_x, res_y = GLOPOP_GRID_region.rio.resolution()
+            i = 0
+            # find objects in GHS_OBAT for each cell in GLOPOP_GRID_region
+            for x, y in zip(GLOPOP_GRID_region.x.values, GLOPOP_GRID_region.y.values):
+                objects_in_x = np.where(
+                    np.logical_and(
+                        ghs_obat["lon"] > x,
+                        ghs_obat["lon"] < x + res_x,
+                    )
+                )[0]
+                objects_in_y = np.where(
+                    np.logical_and(
+                        ghs_obat["lat"] < y,
+                        ghs_obat["lat"] > y + res_y,
+                    ))[0]
+
+                buildings_idx = np.intersect1d(objects_in_x, objects_in_y)
+                i += 1
+                if buildings_idx.size > 0:
+                    building_gdl = ghs_obat.iloc[buildings_idx]
+                    building_gdl['grid_idx'] = i
+                    buildings_df = pd.concat([buildings_df, ghs_obat.iloc[buildings_idx]])
+            
+            a = 1
+
+    
 
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
         # load GDL region within model domain
