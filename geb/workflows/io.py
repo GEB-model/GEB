@@ -19,6 +19,8 @@ import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from tqdm import tqdm
+from zarr.codecs import BloscCodec
+from zarr.codecs.blosc import BloscShuffle
 
 all_async_readers: list = []
 
@@ -250,7 +252,7 @@ def to_zarr(
 
         da.name = path.stem.split("/")[-1]
 
-        da = da.drop_vars([v for v in da.coords if v not in da.dims])
+        da: xr.DataArray = da.drop_vars([v for v in da.coords if v not in da.dims])
 
         chunks, shards = {}, None
         if "y" in da.dims and "x" in da.dims:
@@ -272,34 +274,16 @@ def to_zarr(
         # support seems recently merged, and we need to wait for the 3.11 release, and
         # subsequent QGIS support for GDAL 3.11. See https://github.com/OSGeo/gdal/pull/11787
         # For anything with a shard, we opt for zarr version 3, for anything without, we use version 2.
-        if shards:
-            zarr_format = 3
-            from zarr.codecs import BloscCodec
-            from zarr.codecs.blosc import BloscShuffle
+        if compressor is None:
+            compressor: BloscCodec = BloscCodec(
+                cname="zstd",
+                clevel=9,
+                shuffle=BloscShuffle.shuffle if byteshuffle else BloscShuffle.noshuffle,
+            )
 
-            if compressor is None:
-                compressor = BloscCodec(
-                    cname="zstd",
-                    clevel=9,
-                    shuffle=BloscShuffle.shuffle
-                    if byteshuffle
-                    else BloscShuffle.noshuffle,
-                )
+        check_buffer_size(da, chunks_or_shards=shards if shards else chunks)
 
-            check_buffer_size(da, chunks_or_shards=shards)
-        else:
-            assert not filters, "Filters are only supported for zarr version 3"
-            zarr_format = 2
-            from numcodecs import Blosc
-
-            if compressor is None:
-                compressor = Blosc(
-                    cname="zstd", clevel=9, shuffle=1 if byteshuffle else 0
-                )
-
-            check_buffer_size(da, chunks_or_shards=chunks)
-
-        da = da.chunk(shards if shards is not None else chunks)
+        da: xr.DataArray = da.chunk(shards if shards is not None else chunks)
 
         # to display maps in QGIS, the "other" dimensions must have a chunk size of 1
         chunks = tuple((chunks[dim] if dim in chunks else 1) for dim in da.dims)
@@ -317,15 +301,15 @@ def to_zarr(
             )
             array_encoding["shards"] = shards
 
-        encoding = {da.name: array_encoding}
+        encoding: dict[str, dict[str, Any]] = {da.name: array_encoding}
         for coord in da.coords:
             encoding[coord] = {"compressors": (compressor,)}
 
-        arguments = {
+        arguments: dict[str, Any] = {
             "store": tmp_zarr,
             "mode": "w",
             "encoding": encoding,
-            "zarr_format": zarr_format,
+            "zarr_format": 3,
             "consolidated": False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
         }
 
@@ -341,7 +325,7 @@ def to_zarr(
 
         store.close()
 
-        folder = path.parent
+        folder: Path = path.parent
         folder.mkdir(parents=True, exist_ok=True)
         if path.exists():
             shutil.rmtree(path)
