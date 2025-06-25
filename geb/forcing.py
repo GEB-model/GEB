@@ -94,7 +94,12 @@ class Forcing(Module):
             ).item()
         else:
             data = reader.read_timestep(time)
-        assert self.validators[name](data)
+        if __debug__ and not self.validators[name](data):
+            raise ValueError(
+                f"Invalid data for {name} at time {time}. "
+                f"\tMin data value: {data.min()}"
+                f"\tMax data value: {data.max()}"
+            )
         return data
 
     def spinup(self):
