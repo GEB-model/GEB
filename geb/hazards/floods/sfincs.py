@@ -41,10 +41,6 @@ class SFINCS:
             self.n_timesteps = n_timesteps
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
-        self.precipitation_dataarray = open_zarr(
-            self.model.files["other"]["climate/pr_hourly"]
-        )
-
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)
         folder.mkdir(parents=True, exist_ok=True)
@@ -121,10 +117,10 @@ class SFINCS:
     def to_sfincs_datetime(self, dt: datetime):
         return dt.strftime("%Y%m%d %H%M%S")
 
-    def set_forcing(self, event, start_time):
+    def set_forcing(self, event, start_time, precipitation_scale_factor=1.0):
         if self.model.simulate_hydrology:
-            n_timesteps = min(self.n_timesteps, len(self.discharge_per_timestep))
-            substeps = self.discharge_per_timestep[0].shape[0]
+            n_timesteps: int = min(self.n_timesteps, len(self.discharge_per_timestep))
+            substeps: int = self.discharge_per_timestep[0].shape[0]
             discharge_grid = self.hydrology.grid.decompress(
                 np.vstack(self.discharge_per_timestep)
             )
@@ -137,6 +133,7 @@ class SFINCS:
                     discharge_grid,
                 ]
             )  # prepend zeros
+
             for i in range(substeps - 1, -1, -1):
                 discharge_grid[i] = discharge_grid[i + 1] * 0.3
             # convert the discharge grid to an xarray DataArray
@@ -158,8 +155,8 @@ class SFINCS:
                 name="discharge",
             )
         else:
-            substeps = 24  # when setting 0 it doesn't matter so much how many substeps. 24 is a reasonable default.
-            n_timesteps = (event["end_time"] - event["start_time"]).days
+            substeps: int = 24  # when setting 0 it doesn't matter so much how many substeps. 24 is a reasonable default.
+            n_timesteps: int = (event["end_time"] - event["start_time"]).days
             time = pd.date_range(
                 end=self.model.current_time - self.model.timestep_length / substeps,
                 periods=(n_timesteps + 1)
@@ -187,9 +184,18 @@ class SFINCS:
         end_time = discharge_grid.time[-1] + pd.Timedelta(
             self.model.timestep_length / substeps
         )
-        discharge_grid = discharge_grid.sel(time=slice(start_time, end_time))
+        discharge_grid: xr.Dataset = discharge_grid.sel(
+            time=slice(start_time, end_time)
+        )
 
-        event_name = self.get_event_name(event)
+        precipitation_grid: xr.DataArray = (
+            self.model.forcing.load("pr_hourly", time=slice(start_time, end_time))
+            * precipitation_scale_factor
+        )
+        precipitation_grid.raster.set_crs(4326)
+        precipitation_grid: xr.DataArray = precipitation_grid.rio.set_crs(4326)
+
+        event_name: str = self.get_event_name(event)
 
         update_sfincs_model_forcing(
             model_root=self.sfincs_model_root(event_name),
@@ -200,16 +206,17 @@ class SFINCS:
             },
             forcing_method="precipitation",
             discharge_grid=discharge_grid,
-            precipitation_grid=self.precipitation,
+            precipitation_grid=precipitation_grid
+            * 3600,  # convert from kg/m2/s to mm/h
             uparea_discharge_grid=None,
         )
 
-    def run_single_event(self, event, start_time):
+    def run_single_event(self, event, start_time, precipitation_scale_factor=1.0):
         self.build(event)
         model_root = self.sfincs_model_root(self.get_event_name(event))
         simulation_root = self.sfincs_simulation_root(self.get_event_name(event))
 
-        self.set_forcing(event, start_time)
+        self.set_forcing(event, start_time, precipitation_scale_factor)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
 
         run_sfincs_simulation(
@@ -274,22 +281,17 @@ class SFINCS:
             return_periods_list = []
             exceedence_probabilities_list = []
 
-            default_precipitation = self.precipitation_dataarray
-
             for _, row in scale_factors.iterrows():
                 return_period = row["return_period"]
                 exceedence_probability = row["exceedance_probability"]
-                scale_factor = row["scaling_factor"]
 
-                self.precipitation_dataarray = default_precipitation * scale_factor
-
-                damages = self.run_single_event(event, start_time)
+                damages = self.run_single_event(
+                    event, start_time, precipitation_scale_factor=row["scaling_factor"]
+                )
 
                 damages_list.append(damages)
                 return_periods_list.append(return_period)
                 exceedence_probabilities_list.append(exceedence_probability)
-
-            self.precipitation_dataarray = default_precipitation
 
             print(damages_list)
             print(return_periods_list)
@@ -348,22 +350,6 @@ class SFINCS:
     @property
     def rivers(self):
         return load_geom(self.model.files["geoms"]["routing/rivers"])
-
-    @property
-    def precipitation(self):
-        # convert from kg/m2/s to mm/h
-        pr = self.precipitation_dataarray * 3600
-        pr.raster.set_crs(4326)  # TODO: Remove when this is added to hydromt_sfincs
-        pr = pr.rio.set_crs(4326)
-        return pr
-
-    @property
-    def precipitation_dataarray(self):
-        return self._precipitation_dataarray
-
-    @precipitation_dataarray.setter
-    def precipitation_dataarray(self, dataarray):
-        self._precipitation_dataarray = dataarray
 
     @property
     def mannings(self):

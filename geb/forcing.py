@@ -31,6 +31,7 @@ class Forcing(Module):
             "sfcwind": lambda x: (x >= 0).all() and (x < 150).all(),
             "ps": lambda x: (x > 30_000).all() and (x < 120_000).all(),
             "pr": lambda x: (x >= 0).all(),
+            "pr_hourly": lambda x: (x >= 0).all(),
             "hurs": lambda x: (x >= 0).all() and (x <= 100).all(),
             "SPEI": lambda x: not np.isnan(x).any(),
             "CO2": lambda x: x > 270 and x < 2000,
@@ -54,11 +55,15 @@ class Forcing(Module):
 
         """
         if name == "CO2":
-            reader = open_zarr(
+            reader: xr.DataArray = open_zarr(
                 self.model.files["other"]["climate/CO2_ppm"],
             ).compute()
+        elif name == "pr_hourly":
+            reader: xr.DataArray = open_zarr(
+                self.model.files["other"]["climate/pr_hourly"],
+            )
         else:
-            reader = AsyncGriddedForcingReader(
+            reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
                 self.model.files["other"][f"climate/{name}"],
                 name,
             )
@@ -83,7 +88,7 @@ class Forcing(Module):
             reader = self.forcings[name]
 
         if time is None:
-            time = self.model.current_time
+            time: datetime = self.model.current_time
 
         if name == "CO2":
             # tollerance is given in nanoseconds. Calulate it as 1e9 * 366 days * 24 hours * 3600 seconds
@@ -92,6 +97,10 @@ class Forcing(Module):
                 method="pad",
                 tolerance=1e9 * 366 * 24 * 3600,
             ).item()
+        if name == "pr_hourly":
+            # For hourly precipitation, we need to read the data for the current time
+            # and return it as a numpy array.
+            data = reader.sel(time=time)
         else:
             data = reader.read_timestep(time)
         if __debug__ and not self.validators[name](data):
