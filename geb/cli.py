@@ -116,11 +116,13 @@ def cli(ctx):  # , quiet, verbose):
 
 
 def click_config(func):
+    default: str = "model.yml"
+
     @click.option(
         "--config",
         "-c",
-        default="model.yml",
-        help="Path of the model configuration file.",
+        default=default,
+        help=f"Path of the model configuration file. Defaults to '{default}'.",
     )
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -330,7 +332,7 @@ def click_build_options(build_config="build.yml"):
             "--build-config",
             "-b",
             default=build_config,
-            help="Path of the model build configuration file.",
+            help=f"Path of the model build configuration file. Defaults to '{build_config}'.",
         )
         @click.option(
             "--custom-model",
@@ -360,7 +362,7 @@ def click_build_options(build_config="build.yml"):
                 "GEB_DATA_ROOT",
                 Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / ".." / "data_catalog",
             ),
-            help="Root folder where the data is located.",
+            help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -504,7 +506,7 @@ def init_fn(
     "--build-config",
     "-b",
     default="build.yml",
-    help="Path of the model build configuration file.",
+    help="Path of the model build configuration file. Defaults to 'build.yml'.",
 )
 @click.option(
     "--update-config",
