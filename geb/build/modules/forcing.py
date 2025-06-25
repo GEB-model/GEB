@@ -1057,7 +1057,7 @@ class Forcing:
             **download_args,
         )
         elevation_forcing, elevation_target = self.get_elevation_forcing_and_grid(
-            self.grid["mask"], pr_hourly, forcing_type="ERA5"
+            self.grid["mask"], pr_hourly, forcing_name="ERA5"
         )
 
         pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
@@ -1319,7 +1319,7 @@ class Forcing:
 
         elif variable_name in ("tas", "tasmin", "tasmax", "ps"):
             elevation_forcing, elevation_grid = self.get_elevation_forcing_and_grid(
-                self.grid["mask"], da, forcing_type="ISIMIP"
+                self.grid["mask"], da, forcing_name="ISIMIP"
             )
 
             if variable_name in ("tas", "tasmin", "tasmax"):
@@ -1954,20 +1954,33 @@ class Forcing:
                 )
 
     def get_elevation_forcing_and_grid(
-        self, grid, forcing_grid, forcing_type
+        self, grid: xr.DataArray, forcing_grid: xr.DataArray, forcing_name
     ) -> tuple[xr.DataArray, xr.DataArray]:
+        """Gets elevation maps for both the normal grid (target of resampling) and the forcing grid.
+
+        Args:
+            grid: the normal grid to which the forcing data is resampled
+            forcing_grid: grid of the forcing data
+            forcing_name: name of the forcing data, used to determine the file paths for caching
+
+        Returns:
+            elevation data for the forcing grid and the normal grid
+
+        """
         # we also need to process the elevation data for the grid, because the
         # elevation data that is available in the model is masked to the grid
-        elevation_forcing_fp = (
-            self.preprocessing_dir / "climate" / forcing_type / "DEM_forcing.zarr"
+        elevation_forcing_fp: Path = (
+            self.preprocessing_dir / "climate" / forcing_name / "DEM_forcing.zarr"
         )
-        elevation_grid_fp = self.preprocessing_dir / "climate" / "DEM.zarr"
+        elevation_grid_fp: Path = self.preprocessing_dir / "climate" / "DEM.zarr"
         if elevation_forcing_fp.exists() and elevation_grid_fp.exists():
-            elevation_forcing = open_zarr(elevation_forcing_fp)
-            elevation_grid = open_zarr(elevation_grid_fp)
+            elevation_forcing: xr.DataArray = open_zarr(elevation_forcing_fp)
+            elevation_grid: xr.DataArray = open_zarr(elevation_grid_fp)
         else:
-            elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
-            elevation = (
+            elevation: xr.DataArray = xr.open_dataarray(
+                self.data_catalog.get_source("fabdem").path
+            )
+            elevation: xr.DataArray = (
                 elevation.isel(
                     band=0,
                     **get_window(
@@ -1978,26 +1991,33 @@ class Forcing:
                 .fillna(0)
                 .chunk({"x": 2000, "y": 2000})
             )
-            elevation_forcing = resample_chunked(
+            elevation_forcing: xr.DataArray = resample_chunked(
                 elevation,
                 forcing_grid.isel(time=0).chunk({"x": 10, "y": 10}),
                 method="bilinear",
             )
-            elevation_forcing = to_zarr(
+            elevation_forcing: xr.DataArray = to_zarr(
                 elevation_forcing,
                 elevation_forcing_fp,
                 crs=4326,
             )
-            elevation_grid = resample_chunked(
+            elevation_grid: xr.DataArray = resample_chunked(
                 elevation, grid.chunk({"x": 50, "y": 50}), method="bilinear"
             )
-            elevation_grid = to_zarr(elevation_grid, elevation_grid_fp, crs=4326)
+            elevation_grid: xr.DataArray = to_zarr(
+                elevation_grid, elevation_grid_fp, crs=4326
+            )
 
         return elevation_forcing.chunk({"x": -1, "y": -1}), elevation_grid.chunk(
             {"x": -1, "y": -1}
         )
 
     def setup_CO2_concentration(self, ssp: str) -> None:
+        """Aquires the CO2 concentration data for the specified SSP in ppm.
+
+        Args:
+            ssp: The Shared Socioeconomic Pathway (SSP) for which the CO2 concentration data is acquired. Only used for future scenarios.
+        """
         da: xr.DataArray = self.construct_ISIMIP_variable(
             variable_name="co2",
             forcing=None,

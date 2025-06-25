@@ -112,11 +112,11 @@ class Agents:
             municipal_water_withdrawal_m3_per_capita_per_day = (
                 municipal_water_withdrawal / population / 365.2425
             )
-            municipal_water_withdrawal_m3_per_capita_per_day = (
+            municipal_water_withdrawal_m3_per_capita_per_day: pd.DataFrame = (
                 municipal_water_withdrawal_m3_per_capita_per_day
             ).dropna()
 
-            municipal_water_withdrawal_m3_per_capita_per_day = (
+            municipal_water_withdrawal_m3_per_capita_per_day: pd.DataFrame = (
                 municipal_water_withdrawal_m3_per_capita_per_day.reindex(
                     list(
                         range(
@@ -124,14 +124,16 @@ class Agents:
                             self.end_date.year + 1,
                         )
                     )
-                ).interpolate(method="linear")
-            )  # interpolate also extrapolates with constant values
+                )
+                .interpolate(method="linear")
+                .fillna(method="bfill")
+            )  # interpolate also extrapolates forward with constant values
 
             assert municipal_water_withdrawal_m3_per_capita_per_day.max() < 10, (
                 f"Too large water withdrawal data for {ISO3}"
             )
 
-            municipal_water_demand_2000_m3_per_capita_per_day = (
+            municipal_water_demand_2000_m3_per_capita_per_day: pd.DataFrame = (
                 municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
             )
 
@@ -342,37 +344,35 @@ class Agents:
                 lcu_filtered, years_lcu, region["ISO3"]
             )
 
-        # convert to pandas dataframe
-        inflation_rates = pd.DataFrame(
-            inflation_rates_dict["data"], index=inflation_rates_dict["time"]
-        ).dropna()
-        # lending_rates = pd.DataFrame(
-        #     lending_rates_dict["data"], index=lending_rates_dict["time"]
-        # ).dropna()
+        for d in (
+            inflation_rates_dict,
+            price_ratio_dict,
+            lcu_dict,
+        ):
+            # convert to pandas dataframe
+            df = pd.DataFrame(d["data"], index=d["time"])
+            df.index = df.index.astype(int)
 
-        inflation_rates.index = inflation_rates.index.astype(int)
-
-        # re-index the inflation rates to ensure that at least all years from
-        # model start to end are present. In addition, we add 10 years
-        # to the beginning, since this is used in some of the model spinup.
-        inflation_rates = inflation_rates.reindex(
-            list(
-                range(
-                    min(self.start_date.year - 10, inflation_rates.index[0]),
-                    max(self.end_date.year, inflation_rates.index[-1]) + 1,
+            # re-index the inflation rates to ensure that at least all years from
+            # model start to end are present. In addition, we add 10 years
+            # to the beginning, since this is used in some of the model spinup.
+            df = df.reindex(
+                list(
+                    range(
+                        min(self.start_date.year - 10, df.index[0]),
+                        max(self.end_date.year, df.index[-1]) + 1,
+                    )
                 )
             )
-        )
+            # interpolate missing values in inflation rates. For extrapolation
+            # linear interpolation uses the first and last value
+            for column in df.columns:
+                df[column] = (
+                    df[column].interpolate(method="linear").fillna(method="bfill")
+                )
 
-        # interpolate missing values in inflation rates. For extrapolation
-        # linear interpolation uses the first and last value
-        for column in inflation_rates.columns:
-            inflation_rates[column] = inflation_rates[column].interpolate(
-                method="linear"
-            )
-
-        inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
-        inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
+            d["time"] = df.index.astype(str).tolist()
+            d["data"] = df.to_dict(orient="list")
 
         # lending_rates.index = lending_rates.index.astype(int)
         # extend lending rates to future

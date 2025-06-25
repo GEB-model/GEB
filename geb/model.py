@@ -46,7 +46,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self._multiverse_name = None
 
-        self.config = self.setup_config(config)
+        self.config = config
 
         # make a deep copy to avoid issues when the model is initialized multiple times
         self.files = copy.deepcopy(files)
@@ -66,7 +66,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     def name(self) -> str:
         return ""
 
-    def restore(self, store_location: str, timestep: int) -> None:
+    def restore(self, store_location: str | Path, timestep: int) -> None:
         self.store.load(store_location)
 
         # restore the heads of the groundwater model
@@ -219,7 +219,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if create_reporter:
             self.reporter = Reporter(self, clean=clean_report_folder)
 
-    def run(self, initialize_only=False) -> None:
+    def run(self, initialize_only: bool = False) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
         if not self.store.path.exists():
             raise FileNotFoundError(
@@ -282,7 +282,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
-    def spinup(self, initialize_only=False) -> None:
+    def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period."""
         # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
         current_time = self.create_datetime(self.config["general"]["spinup_time"])
@@ -461,7 +461,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             and hasattr(self, "simulate_hydrology")
             and self.simulate_hydrology
         ):
-            Hydrology.finalize(self)
+            Hydrology.finalize(self.hydrology)
 
             from geb.workflows.io import all_async_readers
 
