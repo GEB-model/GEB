@@ -81,7 +81,7 @@ class Households(AgentBaseClass):
         )
 
         transformer = pyproj.Transformer.from_crs(
-            self.grid.crs["wkt"], self.flood_maps["crs"], always_xy=True
+            self.grid.crs, self.flood_maps["crs"], always_xy=True
         )
         locations[:, 0], locations[:, 1] = transformer.transform(
             self.var.locations[:, 0], self.var.locations[:, 1]
@@ -97,8 +97,7 @@ class Households(AgentBaseClass):
         flood_maps = {}
         for return_period in self.return_periods:
             file_path = (
-                self.model.output_folder_root
-                / "estimate_return_periods"
+                self.model.output_folder
                 / "flood_maps"
                 / f"{return_period}.zarr"
             )
@@ -286,7 +285,7 @@ class Households(AgentBaseClass):
         if not hasattr(self, "buildings_content_curve_interpolator"):
             self.create_damage_interpolators()
 
-        if not hasattr(self.var, "locations_reprojected_to_flood_map"):
+        # if not hasattr(self.var, "locations_reprojected_to_flood_map"):
             self.reproject_locations_to_floodmap_crs()
 
         # loop over return periods
