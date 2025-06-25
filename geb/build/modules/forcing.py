@@ -703,7 +703,7 @@ class Forcing:
         }
         self.set_xy_attrs(da)
 
-        offset = -250
+        offset = 0
         scaling_factor, out_dtype = calculate_scaling(
             0, 1361, offset=offset, precision=0.1
         )
@@ -738,7 +738,7 @@ class Forcing:
         }
         self.set_xy_attrs(da)
 
-        offset = -250
+        offset = 0
         scaling_factor, out_dtype = calculate_scaling(
             0, 1361, offset=offset, precision=0.1
         )
