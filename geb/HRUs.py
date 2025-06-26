@@ -91,6 +91,7 @@ def load_water_demand_xr(filepath):
             read_only=True,
         ),
         engine="zarr",
+        consolidated=False,
     )
 
 
@@ -420,7 +421,7 @@ class Grid(BaseVariables):
             # Check if we ran out of SPEI data. If we did, revert to using the last month
             if (
                 np.datetime64(spei_time, "ns")
-                > self.model.forcing.forcings["SPEI"].datetime_index[-1]
+                > self.model.forcing["SPEI"].datetime_index[-1]
             ):
                 spei_time: datetime = current_time.replace(day=1)
 
