@@ -49,8 +49,21 @@ def update_sfincs_model_forcing(
             pd.to_datetime(discharge_grid.time[-1].item()).to_pydatetime()
         ) >= event["end_time"]
 
+    if precipitation_grid is not None:
+        assert precipitation_grid.raster.crs is not None, (
+            "precipitation_grid should have a crs"
+        )
+        assert (
+            pd.to_datetime(precipitation_grid.time[0].item()).to_pydatetime()
+            <= event["start_time"]
+        )
+        assert (
+            pd.to_datetime(precipitation_grid.time[-1].item()).to_pydatetime()
+            >= event["end_time"]
+        )
+
     # read model
-    sf = SfincsModel(root=model_root, mode="r+", logger=get_logger())
+    sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
 
     # update mode time based on event tstart and tend from event dict
     sf.setup_config(

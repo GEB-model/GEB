@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
@@ -159,6 +160,9 @@ def test_multiverse():
         + timedelta(days=forecast_after_n_days)
         + timedelta(hours=forecast_n_hours)
     )
+    forecast_end_date = forecast_date + timedelta(
+        days=int(forecast_n_days), hours=forecast_n_hours
+    )
     config["general"]["end_time"] = forecast_date + timedelta(
         days=int(forecast_n_days) + 5
     )
@@ -171,27 +175,39 @@ def test_multiverse():
     precipitation = xr.open_dataarray(
         input_folder / files["other"]["climate/pr_hourly"], consolidated=False
     ).drop_encoding()
-    precipitation = precipitation.sel(
+    forecast = precipitation.sel(
         time=slice(
             forecast_date,
-            forecast_date
-            + timedelta(days=forecast_n_days)
-            + timedelta(hours=forecast_n_hours),
+            forecast_end_date,
         )
     )
 
     # add member dimension
-    precipitation = precipitation.expand_dims(dim={"member": [0]}, axis=0)
+    forecast = forecast.expand_dims(dim={"member": [0]}, axis=0)
 
     forecasts_folder = input_folder / "other" / "climate" / "forecasts"
     forecasts_folder.mkdir(parents=True, exist_ok=True)
 
-    precipitation.to_zarr(
+    forecast.to_zarr(
         forecasts_folder / forecast_date.strftime("%Y%m%dT%H%M%S.zarr"), mode="w"
     )
 
     # inititate a forecast after three days
     config["general"]["forecasts"]["times"] = [forecast_date]
+
+    # add flood event during the forecast period
+    events: list = [
+        {
+            "start_time": forecast_date + timedelta(days=1),
+            "end_time": forecast_date + timedelta(days=2, hours=12),
+        },
+        {
+            "start_time": forecast_end_date - timedelta(days=1, hours=0),
+            "end_time": forecast_end_date + timedelta(days=1, hours=18),
+        },
+    ]
+    config["hazards"]["floods"]["events"] = events
+    config["hazards"]["floods"]["force_overwrite"] = False
 
     args["config"] = config
 
@@ -206,7 +222,7 @@ def test_multiverse():
         )
 
         end_date = round_up_to_start_of_next_day_unless_midnight(
-            pd.to_datetime(precipitation.time[-1].item()).to_pydatetime()
+            pd.to_datetime(forecast.time[-1].item()).to_pydatetime()
         ).date()
         steps_in_forecast = (end_date - geb.current_time.date()).days
 
@@ -223,6 +239,34 @@ def test_multiverse():
         assert forecast_mean_discharge == mean_discharge
 
     geb.close()
+
+    flood_map_folder: Path = working_directory / "output" / "flood_maps"
+
+    flood_map_first_event: xr.DataArray = xr.open_dataarray(
+        flood_map_folder
+        / f"{events[0]['start_time'].isoformat()} - {events[0]['end_time'].isoformat()}.zarr"
+    )
+
+    flood_map_first_event_multiverse: xr.DataArray = xr.open_dataarray(
+        flood_map_folder
+        / f"0 - {events[0]['start_time'].isoformat()} - {events[0]['end_time'].isoformat()}.zarr"
+    )
+
+    np.testing.assert_array_equal(
+        flood_map_first_event.values,
+        flood_map_first_event_multiverse.values,
+        err_msg="Flood maps for the first event do not match across multiverse members.",
+    )
+
+    flood_map_second_event: xr.DataArray = xr.open_dataarray(
+        flood_map_folder
+        / f"{events[1]['start_time'].isoformat()} - {events[1]['end_time'].isoformat()}.zarr"
+    )
+
+    flood_map_second_event_multiverse: xr.DataArray = xr.open_dataarray(
+        flood_map_folder
+        / f"0 - {events[1]['start_time'].isoformat()} - {forecast_end_date.isoformat()}.zarr"
+    )
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

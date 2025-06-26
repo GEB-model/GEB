@@ -46,11 +46,12 @@ class SFINCS:
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
-    def sfincs_simulation_root(self, basin_id):
+    def sfincs_simulation_root(self, event):
+        name = self.get_event_name(event)
         folder = (
-            self.sfincs_model_root(basin_id)
+            self.sfincs_model_root(name)
             / "simulations"
-            / f"{self.model.current_time.strftime('%Y%m%dT%H%M%S')}"
+            / f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}"
         )
         if self.model.multiverse_name:
             folder = folder / self.model.multiverse_name
@@ -58,12 +59,12 @@ class SFINCS:
         return folder
 
     def get_event_name(self, event):
-        if "basin_id" in event:
+        if "name" in event:
+            return event["name"]
+        elif "basin_id" in event:
             return event["basin_id"]
-        elif "region" in event:
-            return "region"
         else:
-            return "all"
+            return "run"
 
     def get_utm_zone(self, region_file):
         region = load_geom(region_file)
@@ -201,7 +202,7 @@ class SFINCS:
 
         update_sfincs_model_forcing(
             model_root=self.sfincs_model_root(event_name),
-            simulation_root=self.sfincs_simulation_root(event_name),
+            simulation_root=self.sfincs_simulation_root(event),
             event=event,
             forcing_method="precipitation",
             discharge_grid=discharge_grid,
@@ -212,7 +213,7 @@ class SFINCS:
     def run_single_event(self, event, start_time, precipitation_scale_factor=1.0):
         self.build(event)
         model_root = self.sfincs_model_root(self.get_event_name(event))
-        simulation_root = self.sfincs_simulation_root(self.get_event_name(event))
+        simulation_root = self.sfincs_simulation_root(event)
 
         self.set_forcing(event, start_time, precipitation_scale_factor)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
@@ -226,13 +227,19 @@ class SFINCS:
             model_root=model_root,
             simulation_root=simulation_root,
         )  # xc, yc is for x and y in rotated grid`DD`
+
+        flood_map_name = (
+            f"{event['start_time'].isoformat()} - {event['end_time'].isoformat()}.zarr"
+        )
+        if self.model.multiverse_name:
+            flood_map_name = self.model.multiverse_name + " - " + flood_map_name
         flood_map = to_zarr(
             flood_map,
-            self.model.output_folder / "flood_maps" / f"{start_time.isoformat()}.zarr",
+            self.model.output_folder / "flood_maps" / flood_map_name,
             crs=flood_map.rio.crs,
         )
-        damages = self.flood(flood_map=flood_map)
-        return damages
+        # damages = self.flood(flood_map=flood_map)
+        # return damages
 
     def get_return_period_maps(self):
         # close the zarr store

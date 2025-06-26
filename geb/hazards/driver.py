@@ -1,4 +1,7 @@
+import copy
 from datetime import datetime
+
+import pandas as pd
 
 
 class HazardDriver:
@@ -50,6 +53,19 @@ class HazardDriver:
                 if (
                     timestep_end_time >= event["end_time"]
                     and event["end_time"] + self.timestep_length > timestep_end_time
+                ) or (
+                    event["end_time"] > self.end_time
+                    and self.current_timestep == self.n_timesteps - 1
                 ):
-                    print("would run SFINCS for event:", event)
-                    # self.sfincs.run(event)
+                    event = copy.deepcopy(event)
+                    end_of_forcing_date: datetime = pd.to_datetime(
+                        self.model.forcing["pr_hourly"].time[-1].item()
+                    ).to_pydatetime()
+                    if event["end_time"] > end_of_forcing_date:
+                        print(
+                            f"Warning: Flood event {event} ends after the model end time {self.end_time}. Simulating only part of flood event."
+                        )
+                        event["end_time"] = end_of_forcing_date
+
+                    print("Running SFINCS for event:", event)
+                    self.sfincs.run(event)

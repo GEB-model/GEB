@@ -206,7 +206,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         t1 = time()
         print(
-            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}{self.current_time} ({round(t1 - t0, 4)}s)",
+            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}finished {self.current_time} ({round(t1 - t0, 4)}s)",
             flush=True,
         )
 
