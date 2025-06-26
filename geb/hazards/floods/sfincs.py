@@ -1,6 +1,6 @@
 import json
 from collections import deque
-from datetime import datetime
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -42,19 +42,19 @@ class SFINCS:
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
     def sfincs_model_root(self, basin_id):
-        folder = self.model.simulation_root / "SFINCS" / str(basin_id)
+        folder: Path = self.model.simulation_root / "SFINCS" / str(basin_id)
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
     def sfincs_simulation_root(self, event):
-        name = self.get_event_name(event)
-        folder = (
+        name: str = self.get_event_name(event)
+        folder: Path = (
             self.sfincs_model_root(name)
             / "simulations"
             / f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}"
         )
         if self.model.multiverse_name:
-            folder = folder / self.model.multiverse_name
+            folder: Path = folder / self.model.multiverse_name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
