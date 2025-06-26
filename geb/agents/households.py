@@ -247,10 +247,11 @@ class Households(AgentBaseClass):
         self.var.property_value = DynamicArray(
             np.int64(self.var.wealth.data * 0.8), max_n=self.max_n
         )
-        # initiate array with RANDOM annual adaptation costs [dummy data for now, values are availbale in literature]
-        self.var.adaptation_costs = DynamicArray(
-            np.int64(self.var.property_value.data * 0.05), max_n=self.max_n
+        # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
+        adaptation_costs = np.int64(
+            np.maximum(self.var.property_value.data * 0.05, 10_800)
         )
+        self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
 
         # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
         amenity_premiums = np.random.uniform(0, 0.2, self.n)
@@ -356,7 +357,7 @@ class Households(AgentBaseClass):
         self.var.years_since_last_flood.data += 1
 
         # generate random flood (not based on actual modeled flood data, replace this later with events)
-        if np.random.random() < 0.2:
+        if np.random.random() < 0.1:
             print("Flood event!")
             self.var.years_since_last_flood.data = 0
 
@@ -382,7 +383,7 @@ class Households(AgentBaseClass):
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
-            expendature_cap=10,  # realy high for now
+            expendature_cap=0.1,  # realy high for now
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
@@ -419,9 +420,7 @@ class Households(AgentBaseClass):
         self.var.time_adapted[household_adapting] += 1
 
         # print percentage of households that adapted
-        print(
-            f"Percentage of households that adapted: {len(household_adapting) / self.n * 100}%"
-        )
+        print(f"N households that adapted: {len(household_adapting)}")
 
     def load_objects(self):
         # Load buildings
