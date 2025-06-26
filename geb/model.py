@@ -17,6 +17,7 @@ from geb.hazards.driver import HazardDriver
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
+from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
 
 from .evaluate import Evaluate
 from .forcing import Forcing
@@ -68,7 +69,16 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     def name(self) -> str:
         return ""
 
-    def restore(self, store_location: str | Path, timestep: int) -> None:
+    def restore(
+        self, store_location: str | Path, timestep: int, n_timesteps: int
+    ) -> None:
+        """Restore the model state to the original state given by the function input.
+
+        Args:
+            store_location: Location of the store to restore the model state from.
+            timestep: timestep to restore the model state to.
+            n_timesteps: number of timesteps (i.e., the final timestep) to restore the model state to.
+        """
         self.store.load(store_location)
 
         # restore the heads of the groundwater model
@@ -79,32 +89,36 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.hydrology.routing.grid.var.discharge_m3_s.copy()
         )
         self.current_timestep = timestep
+        self.n_timesteps = n_timesteps
 
     def multiverse(
-        self, return_mean_discharge: bool = False
+        self, forecast_dt: datetime.datetime, return_mean_discharge: bool = False
     ) -> None | dict[Any, float]:
         # copy current state of timestep and time
         store_timestep: int = copy.copy(self.current_timestep)
+        store_n_timesteps: int = copy.copy(self.n_timesteps)
 
         # set a folder to store the initial state of the multiverse
         store_location: Path = self.simulation_root / "multiverse" / "forecast"
         self.store.save(store_location)
+
+        original_pr_hourly = self.forcing["pr_hourly"]
 
         forecasts: xr.DataArray = xr.open_dataarray(
             self.input_folder
             / "other"
             / "climate"
             / "forecasts"
-            / f"{self.current_time.strftime('%Y%m%d')}.zarr"
+            / f"{forecast_dt.strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
-        end_date = forecasts.time[-1].dt.date.item()
-        n_timesteps = (end_date - self.current_time.date()).days
+        end_date = round_up_to_start_of_next_day_unless_midnight(
+            pd.to_datetime(forecasts.time[-1].item()).to_pydatetime()
+        ).date()
+        self.n_timesteps = (end_date - self.start_time.date()).days
 
         if return_mean_discharge:
             mean_discharge = {}
-
-        original_pr_hourly = self.forcing["pr_hourly"]
 
         for member in forecasts.member:
             self.multiverse_name: str = member.item()
@@ -135,8 +149,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.model.forcing["pr_hourly"] = pr_hourly_observed_and_historic_combined
 
             print(f"Running forecast member {member.item()}...")
-            for _ in range(n_timesteps):
-                self.step()
+            self.step_to_end()
 
             if return_mean_discharge:
                 mean_discharge[member.item()] = (
@@ -144,7 +157,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 ).item()
 
             # restore the initial state of the multiverse
-            self.restore(store_location=store_location, timestep=store_timestep)
+            self.restore(
+                store_location=store_location,
+                timestep=store_timestep,
+                n_timesteps=store_n_timesteps,
+            )
 
         print("Forecast finished, restoring all conditions...")
 
@@ -169,9 +186,14 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.config["general"]["forecasts"]["use"]
             and self.multiverse_name
             is None  # only start multiverse if not already in one
-            and self.current_time.date() in self.config["general"]["forecasts"]["days"]
+            and self.current_time.date()
         ):
-            self.multiverse()
+            for dt in self.config["general"]["forecasts"]["times"]:
+                if dt.date() == self.current_time.date():
+                    self.multiverse(
+                        forecast_dt=dt,
+                        return_mean_discharge=True,
+                    )
 
         t0 = time()
         self.agents.step()
@@ -184,7 +206,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         t1 = time()
         print(
-            f"{self.current_time} ({round(t1 - t0, 4)}s)",
+            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}{self.current_time} ({round(t1 - t0, 4)}s)",
             flush=True,
         )
 
@@ -243,6 +265,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if create_reporter:
             self.reporter = Reporter(self, clean=clean_report_folder)
 
+    def step_to_end(self) -> None:
+        """Run the model to the end of the simulation period."""
+        for _ in range(self.n_timesteps - self.current_timestep):
+            self.step()
+
     def run(self, initialize_only: bool = False) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
         if not self.store.path.exists():
@@ -271,8 +298,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if initialize_only:
             return
 
-        for _ in range(self.n_timesteps):
-            self.step()
+        self.step_to_end()
 
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
@@ -300,8 +326,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             load_data_from_store=True,
         )
 
-        for _ in range(self.n_timesteps):
-            self.step()
+        self.step_to_end()
 
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
@@ -350,8 +375,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if initialize_only:
             return
 
-        for _ in range(self.n_timesteps):
-            self.step()
+        self.step_to_end()
 
         print("Spinup finished, saving conditions at end of spinup...")
         self.store.save()

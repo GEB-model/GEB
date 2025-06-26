@@ -565,7 +565,8 @@ class AsyncGriddedForcingReader:
             return data
         else:
             index = self.get_index(date)
-            return self.load(index)
+            data = self.load(index)
+            return data
 
     def close(self):
         # cancel the preloading of the next timestep

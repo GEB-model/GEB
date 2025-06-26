@@ -51,5 +51,5 @@ class HazardDriver:
                     timestep_end_time >= event["end_time"]
                     and event["end_time"] + self.timestep_length > timestep_end_time
                 ):
-                    # print("would run SFINCS for event:", event)
-                    self.sfincs.run(event)
+                    print("would run SFINCS for event:", event)
+                    # self.sfincs.run(event)

@@ -1,14 +1,16 @@
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 import xarray as xr
 
 from geb.cli import build_fn, init_fn, parse_config, run_model_with_method, update_fn
 from geb.model import GEBModel
+from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
 from geb.workflows.io import WorkingDirectory
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -150,11 +152,16 @@ def test_multiverse():
 
     forecast_after_n_days = 3
     forecast_n_days = 5
+    forecast_n_hours = 13
 
-    forecast_date = config["general"]["start_time"] + timedelta(
-        days=forecast_after_n_days
+    forecast_date = (
+        datetime.combine(config["general"]["start_time"], time.min)
+        + timedelta(days=forecast_after_n_days)
+        + timedelta(hours=forecast_n_hours)
     )
-    config["general"]["end_time"] = forecast_date + timedelta(days=forecast_n_days)
+    config["general"]["end_time"] = forecast_date + timedelta(
+        days=int(forecast_n_days) + 5
+    )
 
     input_folder = working_directory / config["general"]["input_folder"]
 
@@ -162,10 +169,15 @@ def test_multiverse():
     files = json.loads(files.read_text())
 
     precipitation = xr.open_dataarray(
-        input_folder / files["other"]["climate/pr_hourly"]
+        input_folder / files["other"]["climate/pr_hourly"], consolidated=False
     ).drop_encoding()
     precipitation = precipitation.sel(
-        time=slice(forecast_date, forecast_date + timedelta(days=5))
+        time=slice(
+            forecast_date,
+            forecast_date
+            + timedelta(days=forecast_n_days)
+            + timedelta(hours=forecast_n_hours),
+        )
     )
 
     # add member dimension
@@ -175,11 +187,11 @@ def test_multiverse():
     forecasts_folder.mkdir(parents=True, exist_ok=True)
 
     precipitation.to_zarr(
-        forecasts_folder / forecast_date.strftime("%Y%m%d.zarr"), mode="w"
+        forecasts_folder / forecast_date.strftime("%Y%m%dT%H%M%S.zarr"), mode="w"
     )
 
     # inititate a forecast after three days
-    config["general"]["forecasts"]["days"] = [forecast_date]
+    config["general"]["forecasts"]["times"] = [forecast_date]
 
     args["config"] = config
 
@@ -190,15 +202,22 @@ def test_multiverse():
             geb.step()
 
         mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
-            return_mean_discharge=True
+            return_mean_discharge=True, forecast_dt=forecast_date
         )
 
-        for i in range(forecast_n_days):
+        end_date = round_up_to_start_of_next_day_unless_midnight(
+            pd.to_datetime(precipitation.time[-1].item()).to_pydatetime()
+        ).date()
+        steps_in_forecast = (end_date - geb.current_time.date()).days
+
+        for i in range(steps_in_forecast):
             geb.step()
 
         mean_discharge: float = (
             geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
         )
+
+        geb.step_to_end()
 
     for member, forecast_mean_discharge in mean_discharge_after_forecast.items():
         assert forecast_mean_discharge == mean_discharge
