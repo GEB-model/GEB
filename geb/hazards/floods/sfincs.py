@@ -238,8 +238,8 @@ class SFINCS:
             self.model.output_folder / "flood_maps" / flood_map_name,
             crs=flood_map.rio.crs,
         )
-        # damages = self.flood(flood_map=flood_map)
-        # return damages
+        damages = self.flood(flood_map=flood_map)
+        return damages
 
     def get_return_period_maps(self):
         # close the zarr store
