@@ -137,6 +137,15 @@ def test_run_yearly():
     config["general"]["end_time"] = date(2049, 12, 31)
     args["config"] = config
     args["config"]["report"] = {}
+    assert pytest.raises(
+        AssertionError,
+        run_model_with_method,
+        method="run_yearly",
+        **args,
+    )
+
+    config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+
     run_model_with_method(method="run_yearly", **args)
 
 

@@ -212,7 +212,15 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self.current_timestep += 1
 
-    def create_datetime(self, date):
+    def create_datetime(self, date: datetime.date) -> datetime.datetime:
+        """Create a datetime object from a date with time set to midnight.
+
+        Args:
+            date:  Date object to convert to datetime.
+
+        Returns:
+            Datetime object with time set to midnight.
+        """
         return datetime.datetime.combine(date, datetime.time(0))
 
     def _initialize(
@@ -277,13 +285,19 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 f"The initial conditions folder ({self.store.path.resolve()}) does not exist. Spinup is required before running the model. Please run the spinup first."
             )
 
-        current_time = self.create_datetime(self.config["general"]["start_time"])
-        end_time = self.create_datetime(self.config["general"]["end_time"])
+        current_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["start_time"]
+        )
+        end_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["end_time"]
+        )
 
-        timestep_length = datetime.timedelta(days=1)
-        n_timesteps = (end_time + timestep_length - current_time) / timestep_length
+        timestep_length: datetime.timedelta = datetime.timedelta(days=1)
+        n_timesteps: float | int = (
+            end_time + timestep_length - current_time
+        ) / timestep_length
         assert n_timesteps.is_integer()
-        n_timesteps = int(n_timesteps)
+        n_timesteps: int = int(n_timesteps)
         assert n_timesteps > 0, "End time is before or identical to start time"
 
         self._initialize(
@@ -304,8 +318,16 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.reporter.finalize()
 
     def run_yearly(self) -> None:
-        current_time = self.create_datetime(self.config["general"]["start_time"])
-        end_time = self.create_datetime(self.config["general"]["end_time"])
+        current_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["start_time"]
+        )
+        end_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["end_time"]
+        )
+
+        assert self.config["hazards"]["floods"]["simulate"] is False, (
+            "Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config."
+        )
 
         assert current_time.month == 1 and current_time.day == 1, (
             "In yearly mode start time should be the first day of the year"
