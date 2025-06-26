@@ -174,10 +174,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.multiverse()
 
         t0 = time()
-        HazardDriver.step(self, 1)
         self.agents.step()
         if self.simulate_hydrology:
             self.hydrology.step()
+
+        HazardDriver.step(self)
 
         self.report(self, locals())
 

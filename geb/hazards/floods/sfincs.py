@@ -114,13 +114,10 @@ class SFINCS:
             build_parameters = self.get_build_parameters(model_root)
             build_sfincs(**build_parameters)
 
-    def to_sfincs_datetime(self, dt: datetime):
-        return dt.strftime("%Y%m%d %H%M%S")
-
     def set_forcing(self, event, start_time, precipitation_scale_factor=1.0):
         if self.model.simulate_hydrology:
             n_timesteps: int = min(self.n_timesteps, len(self.discharge_per_timestep))
-            substeps: int = self.discharge_per_timestep[0].shape[0]
+            routing_substeps: int = self.discharge_per_timestep[0].shape[0]
             discharge_grid = self.hydrology.grid.decompress(
                 np.vstack(self.discharge_per_timestep)
             )
@@ -129,12 +126,14 @@ class SFINCS:
             # TODO: Check if this is a right approach
             discharge_grid = np.vstack(
                 [
-                    np.full_like(discharge_grid[:substeps, :, :], fill_value=np.nan),
+                    np.full_like(
+                        discharge_grid[:routing_substeps, :, :], fill_value=np.nan
+                    ),
                     discharge_grid,
                 ]
             )  # prepend zeros
 
-            for i in range(substeps - 1, -1, -1):
+            for i in range(routing_substeps - 1, -1, -1):
                 discharge_grid[i] = discharge_grid[i + 1] * 0.3
             # convert the discharge grid to an xarray DataArray
             discharge_grid = xr.DataArray(
@@ -142,10 +141,11 @@ class SFINCS:
                 coords={
                     "time": pd.date_range(
                         end=self.model.current_time
-                        - self.model.timestep_length / substeps,
+                        + self.model.timestep_length
+                        - self.model.timestep_length / routing_substeps,
                         periods=(n_timesteps + 1)
-                        * substeps,  # +1 because we prepend the discharge above
-                        freq=self.model.timestep_length / substeps,
+                        * routing_substeps,  # +1 because we prepend the discharge above
+                        freq=self.model.timestep_length / routing_substeps,
                         inclusive="right",
                     ),
                     "y": self.hydrology.grid.lat,
@@ -155,19 +155,21 @@ class SFINCS:
                 name="discharge",
             )
         else:
-            substeps: int = 24  # when setting 0 it doesn't matter so much how many substeps. 24 is a reasonable default.
+            routing_substeps: int = 24  # when setting 0 it doesn't matter so much how many routing_substeps. 24 is a reasonable default.
             n_timesteps: int = (event["end_time"] - event["start_time"]).days
             time = pd.date_range(
-                end=self.model.current_time - self.model.timestep_length / substeps,
+                end=self.model.current_time
+                - self.model.timestep_length / routing_substeps,
                 periods=(n_timesteps + 1)
-                * substeps,  # +1 because we prepend the discharge above
-                freq=self.model.timestep_length / substeps,
+                * routing_substeps,  # +1 because we prepend the discharge above
+                freq=self.model.timestep_length / routing_substeps,
                 inclusive="right",
             )
-            discharge_grid = np.zeros(
-                shape=(len(time), *self.model.hydrology.grid.mask.shape)
+            discharge_grid: npt.NDArray[np.float32] = np.zeros(
+                shape=(len(time), *self.model.hydrology.grid.mask.shape),
+                dtype=np.float32,
             )
-            discharge_grid = xr.DataArray(
+            discharge_grid: xr.DataArray = xr.DataArray(
                 data=discharge_grid,
                 coords={
                     "time": time,
@@ -182,7 +184,7 @@ class SFINCS:
 
         discharge_grid.raster.set_crs(self.model.crs)
         end_time = discharge_grid.time[-1] + pd.Timedelta(
-            self.model.timestep_length / substeps
+            self.model.timestep_length / routing_substeps
         )
         discharge_grid: xr.Dataset = discharge_grid.sel(
             time=slice(start_time, end_time)
@@ -200,14 +202,10 @@ class SFINCS:
         update_sfincs_model_forcing(
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event_name),
-            current_event={
-                "tstart": self.to_sfincs_datetime(start_time),
-                "tend": self.to_sfincs_datetime(end_time.dt).item(),
-            },
+            event=event,
             forcing_method="precipitation",
             discharge_grid=discharge_grid,
-            precipitation_grid=precipitation_grid
-            * 3600,  # convert from kg/m2/s to mm/h
+            precipitation_grid=precipitation_grid,
             uparea_discharge_grid=None,
         )
 
