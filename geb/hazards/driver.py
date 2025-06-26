@@ -41,10 +41,15 @@ class HazardDriver:
                 routing_substeps: int = self.sfincs.discharge_per_timestep[0].shape[0]
 
                 # since we are at the end of the timestep, we need to check if the current time plus the timestep length is greater than or equal to the start time of the event
-                if (
+
+                timestep_end_time = (
                     self.current_time
                     + self.timestep_length
                     - self.timestep_length / routing_substeps
-                    >= event["end_time"]
+                )
+                if (
+                    timestep_end_time >= event["end_time"]
+                    and event["end_time"] + self.timestep_length > timestep_end_time
                 ):
+                    # print("would run SFINCS for event:", event)
                     self.sfincs.run(event)
