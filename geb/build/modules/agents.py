@@ -1190,7 +1190,7 @@ class Agents:
         buildings_df = pd.DataFrame()
 
         # load GHS_OBAT for countries in model
-        for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
+        for _, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
             iso_code = GDL_region["iso_code"]
             ghs_obat = load_GHS_OBAT(self.data_catalog, iso_code)
 
@@ -1199,31 +1199,42 @@ class Agents:
             )
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
             res_x, res_y = GLOPOP_GRID_region.rio.resolution()
-            i = 0
             # find objects in GHS_OBAT for each cell in GLOPOP_GRID_region
-            for x, y in zip(GLOPOP_GRID_region.x.values, GLOPOP_GRID_region.y.values):
-                objects_in_x = np.where(
-                    np.logical_and(
-                        ghs_obat["lon"] > x,
-                        ghs_obat["lon"] < x + res_x,
+
+            # Convert the grid into bounding boxes
+            xmin = GLOPOP_GRID_region.x.values
+            ymax = GLOPOP_GRID_region.y.values
+            xmax = xmin + res_x
+            ymin = ymax + res_y
+
+            # ghs_obat coordinates
+            lons = ghs_obat["lon"]
+            lats = ghs_obat["lat"]
+
+            # Initialize a list to hold the matching indices for each cell
+            all_buildings_idx = []
+            grid_idx = 0
+            # Vectorized spatial filtering
+            for i in range(xmin.size):
+                for j in range(ymin.size):
+                    mask = (
+                        (lons > xmin[i])
+                        & (lons < xmax[i])
+                        & (lats < ymax[j])
+                        & (lats > ymin[j])
                     )
-                )[0]
-                objects_in_y = np.where(
-                    np.logical_and(
-                        ghs_obat["lat"] < y,
-                        ghs_obat["lat"] > y + res_y,
-                    ))[0]
+                    buildings_idx = np.where(mask)[0]
+                    all_buildings_idx.append(buildings_idx)
+                    grid_idx += 1
+                    if buildings_idx.size > 0:
+                        building_gdl = ghs_obat.iloc[buildings_idx]
+                        building_gdl["grid_idx"] = GLOPOP_GRID_region.values[0][j, i]
+                        buildings_df = pd.concat([buildings_df, building_gdl])
 
-                buildings_idx = np.intersect1d(objects_in_x, objects_in_y)
-                i += 1
-                if buildings_idx.size > 0:
-                    building_gdl = ghs_obat.iloc[buildings_idx]
-                    building_gdl['grid_idx'] = i
-                    buildings_df = pd.concat([buildings_df, ghs_obat.iloc[buildings_idx]])
-            
-            a = 1
-
-    
+            gdl_name = GDL_region["GDLcode"]
+            buildings_df.to_csv(
+                f"preprocessing/buildings/test_buildings_{gdl_name}.csv"
+            )
 
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
         # load GDL region within model domain
