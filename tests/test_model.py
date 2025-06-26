@@ -162,7 +162,7 @@ def test_multiverse():
     files = json.loads(files.read_text())
 
     precipitation = xr.open_dataarray(
-        input_folder / files["other"]["climate/pr"]
+        input_folder / files["other"]["climate/pr_hourly"]
     ).drop_encoding()
     precipitation = precipitation.sel(
         time=slice(forecast_date, forecast_date + timedelta(days=5))

@@ -21,7 +21,7 @@ class Forcing(Module):
 
     def __init__(self, model):
         self.model = model
-        self.forcings = {}
+        self._forcings = {}
         self.validators = {
             "tas": lambda x: (x > 170).all() and (x < 370).all(),
             "tasmin": lambda x: (x > 170).all() and (x < 370).all(),
@@ -70,6 +70,28 @@ class Forcing(Module):
             assert reader.ds["y"][0] > reader.ds["y"][-1]
         return reader
 
+    def __setitem__(self, name: str, reader: AsyncGriddedForcingReader | xr.DataArray):
+        """Set the forcing data for a given name.
+
+        Args:
+            name: name of forcing dataset, e.g. "tas", "tasmin", "tasmax", "hurs", "ps", "rlds", "rsds", "sfcWind".
+            reader: An AsyncGriddedForcingReader or xarray DataArray for the specified forcing dataset.
+        """
+        self._forcings[name] = reader
+
+    def __getitem__(self, name: str) -> AsyncGriddedForcingReader | xr.DataArray:
+        """Get the forcing data for a given name.
+
+        Args:
+            name: name of forcing dataset, e.g. "tas", "tasmin", "tasmax", "hurs", "ps", "rlds", "rsds", "sfcWind".
+
+        Returns:
+            An AsyncGriddedForcingReader or xarray DataArray for the specified forcing dataset.
+        """
+        if name not in self._forcings.keys():
+            self[name] = self.load_forcing_ds(name)
+        return self._forcings[name]
+
     def load(self, name: str, time: datetime | None = None) -> npt.NDArray[Any]:
         """Load forcing data for a given name and time.
 
@@ -80,29 +102,26 @@ class Forcing(Module):
         Returns:
             Forcing data as a numpy array.
         """
-        if name not in self.forcings:
-            reader = self.load_forcing_ds(name)
-            self.forcings[name] = reader
-
-        else:
-            reader = self.forcings[name]
-
         if time is None:
             time: datetime = self.model.current_time
 
         if name == "CO2":
             # tollerance is given in nanoseconds. Calulate it as 1e9 * 366 days * 24 hours * 3600 seconds
-            data = reader.sel(
-                time=self.model.current_time,
-                method="pad",
-                tolerance=1e9 * 366 * 24 * 3600,
-            ).item()
+            data = (
+                self[name]
+                .sel(
+                    time=self.model.current_time,
+                    method="pad",
+                    tolerance=1e9 * 366 * 24 * 3600,
+                )
+                .item()
+            )
         if name == "pr_hourly":
             # For hourly precipitation, we need to read the data for the current time
             # and return it as a numpy array.
-            data = reader.sel(time=time)
+            data = self[name].sel(time=time)
         else:
-            data = reader.read_timestep(time)
+            data = self[name].read_timestep(time)
         if __debug__ and not self.validators[name](data):
             raise ValueError(
                 f"Invalid data for {name} at time {time}. "

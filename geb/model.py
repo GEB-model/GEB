@@ -6,6 +6,7 @@ from time import time
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 from honeybees.model import Model as ABM_Model
@@ -83,15 +84,13 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self, return_mean_discharge: bool = False
     ) -> None | dict[Any, float]:
         # copy current state of timestep and time
-        store_timestep = copy.copy(self.current_timestep)
+        store_timestep: int = copy.copy(self.current_timestep)
 
         # set a folder to store the initial state of the multiverse
-        store_location = self.simulation_root / "multiverse" / "forecast"
+        store_location: Path = self.simulation_root / "multiverse" / "forecast"
         self.store.save(store_location)
 
-        precipitation_dataarray = self.sfincs.precipitation_dataarray
-
-        forecasts = xr.open_dataset(
+        forecasts: xr.DataArray = xr.open_dataarray(
             self.input_folder
             / "other"
             / "climate"
@@ -105,15 +104,36 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if return_mean_discharge:
             mean_discharge = {}
 
+        original_pr_hourly = self.forcing["pr_hourly"]
+
         for member in forecasts.member:
-            self.multiverse_name = member.item()
-            # self.sfincs.precipitation_dataarray = (
-            #     forecasts.sel(member=member).rename({"accum_precipitation": "precip"})
-            #     / 3600
-            # )
-            self.sfincs.precipitation_dataarray = (
-                precipitation_dataarray / 100 * member.item()
+            self.multiverse_name: str = member.item()
+
+            pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member)
+
+            # Clip the original precipitation data to the start of the forecast
+            # Therefore we take the start of the forecast and subtract one second
+            # to ensure that the original precipitation data does not overlap with the forecast
+            original_pr_hourly_clipped_to_start_of_forecast: xr.DataArray = (
+                original_pr_hourly.sel(
+                    time=slice(
+                        None, (pr_hourly_forecast.time[0] - pd.Timedelta(seconds=1))
+                    )
+                )
             )
+
+            # Concatenate the original precipitation data with the forecast data
+            pr_hourly_observed_and_historic_combined: xr.DataArray = xr.concat(
+                [
+                    original_pr_hourly_clipped_to_start_of_forecast,
+                    pr_hourly_forecast,
+                ],
+                dim="time",
+            )
+
+            # Set the pr_hourly forcing data to the combined data
+            self.model.forcing["pr_hourly"] = pr_hourly_observed_and_historic_combined
+
             print(f"Running forecast member {member.item()}...")
             for _ in range(n_timesteps):
                 self.step()
@@ -129,8 +149,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         print("Forecast finished, restoring all conditions...")
 
         # restore the precipitation dataarray, step out of the multiverse
-        self.sfincs.precipitation_dataarray = precipitation_dataarray
-        self.multiverse_name = None
+        self.forcing["pr_hourly"] = original_pr_hourly
+        self.multiverse_name: None = None
 
         if return_mean_discharge:
             return mean_discharge
