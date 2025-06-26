@@ -55,6 +55,7 @@ class HazardDriver:
                     and event["end_time"] + self.timestep_length > timestep_end_time
                 ) or (
                     event["end_time"] > self.end_time
+                    and event["start_time"] < timestep_end_time
                     and self.current_timestep == self.n_timesteps - 1
                 ):
                     event = copy.deepcopy(event)
