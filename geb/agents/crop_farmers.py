@@ -41,18 +41,18 @@ from .workflows.crop_farmers import (
     plant,
 )
 
-NO_IRRIGATION = -1
-CHANNEL_IRRIGATION = 0
-RESERVOIR_IRRIGATION = 1
-GROUNDWATER_IRRIGATION = 2
-TOTAL_IRRIGATION = 3
+NO_IRRIGATION: int = -1
+CHANNEL_IRRIGATION: int = 0
+RESERVOIR_IRRIGATION: int = 1
+GROUNDWATER_IRRIGATION: int = 2
+TOTAL_IRRIGATION: int = 3
 
-SURFACE_IRRIGATION_EQUIPMENT = 0
-WELL_ADAPTATION = 1
-IRRIGATION_EFFICIENCY_ADAPTATION = 2
-FIELD_EXPANSION_ADAPTATION = 3
-PERSONAL_INSURANCE_ADAPTATION = 4
-INDEX_INSURANCE_ADAPTATION = 5
+SURFACE_IRRIGATION_EQUIPMENT: int = 0
+WELL_ADAPTATION: int = 1
+IRRIGATION_EFFICIENCY_ADAPTATION: int = 2
+FIELD_EXPANSION_ADAPTATION: int = 3
+PERSONAL_INSURANCE_ADAPTATION: int = 4
+INDEX_INSURANCE_ADAPTATION: int = 5
 
 
 def cumulative_mean(mean, counter, update, mask=None):
@@ -1044,7 +1044,9 @@ class CropFarmers(AgentBaseClass):
                 paddy_irrigated_crops=self.var.crop_data["is_paddy"].values,
                 current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
                 max_paddy_water_level=self.var.max_paddy_water_level.data,
-                minimum_effective_root_depth=self.model.hydrology.soil.var.minimum_effective_root_depth,
+                minimum_effective_root_depth=np.float32(
+                    self.model.hydrology.soil.var.minimum_effective_root_depth
+                ),
             )
         )
 
