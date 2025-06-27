@@ -494,7 +494,8 @@ def init_fn(
             config_dict["general"]["region"]["subbasin"] = basin_ids
 
         with open(config, "w") as f:
-            yaml.dump(config_dict, f, default_flow_style=False)
+            # do not sort keys, to keep the order of the config file
+            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
         shutil.copy(example_folder / "build.yml", build_config)
         shutil.copy(example_folder / "update.yml", update_config)
