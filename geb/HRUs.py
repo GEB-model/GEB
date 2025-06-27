@@ -2,7 +2,7 @@
 import math
 import warnings
 from datetime import datetime
-from typing import Literal, Union
+from typing import Any, Literal, Union
 
 import geopandas as gpd
 import numpy as np
@@ -281,7 +281,7 @@ class Grid(BaseVariables):
         """
         return np.full(self.compressed_size, *args, **kwargs)
 
-    def compress(self, array: np.ndarray) -> np.ndarray:
+    def compress(self, array: npt.NDArray[Any]) -> npt.NDArray[Any]:
         """Compress array.
 
         Args:
@@ -488,7 +488,11 @@ class HRUs(BaseVariables):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("hydrology.HRU.var")
+        self.var = self.model.store.create_bucket(
+            "hydrology.HRU.var",
+            validator=lambda x: isinstance(x, np.ndarray)
+            and (not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32),
+        )
 
         (
             self.var.land_use_type,
@@ -650,7 +654,7 @@ class HRUs(BaseVariables):
         HRU_to_grid = HRU_to_grid[:HRU]
         assert int(land_use_size.sum()) == n_nonmasked_cells * scaling * scaling
 
-        land_use_ratio = land_use_size / (scaling**2)
+        land_use_ratio = (land_use_size / (scaling**2)).astype(np.float32)
         return (
             land_use_array,
             land_use_ratio,

@@ -137,7 +137,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             )
 
             # Concatenate the original precipitation data with the forecast data
-            pr_hourly_observed_and_historic_combined: xr.DataArray = xr.concat(
+            pr_hourly_observed_and_forecasted_combined: xr.DataArray = xr.concat(
                 [
                     original_pr_hourly_clipped_to_start_of_forecast,
                     pr_hourly_forecast,
@@ -146,7 +146,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             )
 
             # Set the pr_hourly forcing data to the combined data
-            self.model.forcing["pr_hourly"] = pr_hourly_observed_and_historic_combined
+            self.model.forcing["pr_hourly"] = pr_hourly_observed_and_forecasted_combined
 
             print(f"Running forecast member {member.item()}...")
             self.step_to_end()
