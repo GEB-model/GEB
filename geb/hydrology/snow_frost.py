@@ -22,6 +22,7 @@
 import math
 
 import numpy as np
+import numpy.typing as npt
 
 from geb.module import Module
 from geb.workflows import balance_check
@@ -241,12 +242,16 @@ class SnowFrost(Module):
         else:
             SummerSeason = 0.0
 
-        snow = self.HRU.full_compressed(0, dtype=np.float32)
-        rain = self.HRU.full_compressed(0, dtype=np.float32)
-        snow_melt = self.HRU.full_compressed(0, dtype=np.float32)
+        snow: npt.NDArray[np.float32] = self.HRU.full_compressed(0, dtype=np.float32)
+        rain: npt.NDArray[np.float32] = self.HRU.full_compressed(0, dtype=np.float32)
+        snow_melt: npt.NDArray[np.float32] = self.HRU.full_compressed(
+            0, dtype=np.float32
+        )
 
-        tas_C = self.HRU.tas - 273.15
-        precipitation_m_day = 0.001 * 86400.0 * self.HRU.pr  # kg/m2/s to m/day
+        tas_C: npt.NDArray[np.float32] = self.HRU.tas - 273.15
+        precipitation_m_day: npt.NDArray[np.float32] = (
+            0.001 * 86400.0 * self.HRU.pr
+        )  # kg/m2/s to m/day
 
         for i in range(self.var.numberSnowLayers):
             TavgS = tas_C + self.HRU.var.DeltaTSnow * self.HRU.var.deltaInvNorm[i]

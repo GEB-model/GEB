@@ -6,6 +6,7 @@ from typing import Literal, Union
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import rasterio
 import xarray as xr
 import zarr
@@ -356,43 +357,43 @@ class Grid(BaseVariables):
         return data
 
     @property
-    def hurs(self):
+    def hurs(self) -> npt.NDArray[np.float32]:
         return self.compress(self.model.forcing.load("hurs"))
 
     @property
-    def pr(self):
+    def pr(self) -> npt.NDArray[np.float32]:
         return self.compress(self.model.forcing.load("pr"))
 
     @property
-    def ps(self):
+    def ps(self) -> npt.NDArray[np.float32]:
         return self.compress(self.model.forcing.load("ps"))
 
     @property
-    def rlds(self):
+    def rlds(self) -> npt.NDArray[np.float32]:
         return self.compress(self.model.forcing.load("rlds"))
 
     @property
-    def rsds(self):
+    def rsds(self) -> npt.NDArray[np.float32]:
         return self.compress(self.model.forcing.load("rsds"))
 
     @property
-    def tas(self):
+    def tas(self) -> npt.NDArray[np.float32]:
         return self.compress(self.model.forcing.load("tas"))
 
     @property
-    def tasmin(self):
+    def tasmin(self) -> npt.NDArray[np.float32]:
         return self.compress(self.model.forcing.load("tasmin"))
 
     @property
-    def tasmax(self):
+    def tasmax(self) -> npt.NDArray[np.float32]:
         return self.compress(self.model.forcing.load("tasmax"))
 
     @property
-    def sfcWind(self):
+    def sfcWind(self) -> npt.NDArray[np.float32]:
         return self.compress(self.model.forcing.load("sfcwind"))
 
     @property
-    def spei_uncompressed(self):
+    def spei_uncompressed(self) -> npt.NDArray[np.float32]:
         """Get uncompressed version of SPEI.
 
         We want to get the closest SPEI value, so if we are in the second
@@ -815,48 +816,48 @@ class HRUs(BaseVariables):
             plt.show()
 
     @property
-    def hurs(self):
-        hurs = self.data.grid.hurs
+    def hurs(self) -> npt.NDArray[np.float32]:
+        hurs: npt.NDArray[np.float32] = self.data.grid.hurs
         return self.data.to_HRU(data=hurs, fn=None)
 
     @property
-    def pr(self):
-        pr = self.data.grid.pr
+    def pr(self) -> npt.NDArray[np.float32]:
+        pr: npt.NDArray[np.float32] = self.data.grid.pr
         return self.data.to_HRU(data=pr, fn=None)
 
     @property
-    def ps(self):
-        ps = self.data.grid.ps
+    def ps(self) -> npt.NDArray[np.float32]:
+        ps: npt.NDArray[np.float32] = self.data.grid.ps
         return self.data.to_HRU(data=ps, fn=None)
 
     @property
-    def rlds(self):
-        rlds = self.data.grid.rlds
+    def rlds(self) -> npt.NDArray[np.float32]:
+        rlds: npt.NDArray[np.float32] = self.data.grid.rlds
         return self.data.to_HRU(data=rlds, fn=None)
 
     @property
-    def rsds(self):
-        rsds = self.data.grid.rsds
+    def rsds(self) -> npt.NDArray[np.float32]:
+        rsds: npt.NDArray[np.float32] = self.data.grid.rsds
         return self.data.to_HRU(data=rsds, fn=None)
 
     @property
-    def tas(self):
-        tas = self.data.grid.tas
+    def tas(self) -> npt.NDArray[np.float32]:
+        tas: npt.NDArray[np.float32] = self.data.grid.tas
         return self.data.to_HRU(data=tas, fn=None)
 
     @property
-    def tasmin(self):
-        tasmin = self.data.grid.tasmin
+    def tasmin(self) -> npt.NDArray[np.float32]:
+        tasmin: npt.NDArray[np.float32] = self.data.grid.tasmin
         return self.data.to_HRU(data=tasmin, fn=None)
 
     @property
-    def tasmax(self):
-        tasmax = self.data.grid.tasmax
+    def tasmax(self) -> npt.NDArray[np.float32]:
+        tasmax: npt.NDArray[np.float32] = self.data.grid.tasmax
         return self.data.to_HRU(data=tasmax, fn=None)
 
     @property
-    def sfcWind(self):
-        sfcWind = self.data.grid.sfcWind
+    def sfcWind(self) -> npt.NDArray[np.float32]:
+        sfcWind: npt.NDArray[np.float32] = self.data.grid.sfcWind
         return self.data.to_HRU(data=sfcWind, fn=None)
 
 

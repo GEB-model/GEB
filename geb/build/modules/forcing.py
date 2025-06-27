@@ -665,10 +665,10 @@ class Forcing:
         # https://www.guinnessworldrecords.com/world-records/737965-greatest-rainfall-in-one-hour
         # we take a wide margin of 500 mm/h
         # this function is currently daily, so the hourly value should be save
-        max_value = 500 / 3600  # convert to kg/m2/s
-        precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
+        max_value: float = 500 / 3600  # convert to kg/m2/s
+        precision: float = 0.01 / 3600  # 0.01 mm in kg/m2/s
 
-        offset = 0
+        offset: int = 0
         scaling_factor, out_dtype = calculate_scaling(
             0, max_value, offset=offset, precision=precision
         )
@@ -681,8 +681,8 @@ class Forcing:
             ),
         ]
 
-        da = self._mask_forcing(da, value=-offset)
-        da = self.set_other(
+        da: xr.DataArray = self._mask_forcing(da, value=-offset)
+        da: xr.DataArray = self.set_other(
             da,
             name=name,
             *args,
