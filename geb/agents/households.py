@@ -11,7 +11,7 @@ import xarray as xr
 from damagescanner.core import object_scanner
 from honeybees.library.raster import sample_from_map
 from rasterio.features import shapes
-from rasterstats import zonal_stats
+from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
@@ -285,7 +285,8 @@ class Households(AgentBaseClass):
         )
 
     def change_household_locations(self):
-        """Change the location of the household points to the centroid of the buildings.
+        """This function change the location of the household points to the centroid of the buildings.
+        Also, it associates the household points with their postal codes.
         This is done to get the correct geometry for the warning function"""
 
         crs = self.model.config["hazards"]["floods"]["crs"]
@@ -327,11 +328,24 @@ class Households(AgentBaseClass):
             columns={"index_right", "new_geometry", "distance"}, inplace=True
         )
 
+        # Associate households with their postal codes to use it later in the warning function
+        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        PC4["postcode"] = PC4["postcode"].astype("int32")
+
+        new_locations = gpd.sjoin(
+            new_locations,
+            PC4[["postcode", "geometry"]],
+            how="left",
+            predicate="intersects",
+        )
+
         self.var.household_points = new_locations
 
     def assign_household_attributes_to_buildings(self):
-        """Assign households attributes to buildings. This is done by assigning the attribute of the household (that is inside the household_points gdf)
-        to its nearest building. But later this should be done by using socioeconomic data (and considering only buildings=house?)."""
+        """This function assigns households attributes (object_type and maximum_damage) to buildings. This is done so we pass the
+        object_type from the households (that depends on their decisions) into the object that will go through the damage scanner.
+        This is done by assigning the attribute of the household (that is inside the household_points gdf) to its nearest building.
+        But later this should be done by using socioeconomic data (and considering only buildings=house?)."""
 
         # Set the buildings to the same CRS as the household points
         self.var.buildings.to_crs(self.var.household_points.crs, inplace=True)
@@ -510,55 +524,56 @@ class Households(AgentBaseClass):
 
         days = self.model.config["general"]["forecasts"]["days"]
         crs = self.model.config["hazards"]["floods"]["crs"]
+        strategy = self.model.config["general"]["forecasts"]["strategy"]
 
         prob_folder = os.path.join(self.model.output_folder, "prob_maps")
         os.makedirs(prob_folder, exist_ok=True)
 
-        if self.model.config["general"]["forecasts"]["strategy"] == 1:
-            # Water level ranges for the probability map
+        if strategy == 1:
+            # Water level ranges for strategy 1 (based on suitable measures and possible impacts)
             ranges = [
                 (1, 0.1, 1.0),
                 (2, 1.0, 2.0),
                 (3, 2.0, None),
             ]  # NEED TO CREATE A PARQUET FILE WITH THE RIGHT RANGES
 
-            probability_maps = {}
+        elif strategy == 2:
+            # Water level ranges for strategy 2 (based on critical infrastructure)
+            ranges = [(1, 0.3, None)]
 
-            for i, day in enumerate(days):
-                for range_id, min, max in ranges:
-                    daily_ensemble = ensemble_flood_maps.isel(day=i)
-                    if max is not None:
-                        condition = (daily_ensemble >= min) & (daily_ensemble <= max)
-                    else:
-                        condition = daily_ensemble >= min
-                    probability = (
-                        condition.sum(dim="member") / condition.sizes["member"]
-                    )
+        probability_maps = {}
 
-                    # save it to zarr format (TOO MUCH TROUBLE - DO IT LATER)
-                    # probability = probability.astype("float32")
-                    # probability = to_zarr(
-                    #     probability,
-                    #     self.model.output_folder
-                    #     / "prob_maps"
-                    #     / f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.zarr",
-                    #     crs=crs,
-                    # )
-                    file_path = (
-                        self.model.output_folder
-                        / "prob_maps"
-                        / f"flood_prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.tif"
-                    )
+        for i, day in enumerate(days):
+            for range_id, min, max in ranges:
+                daily_ensemble = ensemble_flood_maps.isel(day=i)
+                if max is not None:
+                    condition = (daily_ensemble >= min) & (daily_ensemble <= max)
+                else:
+                    condition = daily_ensemble >= min
+                probability = condition.sum(dim="member") / condition.sizes["member"]
 
-                    # SOMETHING IS WRONG WHEN WRITING THE TIFF FILE, THE Y AXIS IS FLIPPED, IDWK WHY, so doing this to fix it for now
-                    if probability.y.values[0] < probability.y.values[-1]:
-                        print("flipping y axis")
-                        probability = probability.sortby("y", ascending=False)
+                # save it to zarr format (TOO MUCH TROUBLE - DO IT LATER)
+                # probability = probability.astype("float32")
+                # probability = to_zarr(
+                #     probability,
+                #     self.model.output_folder
+                #     / "prob_maps"
+                #     / f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.zarr",
+                #     crs=crs,
+                # )
+                file_name = f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}_strategy{strategy}.tif"
+                file_path = self.model.output_folder / "prob_maps" / file_name
+                # NEED TO CREATE A FOLDER FOR THOSE WHO WILL RUN THIS BUT DO NOT HAVE A FOLDER
 
-                    probability = probability.rio.write_crs(crs)
-                    probability.rio.to_raster(file_path, driver="GTiff")
+                # SOMETHING IS WRONG WHEN WRITING THE TIFF FILE, THE Y AXIS IS FLIPPED, IDWK WHY, so doing this to fix it for now
+                if probability.y.values[0] < probability.y.values[-1]:
+                    print("flipping y axis")
+                    probability = probability.sortby("y", ascending=False)
 
-                    probability_maps[(day, range_id)] = probability
+                probability = probability.rio.write_crs(crs)
+                probability.rio.to_raster(file_path, driver="GTiff")
+
+                probability_maps[(day, range_id)] = probability
 
         return probability_maps
 
@@ -567,9 +582,6 @@ class Households(AgentBaseClass):
 
         crs = self.model.config["hazards"]["floods"]["crs"]
         days = self.model.config["general"]["forecasts"]["days"]
-
-        # Create a list to store the probability dataframes
-        # probabilities = []
 
         # Damage ranges for the probability map
         damage_ranges = [
@@ -646,20 +658,9 @@ class Households(AgentBaseClass):
         # Create probability maps
         self.create_flood_probability_maps()
 
-        # --
-        # Load postal codes
-        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
-        PC4["postcode"] = PC4["postcode"].astype("int32")
-
-        # Associate households with their postal codes
+        # Load households and postal codes
         households = self.var.household_points.copy()
-        households = gpd.sjoin(
-            households,
-            PC4[["postcode", "geometry"]],
-            how="left",
-            predicate="intersects",
-        )
-        # -- This part maybe should be done when setting up the households (outside this function), or in the change_household_locations function
+        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
 
         for day in days:
             for range_id in range_ids:
@@ -670,13 +671,13 @@ class Households(AgentBaseClass):
                     / f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.tif"
                 )
 
-                rf = rasterio.open(tif_path)
-                rf_array = rf.read(1)
-                affine = rf.transform
+                prob_map = rasterio.open(tif_path)
+                prob_array = prob_map.read(1)
+                affine = prob_map.transform
 
                 # Run zonal stats using rasterstats
                 stats = zonal_stats(
-                    PC4, rf_array, affine=affine, stats="max", nodata=np.nan
+                    PC4, prob_array, affine=affine, stats="max", nodata=np.nan
                 )
 
                 # Iterate through each postal code and check the max probability
@@ -715,9 +716,90 @@ class Households(AgentBaseClass):
         path = os.path.join(self.model.output_folder, "warnings_log.csv")
         pd.DataFrame(warnings_log).to_csv(path, index=False)
 
+    def infrastructure_warning_strategy(self, prob_threshold=0.6):
+        # Load postal codes and substations
+        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        substations = gpd.read_parquet(
+            self.model.files["geoms"]["assets/energy_substations"]
+        )
+
+        # Get the forecast start date from the config
+        day = self.model.config["general"]["forecasts"]["days"][0]
+
+        # Create flood probability maps for critical substation hit (config needs to be set as strategy 2)
+        self.create_flood_probability_maps()
+
+        # Assign substations to postal codes based on distance -- THIS NEEDS TO BE IMPROVED
+        PC4_with_substations = gpd.sjoin_nearest(
+            PC4, substations[["fid", "geometry"]], how="left", distance_col="distance"
+        )
+        # Rename the fid_right column for clarity
+        PC4_with_substations.rename(
+            columns={"fid_right": "substation_id"},
+            inplace=True,
+        )
+
+        # Get the household points
+        households = self.var.household_points.copy()
+
+        # Get the probability map for the specific day and strategy
+        prob_tif_path = (
+            self.model.output_folder
+            / "prob_maps"
+            / f"prob_map_range1_forecast{day.strftime('%Y-%m-%d')}_strategy2.tif"
+        )
+        # prob_tif_path = "C:\\Users\\adq582\\Documents\\Programming\\GEB\\models\\geul\\base\\output\\prob_maps\\prob_map_range1_forecast2021-07-13_strategy2.tif"
+        prob_map = rasterio.open(prob_tif_path)
+        prob_array = prob_map.read(1)
+        affine = prob_map.transform
+
+        # Sample the probability map at the substations locations
+        sampled_probs = point_query(
+            substations, prob_array, affine=affine, interpolate="nearest"
+        )
+        substations["probability"] = sampled_probs
+
+        # Filter substations that have a flood hit probability > threshold
+        critical_hits = substations[substations["probability"] >= prob_threshold]
+
+        # If there are critical hits, issue warnings
+        if not critical_hits.empty:
+            print(f"Critical hits found: {len(critical_hits)}")
+
+            # Get the postcodes that will be affected by the critical hits
+            affected_postcodes = PC4_with_substations[
+                PC4_with_substations["substation_id"].isin(critical_hits["fid"])
+            ]["postcode"].unique()
+
+            warning_log = []
+
+            # Issue warnings to the households in the affected postcodes
+            for postal_code in affected_postcodes:
+                affected_households = households[households["postcode"] == postal_code]
+                n_warned_households = self.warning_communication(
+                    target_households=affected_households
+                )
+                # Need to think about how to deal with the communication efficiency for the two different strategies
+
+                print(
+                    f"Warning issued to postal code {postal_code} on {day} for critical substation hit."
+                )
+                warning_log.append(
+                    {
+                        "day": day,
+                        "postcode": postal_code,
+                        "n_warned_households": n_warned_households,
+                        "critical_substation_hits": len(critical_hits),
+                    }
+                )
+
+            # Save log
+            path = os.path.join(self.model.output_folder, "warning_log_energy.csv")
+            pd.DataFrame(warning_log).to_csv(path, index=False)
+
     def warning_communication(self, target_households):  # dummy warning system
-        """This function communicates the warning based on the communication efficiency,
-        changes risk perception --> to be moved to the update risk perception function,
+        """This function communicates the warning based on the communication efficiency;
+        changes risk perception --> to be moved to the update risk perception function;
         and return the number of households that were warned"""
 
         print("Communicating the warning...")
@@ -1042,8 +1124,9 @@ class Households(AgentBaseClass):
         self.construct_income_distribution()
         self.assign_household_attributes()
         self.change_household_locations()  # ideally this should be done in the setup_population when building the model
-        self.warning_strategy_1()
-        self.create_damage_probability_maps()
+        # self.warning_strategy_1() #maybe add one if here to select the strategy
+        self.infrastructure_warning_strategy()
+        # self.create_damage_probability_maps()
 
         print("test")
 

@@ -67,7 +67,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.current_timestep = timestep
 
     def multiverse(self):
-        self.agents.households.warning_communication()
         self.agents.households.change_vulnerability()
 
         # copy current state of timestep and time
