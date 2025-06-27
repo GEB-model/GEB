@@ -95,44 +95,66 @@ def reproject_and_apply_lapse_rate_pressure(
     return pressure_grid
 
 
-def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
+def download_ERA5(
+    folder: Path,
+    variable: str,
+    start_date: datetime,
+    end_date: datetime,
+    bounds: tuple[float, float, float, float],
+    logger: logging.Logger,
+) -> xr.DataArray:
+    """Download ERA5 data for a specific variable and time period and save it as a zarr file.
+
+    If the data is already downloaded, it will be opened from the local zarr file.
+
+    Args:
+        folder: Folder to store the downloaded data
+        variable: Short name of the variable to download (e.g., "t2m"). Codes can be found here: https://codes.ecmwf.int/grib/param-db/
+        start_date: start date of the time period to download
+        end_date: end date of the time period to download
+        bounds:  bounding box in the format (min_lon, min_lat, max_lon, max_lat)
+        logger:   logger to use for logging
+
+    Returns:
+        Downloaded ERA5 data as an xarray DataArray.
+    """
     output_fn = folder / f"{variable}.zarr"
     if output_fn.exists():
-        da = open_zarr(output_fn)
+        da: xr.DataArray = open_zarr(output_fn)
     else:
         folder.mkdir(parents=True, exist_ok=True)
-        da = xr.open_dataset(
+        da: xr.DataArray = xr.open_dataset(
             "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
             storage_options={"client_kwargs": {"trust_env": True}},
             chunks={},
             engine="zarr",
         )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
 
-        da = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
+        da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
 
-        buffer = 0.5
+        buffer: float = 0.5
 
         # Check if region crosses the meridian (longitude=0)
         # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
         if bounds[0] < 0 and bounds[2] > 0:
             # Need to handle the split across the meridian
             # Get western hemisphere part (longitude < 0)
-            west_da = da.sel(
+            west_da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
                 y=slice(bounds[3] + buffer, bounds[1] - buffer),
                 x=slice(((bounds[0] - buffer) + 360) % 360, 360),
             )
             # Get eastern hemisphere part (longitude > 0)
-            east_da = da.sel(
+            east_da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
                 y=slice(bounds[3] + buffer, bounds[1] - buffer),
                 x=slice(0, ((bounds[2] + buffer) + 360) % 360),
             )
             # Combine the two parts
-            da = xr.concat([west_da, east_da], dim="x")
+            da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
         else:
             # Regular case - doesn't cross meridian
-            da = da.sel(
+            da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
                 y=slice(bounds[3] + buffer, bounds[1] - buffer),
                 x=slice(
@@ -142,12 +164,12 @@ def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
             )
 
         # Reorder x to be between -180 and 180 degrees
-        da = da.assign_coords(x=((da.x + 180) % 360 - 180))
+        da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
 
         logger.info(f"Downloading ERA5 {variable} to {output_fn}")
         da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
-        da = da.raster.mask_nodata()
-        da = to_zarr(
+        da: xr.DataArray = da.raster.mask_nodata()
+        da: xr.DataArray = to_zarr(
             da,
             output_fn,
             time_chunksize=get_chunk_size(da, target=1e7),
@@ -164,6 +186,26 @@ def process_ERA5(
     bounds: tuple[float, float, float, float],
     logger: logging.Logger,
 ) -> xr.DataArray:
+    """Process ERA5 data for a given variable and time period.
+
+    Downloads the data from the Climate Data Store (CDS) if not already available,
+    processes it to ensure it is in the correct format, and applies de-accumulation
+    for accumulated variables and interpolation of missing values.
+
+    Args:
+        variable: short name of the variable to process (e.g., "t2m"). Codes can be found here: https://codes.ecmwf.int/grib/param-db/
+        folder: folder to store the downloaded data
+        start_date: start date of the time period to process
+        end_date: end date of the time period to process
+        bounds:  bounding box in the format (min_lon, min_lat, max_lon, max_lat)
+        logger:  logger to use for logging
+
+    Raises:
+        NotImplementedError: If the step type of the data is not "accum" or "instant".
+
+    Returns:
+        xr.DataArray: Processed ERA5 data as an xarray DataArray.
+    """
     da: xr.DataArray = download_ERA5(
         folder, variable, start_date, end_date, bounds, logger
     )
@@ -191,17 +233,39 @@ def process_ERA5(
     return da
 
 
-def plot_timeline(da, data, name, ax):
+def plot_timeline(
+    da: xr.DataArray, data: xr.DataArray, name: str, ax: plt.Axes
+) -> None:
+    """Plot a timeline of the data.
+
+    Args:
+        da: the original xarray DataArray containing the data to plot.
+        data: the data to plot, should be a 1D xarray DataArray with a time dimension.
+        name: the name of the data, used for the plot title.
+        ax: the matplotlib axes to plot on.
+    """
     ax.plot(data.time, data)
     ax.set_xlabel("Time")
     if "units" in da.attrs:
         ax.set_ylabel(da.attrs["units"])
     ax.set_xlim(data.time[0], data.time[-1])
     ax.set_ylim(data.min(), data.max() * 1.1)
-    ax.set_title(name)
+    significant_digits: int = 6
+    ax.set_title(
+        f"{name} - mean: {data.mean().item():.{significant_digits}f} - min: {data.min().item():.{significant_digits}f} - max: {data.max().item():.{significant_digits}f}"
+    )
 
 
 def get_chunk_size(da, target: float | int = 1e8) -> int:
+    """Calculate the optimal chunk size for the given xarray DataArray based on the target size.
+
+    Args:
+        da: The xarray DataArray for which to calculate the chunk size.
+        target: The target size in bytes. Default is 1e8 (100 MB).
+
+    Returns:
+        The calculated chunk size in bytes.
+    """
     return int(target / (da.dtype.itemsize * da.x.size * da.y.size))
 
 
@@ -586,10 +650,6 @@ class Forcing:
         fp.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(fp)
 
-        fp = self.report_dir / (name + ".png")
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(fp)
-
         plt.close(fig)
 
         spatial_data = da.mean(dim="time").compute()
@@ -600,7 +660,7 @@ class Forcing:
         plt.xlabel("Longitude")
         plt.ylabel("Latitude")
 
-        spatial_fp = self.report_dir / (name + "_spatial.png")
+        spatial_fp: Path = self.report_dir / (name + "_spatial.png")
         plt.savefig(spatial_fp)
 
         plt.close()
