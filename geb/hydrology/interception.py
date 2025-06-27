@@ -20,8 +20,8 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
-import zarr
 import numpy.typing as npt
+import zarr
 
 from geb.module import Module
 from geb.workflows import balance_check
