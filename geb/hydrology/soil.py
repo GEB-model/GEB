@@ -208,8 +208,8 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
 
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water(
-    crop_group_number, potential_evapotranspiration
-):
+    crop_group_number: np.float32, potential_evapotranspiration: np.float32
+) -> np.float32:
     """Calculate the fraction of easily available soil water.
 
     Calculation is based on crop group number and potential evapotranspiration
@@ -228,22 +228,24 @@ def get_fraction_easily_available_soil_water(
     np.ndarray
         The fraction of easily available soil water, p is closer to 0 if evapo is bigger and cropgroup is smaller
     """
-    potential_evapotranspiration_cm = potential_evapotranspiration * np.float32(100)
+    potential_evapotranspiration_cm: np.float32 = (
+        potential_evapotranspiration * np.float32(100)
+    )
 
-    p = np.float32(1) / (
+    p: np.float32 = np.float32(1) / (
         np.float32(0.76) + np.float32(1.5) * potential_evapotranspiration_cm
     ) - np.float32(0.1) * (np.float32(5) - crop_group_number)
 
     # Additional correction for crop groups 1 and 2
     if crop_group_number <= np.float32(2.5):
-        p = p + (potential_evapotranspiration_cm - np.float32(0.6)) / (
+        p: np.float32 = p + (potential_evapotranspiration_cm - np.float32(0.6)) / (
             crop_group_number * (crop_group_number + np.float32(3.0))
         )
 
     if p < np.float32(0):
-        p = np.float32(0)
+        p: np.float32 = np.float32(0)
     if p > np.float32(1):
-        p = np.float32(1)
+        p: np.float32 = np.float32(1)
     return p
 
 
