@@ -13,7 +13,7 @@ import zipfile
 from operator import attrgetter
 from pathlib import Path
 from pstats import Stats
-from typing import Literal, overload
+from typing import Any
 
 import click
 import yaml
@@ -22,6 +22,7 @@ from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
 
 from geb import __version__
+from geb.build import GEBModel as GEBModelBuild
 from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
@@ -51,7 +52,7 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
 
 def parse_config(
     config_path: dict | Path | str, current_directory: Path | None = None
-) -> dict:
+) -> dict[str, Any]:
     """Parse config."""
     if current_directory is None:
         current_directory = Path.cwd()
@@ -214,9 +215,9 @@ def run_model_with_method(
             os.execv(sys.executable, ["-O"] + sys.argv)
 
     with WorkingDirectory(working_directory):
-        config = parse_config(config)
+        config: dict[str, Any] = parse_config(config)
 
-        files = parse_config(
+        files: dict[str, Any] = parse_config(
             "input/files.json"
             if "files" not in config["general"]
             else config["general"]["files"]
@@ -375,11 +376,9 @@ def click_build_options(build_config="build.yml"):
     return decorator
 
 
-def get_model_builder_class(custom_model):
-    from geb import build
-
+def get_model_builder_class(custom_model) -> type:
     if custom_model is None:
-        return build.GEBModel
+        return GEBModelBuild
     else:
         importlib.import_module(
             "." + custom_model.split(".")[0], package="geb.build.custom_models"
@@ -626,10 +625,15 @@ def alter_fn(
 
 @cli.command()
 @click_build_options()
-@click.option("--from-model", default="../base", help="Folder for base model.")
+@click.option("--from-model", default="../base", help="Folder for the existing model.")
 def alter(*args, **kwargs):
-    """Alter model."""
-    # Alter the model with the given config and build config
+    """Create alternative version from base model with only changed files.
+
+    This command is useful to create a new model based on an existing one, but with
+    only a few changes. It will copy the base model and overwrite the files that are
+    specified in the config and build config files. The rest of the files will be
+    linked to the original model to reduce disk space.
+    """
     alter_fn(*args, **kwargs)
 
 
