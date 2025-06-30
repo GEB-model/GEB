@@ -125,7 +125,7 @@ class Agents:
                     )
                 )
                 .interpolate(method="linear")
-                .fillna(method="bfill")
+                .bfill()
             )  # interpolate also extrapolates forward with constant values
 
             assert municipal_water_withdrawal_m3_per_capita_per_day.max() < 10, (
@@ -195,7 +195,7 @@ class Agents:
                 start=datetime(1901, 1, 1)
                 + relativedelta(years=int(ds.time[0].data.item())),
                 periods=len(ds.time),
-                freq="AS",
+                freq="YS",
             )
 
             assert (ds.time.dt.year.diff("time") == 1).all(), "not all years are there"
@@ -366,9 +366,7 @@ class Agents:
             # interpolate missing values in inflation rates. For extrapolation
             # linear interpolation uses the first and last value
             for column in df.columns:
-                df[column] = (
-                    df[column].interpolate(method="linear").fillna(method="bfill")
-                )
+                df[column] = df[column].interpolate(method="linear").bfill()
 
             d["time"] = df.index.astype(str).tolist()
             d["data"] = df.to_dict(orient="list")
