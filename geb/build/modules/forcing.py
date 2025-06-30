@@ -1221,9 +1221,7 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
-    def setup_forcing_ISIMIP(
-        self, resolution_arcsec: int, forcing: str, ssp: str
-    ) -> None:
+    def setup_forcing_ISIMIP(self, resolution_arcsec: int, forcing: str) -> None:
         """Sets up the forcing data for GEB using ISIMIP data.
 
         Parameters
@@ -1233,8 +1231,6 @@ class Forcing:
         forcing : str
             The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
             and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
-        ssp: str
-            The Shared Socioeconomic Pathway (SSP) scenario to use. Supported values are ssp126, ssp370, and ssp585.
         """
         if resolution_arcsec == 30:
             assert forcing == "chelsa-w5e5", (
@@ -1264,7 +1260,7 @@ class Forcing:
                 "ps",
                 "sfcwind",
             ]
-            self.setup_1800arcsec_variables_isimip(forcing, variables, ssp=ssp)
+            self.setup_1800arcsec_variables_isimip(forcing, variables)
         else:
             raise ValueError(
                 "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
@@ -1272,38 +1268,37 @@ class Forcing:
 
     def setup_forcing(
         self,
-        data_source: str,
-        resolution_arcsec,
-        forcing,
-        ssp: None | str = None,
+        resolution_arcsec: int,
+        forcing_name: str | None = None,
+        data_source: str = "ERA5",
     ):
         """Sets up the forcing data for GEB.
 
-        Parameters
-        ----------
-        data_source : str, optional
-            The data source to use for the forcing data. Default is 'isimip'.
+        Args:
+            resolution_arcsec : The resolution of the data in arcseconds. Supported values are 30 and 1800.
+            data_source : The data source to use for the forcing data. Can be ERA5 or ISIMIP. Default is 'era5'.
+            forcing_name : The name of the forcing data to use within the dataset. Only required for ISIMIP data.
+                For ISIMIP, this can be 'chelsa-w5e5' for 30 arcsec resolution
+                or 'ipsl-cm6a-lr', 'gfdl-esm4', 'mpi-esm1-2-hr', 'mri-esm2-0', or 'mri-esm2-0' for 1800 arcsec resolution.
 
         Notes:
-        -----
-        This method sets up the forcing data for GEB. It first downloads the high-resolution variables
-        (precipitation, surface solar radiation, air temperature, maximum air temperature, and minimum air temperature) from
-        the ISIMIP dataset for the specified time period.
+            This method sets up the forcing data for GEB. It first downloads the high-resolution variables
+            (precipitation, surface solar radiation, air temperature, maximum air temperature, and minimum air temperature) from
+            the ISIMIP dataset for the specified time period.
 
-        The method then sets up the relative humidity, longwave radiation, pressure, and wind data for the model. The
-        relative humidity data is downloaded from the ISIMIP dataset using the `setup_hurs_isimip_30arcsec` method. The longwave radiation
-        data is calculated using the air temperature and relative humidity data and the `calculate_longwave` function. The
-        pressure data is downloaded from the ISIMIP dataset using the `setup_pressure_isimip_30arcsec` method. The wind data is downloaded
-        from the ISIMIP dataset using the `setup_wind_isimip_30arcsec` method. All these data are first downscaled to the model grid.
+            The method then sets up the relative humidity, longwave radiation, pressure, and wind data for the model. The
+            relative humidity data is downloaded from the ISIMIP dataset using the `setup_hurs_isimip_30arcsec` method. The longwave radiation
+            data is calculated using the air temperature and relative humidity data and the `calculate_longwave` function. The
+            pressure data is downloaded from the ISIMIP dataset using the `setup_pressure_isimip_30arcsec` method. The wind data is downloaded
+            from the ISIMIP dataset using the `setup_wind_isimip_30arcsec` method. All these data are first downscaled to the model grid.
 
-        The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
+            The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
         """
-        if data_source == "isimip":
-            assert ssp is not None, "ssp must be specified for ISIMIP data"
-            self.setup_forcing_ISIMIP(resolution_arcsec, forcing, ssp)
-        elif data_source == "era5":
+        if data_source == "ISIMIP":
+            self.setup_forcing_ISIMIP(resolution_arcsec, forcing_name)
+        elif data_source == "ERA5":
             self.setup_forcing_era5()
-        elif data_source == "cmip":
+        elif data_source == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
             raise ValueError(f"Unknown data source: {data_source}")
@@ -1415,7 +1410,6 @@ class Forcing:
         self,
         forcing: str,
         variables: List[str],
-        ssp: str,
     ):
         """Sets up the high-resolution climate variables for GEB.
 
@@ -1465,7 +1459,7 @@ class Forcing:
 
         def download_variable(variable):
             self.logger.info(f"Setting up {variable}...")
-            ds: xr.Dataset = self.download_isimip(
+            ds: xr.DataArray = self.download_isimip(
                 product="InputData",
                 variable=variable,
                 start_date=self.start_date,
@@ -2082,16 +2076,12 @@ class Forcing:
             {"x": -1, "y": -1}
         )
 
-    def setup_CO2_concentration(self, ssp: str) -> None:
-        """Aquires the CO2 concentration data for the specified SSP in ppm.
-
-        Args:
-            ssp: The Shared Socioeconomic Pathway (SSP) for which the CO2 concentration data is acquired. Only used for future scenarios.
-        """
+    def setup_CO2_concentration(self) -> None:
+        """Aquires the CO2 concentration data for the specified SSP in ppm."""
         da: xr.DataArray = self.construct_ISIMIP_variable(
             variable_name="co2",
             forcing=None,
-            ssp=ssp,
+            ssp=self.ISIMIP_ssp,
         ).astype(np.float32)
         self.set_other(
             da,

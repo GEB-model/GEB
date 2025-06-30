@@ -507,16 +507,12 @@ def create_riverine_mask(
     return riverine_mask
 
 
-class DelayedReader:
+class DelayedReader(dict):
     def __init__(self, reader: Any) -> None:
         self.reader: Any = reader
-        self.items: dict[str, Any] = {}
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.items[key] = value
 
     def __getitem__(self, key: str) -> Any:
-        fp: str | Path = self.items[key]
+        fp = super().__getitem__(key)
         return self.reader(fp)
 
 
@@ -982,6 +978,28 @@ class GEBModel(
     @property
     def end_date(self):
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
+
+    def set_ssp(self, ssp: str):
+        assert ssp in ["ssp1", "ssp3", "ssp5"], (
+            f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
+        )
+        self.set_dict({"ssp": ssp}, name="ssp")
+
+    @property
+    def ssp(self):
+        return self.dict["ssp"]["ssp"] if "ssp" in self.dict else "ssp3"
+
+    @property
+    def ISIMIP_ssp(self):
+        """Returns the ISIMIP SSP name."""
+        if self.ssp == "ssp1":
+            return "ssp126"
+        elif self.ssp == "ssp3":
+            return "ssp370"
+        elif self.ssp == "ssp5":
+            return "ssp585"
+        else:
+            raise ValueError(f"SSP {self.ssp} not supported.")
 
     def snap_to_grid(
         self,
