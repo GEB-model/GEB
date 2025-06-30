@@ -779,15 +779,16 @@ GLOBIOM_regions_37:
   driver_kwargs:
     sheet_name: Region37
 ISIMIP:
+  data_type: Dataset
+  path: "placeholder"
   meta:
     category: climate
     source_author: ISIMIP
     source_license: CC BY 4.0
     source_url: https://www.isimip.org
-  path: ""
-  data_type: Dataset
 ERA5_hourly:
   data_type: Dataset
+  path: "placeholder"
   meta:
     category: climate
     source_author: ECMWF
