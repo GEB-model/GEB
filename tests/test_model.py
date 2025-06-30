@@ -9,7 +9,14 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from geb.cli import build_fn, init_fn, parse_config, run_model_with_method, update_fn
+from geb.cli import (
+    alter_fn,
+    build_fn,
+    init_fn,
+    parse_config,
+    run_model_with_method,
+    update_fn,
+)
 from geb.model import GEBModel
 from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
 from geb.workflows.io import WorkingDirectory
@@ -19,7 +26,7 @@ from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 working_directory: Path = tmp_folder / "model"
 
 DEFAULT_BUILD_ARGS: dict[str, Any] = {
-    "data_catalog": [Path("../../../geb/data_catalog.yml")],
+    "data_catalog": [Path(os.getenv("GEB_PACKAGE_DIR")) / "data_catalog.yml"],
     "config": "model.yml",
     "build_config": "build.yml",
     "working_directory": working_directory,
@@ -72,6 +79,24 @@ def test_init():
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_build():
     build_fn(**DEFAULT_BUILD_ARGS)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_alter():
+    args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
+    args["build_config"] = {"setup_CO2_concentration": {"ssp": "ssp126"}}
+    args["working_directory"] = working_directory / "alter"
+
+    args["from_model"] = ".."
+
+    args["working_directory"].mkdir(parents=True, exist_ok=True)
+
+    alter_fn(**args)
+
+    run_args = DEFAULT_RUN_ARGS.copy()
+    run_args["working_directory"] = args["working_directory"]
+
+    run_model_with_method(method="spinup", **run_args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

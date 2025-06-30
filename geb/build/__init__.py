@@ -1330,13 +1330,6 @@ class GEBModel(
         )
         return self.region_subgrid[name]
 
-    def set_alternate_root(self, root, mode):
-        relative_path = Path(os.path.relpath(Path(self.root), root.resolve()))
-        for data in self.files.values():
-            for name, fn in data.items():
-                data[name] = relative_path / fn
-        super().set_root(root, mode)
-
     @property
     def subgrid_factor(self) -> int:
         """The factor by which the subgrid is smaller than the original grid."""

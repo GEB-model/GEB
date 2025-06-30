@@ -3,7 +3,7 @@ import datetime
 import os
 from pathlib import Path
 from time import time
-from typing import Any
+from typing import Any, Literal, overload
 
 import numpy as np
 import pandas as pd
@@ -91,6 +91,16 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.current_timestep = timestep
         self.n_timesteps = n_timesteps
 
+    @overload
+    def multiverse(
+        self, forecast_dt: datetime.datetime, return_mean_discharge: Literal[True]
+    ) -> dict[Any, float]: ...
+
+    @overload
+    def multiverse(
+        self, forecast_dt: datetime.datetime, return_mean_discharge: Literal[False]
+    ) -> None: ...
+
     def multiverse(
         self, forecast_dt: datetime.datetime, return_mean_discharge: bool = False
     ) -> None | dict[Any, float]:
@@ -121,7 +131,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             mean_discharge = {}
 
         for member in forecasts.member:
-            self.multiverse_name: str = member.item()
+            self.multiverse_name = member.item()
 
             pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member)
 
