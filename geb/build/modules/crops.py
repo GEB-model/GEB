@@ -727,7 +727,7 @@ class Crops:
             adjust_currency=adjust_currency,
         )
         self.set_dict(crop_prices, name="crops/crop_prices")
-        # self.set_dict(crop_prices, name="crops/cultivation_costs")
+        self.set_dict(crop_prices, name="crops/cultivation_costs")
 
     def determine_crop_area_fractions(self, resolution="5-arcminute"):
         output_folder = "plot/mirca_crops"
