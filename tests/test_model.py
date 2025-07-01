@@ -84,7 +84,7 @@ def test_build():
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_alter():
     args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
-    args["build_config"] = {"setup_CO2_concentration": {"ssp": "ssp126"}}
+    args["build_config"] = {"set_ssp": {"ssp": "ssp1"}, "setup_CO2_concentration": {}}
     args["working_directory"] = working_directory / "alter"
 
     args["from_model"] = ".."
