@@ -447,13 +447,59 @@ class Households(AgentBaseClass):
             flood_map_final = flood_map.rio.clip(
                 region_projected.geometry, region_projected.crs
             )
-    
-        #         flood_path = join(simulation_root, f"hmax RP {int(return_period)}.tif")
-        #     flood_map = rioxarray.open_rasterio(flood_path)
-        # else:
-        #     flood_path = join(simulation_root, "hmax.tif")
-        #     flood_map = rioxarray.open_rasterio(flood_path)
 
+
+            if (
+                self.model.config["hazards"]
+                .get("floods", {})
+                .get("include_new_waterbuffers")
+                is True
+            ):
+                print("Clipping out loations of waterbuffers -- new ones")
+                waterbuffer_locations = gpd.read_file(
+                    self.model.files["geoms"]["new_buffer_locations"]
+                )
+
+                waterbuffers = waterbuffer_locations.to_crs(flood_map.rio.crs)
+                buffer_mask = flood_map_final.raster.geometry_mask(
+                    gdf=waterbuffers, all_touched=True
+                )
+                flood_map_clipped = flood_map_final.where(~buffer_mask)
+
+                output_filename = (
+                    f"flood_map_clipped_RP{int(return_period)}.tif"
+                    if return_period
+                    else "flood_map_clipped.tif"
+                )
+                
+                flood_map_clipped.rio.to_raster(join(simulation_root, output_filename))
+
+                flood_map_final = flood_map_clipped
+
+            if (
+                self.model.config["hazards"]
+                .get("floods", {})
+                .get("include_existing_waterbuffers")
+                is True
+            ):
+                print("Clipping out locations of waterbuffers - existing ones")
+                waterbuffer_locations = gpd.read_file(
+                    self.model.files["geoms"]["existing_buffer_locations"]
+                )
+                waterbuffers = waterbuffer_locations.to_crs(flood_map.rio.crs)
+                buffer_mask = flood_map_final.raster.geometry_mask(
+                    gdf=waterbuffers, all_touched=True
+                )
+                flood_map_clipped = flood_map_final.where(~buffer_mask)
+
+                output_filename = (
+                    f"flood_map_clipped_RP{int(return_period)}.tif"
+                    if return_period
+                    else "flood_map_clipped.tif"
+                )
+                flood_map_clipped.rio.to_raster(join(simulation_root, output_filename))
+                flood_map_final = flood_map_clipped
+            
         # Load landuse and make turn into polygons
         agriculture = from_landuse_raster_to_polygon(
             self.model.data.HRU.decompress(self.model.data.HRU.var.land_owners != -1),

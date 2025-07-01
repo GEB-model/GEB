@@ -480,6 +480,20 @@ class SFINCS:
         sfincs_precipitation = event.get("precipitation", None)
 
         if sfincs_precipitation is None:
+
+            # if (self.model.config["hazards"]
+            #     .get("floods", {})
+            #     .get("include_existing_waterbuffers")
+            #      is True
+            #     ):
+            #         print("Running SFINCS with existing waterbuffers - implement blokbui")
+            #         sfincs_precipitation = xr.open_dataset("/scistor/ivm/vbl220/PhD/modified_precip.zarr.zip", engine="zarr")["precip"]
+            #         print(sfincs_precipitation)
+            #         sfincs_precipitation.raster.set_crs(4326)  # TODO: Remove when this is added to hydromt_sfincs
+            #         sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
+            #         print("CRS:", sfincs_precipitation.rio.crs)
+            #         print(sfincs_precipitation.raster.crs)
+            # else:
             sfincs_precipitation = (
                 xr.open_dataset(
                     self.model.files["forcing"]["climate/pr_hourly"], engine="zarr"
@@ -519,6 +533,7 @@ class SFINCS:
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
         event_name = self.get_event_name(event)
+    
         run_sfincs_simulation(
             simulation_root=self.sfincs_simulation_root(event_name),
             model_root=self.sfincs_model_root(event_name),
@@ -551,6 +566,26 @@ class SFINCS:
         sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
         scaled_event["precipitation"] = sfincs_precipitation
         return scaled_event
+    
+    def create_blokbui(self, event, precip):
+        blokbui = event.copy()
+        sfincs_precipitation = (
+            xr.open_dataset(
+                self.model.files["forcing"]["climate/pr_hourly"], engine="zarr"
+            ).rename(pr_hourly="precip")["precip"]
+            * 3600
+        )  # convert from kg/m2/s to mm/h for
+        sfincs_precipitation.raster.set_crs(
+            4326
+        )  # TODO: Remove when this is added to hydromt_sfincs
+        sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
+        replacement_value = precip / 48
+        print(replacement_value)
+        full_event = pd.date_range("2021-07-13T10:00", periods=48, freq="H")
+        for t in full_event:
+            sfincs_precipitation.loc[dict(time=t)] = replacement_value
+        blokbui["precipitation"] = sfincs_precipitation
+        return blokbui
 
     def get_return_period_maps(self, config_fn="sfincs.yml", force_overwrite=True):
         # close the zarr store
@@ -587,40 +622,72 @@ class SFINCS:
         )
 
     def run(self, event):
-        print("lets run")
+        print("Running SFINCS")
         start_time = event["start_time"]
 
         if self.model.config["hazards"]["floods"]["flood_risk"]:
-            print("config settings are read")
-            scale_factors = pd.read_parquet(
-                self.model.files["table"]["hydrodynamics/risk_scaling_factors"]
-            )
-            scale_factors["return_period"] = 1 / scale_factors["exceedance_probability"]
-            damages_list = []
-            return_periods_list = []
-            exceedence_probabilities_list = []
-            for index, row in scale_factors.iterrows():
-                return_period = row["return_period"]
-                exceedence_probability = row["exceedance_probability"]
-                scale_factor = row["scaling_factor"]
-                scaled_event = self.scale_event(event, scale_factor)
-                damages = self.run_single_event(scaled_event, start_time, return_period)
+            if self.model.config["hazards"]["floods"]["scale_event"]:
+                print("Running flood risk - scaling event")
+                scale_factors = pd.read_parquet(
+                    self.model.files["table"]["hydrodynamics/risk_scaling_factors"]
+                )
+                scale_factors["return_period"] = 1 / scale_factors["exceedance_probability"]
+                damages_list = []
+                return_periods_list = []
+                exceedence_probabilities_list = []
+                for index, row in scale_factors.iterrows():
+                    return_period = row["return_period"]
+                    exceedence_probability = row["exceedance_probability"]
+                    scale_factor = row["scaling_factor"]
+                    scaled_event = self.scale_event(event, scale_factor)
+                    damages = self.run_single_event(scaled_event, start_time, return_period)
 
-                damages_list.append(damages)
-                return_periods_list.append(return_period)
-                exceedence_probabilities_list.append(exceedence_probability)
+                    damages_list.append(damages)
+                    return_periods_list.append(return_period)
+                    exceedence_probabilities_list.append(exceedence_probability)
 
-            print(damages_list)
-            print(return_periods_list)
-            print(exceedence_probabilities_list)
+                print(damages_list)
+                print(return_periods_list)
+                print(exceedence_probabilities_list)
 
-            inverted_damage_list = damages_list[::-1]
-            inverted_exceedence_probabilities_list = exceedence_probabilities_list[::-1]
+                inverted_damage_list = damages_list[::-1]
+                inverted_exceedence_probabilities_list = exceedence_probabilities_list[::-1]
 
-            expected_annual_damage = np.trapz(
-                y=inverted_damage_list, x=inverted_exceedence_probabilities_list
-            )  # np.trapezoid or np.trapz -> depends on np version
-            print(f"expected annual damage is: {expected_annual_damage}")
+                expected_annual_damage = np.trapz(
+                    y=inverted_damage_list, x=inverted_exceedence_probabilities_list
+                )  # np.trapezoid or np.trapz -> depends on np version
+                print(f"expected annual damage is: {expected_annual_damage}")
+
+            elif self.model.config["hazards"]["floods"]["blokbui"]:
+                print("Running flood risk - using blokbui method")
+                accumulated_rainfall = pd.read_parquet(
+                    "/scistor/ivm/vbl220/PhD/models/geulnew/input/hydrodynamics/accumulated_precipitation_factors.parquet"
+                )
+                accumulated_rainfall["return_period"] = 1 / accumulated_rainfall["exceedance_probability"]
+                damages_list = []
+                return_periods_list = []
+                exceedence_probabilities_list = []
+                for index, row in accumulated_rainfall.iterrows():
+                    return_period = row["return_period"]
+                    exceedence_probability = row["exceedance_probability"]
+                    precip = row["accumulated_precipitation"]
+                    blokbui = self.create_blokbui(event, precip)
+                    damages = self.run_single_event(blokbui, start_time, return_period)
+                    damages_list.append(damages)
+                    return_periods_list.append(return_period)
+                    exceedence_probabilities_list.append(exceedence_probability)
+
+                print(damages_list)
+                print(return_periods_list)
+                print(exceedence_probabilities_list)
+
+                inverted_damage_list = damages_list[::-1]
+                inverted_exceedence_probabilities_list = exceedence_probabilities_list[::-1]
+
+                expected_annual_damage = np.trapz(
+                    y=inverted_damage_list, x=inverted_exceedence_probabilities_list
+                )  # np.trapezoid or np.trapz -> depends on np version
+                print(f"expected annual damage is: {expected_annual_damage}")
         
         # elif self.model.config["hazards"]["floods"]["custom_flood_map"]:
         # print("running with custom flood map")
@@ -651,6 +718,7 @@ class SFINCS:
         # print("damages done")
 
         else:
+            print("Running single event")
             self.run_single_event(event, start_time)
 
     def flood(self, model_root, simulation_root, flood_map, return_period=None):
