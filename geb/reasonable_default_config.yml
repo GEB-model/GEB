@@ -52,7 +52,7 @@ agent_settings:
       per: capita
   households:
     adapt: false
-    warning_respose: false
+    warning_response: false
     expected_utility:
       flood_risk_calculations:
         risk_perception:
