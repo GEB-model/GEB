@@ -10,7 +10,7 @@ import zarr
 import zarr.storage
 
 from geb.workflows.io import (
-    AsyncForcingReader,
+    AsyncGriddedForcingReader,
 )
 
 from .testconfig import tmp_folder
@@ -52,13 +52,13 @@ def test_read_timestep():
     temperature_file: Path = zarr_file("temperature")
     precipitation_file: Path = zarr_file("precipitation")
     pressure_file: Path = zarr_file("pressure")
-    reader1: AsyncForcingReader = AsyncForcingReader(
+    reader1: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
         temperature_file, variable_name="temperature"
     )
-    reader2: AsyncForcingReader = AsyncForcingReader(
+    reader2: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
         precipitation_file, variable_name="precipitation"
     )
-    reader3: AsyncForcingReader = AsyncForcingReader(
+    reader3: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
         pressure_file, variable_name="pressure"
     )
 

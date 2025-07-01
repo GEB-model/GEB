@@ -507,16 +507,12 @@ def create_riverine_mask(
     return riverine_mask
 
 
-class DelayedReader:
+class DelayedReader(dict):
     def __init__(self, reader: Any) -> None:
         self.reader: Any = reader
-        self.items: dict[str, Any] = {}
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.items[key] = value
 
     def __getitem__(self, key: str) -> Any:
-        fp: str | Path = self.items[key]
+        fp = super().__getitem__(key)
         return self.reader(fp)
 
 
@@ -581,15 +577,17 @@ class GEBModel(
         Adds/Updates model layers:
         * **grid** grid mask: add grid mask to grid object
 
-        Parameters
-        ----------
-        region : dict
-            Dictionary describing region of interest, e.g.:
-            * {'basin': [x, y]}
+        Args:
+            region: Dictionary describing region of interest, e.g.:
+                * {'basin': [x, y]}
 
-            Region must be of kind [basin, subbasin].
-        subgrid_factor : int
-            GEB implements a subgrid. This parameter determines the factor by which the subgrid is smaller than the original grid.
+                Region must be of kind [basin, subbasin].
+            subgrid_factor: GEB implements a subgrid. This parameter determines the factor by which the subgrid is smaller than the original grid.
+            resolution_arcsec: Resolution of the grid in arcseconds. Must be a multiple of 3 to align with MERIT.
+            include_coastal_area: Because the subbasins are delinated using a minimum upstream area small basins near the coast are not included.
+                If this parameter is set to True, the coastal area will be included in the riverine mask by automatically extending the riverine mask to the coastal area,
+                by finding all coastal basins between the outlets within the study area and half the distance to the nearest outlet outside the study area.
+                All cells upstream of these coastal basins will be included in the riverine mask.
         """
         assert resolution_arcsec % 3 == 0, (
             "resolution_arcsec must be a multiple of 3 to align with MERIT"
@@ -983,6 +981,28 @@ class GEBModel(
     def end_date(self):
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
 
+    def set_ssp(self, ssp: str):
+        assert ssp in ["ssp1", "ssp3", "ssp5"], (
+            f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
+        )
+        self.set_dict({"ssp": ssp}, name="ssp")
+
+    @property
+    def ssp(self):
+        return self.dict["ssp"]["ssp"] if "ssp" in self.dict else "ssp3"
+
+    @property
+    def ISIMIP_ssp(self):
+        """Returns the ISIMIP SSP name."""
+        if self.ssp == "ssp1":
+            return "ssp126"
+        elif self.ssp == "ssp3":
+            return "ssp370"
+        elif self.ssp == "ssp5":
+            return "ssp585"
+        else:
+            raise ValueError(f"SSP {self.ssp} not supported.")
+
     def snap_to_grid(
         self,
         ds: xr.DataArray | xr.Dataset,
@@ -1243,25 +1263,29 @@ class GEBModel(
 
     def _set_grid(
         self,
-        grid_name,
-        grid,
+        grid_name: str,
+        grid: xr.Dataset,
         data: xr.DataArray,
         name: str,
-        write,
-        x_chunksize=XY_CHUNKSIZE,
-        y_chunksize=XY_CHUNKSIZE,
+        write: bool,
+        x_chunksize: int = XY_CHUNKSIZE,
+        y_chunksize: int = XY_CHUNKSIZE,
     ):
-        """Add data to grid.
+        """Add data to grid dataset.
 
         All layers of grid must have identical spatial coordinates.
 
-        Parameters
-        ----------
-        data: xarray.DataArray or xarray.Dataset
-            new map layer to add to grid
-        name: str
-            Name of new map layer, this is used to overwrite the name of a DataArray
-            and ignored if data is a Dataset
+        Args:
+            grid_name: name of the grid, e.g. "grid", "subgrid", "region_subgrid"
+            grid: the gridded dataset itself
+            data: the data to add to the grid
+            write: if True, write the data to disk
+            name: the name of the layer that will be added to the grid.
+            x_chunksize: the chunk size in the x dimension for writing to zarr
+            y_chunksize: the chunk size in the y dimension for writing to zarr
+
+        Returns:
+            grid: the updated grid with the new layer addedå
         """
         assert isinstance(data, xr.DataArray)
 
@@ -1329,13 +1353,6 @@ class GEBModel(
             name=name,
         )
         return self.region_subgrid[name]
-
-    def set_alternate_root(self, root, mode):
-        relative_path = Path(os.path.relpath(Path(self.root), root.resolve()))
-        for data in self.files.values():
-            for name, fn in data.items():
-                data[name] = relative_path / fn
-        super().set_root(root, mode)
 
     @property
     def subgrid_factor(self) -> int:

@@ -1,14 +1,24 @@
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import pandas as pd
 import pytest
 import xarray as xr
 
-from geb.cli import build_fn, init_fn, parse_config, run_model_with_method, update_fn
+from geb.cli import (
+    alter_fn,
+    build_fn,
+    init_fn,
+    parse_config,
+    run_model_with_method,
+    update_fn,
+)
 from geb.model import GEBModel
+from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
 from geb.workflows.io import WorkingDirectory
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -16,7 +26,7 @@ from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 working_directory: Path = tmp_folder / "model"
 
 DEFAULT_BUILD_ARGS: dict[str, Any] = {
-    "data_catalog": [Path("../../../geb/data_catalog.yml")],
+    "data_catalog": [Path(os.getenv("GEB_PACKAGE_DIR")) / "data_catalog.yml"],
     "config": "model.yml",
     "build_config": "build.yml",
     "working_directory": working_directory,
@@ -69,6 +79,24 @@ def test_init():
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_build():
     build_fn(**DEFAULT_BUILD_ARGS)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_alter():
+    args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
+    args["build_config"] = {"set_ssp": {"ssp": "ssp1"}, "setup_CO2_concentration": {}}
+    args["working_directory"] = working_directory / "alter"
+
+    args["from_model"] = ".."
+
+    args["working_directory"].mkdir(parents=True, exist_ok=True)
+
+    alter_fn(**args)
+
+    run_args = DEFAULT_RUN_ARGS.copy()
+    run_args["working_directory"] = args["working_directory"]
+
+    run_model_with_method(method="spinup", **run_args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -134,6 +162,15 @@ def test_run_yearly():
     config["general"]["end_time"] = date(2049, 12, 31)
     args["config"] = config
     args["config"]["report"] = {}
+    assert pytest.raises(
+        AssertionError,
+        run_model_with_method,
+        method="run_yearly",
+        **args,
+    )
+
+    config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+
     run_model_with_method(method="run_yearly", **args)
 
 
@@ -150,11 +187,19 @@ def test_multiverse():
 
     forecast_after_n_days = 3
     forecast_n_days = 5
+    forecast_n_hours = 13
 
-    forecast_date = config["general"]["start_time"] + timedelta(
-        days=forecast_after_n_days
+    forecast_date = (
+        datetime.combine(config["general"]["start_time"], time.min)
+        + timedelta(days=forecast_after_n_days)
+        + timedelta(hours=forecast_n_hours)
     )
-    config["general"]["end_time"] = forecast_date + timedelta(days=forecast_n_days)
+    forecast_end_date = forecast_date + timedelta(
+        days=int(forecast_n_days), hours=forecast_n_hours
+    )
+    config["general"]["end_time"] = forecast_date + timedelta(
+        days=int(forecast_n_days) + 5
+    )
 
     input_folder = working_directory / config["general"]["input_folder"]
 
@@ -162,24 +207,41 @@ def test_multiverse():
     files = json.loads(files.read_text())
 
     precipitation = xr.open_dataarray(
-        input_folder / files["other"]["climate/pr"]
+        input_folder / files["other"]["climate/pr_hourly"], consolidated=False
     ).drop_encoding()
-    precipitation = precipitation.sel(
-        time=slice(forecast_date, forecast_date + timedelta(days=5))
+    forecast = precipitation.sel(
+        time=slice(
+            forecast_date,
+            forecast_end_date,
+        )
     )
 
     # add member dimension
-    precipitation = precipitation.expand_dims(dim={"member": [0]}, axis=0)
+    forecast = forecast.expand_dims(dim={"member": [0]}, axis=0)
 
     forecasts_folder = input_folder / "other" / "climate" / "forecasts"
     forecasts_folder.mkdir(parents=True, exist_ok=True)
 
-    precipitation.to_zarr(
-        forecasts_folder / forecast_date.strftime("%Y%m%d.zarr"), mode="w"
+    forecast.to_zarr(
+        forecasts_folder / forecast_date.strftime("%Y%m%dT%H%M%S.zarr"), mode="w"
     )
 
     # inititate a forecast after three days
-    config["general"]["forecasts"]["days"] = [forecast_date]
+    config["general"]["forecasts"]["times"] = [forecast_date]
+
+    # add flood event during the forecast period
+    events: list = [
+        {
+            "start_time": forecast_date + timedelta(days=1),
+            "end_time": forecast_date + timedelta(days=2, hours=12),
+        },
+        {
+            "start_time": forecast_end_date - timedelta(days=1, hours=0),
+            "end_time": forecast_end_date + timedelta(days=1, hours=18),
+        },
+    ]
+    config["hazards"]["floods"]["events"] = events
+    config["hazards"]["floods"]["force_overwrite"] = False
 
     args["config"] = config
 
@@ -190,20 +252,55 @@ def test_multiverse():
             geb.step()
 
         mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
-            return_mean_discharge=True
+            return_mean_discharge=True, forecast_dt=forecast_date
         )
 
-        for i in range(forecast_n_days):
+        end_date = round_up_to_start_of_next_day_unless_midnight(
+            pd.to_datetime(forecast.time[-1].item()).to_pydatetime()
+        ).date()
+        steps_in_forecast = (end_date - geb.current_time.date()).days
+
+        for i in range(steps_in_forecast):
             geb.step()
 
         mean_discharge: float = (
             geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
         )
 
+        geb.step_to_end()
+
     for member, forecast_mean_discharge in mean_discharge_after_forecast.items():
         assert forecast_mean_discharge == mean_discharge
 
     geb.close()
+
+    flood_map_folder: Path = working_directory / "output" / "flood_maps"
+
+    flood_map_first_event: xr.DataArray = xr.open_dataarray(
+        flood_map_folder
+        / f"{events[0]['start_time'].isoformat()} - {events[0]['end_time'].isoformat()}.zarr"
+    )
+
+    flood_map_first_event_multiverse: xr.DataArray = xr.open_dataarray(
+        flood_map_folder
+        / f"0 - {events[0]['start_time'].isoformat()} - {events[0]['end_time'].isoformat()}.zarr"
+    )
+
+    np.testing.assert_array_equal(
+        flood_map_first_event.values,
+        flood_map_first_event_multiverse.values,
+        err_msg="Flood maps for the first event do not match across multiverse members.",
+    )
+
+    flood_map_second_event: xr.DataArray = xr.open_dataarray(
+        flood_map_folder
+        / f"{events[1]['start_time'].isoformat()} - {events[1]['end_time'].isoformat()}.zarr"
+    )
+
+    flood_map_second_event_multiverse: xr.DataArray = xr.open_dataarray(
+        flood_map_folder
+        / f"0 - {events[1]['start_time'].isoformat()} - {forecast_end_date.isoformat()}.zarr"
+    )
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -226,7 +323,6 @@ def test_ISIMIP_forcing_low_res():
         "setup_forcing_ISIMIP": {
             "resolution_arcsec": 1800,
             "forcing": "gfdl-esm4",
-            "ssp": "ssp370",
         },
     }
     update_fn(**args)
