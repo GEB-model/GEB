@@ -49,7 +49,30 @@ def update_sfincs_model_forcing(
             pd.to_datetime(discharge_grid.time[-1].item()).to_pydatetime()
         ) >= event["end_time"]
 
+    # read model
+    sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
+
+    # update mode time based on event tstart and tend from event dict
+    sf.setup_config(
+        tref=to_sfincs_datetime(event["start_time"]),
+        tstart=to_sfincs_datetime(event["start_time"]),
+        tstop=to_sfincs_datetime(event["end_time"]),
+    )
+    segments = import_rivers(model_root)
+
     if precipitation_grid is not None:
+        if not isinstance(precipitation_grid, list):
+            assert isinstance(precipitation_grid, xr.DataArray), (
+                "precipitation_grid should be a list or an xr.DataArray"
+            )
+            precipitation_grid: list[xr.DataArray] = [precipitation_grid]
+
+        precipitation_grid: list[xr.DataArray] = [
+            pr.raster.reproject_like(sf.grid) for pr in precipitation_grid
+        ]
+
+        precipitation_grid: xr.DataArray = xr.concat(precipitation_grid, dim="time")
+
         assert precipitation_grid.raster.crs is not None, (
             "precipitation_grid should have a crs"
         )
@@ -62,16 +85,13 @@ def update_sfincs_model_forcing(
             >= event["end_time"]
         )
 
-    # read model
-    sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
+        precipitation_grid: xr.DataArray = precipitation_grid.sel(
+            time=slice(event["start_time"], event["end_time"])
+        )
 
-    # update mode time based on event tstart and tend from event dict
-    sf.setup_config(
-        tref=to_sfincs_datetime(event["start_time"]),
-        tstart=to_sfincs_datetime(event["start_time"]),
-        tstop=to_sfincs_datetime(event["end_time"]),
-    )
-    segments = import_rivers(model_root)
+        sf.set_forcing(
+            (precipitation_grid * 3600).to_dataset(name="precip_2d"), name="precip_2d"
+        )  # convert from kg/m2/s to mm/h
 
     if forcing_method == "headwater_points":
         # TODO: Cleanup and re-use nodes (or create nodes here)
@@ -234,10 +254,6 @@ def update_sfincs_model_forcing(
             #     locations=forcing_points,  # Only river inflow point here
             #     uparea=uparea_discharge_grid,
             # )
-
-        sf.setup_precip_forcing_from_grid(
-            precip=precipitation_grid * 3600  # convert from kg/m2/s to mm/h
-        )
 
     # detect whether water level forcing should be set
     if (

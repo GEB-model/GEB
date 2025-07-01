@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal, overload
 
 import numpy as np
 import numpy.typing as npt
@@ -80,6 +80,19 @@ class Forcing(Module):
         """
         self._forcings[name] = reader
 
+    @overload
+    def __getitem__(self, name: Literal["pr_hourly", "CO2"]) -> xr.DataArray:
+        pass
+
+    @overload
+    def __getitem__(
+        self,
+        name: Literal[
+            "tas", "tasmin", "tasmax", "hurs", "ps", "rlds", "rsds", "sfcwind", "SPEI"
+        ],
+    ) -> AsyncGriddedForcingReader:
+        pass
+
     def __getitem__(self, name: str) -> AsyncGriddedForcingReader | xr.DataArray:
         """Get the forcing data for a given name.
 
@@ -124,6 +137,7 @@ class Forcing(Module):
         else:
             data = self[name].read_timestep(time)
         if __debug__ and not self.validators[name](data):
+            data = data.compute()
             raise ValueError(
                 f"Invalid data for {name} at time {time}. "
                 f"\tMin data value: {data.min()}"

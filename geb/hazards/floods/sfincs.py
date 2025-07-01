@@ -191,12 +191,16 @@ class SFINCS:
             time=slice(start_time, end_time)
         )
 
-        precipitation_grid: xr.DataArray = (
-            self.model.forcing.load("pr_hourly", time=slice(start_time, end_time))
-            * precipitation_scale_factor
-        )
-        precipitation_grid.raster.set_crs(4326)
-        precipitation_grid: xr.DataArray = precipitation_grid.rio.set_crs(4326)
+        precipitation_grid = self.model.forcing["pr_hourly"]
+
+        if isinstance(precipitation_grid, list):
+            precipitation_grid: list[xr.DataArray] = [
+                pr * precipitation_scale_factor for pr in precipitation_grid
+            ]
+        else:
+            precipitation_grid: xr.DataArray = (
+                precipitation_grid * precipitation_scale_factor
+            )
 
         event_name: str = self.get_event_name(event)
 

@@ -18,6 +18,7 @@ from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
 from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
+from geb.workflows.io import open_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
@@ -112,20 +113,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         store_location: Path = self.simulation_root / "multiverse" / "forecast"
         self.store.save(store_location)
 
-        original_pr_hourly = self.forcing["pr_hourly"]
+        original_pr_hourly: xr.DataArray = self.forcing["pr_hourly"]
 
-        forecasts: xr.DataArray = xr.open_dataarray(
-            self.input_folder
-            / "other"
-            / "climate"
-            / "forecasts"
-            / f"{forecast_dt.strftime('%Y%m%dT%H%M%S')}.zarr"
+        forecasts: xr.DataArray = open_zarr(
+            Path("data") / f"{forecast_dt.strftime('%Y%m%dT%H%M%S')}__.zarr"
         )
-
-        end_date = round_up_to_start_of_next_day_unless_midnight(
-            pd.to_datetime(forecasts.time[-1].item()).to_pydatetime()
-        ).date()
-        self.n_timesteps = (end_date - self.start_time.date()).days
 
         if return_mean_discharge:
             mean_discharge = {}
@@ -133,7 +125,14 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         for member in forecasts.member:
             self.multiverse_name = member.item()
 
-            pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member)
+            pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member) / 3600
+
+            pr_hourly_forecast = pr_hourly_forecast.compute()
+
+            foecast_end_date = round_up_to_start_of_next_day_unless_midnight(
+                pd.to_datetime(pr_hourly_forecast.time[-1].item()).to_pydatetime()
+            ).date()
+            self.n_timesteps = (foecast_end_date - self.start_time.date()).days
 
             # Clip the original precipitation data to the start of the forecast
             # Therefore we take the start of the forecast and subtract one second
@@ -147,13 +146,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             )
 
             # Concatenate the original precipitation data with the forecast data
-            pr_hourly_observed_and_forecasted_combined: xr.DataArray = xr.concat(
-                [
-                    original_pr_hourly_clipped_to_start_of_forecast,
-                    pr_hourly_forecast,
-                ],
-                dim="time",
-            )
+            pr_hourly_observed_and_forecasted_combined: list[xr.DataArray] = [
+                original_pr_hourly_clipped_to_start_of_forecast,
+                pr_hourly_forecast,
+            ]
 
             # Set the pr_hourly forcing data to the combined data
             self.model.forcing["pr_hourly"] = pr_hourly_observed_and_forecasted_combined
