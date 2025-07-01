@@ -323,7 +323,6 @@ def test_ISIMIP_forcing_low_res():
         "setup_forcing_ISIMIP": {
             "resolution_arcsec": 1800,
             "forcing": "gfdl-esm4",
-            "ssp": "ssp370",
         },
     }
     update_fn(**args)
