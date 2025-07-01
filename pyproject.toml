@@ -5,9 +5,6 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-root = ""
 
-[tool.uv.sources]
-hydromt-sfincs = { git = "https://github.com/GEB-model/hydromt_sfincs.git" }
-
 [project]
 name = "geb"
 version = "1.0.0b5"
@@ -26,22 +23,25 @@ dependencies = [
     "cdsapi>=0.7.5",
     "cfgrib>=0.9.14",
     "click>=8.1.8",
+    "contextily>=1.6.2",
     "damagescanner==0.8b1",
-    "dask>=2024.6,<2024.12.0", # Pinned due to chunking error, unpin when resolved.
+    "dask",
     "deap>=1.4.1",
     "flopy>=3.8.0",
+    "folium>=0.19.6",
     "geopandas>=1.0.1",
     "honeybees>=1.2.0",
     "hydromt==0.10.1",
-    "hydromt-sfincs",
+    "hydromt-sfincs>=1.2.0",
     "isimip-client>=1.0.1",
     "nest_asyncio>=1.6.0", # for GUI in
     "networkx",
     "numba>=0.61.0",
     "numpy>=2.1",
     "openpyxl>=3.1.2",
+    "pandas>=2.3.0",
+    "permetrics>=2.0.0",
     "pyarrow>=17.0.0",
-    "pybind11>=2.13.4",
     "pyextremes>=2.3.3",
     "pyflwdir>=0.5.9",
     "pyogrio>=0.9.0",
@@ -56,15 +56,16 @@ dependencies = [
     "ruff",
     "s3fs>=2023.6.0",
     "SALib>=1.4.8", # for sensitivity analysis
-    "scipy>=1.14.0",
+    "scipy>=1.14.0,<1.16",  # update blocked until https://github.com/statsmodels/statsmodels/issues/9584 is fixed
     "setuptools>=75.8.0",
-    "tbb>=2022.0.0",
+    "statsmodels>=0.14.4",
     "tqdm>=4.66.1",
     "xarray>=2025.3.0",
     "xarray-regrid[accel]>=0.4.1",
     "xclim>=0.56.0",
     "xmipy>=1.5.0",
     "xvec>=0.4.0",
+    "xugrid>=0.13.0",
     "zarr>=3.0.6",
 ]
 requires-python = ">=3.12, <3.14"
@@ -82,10 +83,12 @@ classifiers = [
 required-environments = [
     "sys_platform == 'linux'",
     "sys_platform == 'win32'",
+    "sys_platform == 'darwin'"
 ]
 
 [dependency-groups]
 dev = [
+    "myst-parser>=4.0.1",
     "pypandoc>=1.15",
     "sphinx<8",
     "sphinx-autodoc-typehints>=2.3.0",
@@ -108,14 +111,33 @@ display = [
     "jupyter>=1.1.1",
     "seaborn>=0.13.2",
 ]
+plantfate = [
+    "cppimport>=22.8.2",
+    "pybind11>=2.13.6",
+]
 
 [tool.ruff]
 target-version = "py313"
-lint.extend-select = ["I"]
+
+[tool.ruff.lint]
+select = ["D"]
+extend-select = ["I"]
+ignore = [
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D107"
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]
 combine-as-imports = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.pyright]
 include = ["geb"]
@@ -130,3 +152,7 @@ reportAttributeAccessIssue = "none"
 [tool.pytest.ini_options]
 norecursedirs = [".venv", "build", "dist", "tmp*"]
 testpaths = ["tests"]
+addopts = "--ignore=.venv"
+
+[tool.ty.environment]
+python-version = "3.13"

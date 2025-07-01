@@ -8,6 +8,7 @@ general:
   input_folder: input/
   preprocessing_folder: preprocessing/
   output_folder: output/
+  spinup_name: spinup
   name: default
   export_inital_on_spinup: true
   simulate_forest: false
@@ -37,6 +38,10 @@ hazards:
   erosion:
     simulate: false
 
+hydrology:
+  routing:
+    algorithm: kinematic_wave  # accuflux or kinematic_wave
+
 agent_settings:
   market:
     dynamic_market: false
@@ -61,6 +66,7 @@ agent_settings:
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
     microcredit:
+      ruleset: base
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
@@ -69,6 +75,12 @@ agent_settings:
       radius: 5000 # m
       size: 10 # nr of neighbors
     expected_utility:
+      insurance:
+        duration: 2
+        personal_insurance: 
+          ruleset: base
+        index_insurance: 
+          ruleset: base
       crop_switching: 
         ruleset: no-adaptation
       adaptation_sprinkler:
@@ -133,7 +145,7 @@ draw:
 report:
   hydrology.routing:
     discharge_daily:
-      varname: grid.var.discharge
+      varname: grid.var.discharge_m3_s
       type: grid
       function: null
       format: zarr
@@ -146,3 +158,11 @@ parameters:
   lakeEvaFactor: 2.6777823102359894
   manningsN: 0.8269807271111366
   preferentialFlowConstant: 3.14300925049279
+
+plantFATE:
+  spinup_ini_file: data/plantFATE/p_spinup.ini
+  run_ini_file: data/plantFATE/p_run.ini
+  new_forest_ini_file: data/plantFATE/p_new_forest.ini
+  new_forest: false
+  new_forest_filename: null
+  n_cells: 'all'

@@ -1,14 +1,10 @@
-import os
-import shutil
-import tempfile
-import time
 from collections.abc import Mapping
 from datetime import date
 from typing import Any, Union
 
+import dask
 import numpy as np
 import pandas as pd
-import requests
 import xarray
 import xarray as xr
 import xarray_regrid
@@ -66,7 +62,7 @@ def bounds_are_within(small_bounds, large_bounds, tollerance=0):
 
 
 def pad_xy(
-    self,
+    array_rio,
     minx: float,
     miny: float,
     maxx: float,
@@ -75,34 +71,34 @@ def pad_xy(
         float, tuple[int, int], Mapping[Any, tuple[int, int]], None
     ] = None,
     return_slice: bool = False,
-) -> xarray.DataArray:
+) -> xr.DataArray:
     """Pad the array to x,y bounds.
 
-    Parameters
-    ----------
-    minx: float
-        Minimum bound for x coordinate.
-    miny: float
-        Minimum bound for y coordinate.
-    maxx: float
-        Maximum bound for x coordinate.
-    maxy: float
-        Maximum bound for y coordinate.
-    constant_values: scalar, tuple or mapping of hashable to tuple
-        The value used for padding. If None, nodata will be used if it is
-        set, and np.nan otherwise.
+    Args:
+        array_rio: rio assecor of xarray DataArray
+        minx: Minimum bound for x coordinate.
+        miny: Minimum bound for y coordinate.
+        maxx: Maximum bound for x coordinate.
+        maxy: Maximum bound for y coordinate.
+        constant_values: scalar, tuple or mapping of hashable to tuple
+            The value used for padding. If None, nodata will be used if it is
+            set, and np.nan otherwise.
+        return_slice: If True, returns a dictionary with slices for x and y.
 
-    Returns
-    -------
-    :obj:`xarray.DataArray`:
-        The padded object.
+    Returns:
+        Padded DataArray with new x and y coordinates.
+
+    If `return_slice` is True, also returns a dictionary with slices for x and y
+    dimensions that can be used to index the padded DataArray to get the original
+    data.
+
     """
-    left, bottom, right, top = self._internal_bounds()
-    resolution_x, resolution_y = self.resolution()
+    left, bottom, right, top = array_rio._internal_bounds()
+    resolution_x, resolution_y = array_rio.resolution()
     y_before = y_after = 0
     x_before = x_after = 0
-    y_coord: Union[xarray.DataArray, np.ndarray] = self._obj[self.y_dim]
-    x_coord: Union[xarray.DataArray, np.ndarray] = self._obj[self.x_dim]
+    y_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.y_dim]
+    x_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.x_dim]
 
     if top - resolution_y < maxy:
         new_y_coord: np.ndarray = np.arange(bottom, maxy, -resolution_y)[::-1]
@@ -127,17 +123,17 @@ def pad_xy(
         right = x_coord[-1]
 
     if constant_values is None:
-        constant_values = np.nan if self.nodata is None else self.nodata
+        constant_values = np.nan if array_rio.nodata is None else array_rio.nodata
 
-    superset = self._obj.pad(
+    superset = array_rio._obj.pad(
         pad_width={
-            self.x_dim: (x_before, x_after),
-            self.y_dim: (y_before, y_after),
+            array_rio.x_dim: (x_before, x_after),
+            array_rio.y_dim: (y_before, y_after),
         },
         constant_values=constant_values,  # type: ignore
-    ).rio.set_spatial_dims(x_dim=self.x_dim, y_dim=self.y_dim, inplace=True)
-    superset[self.x_dim] = x_coord
-    superset[self.y_dim] = y_coord
+    ).rio.set_spatial_dims(x_dim=array_rio.x_dim, y_dim=array_rio.y_dim, inplace=True)
+    superset[array_rio.x_dim] = x_coord
+    superset[array_rio.y_dim] = y_coord
     superset.rio.write_transform(inplace=True)
     if return_slice:
         return superset, {
@@ -146,62 +142,6 @@ def pad_xy(
         }
     else:
         return superset
-
-
-def fetch_and_save(
-    url, file_path, overwrite=False, max_retries=3, delay=5, chunk_size=16384
-):
-    """
-    Fetches data from a URL and saves it to a temporary file, with a retry mechanism.
-    Moves the file to the destination if the download is complete.
-    Removes the temporary file if the download is interrupted.
-    """
-    if not overwrite and file_path.exists():
-        return True
-
-    attempts = 0
-    temp_file = None
-
-    while attempts < max_retries:
-        try:
-            print(f"Downloading {url} to {file_path}")
-            # Attempt to make the request
-            response = requests.get(url, stream=True)
-            response.raise_for_status()  # Raises HTTPError for bad status codes
-
-            # Create a temporary file
-            temp_file = tempfile.NamedTemporaryFile(delete=False)
-
-            # Write to the temporary file
-            total_size = int(response.headers.get("content-length", 0))
-            progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-            for data in response.iter_content(chunk_size=chunk_size):
-                temp_file.write(data)
-                progress_bar.update(len(data))
-            progress_bar.close()
-
-            # Close the temporary file
-            temp_file.close()
-
-            # Move the temporary file to the destination
-            shutil.move(temp_file.name, file_path)
-
-            return True  # Exit the function after successful write
-
-        except requests.RequestException as e:
-            # Log the error
-            print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
-
-            # Remove the temporary file if it exists
-            if temp_file is not None and os.path.exists(temp_file.name):
-                os.remove(temp_file.name)
-
-            # Increment the attempt counter and wait before retrying
-            attempts += 1
-            time.sleep(delay)
-
-    # If all attempts fail, raise an exception
-    raise Exception("All attempts to download the file have failed.")
 
 
 def project_to_future(df, project_future_until_year, inflation_rates):
@@ -263,39 +203,69 @@ def interpolate_na_along_time_dim(da):
     return da
 
 
-def resample_like(source, target, method="bilinear"):
-    # TODO: bilinear should be conservative? Which also corrects
-    # for changes in the latitude direction
-    source_spatial_ref = source.spatial_ref
+def resample_like(
+    source: xr.DataArray, target: xr.DataArray, method: str = "bilinear"
+) -> xr.DataArray:
+    """Resample the source DataArray to match the target DataArray's grid.
+
+    Args:
+        source: the source DataArray to be resampled.
+        target: the target DataArray to match.
+        method: the resampling method, can be 'bilinear', 'nearest', or 'conservative'.
+
+    Returns:
+        A new DataArray that has been resampled to match the target's grid.
+
+    """
+    source_spatial_ref: Any = source.spatial_ref
 
     # xarray-regrid does not handle integer types well
     assert not np.issubdtype(source.dtype, np.integer), (
         "Source data must not be an integer type for resampling"
     )
 
-    source = source.drop_vars("spatial_ref")
-    target = target.drop_vars("spatial_ref")  # TODO: Perhaps not needed
+    source: xr.DataArray = source.drop_vars("spatial_ref")
+    target: xr.DataArray = target.drop_vars("spatial_ref")  # TODO: Perhaps not needed
 
     regridder = xarray_regrid.regrid.Regridder(source)
 
     if method == "bilinear":
-        dst = regridder.linear(target)
+        dst: xr.DataArray = regridder.linear(target)
     elif method == "conservative":
-        dst = regridder.conservative(target, latitude_coord="y")
+        # conservative regridding uses the chunks of the source it not explicitly set
+        # here we use the chunks of the source as base, and overwrite it with the
+        # chunks of the target where they both exist
+        dst: xr.DataArray = regridder.conservative(
+            target,
+            latitude_coord="y",
+            output_chunks={**source.chunksizes, **target.chunksizes},
+        )
     elif method == "nearest":
-        dst = regridder.nearest(target)
+        dst: xr.DataArray = regridder.nearest(target)
     else:
-        raise ValueError(f"Unknown method: {method}, must be 'bilinear' or 'nearest'")
+        raise ValueError(
+            f"Unknown method: {method}, must be 'bilinear', 'nearest', or 'conservative'"
+        )
 
     if source.dtype == np.float32:
-        dst = dst.astype(np.float32)
+        dst: xr.DataArray = dst.astype(np.float32)
 
     # Set the spatial reference back to the original
-    dst = dst.assign_coords({"spatial_ref": source_spatial_ref})
+    dst: xr.DataArray = dst.assign_coords({"spatial_ref": source_spatial_ref})
     return dst
 
 
-def get_area_definition(da):
+def get_area_definition(da: xr.DataArray) -> geometry.AreaDefinition:
+    """Get the pyresample area definition from an xarray DataArray.
+
+    This is a requirement for the resampling functions in pyresample.
+
+    Args:
+        da: The xarray DataArray with spatial dimensions.
+
+    Returns:
+        A pyresample AreaDefinition object.
+    """
     return geometry.AreaDefinition(
         area_id="",
         description="",
@@ -320,7 +290,25 @@ def _fill_in_coords(target_coords, source_coords, data_dims):
     return coords
 
 
-def resample_chunked(source, target, method="bilinear"):
+def resample_chunked(
+    source: xr.DataArray, target: xr.DataArray, method: str = "bilinear"
+) -> xr.DataArray:
+    """Resample a source DataArray to match the grid of a target DataArray using block-based resampling.
+
+    This function uses the pyresample library to perform block-based resampling,
+    which is suitable for large datasets that do not fit into memory.
+
+    Args:
+        source: DataArray to be resampled, must have spatial dimensions "y" and "x".
+        target: DataArray that defines the target grid, must have spatial dimensions "y" and "x".
+        method: Resampling method, must be 'bilinear' or 'nearest'. Defaults to "bilinear".
+
+    Raises:
+        ValueError: If the method is not 'bilinear' or 'nearest'.
+
+    Returns:
+        A new DataArray that has been resampled to match the target's grid.
+    """
     if method == "nearest":
         interpolator = block_nn_interpolator
     elif method == "bilinear":
@@ -330,10 +318,10 @@ def resample_chunked(source, target, method="bilinear"):
 
     assert target.dims == ("y", "x")
 
-    source_geo = get_area_definition(source)
-    target_geo = get_area_definition(target)
+    source_geo: geometry.AreaDefinition = get_area_definition(source)
+    target_geo: geometry.AreaDefinition = get_area_definition(target)
 
-    indices = resample_blocks(
+    indices: dask.Array = resample_blocks(
         gradient_resampler_indices_block,
         source_geo,
         [],
@@ -342,7 +330,7 @@ def resample_chunked(source, target, method="bilinear"):
         dtype=np.float64,
     )
 
-    resampled_data = resample_blocks(
+    resampled_data: dask.Array = resample_blocks(
         interpolator,
         source_geo,
         [source.data],
@@ -354,7 +342,7 @@ def resample_chunked(source, target, method="bilinear"):
     )
 
     # Convert result back to xarray DataArray
-    da = xr.DataArray(
+    da: xr.DataArray = xr.DataArray(
         resampled_data,
         dims=source.dims,
         coords=_fill_in_coords(target.coords, source.coords, source.dims),

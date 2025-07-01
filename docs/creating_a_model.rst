@@ -1,25 +1,27 @@
-##############
-Preprocessing
-##############
+################
+Creating a model
+################
 
-GEB has a build module to preprocess all data for a specific region. This module creates a new folder "input" with all input files for the model.
+GEB init
+========
 
-Obtaining the data
-------------------
-Most of the data that the build module uses to create the input data for GEB is downloaded by the tool itself when it is run. However, some data needs to be aquired seperately. To obtain this data, please send an email to Jens de Bruijn (jens.de.bruijn@vu.nl).
+To initialize a new model, we first need to create a new folder for the model. This folder will contain all the files and data required for the model. Then in the folder, run the following command:
 
-Configuration
--------------
-Some of the data that is obtained from online sources and APIs requires keys. You should take the following steps:
+.. code-block:: python
 
-1. Request access to MERIT Hydro dataset `MERIT Hydro <https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/>`_, and create a ".env"-file in the GEB repository with the following content:
+    geb init
 
-.. code-block:: text
+This will copy the default model configuration files from the examples folder in the GEB repository to the current folder. You can pass a custom subbasin ID or geom to the command to create a model for a specific region. See the section below for more information on how to specify the study region. If you do not specify a subbasin ID or geom, the default model configuration files will be copied.
 
-    MERIT_USERNAME=<your_username>
-    MERIT_PASSWORD=<your_password>
+.. code-block:: python
 
-2. To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on `Destination Earth <https://earthdatahub.destine.eu/>`_ and following the instructions `here <https://earthdatahub.destine.eu/collections/era5/datasets/reanalysis-era5-land>`_.
+    geb init --subbasin-id 23011134
+
+For more options, you can call the command with the `--help` flag:
+
+... code-block:: python
+
+    geb init --help
 
 Study region
 -------------------
@@ -78,6 +80,28 @@ The outflow option allows you to define your study region based on a specific ou
         outflow:
           lat: 48.8566
           lon: 2.3522
+
+GEB build
+=========
+
+GEB has a build module to preprocess all input data for the specified region. This command creates a new folder "input" with all input files for the model.
+
+Obtaining the raw input data
+------------------------------
+Most of the data that the build module uses to create the input data for GEB is downloaded by the tool itself when it is run. However, some data needs to be aquired seperately. To obtain this data, please send an email to Jens de Bruijn (jens.de.bruijn@vu.nl).
+
+Configuration
+-------------
+Some of the data that is obtained from online sources and APIs requires keys. You should take the following steps:
+
+1. Request access to MERIT Hydro dataset `MERIT Hydro <https://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro/>`_, and create a ".env"-file in the GEB repository with the following content:
+
+.. code-block:: text
+
+    MERIT_USERNAME=<your_username>
+    MERIT_PASSWORD=<your_password>
+
+2. To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on `Destination Earth <https://earthdatahub.destine.eu/>`_ and copy your personal access token to a .netrc file, located in your home directory. You can find the personal access token `here <https://earthdatahub.destine.eu/account-settings>`_.
 
 Building to model
 -------------------

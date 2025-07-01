@@ -52,11 +52,18 @@ def get_subbasins_geometry(data_catalog, subbasin_ids):
 def get_rivers(data_catalog, subbasin_ids):
     rivers = gpd.read_parquet(
         data_catalog.get_source("MERIT_Basins_riv").path,
-        columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
+        columns=["COMID", "lengthkm", "uparea", "maxup", "NextDownID", "geometry"],
         filters=[
             ("COMID", "in", subbasin_ids),
         ],
+    ).rename(
+        columns={
+            "NextDownID": "downstream_ID",
+        }
     )
+    rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
+    rivers = rivers.drop(columns=["uparea"])
+    rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
     # reverse the river lines to have the downstream direction
     rivers["geometry"] = rivers["geometry"].apply(
@@ -65,7 +72,9 @@ def get_rivers(data_catalog, subbasin_ids):
     return rivers.set_index("COMID")
 
 
-def create_river_raster_from_river_lines(rivers, target, column=None, index=None):
+def create_river_raster_from_river_lines(
+    rivers, target, original_upstream_area, column=None, index=None
+):
     if column is None and (index is None or index is True):
         values = rivers.index
     elif column is not None:
@@ -82,6 +91,10 @@ def create_river_raster_from_river_lines(rivers, target, column=None, index=None
         transform=target.rio.transform(),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
     )
+
+    # check that upstream area of all rivers is larger than 25 km^2. But because there are some rounding errors, we use a threshold of 24 km^2
+    assert np.nanmin(original_upstream_area.values[river_raster != -1]) > 24 * 1e6
+
     return river_raster
 
 
@@ -147,10 +160,9 @@ class Hydrography:
         pass
 
     def setup_mannings(self) -> None:
-        """
-        Sets up the Manning's coefficient for the model.
+        """Sets up the Manning's coefficient for the model.
 
-        Notes
+        Notes:
         -----
         This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
         and topography of the grid. It first calculates the upstream area of each cell in the grid using the
@@ -338,14 +350,31 @@ class Hydrography:
         )
 
         river_raster_HD = create_river_raster_from_river_lines(
-            rivers, original_d8_elevation
+            rivers, original_d8_elevation, original_upstream_area
         )
         river_raster_LR = river_raster_HD.ravel()[
             self.grid["idxs_outflow"].values.ravel()
         ].reshape(self.grid["idxs_outflow"].shape)
 
-        assert set(np.unique(river_raster_LR[river_raster_LR != -1])) == set(
-            np.unique(river_raster_LR[river_raster_LR != -1])
+        missing_rivers = set(rivers.index) - set(
+            np.unique(river_raster_LR[river_raster_LR != -1]).tolist()
+        )
+
+        rivers["represented_in_grid"] = True
+        rivers.iloc[
+            rivers.index.isin(missing_rivers),
+            rivers.columns.get_loc("represented_in_grid"),
+        ] = False
+
+        assert (
+            rivers[
+                (~rivers["represented_in_grid"])
+                & (~rivers["is_downstream_outflow_subbasin"])
+            ]["lengthkm"]
+            < 5
+        ).all(), (
+            "Some large rivers are not represented in the grid, please check the "
+            "rasterization of the river lines"
         )
 
         # Derive the xy coordinates of the river network. Here the coordinates
@@ -357,12 +386,25 @@ class Hydrography:
             upstream_area = upstream_area_data[ys, xs]
             up_to_downstream_ids = np.argsort(upstream_area)
             upstream_area_sorted = upstream_area[up_to_downstream_ids]
+
+            assert (river_raster_LR[ys, xs] == COMID).all(), (
+                f"River segment {COMID} has inconsistent raster values"
+            )
+
             ys = ys[up_to_downstream_ids]
             xs = xs[up_to_downstream_ids]
-            rivers.at[COMID, "hydrography_xy"] = list(zip(xs, ys))
+            assert ys.size > 0, "No xy coordinates found for river segment"
+            rivers.at[COMID, "hydrography_xy"] = list(zip(xs, ys, strict=True))
             rivers.at[COMID, "hydrography_upstream_area_m2"] = (
                 upstream_area_sorted.tolist()
             )
+
+        for river_ID, river in rivers.iterrows():
+            if river["represented_in_grid"]:
+                assert len(river["hydrography_xy"]) > 0, (
+                    f"River {river_ID} has no xy coordinates, please check the "
+                    "rasterization of the river lines"
+                )
 
         COMID_IDs_raster = self.full_like(
             outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
@@ -383,9 +425,9 @@ class Hydrography:
         assert (~np.isnan(rivers["width"][(SWORD_reach_IDs != -1).any(axis=0)])).all()
 
         # set initial width guess where width is not available from SWORD
-        rivers.loc[rivers["width"].isnull(), "width"] = (
-            rivers[rivers["width"].isnull()]["uparea"] / 10
-        )
+        rivers.loc[rivers["width"].isnull(), "width"] = rivers[
+            rivers["width"].isnull()
+        ]["uparea_m2"] / (10 * 1e6)
         rivers["width"] = rivers["width"].clip(lower=float(MINIMUM_RIVER_WIDTH))
 
         self.set_geoms(rivers, name="routing/rivers")
@@ -406,10 +448,9 @@ class Hydrography:
         command_areas=None,
         custom_reservoir_capacity=None,
     ):
-        """
-        Sets up the waterbodies for GEB.
+        """Sets up the waterbodies for GEB.
 
-        Notes
+        Notes:
         -----
         This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
         specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
@@ -474,8 +515,8 @@ class Hydrography:
                 crs=4326,
             )
             waterbodies = waterbodies.astype(dtypes)
-            water_body_id = xr.zeros_like(self.grid["mask"], dtype=np.int32)
-            sub_water_body_id = xr.zeros_like(self.subgrid["mask"], dtype=np.int32)
+            water_body_id = xr.full_like(self.grid["mask"], -1, dtype=np.int32)
+            sub_water_body_id = xr.full_like(self.subgrid["mask"], -1, dtype=np.int32)
         else:
             water_body_id = self.grid.raster.rasterize(
                 waterbodies,
@@ -511,6 +552,28 @@ class Hydrography:
                 np.int32
             )
 
+            # Dissolve command areas with same reservoir
+            command_areas = command_areas.dissolve(by="waterbody_id", as_index=False)
+
+            # Set lakes with command area to reservoirs and reservoirs without command area to lakes
+            ids_with_command: set = set(command_areas["waterbody_id"])
+            waterbodies.loc[
+                waterbodies["waterbody_id"].isin(ids_with_command),
+                "waterbody_type",
+            ] = RESERVOIR
+
+            # Lastly remove command areas that have no associated water body
+            reservoir_ids: set = set(
+                waterbodies.loc[
+                    waterbodies["waterbody_type"] == RESERVOIR, "waterbody_id"
+                ]
+            )
+            command_areas_dissolved = command_areas[
+                command_areas["waterbody_id"].isin(reservoir_ids)
+            ].reset_index(drop=True)
+
+            assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
+
             self.set_grid(
                 self.grid.raster.rasterize(
                     command_areas,
@@ -532,10 +595,6 @@ class Hydrography:
                 name="waterbodies/subcommand_areas",
             )
 
-            # set all lakes with command area to reservoir
-            waterbodies.loc[
-                waterbodies.index.isin(command_areas["waterbody_id"]), "waterbody_type"
-            ] = RESERVOIR
         else:
             command_areas = self.full_like(
                 self.grid["mask"],
@@ -565,9 +624,6 @@ class Hydrography:
             waterbodies.update(custom_reservoir_capacity)
             waterbodies.reset_index(inplace=True)
 
-        # spatial dimension is not required anymore, so drop it.
-        waterbodies = waterbodies.drop("geometry", axis=1)
-
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
         assert "waterbody_type" in waterbodies.columns, "waterbody_type is required"
         assert "volume_total" in waterbodies.columns, "volume_total is required"
@@ -575,4 +631,4 @@ class Hydrography:
             "average_discharge is required"
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
-        self.set_table(waterbodies, name="waterbodies/waterbody_data")
+        self.set_geoms(waterbodies, name="waterbodies/waterbody_data")

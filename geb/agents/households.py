@@ -24,18 +24,17 @@ from .decision_module_flood import DecisionModule
 from .general import AgentBaseClass
 
 
-def from_landuse_raster_to_polygon(mask, transform, crs):
-    """
-    Convert raster data into separate GeoDataFrames for specified land use values.
+def from_landuse_raster_to_polygon(mask, transform, crs) -> gpd.GeoDataFrame:
+    """Convert raster data into separate GeoDataFrames for specified land use values.
 
-    Parameters:
-    - landuse: An xarray DataArray or similar with land use data and 'x' and 'y' coordinates.
-    - values_to_extract: List of integer values to extract (e.g., [0, 1] for forest and agriculture).
+    Args:
+        mask: A 2D numpy array representing the land use raster, where each unique value corresponds to a different land use type.
+        transform: A rasterio Affine transform object that defines the spatial reference of the raster.
+        crs: The coordinate reference system (CRS) to use for the resulting GeoDataFrame.
 
     Returns:
-    - Geodataframe
+        A GeoDataFrame containing polygons for the specified land use values.
     """
-
     shapes_gen = shapes(mask.astype(np.uint8), mask=mask, transform=transform)
 
     polygons = []
@@ -68,6 +67,10 @@ class Households(AgentBaseClass):
         if self.config["adapt"]:
             self.load_flood_maps()
 
+        self.load_objects()
+        self.load_max_damage_values()
+        self.load_damage_curves()
+
         if self.model.in_spinup:
             self.spinup()
 
@@ -91,7 +94,6 @@ class Households(AgentBaseClass):
 
     def load_flood_maps(self):
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
-
         self.return_periods = np.array(
             self.model.config["hazards"]["floods"]["return_periods"]
         )
@@ -166,10 +168,11 @@ class Households(AgentBaseClass):
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
     def assign_household_attributes(self):
-        """Household locations are already sampled from population map in GEBModel.setup_population()
-        These are loaded in the spinup() method.
-        Here we assign additional attributes (dummy data) to the households that are used in the decision module."""
+        """Household locations are already sampled from population map in GEBModel.setup_population().
 
+        These are loaded in the spinup() method.
+        Here we assign additional attributes (dummy data) to the households that are used in the decision module.
+        """
         # load household locations
         locations = load_array(self.model.files["array"]["agents/households/location"])
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
@@ -287,8 +290,8 @@ class Households(AgentBaseClass):
     def change_household_locations(self):
         """This function change the location of the household points to the centroid of the buildings.
         Also, it associates the household points with their postal codes.
-        This is done to get the correct geometry for the warning function"""
-
+        This is done to get the correct geometry for the warning function
+        """
         crs = self.model.config["hazards"]["floods"]["crs"]
         locations = self.var.household_points.copy()
         locations.to_crs(
@@ -345,8 +348,8 @@ class Households(AgentBaseClass):
         """This function assigns households attributes (object_type and maximum_damage) to buildings. This is done so we pass the
         object_type from the households (that depends on their decisions) into the object that will go through the damage scanner.
         This is done by assigning the attribute of the household (that is inside the household_points gdf) to its nearest building.
-        But later this should be done by using socioeconomic data (and considering only buildings=house?)."""
-
+        But later this should be done by using socioeconomic data (and considering only buildings=house?).
+        """
         # Set the buildings to the same CRS as the household points
         self.var.buildings.to_crs(self.var.household_points.crs, inplace=True)
 
@@ -418,9 +421,11 @@ class Households(AgentBaseClass):
         return damages_do_not_adapt, damages_adapt
 
     def get_flood_risk_information_damage_scanner(self):
-        """Initiate flood risk information for each household. This information is used in the decision module.
-        For now also only dummy data is created."""
+        """Initiate flood risk information for each household.
 
+        This information is used in the decision module.
+        For now also only dummy data is created.
+        """
         # preallocate array for damages
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
@@ -571,7 +576,6 @@ class Households(AgentBaseClass):
 
     def create_damage_probability_maps(self):
         """Creates an object-based (buildings) probability map based on the ensemble of damage maps."""
-
         crs = self.model.config["hazards"]["floods"]["crs"]
         days = self.model.config["general"]["forecasts"]["days"]
 
@@ -792,8 +796,8 @@ class Households(AgentBaseClass):
     def warning_communication(self, target_households):  # dummy warning system
         """This function communicates the warning based on the communication efficiency;
         changes risk perception --> to be moved to the update risk perception function;
-        and return the number of households that were warned"""
-
+        and return the number of households that were warned
+        """
         print("Communicating the warning...")
         # Define the % of households reached by the warning
         warning_range = 0.35
@@ -836,7 +840,6 @@ class Households(AgentBaseClass):
 
     def decide_household_strategy(self):
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
-
         # update risk perceptions
         # self.update_risk_perceptions()
 
@@ -908,13 +911,13 @@ class Households(AgentBaseClass):
         )
 
         # Load roads
-        self.var.roads = gpd.read_parquet(
-            self.model.files["geoms"]["assets/roads"]
-        ).rename(columns={"highway": "object_type"})
+        self.roads = gpd.read_parquet(self.model.files["geoms"]["assets/roads"]).rename(
+            columns={"highway": "object_type"}
+        )
 
         # Load rail
-        self.var.rail = gpd.read_parquet(self.model.files["geoms"]["assets/rails"])
-        self.var.rail["object_type"] = "rail"
+        self.rail = gpd.read_parquet(self.model.files["geoms"]["assets/rails"])
+        self.rail["object_type"] = "rail"
 
     def load_max_damage_values(self):
         # Load maximum damages
@@ -925,7 +928,7 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
-        self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
+        self.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
 
         with open(
             self.model.files["dict"][
@@ -937,9 +940,7 @@ class Households(AgentBaseClass):
         self.var.max_dam_buildings_content = float(
             max_dam_buildings_content["maximum_damage"]
         )
-        self.var.buildings_centroid["maximum_damage"] = (
-            self.var.max_dam_buildings_content
-        )
+        self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         with open(
             self.model.files["dict"][
@@ -948,7 +949,7 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.var.max_dam_rail = float(json.load(f)["maximum_damage"])
-        self.var.rail["maximum_damage"] = self.var.max_dam_rail
+        self.rail["maximum_damage"] = self.var.max_dam_rail
 
         self.var.max_dam_road = {}
         road_types = [
@@ -982,7 +983,7 @@ class Households(AgentBaseClass):
                 max_damage = json.load(f)
             self.var.max_dam_road[road_type] = max_damage["maximum_damage"]
 
-        self.var.roads["maximum_damage"] = self.var.roads["object_type"].map(
+        self.roads["maximum_damage"] = self.roads["object_type"].map(
             self.var.max_dam_road
         )
 
@@ -1110,9 +1111,6 @@ class Households(AgentBaseClass):
         )
 
     def spinup(self):
-        self.load_objects()
-        self.load_max_damage_values()
-        self.load_damage_curves()
         self.construct_income_distribution()
         self.assign_household_attributes()
         self.change_household_locations()  # ideally this should be done in the setup_population when building the model
@@ -1202,7 +1200,7 @@ class Households(AgentBaseClass):
         total_damages_forest = damages_forest.sum()
         print(f"damages to forest are: {total_damages_forest}")
 
-        buildings = self.var.buildings.to_crs(flood_map.rio.crs)
+        buildings = self.buildings.to_crs(flood_map.rio.crs)
         damages_buildings_structure = object_scanner(
             objects=buildings,
             hazard=flood_map,
@@ -1211,7 +1209,7 @@ class Households(AgentBaseClass):
         total_damage_structure = damages_buildings_structure.sum()
         print(f"damages to building structure are: {total_damage_structure}")
 
-        buildings_centroid = self.var.buildings_centroid.to_crs(flood_map.rio.crs)
+        buildings_centroid = self.buildings_centroid.to_crs(flood_map.rio.crs)
         damages_buildings_content = object_scanner(
             objects=buildings_centroid,
             hazard=flood_map,
@@ -1220,7 +1218,7 @@ class Households(AgentBaseClass):
         total_damages_content = damages_buildings_content.sum()
         print(f"damages to building content are: {total_damages_content}")
 
-        roads = self.var.roads.to_crs(flood_map.rio.crs)
+        roads = self.roads.to_crs(flood_map.rio.crs)
         damages_roads = object_scanner(
             objects=roads,
             hazard=flood_map,
@@ -1229,7 +1227,7 @@ class Households(AgentBaseClass):
         total_damages_roads = damages_roads.sum()
         print(f"damages to roads are: {total_damages_roads} ")
 
-        rail = self.var.rail.to_crs(flood_map.rio.crs)
+        rail = self.rail.to_crs(flood_map.rio.crs)
         damages_rail = object_scanner(
             objects=rail,
             hazard=flood_map,
@@ -1256,7 +1254,6 @@ class Households(AgentBaseClass):
         This function uses a multiplier to calculate the water demand for
         for each region with respect to the base year.
         """
-
         # the water demand multiplier is a function of the year and region
         water_demand_multiplier_per_region = (
             self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[

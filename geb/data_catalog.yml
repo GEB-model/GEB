@@ -10,6 +10,17 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: topography/FABDEM1-2.vrt
+
+GRDC:
+  crs: 4326
+  data_type: GeoDataset
+  driver: netcdf
+  meta:
+    category: hydrology
+    source_license: https://grdc.bafg.de/downloads/policy_guidelines.pdf
+    source_url: https://grdc.bafg.de/
+  path: rivers/discharge/GRDC/GRDC-Daily_V2.nc
+
 SWORD:
   data_type: GeoDataFrame
   driver: vector
@@ -327,7 +338,7 @@ wb_inflation_rate:
     source_license: CC-BY-4.0
     source_url: https://data.worldbank.org/indicator/FP.CPI.TOTL.ZG
     sorce_version: 5551656
-  path: socioeconomic/WB inflation rates/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_77.csv
+  path: socioeconomic/WB inflation rates/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_402281.csv
   driver: csv
   data_type: DataFrame
   driver_kwargs:
@@ -351,6 +362,17 @@ world_bank_price_ratio:
     source_license: CC-BY-4.0
     source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
   path: socioeconomic/price_ratio/API_PA.NUS.PPPC.RF_DS2_en_csv_v2_4549.csv
+  driver: csv
+  data_type: DataFrame
+  driver_kwargs:
+    skiprows: 4
+wb_LCU_per_USD:
+  meta:
+    category: economics
+    source_author: World Bank
+    source_license: CC-BY-4.0
+    source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
+  path: socioeconomic/currency_conversion/API_PA.NUS.FCRF_DS2_en_csv_v2_399523.csv
   driver: csv
   data_type: DataFrame
   driver_kwargs:
@@ -725,43 +747,6 @@ soilgrids_2020_{variable}_{depth}:
   placeholders:
     depth: ['0-5cm', '5-15cm', '15-30cm', '30-60cm', '60-100cm', '100-200cm']
     variable: ['bdod', 'cec', 'cfvo', 'clay', 'nitrogen', 'ocd', 'ocs', 'phh2o', 'sand', 'silt', 'soc']
-  unit_mult:
-    phh2o_0-5cm_mean: 0.1
-    phh2o_5-15cm_mean: 0.1
-    phh2o_15-30cm_mean: 0.1
-    phh2o_30-60cm_mean: 0.1
-    phh2o_60-100cm_mean: 0.1
-    phh2o_100-200cm_mean: 0.1
-    bdod_0-5cm_mean: 0.01
-    bdod_5-15cm_mean: 0.01
-    bdod_15-30cm_mean: 0.01
-    bdod_30-60cm_mean: 0.01
-    bdod_60-100cm_mean: 0.01
-    bdod_100-200cm_mean: 0.01
-    sand_0-5cm_mean: 0.1
-    sand_5-15cm_mean: 0.1
-    sand_15-30cm_mean: 0.1
-    sand_30-60cm_mean: 0.1
-    sand_60-100cm_mean: 0.1
-    sand_100-200cm_mean: 0.1
-    silt_0-5cm_mean: 0.1
-    silt_5-15cm_mean: 0.1
-    silt_15-30cm_mean: 0.1
-    silt_30-60cm_mean: 0.1
-    silt_60-100cm_mean: 0.1
-    silt_100-200cm_mean: 0.1
-    clay_0-5cm_mean: 0.1
-    clay_5-15cm_mean: 0.1
-    clay_15-30cm_mean: 0.1
-    clay_30-60cm_mean: 0.1
-    clay_60-100cm_mean: 0.1
-    clay_100-200cm_mean: 0.1
-    soc_0-5cm_mean: 0.01
-    soc_5-15cm_mean: 0.01
-    soc_15-30cm_mean: 0.01
-    soc_30-60cm_mean: 0.01
-    soc_60-100cm_mean: 0.01
-    soc_100-200cm_mean: 0.01
 soilgrids_2017_{variable}:
   data_type: RasterDataset
   driver: raster
@@ -793,3 +778,19 @@ GLOBIOM_regions_37:
     source_url: https://www.isric.org/explore/soilgrids
   driver_kwargs:
     sheet_name: Region37
+ISIMIP:
+  data_type: Dataset
+  path: "placeholder"
+  meta:
+    category: climate
+    source_author: ISIMIP
+    source_license: CC BY 4.0
+    source_url: https://www.isimip.org
+ERA5_hourly:
+  data_type: Dataset
+  path: "placeholder"
+  meta:
+    category: climate
+    source_author: ECMWF
+    source_license: Licence to use Copernicus Products
+    source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels

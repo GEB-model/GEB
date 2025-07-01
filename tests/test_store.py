@@ -8,7 +8,96 @@ from geb.store import DynamicArray
 from .testconfig import tmp_folder
 
 
-def test_agent_array():
+def test_1D_dynamic_array_slice():
+    a = DynamicArray(np.array([1, 2, 3]), max_n=10)
+
+    sliced = a[:]
+    assert (sliced == a).all()
+    assert isinstance(sliced, DynamicArray)
+    assert sliced.max_n == 10
+    assert sliced.n == 3
+    assert sliced.extra_dims_names.size == 0
+
+    sliced = a[0]
+    assert (sliced == 1).all()
+
+    sliced = a[0:2]
+    assert (sliced == np.array([1, 2])).all()
+    assert isinstance(sliced, np.ndarray)
+
+    sliced = a[[True, False, True]]
+    assert (sliced == np.array([1, 3])).all()
+    assert isinstance(sliced, np.ndarray)
+
+    sliced = a[np.array([True, False, True])]
+    assert (sliced == np.array([1, 3])).all()
+    assert isinstance(sliced, np.ndarray)
+
+
+def test_2D_dynamic_array_slice():
+    a = DynamicArray(
+        np.array([[1, 2], [3, 4], [5, 6]]), max_n=10, extra_dims_names=["extra"]
+    )
+
+    sliced = a[:, :]
+    assert (sliced == a).all()
+    assert isinstance(sliced, DynamicArray)
+    assert sliced.max_n == 10
+    assert sliced.n == 3
+    assert sliced.extra_dims_names == ["extra"]
+
+    sliced = a[:, 0]
+    assert (sliced == np.array([1, 3, 5])).all()
+    assert isinstance(sliced, DynamicArray)
+    assert sliced.max_n == 10
+    assert sliced.n == 3
+    assert sliced.extra_dims_names.size == 0
+
+    sliced = a[0, :]
+    assert (sliced == np.array([1, 2])).all()
+    assert isinstance(sliced, np.ndarray)
+
+    sliced = a[[True, False, True], :]
+    assert (sliced == np.array([[1, 2], [5, 6]])).all()
+    assert isinstance(sliced, np.ndarray)
+
+    sliced = a[np.array([True, False, True]), :]
+    assert (sliced == np.array([[1, 2], [5, 6]])).all()
+    assert isinstance(sliced, np.ndarray)
+
+    sliced = a[:, [True, False]]
+    assert (sliced == np.array([[1], [3], [5]])).all()
+    assert isinstance(sliced, DynamicArray)
+    assert sliced.max_n == 10
+    assert sliced.n == 3
+    assert sliced.extra_dims_names == ["extra"]
+
+    sliced = a[:]
+    assert (sliced == a).all()
+    assert isinstance(sliced, DynamicArray)
+    assert sliced.max_n == 10
+    assert sliced.n == 3
+    assert sliced.extra_dims_names == ["extra"]
+
+
+def test_dynamic_array_copy():
+    a = DynamicArray(
+        np.array([[1, 2], [3, 4], [5, 6]]), max_n=10, extra_dims_names=["extra"]
+    )
+
+    copied = a.copy()
+    assert (copied == a).all()
+    assert isinstance(copied, DynamicArray)
+    assert copied.max_n == 10
+    assert copied.n == 3
+    assert copied.extra_dims_names == ["extra"]
+
+    # Test that modifying the original does not affect the copy
+    a[0, 0] = 99
+    assert copied[0, 0] == 1
+
+
+def test_dynamic_array_operations():
     # Test initialization with max_n
     a = DynamicArray(np.array([1, 2, 3]), max_n=10)
     a_ = DynamicArray(dtype=np.int64, n=3, max_n=10)
@@ -218,6 +307,8 @@ def test_agent_array():
     a = np.ones(10, dtype=np.int32)
     assert (+a == 1).all()
     assert (-a == -1).all()
+
+    assert a[0] == 1
 
 
 @pytest.fixture

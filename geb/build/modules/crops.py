@@ -8,6 +8,8 @@ import pandas as pd
 import xarray as xr
 from honeybees.library.raster import sample_from_map
 
+from geb.workflows.io import get_window
+
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
     M49_to_ISO3,
@@ -87,9 +89,7 @@ class Crops:
         source: Union[str, None] = "MIRCA2000",
         crop_specifier: Union[str, None] = None,
     ):
-        """
-        Sets up the crops data for the model.
-        """
+        """Sets up the crops data for the model."""
         self.logger.info("Preparing crops data")
 
         assert source in ("MIRCA2000",), (
@@ -121,9 +121,9 @@ class Crops:
         self,
         crop_prices,
         translate_crop_names=None,
+        adjust_currency=False,
     ):
-        """
-        Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
+        """Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
 
         Parameters
         ----------
@@ -134,17 +134,17 @@ class Crops:
         project_future_until_year : int, optional
             The year to project future data until. Defaults to False.
 
-        Returns
+        Returns:
         -------
         dict
             A dictionary containing processed crop data in a time series format or as a constant value.
 
-        Raises
+        Raises:
         ------
         ValueError
             If crop_prices is neither a valid file path nor an integer/float.
 
-        Notes
+        Notes:
         -----
         The function performs the following steps:
         1. Fetches and processes crop data from FAO statistics if crop_prices is 'FAO_stat'.
@@ -152,7 +152,6 @@ class Crops:
         3. Determines price variability and performs interpolation/extrapolation of crop prices.
         4. Formats the processed data into a nested dictionary structure.
         """
-
         if crop_prices == "FAO_stat":
             crop_data = self.data_catalog.get_dataframe(
                 "FAO_crop_price",
@@ -287,7 +286,8 @@ class Crops:
                 [
                     col
                     for col in data.columns
-                    if col.lower() in crop_names or col == "_crop_price_inflation"
+                    if col.lower() in crop_names
+                    or col in ("_crop_price_inflation", "_crop_price_LCU_USD")
                 ]
             ]
 
@@ -420,7 +420,9 @@ class Crops:
             )
 
             data = self.assign_crop_price_inflation(data, self.geoms["regions"])
-            data = self.inter_and_extrapolate_prices(data, self.geoms["regions"])
+            data = self.inter_and_extrapolate_prices(
+                data, self.geoms["regions"], adjust_currency
+            )
 
             data = {
                 "type": "time_series",
@@ -448,7 +450,8 @@ class Crops:
     def donate_and_receive_crop_prices(
         self, donor_data, recipient_regions, GLOBIOM_regions
     ):
-        """
+        """Gets crop prices from other to fill missing data.
+
         If there are multiple countries in one selected basin, where one country has prices for a certain crop, but the other does not,
         this gives issues. This function adjusts crop data for those countries by filling in missing values using data from nearby regions
         and PPP conversion rates.
@@ -459,12 +462,12 @@ class Crops:
             A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'. The DataFrame
             contains crop prices for different regions.
 
-        Returns
+        Returns:
         -------
         DataFrame
             The updated DataFrame with missing crop data filled in using PPP conversion rates from nearby regions.
 
-        Notes
+        Notes:
         -----
         The function performs the following steps:
         1. Identifies columns where all values are NaN for each country and stores this information.
@@ -472,7 +475,6 @@ class Crops:
         3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
         4. Drops the 'ISO3' column before returning the updated DataFrame.
         """
-
         # create a copy of the data to avoid using data that was adjusted in this function
         data_out = None
 
@@ -545,8 +547,8 @@ class Crops:
         return data_out
 
     def assign_crop_price_inflation(self, costs, unique_regions):
-        """
-        Determines the price inflation of all crops in the region and adds a column that describes this inflation.
+        """Determines the price inflation of all crops in the region and adds a column that describes this inflation.
+
         If there is no data for a certain year, the inflation rate is taken from the socioeconomics data.
 
         Parameters
@@ -554,12 +556,14 @@ class Crops:
         costs : DataFrame
             A DataFrame containing the cost data for different regions. The DataFrame should be indexed by region IDs.
 
-        Returns
+        Returns:
         -------
         DataFrame
             The updated DataFrame with a new column 'changes' that contains the average price changes for each region.
         """
         costs["_crop_price_inflation"] = np.nan
+        costs["_crop_price_LCU_USD"] = np.nan
+
         # Determine the average changes of price of all crops in the region and add it to the data
         for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
@@ -574,11 +578,23 @@ class Crops:
             years_with_no_crop_inflation_data = costs.loc[
                 region_id, "_crop_price_inflation"
             ]
+            years_with_no_crop_inflation_data = costs.loc[
+                region_id, "_crop_price_inflation"
+            ]
             region_inflation_rates = self.dict["socioeconomics/inflation_rates"][
+                "data"
+            ][str(region["region_id"])]
+            region_currency_conversion_rates = self.dict["socioeconomics/LCU_per_USD"][
                 "data"
             ][str(region["region_id"])]
 
             for year, crop_inflation_rate in years_with_no_crop_inflation_data.items():
+                year_currency_conversion = region_currency_conversion_rates[
+                    self.dict["socioeconomics/LCU_per_USD"]["time"].index(str(year))
+                ]
+                costs.at[(region_id, year), "_crop_price_LCU_USD"] = (
+                    year_currency_conversion
+                )
                 if np.isnan(crop_inflation_rate):
                     year_inflation_rate = region_inflation_rates[
                         self.dict["socioeconomics/inflation_rates"]["time"].index(
@@ -591,9 +607,8 @@ class Crops:
 
         return costs
 
-    def inter_and_extrapolate_prices(self, data, unique_regions):
-        """
-        Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
+    def inter_and_extrapolate_prices(self, data, unique_regions, adjust_currency=False):
+        """Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
 
         Parameters
         ----------
@@ -601,13 +616,13 @@ class Crops:
             A DataFrame containing crop price data for different regions. The DataFrame should be indexed by region IDs
             and have columns corresponding to different crops.
 
-        Returns
+        Returns:
         -------
         DataFrame
             The updated DataFrame with interpolated and extrapolated crop prices. Columns for 'others perennial' and 'others annual'
             crops are also added.
 
-        Notes
+        Notes:
         -----
         The function performs the following steps:
         1. Extracts crop names from the internal crop data dictionary.
@@ -616,7 +631,6 @@ class Crops:
         4. Filters and updates the original data with the computed averages.
         5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
         """
-
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
         for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
@@ -656,19 +670,25 @@ class Crops:
                         )
                         for i, change in zip(range(j, k), scaled_crop_price_inflation):
                             crop_data[i] = crop_data[i - 1] * change
-                data.loc[region_id, crop] = crop_data
+                if adjust_currency:
+                    conversion_data = region_data["_crop_price_LCU_USD"].to_numpy()
+                    data.loc[region_id, crop] = crop_data / conversion_data
+                else:
+                    data.loc[region_id, crop] = crop_data
 
-        # assert no nan values in costs
+        # remove columns that are not needed anymore
         data = data.drop(columns=["_crop_price_inflation"])
+        data = data.drop(columns=["_crop_price_LCU_USD"])
+
         return data
 
     def setup_cultivation_costs(
         self,
         cultivation_costs: Optional[Union[str, int, float]] = 0,
         translate_crop_names: Optional[Dict[str, str]] = None,
+        adjust_currency=False,
     ):
-        """
-        Sets up the cultivation costs for the model.
+        """Sets up the cultivation costs for the model.
 
         Parameters
         ----------
@@ -681,6 +701,7 @@ class Crops:
         cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
             translate_crop_names=translate_crop_names,
+            adjust_currency=adjust_currency,
         )
         self.set_dict(cultivation_costs, name="crops/cultivation_costs")
 
@@ -688,9 +709,9 @@ class Crops:
         self,
         crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
         translate_crop_names: Optional[Dict[str, str]] = None,
+        adjust_currency=False,
     ):
-        """
-        Sets up the crop prices for the model.
+        """Sets up the crop prices for the model.
 
         Parameters
         ----------
@@ -703,6 +724,7 @@ class Crops:
         crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,
+            adjust_currency=adjust_currency,
         )
         self.set_dict(crop_prices, name="crops/crop_prices")
         self.set_dict(crop_prices, name="crops/cultivation_costs")
@@ -750,11 +772,14 @@ class Crops:
                 for irrigation in irrigation_types:
                     dataset_name = f"MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{irrigation}"
 
-                    crop_map = self.data_catalog.get_rasterdataset(
-                        dataset_name,
-                        bbox=self.bounds,
-                        buffer=2,
+                    crop_map = xr.open_dataarray(
+                        self.data_catalog.get_source(dataset_name).path
                     )
+                    crop_map = crop_map.isel(
+                        band=0,
+                        **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
+                    )
+
                     crop_map = crop_map.fillna(0)
 
                     crop_data[year][crop][irrigation] = crop_map.assign_coords(
@@ -865,9 +890,14 @@ class Crops:
     ):
         n_farmers = self.array["agents/farmers/id"].size
 
-        MIRCA_unit_grid = self.data_catalog.get_rasterdataset(
-            "MIRCA2000_unit_grid", bbox=self.bounds, buffer=2
-        ).compute()
+        MIRCA_unit_grid = xr.open_dataarray(
+            self.data_catalog.get_source("MIRCA2000_unit_grid").path
+        )
+
+        MIRCA_unit_grid = MIRCA_unit_grid.isel(
+            band=0,
+            **get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
+        )
 
         crop_calendar = parse_MIRCA2000_crop_calendar(
             self.data_catalog,

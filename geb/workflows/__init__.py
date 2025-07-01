@@ -4,6 +4,8 @@ import numpy as np
 
 
 class TimingModule:
+    """A timing module to measure the time taken for different parts of a workflow."""
+
     def __init__(self, name):
         self.name = name
         self.times = [time()]
@@ -92,9 +94,11 @@ def balance_check(
         for endStorage in poststorages:
             store -= endStorage.sum()
 
-        balance = income + store - out
+        balance = abs(income + store - out)
+        if np.isnan(balance):
+            raise ValueError("Balance check failed, NaN values found.")
         if balance > tollerance:
-            text = f"{np.abs(balance).max()} is larger than tollerance {tollerance}"
+            text = f"{balance} is larger than tollerance {tollerance}"
             if name:
                 print(name, text)
             else:

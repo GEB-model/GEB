@@ -2,6 +2,7 @@
 import calendar
 
 import numpy as np
+import numpy.typing as npt
 
 from ..hydrology.landcover import GRASSLAND_LIKE
 from .general import AgentBaseClass, downscale_volume
@@ -42,11 +43,6 @@ class LiveStockFarmers(AgentBaseClass):
         self.var.current_efficiency = efficiency
 
     def update_water_demand(self):
-        """
-        Dynamic part of the water demand module - livestock
-        read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
-
-        """
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
         # grassland/non-irrigated land that is not owned by a crop farmer
@@ -64,7 +60,7 @@ class LiveStockFarmers(AgentBaseClass):
             / days_in_year
         )
         water_consumption = (
-            water_consumption.rio.set_crs(4326).rio.reproject(
+            water_consumption.rio.write_crs(4326).rio.reproject(
                 4326,
                 shape=self.model.hydrology.grid.shape,
                 transform=self.model.hydrology.grid.transform,
@@ -75,17 +71,18 @@ class LiveStockFarmers(AgentBaseClass):
             )
             ** 2
         )
-        water_consumption = downscale_volume(
-            water_consumption.rio.transform().to_gdal(),
-            self.model.hydrology.grid.gt,
-            water_consumption.values,
-            self.model.hydrology.grid.mask,
-            self.model.hydrology.grid_to_HRU_uncompressed,
-            downscale_mask,
-            self.HRU.var.land_use_ratio,
-        )
-
-        water_consumption = self.HRU.M3toM(water_consumption)
+        water_consumption: npt.NDArray[np.float32] = (
+            downscale_volume(
+                water_consumption.rio.transform().to_gdal(),
+                self.model.hydrology.grid.gt,
+                water_consumption.values,
+                self.model.hydrology.grid.mask,
+                self.model.hydrology.grid_to_HRU_uncompressed,
+                downscale_mask,
+                self.HRU.var.land_use_ratio,
+            )
+            / self.HRU.var.cell_area
+        )  # convert to m/day
 
         efficiency = 1.0
         water_demand = water_consumption / efficiency

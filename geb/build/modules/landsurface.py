@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from geb.workflows.io import get_window
+
 from ..workflows.general import (
     bounds_are_within,
     calculate_cell_area,
@@ -18,15 +20,14 @@ class LandSurface:
         pass
 
     def setup_cell_area(self) -> None:
-        """
-        Sets up the cell area map for the model.
+        """Sets up the cell area map for the model.
 
-        Raises
+        Raises:
         ------
         ValueError
             If the grid mask is not available.
 
-        Notes
+        Notes:
         -----
         This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
         retrieves the grid mask from the `mask` attribute of the grid, and then calculates the cell area
@@ -89,8 +90,10 @@ class LandSurface:
             {"name": "gebco"},
         ],
     ):
-        """For configuration of DEMs parameters, see
-        https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html
+        """Sets up the elevation data for the model.
+
+        For configuration of DEMs parameters, see
+        https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html.
         """
         if not DEMs:
             DEMs = []
@@ -100,10 +103,15 @@ class LandSurface:
         # subbasins that are not part of the study area
         bounds = tuple(self.geoms["routing/subbasins"].total_bounds)
 
-        fabdem = self.data_catalog.get_rasterdataset(
-            "fabdem",
-            bbox=bounds,
-            buffer=100,
+        fabdem = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
+        fabdem = fabdem.isel(
+            band=0,
+            **get_window(
+                fabdem.x,
+                fabdem.y,
+                bounds,
+                buffer=100,
+            ),
         ).raster.mask_nodata()
 
         target = self.subgrid["mask"]
@@ -118,10 +126,23 @@ class LandSurface:
             if DEM["name"] == "fabdem":
                 DEM_raster = fabdem
             else:
-                DEM_raster = self.data_catalog.get_rasterdataset(
-                    DEM["name"],
-                    bbox=bounds,
-                    buffer=100,
+                DEM_raster = xr.open_dataarray(
+                    self.data_catalog.get_source(DEM["name"]).path,
+                )
+                DEM_raster = DEM_raster.isel(
+                    band=0,
+                    **get_window(
+                        DEM_raster.x,
+                        DEM_raster.y,
+                        tuple(
+                            self.geoms["routing/subbasins"]
+                            .to_crs(DEM_raster.rio.crs)
+                            .total_bounds
+                        ),
+                        buffer=100,
+                        raise_on_out_of_bounds=False,
+                        raise_on_buffer_out_of_bounds=False,
+                    ),
                 ).raster.mask_nodata()
 
             DEM_raster = DEM_raster.astype(np.float32)
@@ -141,9 +162,10 @@ class LandSurface:
         ISO3_column="GID_0",
         land_cover="esa_worldcover_2021_v200",
     ):
-        """
-        Sets up the (administrative) regions and land use data for GEB. The regions can be used for multiple purposes,
-        for example for creating the agents in the model, assigning unique crop prices and other economic variables
+        """Sets up the (administrative) regions and land use data for GEB.
+
+        The regions can be used for multiple purposes, for example for creating the
+        agents in the model, assigning unique crop prices and other economic variables
         per region and for aggregating the results.
 
         Parameters
@@ -154,7 +176,7 @@ class LandSurface:
             The name of the column in the region database that contains the unique region ID. Default is 'UID',
             which is the unique identifier for the GADM database.
 
-        Notes
+        Notes:
         -----
         This method sets up the regions and land use data for GEB. It first retrieves the region data from
         the specified region database and sets it as a geometry in the model. It then pads the subgrid to cover the entire
@@ -295,15 +317,14 @@ class LandSurface:
         self,
         land_cover="esa_worldcover_2021_v200",
     ) -> None:
-        """
-        Sets up the land use parameters for the model.
+        """Sets up the land use parameters for the model.
 
         Parameters
         ----------
         interpolation_method : str, optional
             The interpolation method to use when interpolating the land use parameters. Default is 'nearest'.
 
-        Notes
+        Notes:
         -----
         This method sets up the land use parameters for the model by retrieving land use data from the CWATM dataset and
         interpolating the data to the model grid. It first retrieves the land use dataset from the `data_catalog`, and
@@ -352,31 +373,58 @@ class LandSurface:
 
         target = self.grid["mask"]
 
-        forect_kc = self.data_catalog.get_rasterdataset(
-            "cwatm_forest_5min", bbox=self.bounds, buffer=10
-        )["cropCoefficientForest_10days"]
-        forect_kc = forect_kc.raster.mask_nodata()
+        forest_kc = (
+            xr.open_dataarray(
+                self.data_catalog.get_source("cwatm_forest_5min").path.format(
+                    variable="cropCoefficientForest_10days"
+                ),
+            )
+            .rename({"lat": "y", "lon": "x"})
+            .rio.write_crs(4326)
+        )
+        forest_kc = forest_kc.isel(
+            **get_window(
+                forest_kc.x,
+                forest_kc.y,
+                self.bounds,
+                buffer=3,
+            ),
+        ).raster.mask_nodata()
 
-        forect_kc = resample_like(forect_kc, target, method="nearest")
+        forest_kc = resample_like(forest_kc, target, method="nearest")
 
-        forect_kc.attrs = {
+        forest_kc.attrs = {
             key: attr
-            for key, attr in forect_kc.attrs.items()
+            for key, attr in forest_kc.attrs.items()
             if not key.startswith("NETCDF_") and key != "units"
         }
         self.set_grid(
-            forect_kc,
+            forest_kc,
             name="landcover/forest/crop_coefficient",
         )
 
         for land_use_type in ("forest", "grassland"):
             self.logger.info(f"Setting up land use parameters for {land_use_type}")
 
-            land_use_ds = self.data_catalog.get_rasterdataset(
-                f"cwatm_{land_use_type}_5min", bbox=self.bounds, buffer=10
-            )
             parameter = f"interceptCap{land_use_type.title()}_10days"
-            interception_capacity = land_use_ds[parameter].raster.mask_nodata()
+            interception_capacity = (
+                xr.open_dataarray(
+                    self.data_catalog.get_source(
+                        f"cwatm_{land_use_type}_5min"
+                    ).path.format(variable=parameter),
+                )
+                .rename({"lat": "y", "lon": "x"})
+                .rio.write_crs(4326)
+            )
+            interception_capacity = interception_capacity.isel(
+                **get_window(
+                    interception_capacity.x,
+                    interception_capacity.y,
+                    self.bounds,
+                    buffer=3,
+                ),
+            ).raster.mask_nodata()
+
             interception_capacity = resample_like(
                 interception_capacity, target, method="nearest"
             )
@@ -392,13 +440,12 @@ class LandSurface:
             )
 
     def setup_soil_parameters(self) -> None:
-        """
-        Sets up the soil parameters for the model.
+        """Sets up the soil parameters for the model.
 
         Parameters
         ----------
 
-        Notes
+        Notes:
         -----
         This method sets up the soil parameters for the model by retrieving soil data from the CWATM dataset and interpolating
         the data to the model grid. It first retrieves the soil dataset from the `data_catalog`, and
@@ -414,7 +461,6 @@ class LandSurface:
         form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
         with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
         """
-
         self.logger.info("Setting up soil parameters")
         ds = load_soilgrids(self.data_catalog, self.subgrid, self.region)
 
@@ -424,8 +470,34 @@ class LandSurface:
         self.set_subgrid(ds["soc"], name="soil/soil_organic_carbon")
         self.set_subgrid(ds["height"], name="soil/soil_layer_height")
 
-        crop_group = self.data_catalog.get_rasterdataset(
-            "cwatm_soil_5min", bbox=self.bounds, buffer=10, variables=["cropgrp"]
-        ).raster.mask_nodata()
+        crop_group = (
+            xr.open_dataarray(
+                self.data_catalog.get_source("cwatm_soil_5min").path.format(
+                    variable="cropgrp"
+                ),
+            )
+            .rename({"lat": "y", "lon": "x"})
+            .rio.write_crs(4326)
+        )
+        crop_group = crop_group.isel(
+            **get_window(
+                crop_group.x,
+                crop_group.y,
+                self.bounds,
+                buffer=10,
+            ),
+        )
+        crop_group.attrs["_FillValue"] = crop_group.attrs["__FillValue"]
+        del crop_group.attrs["__FillValue"]
 
-        self.set_grid(self.interpolate(crop_group, "linear"), name="soil/crop_group")
+        crop_group = crop_group.raster.mask_nodata()
+
+        crop_group = crop_group.astype(np.float32)
+
+        crop_group = resample_like(
+            crop_group,
+            self.grid["mask"],
+            method="nearest",
+        )
+
+        self.set_grid(crop_group, name="soil/crop_group")

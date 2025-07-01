@@ -20,6 +20,7 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
+import numpy.typing as npt
 import zarr
 
 from geb.module import Module
@@ -37,9 +38,7 @@ from .landcover import (
 
 
 class Interception(Module):
-    """
-    INTERCEPTION
-
+    """INTERCEPTION.
 
     **Global variables**
 
@@ -113,21 +112,20 @@ class Interception(Module):
                 zarr.open_group(store, mode="r")["interception_capacity"][:]
             )
 
-    def step(self, potential_transpiration):
-        """
-        Dynamic part of the interception module
-        calculating interception for each land cover class
-
-        :param coverType: Land cover type: forest, grassland  ...
-        :param No: number of land cover type: forest = 0, grassland = 1 ...
-        :return: interception evaporation, interception storage, reduced pot. transpiration
-
-        """
-
+    def step(
+        self,
+        potential_transpiration: npt.NDArray[np.float32],
+        rain: npt.NDArray[np.float32],
+        snow_melt: npt.NDArray[np.float32],
+    ):
         if __debug__:
-            interception_storage_pre = self.HRU.var.interception_storage.copy()
+            interception_storage_pre: npt.NDArray[np.float32] = (
+                self.HRU.var.interception_storage.copy()
+            )
 
-        interceptCap = self.HRU.full_compressed(np.nan, dtype=np.float32)
+        interceptCap: npt.NDArray[np.float32] = self.HRU.full_compressed(
+            np.nan, dtype=np.float32
+        )
         for cover in ALL_LAND_COVER_TYPES:
             coverType_indices = np.where(self.HRU.var.land_use_type == cover)
             if cover in (FOREST, GRASSLAND_LIKE):
@@ -147,23 +145,29 @@ class Interception(Module):
 
         # Rain instead Pr, because snow is substracted later
         # assuming that all interception storage is used the other time step
-        throughfall = np.maximum(
-            0.0, self.HRU.var.Rain + self.HRU.var.interception_storage - interceptCap
+        throughfall: npt.NDArray[np.float32] = np.maximum(
+            0.0, rain + self.HRU.var.interception_storage - interceptCap
         )
 
         # update interception storage after throughfall
-        self.HRU.var.interception_storage = (
-            self.HRU.var.interception_storage + self.HRU.var.Rain - throughfall
+        self.HRU.var.interception_storage: npt.NDArray[np.float32] = (
+            self.HRU.var.interception_storage + rain - throughfall
         )
 
         # availWaterInfiltration Available water for infiltration: throughfall + snow melt
-        self.HRU.var.natural_available_water_infiltration = np.maximum(
-            0.0, throughfall + self.HRU.var.SnowMelt
+        self.HRU.var.natural_available_water_infiltration: npt.NDArray[np.float32] = (
+            np.maximum(0.0, throughfall + snow_melt)
         )
 
-        sealed_area = np.where(self.HRU.var.land_use_type == SEALED)
-        water_area = np.where(self.HRU.var.land_use_type == OPEN_WATER)
-        bio_area = np.where(self.HRU.var.land_use_type < SEALED)
+        sealed_area: npt.NDArray[np.int64] = np.where(
+            self.HRU.var.land_use_type == SEALED
+        )[0]
+        water_area: npt.NDArray[np.int64] = np.where(
+            self.HRU.var.land_use_type == OPEN_WATER
+        )[0]
+        bio_area: npt.NDArray[np.int64] = np.where(self.HRU.var.land_use_type < SEALED)[
+            0
+        ]
 
         interception_evaporation = self.HRU.full_compressed(0, dtype=np.float32)
         # interception_evaporation evaporation from intercepted water (based on potential_transpiration)
@@ -199,7 +203,7 @@ class Interception(Module):
             balance_check(
                 name="interception",
                 how="cellwise",
-                influxes=[self.HRU.var.Rain, self.HRU.var.SnowMelt],  # In
+                influxes=[rain, snow_melt],  # In
                 outfluxes=[
                     self.HRU.var.natural_available_water_infiltration,
                     interception_evaporation,

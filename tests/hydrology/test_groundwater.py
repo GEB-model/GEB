@@ -1,5 +1,7 @@
 import math
+import os
 from copy import deepcopy
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -57,6 +59,8 @@ for layer in range(NLAY):
 
 
 class DummyGrid:
+    """A dummy grid class to simulate the grid structure."""
+
     def __init__(self):
         pass
 
@@ -65,14 +69,22 @@ class DummyGrid:
 
 
 class DummyHydrology:
+    """A dummy hydrology class to simulate the hydrology structure."""
+
     def __init__(self):
         self.grid = DummyGrid()
 
 
 class DummyModel:
+    """A dummy model class to simulate the MODFLOW model structure."""
+
     def __init__(self):
         self.simulation_root_spinup = tmp_folder / "modflow"
         self.hydrology = DummyHydrology()
+
+    @property
+    def bin_folder(self) -> Path:
+        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
 
 default_params = {
@@ -169,7 +181,7 @@ def test_drainage():
     drainage = np.nansum(sim.drainage_m3)
     assert drainage.sum() > 0
 
-    assert np.nansum(sim.drainage_m * sim.area) == np.nansum(drainage)
+    assert math.isclose(np.nansum(sim.drainage_m * sim.area), np.nansum(drainage))
 
     groundwater_content = np.nansum(sim.groundwater_content_m3)
 

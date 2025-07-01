@@ -19,10 +19,14 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+
+import platform
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 from numba import float32, njit, prange
+from tqdm import tqdm
 
 from geb.HRUs import load_grid
 from geb.module import Module
@@ -37,6 +41,123 @@ from .landcover import (
 )
 
 
+def calculate_soil_water_potential_MPa(
+    soil_moisture,  # [m]
+    soil_moisture_wilting_point,  # [m]
+    soil_moisture_field_capacity,  # [m]
+    soil_tickness,  # [m]
+    wilting_point=-1500,  # kPa
+    field_capacity=-33,  # kPa
+):
+    # https://doi.org/10.1016/B978-0-12-374460-9.00007-X (eq. 7.16)
+    soil_moisture_fraction = soil_moisture / soil_tickness
+    # assert (soil_moisture_fraction >= 0).all() and (soil_moisture_fraction <= 1).all()
+    del soil_moisture
+    soil_moisture_wilting_point_fraction = soil_moisture_wilting_point / soil_tickness
+    # assert (soil_moisture_wilting_point_fraction).all() >= 0 and (
+    #     soil_moisture_wilting_point_fraction
+    # ).all() <= 1
+    del soil_moisture_wilting_point
+    soil_moisture_field_capacity_fraction = soil_moisture_field_capacity / soil_tickness
+    # assert (soil_moisture_field_capacity_fraction >= 0).all() and (
+    #     soil_moisture_field_capacity_fraction <= 1
+    # ).all()
+    del soil_moisture_field_capacity
+
+    n_potential = -(
+        np.log(wilting_point / field_capacity)
+        / np.log(
+            soil_moisture_wilting_point_fraction / soil_moisture_field_capacity_fraction
+        )
+    )
+    # assert (n_potential >= 0).all()
+    a_potential = 1.5 * 10**6 * soil_moisture_wilting_point_fraction**n_potential
+    # assert (a_potential >= 0).all()
+    soil_water_potential = -a_potential * soil_moisture_fraction ** (-n_potential)
+    return soil_water_potential / 1_000_000  # Pa to MPa
+
+
+def calculate_vapour_pressure_deficit_kPa(temperature_K, relative_humidity):
+    temperature_C = temperature_K - 273.15
+    assert (
+        temperature_C < 100
+    ).all()  # temperature is in Celsius. So on earth should be well below 100.
+    assert (
+        temperature_C > -100
+    ).all()  # temperature is in Celsius. So on earth should be well above -100.
+    assert (
+        relative_humidity >= 1
+    ).all()  # below 1 is so rare that it shouldn't be there at the resolutions of current climate models, and this catches errors with relative_humidity as a ratio [0-1].
+    assert (
+        relative_humidity <= 100
+    ).all()  # below 1 is so rare that it shouldn't be there at the resolutions of current climate models, and this catches errors with relative_humidity as a ratio [0-1].
+    # https://soilwater.github.io/pynotes-agriscience/notebooks/vapor_pressure_deficit.html
+    saturated_vapour_pressure = 0.611 * np.exp(
+        (17.502 * temperature_C) / (temperature_C + 240.97)
+    )  # kPa
+    actual_vapour_pressure = saturated_vapour_pressure * relative_humidity / 100  # kPa
+    vapour_pressure_deficit = saturated_vapour_pressure - actual_vapour_pressure
+    return vapour_pressure_deficit
+
+
+def calculate_photosynthetic_photon_flux_density(shortwave_radiation, xi=0.5):
+    # https://search.r-project.org/CRAN/refmans/bigleaf/html/Rg.to.PPFD.html
+    photosynthetically_active_radiation = shortwave_radiation * xi
+    photosynthetic_photon_flux_density = (
+        photosynthetically_active_radiation * 4.6
+    )  #  W/m2 -> umol/m2/s
+    return photosynthetic_photon_flux_density
+
+
+@njit(cache=True, inline="always", fastmath=True)
+def get_soil_water_potential(
+    theta,
+    thetar,
+    thetas,
+    lambda_,
+    bubbling_pressure_cm,
+    minimum_effective_saturation=np.float32(0.01),
+):
+    """Calculates the soil water potential (capillary suction) using the van Genuchten model.
+
+    Note that theta, thetar and thetas can also be given as the height of the water column
+    in the soil layer as w, wres and ws since only there relative size is used. Of course
+    consistency is key.
+
+    Parameters
+    ----------
+    theta : np.ndarray
+        The soil moisture content (m³/m³)
+    thetar : np.ndarray
+        The residual soil moisture content (m³/m³)
+    thetas : np.ndarray
+        The saturated soil moisture content (m³/m³)
+    lambda_ : np.ndarray
+        The van Genuchten parameter lambda (1/m)
+    bubbling_pressure_cm : np.ndarray
+        The bubbling pressure (cm)
+    """
+    # van Genuchten parameters
+    alpha = np.float32(1) / bubbling_pressure_cm
+    n = lambda_ + np.float32(1)
+    m = np.float32(1) - np.float32(1) / n
+
+    # Effective saturation
+    effective_saturation = (theta - thetar) / (thetas - thetar)
+    effective_saturation = max(minimum_effective_saturation, effective_saturation)
+    effective_saturation = min(np.float32(1), effective_saturation)
+
+    # Compute capillary pressure head (phi)
+    phi = ((effective_saturation) ** (-np.float32(1) / m) - np.float32(1)) ** (
+        np.float32(1) / n
+    ) / alpha  # Positive value
+
+    # Soil water potential (negative value for suction)
+    capillary_suction = -phi
+
+    return capillary_suction
+
+
 @njit(
     cache=True,
     inline="always",
@@ -44,22 +165,19 @@ from .landcover import (
 def get_soil_moisture_at_pressure(
     capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
 ):
-    """
-    Calculates the soil moisture content at a given soil water potential (capillary suction)
-    using the van Genuchten model.
+    """Calculates the soil moisture content at a given soil water potential (capillary suction) using the van Genuchten model.
 
-    Parameters
-    ----------
-    capillary_suction : np.ndarray
-        The soil water potential (capillary suction) (m)
-    bubbling_pressure_cm : np.ndarray
-        The bubbling pressure (cm)
-    thetas : np.ndarray
-        The saturated soil moisture content (m³/m³)
-    thetar : np.ndarray
-        The residual soil moisture content (m³/m³)
-    lambda_ : np.ndarray
-        The van Genuchten parameter lambda (1/m)
+    Args:
+        capillary_suction : np.ndarray
+            The soil water potential (capillary suction) (m)
+        bubbling_pressure_cm : np.ndarray
+            The bubbling pressure (cm)
+        thetas : np.ndarray
+            The saturated soil moisture content (m³/m³)
+        thetar : np.ndarray
+            The residual soil moisture content (m³/m³)
+        lambda_ : np.ndarray
+            The van Genuchten parameter lambda (1/m)
     """
     alpha = np.float32(1) / bubbling_pressure_cm
     n = lambda_ + np.float32(1)
@@ -74,11 +192,12 @@ def get_soil_moisture_at_pressure(
 
 @njit(cache=True, inline="always")
 def get_critical_soil_moisture_content(p, wfc, wwp):
-    """
-    "The critical soil moisture content is defined as the quantity of stored soil moisture below
+    """Calculate the critical soil moisture content.
+
+    The critical soil moisture content is defined as the quantity of stored soil moisture below
     which water uptake is impaired and the crop begins to close its stomata. It is not a fixed
     value. Restriction of water uptake due to water stress starts at a higher water content
-    when the potential transpiration rate is higher" (Van Diepen et al., 1988: WOFOST 6.0, p.86)
+    when the potential transpiration rate is higher" (Van Diepen et al., 1988: WOFOST 6.0, p.86).
 
     A higher p value means that the critical soil moisture content is higher, i.e. the plant can
     extract water from the soil at a lower soil moisture content. Thus when p is 1 the critical
@@ -90,11 +209,12 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
 
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water(
-    crop_group_number, potential_evapotranspiration
-):
-    """
-    Calculate the fraction of easily available soil water, based on crop group number and potential evapotranspiration
-    following Van Diepen et al., 1988: WOFOST 6.0, p.87
+    crop_group_number: np.float32, potential_evapotranspiration: np.float32
+) -> np.float32:
+    """Calculate the fraction of easily available soil water.
+
+    Calculation is based on crop group number and potential evapotranspiration
+    following Van Diepen et al., 1988: WOFOST 6.0, p.87.
 
     Parameters
     ----------
@@ -104,27 +224,29 @@ def get_fraction_easily_available_soil_water(
     potential_evapotranspiration : np.ndarray
         Potential evapotranspiration in m
 
-    Returns
+    Returns:
     -------
     np.ndarray
         The fraction of easily available soil water, p is closer to 0 if evapo is bigger and cropgroup is smaller
     """
-    potential_evapotranspiration_cm = potential_evapotranspiration * np.float32(100)
+    potential_evapotranspiration_cm: np.float32 = (
+        potential_evapotranspiration * np.float32(100)
+    )
 
-    p = np.float32(1) / (
+    p: np.float32 = np.float32(1) / (
         np.float32(0.76) + np.float32(1.5) * potential_evapotranspiration_cm
     ) - np.float32(0.1) * (np.float32(5) - crop_group_number)
 
     # Additional correction for crop groups 1 and 2
     if crop_group_number <= np.float32(2.5):
-        p = p + (potential_evapotranspiration_cm - np.float32(0.6)) / (
+        p: np.float32 = p + (potential_evapotranspiration_cm - np.float32(0.6)) / (
             crop_group_number * (crop_group_number + np.float32(3.0))
         )
 
     if p < np.float32(0):
-        p = np.float32(0)
+        p: np.float32 = np.float32(0)
     if p > np.float32(1):
-        p = np.float32(1)
+        p: np.float32 = np.float32(1)
     return p
 
 
@@ -182,19 +304,17 @@ def get_available_water_infiltration(
     EWRef,
     topwater,
 ):
-    """
-    Update the soil water storage based on the water balance calculations.
+    """Update the soil water storage based on the water balance calculations.
 
     Parameters
     ----------
     wwp : np.ndarray
 
-    Notes
+    Notes:
     -----
     This function requires N_SOIL_LAYERS to be defined in the global scope. Which can help
     the compiler to optimize the code better.
     """
-
     available_water_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
     open_water_evaporation = np.zeros_like(land_use_type, dtype=np.float32)
     for i in prange(land_use_type.size):
@@ -269,25 +389,36 @@ def evapotranspirate(
     open_water_evaporation,
     available_water_infiltration,
     minimum_effective_root_depth: float,
+    mask,
+    mask_transpiration,
 ):
+    """Evapotranspiration calculation for the soil module.
+
+    Parameters
+    ----------
+    mask : np.ndarray
+        A mask indicating which pixels are valid for evapotranspiration calculation.
+    mask_transpiration : np.ndarray
+        A mask indicating which pixels are valid for transpiration calculation. This is
+        useful when transpiration is calculated by an external module.
+    """
     root_distribution_per_layer_rws_corrected_matrix = np.zeros_like(soil_layer_height)
 
-    is_bioarea = land_use_type < SEALED
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
 
-    actual_total_transpiration = np.zeros_like(land_use_type, dtype=np.float32)
+    transpiration = np.zeros_like(land_use_type, dtype=np.float32)
     actual_bare_soil_evaporation = np.zeros_like(land_use_type, dtype=np.float32)
 
     for i in prange(land_use_type.size):
         remaining_potential_transpiration = potential_transpiration[i]
-        if land_use_type[i] == PADDY_IRRIGATED:
+        if land_use_type[i] == PADDY_IRRIGATED and mask[i]:
             transpiration_from_topwater = min(
                 topwater[i], remaining_potential_transpiration
             )
             remaining_potential_transpiration -= transpiration_from_topwater
             topwater[i] -= transpiration_from_topwater
             available_water_infiltration[i] -= transpiration_from_topwater
-            actual_total_transpiration[i] += transpiration_from_topwater
+            transpiration[i] += transpiration_from_topwater
 
         # get group group numbers for natural areas
         if land_use_type[i] == FOREST or land_use_type[i] == GRASSLAND_LIKE:
@@ -351,19 +482,20 @@ def evapotranspirate(
             # distribute the transpiration over the layers, considering the root ratios
             # and the transpiration reduction factor per layer
             for layer in range(N_SOIL_LAYERS):
-                transpiration = (
+                transpiration_layer = (
                     maximum_transpiration
                     * root_distribution_per_layer_rws_corrected_matrix[layer, i]
                     / total_root_length_rws_corrected
                 )
-                w[layer, i] -= transpiration
-                w[layer, i] = max(
-                    w[layer, i], wres[layer, i]
-                )  # soil moisture can never be lower than wres
-                if is_bioarea[i]:
-                    actual_total_transpiration[i] += transpiration
 
-        if is_bioarea[i]:
+                if mask[i]:
+                    w[layer, i] -= transpiration_layer
+                    w[layer, i] = max(
+                        w[layer, i], wres[layer, i]
+                    )  # soil moisture can never be lower than wres
+                    transpiration[i] += transpiration_layer
+
+        if mask_transpiration[i]:
             # limit the bare soil evaporation to the available water in the soil
             if not soil_is_frozen[i] and land_use_type[i] != PADDY_IRRIGATED:
                 # TODO: Minor bug, this should only occur when topwater is above 0
@@ -388,7 +520,7 @@ def evapotranspirate(
                 actual_bare_soil_evaporation[i] = np.float32(0)
 
     return (
-        actual_total_transpiration,
+        transpiration,
         actual_bare_soil_evaporation,
     )
 
@@ -502,26 +634,15 @@ def vertical_water_transport(
     topwater,
     soil_layer_height,
 ):
-    """
-    Parameters
-    ----------
-    preferential_flow_constant : float
-        The preferential flow constant. Because effective saturation is always below 1, a higher
-        preferential flow constant will result in less preferential flow.
+    """Simulates vertical transport of water in the soil using Darcy's equation.
 
-    Simulates vertical transport of water in the soil using Darcy's equation,
-    combining infiltration, percolation, and capillary rise into a single process.
-    Considers soil water potential and varying soil layer heights.
-
-    Returns
-    -------
-    preferential_flow : np.ndarray
-        The preferential flow of water through the soil
-    direct_runoff : np.ndarray
-        The direct runoff of water from the soil
-    groundwater_recharge : np.ndarray
-        The recharge of groundwater from the soil
-
+    Returns:
+        preferential_flow : np.ndarray
+            The preferential flow of water through the soil
+        direct_runoff : np.ndarray
+            The direct runoff of water from the soil
+        groundwater_recharge : np.ndarray
+            The recharge of groundwater from the soil
     """
     # Initialize variables
     preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
@@ -657,9 +778,14 @@ def vertical_water_transport(
     return preferential_flow, direct_runoff, groundwater_recharge
 
 
-def thetas_toth(soil_organic_carbon, bulk_density, is_top_soil, clay, silt):
-    """
-    Determine saturated water content [m3/m3].
+def thetas_toth(
+    soil_organic_carbon: npt.NDArray[np.float32],
+    bulk_density: npt.NDArray[np.float32],
+    is_top_soil: npt.NDArray[np.bool_],
+    clay: npt.NDArray[np.float32],
+    silt: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Determine saturated water content [m3/m3].
 
     Based on:
     Tóth, B., Weynants, M., Nemes, A., Makó, A., Bilas, G., and Tóth, G.:
@@ -668,40 +794,38 @@ def thetas_toth(soil_organic_carbon, bulk_density, is_top_soil, clay, silt):
 
     Parameters
     ----------
-    bdod : float
-        bulk density [g /cm3].
-    sand: float
-        sand percentage [%].
-    silt: float
-        silt percentage [%].
-    is_top_soil: bool
-        top soil flag.
+    bdod  bulk density [g /cm3].
+    sand: sand percentage [%].
+    silt: fsilt percentage [%].
+    is_top_soil: top soil flag.
 
-    Returns
+    Returns:
     -------
-    thetas : float
-        saturated water content [cm3/cm3].
+    thetas: saturated water content [cm3/cm3].
 
     """
     return (
-        0.6819
-        - 0.06480 * (1 / (soil_organic_carbon + 1))
-        - 0.11900 * bulk_density**2
-        - 0.02668 * is_top_soil
-        + 0.001489 * clay
-        + 0.0008031 * silt
-        + 0.02321 * (1 / (soil_organic_carbon + 1)) * bulk_density**2
-        + 0.01908 * bulk_density**2 * is_top_soil
-        - 0.0011090 * clay * is_top_soil
-        - 0.00002315 * silt * clay
-        - 0.0001197 * silt * bulk_density**2
-        - 0.0001068 * clay * bulk_density**2
+        np.float32(0.6819)
+        - np.float32(0.06480) * (1 / (soil_organic_carbon + 1))
+        - np.float32(0.11900) * bulk_density**2
+        - np.float32(0.02668) * is_top_soil
+        + np.float32(0.001489) * clay
+        + np.float32(0.0008031) * silt
+        + np.float32(0.02321) * (1 / (soil_organic_carbon + 1)) * bulk_density**2
+        + np.float32(0.01908) * bulk_density**2 * is_top_soil
+        - np.float32(0.0011090) * clay * is_top_soil
+        - np.float32(0.00002315) * silt * clay
+        - np.float32(0.0001197) * silt * bulk_density**2
+        - np.float32(0.0001068) * clay * bulk_density**2
     )
 
 
-def thetar_brakensiek(sand, clay, thetas):
-    """
-    Determine residual water content [m3/m3].
+def thetar_brakensiek(
+    sand: npt.NDArray[np.float32],
+    clay: npt.NDArray[np.float32],
+    thetas: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Determine residual water content [m3/m3].
 
     Thetas is equal to porosity (Φ) in this case.
 
@@ -721,22 +845,22 @@ def thetar_brakensiek(sand, clay, thetas):
     thetas : float
         saturated water content [m3/m3].
 
-    Returns
+    Returns:
     -------
     thetar : float
         residual water content [m3/m3].
 
     """
     return (
-        -0.0182482
-        + 0.00087269 * sand
-        + 0.00513488 * clay
-        + 0.02939286 * thetas
-        - 0.00015395 * clay**2
-        - 0.0010827 * sand * thetas
-        - 0.00018233 * clay**2 * thetas**2
-        + 0.00030703 * clay**2 * thetas
-        - 0.0023584 * thetas**2 * clay
+        np.float32(-0.0182482)
+        + np.float32(0.00087269) * sand
+        + np.float32(0.00513488) * clay
+        + np.float32(0.02939286) * thetas
+        - np.float32(0.00015395) * clay**2
+        - np.float32(0.0010827) * sand * thetas
+        - np.float32(0.00018233) * clay**2 * thetas**2
+        + np.float32(0.00030703) * clay**2 * thetas
+        - np.float32(0.0023584) * thetas**2 * clay
     )
 
 
@@ -760,8 +884,7 @@ def get_bubbling_pressure(clay, sand, thetas):
 
 
 def get_pore_size_index_brakensiek(sand, thetas, clay):
-    """
-    Determine Brooks-Corey pore size distribution index [-].
+    """Determine Brooks-Corey pore size distribution index [-].
 
     Thetas is equal to porosity (Φ) in this case.
 
@@ -780,7 +903,7 @@ def get_pore_size_index_brakensiek(sand, thetas, clay):
     clay: float
         clay percentage [%].
 
-    Returns
+    Returns:
     -------
     poresizeindex : float
         pore size distribution index [-].
@@ -805,8 +928,7 @@ def get_pore_size_index_brakensiek(sand, thetas, clay):
 
 
 def kv_brakensiek(thetas, clay, sand):
-    """
-    Determine saturated hydraulic conductivity kv [m/day].
+    """Determine saturated hydraulic conductivity kv [m/day].
 
     Based on:
       Brakensiek, D.L., Rawls, W.J.,and Stephenson, G.R.: Modifying scs hydrologic
@@ -822,7 +944,7 @@ def kv_brakensiek(thetas, clay, sand):
     sand: float
         sand percentage [%].
 
-    Returns
+    Returns:
     -------
     kv : float
         saturated hydraulic conductivity [m/day].
@@ -854,6 +976,13 @@ def kv_brakensiek(thetas, clay, sand):
 
 
 class Soil(Module):
+    """Soil module for the hydrological model.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology
@@ -874,7 +1003,7 @@ class Soil(Module):
         self.var.minimum_effective_root_depth = 0.25  # m
 
         # Soil properties
-        self.HRU.var.soil_layer_height = self.HRU.compress(
+        self.HRU.var.soil_layer_height: npt.NDArray[np.float32] = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/soil_layer_height"],
                 layer=None,
@@ -882,28 +1011,28 @@ class Soil(Module):
             method="mean",
         )
 
-        soil_organic_carbon = self.HRU.compress(
+        soil_organic_carbon: npt.NDArray[np.float32] = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/soil_organic_carbon"],
                 layer=None,
             ),
             method="mean",
         )
-        bulk_density = self.HRU.compress(
+        bulk_density: npt.NDArray[np.float32] = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/bulk_density"],
                 layer=None,
             ),
             method="mean",
         )
-        self.HRU.var.silt = self.HRU.compress(
+        self.HRU.var.silt: npt.NDArray[np.float32] = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/silt"],
                 layer=None,
             ),
             method="mean",
         )
-        self.HRU.var.clay = self.HRU.compress(
+        self.HRU.var.clay: npt.NDArray[np.float32] = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/clay"],
                 layer=None,
@@ -912,31 +1041,39 @@ class Soil(Module):
         )
 
         # calculate sand content based on silt and clay content (together they should sum to 100%)
-        self.HRU.var.sand = 100 - self.HRU.var.silt - self.HRU.var.clay
+        self.HRU.var.sand: npt.NDArray[np.float32] = (
+            100 - self.HRU.var.silt - self.HRU.var.clay
+        )
 
         # the top 30 cm is considered as top soil (https://www.fao.org/uploads/media/Harm-World-Soil-DBv7cv_1.pdf)
-        is_top_soil = np.zeros_like(self.HRU.var.clay, dtype=bool)
+        is_top_soil: npt.NDArray[np.bool_] = np.zeros_like(
+            self.HRU.var.clay, dtype=bool
+        )
         is_top_soil[0:3] = True
 
-        thetas = thetas_toth(
+        thetas: npt.NDArray[np.float32] = thetas_toth(
             soil_organic_carbon=soil_organic_carbon,
             bulk_density=bulk_density,
             is_top_soil=is_top_soil,
             clay=self.HRU.var.clay,
             silt=self.HRU.var.silt,
         )
-        thetar = thetar_brakensiek(
+        thetar: npt.NDArray[np.float32] = thetar_brakensiek(
             sand=self.HRU.var.sand, clay=self.HRU.var.clay, thetas=thetas
         )
-        self.HRU.var.bubbling_pressure_cm = get_bubbling_pressure(
-            clay=self.HRU.var.clay, sand=self.HRU.var.sand, thetas=thetas
+        self.HRU.var.bubbling_pressure_cm: npt.NDArray[np.float32] = (
+            get_bubbling_pressure(
+                clay=self.HRU.var.clay, sand=self.HRU.var.sand, thetas=thetas
+            )
         )
-        self.HRU.var.lambda_pore_size_distribution = get_pore_size_index_brakensiek(
-            sand=self.HRU.var.sand, thetas=thetas, clay=self.HRU.var.clay
+        self.HRU.var.lambda_pore_size_distribution: npt.NDArray[np.float32] = (
+            get_pore_size_index_brakensiek(
+                sand=self.HRU.var.sand, thetas=thetas, clay=self.HRU.var.clay
+            )
         )
 
         # θ saturation, field capacity, wilting point and residual moisture content
-        thetafc = get_soil_moisture_at_pressure(
+        thetafc: npt.NDArray[np.float32] = get_soil_moisture_at_pressure(
             np.float32(-100.0),  # assuming field capacity is at -100 cm (pF 2)
             self.HRU.var.bubbling_pressure_cm,
             thetas,
@@ -944,7 +1081,7 @@ class Soil(Module):
             self.HRU.var.lambda_pore_size_distribution,
         )
 
-        thetawp = get_soil_moisture_at_pressure(
+        thetawp: npt.NDArray[np.float32] = get_soil_moisture_at_pressure(
             np.float32(-(10**4.2)),  # assuming wilting point is at -10^4.2 cm (pF 4.2)
             self.HRU.var.bubbling_pressure_cm,
             thetas,
@@ -952,32 +1089,42 @@ class Soil(Module):
             self.HRU.var.lambda_pore_size_distribution,
         )
 
-        self.HRU.var.ws = thetas * self.HRU.var.soil_layer_height
-        self.HRU.var.wfc = thetafc * self.HRU.var.soil_layer_height
-        self.HRU.var.wwp = thetawp * self.HRU.var.soil_layer_height
-        self.HRU.var.wres = thetar * self.HRU.var.soil_layer_height
+        self.HRU.var.ws: npt.NDArray[np.float32] = (
+            thetas * self.HRU.var.soil_layer_height
+        )
+        self.HRU.var.wfc: npt.NDArray[np.float32] = (
+            thetafc * self.HRU.var.soil_layer_height
+        )
+        self.HRU.var.wwp: npt.NDArray[np.float32] = (
+            thetawp * self.HRU.var.soil_layer_height
+        )
+        self.HRU.var.wres: npt.NDArray[np.float32] = (
+            thetar * self.HRU.var.soil_layer_height
+        )
 
         # initial soil water storage between field capacity and wilting point
         # set soil moisture to nan where land use is not bioarea
-        self.HRU.var.w = np.where(
+        self.HRU.var.w: npt.NDArray[np.float32] = np.where(
             self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
             (self.HRU.var.wfc - self.HRU.var.wwp) * 0.2 + self.HRU.var.wwp,
             np.nan,
         )
         # for paddy irrigation flooded paddy fields
-        self.HRU.var.topwater = self.HRU.full_compressed(0, dtype=np.float32)
+        self.HRU.var.topwater: npt.NDArray[np.float32] = self.HRU.full_compressed(
+            0, dtype=np.float32
+        )
 
-        self.HRU.var.ksat = kv_brakensiek(
+        self.HRU.var.ksat: npt.NDArray[np.float32] = kv_brakensiek(
             thetas=thetas, clay=self.HRU.var.clay, sand=self.HRU.var.sand
         )
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
-        natural_crop_groups = self.hydrology.grid.load(
+        natural_crop_groups: npt.NDArray[np.float32] = self.hydrology.grid.load(
             self.model.files["grid"]["soil/crop_group"]
         )
-        self.HRU.var.natural_crop_groups = self.hydrology.to_HRU(
-            data=natural_crop_groups
+        self.HRU.var.natural_crop_groups: npt.NDArray[np.float32] = (
+            self.hydrology.to_HRU(data=natural_crop_groups)
         )
 
         # ------------ Preferential Flow constant ------------------------------------------
@@ -1019,107 +1166,106 @@ class Soil(Module):
                 1.2, np.maximum(0.01, self.HRU.var.arnoBeta[land_use_indices])
             )
 
-        def create_ini(yaml, idx, plantFATE_cluster, biodiversity_scenario):
-            out_dir = self.model.simulation_root / "plantFATE" / f"cell_{idx}"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            ini_file = out_dir / "p_daily.ini"
+    def initiate_plantfate(self):
+        # plantFATE only runs on Linux, so we check if the system is Linux
+        assert platform.system() == "Linux", (
+            "plantFATE only runs on Linux. Please run the model on a Linux system."
+        )
 
-            yaml["> STRINGS"]["outDir"] = out_dir
-            if self.model.in_spinup is True:
-                original_state_file = (
-                    Path("input")
-                    / "plantFATE_initialization"
-                    / biodiversity_scenario
-                    / f"cluster_{plantFATE_cluster}"
-                    / "pf_saved_state.txt"
+        from . import plantFATE
+
+        self.plantFATE_forest_RUs = np.zeros_like(
+            self.HRU.var.land_use_type, dtype=bool
+        )
+
+        for i, land_use_type_RU in enumerate(self.HRU.var.land_use_type):
+            if (
+                (
+                    self.model.config["plantFATE"]["n_cells"] == "all"
+                    or self.plantFATE_forest_RUs.sum()
+                    < self.model.config["plantFATE"]["n_cells"]
                 )
-                assert original_state_file.exists()
-                new_state_file = out_dir / "pf_saved_state_initialization.txt"
-                with open(original_state_file, "r") as original_f:
-                    state = original_f.read()
-                    timetuple = self.model.current_time.timetuple()
-                    year = timetuple.tm_year
-                    day_of_year = timetuple.tm_yday
-                    state = state.replace(
-                        "6 2 0 2000 1 0 0",
-                        f"6 2 0 {year + (day_of_year - 1) / 365} 1 0 0",
+                and land_use_type_RU == FOREST
+                and self.HRU.var.land_use_ratio[i] > 0.5
+            ):
+                self.plantFATE_forest_RUs[i] = True
+
+                if self.model.in_spinup:
+                    PFconfig_ini = Path(
+                        self.model.config["plantFATE"]["spinup_ini_file"]
                     )
-                    with open(new_state_file, "w") as new_f:
-                        new_f.write(state)
-
-                yaml["> STRINGS"]["continueFromState"] = new_state_file
-                yaml["> STRINGS"]["continueFromConfig"] = ini_file
-                yaml["> STRINGS"]["saveState"] = True
-                yaml["> STRINGS"]["savedStateFile"] = "pf_saved_state_spinup.txt"
-                yaml["> STRINGS"]["savedConfigFile"] = "pf_saved_config_spinup.txt"
-            else:
-                yaml["> STRINGS"]["continueFromState"] = (
-                    out_dir
-                    / self.model.config["plantFATE"]["> STRINGS"]["exptName"]
-                    / "pf_saved_state_spinup.txt"
-                )
-                yaml["> STRINGS"]["continueFromConfig"] = ini_file
-                yaml["> STRINGS"]["savedStateFile"] = None
-                yaml["> STRINGS"]["saveState"] = False
-                yaml["> STRINGS"]["savedConfigFile"] = None
-
-            with open(ini_file, "w") as f:
-                for section, section_dict in yaml.items():
-                    f.write(section + "\n")
-                    if section_dict is None:
-                        continue
-                    for key, value in section_dict.items():
-                        if value is None:
-                            value = "null"
-                        elif value is False:
-                            value = "no"
-                        elif value is True:
-                            value = "yes"
-                        f.write(key + " " + str(value) + "\n")
-            return ini_file
-
-        if self.model.config["general"]["simulate_forest"]:
-            plantFATE_cluster = 7
-            biodiversity_scenario = "low"
-
-            lon, lat = 73.5975501619, 19.1444726274
-
-            from honeybees.library.raster import coord_to_pixel
-
-            px, py = coord_to_pixel(
-                np.array([lon, lat]), gt=self.model.hydrology.grid.gt
-            )
-
-            cell_ids = np.arange(self.hydrology.grid.compressed_size)
-            cell_ids_map = self.hydrology.grid.decompress(cell_ids, fillvalue=-1)
-            cell_id = cell_ids_map[py, px]
-
-            already_has_plantFATE_cell = False
-            from . import plantFATE
-
-            self.model.plantFATE = []
-            self.plantFATE_forest_RUs = np.zeros_like(
-                self.HRU.var.land_use_type, dtype=bool
-            )
-            for i, land_use_type_RU in enumerate(self.HRU.var.land_use_type):
-                grid_cell = self.HRU.var.HRU_to_grid[i]
-                # if land_use_type_RU == 0 and self.HRU.var.land_use_ratio[i] > 0.5:
-                if land_use_type_RU == FOREST and grid_cell == cell_id:
-                    if already_has_plantFATE_cell:
-                        self.model.plantFATE.append(None)
-                    else:
-                        self.plantFATE_forest_RUs[i] = True
-
-                        ini_path = create_ini(
-                            self.model.config["plantFATE"],
-                            i,
-                            plantFATE_cluster,
-                            biodiversity_scenario,
-                        )
-                        already_has_plantFATE_cell = True
-                        self.model.plantFATE.append(plantFATE.Model(ini_path))
                 else:
-                    self.model.plantFATE.append(None)
+                    PFconfig_ini = Path(self.model.config["plantFATE"]["run_ini_file"])
+
+                if not PFconfig_ini.exists():
+                    raise FileNotFoundError(
+                        f"plantFATE spinup config file {PFconfig_ini} not found."
+                    )
+
+                PFconfig_ini.parent.mkdir(parents=True, exist_ok=True)
+
+                pfModel = plantFATE.Model(PFconfig_ini, False, None)
+                pfModel.plantFATE_model.config.parent_dir = (
+                    self.model.simulation_root / "plantFATE"
+                ).as_posix()
+                pfModel.plantFATE_model.config.expt_dir = f"cell_{i}"
+
+                out_dir = Path(self.model.simulation_root / "plantFATE" / f"cell_{i}")
+                out_dir.mkdir(parents=True, exist_ok=True)
+
+                pfModel.plantFATE_model.config.out_dir = out_dir.as_posix()
+                pfModel.plantFATE_model.config.save_state = False
+
+                if self.model.in_spinup:
+                    pfModel.plantFATE_model.config.save_state = True
+                else:
+                    pfModel.plantFATE_model.config.continuePrevious = True
+                    pfModel.plantFATE_model.config.continueFrom_stateFile = str(
+                        self.model.simulation_root
+                        / ".."
+                        / "spinup"
+                        / "plantFATE"
+                        / f"cell_{i}"
+                        / "pf_saved_state.txt"
+                    )
+                    pfModel.plantFATE_model.config.continueFrom_configFile = str(
+                        self.model.simulation_root
+                        / ".."
+                        / "spinup"
+                        / "plantFATE"
+                        / f"cell_{i}"
+                        / "pf_saved_config.ini"
+                    )
+                # pfModel.plantFATE_model.config.traits_file = "traits_file_for_cluster"
+                self.model.plantFATE.append(pfModel)
+
+            else:
+                self.model.plantFATE.append(None)
+
+        # print(len(self.model.plantFATE))
+        # print(self.model.plantFATE[0])
+        # print(self.model.plantFATE[0:10])
+        # print(all(v is None for v in self.model.plantFATE))
+
+    def plant_new_forest(self, indx):
+        assert not self.model.in_spinup
+
+        from . import plantFATE
+
+        self.plantFATE_forest_RUs[indx] = True
+
+        PFconfig_ini = self.model.config["plantFATE"]["new_forest_ini_file"]
+
+        pfModel = plantFATE.Model(PFconfig_ini, False, None)
+        pfModel.plantFATE_model.config.parent_dir = str(
+            self.model.simulation_root / "plantFATE"
+        )
+        pfModel.plantFATE_model.config.expt_dir = f"cell_{indx}"
+        pfModel.plantFATE_model.config.out_dir = str(
+            self.model.simulation_root / "plantFATE" / f"cell_{indx}"
+        )
+
+        self.model.plantFATE[indx] = pfModel
 
     def calculate_soil_water_potential_MPa(
         self,
@@ -1185,6 +1331,125 @@ class Soil(Module):
         )  #  W/m2 -> umol/m2/s
         return photosynthetic_photon_flux_density
 
+    def calculate_topsoil_volumetric_content(
+        self, topsoil_water_content, topsoil_wilting_point, topsoil_fieldcap
+    ):
+        topsoil_volumetric_content = (topsoil_water_content - topsoil_wilting_point) / (
+            topsoil_fieldcap - topsoil_wilting_point
+        )
+        return topsoil_volumetric_content
+
+    def calculate_net_radiation(
+        self, shortwave_radiation_downwelling, longwave_radiation_net, albedo
+    ):
+        net_radiation = (
+            shortwave_radiation_downwelling * (1 - albedo) + longwave_radiation_net
+        )  # W/m2
+        return net_radiation
+
+    def evapotranspirate_plantFATE(
+        self,
+        indx,
+        plantfate_transpiration,
+        plantfate_bare_soil_evaporation,
+        plantfate_transpiration_by_layer,
+        plantfate_biomass,
+        plantfate_co2,
+        plantfate_num_ind,
+    ):
+        if self.plantFATE_forest_RUs[indx]:
+            plantFATE_model = self.model.plantFATE[indx]
+            if plantFATE_model is not None:
+                plantFATE_data = {
+                    "soil_water_potential": self.calculate_soil_water_potential_MPa(
+                        soil_moisture=self.HRU.var.w[
+                            0 : len(self.HRU.var.w), indx
+                        ].sum(),
+                        soil_moisture_wilting_point=self.HRU.var.wres[
+                            0 : len(self.HRU.var.wres), indx
+                        ].sum(),
+                        soil_moisture_field_capacity=self.HRU.var.wfc[
+                            0 : len(self.HRU.var.wfc), indx
+                        ].sum(),
+                        soil_tickness=self.HRU.var.soil_layer_height[
+                            0 : len(self.HRU.var.soil_layer_height), indx
+                        ].sum(),
+                    ),
+                    "vapour_pressure_deficit": self.calculate_vapour_pressure_deficit_kPa(
+                        temperature_K=self.HRU.tas[indx],
+                        relative_humidity=self.HRU.hurs[indx],
+                    )
+                    * 1000,  # kPa to Pa
+                    "photosynthetic_photon_flux_density": self.calculate_photosynthetic_photon_flux_density(
+                        shortwave_radiation=self.HRU.rsds[indx]
+                    ),
+                    "temperature": self.HRU.tas[indx] - 273.15,  # - 273.15,  # K to C
+                    "topsoil_volumetric_water_content": self.calculate_topsoil_volumetric_content(
+                        topsoil_water_content=self.HRU.var.w[0, indx],
+                        topsoil_wilting_point=self.HRU.var.wres[0, indx],
+                        topsoil_fieldcap=self.HRU.var.wfc[0, indx],
+                    ),
+                    "net_radiation": self.calculate_net_radiation(
+                        shortwave_radiation_downwelling=self.HRU.rsds[indx],
+                        longwave_radiation_net=self.HRU.rlds[indx],
+                        albedo=0.13,  # temporary value for forest
+                    ),
+                    # "net_radiation": self.grid.net_absorbed_radiation_vegetation_MJ_m2_day[i]
+                }
+
+                # print(plantFATE_data)
+                if self.model.current_timestep == 0:
+                    plantFATE_model.first_step(
+                        tstart=self.model.current_time, **plantFATE_data
+                    )
+                else:
+                    # print(indx)
+                    (
+                        transpiration,
+                        plantfate_bare_soil_evaporation[indx],
+                        _,
+                        _,
+                        _,
+                    ) = plantFATE_model.step(**plantFATE_data)
+
+                    plantfate_biomass[indx] = plantFATE_model.biomass
+                    plantfate_co2[indx] = plantFATE_model.npp
+                    plantfate_num_ind[indx] = plantFATE_model.n_individuals
+
+                    total_water_by_layer = (
+                        self.HRU.var.w[0 : len(self.HRU.var.w), indx]
+                        - self.HRU.var.wres[0 : len(self.HRU.var.w), indx]
+                    )
+                    # print("PF input data " + str(plantFATE_data))
+                    # print("Total Available Water " + str(sum(total_water_by_layer)))
+                    # print("Water we are taking " + str(transpiration))
+                    if transpiration > sum(total_water_by_layer):
+                        # print("Old transpiration: " + str(transpiration))
+                        transpiration = min(transpiration, sum(total_water_by_layer))
+                        # print("New transpiration: " + str(transpiration))
+                        # print("water by layer " + str(total_water_by_layer))
+                        # print("water by layer w " + str(self.HRU.var.w[0:len(self.HRU.var.w), indx]))
+                        # print("water by layer wres " + str(self.HRU.var.wres[0:len(self.HRU.var.w), indx]))
+
+                    plantfate_transpiration[indx] = transpiration
+                    if total_water_by_layer.sum() > 0:
+                        for layer in range(N_SOIL_LAYERS):
+                            plantfate_transpiration_by_layer[layer, indx] = (
+                                plantfate_transpiration[indx]
+                                * (
+                                    total_water_by_layer[layer]
+                                    / total_water_by_layer.sum()
+                                )
+                            )
+
+                    # print(
+                    #     "PlantFATE transpiration: " + str(plantfate_transpiration[indx])
+                    # )
+                    # print(
+                    #     "PlantFATE transpiration by layer "
+                    #     + str(plantfate_transpiration_by_layer[:, indx])
+                    # )
+
     def set_global_variables(self):
         # set number of soil layers as global variable for numba
         global N_SOIL_LAYERS
@@ -1192,7 +1457,9 @@ class Soil(Module):
 
         # set the frost index threshold as global variable for numba
         global FROST_INDEX_THRESHOLD
-        FROST_INDEX_THRESHOLD = np.float32(self.HRU.var.frost_indexThreshold)
+        FROST_INDEX_THRESHOLD = np.float32(
+            self.model.hydrology.snowfrost.var.frost_indexThreshold
+        )
 
     def step(
         self,
@@ -1203,8 +1470,7 @@ class Soil(Module):
         natural_available_water_infiltration,
         actual_irrigation_consumption,
     ):
-        """
-        Dynamic part of the soil module
+        """Dynamic part of the soil module.
 
         For each of the land cover classes the vertical water transport is simulated
         Distribution of water holding capiacity in 3 soil layers based on saturation excess overland flow, preferential flow
@@ -1212,13 +1478,124 @@ class Soil(Module):
         """
         timer = TimingModule("Soil")
 
+        bioarea = self.HRU.var.land_use_type < SEALED
+
+        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
+        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
+
+        if (
+            self.model.current_timestep == 0
+            and self.model.config["general"]["simulate_forest"]
+        ):
+            self.initiate_plantfate()
+
         if __debug__:
             w_pre = self.HRU.var.w.copy()
             topwater_pre = self.HRU.var.topwater.copy()
 
-        bioarea = self.HRU.var.land_use_type < SEALED
+        if (
+            not self.model.in_spinup
+            and self.model.config["general"]["simulate_forest"]
+            and self.model.config["plantFATE"]["new_forest"]
+            and self.model.current_timestep == 0
+        ):
+            import geopandas as gpd
+            from rasterio.features import rasterize
+            from shapely.geometry import shape
+
+            forest = gpd.read_file(
+                self.model.config["plantFATE"]["new_forest_filename"]
+            )
+            forest = rasterize(
+                [(shape(geom), 1) for geom in forest.geometry],
+                out_shape=self.HRU.shape,
+                transform=self.HRU.transform,
+                fill=False,
+                dtype="uint8",  # bool is not supported, so we use uint8 and convert to bool
+            ).astype(bool)
+            # do not create forests outside the study area
+            forest[self.HRU.mask] = False
+            # only create forests in grassland or agricultural areas
+            forest[
+                ~np.isin(
+                    self.HRU.decompress(self.HRU.var.land_use_type),
+                    [GRASSLAND_LIKE, PADDY_IRRIGATED, NON_PADDY_IRRIGATED],
+                )
+            ] = False
+
+            import matplotlib.pyplot as plt
+
+            plt.imshow(forest)
+            plt.savefig("forest.png")
+
+            new_forest_HRUs = np.unique(self.HRU.var.unmerged_HRU_indices[forest])
+
+            # set the land use type to forest
+            self.HRU.var.land_use_type[new_forest_HRUs] = FOREST
+
+            # get the farmers corresponding to the new forest HRUs
+            farmers_with_land_converted_to_forest = np.unique(
+                self.HRU.var.land_owners[new_forest_HRUs]
+            )
+            farmers_with_land_converted_to_forest = (
+                farmers_with_land_converted_to_forest
+            )[farmers_with_land_converted_to_forest != -1]
+
+            HRUs_removed_farmers = self.model.agents.crop_farmers.remove_agents(
+                farmers_with_land_converted_to_forest, new_land_use_type=FOREST
+            )
+
+            new_forest_HRUs = np.unique(
+                np.concatenate([new_forest_HRUs, HRUs_removed_farmers])
+            )
+
+            ## NEW PLANTFATE CELL
+
+            for i in new_forest_HRUs:
+                self.plant_new_forest(i)
+                # self.plantFATE_forest_RUs[new_forest_HRUs] = True
 
         interflow = self.HRU.full_compressed(0, dtype=np.float32)
+
+        timer = TimingModule("Soil")
+
+        self.grid.vapour_pressure_deficit_KPa = (
+            self.calculate_vapour_pressure_deficit_kPa(
+                temperature_K=self.grid.tas,
+                relative_humidity=self.grid.hurs,
+            )
+        )
+        self.grid.photosynthetic_photon_flux_density_umol_m2_s = (
+            self.calculate_photosynthetic_photon_flux_density(
+                shortwave_radiation=self.grid.rsds,
+                xi=0.5,
+            )
+        )
+
+        w_forest = self.HRU.var.w.sum(axis=0)
+        w_forest[self.HRU.var.land_use_type != FOREST] = np.nan
+        w_forest = self.hydrology.to_grid(HRU_data=w_forest, fn="nanmax")
+
+        wwp_forest = self.HRU.var.wwp.sum(axis=0)
+        wwp_forest[self.HRU.var.land_use_type != FOREST] = np.nan
+        wwp_forest = self.hydrology.to_grid(HRU_data=wwp_forest, fn="nanmax")
+
+        wfc_forest = self.HRU.var.wfc.sum(axis=0)
+        wfc_forest[self.HRU.var.land_use_type != FOREST] = np.nan
+        wfc_forest = self.hydrology.to_grid(HRU_data=wfc_forest, fn="nanmax")
+
+        soil_height_forest = self.HRU.var.soil_layer_height.sum(axis=0)
+        soil_height_forest[self.HRU.var.land_use_type != FOREST] = np.nan
+        soil_height_forest = self.hydrology.to_grid(
+            HRU_data=soil_height_forest, fn="nanmax"
+        )
+
+        self.grid.soil_water_potential_MPa = self.calculate_soil_water_potential_MPa(
+            soil_moisture=w_forest,
+            soil_moisture_wilting_point=wwp_forest,
+            soil_moisture_field_capacity=wfc_forest,
+            soil_tickness=soil_height_forest,
+        )
 
         available_water_infiltration, open_water_evaporation = (
             get_available_water_infiltration(
@@ -1230,26 +1607,6 @@ class Soil(Module):
                 topwater=self.HRU.var.topwater,
             )
         )
-
-        # assert balance_check(
-        #     name="soil_1",
-        #     how="cellwise",
-        #     influxes=[
-        #         actual_irrigation_consumption[bioarea],
-        #         natural_available_water_infiltration[bioarea],
-        #     ],
-        #     outfluxes=[
-        #         open_water_evaporation[bioarea],
-        #         available_water_infiltration[bioarea],
-        #     ],
-        #     prestorages=[
-        #         topwater_pre[bioarea],
-        #     ],
-        #     poststorages=[
-        #         self.HRU.var.topwater[bioarea],
-        #     ],
-        #     tollerance=1e-6,
-        # )
 
         timer.new_split("Available infiltration")
 
@@ -1264,34 +1621,18 @@ class Soil(Module):
             ),
         )
 
-        # assert balance_check(
-        #     name="soil_2",
-        #     how="cellwise",
-        #     influxes=[
-        #         capillary_rise_from_groundwater[bioarea],
-        #         actual_irrigation_consumption[bioarea],
-        #         natural_available_water_infiltration[bioarea],
-        #     ],
-        #     outfluxes=[
-        #         open_water_evaporation[bioarea],
-        #         available_water_infiltration[bioarea],
-        #         runoff_from_groundwater[bioarea],
-        #     ],
-        #     prestorages=[topwater_pre[bioarea], w_pre[:, bioarea].sum(axis=0)],
-        #     poststorages=[
-        #         self.HRU.var.topwater[bioarea],
-        #         self.HRU.var.w[:, bioarea].sum(axis=0),
-        #     ],
-        #     tollerance=1e-6,
-        # )
-
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
         timer.new_split("Capillary rise from groundwater")
 
+        mask = self.HRU.var.land_use_type < SEALED
+        mask_transpiration = self.HRU.var.land_use_type < SEALED
+        if self.model.config["general"]["simulate_forest"]:
+            mask[self.plantFATE_forest_RUs] = False
+
         (
-            actual_total_transpiration,
+            transpiration,
             actual_bare_soil_evaporation,
         ) = evapotranspirate(
             wwp=self.HRU.var.wwp,
@@ -1314,33 +1655,74 @@ class Soil(Module):
             open_water_evaporation=open_water_evaporation,
             available_water_infiltration=available_water_infiltration,
             minimum_effective_root_depth=self.var.minimum_effective_root_depth,
+            mask=mask,
+            mask_transpiration=mask_transpiration,
         )
-        assert actual_total_transpiration.dtype == np.float32
+        assert transpiration.dtype == np.float32
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
-        # assert balance_check(
-        #     name="soil_3",
-        #     how="cellwise",
-        #     influxes=[
-        #         capillary_rise_from_groundwater[bioarea],
-        #         actual_irrigation_consumption[bioarea],
-        #         natural_available_water_infiltration[bioarea],
-        #     ],
-        #     outfluxes=[
-        #         open_water_evaporation[bioarea],
-        #         available_water_infiltration[bioarea],
-        #         runoff_from_groundwater[bioarea],
-        #         actual_total_transpiration[bioarea],
-        #         actual_bare_soil_evaporation[bioarea],
-        #     ],
-        #     prestorages=[topwater_pre[bioarea], w_pre[:, bioarea].sum(axis=0)],
-        #     poststorages=[
-        #         self.HRU.var.topwater[bioarea],
-        #         self.HRU.var.w[:, bioarea].sum(axis=0),
-        #     ],
-        #     tollerance=1e-6,
-        # )
+        if self.model.config["general"]["simulate_forest"]:
+            plantfate_transpiration = np.zeros(len(self.plantFATE_forest_RUs))
+            plantfate_bare_soil_evaporation = np.zeros(len(self.plantFATE_forest_RUs))
+            plantfate_transpiration_by_layer = np.zeros_like(self.HRU.var.w)
+            plantfate_biomass = np.zeros(len(self.plantFATE_forest_RUs))
+            plantfate_co2 = np.zeros(len(self.plantFATE_forest_RUs))
+            plantfate_num_ind = np.zeros(len(self.plantFATE_forest_RUs))
+            # import multiprocessing
+            #
+            # print(plantfate_transpiration[self.plantFATE_forest_RUs])
+            #
+            # # def evap_multi_plantfate(i):
+            # #     self.evapotranspirate_plantFATE(i, plantfate_transpiration, plantfate_bare_soil_evaporation, plantfate_transpiration_by_layer)
+            # #
+            # # multiprocessing.set_start_method('fork')
+            # # pool_obj = multiprocessing.Pool()
+            # # pool_obj.map(evap_multi_plantfate, range(len(self.plantFATE_forest_RUs)))
+            #
+            # cpus = multiprocessing.cpu_count()
+            # processes = [multiprocessing.Process(target = self.evapotranspirate_plantFATE, args = (i, plantfate_transpiration, plantfate_bare_soil_evaporation, plantfate_transpiration_by_layer)) for i in range(len(self.plantFATE_forest_RUs))]
+
+            # print(np.where(new_forest_HRUs == 425))
+
+            for i in tqdm(range(len(self.plantFATE_forest_RUs))):
+                # print("New Forest " + str(i))
+                self.evapotranspirate_plantFATE(
+                    i,
+                    plantfate_transpiration,
+                    plantfate_bare_soil_evaporation,
+                    plantfate_transpiration_by_layer,
+                    plantfate_biomass,
+                    plantfate_co2,
+                    plantfate_num_ind,
+                )
+
+            # for p in processes:
+            #     p.start()
+            # for p in processes:
+            #     p.join()
+            #
+            # print(plantfate_transpiration[self.plantFATE_forest_RUs])
+
+            transpiration += plantfate_transpiration
+            self.HRU.var.w -= plantfate_transpiration_by_layer
+
+            assert np.allclose(
+                plantfate_transpiration, plantfate_transpiration_by_layer.sum(axis=0)
+            )
+
+            self.grid.plantFATE_biomass = self.hydrology.to_grid(
+                HRU_data=plantfate_biomass, fn="weightedmean"
+            )
+            self.grid.plantFATE_NPP = self.hydrology.to_grid(
+                HRU_data=plantfate_co2, fn="weightedmean"
+            )
+            self.grid.plantFATE_num_ind = self.hydrology.to_grid(
+                HRU_data=plantfate_num_ind, fn="weightedmean"
+            )
+
+        # actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
+        # print(plantfate_bare_soil_evaporation)
 
         timer.new_split("Evapotranspiration")
 
@@ -1350,6 +1732,13 @@ class Soil(Module):
         groundwater_recharge = np.zeros_like(
             self.HRU.var.land_use_type, dtype=np.float32
         )
+        #
+        # print(self.HRU.var.w[:, self.plantFATE_forest_RUs])
+        # print(self.HRU.var.ws[:, self.plantFATE_forest_RUs])
+        # print(self.HRU.var.wres[:, self.plantFATE_forest_RUs])
+
+        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
+        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
         for _ in range(n_substeps):
             (
@@ -1377,6 +1766,8 @@ class Soil(Module):
             direct_runoff += direct_runoff_substep
             groundwater_recharge[bioarea] += groundwater_recharge_substep[bioarea]
 
+        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
+        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
         timer.new_split("Vertical transport")
 
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
@@ -1392,7 +1783,7 @@ class Soil(Module):
             assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
             assert (interflow == 0).all()  # interflow is not implemented (see above)
             balance_check(
-                name="soil_4",
+                name="soil_1",
                 how="cellwise",
                 influxes=[
                     natural_available_water_infiltration[bioarea],
@@ -1403,7 +1794,7 @@ class Soil(Module):
                     runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    actual_total_transpiration[bioarea],
+                    transpiration[bioarea],
                     actual_bare_soil_evaporation[bioarea],
                     open_water_evaporation[bioarea],
                 ],
@@ -1419,7 +1810,7 @@ class Soil(Module):
             )
 
             balance_check(
-                name="soil_5",
+                name="soil_2",
                 how="cellwise",
                 influxes=[
                     natural_available_water_infiltration[bioarea],
@@ -1430,7 +1821,7 @@ class Soil(Module):
                     runoff[bioarea],
                     interflow[bioarea],
                     groundwater_recharge[bioarea],
-                    actual_total_transpiration[bioarea],
+                    transpiration[bioarea],
                     actual_bare_soil_evaporation[bioarea],
                     open_water_evaporation[bioarea],
                 ],
@@ -1445,18 +1836,95 @@ class Soil(Module):
                 tollerance=1e-6,
             )
 
-            assert (
-                actual_total_transpiration[bioarea]
-                <= potential_transpiration[bioarea] + 1e-7
-            ).all()
-            assert (
-                actual_bare_soil_evaporation[bioarea]
-                <= potential_bare_soil_evaporation[bioarea] + 1e-7
-            ).all()
+            # print(transpiration[self.plantFATE_forest_RUs])
+            # print(potential_transpiration[self.plantFATE_forest_RUs])
+            # print(self.var.w[0:len(self.var.w), self.plantFATE_forest_RUs] - self.wres[0:len(self.var.w), self.plantFATE_forest_RUs])
+            # print(self.var.w[0:len(self.var.w), self.plantFATE_forest_RUs])
+            # print(self.wres[0:len(self.wres), self.plantFATE_forest_RUs])
+            #
+            # if self.model.config["general"]["simulate_forest"]:
+            #     assert (
+            #         transpiration[self.plantFATE_forest_RUs]
+            #         <= potential_transpiration[self.plantFATE_forest_RUs] + 1e-7
+            #     ).all()
+            #
+            # assert (
+            #     transpiration[bioarea]
+            #     <= potential_transpiration[bioarea] + 1e-7
+            # ).all()
+            # assert (
+            #     actual_bare_soil_evaporation[bioarea]
+            #     <= potential_bare_soil_evaporation[bioarea] + 1e-7
+            # ).all()
 
         timer.new_split("Finalizing")
         if self.model.timing:
             print(timer)
+
+        if self.model.config["general"]["simulate_forest"]:
+            # Soil moisture
+            soil_moisture = np.nan_to_num(self.HRU.var.w.sum(axis=0))
+
+            soil_moisture_forest_HRU = soil_moisture.copy()
+            soil_moisture_forest_HRU[self.HRU.var.land_use_type != FOREST] = np.nan
+            soil_moisture_forest_grid = self.hydrology.to_grid(
+                HRU_data=soil_moisture_forest_HRU, fn="weightednanmean"
+            )
+            soil_moisture_forest_plantFATE_HRU = soil_moisture.copy()
+            soil_moisture_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = np.nan
+            soil_moisture_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=soil_moisture_forest_plantFATE_HRU, fn="weightednanmean"
+            )
+
+            actual_bare_soil_evaporation_forest_HRU = (
+                actual_bare_soil_evaporation.copy()
+            )
+            actual_bare_soil_evaporation_forest_HRU[
+                self.HRU.var.land_use_type != FOREST
+            ] = np.nan
+            actual_bare_soil_evaporation_forest_grid = self.hydrology.to_grid(
+                HRU_data=actual_bare_soil_evaporation_forest_HRU, fn="weightednanmean"
+            )
+
+            # Bare soil evaporation
+            actual_bare_soil_evaporation_forest_plantFATE_HRU = (
+                actual_bare_soil_evaporation.copy()
+            )
+            actual_bare_soil_evaporation_forest_plantFATE_HRU[
+                ~self.plantFATE_forest_RUs
+            ] = np.nan
+            actual_bare_soil_evaporation_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=actual_bare_soil_evaporation_forest_plantFATE_HRU,
+                fn="weightednanmean",
+            )
+
+            # Transpiration
+            transpiration_forest_HRU = transpiration.copy()
+            transpiration_forest_HRU[self.HRU.var.land_use_type != FOREST] = np.nan
+            transpiration_forest_grid = self.hydrology.to_grid(
+                HRU_data=transpiration_forest_HRU, fn="weightednanmean"
+            )
+            transpiration_forest_plantFATE_HRU = transpiration.copy()
+            transpiration_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = np.nan
+            transpiration_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=transpiration_forest_plantFATE_HRU, fn="weightednanmean"
+            )
+
+            # Groundwater recharge
+            groundwater_recharge_forest_HRU = groundwater_recharge.copy()
+            groundwater_recharge_forest_HRU[self.HRU.var.land_use_type != FOREST] = (
+                np.nan
+            )
+            groundwater_recharge_forest_grid = self.hydrology.to_grid(
+                HRU_data=groundwater_recharge_forest_HRU, fn="weightednanmean"
+            )
+            groundwater_recharge_forest_plantFATE_HRU = groundwater_recharge.copy()
+            groundwater_recharge_forest_plantFATE_HRU[~self.plantFATE_forest_RUs] = (
+                np.nan
+            )
+            groundwater_recharge_forest_plantFATE_grid = self.hydrology.to_grid(
+                HRU_data=groundwater_recharge_forest_plantFATE_HRU, fn="weightednanmean"
+            )
 
         self.report(self, locals())
 
@@ -1465,6 +1933,6 @@ class Soil(Module):
             runoff,
             groundwater_recharge,
             open_water_evaporation,
-            actual_total_transpiration,
+            transpiration,
             actual_bare_soil_evaporation,
         )

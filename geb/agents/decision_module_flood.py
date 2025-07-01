@@ -59,7 +59,9 @@ class DecisionModule:
         n_agents: int,
         r: float,
     ) -> np.ndarray:
-        """This function iterates through each (no)flood event i (see manuscript for details). It calculates the time discounted NPV of each event i:
+        """This function iterates through each (no)flood event i (see manuscript for details).
+
+        It calculates the time discounted NPV of each event i:
 
         Args:
             n_floods: number of flood maps included in model run
@@ -72,8 +74,8 @@ class DecisionModule:
             r: time discounting rate
 
         Returns:
-            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent"""
-
+            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+        """
         # Allocate array
         NPV_summed = np.full((n_floods + 3, n_agents), -1, dtype=np.float32)
 
@@ -131,19 +133,6 @@ class DecisionModule:
         **kwargs,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
-
-        Args:
-            n_agents: number of agents in the floodplain.
-            wealth: array containing the wealth of each household.
-            income: array containing the income of each household.
-            amenity_value: array containing the aminity value of each household.
-            risk_perception: array containing the risk perception of each household (see manuscript for details).
-            expected_damages: array expected damages for each flood event for each agent under no implementation of dry flood proofing.
-            adapted: array containing the adaptation status of each agent (1 = adapted, 0 = not adapted).
-            p_floods: array containing the exceedance probabilities of each flood event included in the analysis.
-            T: array containing the decision horizon of each agent.
-            r: time discounting factor.
-            sigma: risk aversion setting.
 
         Returns:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
@@ -262,23 +251,9 @@ class DecisionModule:
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
-        Args:
-            n_agents: number of agents in the floodplain.
-            wealth: array containing the wealth of each household.
-            income: array containing the income of each household.
-            amenity_value: array containing the aminity value of each household.
-            risk_perception: array containing the risk perception of each household (see manuscript for details).
-            expected_damages: array expected damages for each flood event for each agent under no implementation of dry flood proofing.
-            adapted: array containing the adaptation status of each agent (1 = adapted, 0 = not adapted).
-            p_floods: array containing the exceedance probabilities of each flood event included in the analysis.
-            T: array containing the decision horizon of each agent.
-            r: time discounting factor.
-            sigma: risk aversion setting.
-
         Returns:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
         """
-
         # multiply damages by deductable
         expected_damages_insured = expected_damages * deductable
 
@@ -388,19 +363,6 @@ class DecisionModule:
         **kwargs,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
-
-        Args:
-            n_agents: number of agents in the floodplain.
-            wealth: array containing the wealth of each household.
-            income: array containing the income of each household.
-            amenity_value: array containing the aminity value of each household.
-            risk_perception: array containing the risk perception of each household (see manuscript for details).
-            expected_damages: array expected damages for each flood event for each agent under no implementation of dry flood proofing.
-            adapted: array containing the adaptation status of each agent (1 = adapted, 0 = not adapted).
-            p_floods: array containing the exceedance probabilities of each flood event included in the analysis.
-            T: array containing the decision horizon of each agent.
-            r: time discounting factor.
-            sigma: risk aversion setting.
 
         Returns:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
@@ -751,19 +713,9 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
     ):
-        """This function calculates the subjective expected utilty of migration and the region for which
-        utility is highers. The function loops through each agent, processing their individual characteristics.
+        """This function calculates the subjective expected utilty of migration and the region for which utility is higher.
 
-        Args:
-            n_agents: the number of agents to loop through.
-            sigma: risk aversion setting of the agents.
-            wealth: array containing the wealth of each agent.
-            income_region: array containing the mean income in each region.
-            income_percentile: array Array containing the income percentile of each agent. This percentile indicates their position in the lognormal income distribution.
-            amenity_premium_regions: array containing the mean amenity premium of available cells in each region.
-            Cmax: array containing the maximum migration cost of each agent. The cost increases with distance.
-            T: array containing the decision horizon of each agent.
-            r: array containing the time preference of each agent.
+        The function loops through each agent, processing their individual characteristics.
 
         Returns:
             EU_migr_MAX_return: array containing the maximum expected utility of migration of each agent.
@@ -844,13 +796,16 @@ class DecisionModule:
 
     def allocate_destinations(self, EU_regions, regions_select, n_agents, n_choices=10):
         """This function allocates agents to regions based on the highest expected utility of migration.
-            It checks if the number of household agents does not exceed a percentage of the current populaton, if it does it sets the expected utility of migration to -np.inf for all other agents.
-            This is done to prevent agents from migrating to a region that is already full.
+
+        It checks if the number of household agents does not exceed a percentage of the current populaton, if it does it sets the expected utility of migration to -np.inf for all other agents.
+        This is done to prevent agents from migrating to a region that is already full.
+
         Args:
             EU_regions: array containing the expected utility of migration for each agent in each region.
             regions_select: array containing the region IDs of the regions that are selected for migration.
             n_agents: integer containing the number of agents in the simulation.
             n_choices: integer containing the number of regions to consider for migration.
+
         Returns:
             EU_migr_MAX_return: array containing the maximum expected utility of migration of each agent.
             ID_migr_MAX_return: array containing the region IDs for which the utility of migration is highest for each agent.

@@ -8,13 +8,13 @@ general:
   start_time: 2021-07-01
   ###
   # model end time (YYYY-MM-DD).
-  end_time: 2021-12-31
+  end_time: 2024-12-30
   # end_time: 2030-01-01
   ###
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
   # spinup_time: 1980-01-01
-  spinup_time: 2001-01-01
+  spinup_time: 2011-01-01
   # spinup_time: 2020-01-01
   ###
   # base folder where to report output data to
@@ -24,7 +24,7 @@ hazards:
   floods:
     simulate: true
     resolution: 100
-    nr_subgrid_pixels: 5
+    nr_subgrid_pixels: 4
     flood_risk: false
     gpu: false
     force_overwrite: true
@@ -32,12 +32,12 @@ hazards:
       - 2
       - 1000
     events:
-      - start_time: 2021-07-11
-        end_time: 2021-07-20
+      - start_time: 2021-07-12 09:00:00
+        end_time: 2021-07-20 09:00:00
 
 report:
   hydrology.routing:
     discharge_daily:
-      varname: grid.var.discharge
+      varname: grid.var.discharge_m3_s
       type: grid
       function: null

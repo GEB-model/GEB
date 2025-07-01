@@ -591,12 +591,14 @@ def test_withdraw_groundwater():
     water_withdrawal_m = np.array([0.0])
     remaining_irrigation_limit_m3 = np.array([np.nan])
     groundwater_abstraction_m3_by_farmer = np.array([0.0])
+    groundwater_abstraction_m3 = np.zeros_like(available_groundwater_m3)
 
     irrigation_water_demand_field = withdraw_groundwater(
         farmer=0,
         field=0,
         grid_cell=0,
         available_groundwater_m3=available_groundwater_m3,
+        groundwater_abstraction_m3=groundwater_abstraction_m3,
         cell_area=np.array([100.0]),
         groundwater_depth=np.array([20.0]),
         well_depth=np.array([30.0]),
@@ -605,15 +607,19 @@ def test_withdraw_groundwater():
         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
         groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
     )
+    available_groundwater_m3 -= groundwater_abstraction_m3
     assert irrigation_water_demand_field == 0.0
-    assert available_groundwater_m3[0] == 1000.0
+    assert groundwater_abstraction_m3[0] == 1000.0
     assert water_withdrawal_m[0] == 10.0
     assert groundwater_abstraction_m3_by_farmer[0] == 1000.0
+
+    groundwater_abstraction_m3.fill(0.0)
 
     irrigation_water_demand_field = withdraw_groundwater(
         farmer=0,
         field=0,
         grid_cell=0,
+        groundwater_abstraction_m3=groundwater_abstraction_m3,
         available_groundwater_m3=available_groundwater_m3,
         cell_area=np.array([100.0]),
         groundwater_depth=np.array([20.0]),
@@ -624,7 +630,7 @@ def test_withdraw_groundwater():
         groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
     )
     assert irrigation_water_demand_field == 10.0
-    assert available_groundwater_m3[0] == 0.0
+    assert groundwater_abstraction_m3[0] == 1000.0
     assert water_withdrawal_m[0] == 20.0
     assert groundwater_abstraction_m3_by_farmer[0] == 2000.0
 
@@ -632,10 +638,12 @@ def test_withdraw_groundwater():
     water_withdrawal_m = np.array([0.0])
     available_groundwater_m3 = np.array([2000.0])
     groundwater_abstraction_m3_by_farmer = np.array([0.0])
+    groundwater_abstraction_m3.fill(0.0)
     irrigation_water_demand_field = withdraw_groundwater(
         farmer=0,
         field=0,
         grid_cell=0,
+        groundwater_abstraction_m3=groundwater_abstraction_m3,
         available_groundwater_m3=available_groundwater_m3,
         cell_area=np.array([100.0]),
         groundwater_depth=np.array([20.0]),
@@ -646,7 +654,7 @@ def test_withdraw_groundwater():
         groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
     )
     assert irrigation_water_demand_field == 20.0
-    assert available_groundwater_m3[0] == 2000.0
+    assert groundwater_abstraction_m3[0] == 0.0
     assert water_withdrawal_m[0] == 0.0
     assert groundwater_abstraction_m3_by_farmer[0] == 0.0
 
@@ -692,14 +700,16 @@ def test_withdraw_channel():
     assert channel_abstraction_m3_by_farmer[0] == 1900.0
 
 
-def test_reservoir():
+def test_withdraw_reservoir():
     available_reservoir_storage_m3 = np.array([2000.0])
     water_withdrawal_m = np.array([0.0])
     remaining_irrigation_limit_m3 = np.array([np.nan])
     reservoir_abstraction_m3_by_farmer = np.array([0.0])
+    reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
 
     irrigation_water_demand_field = withdraw_reservoir(
         command_area=0,
+        reservoir_abstraction_m3=reservoir_abstraction_m3,
         available_reservoir_storage_m3=available_reservoir_storage_m3,
         field=0,
         farmer=0,
@@ -709,15 +719,18 @@ def test_reservoir():
         reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
         cell_area=np.array([100.0]),
     )
+    available_reservoir_storage_m3 -= reservoir_abstraction_m3
     assert irrigation_water_demand_field == 0.0
     assert available_reservoir_storage_m3[0] == 1000.0
     assert water_withdrawal_m[0] == 10.0
     assert reservoir_abstraction_m3_by_farmer[0] == 1000.0
 
+    reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
     irrigation_water_demand_field = withdraw_reservoir(
         command_area=0,
         field=0,
         farmer=0,
+        reservoir_abstraction_m3=reservoir_abstraction_m3,
         available_reservoir_storage_m3=available_reservoir_storage_m3,
         irrigation_water_demand_field_m=20.0,
         water_withdrawal_m=water_withdrawal_m,
@@ -725,6 +738,7 @@ def test_reservoir():
         reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
         cell_area=np.array([100.0]),
     )
+    available_reservoir_storage_m3 -= reservoir_abstraction_m3
     assert irrigation_water_demand_field == 10.0
     assert available_reservoir_storage_m3[0] == 0.0
     assert water_withdrawal_m[0] == 20.0

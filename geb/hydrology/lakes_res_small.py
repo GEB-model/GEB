@@ -23,6 +23,13 @@ from geb.module import Module
 
 
 class SmallLakesReservoirs(Module):
+    """Implements small lakes. Currently this module does do anything, but it is a placeholder for future development.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology

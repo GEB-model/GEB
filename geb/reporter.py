@@ -10,6 +10,8 @@ import pandas as pd
 import zarr
 from honeybees.library.raster import coord_to_pixel
 
+from geb.store import DynamicArray
+
 
 def create_time_array(
     start: datetime.datetime,
@@ -67,7 +69,8 @@ class Reporter:
 
     def __init__(self, model, clean) -> None:
         self.model = model
-        self.hydrology = model.hydrology
+        if self.model.simulate_hydrology:
+            self.hydrology = model.hydrology
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
         # optionally clean report model at start of run
         if clean:
@@ -93,7 +96,9 @@ class Reporter:
             self.activated = False
 
     def create_variable(self, config: dict, module_name: str, name: str) -> None:
-        """This function creates a variable for the reporter. For
+        """This function creates a variable for the reporter.
+
+        For
         configurations without a aggregation function, a zarr file is created. For
         configurations with an aggregation function, the data
         is stored in memory and exported on the final timestep.
@@ -186,14 +191,19 @@ class Reporter:
                         raster.lon.size,
                     ),
                     dtype=np.float32,
-                    compressor=zarr.codecs.BloscCodec(
-                        cname="zlib",
-                        clevel=9,
-                        shuffle=zarr.codecs.BloscShuffle.shuffle,
+                    compressors=(
+                        zarr.codecs.BloscCodec(
+                            cname="zlib",
+                            clevel=9,
+                            shuffle=zarr.codecs.BloscShuffle.shuffle,
+                        ),
                     ),
                     fill_value=np.nan,
                     dimension_names=["time", "y", "x"],
                 )
+
+                crs = raster.crs
+                assert isinstance(crs, str)
 
                 zarr_data.attrs.update(
                     {
@@ -201,7 +211,7 @@ class Reporter:
                         "coordinates": "time y x",
                         "units": "unknown",
                         "long_name": name,
-                        "_CRS": raster.crs,
+                        "_CRS": {"wkt": crs},
                     }
                 )
                 return zarr_store
@@ -214,8 +224,9 @@ class Reporter:
                     self.report_folder / module_name / (name + ".zarr")
                 )
                 filepath.parent.mkdir(parents=True, exist_ok=True)
+
                 store = zarr.storage.LocalStore(filepath, read_only=False)
-                ds = zarr.open_group(store, mode="w")
+                zarr_group = zarr.open_group(store, mode="w")
 
                 time = create_time_array(
                     start=self.model.current_time,
@@ -228,10 +239,11 @@ class Reporter:
                     dtype=np.int64,
                 )
 
-                time_group = ds.create_array(
+                time_group = zarr_group.create_array(
                     "time",
                     shape=time.shape,
                     dtype=time.dtype,
+                    dimension_names=["time"],
                 )
                 time_group[:] = time
 
@@ -240,12 +252,14 @@ class Reporter:
                         "standard_name": "time",
                         "units": "seconds since 1970-01-01T00:00:00",
                         "calendar": "gregorian",
-                        "_ARRAY_DIMENSIONS": ["time"],
                     }
                 )
 
-                config["_file"] = ds
+                config["_file"] = zarr_group
                 config["_time_index"] = time
+
+                return store
+
         else:
             raise ValueError(
                 f"Type {config['type']} not recognized. Must be 'grid', 'agents' or 'HRU'."
@@ -262,11 +276,13 @@ class Reporter:
         """This method is used to save and/or export model values.
 
         Args:
+            module_name: Name of the module to which the value belongs.
             name: Name of the value to be exported.
-            value: The array itself.
-            conf: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.
+            module: The module to report data from.
+            local_variables: A dictionary of local variables from the function
+                that calls this one.
+            config: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.
         """
-
         # here we return None if the value is not to be reported on this timestep
         if "frequency" in config:
             if config["frequency"] == "initial":
@@ -332,7 +348,7 @@ class Reporter:
             module_name: Name of the module to which the value belongs.
             name: Name of the value to be exported.
             value: The array itself.
-            conf: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
+            config: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
         """
         if config["type"] in ("grid", "HRU"):
             if config["function"] is None:
@@ -431,10 +447,10 @@ class Reporter:
                         shape=shape,
                         chunks=chunks,
                         dtype=dtype,
-                        compressor=compressor,
+                        compressors=(compressor,),
                         fill_value=fill_value,
+                        dimension_names=array_dimensions,
                     )
-                    ds[name].attrs["_ARRAY_DIMENSIONS"] = array_dimensions
                 index = np.argwhere(
                     config["_time_index"]
                     == np.datetime64(self.model.current_time, "s").astype(
@@ -444,7 +460,7 @@ class Reporter:
                 if value.size < ds[name][index].size:
                     print("Padding array with NaNs or -1 - temporary solution")
                     value = np.pad(
-                        value,
+                        value.data if isinstance(value, DynamicArray) else value,
                         (0, ds[name][index].size - value.size),
                         mode="constant",
                         constant_values=np.nan
@@ -500,7 +516,7 @@ class Reporter:
 
         Args:
             module: The module to report data from.
-            variables: A dictionary of local variables from the function
+            local_variables: A dictionary of local variables from the function
                 that calls this one.
             module_name: The name of the module.
         """

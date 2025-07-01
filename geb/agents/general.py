@@ -2,6 +2,7 @@ import math
 from typing import Tuple
 
 import numpy as np
+import numpy.typing as npt
 from honeybees.agents import AgentBaseClass as HoneybeesAgentBaseClass
 from numba import njit
 
@@ -13,12 +14,12 @@ from geb.store import DynamicArray
 def downscale_volume(
     data_gt: Tuple[float, float, float, float, float, float],
     model_gt: Tuple[float, float, float, float, float, float],
-    data: np.ndarray,
-    mask: np.ndarray,
-    grid_to_HRU_uncompressed: np.ndarray,
-    downscale_mask: np.ndarray,
-    HRU_land_size: np.ndarray,
-) -> np.ndarray:
+    data: npt.NDArray[np.float32],
+    mask: npt.NDArray[np.bool_],
+    grid_to_HRU_uncompressed: npt.NDArray[np.int32],
+    downscale_mask: npt.NDArray[np.bool_],
+    HRU_land_size: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     xoffset = (model_gt[0] - data_gt[0]) / model_gt[1]
     assert 0.0001 > xoffset - round(xoffset) > -0.0001
     xoffset = round(xoffset)
@@ -57,7 +58,7 @@ def downscale_volume(
             x_right = min(x_left + xratio, xvarsize)
             x_left = max(x_left, 0)
 
-            land_area_cell = 0
+            land_area_cell = np.float32(0.0)
             for yvar in range(y_left, y_right):
                 for xvar in range(x_left, x_right):
                     if not mask[yvar, xvar]:
@@ -119,7 +120,7 @@ class AgentBaseClass(Module, HoneybeesAgentBaseClass):
     def agent_arrays(self):
         agent_arrays = {
             name: value
-            for name, value in vars(self).items()
+            for name, value in vars(self.var).items()
             if isinstance(value, DynamicArray)
         }
         ids = [id(v) for v in agent_arrays.values()]

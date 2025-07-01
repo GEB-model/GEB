@@ -8,16 +8,58 @@ from geb.hydrology.lakes_reservoirs import (
     estimate_outflow_height,
     get_lake_factor,
     get_lake_height_above_outflow,
-    get_lake_outflow_and_storage,
+    get_lake_height_from_bottom,
+    get_lake_outflow,
+    get_lake_storage_from_height_above_bottom,
     get_river_width,
 )
 
 from ..testconfig import output_folder
 
 
+def test_get_lake_height_from_bottom():
+    lake_area = np.array([100])
+    lake_storage = np.linspace(0, 1000, 100)
+
+    lake_height = get_lake_height_from_bottom(
+        lake_storage=lake_storage, lake_area=lake_area
+    )
+
+    np.testing.assert_allclose(
+        lake_height,
+        np.linspace(0, 10, 100),
+    )
+
+    np.testing.assert_allclose(
+        lake_storage,
+        get_lake_storage_from_height_above_bottom(
+            lake_height=lake_height, lake_area=lake_area
+        ),
+    )
+
+
+def test_get_lake_storage_from_height_above_bottom():
+    lake_area = np.array([100])
+    lake_height = np.linspace(0, 10, 100)
+
+    lake_storage = get_lake_storage_from_height_above_bottom(
+        lake_height=lake_height, lake_area=lake_area
+    )
+
+    np.testing.assert_allclose(
+        lake_storage,
+        np.linspace(0, 1000, 100),
+    )
+
+    np.testing.assert_allclose(
+        lake_height,
+        get_lake_height_from_bottom(lake_storage=lake_storage, lake_area=lake_area),
+    )
+
+
 def test_estimate_initial_lake_storage_and_outflow_height():
     lake_area = np.array([3_480_000.0])
-    lake_storage = np.array([7_630_000.0])
+    lake_capacity = np.array([7_630_000.0])
     avg_outflow = np.array([2.494])
     river_width = get_river_width(avg_outflow)
     lake_factor = get_lake_factor(
@@ -25,15 +67,15 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     )
 
     outflow_height = estimate_outflow_height(
-        lake_storage=lake_storage,
+        lake_capacity=lake_capacity,
         lake_factor=lake_factor,
         lake_area=lake_area,
         avg_outflow=avg_outflow,
     )
 
-    storage = lake_storage.copy()
+    lake_storage = lake_capacity.copy()
     height_above_outflow = get_lake_height_above_outflow(
-        storage=storage, lake_area=lake_area, outflow_height=outflow_height
+        lake_storage=lake_storage, lake_area=lake_area, outflow_height=outflow_height
     )
 
     assert math.isclose(
@@ -46,9 +88,9 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     # test if outflow_to_height_above_outflow is indeed the inverse of estimate_lake_outflow
     assert math.isclose(outflow[0], avg_outflow[0])
 
-    storage = np.linspace(0, lake_storage * 1.2, 100)
+    lake_storage = np.linspace(0, lake_storage[0] * 1.2, 100)
     height_above_outflow = get_lake_height_above_outflow(
-        storage=storage, lake_area=lake_area, outflow_height=outflow_height
+        lake_storage=lake_storage, lake_area=lake_area, outflow_height=outflow_height
     )
     outflow = estimate_lake_outflow(
         lake_factor=lake_factor, height_above_outflow=height_above_outflow
@@ -58,9 +100,9 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     ax_right = ax_left.twinx()
 
     ax_left.plot(
-        storage, height_above_outflow, color="red", label="height_above_outflow"
+        lake_storage, height_above_outflow, color="red", label="height_above_outflow"
     )
-    ax_right.plot(storage, outflow, color="blue", label="outflow")
+    ax_right.plot(lake_storage, outflow, color="blue", label="outflow")
 
     # plot vertical line of initial storage
     ax_left.axvline(x=lake_storage[0], color="green", linestyle="--")
@@ -71,7 +113,7 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     ax_left.set_ylim(0, None)
     ax_right.set_ylim(0, None)
 
-    ax_left.set_xlim(storage[0].item(), storage[-1].item())
+    ax_left.set_xlim(lake_storage[0].item(), lake_storage[-1].item())
 
     ax_left.set_xlabel("Storage")
     ax_left.set_ylabel("Height above outflow (red)")
@@ -96,16 +138,18 @@ def test_estimate_initial_lake_storage_and_outflow_height():
     new_outflows = np.full(inflow.size, np.nan)
     new_height_above_outflows = np.full(inflow.size, np.nan)
     for i in range(inflow.size):
-        outflow, storage, lake_height_above_outflow = get_lake_outflow_and_storage(
+        storage += inflow[i]
+
+        outflow, lake_height_above_outflow = get_lake_outflow(
             dt,
             storage,
-            inflow[i],
             lake_factor,
             lake_area,
             outflow_height,
         )
 
         # evaporation
+        storage -= outflow
         storage -= evaporation
 
         new_storages[i] = storage[0]
