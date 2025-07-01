@@ -244,9 +244,15 @@ class CropFarmers(AgentBaseClass):
         self.var.p_droughts = np.array([100, 50, 25, 10, 5, 2, 1])
 
         # Set water costs
-        self.var.water_costs_m3_channel = 0.20
-        self.var.water_costs_m3_reservoir = 0.20
-        self.var.water_costs_m3_groundwater = 0.20
+        self.var.water_costs_m3_channel = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["water_price"]["water_costs_m3_channel"]
+        self.var.water_costs_m3_reservoir = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["water_price"]["water_costs_m3_groundwater"]
+        self.var.water_costs_m3_groundwater = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["water_price"]["water_costs_m3_channel"]
 
         # Irr efficiency variables
         self.var.lifespan_irrigation = self.model.config["agent_settings"]["farmers"][
@@ -267,8 +273,6 @@ class CropFarmers(AgentBaseClass):
         self.crop_prices = load_regional_crop_data_from_dict(
             self.model, "crops/crop_prices"
         )
-
-        self.adjust_cultivation_costs()
 
         # Test with a high variable for now
         self.var.total_spinup_time = max(
@@ -675,7 +679,8 @@ class CropFarmers(AgentBaseClass):
         ] = 0
 
         # Initiate array that tracks the overall yearly costs for all adaptations
-        # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation), 4 irr. field expansion, 5 is water costs, last is total
+        # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation), 4 irr. field expansion, 
+        # 5 is water costs, 6 is personal insurance, 7 is index insurance last is total
         # Columns are the individual loans, i.e. if there are 2 loans for 2 wells, the first and second slot is used
 
         self.var.n_loans = self.var.adaptations.shape[1] + 2
@@ -749,6 +754,8 @@ class CropFarmers(AgentBaseClass):
             self.var.GEV_parameters[:, i] = sample_from_map(
                 GEV_grid, self.var.locations.data, self.grid.gt
             )
+
+        assert not np.all(np.isnan(self.var.GEV_parameters))
 
         self.var.risk_perc_min = DynamicArray(
             n=self.var.n,
@@ -1838,9 +1845,9 @@ class CropFarmers(AgentBaseClass):
         # with the least basis risk considering past losses
         mask_columns = np.all(self.var.yearly_income == 0, axis=0)
         gev_params = self.var.GEV_parameters.data
-        strike_vals = np.round(np.arange(0.0, -2.0, -0.1), 2)
-        exit_vals = np.round(np.arange(-2, -3.6, -0.1), 2)
-        rate_vals = np.linspace(500, 60000, 20)
+        strike_vals = np.round(np.arange(0.0, -2.6, -0.2), 2)
+        exit_vals = np.round(np.arange(-2, -3.6, -0.2), 2)
+        rate_vals = np.linspace(50, 10000, 10)
 
         potential_insured_loss_masked = potential_insured_loss[:, ~mask_columns]
         spei_hist = self.var.yearly_SPEI.data[:, ~mask_columns]
@@ -2749,7 +2756,7 @@ class CropFarmers(AgentBaseClass):
         rows, cols = np.nonzero(mask_valid_crops)
         costs = cultivation_cost[
             self.var.region_id[rows], current_crop_calendar[rows, cols]
-        ]
+        ]  # Costs per m2
         cultivation_costs_current_rotation = np.bincount(
             rows, weights=costs, minlength=current_crop_calendar.shape[0]
         ).astype(np.float32)
@@ -3878,12 +3885,6 @@ class CropFarmers(AgentBaseClass):
                 self.var.crop_calendar[:, :, 0].data,
                 self.farmer_command_area.reshape(-1, 1),
                 self.up_or_downstream.reshape(-1, 1),
-                np.where(
-                    self.var.yearly_abstraction_m3_by_farmer[:, CHANNEL_IRRIGATION, 0]
-                    > 0,
-                    1,
-                    0,
-                ).reshape(-1, 1),
                 insurance_differentiator.reshape(-1, 1),
             )
         )
@@ -3898,7 +3899,7 @@ class CropFarmers(AgentBaseClass):
             new_farmer_id,
         ) = crop_profit_difference_njit_parallel(
             yearly_profits=self.var.yearly_income.data
-            / self.field_size_per_farmer[..., None],
+            / self.field_size_per_farmer[..., None],  # income per m2
             crop_elevation_group=crop_elevation_group,
             unique_crop_groups=unique_crop_groups,
             group_indices=group_indices,
@@ -4524,17 +4525,10 @@ class CropFarmers(AgentBaseClass):
                 self.var.crop_calendar[:, :, 0], axis=0, return_inverse=True
             )[1]
 
-            channel_irrigator = np.where(
-                self.var.yearly_abstraction_m3_by_farmer[:, CHANNEL_IRRIGATION, 0] > 0,
-                1,
-                0,
-            )
-
             self.var.farmer_base_class[:] = self.create_farmer_classes(
                 crop_calendar_group,
                 self.farmer_command_area,
                 self.up_or_downstream,
-                channel_irrigator,
             )
 
             print(
