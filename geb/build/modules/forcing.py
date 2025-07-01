@@ -24,7 +24,6 @@ from geb.workflows.io import get_window
 from ...workflows.io import calculate_scaling, open_zarr, to_zarr
 from ..workflows.general import (
     interpolate_na_along_time_dim,
-    resample_chunked,
     resample_like,
 )
 
@@ -34,13 +33,19 @@ def reproject_and_apply_lapse_rate_temperature(
 ):
     assert (T.x.values == elevation_forcing.x.values).all()
     assert (T.y.values == elevation_forcing.y.values).all()
+
     t_at_sea_level = T - elevation_forcing * lapse_rate
+    print(t_at_sea_level)
     t_at_sea_level_reprojected = resample_like(
         t_at_sea_level, elevation_target, method="conservative"
     )
+    print(t_at_sea_level_reprojected)
+
     T_grid = t_at_sea_level_reprojected + lapse_rate * elevation_target
     T_grid.name = T.name
     T_grid.attrs = T.attrs
+    print(T_grid)
+
     return T_grid
 
 
@@ -70,12 +75,11 @@ def reproject_and_apply_lapse_rate_pressure(
     lapse_rate : float, deafult -0.0065
         lapse rate of temperature [C m-1]
 
-    Returns
+    Returns:
     -------
     press_fact : xarray.DataArray
         pressure correction factor
     """
-
     assert (pressure.x.values == elevation_forcing.x.values).all()
     assert (pressure.y.values == elevation_forcing.y.values).all
     pressure_at_sea_level = pressure / get_pressure_correction_factor(
@@ -211,8 +215,7 @@ class Forcing:
         resolution=None,
         buffer=0,
     ):
-        """
-        Downloads ISIMIP climate data for GEB.
+        """Downloads ISIMIP climate data for GEB.
 
         Parameters
         ----------
@@ -231,12 +234,12 @@ class Forcing:
         buffer : int, optional
             The buffer size in degrees to add to the bounding box of the data to download. Default is 0.
 
-        Returns
+        Returns:
         -------
         xr.Dataset
             The downloaded climate data as an xarray dataset.
 
-        Notes
+        Notes:
         -----
         This method downloads ISIMIP climate data for GEB. It first retrieves the dataset
         metadata from the ISIMIP repository using the specified `product`, `variable`, `forcing`, and `resolution`
@@ -694,7 +697,7 @@ class Forcing:
             *args,
             **kwargs,
             byteshuffle=True,
-            filters=filters,
+            filters=None,
             time_chunks_per_shard=get_chunk_size(da),
         )
 
@@ -955,100 +958,111 @@ class Forcing:
             "tp",  # total_precipitation
             **download_args,
         )
+        pr_hourly = pr_hourly.compute()
+        print(pr_hourly.where(pr_hourly.isnull(), drop=True))
+        target = target.compute()
+        print(target.where(target.isnull(), drop=True))
         elevation_forcing, elevation_target = self.get_elevation_forcing_and_grid(
             self.grid["mask"], pr_hourly, forcing_type="ERA5"
         )
+        elevation_forcing = elevation_forcing.compute()
+        elevation_target = elevation_target.compute()
 
-        pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
+        print(elevation_forcing.where(elevation_forcing.isnull(), drop=True))
+        print(elevation_target.where(elevation_target.isnull(), drop=True))
 
-        # ensure no negative values for precipitation, which may arise due to float precision
-        pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
+        # pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
 
-        pr = pr_hourly.resample(time="D").mean()  # get daily mean
-        pr = resample_like(pr, target, method="conservative")
-        pr = self.set_pr(pr)
+        # # ensure no negative values for precipitation, which may arise due to float precision
+        # pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
+        # pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
-        hourly_tas = process_ERA5("t2m", **download_args)
+        # pr = pr_hourly.resample(time="D").mean()  # get daily mean
+        # pr = resample_like(pr, target, method="conservative")
+        # pr = self.set_pr(pr)
 
+        hourly_tas = process_ERA5("t2m", **download_args).compute()
+        print(hourly_tas.where(hourly_tas == -999, drop=True))
         tas_avg = hourly_tas.resample(time="D").mean()
         tas_avg = reproject_and_apply_lapse_rate_temperature(
             tas_avg, elevation_forcing, elevation_target
         )
+        tas_avg = tas_avg.compute()
+        print(tas_avg.where(tas_avg.isnull(), drop=True))
         self.set_tas(tas_avg)
 
-        tasmax = hourly_tas.resample(time="D").max()
-        tasmax = reproject_and_apply_lapse_rate_temperature(
-            tasmax, elevation_forcing, elevation_target
-        )
-        self.set_tasmax(tasmax)
+        # tasmax = hourly_tas.resample(time="D").max()
+        # tasmax = reproject_and_apply_lapse_rate_temperature(
+        #     tasmax, elevation_forcing, elevation_target
+        # )
+        # self.set_tasmax(tasmax)
 
-        tasmin = hourly_tas.resample(time="D").min()
-        tasmin = reproject_and_apply_lapse_rate_temperature(
-            tasmin, elevation_forcing, elevation_target
-        )
-        self.set_tasmin(tasmin)
+        # tasmin = hourly_tas.resample(time="D").min()
+        # tasmin = reproject_and_apply_lapse_rate_temperature(
+        #     tasmin, elevation_forcing, elevation_target
+        # )
+        # self.set_tasmin(tasmin)
 
-        hourly_dew_point_tas = process_ERA5(
-            "d2m",
-            **download_args,
-        )
-        dew_point_tas = hourly_dew_point_tas.resample(time="D").mean()
-        dew_point_tas = reproject_and_apply_lapse_rate_temperature(
-            dew_point_tas, elevation_forcing, elevation_target
-        )
+        # hourly_dew_point_tas = process_ERA5(
+        #     "d2m",
+        #     **download_args,
+        # )
+        # dew_point_tas = hourly_dew_point_tas.resample(time="D").mean()
+        # dew_point_tas = reproject_and_apply_lapse_rate_temperature(
+        #     dew_point_tas, elevation_forcing, elevation_target
+        # )
 
-        water_vapour_pressure = 0.6108 * np.exp(
-            17.27 * (dew_point_tas - 273.15) / (237.3 + (dew_point_tas - 273.15))
-        )  # calculate water vapour pressure (kPa)
-        saturation_vapour_pressure = 0.6108 * np.exp(
-            17.27 * (tas_avg - 273.15) / (237.3 + (tas_avg - 273.15))
-        )
+        # water_vapour_pressure = 0.6108 * np.exp(
+        #     17.27 * (dew_point_tas - 273.15) / (237.3 + (dew_point_tas - 273.15))
+        # )  # calculate water vapour pressure (kPa)
+        # saturation_vapour_pressure = 0.6108 * np.exp(
+        #     17.27 * (tas_avg - 273.15) / (237.3 + (tas_avg - 273.15))
+        # )
 
-        assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
-        relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
-        self.set_hurs(relative_humidity)
+        # assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
+        # relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
+        # self.set_hurs(relative_humidity)
 
-        hourly_rsds = process_ERA5(
-            "ssrd",  # surface_solar_radiation_downwards
-            **download_args,
-        )
-        rsds = hourly_rsds.resample(time="D").sum() / (
-            24 * 3600
-        )  # get daily sum and convert from J/m2 to W/m2
+        # hourly_rsds = process_ERA5(
+        #     "ssrd",  # surface_solar_radiation_downwards
+        #     **download_args,
+        # )
+        # rsds = hourly_rsds.resample(time="D").sum() / (
+        #     24 * 3600
+        # )  # get daily sum and convert from J/m2 to W/m2
 
-        rsds = resample_like(rsds, target, method="conservative")
-        self.set_rsds(rsds)
+        # rsds = resample_like(rsds, target, method="conservative")
+        # self.set_rsds(rsds)
 
-        hourly_rlds = process_ERA5(
-            "strd",  # surface_thermal_radiation_downwards
-            **download_args,
-        )
-        rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
-        rlds = resample_like(rlds, target, method="conservative")
-        self.set_rlds(rlds)
+        # hourly_rlds = process_ERA5(
+        #     "strd",  # surface_thermal_radiation_downwards
+        #     **download_args,
+        # )
+        # rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
+        # rlds = resample_like(rlds, target, method="conservative")
+        # self.set_rlds(rlds)
 
-        pressure = process_ERA5("sp", **download_args)
-        pressure = reproject_and_apply_lapse_rate_pressure(
-            pressure, elevation_forcing, elevation_target
-        )
-        pressure = pressure.resample(time="D").mean()
-        self.set_ps(pressure)
+        # pressure = process_ERA5("sp", **download_args)
+        # pressure = reproject_and_apply_lapse_rate_pressure(
+        #     pressure, elevation_forcing, elevation_target
+        # )
+        # pressure = pressure.resample(time="D").mean()
+        # self.set_ps(pressure)
 
-        u_wind = process_ERA5(
-            "u10",
-            **download_args,
-        )
-        u_wind = u_wind.resample(time="D").mean()
+        # u_wind = process_ERA5(
+        #     "u10",
+        #     **download_args,
+        # )
+        # u_wind = u_wind.resample(time="D").mean()
 
-        v_wind = process_ERA5(
-            "v10",
-            **download_args,
-        )
-        v_wind = v_wind.resample(time="D").mean()
-        wind_speed = np.sqrt(u_wind**2 + v_wind**2)
-        wind_speed = resample_like(wind_speed, target, method="conservative")
-        self.set_sfcwind(wind_speed)
+        # v_wind = process_ERA5(
+        #     "v10",
+        #     **download_args,
+        # )
+        # v_wind = v_wind.resample(time="D").mean()
+        # wind_speed = np.sqrt(u_wind**2 + v_wind**2)
+        # wind_speed = resample_like(wind_speed, target, method="conservative")
+        # self.set_sfcwind(wind_speed)
 
     def setup_forcing_ISIMIP(self, resolution_arcsec, forcing, ssp):
         if resolution_arcsec == 30:
@@ -1092,15 +1106,14 @@ class Forcing:
         forcing,
         ssp=None,
     ):
-        """
-        Sets up the forcing data for GEB.
+        """Sets up the forcing data for GEB.
 
         Parameters
         ----------
         data_source : str, optional
             The data source to use for the forcing data. Default is 'isimip'.
 
-        Notes
+        Notes:
         -----
         This method sets up the forcing data for GEB. It first downloads the high-resolution variables
         (precipitation, surface solar radiation, air temperature, maximum air temperature, and minimum air temperature) from
@@ -1130,8 +1143,7 @@ class Forcing:
         variables: List[str],
         ssp: str,
     ):
-        """
-        Sets up the high-resolution climate variables for GEB.
+        """Sets up the high-resolution climate variables for GEB.
 
         Parameters
         ----------
@@ -1140,7 +1152,7 @@ class Forcing:
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the high-resolution climate variables for GEB. It downloads the specified
         climate variables from the ISIMIP dataset for the specified time period. The data is downloaded using the
@@ -1243,8 +1255,7 @@ class Forcing:
             download_variable(variable, forcing, ssp)
 
     def setup_30arcsec_variables_isimip(self, variables: List[str]):
-        """
-        Sets up the high-resolution climate variables for GEB.
+        """Sets up the high-resolution climate variables for GEB.
 
         Parameters
         ----------
@@ -1253,7 +1264,7 @@ class Forcing:
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the high-resolution climate variables for GEB. It downloads the specified
         climate variables from the ISIMIP dataset for the specified time period. The data is downloaded using the
@@ -1289,15 +1300,14 @@ class Forcing:
             download_variable(variable)
 
     def setup_hurs_isimip_30arcsec(self):
-        """
-        Sets up the relative humidity data for GEB.
+        """Sets up the relative humidity data for GEB.
 
         Parameters
         ----------
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the relative humidity data for GEB. It first downloads the relative humidity
         data from the ISIMIP dataset for the specified time period using the `download_isimip` method. The data is downloaded
@@ -1408,15 +1418,14 @@ class Forcing:
         self.set_hurs(hurs_output)
 
     def setup_longwave_isimip_30arcsec(self):
-        """
-        Sets up the longwave radiation data for GEB.
+        """Sets up the longwave radiation data for GEB.
 
         Parameters
         ----------
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the longwave radiation data for GEB. It first downloads the relative humidity,
         air temperature, and downward longwave radiation data from the ISIMIP dataset for the specified time period using the
@@ -1515,15 +1524,14 @@ class Forcing:
         self.set_rlds(lw_fine)
 
     def setup_pressure_isimip_30arcsec(self):
-        """
-        Sets up the surface pressure data for GEB.
+        """Sets up the surface pressure data for GEB.
 
         Parameters
         ----------
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the surface pressure data for GEB. It then downloads
         the orography data and surface pressure data from the ISIMIP dataset for the specified time period using the
@@ -1572,15 +1580,14 @@ class Forcing:
         self.set_ps(pressure_30_min_regridded_corr)
 
     def setup_wind_isimip_30arcsec(self):
-        """
-        Sets up the wind data for GEB.
+        """Sets up the wind data for GEB.
 
         Parameters
         ----------
         folder: str
             The folder to save the forcing data in.
 
-        Notes
+        Notes:
         -----
         This method sets up the wind data for GEB. It first downloads the global wind atlas data and
         regrids it to the target grid using the `xe.Regridder` method. It then downloads the 30-minute average wind data
@@ -1663,8 +1670,7 @@ class Forcing:
         calibration_period_end: date = date(2010, 1, 1),
         window_months: int = 12,
     ):
-        """
-        Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
+        """Sets up the Standardized Precipitation Evapotranspiration Index (SPEI). Note that
         due to the sliding window, the SPEI data will be shorter than the original data. When
         a sliding window of 12 months is used, the SPEI data will be shorter by 11 months.
 
@@ -1839,37 +1845,52 @@ class Forcing:
             self.preprocessing_dir / "climate" / forcing_type / "DEM_forcing.zarr"
         )
         elevation_grid_fp = self.preprocessing_dir / "climate" / "DEM.zarr"
+
         if elevation_forcing_fp.exists() and elevation_grid_fp.exists():
             elevation_forcing = open_zarr(elevation_forcing_fp)
             elevation_grid = open_zarr(elevation_grid_fp)
+            elevation_grid = elevation_grid.compute()
+            elevation_forcing = elevation_forcing.compute()
+
+            print(elevation_forcing.where(elevation_forcing.isnull(), drop=True))
+            print(elevation_grid.where(elevation_grid.isnull(), drop=True))
+
+            print("dd")
         else:
+            print("Reading elevation data...")
             elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
-            elevation = (
-                elevation.isel(
-                    band=0,
-                    **get_window(
-                        elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
-                    ),
-                )
-                .raster.mask_nodata()
-                .fillna(0)
-                .chunk({"x": 2000, "y": 2000})
+            print("done reading elevation data")
+            elevation = elevation.isel(
+                band=0,
+                **get_window(
+                    elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
+                ),
             )
-            elevation_forcing = resample_chunked(
-                elevation,
-                forcing_grid.isel(time=0).chunk({"x": 10, "y": 10}),
-                method="bilinear",
-            )
+            elevation = elevation.drop("band")
+            elevation = elevation.chunk({"x": 2000, "y": 2000})
+            elevation = xr.where(elevation == -9999, 0, elevation)
+            elevation.attrs["_FillValue"] = np.nan
+            print("elevation")
+            print("start resample")
+            print(forcing_grid.isel(time=0).drop("time"))
+            target = forcing_grid.isel(time=0).drop("time")
+            elevation_forcing = resample_like(elevation, target, method="bilinear")
+            print("done resample")
+
             elevation_forcing = to_zarr(
                 elevation_forcing,
                 elevation_forcing_fp,
                 crs=4326,
             )
-            elevation_grid = resample_chunked(
-                elevation, grid.chunk({"x": 50, "y": 50}), method="bilinear"
-            )
-            elevation_grid = to_zarr(elevation_grid, elevation_grid_fp, crs=4326)
+            print("start resample chunked")
 
+            elevation_grid = resample_like(elevation, grid, method="conservative")
+            elevation_grid = to_zarr(
+                elevation_grid,
+                elevation_grid_fp,
+                crs=4326,
+            )
+            print("done")
         return elevation_forcing.chunk({"x": -1, "y": -1}), elevation_grid.chunk(
             {"x": -1, "y": -1}
         )

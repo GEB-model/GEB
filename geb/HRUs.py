@@ -407,6 +407,7 @@ class Grid(BaseVariables):
         if not hasattr(self, "tas_ds"):
             self.tas_ds = self.load_forcing_ds("tas")
         tas = self.load_forcing(self.tas_ds, self.model.current_time)
+        print("model time step:", self.model.current_time)
         assert (tas > 170).all() and (tas < 370).all(), "tas out of range"
         return tas
 
