@@ -95,44 +95,66 @@ def reproject_and_apply_lapse_rate_pressure(
     return pressure_grid
 
 
-def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
+def download_ERA5(
+    folder: Path,
+    variable: str,
+    start_date: datetime,
+    end_date: datetime,
+    bounds: tuple[float, float, float, float],
+    logger: logging.Logger,
+) -> xr.DataArray:
+    """Download ERA5 data for a specific variable and time period and save it as a zarr file.
+
+    If the data is already downloaded, it will be opened from the local zarr file.
+
+    Args:
+        folder: Folder to store the downloaded data
+        variable: Short name of the variable to download (e.g., "t2m"). Codes can be found here: https://codes.ecmwf.int/grib/param-db/
+        start_date: start date of the time period to download
+        end_date: end date of the time period to download
+        bounds:  bounding box in the format (min_lon, min_lat, max_lon, max_lat)
+        logger:   logger to use for logging
+
+    Returns:
+        Downloaded ERA5 data as an xarray DataArray.
+    """
     output_fn = folder / f"{variable}.zarr"
     if output_fn.exists():
-        da = open_zarr(output_fn)
+        da: xr.DataArray = open_zarr(output_fn)
     else:
         folder.mkdir(parents=True, exist_ok=True)
-        da = xr.open_dataset(
+        da: xr.DataArray = xr.open_dataset(
             "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
             storage_options={"client_kwargs": {"trust_env": True}},
             chunks={},
             engine="zarr",
         )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
 
-        da = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
+        da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
 
-        buffer = 0.5
+        buffer: float = 0.5
 
         # Check if region crosses the meridian (longitude=0)
         # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
         if bounds[0] < 0 and bounds[2] > 0:
             # Need to handle the split across the meridian
             # Get western hemisphere part (longitude < 0)
-            west_da = da.sel(
+            west_da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
                 y=slice(bounds[3] + buffer, bounds[1] - buffer),
                 x=slice(((bounds[0] - buffer) + 360) % 360, 360),
             )
             # Get eastern hemisphere part (longitude > 0)
-            east_da = da.sel(
+            east_da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
                 y=slice(bounds[3] + buffer, bounds[1] - buffer),
                 x=slice(0, ((bounds[2] + buffer) + 360) % 360),
             )
             # Combine the two parts
-            da = xr.concat([west_da, east_da], dim="x")
+            da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
         else:
             # Regular case - doesn't cross meridian
-            da = da.sel(
+            da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
                 y=slice(bounds[3] + buffer, bounds[1] - buffer),
                 x=slice(
@@ -142,12 +164,12 @@ def download_ERA5(folder, variable, start_date, end_date, bounds, logger):
             )
 
         # Reorder x to be between -180 and 180 degrees
-        da = da.assign_coords(x=((da.x + 180) % 360 - 180))
+        da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
 
         logger.info(f"Downloading ERA5 {variable} to {output_fn}")
         da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
-        da = da.raster.mask_nodata()
-        da = to_zarr(
+        da: xr.DataArray = da.raster.mask_nodata()
+        da: xr.DataArray = to_zarr(
             da,
             output_fn,
             time_chunksize=get_chunk_size(da, target=1e7),
@@ -164,6 +186,26 @@ def process_ERA5(
     bounds: tuple[float, float, float, float],
     logger: logging.Logger,
 ) -> xr.DataArray:
+    """Process ERA5 data for a given variable and time period.
+
+    Downloads the data from the Climate Data Store (CDS) if not already available,
+    processes it to ensure it is in the correct format, and applies de-accumulation
+    for accumulated variables and interpolation of missing values.
+
+    Args:
+        variable: short name of the variable to process (e.g., "t2m"). Codes can be found here: https://codes.ecmwf.int/grib/param-db/
+        folder: folder to store the downloaded data
+        start_date: start date of the time period to process
+        end_date: end date of the time period to process
+        bounds:  bounding box in the format (min_lon, min_lat, max_lon, max_lat)
+        logger:  logger to use for logging
+
+    Raises:
+        NotImplementedError: If the step type of the data is not "accum" or "instant".
+
+    Returns:
+        xr.DataArray: Processed ERA5 data as an xarray DataArray.
+    """
     da: xr.DataArray = download_ERA5(
         folder, variable, start_date, end_date, bounds, logger
     )
@@ -191,17 +233,39 @@ def process_ERA5(
     return da
 
 
-def plot_timeline(da, data, name, ax):
+def plot_timeline(
+    da: xr.DataArray, data: xr.DataArray, name: str, ax: plt.Axes
+) -> None:
+    """Plot a timeline of the data.
+
+    Args:
+        da: the original xarray DataArray containing the data to plot.
+        data: the data to plot, should be a 1D xarray DataArray with a time dimension.
+        name: the name of the data, used for the plot title.
+        ax: the matplotlib axes to plot on.
+    """
     ax.plot(data.time, data)
     ax.set_xlabel("Time")
     if "units" in da.attrs:
         ax.set_ylabel(da.attrs["units"])
     ax.set_xlim(data.time[0], data.time[-1])
     ax.set_ylim(data.min(), data.max() * 1.1)
-    ax.set_title(name)
+    significant_digits: int = 6
+    ax.set_title(
+        f"{name} - mean: {data.mean().item():.{significant_digits}f} - min: {data.min().item():.{significant_digits}f} - max: {data.max().item():.{significant_digits}f}"
+    )
 
 
 def get_chunk_size(da, target: float | int = 1e8) -> int:
+    """Calculate the optimal chunk size for the given xarray DataArray based on the target size.
+
+    Args:
+        da: The xarray DataArray for which to calculate the chunk size.
+        target: The target size in bytes. Default is 1e8 (100 MB).
+
+    Returns:
+        The calculated chunk size in bytes.
+    """
     return int(target / (da.dtype.itemsize * da.x.size * da.y.size))
 
 
@@ -586,10 +650,6 @@ class Forcing:
         fp.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(fp)
 
-        fp = self.report_dir / (name + ".png")
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(fp)
-
         plt.close(fig)
 
         spatial_data = da.mean(dim="time").compute()
@@ -600,7 +660,7 @@ class Forcing:
         plt.xlabel("Longitude")
         plt.ylabel("Latitude")
 
-        spatial_fp = self.report_dir / (name + "_spatial.png")
+        spatial_fp: Path = self.report_dir / (name + "_spatial.png")
         plt.savefig(spatial_fp)
 
         plt.close()
@@ -665,10 +725,10 @@ class Forcing:
         # https://www.guinnessworldrecords.com/world-records/737965-greatest-rainfall-in-one-hour
         # we take a wide margin of 500 mm/h
         # this function is currently daily, so the hourly value should be save
-        max_value = 500 / 3600  # convert to kg/m2/s
-        precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
+        max_value: float = 500 / 3600  # convert to kg/m2/s
+        precision: float = 0.01 / 3600  # 0.01 mm in kg/m2/s
 
-        offset = 0
+        offset: int = 0
         scaling_factor, out_dtype = calculate_scaling(
             0, max_value, offset=offset, precision=precision
         )
@@ -681,8 +741,8 @@ class Forcing:
             ),
         ]
 
-        da = self._mask_forcing(da, value=-offset)
-        da = self.set_other(
+        da: xr.DataArray = self._mask_forcing(da, value=-offset)
+        da: xr.DataArray = self.set_other(
             da,
             name=name,
             *args,
@@ -703,7 +763,7 @@ class Forcing:
         }
         self.set_xy_attrs(da)
 
-        offset = -250
+        offset = 0
         scaling_factor, out_dtype = calculate_scaling(
             0, 1361, offset=offset, precision=0.1
         )
@@ -738,7 +798,7 @@ class Forcing:
         }
         self.set_xy_attrs(da)
 
-        offset = -250
+        offset = 0
         scaling_factor, out_dtype = calculate_scaling(
             0, 1361, offset=offset, precision=0.1
         )
@@ -1161,9 +1221,7 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
-    def setup_forcing_ISIMIP(
-        self, resolution_arcsec: int, forcing: str, ssp: str
-    ) -> None:
+    def setup_forcing_ISIMIP(self, resolution_arcsec: int, forcing: str) -> None:
         """Sets up the forcing data for GEB using ISIMIP data.
 
         Parameters
@@ -1173,8 +1231,6 @@ class Forcing:
         forcing : str
             The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
             and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
-        ssp: str
-            The Shared Socioeconomic Pathway (SSP) scenario to use. Supported values are ssp126, ssp370, and ssp585.
         """
         if resolution_arcsec == 30:
             assert forcing == "chelsa-w5e5", (
@@ -1204,7 +1260,7 @@ class Forcing:
                 "ps",
                 "sfcwind",
             ]
-            self.setup_1800arcsec_variables_isimip(forcing, variables, ssp=ssp)
+            self.setup_1800arcsec_variables_isimip(forcing, variables)
         else:
             raise ValueError(
                 "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
@@ -1212,38 +1268,37 @@ class Forcing:
 
     def setup_forcing(
         self,
-        data_source: str,
-        resolution_arcsec,
-        forcing,
-        ssp: None | str = None,
+        resolution_arcsec: int,
+        forcing_name: str | None = None,
+        data_source: str = "ERA5",
     ):
         """Sets up the forcing data for GEB.
 
-        Parameters
-        ----------
-        data_source : str, optional
-            The data source to use for the forcing data. Default is 'isimip'.
+        Args:
+            resolution_arcsec : The resolution of the data in arcseconds. Supported values are 30 and 1800.
+            data_source : The data source to use for the forcing data. Can be ERA5 or ISIMIP. Default is 'era5'.
+            forcing_name : The name of the forcing data to use within the dataset. Only required for ISIMIP data.
+                For ISIMIP, this can be 'chelsa-w5e5' for 30 arcsec resolution
+                or 'ipsl-cm6a-lr', 'gfdl-esm4', 'mpi-esm1-2-hr', 'mri-esm2-0', or 'mri-esm2-0' for 1800 arcsec resolution.
 
         Notes:
-        -----
-        This method sets up the forcing data for GEB. It first downloads the high-resolution variables
-        (precipitation, surface solar radiation, air temperature, maximum air temperature, and minimum air temperature) from
-        the ISIMIP dataset for the specified time period.
+            This method sets up the forcing data for GEB. It first downloads the high-resolution variables
+            (precipitation, surface solar radiation, air temperature, maximum air temperature, and minimum air temperature) from
+            the ISIMIP dataset for the specified time period.
 
-        The method then sets up the relative humidity, longwave radiation, pressure, and wind data for the model. The
-        relative humidity data is downloaded from the ISIMIP dataset using the `setup_hurs_isimip_30arcsec` method. The longwave radiation
-        data is calculated using the air temperature and relative humidity data and the `calculate_longwave` function. The
-        pressure data is downloaded from the ISIMIP dataset using the `setup_pressure_isimip_30arcsec` method. The wind data is downloaded
-        from the ISIMIP dataset using the `setup_wind_isimip_30arcsec` method. All these data are first downscaled to the model grid.
+            The method then sets up the relative humidity, longwave radiation, pressure, and wind data for the model. The
+            relative humidity data is downloaded from the ISIMIP dataset using the `setup_hurs_isimip_30arcsec` method. The longwave radiation
+            data is calculated using the air temperature and relative humidity data and the `calculate_longwave` function. The
+            pressure data is downloaded from the ISIMIP dataset using the `setup_pressure_isimip_30arcsec` method. The wind data is downloaded
+            from the ISIMIP dataset using the `setup_wind_isimip_30arcsec` method. All these data are first downscaled to the model grid.
 
-        The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
+            The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
         """
-        if data_source == "isimip":
-            assert ssp is not None, "ssp must be specified for ISIMIP data"
-            self.setup_forcing_ISIMIP(resolution_arcsec, forcing, ssp)
-        elif data_source == "era5":
+        if data_source == "ISIMIP":
+            self.setup_forcing_ISIMIP(resolution_arcsec, forcing_name)
+        elif data_source == "ERA5":
             self.setup_forcing_era5()
-        elif data_source == "cmip":
+        elif data_source == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
             raise ValueError(f"Unknown data source: {data_source}")
@@ -1355,30 +1410,27 @@ class Forcing:
         self,
         forcing: str,
         variables: List[str],
-        ssp: str,
     ):
         """Sets up the high-resolution climate variables for GEB.
 
-        Parameters
-        ----------
-        variables : list of str
-            The list of climate variables to set up.
-        folder: str
-            The folder to save the forcing data in.
+        Args:
+            forcing: The forcing data to use. Supported values are 'ipsl-cm6a-lr', 'gfdl-esm4', 'mpi-esm1-2-hr', 'mri-esm2-0', or 'mri-esm2-0'.
+            variables: The list of climate variables to set up.
 
         Notes:
-        -----
-        This method sets up the high-resolution climate variables for GEB. It downloads the specified
-        climate variables from the ISIMIP dataset for the specified time period. The data is downloaded using the
-        `download_isimip` method.
+            This method sets up the high-resolution climate variables for GEB. It downloads the specified
+            climate variables from the ISIMIP dataset for the specified time period. The data is downloaded using the
+            `download_isimip` method.
 
-        The method renames the longitude and latitude dimensions of the downloaded data to 'x' and 'y', respectively. It
-        then clips the data to the bounding box of the model grid using the `clip_bbox` method of the `raster` object.
+            The method renames the longitude and latitude dimensions of the downloaded data to 'x' and 'y', respectively. It
+            then clips the data to the bounding box of the model grid using the `clip_bbox` method of the `raster` object.
 
-        The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
+            The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
         for variable in variables:
-            da = self.construct_ISIMIP_variable(variable, forcing, ssp)
+            da: xr.DataArray = self.construct_ISIMIP_variable(
+                variable, forcing, self.ISIMIP_ssp
+            )
             getattr(self, f"set_{variable}")(da)
 
     def setup_30arcsec_variables_isimip(self, variables: List[str]):
@@ -1405,7 +1457,7 @@ class Forcing:
 
         def download_variable(variable):
             self.logger.info(f"Setting up {variable}...")
-            ds: xr.Dataset = self.download_isimip(
+            ds: xr.DataArray = self.download_isimip(
                 product="InputData",
                 variable=variable,
                 start_date=self.start_date,
@@ -1430,25 +1482,19 @@ class Forcing:
     def setup_hurs_isimip_30arcsec(self):
         """Sets up the relative humidity data for GEB.
 
-        Parameters
-        ----------
-        folder: str
-            The folder to save the forcing data in.
-
         Notes:
-        -----
-        This method sets up the relative humidity data for GEB. It first downloads the relative humidity
-        data from the ISIMIP dataset for the specified time period using the `download_isimip` method. The data is downloaded
-        at a 30 arcsec resolution.
+            This method sets up the relative humidity data for GEB. It first downloads the relative humidity
+            data from the ISIMIP dataset for the specified time period using the `download_isimip` method. The data is downloaded
+            at a 30 arcsec resolution.
 
-        The method then downloads the monthly CHELSA-BIOCLIM+ relative humidity data at 30 arcsec resolution from the data
-        catalog. The data is downloaded for each month in the specified time period and is clipped to the bounding box of
-        the downloaded relative humidity data using the `clip_bbox` method of the `raster` object.
+            The method then downloads the monthly CHELSA-BIOCLIM+ relative humidity data at 30 arcsec resolution from the data
+            catalog. The data is downloaded for each month in the specified time period and is clipped to the bounding box of
+            the downloaded relative humidity data using the `clip_bbox` method of the `raster` object.
 
-        The original ISIMIP data is then downscaled using the monthly CHELSA-BIOCLIM+ data. The downscaling method is adapted
-        from https://github.com/johanna-malle/w5e5_downscale, which was licenced under GNU General Public License v3.0.
+            The original ISIMIP data is then downscaled using the monthly CHELSA-BIOCLIM+ data. The downscaling method is adapted
+            from https://github.com/johanna-malle/w5e5_downscale, which was licenced under GNU General Public License v3.0.
 
-        The resulting relative humidity data is set as forcing data in the model with names of the form 'climate/hurs'.
+            The resulting relative humidity data is set as forcing data in the model with names of the form 'climate/hurs'.
         """
         hurs_30_min: xr.DataArray = self.download_isimip(
             product="SecondaryInputData",
@@ -1555,35 +1601,29 @@ class Forcing:
     def setup_longwave_isimip_30arcsec(self):
         """Sets up the longwave radiation data for GEB.
 
-        Parameters
-        ----------
-        folder: str
-            The folder to save the forcing data in.
-
         Notes:
-        -----
-        This method sets up the longwave radiation data for GEB. It first downloads the relative humidity,
-        air temperature, and downward longwave radiation data from the ISIMIP dataset for the specified time period using the
-        `download_isimip` method. The data is downloaded at a 30 arcsec resolution.
+            This method sets up the longwave radiation data for GEB. It first downloads the relative humidity,
+            air temperature, and downward longwave radiation data from the ISIMIP dataset for the specified time period using the
+            `download_isimip` method. The data is downloaded at a 30 arcsec resolution.
 
-        The method then regrids the downloaded data to the target grid using the `xe.Regridder` method. It calculates the
-        saturation vapor pressure, water vapor pressure, clear-sky emissivity, all-sky emissivity, and cloud-based component
-        of emissivity for the coarse and fine grids. It then downscales the longwave radiation data for the fine grid using
-        the calculated all-sky emissivity and Stefan-Boltzmann constant. The downscaling method is adapted
-        from https://github.com/johanna-malle/w5e5_downscale, which was licenced under GNU General Public License v3.0.
+            The method then regrids the downloaded data to the target grid using the `xe.Regridder` method. It calculates the
+            saturation vapor pressure, water vapor pressure, clear-sky emissivity, all-sky emissivity, and cloud-based component
+            of emissivity for the coarse and fine grids. It then downscales the longwave radiation data for the fine grid using
+            the calculated all-sky emissivity and Stefan-Boltzmann constant. The downscaling method is adapted
+            from https://github.com/johanna-malle/w5e5_downscale, which was licenced under GNU General Public License v3.0.
 
-        The resulting longwave radiation data is set as forcing data in the model with names of the form 'climate/rlds'.
+            The resulting longwave radiation data is set as forcing data in the model with names of the form 'climate/rlds'.
         """
-        x1 = 0.43
-        x2 = 5.7
-        sbc = 5.67e-8  # stefan boltzman constant [Js−1 m−2 K−4]
+        x1: float = 0.43
+        x2: float = 5.7
+        sbc: float = 5.67e-8  # stefan boltzman constant [Js−1 m−2 K−4]
 
-        es0 = 6.11  # reference saturation vapour pressure  [hPa]
-        T0 = 273.15
-        lv = 2.5e6  # latent heat of vaporization of water
-        Rv = 461.5  # gas constant for water vapour [J K kg-1]
+        es0: float = 6.11  # reference saturation vapour pressure  [hPa]
+        T0: float = 273.15
+        lv: float = 2.5e6  # latent heat of vaporization of water
+        Rv: float = 461.5  # gas constant for water vapour [J K kg-1]
 
-        hurs_coarse = self.download_isimip(
+        hurs_coarse: xr.DataArray = self.download_isimip(
             product="SecondaryInputData",
             variable="hurs",
             start_date=self.start_date,
@@ -1591,7 +1631,7 @@ class Forcing:
             forcing="w5e5v2.0",
             buffer=1,
         ).hurs  # some buffer to avoid edge effects / errors in ISIMIP API
-        tas_coarse = self.download_isimip(
+        tas_coarse: xr.DataArray = self.download_isimip(
             product="SecondaryInputData",
             variable="tas",
             start_date=self.start_date,
@@ -1599,7 +1639,7 @@ class Forcing:
             forcing="w5e5v2.0",
             buffer=1,
         ).tas  # some buffer to avoid edge effects / errors in ISIMIP API
-        rlds_coarse = self.download_isimip(
+        rlds_coarse: xr.DataArray = self.download_isimip(
             product="SecondaryInputData",
             variable="rlds",
             start_date=self.start_date,
@@ -1608,20 +1648,22 @@ class Forcing:
             buffer=1,
         ).rlds  # some buffer to avoid edge effects / errors in ISIMIP API
 
-        target = self.other["climate/hurs"]
+        target: xr.DataArray = self.other["climate/hurs"]
         target.raster.set_crs(4326)
 
-        hurs_coarse_regridded = resample_like(
+        hurs_coarse_regridded: xr.DataArray = resample_like(
             hurs_coarse, target, method="conservative"
         )
 
-        tas_coarse_regridded = resample_like(tas_coarse, target, method="conservative")
-        rlds_coarse_regridded = resample_like(
+        tas_coarse_regridded: xr.DataArray = resample_like(
+            tas_coarse, target, method="conservative"
+        )
+        rlds_coarse_regridded: xr.DataArray = resample_like(
             rlds_coarse, target, method="conservative"
         )
 
-        hurs_fine = self.other["climate/hurs"]
-        tas_fine = self.other["climate/tas"]
+        hurs_fine: xr.DataArray = self.other["climate/hurs"]
+        tas_fine: xr.DataArray = self.other["climate/tas"]
 
         # now ready for calculation:
         es_coarse = es0 * np.exp(
@@ -1655,7 +1697,9 @@ class Forcing:
             e_as_fine * sbc * tas_fine**4
         )  # downscaled lwr! assume cloud e is the same
 
-        lw_fine = self.snap_to_grid(lw_fine, self.grid, relative_tollerance=0.07)
+        lw_fine: xr.DataArray = self.snap_to_grid(
+            lw_fine, self.grid, relative_tollerance=0.07
+        )
         self.set_rlds(lw_fine)
 
     def setup_pressure_isimip_30arcsec(self):
@@ -2022,16 +2066,12 @@ class Forcing:
             {"x": -1, "y": -1}
         )
 
-    def setup_CO2_concentration(self, ssp: str) -> None:
-        """Aquires the CO2 concentration data for the specified SSP in ppm.
-
-        Args:
-            ssp: The Shared Socioeconomic Pathway (SSP) for which the CO2 concentration data is acquired. Only used for future scenarios.
-        """
+    def setup_CO2_concentration(self) -> None:
+        """Aquires the CO2 concentration data for the specified SSP in ppm."""
         da: xr.DataArray = self.construct_ISIMIP_variable(
             variable_name="co2",
             forcing=None,
-            ssp=ssp,
+            ssp=self.ISIMIP_ssp,
         ).astype(np.float32)
         self.set_other(
             da,

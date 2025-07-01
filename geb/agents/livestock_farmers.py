@@ -2,6 +2,7 @@
 import calendar
 
 import numpy as np
+import numpy.typing as npt
 
 from ..hydrology.landcover import GRASSLAND_LIKE
 from .general import AgentBaseClass, downscale_volume
@@ -70,7 +71,7 @@ class LiveStockFarmers(AgentBaseClass):
             )
             ** 2
         )
-        water_consumption = (
+        water_consumption: npt.NDArray[np.float32] = (
             downscale_volume(
                 water_consumption.rio.transform().to_gdal(),
                 self.model.hydrology.grid.gt,

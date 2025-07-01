@@ -1,6 +1,7 @@
 import cProfile
 import functools
 import importlib
+import json
 import logging
 import os
 import platform
@@ -12,6 +13,7 @@ import zipfile
 from operator import attrgetter
 from pathlib import Path
 from pstats import Stats
+from typing import Any
 
 import click
 import yaml
@@ -20,6 +22,7 @@ from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
 
 from geb import __version__
+from geb.build import GEBModel as GEBModelBuild
 from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
@@ -49,7 +52,7 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
 
 def parse_config(
     config_path: dict | Path | str, current_directory: Path | None = None
-) -> dict:
+) -> dict[str, Any]:
     """Parse config."""
     if current_directory is None:
         current_directory = Path.cwd()
@@ -212,9 +215,9 @@ def run_model_with_method(
             os.execv(sys.executable, ["-O"] + sys.argv)
 
     with WorkingDirectory(working_directory):
-        config = parse_config(config)
+        config: dict[str, Any] = parse_config(config)
 
-        files = parse_config(
+        files: dict[str, Any] = parse_config(
             "input/files.json"
             if "files" not in config["general"]
             else config["general"]["files"]
@@ -373,11 +376,9 @@ def click_build_options(build_config="build.yml"):
     return decorator
 
 
-def get_model_builder_class(custom_model):
-    from geb import build
-
+def get_model_builder_class(custom_model) -> type:
     if custom_model is None:
-        return build.GEBModel
+        return GEBModelBuild
     else:
         importlib.import_module(
             "." + custom_model.split(".")[0], package="geb.build.custom_models"
@@ -494,7 +495,8 @@ def init_fn(
             config_dict["general"]["region"]["subbasin"] = basin_ids
 
         with open(config, "w") as f:
-            yaml.dump(config_dict, f, default_flow_style=False)
+            # do not sort keys, to keep the order of the config file
+            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
         shutil.copy(example_folder / "build.yml", build_config)
         shutil.copy(example_folder / "update.yml", update_config)
@@ -568,20 +570,45 @@ def build(*args, **kwargs):
     build_fn(*args, **kwargs)
 
 
-@cli.command()
-@click_build_options()
-@click.option("--model", "-m", default="../base", help="Folder for base model.")
-def alter(
+def alter_fn(
     data_catalog,
-    config,
-    build_config,
+    config: dict,
+    build_config: dict,
     custom_model,
-    working_directory,
-    model,
+    working_directory: Path | str,
+    from_model: str,
     data_provider,
     data_root,
-):
+) -> None:
+    from_model: Path = Path(from_model)
+
     with WorkingDirectory(working_directory):
+        original_config: Path = from_model / config
+
+        config_dict: dict[str, str] = {"inherits": str(original_config)}
+        with open(config, "w") as f:
+            # do not sort keys, to keep the order of the config file
+            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+
+        config_from_original_model = parse_config(from_model / config)
+        input_folder: Path = Path(config_from_original_model["general"]["input_folder"])
+
+        original_input_path: Path = from_model / input_folder
+
+        with open(original_input_path / "files.json", "r") as f:
+            original_files = json.load(f)
+
+            for file_class, files in original_files.items():
+                for file_name, file_path in files.items():
+                    if not file_path.startswith("/"):
+                        original_files[file_class][file_name] = str(
+                            from_model / original_input_path / file_path
+                        )
+
+        input_folder.mkdir(parents=True, exist_ok=True)
+        with open(input_folder / "files.json", "w") as f:
+            json.dump(original_files, f, indent=4)
+
         model = get_builder(
             config,
             data_catalog,
@@ -590,13 +617,24 @@ def alter(
             data_root,
         )
         model.read()
-        model.set_alternate_root(
-            Path(".") / Path(config["general"]["input_folder"]), mode="w+"
-        )
+
         model.update(
             methods=parse_config(build_config),
-            # model_out=Path(".") / Path(config["general"]["input_folder"]),
         )
+
+
+@cli.command()
+@click_build_options()
+@click.option("--from-model", default="../base", help="Folder for the existing model.")
+def alter(*args, **kwargs):
+    """Create alternative version from base model with only changed files.
+
+    This command is useful to create a new model based on an existing one, but with
+    only a few changes. It will copy the base model and overwrite the files that are
+    specified in the config and build config files. The rest of the files will be
+    linked to the original model to reduce disk space.
+    """
+    alter_fn(*args, **kwargs)
 
 
 def update_fn(

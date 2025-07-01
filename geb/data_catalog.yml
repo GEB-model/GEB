@@ -778,3 +778,19 @@ GLOBIOM_regions_37:
     source_url: https://www.isric.org/explore/soilgrids
   driver_kwargs:
     sheet_name: Region37
+ISIMIP:
+  data_type: Dataset
+  path: "placeholder"
+  meta:
+    category: climate
+    source_author: ISIMIP
+    source_license: CC BY 4.0
+    source_url: https://www.isimip.org
+ERA5_hourly:
+  data_type: Dataset
+  path: "placeholder"
+  meta:
+    category: climate
+    source_author: ECMWF
+    source_license: Licence to use Copernicus Products
+    source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels

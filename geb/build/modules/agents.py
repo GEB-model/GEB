@@ -38,22 +38,21 @@ class Agents:
     def __init__(self):
         pass
 
-    def setup_water_demand(self, ssp):
+    def setup_water_demand(self):
         """Sets up the water demand data for GEB.
 
         Notes:
-        -----
-        This method sets up the water demand data for GEB. It retrieves the domestic, industry, and
-        livestock water demand data from the specified data catalog and sets it as forcing data in the model. The domestic
-        water demand and consumption data are retrieved from the 'cwatm_domestic_water_demand' dataset, while the industry
-        water demand and consumption data are retrieved from the 'cwatm_industry_water_demand' dataset. The livestock water
-        consumption data is retrieved from the 'cwatm_livestock_water_demand' dataset.
+            This method sets up the water demand data for GEB. It retrieves the domestic, industry, and
+            livestock water demand data from the specified data catalog and sets it as forcing data in the model. The domestic
+            water demand and consumption data are retrieved from the 'cwatm_domestic_water_demand' dataset, while the industry
+            water demand and consumption data are retrieved from the 'cwatm_industry_water_demand' dataset. The livestock water
+            consumption data is retrieved from the 'cwatm_livestock_water_demand' dataset.
 
-        The domestic water demand and consumption data are provided at a monthly time step, while the industry water demand
-        and consumption data are provided at an annual time step. The livestock water consumption data is provided at a
-        monthly time step, but is assumed to be constant over the year.
+            The domestic water demand and consumption data are provided at a monthly time step, while the industry water demand
+            and consumption data are provided at an annual time step. The livestock water consumption data is provided at a
+            monthly time step, but is assumed to be constant over the year.
 
-        The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
+            The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
         """
         self.logger.info("Setting up municipal water demands")
 
@@ -126,7 +125,7 @@ class Agents:
                     )
                 )
                 .interpolate(method="linear")
-                .fillna(method="bfill")
+                .bfill()
             )  # interpolate also extrapolates forward with constant values
 
             assert municipal_water_withdrawal_m3_per_capita_per_day.max() < 10, (
@@ -196,7 +195,7 @@ class Agents:
                 start=datetime(1901, 1, 1)
                 + relativedelta(years=int(ds.time[0].data.item())),
                 periods=len(ds.time),
-                freq="AS",
+                freq="YS",
             )
 
             assert (ds.time.dt.year.diff("time") == 1).all(), "not all years are there"
@@ -208,19 +207,19 @@ class Agents:
             "industry_water_demand",
             "indWW",
             "industry_water_demand",
-            ssp,
+            self.ssp,
         )
         set_demand(
             "industry_water_demand",
             "indCon",
             "industry_water_consumption",
-            ssp,
+            self.ssp,
         )
         set_demand(
             "livestock_water_demand",
             "livestockConsumption",
             "livestock_water_consumption",
-            ssp,
+            "ssp2",
         )
 
     def setup_economic_data(self):
@@ -367,9 +366,7 @@ class Agents:
             # interpolate missing values in inflation rates. For extrapolation
             # linear interpolation uses the first and last value
             for column in df.columns:
-                df[column] = (
-                    df[column].interpolate(method="linear").fillna(method="bfill")
-                )
+                df[column] = df[column].interpolate(method="linear").bfill()
 
             d["time"] = df.index.astype(str).tolist()
             d["data"] = df.to_dict(orient="list")

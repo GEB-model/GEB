@@ -470,7 +470,7 @@ def get_window(
     return {"x": xslice, "y": yslice}
 
 
-class AsyncForcingReader:
+class AsyncGriddedForcingReader:
     """Asynchronous reader for a forcing variable stored in a zarr file.
 
     This class allows for asynchronous reading of a forcing variable from a zarr file.
@@ -565,7 +565,8 @@ class AsyncForcingReader:
             return data
         else:
             index = self.get_index(date)
-            return self.load(index)
+            data = self.load(index)
+            return data
 
     def close(self):
         # cancel the preloading of the next timestep

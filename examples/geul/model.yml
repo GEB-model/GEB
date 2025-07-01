@@ -32,8 +32,8 @@ hazards:
       - 2
       - 1000
     events:
-      - start_time: 2021-07-11
-        end_time: 2021-07-20
+      - start_time: 2021-07-12 09:00:00
+        end_time: 2021-07-20 09:00:00
 
 report:
   hydrology.routing:

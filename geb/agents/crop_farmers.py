@@ -41,18 +41,18 @@ from .workflows.crop_farmers import (
     plant,
 )
 
-NO_IRRIGATION = -1
-CHANNEL_IRRIGATION = 0
-RESERVOIR_IRRIGATION = 1
-GROUNDWATER_IRRIGATION = 2
-TOTAL_IRRIGATION = 3
+NO_IRRIGATION: int = -1
+CHANNEL_IRRIGATION: int = 0
+RESERVOIR_IRRIGATION: int = 1
+GROUNDWATER_IRRIGATION: int = 2
+TOTAL_IRRIGATION: int = 3
 
-SURFACE_IRRIGATION_EQUIPMENT = 0
-WELL_ADAPTATION = 1
-IRRIGATION_EFFICIENCY_ADAPTATION = 2
-FIELD_EXPANSION_ADAPTATION = 3
-PERSONAL_INSURANCE_ADAPTATION = 4
-INDEX_INSURANCE_ADAPTATION = 5
+SURFACE_IRRIGATION_EQUIPMENT: int = 0
+WELL_ADAPTATION: int = 1
+IRRIGATION_EFFICIENCY_ADAPTATION: int = 2
+FIELD_EXPANSION_ADAPTATION: int = 3
+PERSONAL_INSURANCE_ADAPTATION: int = 4
+INDEX_INSURANCE_ADAPTATION: int = 5
 
 
 def cumulative_mean(mean, counter, update, mask=None):
@@ -1044,7 +1044,9 @@ class CropFarmers(AgentBaseClass):
                 paddy_irrigated_crops=self.var.crop_data["is_paddy"].values,
                 current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
                 max_paddy_water_level=self.var.max_paddy_water_level.data,
-                minimum_effective_root_depth=self.model.hydrology.soil.var.minimum_effective_root_depth,
+                minimum_effective_root_depth=np.float32(
+                    self.model.hydrology.soil.var.minimum_effective_root_depth
+                ),
             )
         )
 
@@ -1073,13 +1075,30 @@ class CropFarmers(AgentBaseClass):
 
     def abstract_water(
         self,
-        gross_irrigation_demand_m3_per_field: np.ndarray,
-        available_channel_storage_m3: np.ndarray,
-        available_groundwater_m3: np.ndarray,
-        groundwater_depth: np.ndarray,
-        available_reservoir_storage_m3: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """This function allows the abstraction of water by farmers for irrigation purposes. Its main purpose is to call the relevant numba function to do the actual abstraction. In addition, the function saves the abstraction from the various sources by farmer.
+        gross_irrigation_demand_m3_per_field: npt.NDArray[np.float32],
+        available_channel_storage_m3: npt.NDArray[np.float32],
+        available_groundwater_m3: npt.NDArray[np.float64],
+        groundwater_depth: npt.NDArray[np.float64],
+        available_reservoir_storage_m3: npt.NDArray[np.float32],
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float64],
+    ]:
+        """This function allows the abstraction of water by farmers for irrigation purposes.
+
+        Its main purpose is to call the relevant numba function to do the actual abstraction.
+        In addition, the function saves the abstraction from the various sources by farmer.
+
+        Args:
+            gross_irrigation_demand_m3_per_field: gross irrigation demand in m3 per field
+            available_channel_storage_m3: available channel storage in m3 per grid cell
+            available_groundwater_m3: available groundwater storage in m3 per grid cell
+            groundwater_depth: groundwater depth in meters per grid cell
+            available_reservoir_storage_m3: available reservoir storage in m3 per reservoir
 
         Returns:
             water_withdrawal_m: water withdrawal in meters
@@ -1094,7 +1113,6 @@ class CropFarmers(AgentBaseClass):
         if __debug__:
             irrigation_limit_pre = self.var.remaining_irrigation_limit_m3.copy()
             available_channel_storage_m3_pre = available_channel_storage_m3.copy()
-            available_reservoir_storage_m3_pre = available_reservoir_storage_m3.copy()
         (
             self.var.channel_abstraction_m3_by_farmer[:],
             self.var.reservoir_abstraction_m3_by_farmer[:],
@@ -1164,8 +1182,7 @@ class CropFarmers(AgentBaseClass):
                 name="water withdrawal reservoir",
                 how="sum",
                 outfluxes=self.var.reservoir_abstraction_m3_by_farmer,
-                prestorages=available_reservoir_storage_m3_pre,
-                poststorages=available_reservoir_storage_m3,
+                influxes=reservoir_abstraction_m3,
                 tollerance=50,
             )
 

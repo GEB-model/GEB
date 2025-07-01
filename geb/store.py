@@ -2,6 +2,7 @@ import json
 import shutil
 from datetime import datetime
 from operator import attrgetter
+from typing import Callable
 
 import geopandas as gpd
 import numpy as np
@@ -366,12 +367,28 @@ class Bucket:
     """A class to manage the storage of model data in a bucket.
 
     Each bucket is associated with a specific part of the model, usually a Module.
+
+    Args:
+        validator: A function to validate values before setting them.
+            If provided, it should return True for valid values and False for invalid ones.
+            Defaults to None, meaning no validation is performed.
+
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, validator: Callable | None = None):
+        self.validator = validator
 
     def __setattr__(self, name, value):
+        # If the name is 'validator', we allow setting it directly.
+        # i.e., we do not validate the validator itself.
+        if name == "validator":
+            super().__setattr__(name, value)
+            return
+
+        if self.validator is not None:
+            if not self.validator(value):
+                raise ValueError(f"Value for {name} does not pass validation: {value}")
+
         assert isinstance(
             value,
             (
@@ -392,6 +409,9 @@ class Bucket:
     def save(self, path):
         path.mkdir(parents=True, exist_ok=True)
         for name, value in self.__dict__.items():
+            # do not save the validator itself
+            if name == "validator":
+                continue
             if isinstance(value, DynamicArray):
                 value.save(path / name)
             elif isinstance(value, np.ndarray):
@@ -479,9 +499,9 @@ class Store:
         self.model = model
         self.buckets = {}
 
-    def create_bucket(self, name):
+    def create_bucket(self, name, validator=None):
         assert name not in self.buckets
-        bucket = Bucket()
+        bucket = Bucket(validator=validator)
         self.buckets[name] = bucket
         return bucket
 
