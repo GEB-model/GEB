@@ -293,7 +293,7 @@ class Households(AgentBaseClass):
         Also, it associates the household points with their postal codes.
         This is done to get the correct geometry for the warning function
         """
-        crs = self.model.config["hazards"]["floods"]["crs"]
+        crs: str = self.model.sfincs.crs
         locations = self.var.household_points.copy()
         locations.to_crs(
             crs, inplace=True
@@ -333,7 +333,7 @@ class Households(AgentBaseClass):
         )
 
         # Associate households with their postal codes to use it later in the warning function
-        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        PC4: gpd.GeoDataFrame = gpd.read_parquet("data/postal_codes_4.parquet")
         PC4["postcode"] = PC4["postcode"].astype("int32")
 
         new_locations = gpd.sjoin(
@@ -409,17 +409,17 @@ class Households(AgentBaseClass):
 
             # cap water levels at damage curve max inundation
             water_levels = np.minimum(
-                water_levels, self.buildings_content_curve_interpolator.x.max()
+                water_levels, self.var.buildings_content_curve_interpolator.x.max()
             )
 
             # interpolate damages
             damages_do_not_adapt[i, :] = (
-                self.buildings_content_curve_interpolator(water_levels)
+                self.var.buildings_content_curve_interpolator(water_levels)
                 * self.var.property_value.data
             )
 
             damages_adapt[i, :] = (
-                self.buildings_content_curve_adapted_interpolator(water_levels)
+                self.var.buildings_content_curve_adapted_interpolator(water_levels)
                 * self.var.property_value.data
             )
 
@@ -934,7 +934,7 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
-        self.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
+        self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
 
         with open(
             self.model.files["dict"][
@@ -946,7 +946,9 @@ class Households(AgentBaseClass):
         self.var.max_dam_buildings_content = float(
             max_dam_buildings_content["maximum_damage"]
         )
-        self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
+        self.var.buildings_centroid["maximum_damage"] = (
+            self.var.max_dam_buildings_content
+        )
 
         with open(
             self.model.files["dict"][
@@ -1105,12 +1107,12 @@ class Households(AgentBaseClass):
 
     def create_damage_interpolators(self):
         # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
-        self.buildings_content_curve_interpolator = interpolate.interp1d(
+        self.var.buildings_content_curve_interpolator = interpolate.interp1d(
             x=self.var.buildings_content_curve.index,
             y=self.var.buildings_content_curve["building_unprotected"],
             # fill_value="extrapolate",
         )
-        self.buildings_content_curve_adapted_interpolator = interpolate.interp1d(
+        self.var.buildings_content_curve_adapted_interpolator = interpolate.interp1d(
             x=self.var.buildings_content_curve_adapted.index,
             y=self.var.buildings_content_curve_adapted["building_unprotected"],
             # fill_value="extrapolate",
@@ -1119,7 +1121,8 @@ class Households(AgentBaseClass):
     def spinup(self):
         self.construct_income_distribution()
         self.assign_household_attributes()
-        self.change_household_locations()  # ideally this should be done in the setup_population when building the model
+        if self.config["warning_response"]:
+            self.change_household_locations()  # ideally this should be done in the setup_population when building the model
 
     def flood(self, flood_map, simulation_root):
         """This function computes the damages for the assets and land use types in the model."""
@@ -1206,7 +1209,7 @@ class Households(AgentBaseClass):
         total_damages_forest = damages_forest.sum()
         print(f"damages to forest are: {total_damages_forest}")
 
-        buildings = self.buildings.to_crs(flood_map.rio.crs)
+        buildings = self.var.buildings.to_crs(flood_map.rio.crs)
         damages_buildings_structure = object_scanner(
             objects=buildings,
             hazard=flood_map,
@@ -1215,7 +1218,7 @@ class Households(AgentBaseClass):
         total_damage_structure = damages_buildings_structure.sum()
         print(f"damages to building structure are: {total_damage_structure}")
 
-        buildings_centroid = self.buildings_centroid.to_crs(flood_map.rio.crs)
+        buildings_centroid = self.var.buildings_centroid.to_crs(flood_map.rio.crs)
         damages_buildings_content = object_scanner(
             objects=buildings_centroid,
             hazard=flood_map,
