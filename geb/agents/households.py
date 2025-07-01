@@ -288,7 +288,8 @@ class Households(AgentBaseClass):
         )
 
     def change_household_locations(self):
-        """This function change the location of the household points to the centroid of the buildings.
+        """Change the location of the household points to the centroid of the buildings.
+
         Also, it associates the household points with their postal codes.
         This is done to get the correct geometry for the warning function
         """
@@ -345,10 +346,14 @@ class Households(AgentBaseClass):
         self.var.household_points = new_locations
 
     def assign_household_attributes_to_buildings(self):
-        """This function assigns households attributes (object_type and maximum_damage) to buildings. This is done so we pass the
-        object_type from the households (that depends on their decisions) into the object that will go through the damage scanner.
-        This is done by assigning the attribute of the household (that is inside the household_points gdf) to its nearest building.
-        But later this should be done by using socioeconomic data (and considering only buildings=house?).
+        """Assigns households attributes (object_type and maximum_damage) to buildings.
+
+        This is done so we pass the object_type from the households (that depends on their decisions)
+        into the object that will go through the damage scanner.
+        This is done by assigning the attribute of the household
+        (that is inside the household_points gdf) to its nearest building.
+        But later this should be done by using socioeconomic data
+        (and considering only buildings=house?).
         """
         # Set the buildings to the same CRS as the household points
         self.var.buildings.to_crs(self.var.household_points.crs, inplace=True)
@@ -793,8 +798,9 @@ class Households(AgentBaseClass):
             path = os.path.join(self.model.output_folder, "warning_log_energy.csv")
             pd.DataFrame(warning_log).to_csv(path, index=False)
 
-    def warning_communication(self, target_households):  # dummy warning system
-        """This function communicates the warning based on the communication efficiency;
+    def warning_communication(self, target_households):
+        """Communicates the warning to households based on the communication efficiency.
+
         changes risk perception --> to be moved to the update risk perception function;
         and return the number of households that were warned
         """
