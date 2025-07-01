@@ -67,8 +67,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.current_timestep = timestep
 
     def multiverse(self):
-        self.agents.households.change_vulnerability()
-
         # copy current state of timestep and time
         store_timestep = copy.copy(self.current_timestep)
 
@@ -127,6 +125,12 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             and self.current_time.date() in self.config["general"]["forecasts"]["days"]
         ):
             self.multiverse()
+
+            # If the multiverse function is called and we want to simulate a warning response afterwards,
+            if self.config["agent_settings"]["households"]["warning_response"]:
+                self.agents.households.warning_strategy_1()
+                # self.agents.households.infrastructure_warning_strategy()
+                self.agents.households.change_vulnerability()
 
         t0 = time()
         HazardDriver.step(self, 1)

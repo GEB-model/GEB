@@ -363,6 +363,7 @@ class Households(AgentBaseClass):
             self.var.buildings_with_households["maximum_damage_right"]
         )
 
+        # Drop the columns that are not needed
         self.var.buildings_with_households = self.var.buildings_with_households.drop(
             columns=["object_type_right", "maximum_damage_right", "index_right"]
         )
@@ -552,15 +553,6 @@ class Households(AgentBaseClass):
                     condition = daily_ensemble >= min
                 probability = condition.sum(dim="member") / condition.sizes["member"]
 
-                # save it to zarr format (TOO MUCH TROUBLE - DO IT LATER)
-                # probability = probability.astype("float32")
-                # probability = to_zarr(
-                #     probability,
-                #     self.model.output_folder
-                #     / "prob_maps"
-                #     / f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.zarr",
-                #     crs=crs,
-                # )
                 file_name = f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}_strategy{strategy}.tif"
                 file_path = self.model.output_folder / "prob_maps" / file_name
                 # NEED TO CREATE A FOLDER FOR THOSE WHO WILL RUN THIS BUT DO NOT HAVE A FOLDER
@@ -813,7 +805,7 @@ class Households(AgentBaseClass):
         if n_target_households == 0:
             return 0
 
-        # Get random indices to change the warning
+        # Get random indices to change the warning state
         n_warned_households = int(n_target_households * warning_range)
         indices = np.random.choice(
             n_target_households, n_warned_households, replace=False
@@ -835,12 +827,12 @@ class Households(AgentBaseClass):
         return n_warned_households
 
     def change_vulnerability(self, risk_perception_threshold=0.1):
-        # define a risk perception threshold
+        # Define a risk perception threshold
         mask = self.var.risk_perception >= risk_perception_threshold
 
-        # change the vulnerability curve of households content for those who received a warning
+        # Change the vulnerability curve of households content for those who received a warning
         self.var.household_points.loc[mask, "object_type"] = "building_protected"
-        # before it was buildings.loc but there are more buildings than households
+        # Before it was buildings.loc but there are more buildings than households
 
     def decide_household_strategy(self):
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
@@ -1124,11 +1116,6 @@ class Households(AgentBaseClass):
         self.construct_income_distribution()
         self.assign_household_attributes()
         self.change_household_locations()  # ideally this should be done in the setup_population when building the model
-        # self.warning_strategy_1() #maybe add one if here to select the strategy
-        self.infrastructure_warning_strategy()
-        # self.create_damage_probability_maps()
-
-        print("test")
 
     def flood(self, flood_map, simulation_root):
         """This function computes the damages for the assets and land use types in the model."""
@@ -1140,7 +1127,7 @@ class Households(AgentBaseClass):
         damage_folder = os.path.join(self.model.output_folder, "damage_maps")
         os.makedirs(damage_folder, exist_ok=True)
 
-        ## Compute damages for buildings content and save it to a gpkg file
+        # Compute damages for buildings content and save it to a gpkg file
         category_name = "buildings_content"
         filename = f"damage_map_{category_name}.gpkg"
         save_path = os.path.join(damage_folder, filename)
@@ -1155,7 +1142,7 @@ class Households(AgentBaseClass):
         buildings_centroid["damages"] = damages_buildings_content
         buildings_centroid.to_file(save_path, driver="GPKG")
 
-        ## Compute damages for buildings structure and save it to a gpkg file
+        # Compute damages for buildings structure and save it to a gpkg file
         category_name = "buildings_structure"
         filename = f"damage_map_{category_name}.gpkg"
         save_path = os.path.join(damage_folder, filename)
@@ -1170,19 +1157,13 @@ class Households(AgentBaseClass):
         buildings["damages"] = damages_buildings_structure
         buildings.to_file(save_path, driver="GPKG")
 
-        # to store damages for every timestep? why the [i, :]?
-        # damages_adapt[i, :] = np.array(
-        #         object_scanner(
-        #             objects=self.var.household_points,
-        #             hazard=flood_map,
-        #             curves=self.var.buildings_content_curve_adapted,
-        #         )
-        #     )
-
         total_flood_damages = (
             damages_buildings_content.sum() + damages_buildings_structure.sum()
         )
         print(f"Total damages to buildings are: {total_flood_damages}")
+
+        # Reset the households unprotected state
+        self.var.household_points["object_type"] = "building_unprotected"
 
         return total_flood_damages
 
