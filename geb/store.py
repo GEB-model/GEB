@@ -2,6 +2,7 @@ import json
 import shutil
 from datetime import datetime
 from operator import attrgetter
+from typing import Callable
 
 import geopandas as gpd
 import numpy as np
@@ -11,7 +12,9 @@ from .HRUs import load_geom
 
 
 class DynamicArray:
-    __slots__ = ["_data", "_n", "_extra_dims_names"]
+    """A dynamic array almost identical to a Numpy array, but that can grow and shrink in size."""
+
+    __slots__: list = ["_data", "_n", "_extra_dims_names"]
 
     def __init__(
         self,
@@ -37,7 +40,7 @@ class DynamicArray:
             assert n is None, "n cannot be given if input_array is given"
             # assert dtype is not object
             assert input_array.dtype != object, "dtype cannot be object"
-            input_array = np.asarray(input_array)
+            input_array: np.ndarray = np.asarray(input_array)
             n = input_array.shape[0]
             if max_n:
                 if input_array.ndim == 1:
@@ -124,10 +127,10 @@ class DynamicArray:
 
     def __array_function__(self, func, types, args, kwargs):
         # Explicitly call __array_function__ of the underlying NumPy array
-        modified_args = tuple(
+        modified_args: tuple = tuple(
             arg.data if isinstance(arg, DynamicArray) else arg for arg in args
         )
-        modified_types = tuple(
+        modified_types: tuple = tuple(
             type(arg.data) if isinstance(arg, DynamicArray) else type(arg)
             for arg in args
         )
@@ -149,7 +152,7 @@ class DynamicArray:
         ):
             data = self.data.__getitem__(key)
 
-            new_extra_dims_names = []
+            new_extra_dims_names: list = []
             for i, slicer in enumerate(key[1:]):
                 if isinstance(slicer, (slice, list)):
                     new_extra_dims_names.append(self.extra_dims_names[i])
@@ -231,7 +234,7 @@ class DynamicArray:
             other = other._data[: other._n]
         fn = getattr(self.data, operation)
         if other is None:
-            args = ()
+            args: tuple[()] = ()
         else:
             args = (other,)
         result = fn(*args)
@@ -361,10 +364,31 @@ class DynamicArray:
 
 
 class Bucket:
-    def __init__(self):
-        pass
+    """A class to manage the storage of model data in a bucket.
+
+    Each bucket is associated with a specific part of the model, usually a Module.
+
+    Args:
+        validator: A function to validate values before setting them.
+            If provided, it should return True for valid values and False for invalid ones.
+            Defaults to None, meaning no validation is performed.
+
+    """
+
+    def __init__(self, validator: Callable | None = None):
+        self.validator = validator
 
     def __setattr__(self, name, value):
+        # If the name is 'validator', we allow setting it directly.
+        # i.e., we do not validate the validator itself.
+        if name == "validator":
+            super().__setattr__(name, value)
+            return
+
+        if self.validator is not None:
+            if not self.validator(value):
+                raise ValueError(f"Value for {name} does not pass validation: {value}")
+
         assert isinstance(
             value,
             (
@@ -385,6 +409,9 @@ class Bucket:
     def save(self, path):
         path.mkdir(parents=True, exist_ok=True)
         for name, value in self.__dict__.items():
+            # do not save the validator itself
+            if name == "validator":
+                continue
             if isinstance(value, DynamicArray):
                 value.save(path / name)
             elif isinstance(value, np.ndarray):
@@ -463,13 +490,18 @@ class Bucket:
 
 
 class Store:
+    """A class to manage the storage of model data in buckets.
+
+    This class is use to store and restore the model's state in a structured way.
+    """
+
     def __init__(self, model):
         self.model = model
         self.buckets = {}
 
-    def create_bucket(self, name):
+    def create_bucket(self, name, validator=None):
         assert name not in self.buckets
-        bucket = Bucket()
+        bucket = Bucket(validator=validator)
         self.buckets[name] = bucket
         return bucket
 

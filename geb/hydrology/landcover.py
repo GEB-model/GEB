@@ -20,6 +20,7 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
+import numpy.typing as npt
 import zarr
 from numba import njit
 
@@ -93,6 +94,13 @@ def get_crop_kc_and_root_depths(
 
 
 class LandCover(Module):
+    """Implements all land cover processes in the hydrological model.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology
@@ -114,8 +122,13 @@ class LandCover(Module):
             "crop_coefficient"
         ][:]
 
-    def step(self, snow, rain, snow_melt):
-        timer = TimingModule("Landcover")
+    def step(
+        self,
+        snow: npt.NDArray[np.float32],
+        rain: npt.NDArray[np.float32],
+        snow_melt: npt.NDArray[np.float32],
+    ):
+        timer: TimingModule = TimingModule("Landcover")
 
         if __debug__:
             interception_storage_pre = self.HRU.var.interception_storage.copy()

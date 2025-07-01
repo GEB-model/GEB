@@ -25,10 +25,7 @@ from geb.module import Module
 
 
 class Evaporation(Module):
-    """
-    Evaporation module
-    Calculate potential evaporation and pot. transpiration
-    """
+    """Calculate potential evaporation and pot. transpiration."""
 
     def __init__(self, model, hydrology):
         super().__init__(model)
@@ -48,8 +45,7 @@ class Evaporation(Module):
         pass
 
     def step(self, ETRef, snow_melt):
-        """
-        Dynamic part of the soil module
+        """Dynamic part of the soil module.
 
         calculating potential Evaporation for each land cover class with kc factor
         get crop coefficient, use potential ET, calculate potential bare soil evaporation and transpiration
@@ -58,7 +54,6 @@ class Evaporation(Module):
         :param No: number of land cover type: forest = 0, grassland = 1 ...
         :return: potential evaporation from bare soil, potential transpiration
         """
-
         # get crop coefficient
         # to get ETc from ET0 x kc factor  ((see http://www.fao.org/docrep/X0490E/x0490e04.htm#TopOfPage figure 4:)
         # crop coefficient read for forest and grassland from file

@@ -13,11 +13,13 @@ from tqdm import tqdm
 
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
+    INDEX_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
+    PERSONAL_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
-from geb.workflows.io import get_window
+from geb.workflows.io import fetch_and_save, get_window
 
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
@@ -29,7 +31,6 @@ from ..workflows.conversions import (
 from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
 from ..workflows.general import (
     clip_with_grid,
-    fetch_and_save,
 )
 from ..workflows.population import load_GLOPOP_S
 
@@ -38,25 +39,22 @@ class Agents:
     def __init__(self):
         pass
 
-    def setup_water_demand(self, ssp):
+    def setup_water_demand(self):
+        """Sets up the water demand data for GEB.
+
+        Notes:
+            This method sets up the water demand data for GEB. It retrieves the domestic, industry, and
+            livestock water demand data from the specified data catalog and sets it as forcing data in the model. The domestic
+            water demand and consumption data are retrieved from the 'cwatm_domestic_water_demand' dataset, while the industry
+            water demand and consumption data are retrieved from the 'cwatm_industry_water_demand' dataset. The livestock water
+            consumption data is retrieved from the 'cwatm_livestock_water_demand' dataset.
+
+            The domestic water demand and consumption data are provided at a monthly time step, while the industry water demand
+            and consumption data are provided at an annual time step. The livestock water consumption data is provided at a
+            monthly time step, but is assumed to be constant over the year.
+
+            The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
         """
-        Sets up the water demand data for GEB.
-
-        Notes
-        -----
-        This method sets up the water demand data for GEB. It retrieves the domestic, industry, and
-        livestock water demand data from the specified data catalog and sets it as forcing data in the model. The domestic
-        water demand and consumption data are retrieved from the 'cwatm_domestic_water_demand' dataset, while the industry
-        water demand and consumption data are retrieved from the 'cwatm_industry_water_demand' dataset. The livestock water
-        consumption data is retrieved from the 'cwatm_livestock_water_demand' dataset.
-
-        The domestic water demand and consumption data are provided at a monthly time step, while the industry water demand
-        and consumption data are provided at an annual time step. The livestock water consumption data is provided at a
-        monthly time step, but is assumed to be constant over the year.
-
-        The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
-        """
-
         self.logger.info("Setting up municipal water demands")
 
         start_model_time = self.start_date.year
@@ -198,6 +196,19 @@ class Agents:
                 municipal_water_withdrawal_m3_per_capita_per_day
             ).dropna()
 
+            municipal_water_withdrawal_m3_per_capita_per_day: pd.DataFrame = (
+                municipal_water_withdrawal_m3_per_capita_per_day.reindex(
+                    list(
+                        range(
+                            self.start_date.year,
+                            self.end_date.year + 1,
+                        )
+                    )
+                )
+                .interpolate(method="linear")
+                .bfill()
+            )  # interpolate also extrapolates forward with constant values
+
             assert municipal_water_withdrawal_m3_per_capita_per_day.max() < 10, (
                 f"Too large water withdrawal data for {ISO3}"
             )
@@ -215,7 +226,7 @@ class Agents:
                     ].item()
                 )
             # use the 2000 as baseline (default)
-            municipal_water_demand_baseline_m3_per_capita_per_day = (
+            municipal_water_demand_baseline_m3_per_capita_per_day: pd.DataFrame = (
                 municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
             )
 
@@ -278,7 +289,7 @@ class Agents:
                 start=datetime(1901, 1, 1)
                 + relativedelta(years=int(ds.time[0].data.item())),
                 periods=len(ds.time),
-                freq="AS",
+                freq="YS",
             )
 
             assert (ds.time.dt.year.diff("time") == 1).all(), "not all years are there"
@@ -290,26 +301,25 @@ class Agents:
             "industry_water_demand",
             "indWW",
             "industry_water_demand",
-            ssp,
+            self.ssp,
         )
         set_demand(
             "industry_water_demand",
             "indCon",
             "industry_water_consumption",
-            ssp,
+            self.ssp,
         )
         set_demand(
             "livestock_water_demand",
             "livestockConsumption",
             "livestock_water_consumption",
-            ssp,
+            "ssp2",
         )
 
     def setup_economic_data(self):
-        """
-        Sets up the economic data for GEB.
+        """Sets up the economic data for GEB.
 
-        Notes
+        Notes:
         -----
         This method sets up the lending rates and inflation rates data for GEB. It first retrieves the
         lending rates and inflation rates data from the World Bank dataset using the `get_geodataframe` method of the
@@ -328,6 +338,7 @@ class Agents:
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
         inflation_rates_country_index = inflation_rates.set_index("Country Code")
         price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
+        LCU_per_USD = self.data_catalog.get_dataframe("wb_LCU_per_USD")
 
         def filter_and_rename(df, additional_cols):
             # Select columns: 'Country Name', 'Country Code', and columns containing "YR"
@@ -353,6 +364,10 @@ class Agents:
         )
         years_price_ratio = extract_years(price_ratio_filtered)
         price_ratio_dict = {"time": years_price_ratio, "data": {}}  # price ratio
+
+        lcu_filtered = filter_and_rename(LCU_per_USD, ["Country Name", "Country Code"])
+        years_lcu = extract_years(lcu_filtered)
+        lcu_dict = {"time": years_lcu, "data": {}}  # LCU per USD
 
         # Assume lending_rates and inflation_rates are available
         # years_lending_rates = extract_years(lending_rates)
@@ -454,37 +469,37 @@ class Agents:
                     f"Missing price ratio data for {ISO3}, using donor country {donor_country}"
                 )
 
-        # convert to pandas dataframe
-        inflation_rates = pd.DataFrame(
-            inflation_rates_dict["data"], index=inflation_rates_dict["time"]
-        ).dropna()
-        # lending_rates = pd.DataFrame(
-        #     lending_rates_dict["data"], index=lending_rates_dict["time"]
-        # ).dropna()
+            lcu_dict["data"][region_id] = process_rates(
+                lcu_filtered, years_lcu, region["ISO3"]
+            )
 
-        inflation_rates.index = inflation_rates.index.astype(int)
+        for d in (
+            inflation_rates_dict,
+            price_ratio_dict,
+            lcu_dict,
+        ):
+            # convert to pandas dataframe
+            df = pd.DataFrame(d["data"], index=d["time"])
+            df.index = df.index.astype(int)
 
-        # re-index the inflation rates to ensure that at least all years from
-        # model start to end are present. In addition, we add 10 years
-        # to the beginning, since this is used in some of the model spinup.
-        inflation_rates = inflation_rates.reindex(
-            list(
-                range(
-                    min(self.start_date.year - 10, inflation_rates.index[0]),
-                    max(self.end_date.year, inflation_rates.index[-1]) + 1,
+            # re-index the inflation rates to ensure that at least all years from
+            # model start to end are present. In addition, we add 10 years
+            # to the beginning, since this is used in some of the model spinup.
+            df = df.reindex(
+                list(
+                    range(
+                        min(self.start_date.year - 10, df.index[0]),
+                        max(self.end_date.year, df.index[-1]) + 1,
+                    )
                 )
             )
-        )
+            # interpolate missing values in inflation rates. For extrapolation
+            # linear interpolation uses the first and last value
+            for column in df.columns:
+                df[column] = df[column].interpolate(method="linear").bfill()
 
-        # interpolate missing values in inflation rates. For extrapolation
-        # linear interpolation uses the first and last value
-        for column in inflation_rates.columns:
-            inflation_rates[column] = inflation_rates[column].interpolate(
-                method="linear"
-            )
-
-        inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
-        inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
+            d["time"] = df.index.astype(str).tolist()
+            d["data"] = df.to_dict(orient="list")
 
         # lending_rates.index = lending_rates.index.astype(int)
         # extend lending rates to future
@@ -502,94 +517,10 @@ class Agents:
         self.set_dict(inflation_rates_dict, name="socioeconomics/inflation_rates")
         # self.set_dict(lending_rates_dict, name="socioeconomics/lending_rates")
         self.set_dict(price_ratio_dict, name="socioeconomics/price_ratio")
+        self.set_dict(lcu_dict, name="socioeconomics/LCU_per_USD")
 
     def setup_irrigation_sources(self, irrigation_sources):
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
-
-    def setup_well_prices_by_reference_year(
-        self,
-        irrigation_maintenance: float,
-        pump_cost: float,
-        borewell_cost_1: float,
-        borewell_cost_2: float,
-        electricity_cost: float,
-        reference_year: int,
-        start_year: int,
-        end_year: int,
-    ):
-        """
-        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
-
-        Parameters
-        ----------
-        well_price : float
-            The price of a well in the reference year.
-        upkeep_price_per_m2 : float
-            The upkeep price per square meter of a well in the reference year.
-        reference_year : int
-            The reference year for the well prices and upkeep prices.
-        start_year : int
-            The start year for the well prices and upkeep prices.
-        end_year : int
-            The end year for the well prices and upkeep prices.
-
-        Notes
-        -----
-        This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
-        store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
-        data dimension.
-
-        The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
-        resulting prices are stored in the dictionaries with the region ID as the key.
-
-        The resulting well prices and upkeep prices data are set as dictionary with names of the form
-        'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
-        """
-        self.logger.info("Setting up well prices by reference year")
-
-        # Retrieve the inflation rates data
-        inflation_rates = self.dict["socioeconomics/inflation_rates"]
-        regions = list(inflation_rates["data"].keys())
-
-        # Create a dictionary to store the various types of prices with their initial reference year values
-        price_types = {
-            "irrigation_maintenance": irrigation_maintenance,
-            "pump_cost": pump_cost,
-            "borewell_cost_1": borewell_cost_1,
-            "borewell_cost_2": borewell_cost_2,
-            "electricity_cost": electricity_cost,
-        }
-
-        # Iterate over each price type and calculate the prices across years for each region
-        for price_type, initial_price in price_types.items():
-            prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
-
-            for region in regions:
-                prices = pd.Series(index=range(start_year, end_year + 1))
-                prices.loc[reference_year] = initial_price
-
-                # Forward calculation from the reference year
-                for year in range(reference_year + 1, end_year + 1):
-                    prices.loc[year] = (
-                        prices[year - 1]
-                        * inflation_rates["data"][region][
-                            inflation_rates["time"].index(str(year))
-                        ]
-                    )
-                # Backward calculation from the reference year
-                for year in range(reference_year - 1, start_year - 1, -1):
-                    prices.loc[year] = (
-                        prices[year + 1]
-                        / inflation_rates["data"][region][
-                            inflation_rates["time"].index(str(year + 1))
-                        ]
-                    )
-
-                prices_dict["data"][region] = prices.tolist()
-
-            # Set the calculated prices in the appropriate dictionary
-            self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
     def setup_irrigation_prices_by_reference_year(
         self,
@@ -603,8 +534,7 @@ class Agents:
         start_year: int,
         end_year: int,
     ):
-        """
-        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
+        """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
 
         Parameters
         ----------
@@ -619,7 +549,7 @@ class Agents:
         end_year : int
             The end year for the well prices and upkeep prices.
 
-        Notes
+        Notes:
         -----
         This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
         retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
@@ -685,8 +615,7 @@ class Agents:
         WHY_30: float,
         reference_year: int,
     ):
-        """
-        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
+        """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
 
         Parameters
         ----------
@@ -697,7 +626,7 @@ class Agents:
         reference_year : int
             The reference year for the well prices and upkeep prices.
 
-        Notes
+        Notes:
         -----
         This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
         retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
@@ -810,8 +739,7 @@ class Agents:
         start_year: int,
         end_year: int,
     ):
-        """
-        Sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year.
+        """Sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year.
 
         Parameters
         ----------
@@ -825,9 +753,8 @@ class Agents:
         end_year : int
             The end year for the drip_irrigation prices and upkeep prices.
 
-        Notes
+        Notes:
         -----
-
         The drip_irrigation prices are calculated by applying the inflation rates to the reference year prices. The
         resulting prices are stored in the dictionaries with the region ID as the key.
 
@@ -874,8 +801,7 @@ class Agents:
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
     def setup_farmers(self, farmers):
-        """
-        Sets up the farmers data for GEB.
+        """Sets up the farmers data for GEB.
 
         Parameters
         ----------
@@ -886,7 +812,7 @@ class Agents:
         n_seasons : int, optional
             The number of seasons to simulate.
 
-        Notes
+        Notes:
         -----
         This method sets up the farmers data for GEB. It first retrieves the region data from the
         `regions` and `subgrid` grids. It then creates a `farms` grid with the same shape as the
@@ -988,15 +914,14 @@ class Agents:
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
     def setup_farmers_from_csv(self, path=None):
-        """
-        Sets up the farmers data for GEB from a CSV file.
+        """Sets up the farmers data for GEB from a CSV file.
 
         Parameters
         ----------
         path : str
             The path to the CSV file containing the farmer data.
 
-        Notes
+        Notes:
         -----
         This method sets up the farmers data for GEB from a CSV file. It first reads the farmer data from
         the CSV file using the `pandas.read_csv` method.
@@ -1015,8 +940,7 @@ class Agents:
         data_source="lowder",
         size_class_boundaries=None,
     ):
-        """
-        Sets up the farmers for GEB.
+        """Sets up the farmers for GEB.
 
         Parameters
         ----------
@@ -1029,7 +953,7 @@ class Agents:
             Default is None.
 
 
-        Notes
+        Notes:
         -----
         This method sets up the farmers for GEB. This is a simplified method that generates an example set of agent data.
         It first calculates the number of farmers and their farm sizes for each region based on the agricultural data for
@@ -2084,6 +2008,8 @@ class Agents:
                         WELL_ADAPTATION,
                         IRRIGATION_EFFICIENCY_ADAPTATION,
                         FIELD_EXPANSION_ADAPTATION,
+                        PERSONAL_INSURANCE_ADAPTATION,
+                        INDEX_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
@@ -2164,8 +2090,7 @@ class Agents:
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
     def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
-        """
-        Get assets from OpenStreetMap (OSM) data.
+        """Get assets from OpenStreetMap (OSM) data.
 
         Parameters
         ----------
