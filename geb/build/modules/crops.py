@@ -680,12 +680,14 @@ class Crops:
                         )
                         for i, change in zip(range(j, k), scaled_crop_price_inflation):
                             crop_data[i] = crop_data[i - 1] * change
-                if adjust_currency:
+                if adjust_currency and not crop == "_crop_price_LCU_USD":
                     conversion_data = region_data["_crop_price_LCU_USD"].to_numpy()
                     data.loc[region_id, crop] = crop_data / conversion_data
                 else:
                     data.loc[region_id, crop] = crop_data
 
+        data = data.drop(columns=["_crop_price_LCU_USD"])
+        data = data.drop(columns=["_crop_price_inflation"])
         return data
 
     def setup_cultivation_costs(
