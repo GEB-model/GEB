@@ -205,7 +205,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             if self.config["agent_settings"]["households"]["warning_response"]:
                 self.agents.households.warning_strategy_1()
                 # self.agents.households.infrastructure_warning_strategy()
-                self.agents.households.change_vulnerability()
 
         t0 = time()
         self.agents.step()

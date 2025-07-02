@@ -277,9 +277,6 @@ class Households(AgentBaseClass):
             ),
             crs="EPSG:4326",
         )
-        household_points["object_type"] = (
-            "building_unprotected"  # this must match damage curves
-        )
 
         self.var.household_points = household_points
         print(
@@ -343,44 +340,6 @@ class Households(AgentBaseClass):
         )
 
         self.var.household_points = new_locations
-
-    def assign_household_attributes_to_buildings(self):
-        """Assigns households attributes (object_type and maximum_damage_m2) to buildings.
-
-        This is done so we pass the object_type from the households (that depends on their decisions)
-        into the object that will go through the damage scanner.
-        This is done by assigning the attribute of the household
-        (that is inside the household_points gdf) to its nearest building.
-        But later this should be done by using socioeconomic data
-        (and considering only buildings=house?).
-        """
-        # Set the buildings to the same CRS as the household points
-        self.var.buildings.to_crs(self.var.household_points.crs, inplace=True)
-
-        # Join each building with its nearest household point
-        self.var.buildings_with_households = gpd.sjoin_nearest(
-            self.var.buildings, self.var.household_points, how="left", exclusive=True
-        )
-
-        # Take the maximum damage and object type of the household_point gdf
-        self.var.buildings_with_households["object_type_left"] = (
-            self.var.buildings_with_households["object_type_right"]
-        )
-        self.var.buildings_with_households["maximum_damage_m2_left"] = (
-            self.var.buildings_with_households["maximum_damage_m2_right"]
-        )
-
-        # Drop the columns that are not needed
-        self.var.buildings_with_households = self.var.buildings_with_households.drop(
-            columns=["object_type_right", "maximum_damage_m2_right", "index_right"]
-        )
-
-        self.var.buildings_with_households = self.var.buildings_with_households.rename(
-            columns={
-                "object_type_left": "object_type",
-                "maximum_damage_m2_left": "maximum_damage_m2",
-            }
-        )
 
     def get_flood_risk_information_honeybees(self):
         # preallocate array for damages
@@ -835,14 +794,6 @@ class Households(AgentBaseClass):
 
         return n_warned_households
 
-    def change_vulnerability(self, risk_perception_threshold=0.1):
-        # Define a risk perception threshold
-        mask = self.var.risk_perception >= risk_perception_threshold
-
-        # Change the vulnerability curve of households content for those who received a warning
-        self.var.household_points.loc[mask, "object_type"] = "building_protected"
-        # Before it was buildings.loc but there are more buildings than households
-
     def decide_household_strategy(self):
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
         # update risk perceptions
@@ -1133,9 +1084,24 @@ class Households(AgentBaseClass):
         """
         flood_map = flood_map.compute()
 
-        # Assign household points to buildings
-        # This is done to get the correct geometry for the damage scanner
-        self.assign_household_attributes_to_buildings()
+        buildings: gpd.GeoDataFrame = self.var.buildings.copy().to_crs(
+            flood_map.rio.crs
+        )
+        household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
+            flood_map.rio.crs
+        )
+
+        household_points["protect_building"] = False
+        household_points.loc[self.var.risk_perception >= 0.1, "protect_building"] = True
+
+        buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
+            buildings, household_points, how="left", exclusive=True
+        )
+
+        buildings["object_type"] = "building_unprotected"
+        buildings.loc[buildings["protect_building"], "object_type"] = (
+            "building_protected"
+        )
 
         # Create the folder to save damage maps if it doesn't exist
         damage_folder: Path = self.model.output_folder / "damage_maps"
@@ -1145,12 +1111,20 @@ class Households(AgentBaseClass):
         category_name: str = "buildings_content"
         filename: str = f"damage_map_{category_name}.gpkg"
 
-        buildings_centroid = self.var.buildings_centroid.to_crs(flood_map.rio.crs)
+        buildings_centroid = household_points.to_crs(flood_map.rio.crs)
+        buildings_centroid["object_type"] = buildings_centroid[
+            "protect_building"
+        ].apply(lambda x: "building_protected" if x else "building_unprotected")
+        buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
+
         damages_buildings_content = object_scanner(
             objects=buildings_centroid,
             hazard=flood_map,
             curves=self.var.buildings_content_curve,
         )
+
+        total_damages_content = damages_buildings_content.sum()
+        print(f"damages to building content are: {total_damages_content}")
 
         buildings_centroid["damages"] = damages_buildings_content
         buildings_centroid.to_file(damage_folder / filename, driver="GPKG")
@@ -1159,31 +1133,23 @@ class Households(AgentBaseClass):
         category_name: str = "buildings_structure"
         filename: str = f"damage_map_{category_name}.gpkg"
 
-        buildings: gpd.GeoDataFrame = self.var.buildings_with_households.to_crs(
-            flood_map.rio.crs
-        )
         damages_buildings_structure: pd.Series = object_scanner(
-            objects=buildings,
+            objects=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),
             hazard=flood_map,
             curves=self.var.buildings_structure_curve,
         )
 
+        total_damage_structure = damages_buildings_structure.sum()
+        print(f"damages to building structure are: {total_damage_structure}")
+
         buildings["damages"] = damages_buildings_structure
 
-        assert (buildings["damages"] >= buildings["maximum_damage"]).all(), (
-            "Damages exceed maximum damage for some buildings."
-        )
         buildings.to_file(damage_folder / filename, driver="GPKG")
 
         total_flood_damages = (
             damages_buildings_content.sum() + damages_buildings_structure.sum()
         )
         print(f"Total damages to buildings are: {total_flood_damages}")
-
-        # Reset the households unprotected state
-        self.var.household_points["object_type"] = "building_unprotected"
-
-        return total_flood_damages
 
         agriculture = from_landuse_raster_to_polygon(
             self.HRU.decompress(self.HRU.var.land_owners != -1),
@@ -1220,27 +1186,9 @@ class Households(AgentBaseClass):
         total_damages_forest = damages_forest.sum()
         print(f"damages to forest are: {total_damages_forest}")
 
-        buildings = self.var.buildings.to_crs(flood_map.rio.crs)
-        damages_buildings_structure = object_scanner(
-            objects=buildings,
-            hazard=flood_map,
-            curves=self.var.buildings_structure_curve,
-        )
-        total_damage_structure = damages_buildings_structure.sum()
-        print(f"damages to building structure are: {total_damage_structure}")
-
-        buildings_centroid = self.var.buildings_centroid.to_crs(flood_map.rio.crs)
-        damages_buildings_content = object_scanner(
-            objects=buildings_centroid,
-            hazard=flood_map,
-            curves=self.var.buildings_content_curve,
-        )
-        total_damages_content = damages_buildings_content.sum()
-        print(f"damages to building content are: {total_damages_content}")
-
         roads = self.roads.to_crs(flood_map.rio.crs)
         damages_roads = object_scanner(
-            objects=roads,
+            objects=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
             hazard=flood_map,
             curves=self.var.road_curves,
         )
@@ -1249,7 +1197,7 @@ class Households(AgentBaseClass):
 
         rail = self.rail.to_crs(flood_map.rio.crs)
         damages_rail = object_scanner(
-            objects=rail,
+            objects=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
             hazard=flood_map,
             curves=self.var.rail_curve,
         )
