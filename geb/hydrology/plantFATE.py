@@ -16,9 +16,8 @@ class Model:
     """
 
     def __init__(
-        self, param_file: str | Path, acclim_forcing_file: str | Path, use_acclim: bool
+        self, param_file: str | Path, co2_forcing_file: str | Path, use_co2_forcing: str | Path, acclim_forcing_file: str | Path, use_acclim: bool
     ):
-    def __init__(self, param_file, co2_forcing_file, use_co2_forcing, acclim_forcing_file, use_acclim):
         self.plantFATE_model = patch(str(param_file))
         self.time_unit_base = self.process_time_units()
         self.tcurrent = 0
