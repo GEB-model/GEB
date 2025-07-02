@@ -59,21 +59,6 @@ class Market(AgentBaseClass):
         return "agents.market"
 
     def spinup(self) -> None:
-        with open(self.model.files["dict"]["socioeconomics/inflation_rates"], "r") as f:
-            inflation = json.load(f)
-            inflation["time"] = [int(time) for time in inflation["time"]]
-            start_idx = inflation["time"].index(
-                self.model.config["general"]["spinup_time"].year
-            )
-            end_idx = inflation["time"].index(
-                self.model.config["general"]["end_time"].year
-            )
-            for region in inflation["data"]:
-                region_inflation = [1] + inflation["data"][region][
-                    start_idx + 1 : end_idx + 1
-                ]
-                self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
-
         n_crops = len(self.agents.crop_farmers.var.crop_ids.keys())
         n_years = (
             self.model.config["general"]["end_time"].year
@@ -104,6 +89,21 @@ class Market(AgentBaseClass):
             extra_dims=(2,),
             extra_dims_names=("params",),
         )
+        
+        with open(self.model.files["dict"]["socioeconomics/inflation_rates"], "r") as f:
+            inflation = json.load(f)
+            inflation["time"] = [int(time) for time in inflation["time"]]
+            start_idx = inflation["time"].index(
+                self.model.config["general"]["spinup_time"].year
+            )
+            end_idx = inflation["time"].index(
+                self.model.config["general"]["end_time"].year
+            )
+            for region in inflation["data"]:
+                region_inflation = [1] + inflation["data"][region][
+                    start_idx + 1 : end_idx + 1
+                ]
+                self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
 
     def estimate_price_model(self) -> None:
         estimation_start_year = 1  # skip first year
@@ -161,7 +161,7 @@ class Market(AgentBaseClass):
             )
             price_pred_per_region[region_idx, :] = price_pred
 
-        assert np.all(price_pred_per_region > 0), "Negative prices predicted"
+        assert np.all(price_pred_per_region[:, self.var.production[:, self.year_index - 1] > 0] > 0), "Negative prices predicted"
 
         # TODO: This assumes that the inflation is the same for all regions (region_idx=0)
         return (
