@@ -63,6 +63,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.store = Store(self)
         self.artists = Artists(self)
 
+        self.forcing = Forcing(self)
+
         # Empty list to hold plantFATE models. If forests are not used, this will be empty
         self.plantFATE = []
 
@@ -257,8 +259,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.config["general"]["spinup_time"], datetime.time(0)
         )
         self.timestep_length = timestep_length
-
-        self.forcing = Forcing(self)
 
         if self.simulate_hydrology:
             self.hydrology = Hydrology(self)

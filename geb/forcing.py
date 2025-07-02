@@ -38,9 +38,6 @@ class Forcing(Module):
             "CO2": lambda x: x > 270 and x < 2000,
         }
 
-        if self.model.in_spinup:
-            self.spinup()
-
     @property
     def name(self):
         return "forcing"
@@ -124,7 +121,7 @@ class Forcing(Module):
             data = (
                 self[name]
                 .sel(
-                    time=self.model.current_time,
+                    time=time,
                     method="pad",
                     tolerance=1e9 * 366 * 24 * 3600,
                 )

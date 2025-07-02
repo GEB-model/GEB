@@ -18,6 +18,7 @@ from geb.cli import (
     share_fn,
     update_fn,
 )
+from geb.forcing import Forcing
 from geb.model import GEBModel
 from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
 from geb.workflows.io import WorkingDirectory
@@ -80,6 +81,33 @@ def test_init():
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_build():
     build_fn(**DEFAULT_BUILD_ARGS)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_forcing():
+    with WorkingDirectory(working_directory):
+        model: GEBModel = run_model_with_method(
+            method=None,
+            close_after_run=False,
+            **{**DEFAULT_RUN_ARGS, **{"working_directory": "."}},
+        )
+
+        for name in model.forcing.validators:
+            t_0: datetime = datetime(2010, 1, 1, 0, 0, 0)
+            forcing_0 = model.forcing.load(name, t_0)
+
+            t_1: datetime = datetime(2020, 1, 1, 0, 0, 0)
+            forcing_1 = model.forcing.load(name, t_1)
+
+            if isinstance(forcing_0, (xr.DataArray, np.ndarray)):
+                assert forcing_0.shape == forcing_1.shape, (
+                    f"Shape of forcing data for {name} does not match for times {t_0} and {t_1}."
+                )
+                # non-precipitation forcing basically could never be equal, so we check for inequality
+                if name not in ("pr", "pr_hourly"):
+                    assert not np.array_equal(forcing_0, forcing_1)
+            else:
+                assert forcing_0 != forcing_1
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
