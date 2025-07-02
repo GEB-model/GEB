@@ -13,7 +13,7 @@ from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .build_model import build_sfincs
 from .estimate_discharge_for_return_periods import estimate_discharge_for_return_periods
-from .postprocess_model import read_flood_map
+from .postprocess_model import read_maximum_flood_depth
 from .run_sfincs_for_return_periods import (
     run_sfincs_for_return_periods,
 )
@@ -41,12 +41,12 @@ class SFINCS:
             self.n_timesteps = n_timesteps
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
 
-    def sfincs_model_root(self, basin_id):
+    def sfincs_model_root(self, basin_id) -> Path:
         folder: Path = self.model.simulation_root / "SFINCS" / str(basin_id)
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
-    def sfincs_simulation_root(self, event):
+    def sfincs_simulation_root(self, event) -> Path:
         name: str = self.get_event_name(event)
         folder: Path = (
             self.sfincs_model_root(name)
@@ -216,8 +216,8 @@ class SFINCS:
 
     def run_single_event(self, event, start_time, precipitation_scale_factor=1.0):
         self.build(event)
-        model_root = self.sfincs_model_root(self.get_event_name(event))
-        simulation_root = self.sfincs_simulation_root(event)
+        model_root: Path = self.sfincs_model_root(self.get_event_name(event))
+        simulation_root: Path = self.sfincs_simulation_root(event)
 
         self.set_forcing(event, start_time, precipitation_scale_factor)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
@@ -227,18 +227,17 @@ class SFINCS:
             model_root=model_root,
             gpu=False,
         )
-        flood_map = read_flood_map(
+        flood_map: xr.DataArray = read_maximum_flood_depth(
             model_root=model_root,
             simulation_root=simulation_root,
-            floodmap_name=f"floodmap_{self.model.multiverse_name}.tif",
         )  # xc, yc is for x and y in rotated grid`DD`
 
-        flood_map_name = (
+        flood_map_name: str = (
             f"{event['start_time'].isoformat()} - {event['end_time'].isoformat()}.zarr"
         )
         if self.model.multiverse_name:
-            flood_map_name = self.model.multiverse_name + " - " + flood_map_name
-        flood_map = to_zarr(
+            flood_map_name: str = self.model.multiverse_name + " - " + flood_map_name
+        flood_map: xr.DataArray = to_zarr(
             flood_map,
             self.model.output_folder / "flood_maps" / flood_map_name,
             crs=flood_map.rio.crs,

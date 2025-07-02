@@ -11,7 +11,7 @@ from tqdm import tqdm
 from geb.workflows.io import to_zarr
 
 from .io import import_rivers
-from .postprocess_model import read_flood_map
+from .postprocess_model import read_maximum_flood_depth
 from .sfincs_utils import (
     get_end_point,
     get_logger,
@@ -138,7 +138,7 @@ def run_sfincs_for_return_periods(
         print(f"Running SFINCS for return period {return_period} years")
         rp_map = []
 
-        working_dir_return_period = working_dir / f"rp_{return_period}"
+        working_dir_return_period: Path = working_dir / f"rp_{return_period}"
         for group, group_rivers in tqdm(rivers.groupby("calculation_group")):
             simulation_root = working_dir_return_period / str(group)
 
@@ -149,7 +149,7 @@ def run_sfincs_for_return_periods(
             inflow_nodes = inflow_nodes.reset_index(drop=True)
             inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(get_start_point)
 
-            Q = [
+            Q: list[pd.DataFrame] = [
                 pd.DataFrame.from_dict(
                     inflow_nodes[f"hydrograph_{return_period}"].iloc[idx],
                     orient="index",
@@ -157,16 +157,18 @@ def run_sfincs_for_return_periods(
                 )
                 for idx in inflow_nodes.index
             ]
-            Q = pd.concat(Q, axis=1)
+            Q: pd.DataFrame = pd.concat(Q, axis=1)
             Q.index = pd.to_datetime(Q.index)
 
-            Q = (
+            Q: pd.DataFrame = (
                 Q.fillna(method="ffill").fillna(  # pad with 0's before
                     method="bfill"
                 )  # and after
             )
 
-            sf = SfincsModel(root=model_root, mode="r+", logger=get_logger())
+            sf: SfincsModel = SfincsModel(
+                root=model_root, mode="r+", logger=get_logger()
+            )
             sf.setup_config(
                 tref=Q.index[0],
                 tstart=Q.index[0],
@@ -199,16 +201,18 @@ def run_sfincs_for_return_periods(
 
             run_sfincs_simulation(model_root, simulation_root, gpu=gpu)
 
-            max_depth = read_flood_map(model_root, simulation_root)
+            max_depth: xr.DataArray = read_maximum_flood_depth(
+                model_root, simulation_root
+            )
 
             rp_map.append(max_depth)
 
-        rp_map = xr.concat(rp_map, dim="node")
-        rp_map = rp_map.max(dim="node")
+        rp_map: xr.DataArray = xr.concat(rp_map, dim="node")
+        rp_map: xr.DataArray = rp_map.max(dim="node")
         rp_map.attrs["_FillValue"] = max_depth.attrs["_FillValue"]
 
         if export:
-            rp_map = to_zarr(
+            rp_map: xr.DataArray = to_zarr(
                 rp_map,
                 export_dir / f"{return_period}.zarr",
                 crs=rp_map.rio.crs,
