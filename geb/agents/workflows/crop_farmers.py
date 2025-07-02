@@ -1,7 +1,8 @@
 from typing import Union
 
 import numpy as np
-from numba import njit
+import numpy.typing as npt
+from numba import njit, prange
 
 from geb.hydrology.soil import (
     get_fraction_easily_available_soil_water,
@@ -17,8 +18,9 @@ def get_farmer_HRUs(
     """Gets indices of field for given farmer.
 
     Args:
-        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
         field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
+        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
+        farmer_index: Index of the farmer for which to get the field indices.
 
     Returns:
         field_indices_for_farmer: the indices of the fields for the given farmer.
@@ -74,25 +76,20 @@ def get_farmer_groundwater_depth(
 
 @njit(cache=True, inline="always")
 def get_deficit_between_dates(
-    cumulative_water_deficit_m3, farmer, start_index, end_index
-):
-    """
-    Get the water deficit between two dates for a farmer.
+    cumulative_water_deficit_m3: np.ndarray,
+    farmer: int,
+    start_index: int,
+    end_index: int,
+) -> np.ndarray:
+    """Get the water deficit between two dates for a farmer.
 
-    Parameters
-    ----------
-    cumulative_water_deficit_m3 : np.ndarray
-        Cumulative water deficit in m3 for each day of the year for each farmer.
-    farmer : int
-        Farmer index.
-    start_index : int
-        Start day of cumulative water deficit calculation (index-based; Jan 1 == 0).
-    end_index : int
-        End day of cumulative water deficit calculation (index-based; Jan 1 == 0).
+    Args:
+        cumulative_water_deficit_m3: Cumulative water deficit in m3 for each day of the year for each farmer.
+        farmer: The index of the farmer in the cumulative water deficit.
+        start_index: Start day of cumulative water deficit calculation (index-based; Jan 1 == 0).
+        end_index: End day of cumulative water deficit calculation (index-based; Jan 1 == 0).
 
-    Returns
-    -------
-    float
+    Returns:
         Water deficit in m3 between the two dates.
     """
     if end_index == start_index:
@@ -125,36 +122,25 @@ def get_future_deficit(
     potential_irrigation_consumption_farmer_m3: float,
     reset_day_index=0,
 ):
-    """
-    Get the future water deficit for a farmer.
+    """Get the future water deficit for a farmer.
 
-    Parameters
-    ----------
-    farmer : int
-        Farmer index.
-    day_index : int
-        Current day index (0-indexed).
-    cumulative_water_deficit_m3 : np.ndarray
-        Cumulative water deficit in m3 for each day of the year for each farmer.
-    crop_calendar : np.ndarray
-        Crop calendar for each farmer. Each row is a farmer, and each column is a crop.
-        Each crop is a list of [crop_type, planting_day, growing_days, crop_year_index].
-        Planting day is 0-indexed (Jan 1 == 0).
-        Growing days is the number of days the crop grows.
-        Crop year index is the index of the year in the crop rotation.
-    crop_rotation_year_index : np.ndarray
-        Crop rotation year index for each farmer.
-    potential_irrigation_consumption_farmer_m3 : float
-        Potential irrigation consumption in m3 for each farmer on the current day.
-    reset_day_index : int, optional
-        Day index to reset the water year (0-indexed; Jan 1 == 0). Default is 0. Deficit
-        is calculated up to this day. For example, when the reset day index is 364, the
-        deficit is calculated up to Dec 31. When the reset day index is 0, the deficit is
-        calculated up to Jan 1. Default is 0.
+    Args:
+        farmer: Farmer index.
+        day_index: Current day index (0-indexed).
+        cumulative_water_deficit_m3: Cumulative water deficit in m3 for each day of the year for each farmer.
+        crop_calendar: Crop calendar for each farmer. Each row is a farmer, and each column is a crop.
+            Each crop is a list of [crop_type, planting_day, growing_days, crop_year_index].
+            Planting day is 0-indexed (Jan 1 == 0).
+            Growing days is the number of days the crop grows.
+            Crop year index is the index of the year in the crop rotation.
+        crop_rotation_year_index: Crop rotation year index for each farmer.
+        potential_irrigation_consumption_farmer_m3: Potential irrigation consumption in m3 for each farmer on the current day.
+        reset_day_index: Day index to reset the water year (0-indexed; Jan 1 == 0). Default is 0. Deficit
+            is calculated up to this day. For example, when the reset day index is 364, the
+            deficit is calculated up to Dec 31. When the reset day index is 0, the deficit is
+            calculated up to Jan 1. Default is 0.
 
-    Returns
-    -------
-    float
+    Returns:
         Future water deficit in m3 for the farmer in the growing season.
     """
     if reset_day_index >= 365 or reset_day_index < 0:
@@ -207,7 +193,7 @@ def adjust_irrigation_to_limit(
     crop_rotation_year_index: np.ndarray,
     farmer_gross_irrigation_m3: float,
     irrigation_efficiency_farmer: float,
-):
+) -> float:
     if remaining_irrigation_limit_m3[farmer] < np.float32(0):
         return np.float32(0)
     # calculate future water deficit, but also include today's irrigation consumption
@@ -280,6 +266,7 @@ def withdraw_reservoir(
     command_area: int,
     field: int,
     farmer: int,
+    reservoir_abstraction_m3: np.ndarray,
     available_reservoir_storage_m3: np.ndarray,
     irrigation_water_demand_field_m: float,
     water_withdrawal_m: np.ndarray,
@@ -287,12 +274,21 @@ def withdraw_reservoir(
     reservoir_abstraction_m3_by_farmer: np.ndarray,
     cell_area: np.ndarray,
 ):
-    water_demand_cell_M3 = irrigation_water_demand_field_m * cell_area[field]
-    reservoir_abstraction_m_cell_m3 = min(
-        available_reservoir_storage_m3[command_area],
-        water_demand_cell_M3,
+    water_demand_cell_m3 = irrigation_water_demand_field_m * cell_area[field]
+
+    remaining_reservoir_m3 = (
+        available_reservoir_storage_m3[command_area]
+        - reservoir_abstraction_m3[command_area]
     )
-    available_reservoir_storage_m3[command_area] -= reservoir_abstraction_m_cell_m3
+
+    reservoir_abstraction_m_cell_m3 = min(
+        remaining_reservoir_m3,
+        water_demand_cell_m3,
+    )
+    # ensure reservoir abstraction is non-negative
+    reservoir_abstraction_m_cell_m3 = max(reservoir_abstraction_m_cell_m3, 0)
+
+    reservoir_abstraction_m3[command_area] += reservoir_abstraction_m_cell_m3
 
     reservoir_abstraction_m_cell = reservoir_abstraction_m_cell_m3 / cell_area[field]
     water_withdrawal_m[field] += reservoir_abstraction_m_cell
@@ -324,18 +320,17 @@ def withdraw_groundwater(
 ):
     # groundwater irrigation
     if groundwater_depth[grid_cell] < well_depth[farmer]:
-        groundwater_abstraction_cell_m3 = min(
-            available_groundwater_m3[grid_cell],
-            irrigation_water_demand_field_m * cell_area[field],
+        potential_groundwater_abstraction_cell_m3 = (
+            irrigation_water_demand_field_m * cell_area[field]
         )
-        assert groundwater_abstraction_cell_m3 >= 0
+        assert potential_groundwater_abstraction_cell_m3 >= 0
 
         remaining_groundwater_m3 = (
             available_groundwater_m3[grid_cell] - groundwater_abstraction_m3[grid_cell]
         )
 
         groundwater_abstraction_cell_m3 = min(
-            groundwater_abstraction_cell_m3, remaining_groundwater_m3
+            potential_groundwater_abstraction_cell_m3, remaining_groundwater_m3
         )
         # ensure groundwater abstraction is non-negative
         groundwater_abstraction_cell_m3 = max(groundwater_abstraction_cell_m3, 0)
@@ -360,23 +355,23 @@ def withdraw_groundwater(
 
 @njit(cache=True, inline="always")
 def get_potential_irrigation_consumption_m(
-    topwater,
-    available_infiltration,
-    potential_evapotranspiration,
-    root_depth,
-    soil_layer_height,
+    topwater: np.float32,
+    available_infiltration: np.float32,
+    potential_evapotranspiration: np.float32,
+    root_depth: np.float32,
+    soil_layer_height: np.float32,
     field_capacity,
     wilting_point,
     w,
     ws,
-    arno_beta,
-    fraction_irrigated_field,
+    arno_beta: np.float32,
+    fraction_irrigated_field: np.float32,
     max_paddy_water_level_farmer,
-    crop_group,
-    is_paddy,
-    minimum_effective_root_depth: float,
-    depletion_factor=np.float32(0.5),
-) -> np.ndarray:
+    crop_group: np.float32,
+    is_paddy: np.bool_,
+    minimum_effective_root_depth: np.float32,
+    depletion_factor: np.float32 = np.float32(0.5),
+) -> np.float32:
     assert np.float32(0) <= fraction_irrigated_field <= np.float32(1)
 
     # Calculate the potential irrigation consumption for the farmer
@@ -384,16 +379,16 @@ def get_potential_irrigation_consumption_m(
         # make sure all fields are paddy irrigateds
         # always irrigate to 0.05 m for paddy fields
         potential_irrigation_consumption_m = max(
-            max_paddy_water_level_farmer - topwater + available_infiltration,
+            max_paddy_water_level_farmer - (topwater + available_infiltration),
             np.float32(0),
         )
     else:
         # use a minimum root depth of 25 cm, following AQUACROP recommendation
         # see: Reference manual for AquaCrop v7.1 – Chapter 3
-        effective_root_depth = np.maximum(
-            np.float32(minimum_effective_root_depth), root_depth
+        effective_root_depth: np.float32 = np.maximum(
+            minimum_effective_root_depth, root_depth
         )
-        root_ratios = get_root_ratios(
+        root_ratios: npt.NDArray[np.float32] = get_root_ratios(
             effective_root_depth,
             soil_layer_height,
         )
@@ -408,7 +403,7 @@ def get_potential_irrigation_consumption_m(
 
         # calculate the depletion coefficient (P_{sto}), which is the fraction of
         # total available water (TAW) at which stomata start to close
-        p = get_fraction_easily_available_soil_water(
+        p: np.float32 = get_fraction_easily_available_soil_water(
             crop_group, potential_evapotranspiration
         )
 
@@ -433,51 +428,33 @@ def get_potential_irrigation_consumption_m(
 def get_gross_irrigation_demand_m3(
     day_index: int,
     n: int,
-    currently_irrigated_fields: np.ndarray,
-    field_indices_by_farmer: np.ndarray,
-    field_indices: np.ndarray,
-    irrigation_efficiency: np.ndarray,
-    fraction_irrigated_field: np.ndarray,
-    cell_area: np.ndarray,
-    crop_map: np.ndarray,
-    topwater: np.ndarray,
-    available_infiltration: np.ndarray,
-    potential_evapotranspiration: np.ndarray,
-    root_depth: np.ndarray,
-    soil_layer_height: np.ndarray,
-    field_capacity: np.ndarray,
-    wilting_point: np.ndarray,
-    w: np.ndarray,
-    ws: np.ndarray,
-    arno_beta: np.ndarray,
-    remaining_irrigation_limit_m3: np.ndarray,
-    cumulative_water_deficit_m3: np.ndarray,
-    crop_calendar: np.ndarray,
-    crop_group_numbers: np.ndarray,
-    paddy_irrigated_crops: np.ndarray,
-    current_crop_calendar_rotation_year_index: np.ndarray,
-    max_paddy_water_level: np.ndarray,
-    minimum_effective_root_depth: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
-
-    Args:
-        activation_order: Order in which the agents are activated. Agents that are activated first get a first go at extracting water, leaving less water for other farmers.
-        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
-        field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
-        irrigation_efficiency: Boolean array that specifies whether the specific farmer is efficient with water use.
-        irrigated: Array that specifies whether a farm is irrigated.
-        well_irrigated: Array that specifies whether a farm is groundwater irrigated.
-        cell_area: The area of each subcell in m2.
-        HRU_to_grid: Array to map the index of each subcell to the corresponding cell.
-        crop_map: Map of the currently growing crops.
-        totalPotIrrConsumption: Potential irrigation consumption.
-        available_channel_storage_m3: Water available for irrigation from channels.
-        groundwater_head: Groundwater head.
-        available_groundwater_m3: Water available for irrigation from groundwater.
-        available_reservoir_storage_m3: Water available for irrigation from reservoirs.
-        command_areas: Command areas associated with reservoirs (i.e., which areas can access water from which reservoir.)
+    currently_irrigated_fields: npt.NDArray[np.bool_],
+    field_indices_by_farmer: npt.NDArray[np.int32],
+    field_indices: npt.NDArray[np.int32],
+    irrigation_efficiency: npt.NDArray[np.float32],
+    fraction_irrigated_field: npt.NDArray[np.float32],
+    cell_area: npt.NDArray[np.float32],
+    crop_map: npt.NDArray[np.int32],
+    topwater: npt.NDArray[np.float32],
+    available_infiltration: npt.NDArray[np.float32],
+    potential_evapotranspiration: npt.NDArray[np.float32],
+    root_depth: npt.NDArray[np.float32],
+    soil_layer_height: npt.NDArray[np.float32],
+    field_capacity: npt.NDArray[np.float64],
+    wilting_point: npt.NDArray[np.float64],
+    w: npt.NDArray[np.float64],
+    ws: npt.NDArray[np.float64],
+    arno_beta: npt.NDArray[np.float32],
+    remaining_irrigation_limit_m3: npt.NDArray[np.float32],
+    cumulative_water_deficit_m3: npt.NDArray[np.float32],
+    crop_calendar: npt.NDArray[np.int32],
+    crop_group_numbers: npt.NDArray[np.float32],
+    paddy_irrigated_crops: npt.NDArray[np.bool_],
+    current_crop_calendar_rotation_year_index: npt.NDArray[np.int32],
+    max_paddy_water_level: npt.NDArray[np.float32],
+    minimum_effective_root_depth: np.float32,
+) -> npt.NDArray[np.float32]:
+    """This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
 
     Returns:
         channel_abstraction_m3_by_farmer: Channel abstraction by farmer in m3.
@@ -488,24 +465,25 @@ def get_gross_irrigation_demand_m3(
         irrigation_return_flow_m: Return flow in meters.
         irrigation_evaporation_m: Evaporated irrigation water in meters.
     """
-
-    n_hydrological_response_units = cell_area.size
-    gross_potential_irrigation_m3 = np.zeros(
+    n_hydrological_response_units: int = cell_area.size
+    gross_potential_irrigation_m3: npt.NDArray[np.float32] = np.zeros(
         n_hydrological_response_units, dtype=np.float32
     )
 
     # TODO: First part of this function can be parallelized
     for farmer in range(n):
-        farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
-        irrigation_efficiency_farmer = irrigation_efficiency[farmer]
+        farmer_fields: npt.NDArray[np.int32] = get_farmer_HRUs(
+            field_indices, field_indices_by_farmer, farmer
+        )
+        irrigation_efficiency_farmer: np.float32 = irrigation_efficiency[farmer]
         for field in farmer_fields:
             if not currently_irrigated_fields[field]:
                 continue
 
-            crop = crop_map[field]
+            crop: np.int32 = crop_map[field]
             assert crop != -1
 
-            consumption_m = get_potential_irrigation_consumption_m(
+            consumption_m: np.float32 = get_potential_irrigation_consumption_m(
                 topwater=topwater[field],
                 available_infiltration=available_infiltration[field],
                 potential_evapotranspiration=potential_evapotranspiration[field],
@@ -532,11 +510,11 @@ def get_gross_irrigation_demand_m3(
         # If the potential irrigation consumption is larger than 0, the farmer needs to abstract water
         # if there is no irrigation limit, no need to adjust the irrigation
         if not np.isnan(remaining_irrigation_limit_m3[farmer]):
-            farmer_gross_irrigation_m3 = gross_potential_irrigation_m3[
+            farmer_gross_irrigation_m3: np.float32 = gross_potential_irrigation_m3[
                 farmer_fields
             ].sum()
             if farmer_gross_irrigation_m3 > 0.0:
-                reduction_factor = adjust_irrigation_to_limit(
+                irrigation_correction_factor: float = adjust_irrigation_to_limit(
                     farmer=farmer,
                     day_index=day_index,
                     remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
@@ -546,10 +524,11 @@ def get_gross_irrigation_demand_m3(
                     farmer_gross_irrigation_m3=farmer_gross_irrigation_m3,
                     irrigation_efficiency_farmer=irrigation_efficiency_farmer,
                 )
-                assert 0 <= reduction_factor <= 1
+                assert 0 <= irrigation_correction_factor <= 1
 
                 gross_potential_irrigation_m3[farmer_fields] = (
-                    gross_potential_irrigation_m3[farmer_fields] * reduction_factor
+                    gross_potential_irrigation_m3[farmer_fields]
+                    * irrigation_correction_factor
                 )
 
         assert (
@@ -599,13 +578,14 @@ def abstract_water(
         activation_order.size, dtype=np.float32
     )
 
-    # Because the groundwater source is much larger than the other
-    # sources, and taking out small amounts cannot be represented by
+    # Because the groundwater and reservoir source are much larger than the surface water
+    # and taking out small amounts cannot be represented by
     # floating point numbers, we need to use a separate array that tracks
     # the groundwater abstraction for each field. This is used to
-    # then remove the groundwater abstraction from the available
+    # then remove the groundwater and reservoir abstraction from the available
     # in one go, reducing the risk of (larger) floating point errors.
     groundwater_abstraction_m3 = np.zeros_like(available_groundwater_m3)
+    reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
 
     for activated_farmer_index in range(activation_order.size):
         farmer = activation_order[activated_farmer_index]
@@ -634,6 +614,7 @@ def abstract_water(
                             command_area=command_area,
                             field=field,
                             farmer=farmer,
+                            reservoir_abstraction_m3=reservoir_abstraction_m3,
                             available_reservoir_storage_m3=available_reservoir_storage_m3,
                             irrigation_water_demand_field_m=irrigation_water_demand_field_m,
                             water_withdrawal_m=water_withdrawal_m,
@@ -705,6 +686,7 @@ def abstract_water(
         water_consumption_m,
         irrigation_return_flow_m,
         irrigation_evaporation_m,
+        reservoir_abstraction_m3,
         groundwater_abstraction_m3,
     )
 
@@ -726,54 +708,74 @@ def plant(
     loan_tracker: np.ndarray,
     interest_rate: np.ndarray,
     farmers_going_out_of_business: bool,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the haverst age of the plant.
+) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int64]]:
+    """Determines when and what crop should be planted, by comparing the current day to the next plant day. Also sets the harvest age of the plant.
 
     Args:
         n: Number of farmers.
-        start_day_per_month: Starting day of each month of year.
-        current_day: Current day.
-        crop: Crops grown by each farmer.
+        day_index: Current day index (0-indexed; Jan 1 == 0).
+        crop_calendar: Crop calendar for each farmer. Each row is a farmer, and each column is a crop.
+            Each crop is a list of [crop_type, planting_day, growing_days, crop_year_index].
+            Planting day is 0-indexed (Jan 1 == 0).
+            Growing days is the number of days the crop grows.
+            Crop year index is the index of the year in the crop rotation.
+        current_crop_calendar_rotation_year_index: Current crop calendar rotation year index for each farmer.
+        crop_map: Map of the currently growing crops.
+        crop_harvest_age_days: Array that contains the harvest age of each field in days.
+        cultivation_cost: Cultivation cost per farmer per crop in m2. If this is a single value, it is used for all farmers and crops.
+        region_ids_per_farmer: Region IDs for each farmer.
+            This is used to determine the cultivation cost for each farmer.
         field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
         field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
         field_size_per_farmer: Field size per farmer in m2
+        all_loans_annual_cost: Annual cost of all loans for each farmer and crop.
+            This is a 3D array with shape (n, 1, 4), where n is the number of farmers.
+            The first dimension is the farmer, the second dimension is the crop, and the third dimension is the loan type.
+        loan_tracker: Loan tracker for each farmer and crop. This is a 3D array with shape (n, 1, 4).
+        interest_rate: Interest rate for each farmer.
+        farmers_going_out_of_business: If True, farmers are going out of business. Not implemented yet.
 
     Returns:
         plant: Subarray map of what crops are planted this day.
+        farmers_selling_land: Indices of farmers selling land (currently always empty).
     """
     assert farmers_going_out_of_business is False, (
         "Farmers going out of business not implemented."
     )
 
-    plant = np.full_like(crop_map, -1, dtype=np.int32)
-    sell_land = np.zeros(n, dtype=np.bool_)
+    plant: npt.NDArray[np.int32] = np.full_like(crop_map, -1, dtype=np.int32)
+    sell_land: npt.NDArray[bool] = np.zeros(n, dtype=np.bool_)
 
-    planting_farmers_per_season = (crop_calendar[:, :, 1] == day_index) & (
+    planting_farmers_per_season: npt.NDArray[bool] = (
+        crop_calendar[:, :, 1] == day_index
+    ) & (
         crop_calendar[:, :, 3]
         == current_crop_calendar_rotation_year_index[:, np.newaxis]
     )
-    planting_farmers = planting_farmers_per_season.sum(axis=1)
+    planting_farmers: npt.NDArray[np.int64] = planting_farmers_per_season.sum(axis=1)
 
     assert planting_farmers.max() <= 1, "Multiple crops planted on the same day"
 
-    planting_farmers_idx = np.where(planting_farmers == 1)[0]
+    planting_farmers_idx: npt.NDArray[np.int64] = np.where(planting_farmers == 1)[0]
     if not planting_farmers_idx.size == 0:
-        crop_rotation = np.argmax(
+        crop_rotation: npt.NDArray[np.int64] = np.argmax(
             planting_farmers_per_season[planting_farmers_idx], axis=1
         )
 
         assert planting_farmers_idx.size == crop_rotation.size
 
         for i in range(planting_farmers_idx.size):
-            farmer_idx = planting_farmers_idx[i]
-            farmer_crop_rotation = crop_rotation[i]
+            farmer_idx: np.int64 = planting_farmers_idx[i]
+            farmer_crop_rotation: np.int64 = crop_rotation[i]
 
-            farmer_fields = get_farmer_HRUs(
+            farmer_fields: npt.NDArray[np.int32] = get_farmer_HRUs(
                 field_indices, field_indices_by_farmer, farmer_idx
             )
-            farmer_crop_data = crop_calendar[farmer_idx, farmer_crop_rotation]
-            farmer_crop = farmer_crop_data[0]
-            field_harvest_age = farmer_crop_data[2]
+            farmer_crop_data: npt.NDArray[np.int32] = crop_calendar[
+                farmer_idx, farmer_crop_rotation
+            ]
+            farmer_crop: np.int32 = farmer_crop_data[0]
+            field_harvest_age: np.int32 = farmer_crop_data[2]
 
             assert farmer_crop != -1
 
@@ -788,7 +790,7 @@ def plant(
             assert not np.isnan(cultivation_cost_farmer)
 
             interest_rate_farmer = interest_rate[farmer_idx]
-            loan_duration = 2
+            loan_duration = 1
             annual_cost_input_loan = cultivation_cost_farmer * (
                 interest_rate_farmer
                 * (1 + interest_rate_farmer) ** loan_duration
@@ -860,243 +862,250 @@ def find_most_similar_index(target_series, yield_ratios, groups):
     return indices[min_idx]
 
 
-@njit(cache=True)
-def crop_yield_ratio_difference_test_njit(
-    yield_ratios,
+@njit(cache=True, parallel=True)
+def crop_profit_difference_njit_parallel(
+    yearly_profits,
     crop_elevation_group,
     unique_crop_groups,
     group_indices,
     crop_calendar,
     unique_crop_calendars,
     p_droughts,
+    past_window,
 ):
-    n_groups = len(unique_crop_groups)
-    n_calendars = len(unique_crop_calendars)
-    n_droughts = len(p_droughts)
+    """Parallelized only over unique crop groups; everything else follows your original logic exactly."""
+    n_groups: int = len(unique_crop_groups)
+    n_calendars: int = len(unique_crop_calendars)
+    n_rotation: int = unique_crop_calendars.shape[1]
 
-    unique_yield_ratio_gain = np.full(
-        (n_groups, n_calendars, n_droughts),
-        0.0,
-        dtype=np.float32,
-    )
+    unique_profit_gain = np.full((n_groups, n_calendars), 0.0, dtype=np.float32)
+    id_to_switch_to = np.full((n_groups, n_calendars), -1, dtype=np.int32)
 
-    id_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
+    # Precompute weights
+    weights = np.empty(past_window, dtype=yearly_profits.dtype)
+    weight_total = 0.0
+    if past_window > 1:
+        weight_step = (0.5 - 0.2) / (past_window - 1)
+    else:
+        weight_step = 0.0
 
-    crop_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
+    for j in range(past_window):
+        w = 0.5 - j * weight_step
+        weights[j] = w
+        weight_total += w
 
-    for group_id in range(n_groups):
+    # Parallel only over groups
+    for group_id in prange(n_groups):
         unique_group = unique_crop_groups[group_id]
         unique_farmer_groups = find_matching_rows(crop_elevation_group, unique_group)
 
-        # Identify the adapted counterparts of the current group
-        mask = np.empty(n_calendars, dtype=np.bool_)
+        # build mask & collect candidate calendar‐indices
+        candidate_idxs = np.empty(n_calendars, dtype=np.int32)
+        num_cand = 0
         for i in range(n_calendars):
             match = True
-            for j in range(unique_crop_calendars.shape[1]):
+            for j in range(n_rotation):
                 if unique_crop_calendars[i, j] != unique_group[j]:
                     match = False
                     break
-            mask[i] = not match
+            if not match:
+                candidate_idxs[num_cand] = i
+                num_cand += 1
 
-        # Collect candidate crop rotations
-        candidate_crop_rotations = []
-        for i in range(n_calendars):
-            if mask[i]:
-                candidate_crop_rotations.append(unique_crop_calendars[i])
+        metadata = unique_group[n_rotation:]
 
-        num_candidates = len(candidate_crop_rotations)
+        # sequentially over each candidate (same order as original)
+        for c in range(num_cand):
+            cal_idx = candidate_idxs[c]
+            unique_rotation = unique_crop_calendars[cal_idx]
 
-        # Loop over the counterparts
-        for crop_id in range(num_candidates):
-            unique_rotation = candidate_crop_rotations[crop_id]
-            farmer_class = unique_group[-1]
-            basin_location = unique_group[-2]
-            unique_group_other_crop = np.empty(
-                len(unique_rotation) + 2, dtype=unique_rotation.dtype
-            )
-            unique_group_other_crop[: len(unique_rotation)] = unique_rotation
-            unique_group_other_crop[len(unique_rotation)] = basin_location
-            unique_group_other_crop[len(unique_rotation) + 1] = farmer_class
+            # form the “other” group key
+            other_key = np.empty(unique_group.shape[0], unique_group.dtype)
+            for k in range(n_rotation):
+                other_key[k] = unique_rotation[k]
+            for k in range(n_rotation, other_key.shape[0]):
+                other_key[k] = metadata[k - n_rotation]
 
-            unique_farmer_groups_other_crop = find_matching_rows(
-                crop_elevation_group, unique_group_other_crop
-            )
+            unique_farmer_other = find_matching_rows(crop_elevation_group, other_key)
 
-            if np.any(unique_farmer_groups_other_crop):
-                # Compute current yield ratio mean
-                current_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
-                count_current = 0
-                for i in range(unique_farmer_groups.size):
-                    if unique_farmer_groups[i]:
-                        current_sum += yield_ratios[i]
-                        count_current += 1
-                current_yield_ratio = (
-                    current_sum / count_current if count_current > 0 else current_sum
+            if not np.any(unique_farmer_other):
+                continue
+
+            # current group weighted average
+            current_sum = 0.0
+            count_cur = 0
+            for i in range(unique_farmer_groups.size):
+                if unique_farmer_groups[i]:
+                    wp = 0.0
+                    for j in range(past_window):
+                        wp += yearly_profits[i, j] * weights[j]
+                    current_sum += wp / weight_total
+                    count_cur += 1
+            current_avg = current_sum / count_cur if count_cur > 0 else 0.0
+
+            # candidate group weighted average
+            cand_sum = 0.0
+            count_cand = 0
+            for i in range(unique_farmer_other.size):
+                if unique_farmer_other[i]:
+                    wp = 0.0
+                    for j in range(past_window):
+                        wp += yearly_profits[i, j] * weights[j]
+                    cand_sum += wp / weight_total
+                    count_cand += 1
+            cand_avg = cand_sum / count_cand if count_cand > 0 else 0.0
+
+            gain = cand_avg - current_avg
+            if gain != gain:  # NaN check
+                gain = 0.0
+            else:
+                id_to_switch_to[group_id, c] = find_most_similar_index(
+                    gain, yearly_profits, unique_farmer_other
                 )
 
-                # Compute candidate yield ratio mean
-                candidate_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
-                count_candidate = 0
-                for i in range(unique_farmer_groups_other_crop.size):
-                    if unique_farmer_groups_other_crop[i]:
-                        candidate_sum += yield_ratios[i]
-                        count_candidate += 1
-                candidate_yield_ratio = (
-                    candidate_sum / count_candidate
-                    if count_candidate > 0
-                    else candidate_sum
-                )
+            unique_profit_gain[group_id, c] = gain
 
-                yield_ratio_gain = candidate_yield_ratio - current_yield_ratio
-
-                crop_to_switch_to[group_id, crop_id] = unique_rotation[0]
-
-                if np.all(np.isnan(yield_ratio_gain)):
-                    yield_ratio_gain = np.zeros_like(yield_ratio_gain)
-                else:
-                    id_to_switch_to[group_id, crop_id] = find_most_similar_index(
-                        yield_ratio_gain,
-                        yield_ratios,
-                        unique_farmer_groups_other_crop,
-                    )
-
-                unique_yield_ratio_gain[group_id, crop_id, :] = yield_ratio_gain
-
-    gains_adaptation = unique_yield_ratio_gain[group_indices, :, :]
-    new_crop_nr = crop_to_switch_to[group_indices, :]
+    # Re‐index per‐farmer
+    gains_adaptation = unique_profit_gain[group_indices, :]
     new_farmer_id = id_to_switch_to[group_indices, :]
 
-    return (
-        gains_adaptation,
-        new_crop_nr,
-        new_farmer_id,
-    )
+    return gains_adaptation, new_farmer_id
 
 
-@njit(cache=True)
-def crop_profit_difference_njit(
-    yield_ratios,
-    crop_elevation_group,
-    unique_crop_groups,
-    group_indices,
-    crop_calendar,
-    unique_crop_calendars,
-    p_droughts,
+@njit
+def gev_ppf_scalar(u, c, loc, scale):
+    """Scalar GEV inverse CDF."""
+    if c != 0.0:
+        return loc + scale * ((-np.log(u)) ** (-c) - 1.0) / c
+    else:
+        return loc - scale * np.log(-np.log(u))
+
+
+@njit(cache=True, parallel=True)
+def compute_premiums_and_best_contracts_numba(
+    gev_params,
+    spei_hist,
+    losses,
+    strike_vals,
+    exit_vals,
+    rate_vals,
+    n_sims,
+    seed=42,
 ):
-    n_groups = len(unique_crop_groups)
-    n_calendars = len(unique_crop_calendars)
-    n_droughts = len(p_droughts)
+    """Computes the best insurance contracts for each agent based on GEV parameters, historical SPEI data, and losses.
 
-    unique_yield_ratio_gain = np.full(
-        (n_groups, n_calendars, n_droughts),
-        0.0,
-        dtype=np.float32,
-    )
+    For each agent, loop once over (strike, exit):
+    1) Monte Carlo → expected_ratio
+    2) Historical SPEI → sum_ratio_sq, sum_ratio_loss )
+    3) Over all rates → compute both premium = rate * expected_ratio
+                            and RMSE via quadratic form,
+        tracking the (strike_idx, exit_idx, rate_idx) that minimizes RMSE.
 
-    id_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
+    Returns:
+        best_strike_idx : (n_agents,)  index into strike_vals
+        best_exit_idx   : (n_agents,)  index into exit_vals
+        best_rate_idx   : (n_agents,)  index into rate_vals
+        best_rmse       : (n_agents,)  the minimal RMSE for each agent
+        best_premium    : (n_agents,)  the premium corresponding to that minimal‐RMSE contract
+    """
+    np.random.seed(seed)
+    n_agents = gev_params.shape[0]
+    n_years = spei_hist.shape[1]
+    n_strikes = strike_vals.shape[0]
+    n_exits = exit_vals.shape[0]
+    n_rates = rate_vals.shape[0]
 
-    crop_to_switch_to = np.full(
-        (n_groups, n_calendars),
-        -1,
-        dtype=np.int32,
-    )
+    # Output arrays
+    best_strike_idx = np.empty(n_agents, dtype=np.int64)
+    best_exit_idx = np.empty(n_agents, dtype=np.int64)
+    best_rate_idx = np.empty(n_agents, dtype=np.int64)
+    best_rmse_arr = np.empty(n_agents, dtype=np.float64)
+    best_prem_arr = np.empty(n_agents, dtype=np.float64)
 
-    for group_id in range(n_groups):
-        unique_group = unique_crop_groups[group_id]
-        unique_farmer_groups = find_matching_rows(crop_elevation_group, unique_group)
+    for agent_idx in prange(n_agents):
+        # Extract GEV parameters
+        shape = -gev_params[agent_idx, 0]
+        loc = gev_params[agent_idx, 1]
+        scale = gev_params[agent_idx, 2]
 
-        # Identify the adapted counterparts of the current group
-        mask = np.empty(n_calendars, dtype=np.bool_)
-        for i in range(n_calendars):
-            match = True
-            for j in range(unique_crop_calendars.shape[1]):
-                if unique_crop_calendars[i, j] != unique_group[j]:
-                    match = False
-                    break
-            mask[i] = not match
+        # Precompute sum of squared losses for this agent
+        loss_sq_sum = 0.0
+        for yr in range(n_years):
+            loss_sq_sum += losses[agent_idx, yr] ** 2
 
-        # Collect candidate crop rotations
-        candidate_crop_rotations = []
-        for i in range(n_calendars):
-            if mask[i]:
-                candidate_crop_rotations.append(unique_crop_calendars[i])
+        # Initialize "best so far" placeholders
+        best_rmse_val = 1e20
+        best_s_idx = 0
+        best_e_idx = 0
+        best_r_idx = 0
+        best_premium = 0.0
 
-        num_candidates = len(candidate_crop_rotations)
+        # Loop once over all (strike, exit) pairs
+        for strike_idx in range(n_strikes):
+            strike = strike_vals[strike_idx]
 
-        # Loop over the counterparts
-        for crop_id in range(num_candidates):
-            unique_rotation = candidate_crop_rotations[crop_id]
-            farmer_class = unique_group[-1]
-            basin_location = unique_group[-2]
-            unique_group_other_crop = np.empty(
-                len(unique_rotation) + 2, dtype=unique_rotation.dtype
-            )
-            unique_group_other_crop[: len(unique_rotation)] = unique_rotation
-            unique_group_other_crop[len(unique_rotation)] = basin_location
-            unique_group_other_crop[len(unique_rotation) + 1] = farmer_class
+            for exit_idx in range(n_exits):
+                exit_threshold = exit_vals[exit_idx]
+                if exit_threshold >= strike:
+                    continue
+                denom = strike - exit_threshold
 
-            unique_farmer_groups_other_crop = find_matching_rows(
-                crop_elevation_group, unique_group_other_crop
-            )
+                # Monte Carlo → expected_ratio
+                expected_ratio = 0.0
+                for _ in range(n_sims):
+                    u = np.random.random()  # Uniform(0,1)
+                    spei_val = gev_ppf_scalar(u, shape, loc, scale)
+                    shortfall = strike - spei_val
+                    if shortfall <= 0.0:
+                        continue
+                    if shortfall > denom:
+                        shortfall = denom
+                    expected_ratio += shortfall / denom
+                expected_ratio /= n_sims
 
-            if np.any(unique_farmer_groups_other_crop):
-                # Compute current yield ratio mean
-                current_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
-                count_current = 0
-                for i in range(unique_farmer_groups.size):
-                    if unique_farmer_groups[i]:
-                        current_sum += yield_ratios[i]
-                        count_current += 1
-                current_yield_ratio = (
-                    current_sum / count_current if count_current > 0 else current_sum
-                )
+                sum_ratio_sq = 0.0
+                sum_ratio_loss = 0.0
+                for yr in range(n_years):
+                    shortfall = strike - spei_hist[agent_idx, yr]
+                    if shortfall <= 0.0:
+                        ratio = 0.0
+                    elif shortfall >= denom:
+                        ratio = 1.0
+                    else:
+                        ratio = shortfall / denom
 
-                # Compute candidate yield ratio mean
-                candidate_sum = np.zeros(n_droughts, dtype=yield_ratios.dtype)
-                count_candidate = 0
-                for i in range(unique_farmer_groups_other_crop.size):
-                    if unique_farmer_groups_other_crop[i]:
-                        candidate_sum += yield_ratios[i]
-                        count_candidate += 1
-                candidate_yield_ratio = (
-                    candidate_sum / count_candidate
-                    if count_candidate > 0
-                    else candidate_sum
-                )
+                    sum_ratio_sq += ratio * ratio
+                    sum_ratio_loss += ratio * losses[agent_idx, yr]
 
-                yield_ratio_gain = candidate_yield_ratio - current_yield_ratio
-
-                crop_to_switch_to[group_id, crop_id] = unique_rotation[0]
-
-                if np.all(np.isnan(yield_ratio_gain)):
-                    yield_ratio_gain = np.zeros_like(yield_ratio_gain)
-                else:
-                    id_to_switch_to[group_id, crop_id] = find_most_similar_index(
-                        yield_ratio_gain,
-                        yield_ratios,
-                        unique_farmer_groups_other_crop,
+                # Over all candidate rates, compute premium & RMSE via quadratic form
+                for rate_idx in range(n_rates):
+                    rate = rate_vals[rate_idx]
+                    # RMSE’s sum of squared errors:
+                    sse = (
+                        (rate * rate) * sum_ratio_sq
+                        - 2.0 * rate * sum_ratio_loss
+                        + loss_sq_sum
                     )
+                    rmse_val = np.sqrt(sse / n_years)
 
-                unique_yield_ratio_gain[group_id, crop_id, :] = yield_ratio_gain
+                    if rmse_val < best_rmse_val:
+                        best_rmse_val = rmse_val
+                        best_s_idx = strike_idx
+                        best_e_idx = exit_idx
+                        best_r_idx = rate_idx
+                        best_premium = rate * expected_ratio
 
-    gains_adaptation = unique_yield_ratio_gain[group_indices, :, :]
-    new_crop_nr = crop_to_switch_to[group_indices, :]
-    new_farmer_id = id_to_switch_to[group_indices, :]
+        # Store best‐so‐far for this agent
+        best_strike_idx[agent_idx] = best_s_idx
+        best_exit_idx[agent_idx] = best_e_idx
+        best_rate_idx[agent_idx] = best_r_idx
+        best_rmse_arr[agent_idx] = best_rmse_val
+        best_prem_arr[agent_idx] = best_premium
 
     return (
-        gains_adaptation,
-        new_crop_nr,
-        new_farmer_id,
+        best_strike_idx,
+        best_exit_idx,
+        best_rate_idx,
+        best_rmse_arr,
+        best_prem_arr,
     )

@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 import math
 import warnings
-from typing import Union
+from datetime import datetime
+from typing import Any, Literal, Union
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import rasterio
 import xarray as xr
 import zarr
@@ -12,14 +14,14 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import cKDTree
 
-from geb.workflows.io import AsyncForcingReader
-
 
 def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
-    """This function finds the nearest river cell to each HRU. It does so
-    by first selecting the rivers, by checking if the upstream area is
+    """This function finds the nearest river cell to each HRU.
+
+    It does so by first selecting the rivers, by checking if the upstream area is
     above a certain threshold. then for each grid cell, it finds the nearest
-    river cell. Finally, it maps the nearest river cell to each HRU."""
+    river cell. Finally, it maps the nearest river cell to each HRU.
+    """
     valid_indices = np.argwhere(~mask)
     valid_values = upstream_area[~mask]
 
@@ -37,27 +39,33 @@ def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
     return nearest_indices_in_valid[HRU_to_grid]
 
 
-def load_grid(filepath, layer=1, return_transform_and_crs=False):
+def load_grid(
+    filepath, layer=1, return_transform_and_crs=False
+) -> np.ndarray | tuple[np.ndarray, Affine, str]:
     if filepath.suffix == ".tif":
         warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
         with rasterio.open(filepath) as src:
-            data = src.read(layer)
-            data = data.astype(np.float32) if data.dtype == np.float64 else data
+            data: np.ndarray = src.read(layer)
+            data: np.ndarray = (
+                data.astype(np.float32) if data.dtype == np.float64 else data
+            )
             if return_transform_and_crs:
                 return data, src.transform, src.crs
             else:
                 return data
     elif filepath.suffix == ".zarr":
-        store = zarr.storage.LocalStore(filepath, read_only=True)
-        group = zarr.open_group(store, mode="r")
-        data = group[filepath.stem][:]
-        data = data.astype(np.float32) if data.dtype == np.float64 else data
+        store: zarr.storage._local.LocalStore = zarr.storage.LocalStore(
+            filepath, read_only=True
+        )
+        group: zarr.core.group.Group = zarr.open_group(store, mode="r")
+        data: np.ndarray = group[filepath.stem][:]
+        data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
         if return_transform_and_crs:
-            x = group["x"][:]
-            y = group["y"][:]
-            x_diff = np.diff(x[:]).mean()
-            y_diff = np.diff(y[:]).mean()
-            transform = Affine(
+            x: np.ndarray = group["x"][:]
+            y: np.ndarray = group["y"][:]
+            x_diff: float = np.diff(x[:]).mean().item()
+            y_diff: float = np.diff(y[:]).mean().item()
+            transform: Affine = Affine(
                 a=x_diff,
                 b=0,
                 c=x[0] - x_diff / 2,
@@ -65,7 +73,7 @@ def load_grid(filepath, layer=1, return_transform_and_crs=False):
                 e=y_diff,
                 f=y[0] - y_diff / 2,
             )
-            wkt = group[filepath.stem].attrs["_CRS"]
+            wkt: str = group[filepath.stem].attrs["_CRS"]["wkt"]
             return data, transform, wkt
         else:
             return data
@@ -77,13 +85,14 @@ def load_geom(filepath):
     return gpd.read_parquet(filepath)
 
 
-def load_forcing_xr(filepath):
+def load_water_demand_xr(filepath):
     return xr.open_dataset(
         zarr.storage.LocalStore(
             filepath,
             read_only=True,
         ),
         engine="zarr",
+        consolidated=False,
     )
 
 
@@ -151,6 +160,7 @@ def to_HRU(data, grid_to_HRU, land_use_ratio, output_data, fn=None):
         data: The grid data to be converted.
         grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
         land_use_ratio: Relative size of HRU to grid.
+        output_data: Array to store the output data. Must be of size of the HRUs.
         fn: Name of function to apply to data. None if data should be directly inserted into HRUs - generally used when units are irrespective of area. 'mean' if data should first be corrected relative to the land use ratios - generally used when units are relative to area.
 
     Returns:
@@ -271,7 +281,7 @@ class Grid(BaseVariables):
         """
         return np.full(self.compressed_size, *args, **kwargs)
 
-    def compress(self, array: np.ndarray) -> np.ndarray:
+    def compress(self, array: npt.NDArray[Any]) -> npt.NDArray[Any]:
         """Compress array.
 
         Args:
@@ -336,6 +346,7 @@ class Grid(BaseVariables):
         Args:
             filepath: Filepath of map.
             compress: Whether to compress array.
+            layer: Layer to load from file. Defaults to 1.
 
         Returns:
             array: Loaded array.
@@ -345,129 +356,77 @@ class Grid(BaseVariables):
             data = self.data.grid.compress(data)
         return data
 
-    def load_forcing_ds(self, name):
-        reader = AsyncForcingReader(
-            self.model.files["other"][f"climate/{name}"],
-            name,
-        )
-        assert reader.ds["y"][0] > reader.ds["y"][-1]
-        return reader
-
-    def load_forcing(self, reader, time, compress=True):
-        data = reader.read_timestep(time)
-        if compress:
-            data = self.compress(data)
-        return data
+    @property
+    def hurs(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("hurs"))
 
     @property
-    def hurs(self):
-        if not hasattr(self, "hurs_ds"):
-            self.hurs_ds = self.load_forcing_ds("hurs")
-        hurs = self.load_forcing(self.hurs_ds, self.model.current_time)
-        assert (hurs > 1).all() and (hurs <= 100).all(), "hurs out of range"
-        return hurs
+    def pr(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("pr"))
 
     @property
-    def pr(self):
-        if not hasattr(self, "pr_ds"):
-            self.pr_ds = self.load_forcing_ds("pr")
-        pr = self.load_forcing(self.pr_ds, self.model.current_time)
-        assert (pr >= 0).all(), "Precipitation must be positive or zero"
-        return pr
+    def ps(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("ps"))
 
     @property
-    def ps(self):
-        if not hasattr(self, "ps_ds"):
-            self.ps_ds = self.load_forcing_ds("ps")
-        ps = self.load_forcing(self.ps_ds, self.model.current_time)
-        assert (ps > 30_000).all() and (ps < 120_000).all(), (
-            "ps out of range"
-        )  # top of mount everest is 33700 Pa, highest pressure ever measures is 108180 Pa
-        return ps
+    def rlds(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("rlds"))
 
     @property
-    def rlds(self):
-        if not hasattr(self, "rlds_ds"):
-            self.rlds_ds = self.load_forcing_ds("rlds")
-        rlds = self.load_forcing(self.rlds_ds, self.model.current_time)
-        rlds = rlds.astype(np.float32)
-        assert (rlds >= 0).all(), "rlds must be positive or zero"
-        return rlds
+    def rsds(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("rsds"))
 
     @property
-    def rsds(self):
-        if not hasattr(self, "rsds_ds"):
-            self.rsds_ds = self.load_forcing_ds("rsds")
-        rsds = self.load_forcing(self.rsds_ds, self.model.current_time)
-        assert (rsds >= 0).all(), "rsds must be positive or zero"
-        return rsds
+    def tas(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("tas"))
 
     @property
-    def tas(self):
-        if not hasattr(self, "tas_ds"):
-            self.tas_ds = self.load_forcing_ds("tas")
-        tas = self.load_forcing(self.tas_ds, self.model.current_time)
-        assert (tas > 170).all() and (tas < 370).all(), "tas out of range"
-        return tas
+    def tasmin(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("tasmin"))
 
     @property
-    def tasmin(self):
-        if not hasattr(self, "tasmin_ds"):
-            self.tasmin_ds = self.load_forcing_ds("tasmin")
-        tasmin = self.load_forcing(self.tasmin_ds, self.model.current_time)
-        assert (tasmin > 170).all() and (tasmin < 370).all(), "tasmin out of range"
-        return tasmin
+    def tasmax(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("tasmax"))
 
     @property
-    def tasmax(self):
-        if not hasattr(self, "tasmax_ds"):
-            self.tasmax_ds = self.load_forcing_ds("tasmax")
-        tasmax = self.load_forcing(self.tasmax_ds, self.model.current_time)
-        assert (tasmax > 170).all() and (tasmax < 370).all(), "tasmax out of range"
-        return tasmax
+    def sfcWind(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("sfcwind"))
 
     @property
-    def sfcWind(self):
-        if not hasattr(self, "sfcWind_ds"):
-            self.sfcWind_ds = self.load_forcing_ds("sfcwind")
-        sfcWind = self.load_forcing(self.sfcWind_ds, self.model.current_time)
-        assert (sfcWind >= 0).all() and (sfcWind < 150).all(), (
-            "sfcWind must be positive or zero. Highest wind speed ever measured is 113 m/s."
-        )
-        return sfcWind
+    def spei_uncompressed(self) -> npt.NDArray[np.float32]:
+        """Get uncompressed version of SPEI.
 
-    @property
-    def spei_uncompressed(self):
-        if not hasattr(self, "spei_ds"):
-            self.spei_ds = self.load_forcing_ds("SPEI")
+        We want to get the closest SPEI value, so if we are in the second
+        half of the month, we want to get the first day of the next month.
 
-        current_time = self.model.current_time
+        This is UNLESS we are at the end of the model run and the next
+        SPEI value does not exist, in which case we want to keep using the
+        last SPEI value available.
+        """
+        current_time: datetime = self.model.current_time
 
         # Determine the nearest first day of the month
         if current_time.day <= 15:
-            spei_time = current_time.replace(day=1)
+            spei_time: datetime = current_time.replace(day=1)
         else:
             # Move to the first day of the next month
             if current_time.month == 12:
-                spei_time = current_time.replace(
+                spei_time: datetime = current_time.replace(
                     year=current_time.year + 1, month=1, day=1
                 )
             else:
-                spei_time = current_time.replace(month=current_time.month + 1, day=1)
+                spei_time: datetime = current_time.replace(
+                    month=current_time.month + 1, day=1
+                )
 
-        spei = self.load_forcing(self.spei_ds, spei_time, compress=False)
-        assert not np.isnan(
-            spei[~self.mask]
-        ).any()  # Ensure no NaN values in non-masked cells
-        return spei
+            # Check if we ran out of SPEI data. If we did, revert to using the last month
+            if (
+                np.datetime64(spei_time, "ns")
+                > self.model.forcing["SPEI"].datetime_index[-1]
+            ):
+                spei_time: datetime = current_time.replace(day=1)
 
-    @property
-    def spei(self):
-        if not hasattr(self, "spei_ds"):
-            self.spei_ds = self.load_forcing_ds("spei")
-        spei = self.load_forcing(self.spei_ds, self.model.current_time)
-        assert not np.isnan(spei).any()
-        return spei
+        return self.model.forcing.load("SPEI", time=spei_time)
 
     @property
     def gev_c(self):
@@ -529,7 +488,11 @@ class HRUs(BaseVariables):
             self.spinup()
 
     def spinup(self):
-        self.var = self.model.store.create_bucket("hydrology.HRU.var")
+        self.var = self.model.store.create_bucket(
+            "hydrology.HRU.var",
+            validator=lambda x: isinstance(x, np.ndarray)
+            and (not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32),
+        )
 
         (
             self.var.land_use_type,
@@ -691,7 +654,7 @@ class HRUs(BaseVariables):
         HRU_to_grid = HRU_to_grid[:HRU]
         assert int(land_use_size.sum()) == n_nonmasked_cells * scaling * scaling
 
-        land_use_ratio = land_use_size / (scaling**2)
+        land_use_ratio = (land_use_size / (scaling**2)).astype(np.float32)
         return (
             land_use_array,
             land_use_ratio,
@@ -733,22 +696,24 @@ class HRUs(BaseVariables):
         """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
 
         Args:
-            *args: Variable length argument list.
-            **kwargs: Arbitrary keyword arguments.
+            size: Size of the array to create.
+            dtype: Data type of the array.
+            *args: Additional arguments for np.zeros.
+            **kwargs: Additional keyword arguments for np.zeros.
 
         Returns:
             array: Array with size of number of HRUs.
         """
         return np.zeros(size, dtype, *args, **kwargs)
 
-    def full_compressed(
-        self, fill_value, dtype, gpu=None, *args, **kwargs
-    ) -> np.ndarray:
+    def full_compressed(self, fill_value, dtype, *args, **kwargs) -> np.ndarray:
         """Return a full array with size of number of HRUs. Takes any other argument normally used in np.full.
 
         Args:
-            *args: Variable length argument list.
-            **kwargs: Arbitrary keyword arguments.
+            fill_value: Value to fill the array with.
+            dtype: Data type of the array.
+            *args: Additional arguments for np.full.
+            **kwargs: Arbitrary keyword arguments for np.full.
 
         Returns:
             array: Array with size of number of HRUs.
@@ -765,12 +730,12 @@ class HRUs(BaseVariables):
             outarray: Decompressed HRU_array.
         """
         if np.issubdtype(HRU_array.dtype, np.integer):
-            nanvalue = -1
+            nanvalue: Literal[-1] = -1
         elif np.issubdtype(HRU_array.dtype, bool):
-            nanvalue = False
+            nanvalue: Literal[False] = False
         else:
-            nanvalue = np.nan
-        outarray = HRU_array[self.var.unmerged_HRU_indices]
+            nanvalue: int | float = np.nan
+        outarray: np.ndarray = HRU_array[self.var.unmerged_HRU_indices]
         outarray[self.mask] = nanvalue
         return outarray
 
@@ -855,52 +820,54 @@ class HRUs(BaseVariables):
             plt.show()
 
     @property
-    def hurs(self):
-        hurs = self.data.grid.hurs
+    def hurs(self) -> npt.NDArray[np.float32]:
+        hurs: npt.NDArray[np.float32] = self.data.grid.hurs
         return self.data.to_HRU(data=hurs, fn=None)
 
     @property
-    def pr(self):
-        pr = self.data.grid.pr
+    def pr(self) -> npt.NDArray[np.float32]:
+        pr: npt.NDArray[np.float32] = self.data.grid.pr
         return self.data.to_HRU(data=pr, fn=None)
 
     @property
-    def ps(self):
-        ps = self.data.grid.ps
+    def ps(self) -> npt.NDArray[np.float32]:
+        ps: npt.NDArray[np.float32] = self.data.grid.ps
         return self.data.to_HRU(data=ps, fn=None)
 
     @property
-    def rlds(self):
-        rlds = self.data.grid.rlds
+    def rlds(self) -> npt.NDArray[np.float32]:
+        rlds: npt.NDArray[np.float32] = self.data.grid.rlds
         return self.data.to_HRU(data=rlds, fn=None)
 
     @property
-    def rsds(self):
-        rsds = self.data.grid.rsds
+    def rsds(self) -> npt.NDArray[np.float32]:
+        rsds: npt.NDArray[np.float32] = self.data.grid.rsds
         return self.data.to_HRU(data=rsds, fn=None)
 
     @property
-    def tas(self):
-        tas = self.data.grid.tas
+    def tas(self) -> npt.NDArray[np.float32]:
+        tas: npt.NDArray[np.float32] = self.data.grid.tas
         return self.data.to_HRU(data=tas, fn=None)
 
     @property
-    def tasmin(self):
-        tasmin = self.data.grid.tasmin
+    def tasmin(self) -> npt.NDArray[np.float32]:
+        tasmin: npt.NDArray[np.float32] = self.data.grid.tasmin
         return self.data.to_HRU(data=tasmin, fn=None)
 
     @property
-    def tasmax(self):
-        tasmax = self.data.grid.tasmax
+    def tasmax(self) -> npt.NDArray[np.float32]:
+        tasmax: npt.NDArray[np.float32] = self.data.grid.tasmax
         return self.data.to_HRU(data=tasmax, fn=None)
 
     @property
-    def sfcWind(self):
-        sfcWind = self.data.grid.sfcWind
+    def sfcWind(self) -> npt.NDArray[np.float32]:
+        sfcWind: npt.NDArray[np.float32] = self.data.grid.sfcWind
         return self.data.to_HRU(data=sfcWind, fn=None)
 
 
 class Modflow(BaseVariables):
+    """This class is to store data for the MODFLOW model. It inherits from `BaseVariables` and initializes the variables needed for the MODFLOW model."""
+
     def __init__(self, data, model):
         self.data = data
         self.model = model
@@ -935,13 +902,13 @@ class Data:
         )
 
     def load_water_demand(self):
-        self.model.industry_water_consumption_ds = load_forcing_xr(
+        self.model.industry_water_consumption_ds = load_water_demand_xr(
             self.model.files["other"]["water_demand/industry_water_consumption"]
         )
-        self.model.industry_water_demand_ds = load_forcing_xr(
+        self.model.industry_water_demand_ds = load_water_demand_xr(
             self.model.files["other"]["water_demand/industry_water_demand"]
         )
-        self.model.livestock_water_consumption_ds = load_forcing_xr(
+        self.model.livestock_water_consumption_ds = load_water_demand_xr(
             self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
 

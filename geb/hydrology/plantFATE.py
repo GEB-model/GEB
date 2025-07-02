@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -6,6 +7,17 @@ from pypfate import Patch as patch
 
 
 class Model:
+    """Implements the plantFATE model for a single patch of land.
+
+    Args:
+        param_file: the path to the plantFATE parameter file.
+        acclim_forcing_file: the path to the acclimation forcing file.
+        use_acclim: whether to use acclimation forcing or not.
+    """
+
+    def __init__(
+        self, param_file: str | Path, acclim_forcing_file: str | Path, use_acclim: bool
+    ):
     def __init__(self, param_file, co2_forcing_file, use_co2_forcing, acclim_forcing_file, use_acclim):
         self.plantFATE_model = patch(str(param_file))
         self.time_unit_base = self.process_time_units()

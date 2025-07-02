@@ -24,6 +24,7 @@ import platform
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 from numba import float32, njit, prange
 from tqdm import tqdm
 
@@ -117,8 +118,7 @@ def get_soil_water_potential(
     bubbling_pressure_cm,
     minimum_effective_saturation=np.float32(0.01),
 ):
-    """
-    Calculates the soil water potential (capillary suction) using the van Genuchten model.
+    """Calculates the soil water potential (capillary suction) using the van Genuchten model.
 
     Note that theta, thetar and thetas can also be given as the height of the water column
     in the soil layer as w, wres and ws since only there relative size is used. Of course
@@ -165,22 +165,19 @@ def get_soil_water_potential(
 def get_soil_moisture_at_pressure(
     capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
 ):
-    """
-    Calculates the soil moisture content at a given soil water potential (capillary suction)
-    using the van Genuchten model.
+    """Calculates the soil moisture content at a given soil water potential (capillary suction) using the van Genuchten model.
 
-    Parameters
-    ----------
-    capillary_suction : np.ndarray
-        The soil water potential (capillary suction) (m)
-    bubbling_pressure_cm : np.ndarray
-        The bubbling pressure (cm)
-    thetas : np.ndarray
-        The saturated soil moisture content (m³/m³)
-    thetar : np.ndarray
-        The residual soil moisture content (m³/m³)
-    lambda_ : np.ndarray
-        The van Genuchten parameter lambda (1/m)
+    Args:
+        capillary_suction : np.ndarray
+            The soil water potential (capillary suction) (m)
+        bubbling_pressure_cm : np.ndarray
+            The bubbling pressure (cm)
+        thetas : np.ndarray
+            The saturated soil moisture content (m³/m³)
+        thetar : np.ndarray
+            The residual soil moisture content (m³/m³)
+        lambda_ : np.ndarray
+            The van Genuchten parameter lambda (1/m)
     """
     alpha = np.float32(1) / bubbling_pressure_cm
     n = lambda_ + np.float32(1)
@@ -195,11 +192,12 @@ def get_soil_moisture_at_pressure(
 
 @njit(cache=True, inline="always")
 def get_critical_soil_moisture_content(p, wfc, wwp):
-    """
-    "The critical soil moisture content is defined as the quantity of stored soil moisture below
+    """Calculate the critical soil moisture content.
+
+    The critical soil moisture content is defined as the quantity of stored soil moisture below
     which water uptake is impaired and the crop begins to close its stomata. It is not a fixed
     value. Restriction of water uptake due to water stress starts at a higher water content
-    when the potential transpiration rate is higher" (Van Diepen et al., 1988: WOFOST 6.0, p.86)
+    when the potential transpiration rate is higher" (Van Diepen et al., 1988: WOFOST 6.0, p.86).
 
     A higher p value means that the critical soil moisture content is higher, i.e. the plant can
     extract water from the soil at a lower soil moisture content. Thus when p is 1 the critical
@@ -211,11 +209,12 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
 
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water(
-    crop_group_number, potential_evapotranspiration
-):
-    """
-    Calculate the fraction of easily available soil water, based on crop group number and potential evapotranspiration
-    following Van Diepen et al., 1988: WOFOST 6.0, p.87
+    crop_group_number: np.float32, potential_evapotranspiration: np.float32
+) -> np.float32:
+    """Calculate the fraction of easily available soil water.
+
+    Calculation is based on crop group number and potential evapotranspiration
+    following Van Diepen et al., 1988: WOFOST 6.0, p.87.
 
     Parameters
     ----------
@@ -225,27 +224,29 @@ def get_fraction_easily_available_soil_water(
     potential_evapotranspiration : np.ndarray
         Potential evapotranspiration in m
 
-    Returns
+    Returns:
     -------
     np.ndarray
         The fraction of easily available soil water, p is closer to 0 if evapo is bigger and cropgroup is smaller
     """
-    potential_evapotranspiration_cm = potential_evapotranspiration * np.float32(100)
+    potential_evapotranspiration_cm: np.float32 = (
+        potential_evapotranspiration * np.float32(100)
+    )
 
-    p = np.float32(1) / (
+    p: np.float32 = np.float32(1) / (
         np.float32(0.76) + np.float32(1.5) * potential_evapotranspiration_cm
     ) - np.float32(0.1) * (np.float32(5) - crop_group_number)
 
     # Additional correction for crop groups 1 and 2
     if crop_group_number <= np.float32(2.5):
-        p = p + (potential_evapotranspiration_cm - np.float32(0.6)) / (
+        p: np.float32 = p + (potential_evapotranspiration_cm - np.float32(0.6)) / (
             crop_group_number * (crop_group_number + np.float32(3.0))
         )
 
     if p < np.float32(0):
-        p = np.float32(0)
+        p: np.float32 = np.float32(0)
     if p > np.float32(1):
-        p = np.float32(1)
+        p: np.float32 = np.float32(1)
     return p
 
 
@@ -303,19 +304,17 @@ def get_available_water_infiltration(
     EWRef,
     topwater,
 ):
-    """
-    Update the soil water storage based on the water balance calculations.
+    """Update the soil water storage based on the water balance calculations.
 
     Parameters
     ----------
     wwp : np.ndarray
 
-    Notes
+    Notes:
     -----
     This function requires N_SOIL_LAYERS to be defined in the global scope. Which can help
     the compiler to optimize the code better.
     """
-
     available_water_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
     open_water_evaporation = np.zeros_like(land_use_type, dtype=np.float32)
     for i in prange(land_use_type.size):
@@ -393,8 +392,7 @@ def evapotranspirate(
     mask,
     mask_transpiration,
 ):
-    """
-    Evapotranspiration calculation for the soil module.
+    """Evapotranspiration calculation for the soil module.
 
     Parameters
     ----------
@@ -636,26 +634,15 @@ def vertical_water_transport(
     topwater,
     soil_layer_height,
 ):
-    """
-    Parameters
-    ----------
-    preferential_flow_constant : float
-        The preferential flow constant. Because effective saturation is always below 1, a higher
-        preferential flow constant will result in less preferential flow.
+    """Simulates vertical transport of water in the soil using Darcy's equation.
 
-    Simulates vertical transport of water in the soil using Darcy's equation,
-    combining infiltration, percolation, and capillary rise into a single process.
-    Considers soil water potential and varying soil layer heights.
-
-    Returns
-    -------
-    preferential_flow : np.ndarray
-        The preferential flow of water through the soil
-    direct_runoff : np.ndarray
-        The direct runoff of water from the soil
-    groundwater_recharge : np.ndarray
-        The recharge of groundwater from the soil
-
+    Returns:
+        preferential_flow : np.ndarray
+            The preferential flow of water through the soil
+        direct_runoff : np.ndarray
+            The direct runoff of water from the soil
+        groundwater_recharge : np.ndarray
+            The recharge of groundwater from the soil
     """
     # Initialize variables
     preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
@@ -791,9 +778,14 @@ def vertical_water_transport(
     return preferential_flow, direct_runoff, groundwater_recharge
 
 
-def thetas_toth(soil_organic_carbon, bulk_density, is_top_soil, clay, silt):
-    """
-    Determine saturated water content [m3/m3].
+def thetas_toth(
+    soil_organic_carbon: npt.NDArray[np.float32],
+    bulk_density: npt.NDArray[np.float32],
+    is_top_soil: npt.NDArray[np.bool_],
+    clay: npt.NDArray[np.float32],
+    silt: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Determine saturated water content [m3/m3].
 
     Based on:
     Tóth, B., Weynants, M., Nemes, A., Makó, A., Bilas, G., and Tóth, G.:
@@ -802,40 +794,38 @@ def thetas_toth(soil_organic_carbon, bulk_density, is_top_soil, clay, silt):
 
     Parameters
     ----------
-    bdod : float
-        bulk density [g /cm3].
-    sand: float
-        sand percentage [%].
-    silt: float
-        silt percentage [%].
-    is_top_soil: bool
-        top soil flag.
+    bdod  bulk density [g /cm3].
+    sand: sand percentage [%].
+    silt: fsilt percentage [%].
+    is_top_soil: top soil flag.
 
-    Returns
+    Returns:
     -------
-    thetas : float
-        saturated water content [cm3/cm3].
+    thetas: saturated water content [cm3/cm3].
 
     """
     return (
-        0.6819
-        - 0.06480 * (1 / (soil_organic_carbon + 1))
-        - 0.11900 * bulk_density**2
-        - 0.02668 * is_top_soil
-        + 0.001489 * clay
-        + 0.0008031 * silt
-        + 0.02321 * (1 / (soil_organic_carbon + 1)) * bulk_density**2
-        + 0.01908 * bulk_density**2 * is_top_soil
-        - 0.0011090 * clay * is_top_soil
-        - 0.00002315 * silt * clay
-        - 0.0001197 * silt * bulk_density**2
-        - 0.0001068 * clay * bulk_density**2
+        np.float32(0.6819)
+        - np.float32(0.06480) * (1 / (soil_organic_carbon + 1))
+        - np.float32(0.11900) * bulk_density**2
+        - np.float32(0.02668) * is_top_soil
+        + np.float32(0.001489) * clay
+        + np.float32(0.0008031) * silt
+        + np.float32(0.02321) * (1 / (soil_organic_carbon + 1)) * bulk_density**2
+        + np.float32(0.01908) * bulk_density**2 * is_top_soil
+        - np.float32(0.0011090) * clay * is_top_soil
+        - np.float32(0.00002315) * silt * clay
+        - np.float32(0.0001197) * silt * bulk_density**2
+        - np.float32(0.0001068) * clay * bulk_density**2
     )
 
 
-def thetar_brakensiek(sand, clay, thetas):
-    """
-    Determine residual water content [m3/m3].
+def thetar_brakensiek(
+    sand: npt.NDArray[np.float32],
+    clay: npt.NDArray[np.float32],
+    thetas: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Determine residual water content [m3/m3].
 
     Thetas is equal to porosity (Φ) in this case.
 
@@ -855,22 +845,22 @@ def thetar_brakensiek(sand, clay, thetas):
     thetas : float
         saturated water content [m3/m3].
 
-    Returns
+    Returns:
     -------
     thetar : float
         residual water content [m3/m3].
 
     """
     return (
-        -0.0182482
-        + 0.00087269 * sand
-        + 0.00513488 * clay
-        + 0.02939286 * thetas
-        - 0.00015395 * clay**2
-        - 0.0010827 * sand * thetas
-        - 0.00018233 * clay**2 * thetas**2
-        + 0.00030703 * clay**2 * thetas
-        - 0.0023584 * thetas**2 * clay
+        np.float32(-0.0182482)
+        + np.float32(0.00087269) * sand
+        + np.float32(0.00513488) * clay
+        + np.float32(0.02939286) * thetas
+        - np.float32(0.00015395) * clay**2
+        - np.float32(0.0010827) * sand * thetas
+        - np.float32(0.00018233) * clay**2 * thetas**2
+        + np.float32(0.00030703) * clay**2 * thetas
+        - np.float32(0.0023584) * thetas**2 * clay
     )
 
 
@@ -894,8 +884,7 @@ def get_bubbling_pressure(clay, sand, thetas):
 
 
 def get_pore_size_index_brakensiek(sand, thetas, clay):
-    """
-    Determine Brooks-Corey pore size distribution index [-].
+    """Determine Brooks-Corey pore size distribution index [-].
 
     Thetas is equal to porosity (Φ) in this case.
 
@@ -914,7 +903,7 @@ def get_pore_size_index_brakensiek(sand, thetas, clay):
     clay: float
         clay percentage [%].
 
-    Returns
+    Returns:
     -------
     poresizeindex : float
         pore size distribution index [-].
@@ -939,8 +928,7 @@ def get_pore_size_index_brakensiek(sand, thetas, clay):
 
 
 def kv_brakensiek(thetas, clay, sand):
-    """
-    Determine saturated hydraulic conductivity kv [m/day].
+    """Determine saturated hydraulic conductivity kv [m/day].
 
     Based on:
       Brakensiek, D.L., Rawls, W.J.,and Stephenson, G.R.: Modifying scs hydrologic
@@ -956,7 +944,7 @@ def kv_brakensiek(thetas, clay, sand):
     sand: float
         sand percentage [%].
 
-    Returns
+    Returns:
     -------
     kv : float
         saturated hydraulic conductivity [m/day].
@@ -988,6 +976,13 @@ def kv_brakensiek(thetas, clay, sand):
 
 
 class Soil(Module):
+    """Soil module for the hydrological model.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology
@@ -1008,7 +1003,7 @@ class Soil(Module):
         self.var.minimum_effective_root_depth = 0.25  # m
 
         # Soil properties
-        self.HRU.var.soil_layer_height = self.HRU.compress(
+        self.HRU.var.soil_layer_height: npt.NDArray[np.float32] = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/soil_layer_height"],
                 layer=None,
@@ -1016,28 +1011,28 @@ class Soil(Module):
             method="mean",
         )
 
-        soil_organic_carbon = self.HRU.compress(
+        soil_organic_carbon: npt.NDArray[np.float32] = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/soil_organic_carbon"],
                 layer=None,
             ),
             method="mean",
         )
-        bulk_density = self.HRU.compress(
+        bulk_density: npt.NDArray[np.float32] = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/bulk_density"],
                 layer=None,
             ),
             method="mean",
         )
-        self.HRU.var.silt = self.HRU.compress(
+        self.HRU.var.silt: npt.NDArray[np.float32] = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/silt"],
                 layer=None,
             ),
             method="mean",
         )
-        self.HRU.var.clay = self.HRU.compress(
+        self.HRU.var.clay: npt.NDArray[np.float32] = self.HRU.compress(
             load_grid(
                 self.model.files["subgrid"]["soil/clay"],
                 layer=None,
@@ -1046,31 +1041,39 @@ class Soil(Module):
         )
 
         # calculate sand content based on silt and clay content (together they should sum to 100%)
-        self.HRU.var.sand = 100 - self.HRU.var.silt - self.HRU.var.clay
+        self.HRU.var.sand: npt.NDArray[np.float32] = (
+            100 - self.HRU.var.silt - self.HRU.var.clay
+        )
 
         # the top 30 cm is considered as top soil (https://www.fao.org/uploads/media/Harm-World-Soil-DBv7cv_1.pdf)
-        is_top_soil = np.zeros_like(self.HRU.var.clay, dtype=bool)
+        is_top_soil: npt.NDArray[np.bool_] = np.zeros_like(
+            self.HRU.var.clay, dtype=bool
+        )
         is_top_soil[0:3] = True
 
-        thetas = thetas_toth(
+        thetas: npt.NDArray[np.float32] = thetas_toth(
             soil_organic_carbon=soil_organic_carbon,
             bulk_density=bulk_density,
             is_top_soil=is_top_soil,
             clay=self.HRU.var.clay,
             silt=self.HRU.var.silt,
         )
-        thetar = thetar_brakensiek(
+        thetar: npt.NDArray[np.float32] = thetar_brakensiek(
             sand=self.HRU.var.sand, clay=self.HRU.var.clay, thetas=thetas
         )
-        self.HRU.var.bubbling_pressure_cm = get_bubbling_pressure(
-            clay=self.HRU.var.clay, sand=self.HRU.var.sand, thetas=thetas
+        self.HRU.var.bubbling_pressure_cm: npt.NDArray[np.float32] = (
+            get_bubbling_pressure(
+                clay=self.HRU.var.clay, sand=self.HRU.var.sand, thetas=thetas
+            )
         )
-        self.HRU.var.lambda_pore_size_distribution = get_pore_size_index_brakensiek(
-            sand=self.HRU.var.sand, thetas=thetas, clay=self.HRU.var.clay
+        self.HRU.var.lambda_pore_size_distribution: npt.NDArray[np.float32] = (
+            get_pore_size_index_brakensiek(
+                sand=self.HRU.var.sand, thetas=thetas, clay=self.HRU.var.clay
+            )
         )
 
         # θ saturation, field capacity, wilting point and residual moisture content
-        thetafc = get_soil_moisture_at_pressure(
+        thetafc: npt.NDArray[np.float32] = get_soil_moisture_at_pressure(
             np.float32(-100.0),  # assuming field capacity is at -100 cm (pF 2)
             self.HRU.var.bubbling_pressure_cm,
             thetas,
@@ -1078,7 +1081,7 @@ class Soil(Module):
             self.HRU.var.lambda_pore_size_distribution,
         )
 
-        thetawp = get_soil_moisture_at_pressure(
+        thetawp: npt.NDArray[np.float32] = get_soil_moisture_at_pressure(
             np.float32(-(10**4.2)),  # assuming wilting point is at -10^4.2 cm (pF 4.2)
             self.HRU.var.bubbling_pressure_cm,
             thetas,
@@ -1086,32 +1089,42 @@ class Soil(Module):
             self.HRU.var.lambda_pore_size_distribution,
         )
 
-        self.HRU.var.ws = thetas * self.HRU.var.soil_layer_height
-        self.HRU.var.wfc = thetafc * self.HRU.var.soil_layer_height
-        self.HRU.var.wwp = thetawp * self.HRU.var.soil_layer_height
-        self.HRU.var.wres = thetar * self.HRU.var.soil_layer_height
+        self.HRU.var.ws: npt.NDArray[np.float32] = (
+            thetas * self.HRU.var.soil_layer_height
+        )
+        self.HRU.var.wfc: npt.NDArray[np.float32] = (
+            thetafc * self.HRU.var.soil_layer_height
+        )
+        self.HRU.var.wwp: npt.NDArray[np.float32] = (
+            thetawp * self.HRU.var.soil_layer_height
+        )
+        self.HRU.var.wres: npt.NDArray[np.float32] = (
+            thetar * self.HRU.var.soil_layer_height
+        )
 
         # initial soil water storage between field capacity and wilting point
         # set soil moisture to nan where land use is not bioarea
-        self.HRU.var.w = np.where(
+        self.HRU.var.w: npt.NDArray[np.float32] = np.where(
             self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
             (self.HRU.var.wfc - self.HRU.var.wwp) * 0.2 + self.HRU.var.wwp,
             np.nan,
         )
         # for paddy irrigation flooded paddy fields
-        self.HRU.var.topwater = self.HRU.full_compressed(0, dtype=np.float32)
+        self.HRU.var.topwater: npt.NDArray[np.float32] = self.HRU.full_compressed(
+            0, dtype=np.float32
+        )
 
-        self.HRU.var.ksat = kv_brakensiek(
+        self.HRU.var.ksat: npt.NDArray[np.float32] = kv_brakensiek(
             thetas=thetas, clay=self.HRU.var.clay, sand=self.HRU.var.sand
         )
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
-        natural_crop_groups = self.hydrology.grid.load(
+        natural_crop_groups: npt.NDArray[np.float32] = self.hydrology.grid.load(
             self.model.files["grid"]["soil/crop_group"]
         )
-        self.HRU.var.natural_crop_groups = self.hydrology.to_HRU(
-            data=natural_crop_groups
+        self.HRU.var.natural_crop_groups: npt.NDArray[np.float32] = (
+            self.hydrology.to_HRU(data=natural_crop_groups)
         )
 
         # ------------ Preferential Flow constant ------------------------------------------
@@ -1451,7 +1464,9 @@ class Soil(Module):
 
         # set the frost index threshold as global variable for numba
         global FROST_INDEX_THRESHOLD
-        FROST_INDEX_THRESHOLD = np.float32(self.HRU.var.frost_indexThreshold)
+        FROST_INDEX_THRESHOLD = np.float32(
+            self.model.hydrology.snowfrost.var.frost_indexThreshold
+        )
 
     def step(
         self,
@@ -1462,8 +1477,7 @@ class Soil(Module):
         natural_available_water_infiltration,
         actual_irrigation_consumption,
     ):
-        """
-        Dynamic part of the soil module
+        """Dynamic part of the soil module.
 
         For each of the land cover classes the vertical water transport is simulated
         Distribution of water holding capiacity in 3 soil layers based on saturation excess overland flow, preferential flow

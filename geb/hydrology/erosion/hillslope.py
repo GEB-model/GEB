@@ -25,8 +25,7 @@ from geb.module import Module
 
 
 def get_kinetic_energy_direct_throughfall(direct_throughfall, precipitation_intensity):
-    """
-    Calculate the kinetic energy of rainfall
+    """Calculate the kinetic energy of rainfall.
 
     Parameters
     ----------
@@ -35,7 +34,7 @@ def get_kinetic_energy_direct_throughfall(direct_throughfall, precipitation_inte
     precipitation_intensity : np.array
         Precipitation intensity [?]
 
-    Returns
+    Returns:
     -------
     kinetic_energy : np.array
         Kinetic energy of rainfall [J m-2]
@@ -53,8 +52,7 @@ def get_kinetic_energy_direct_throughfall(direct_throughfall, precipitation_inte
 
 
 def get_kinetic_energy_leaf_drainage(leaf_drainage, plant_height):
-    """
-    Calculate the kinetic energy of leaf drainage
+    """Calculate the kinetic energy of leaf drainage.
 
     Parameters
     ----------
@@ -63,7 +61,7 @@ def get_kinetic_energy_leaf_drainage(leaf_drainage, plant_height):
     plant_height : np.array
         Plant height [m]
 
-    Returns
+    Returns:
     -------
     kinetic_energy : np.array
         Kinetic energy of leaf drainage [J m-2]
@@ -99,7 +97,7 @@ def get_detachment_from_flow(
 
 
 def get_particle_fall_velocity(particle_diameter, rho_s, rho, eta, g=9.81):
-    """See https://doi.org/10.1002/esp.1530 equation 31
+    """See https://doi.org/10.1002/esp.1530 equation 31.
 
     Parameters
     ----------
@@ -112,7 +110,7 @@ def get_particle_fall_velocity(particle_diameter, rho_s, rho, eta, g=9.81):
     eta : float
         Fluid viscosity [kg m−1 s−1]
 
-    Returns
+    Returns:
     -------
     np.array
 
@@ -123,8 +121,7 @@ def get_particle_fall_velocity(particle_diameter, rho_s, rho, eta, g=9.81):
 def get_particle_fall_number(
     particle_diameter, velocity, water_depth, rho_s, rho, eta, slope, cell_length
 ):
-    """
-    See https://doi.org/10.1002/esp.1530 equations 28-30
+    """See https://doi.org/10.1002/esp.1530 equations 28-30.
 
     Parameters
     ----------
@@ -141,7 +138,7 @@ def get_particle_fall_number(
     eta : float
         Fluid viscosity [kg m−1 s−1]
 
-    Returns
+    Returns:
     -------
     np.array
 
@@ -155,15 +152,14 @@ def get_particle_fall_number(
     return N_f
 
 
-def get_deposition(particle_fall_number):
+def get_deposition(particle_fall_number: np.ndarray):
     """Gets the percentage of particles deposited on the soil surface.
-    Parameters
-    ----------
-    particle_fall_number : np.array
 
-    Returns
-    -------
-    np.array
+    Args:
+        particle_fall_number : np.array
+
+    Returns:
+        np.array: Percentage of particles deposited on the soil surface.
     """
     return np.minimum(44.1 * particle_fall_number**0.29, 100)
 
@@ -208,10 +204,13 @@ def get_flow_velocity(manning, water_depth, slope, minimum_slope=1e-5):
 
 
 class HillSlopeErosion(Module):
-    """The Morgan–Morgan–Finney (MMF) model is a process-based soil erosion model
+    """Calculate soil erosion on hillslopes using the MMF model.
+
+    The Morgan–Morgan–Finney (MMF) model is a process-based soil erosion model
     developed by Morgan, Morgan, and Finney (1984). It is designed to estimate annual
     or event-based soil loss by considering the detachment and transport of soil
-    particles separately."""
+    particles separately.
+    """
 
     def __init__(self, model, hydrology):
         super().__init__(model)

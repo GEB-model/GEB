@@ -12,7 +12,9 @@ from scipy.stats import chi2_contingency, norm
 
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
+    INDEX_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
+    PERSONAL_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
@@ -51,7 +53,7 @@ class Survey:
             # get correlation between two variables
             cross_tab = pd.crosstab(self.samples[edge[0]], self.samples[edge[1]])
             chi_stat = chi2_contingency(cross_tab)[0]
-            N = len(self.samples)
+            N: int = len(self.samples)
             minimum_dimension = min(cross_tab.shape) - 1
 
             # Cramer’s V value
@@ -179,18 +181,20 @@ class Survey:
 
     def sample(
         self,
-        n,
-        evidence=[],
-        evidence_columns=None,
-        method="rejection",
-        show_progress=True,
+        n: int,
+        evidence: list = [],
+        evidence_columns: list = None,
+        method: str = "rejection",
+        show_progress: str = True,
     ):
-        """
+        """Sample from the Bayesian network.
+
         Args:
-            n (int): number of samples to generate
-            evidence (list): list of evidence values (i.e., all samples will have these values ...)
-            evidence_columns (list): list of evidence column names (i.e., ... for these columns)
-            method (str): sampling method, only 'rejection' is implemented
+            n: number of samples to generate
+            evidence: list of evidence values (i.e., all samples will have these values ...)
+            evidence_columns: list of evidence column names (i.e., ... for these columns)
+            method: sampling method, only 'rejection' is implemented.
+            show_progress: whether to show progress bar
         """
         assert method == "rejection", "Only rejection sampling is implemented"
         if show_progress:
@@ -468,6 +472,8 @@ class fairSTREAMModel(GEBModel):
                         WELL_ADAPTATION,
                         IRRIGATION_EFFICIENCY_ADAPTATION,
                         FIELD_EXPANSION_ADAPTATION,
+                        PERSONAL_INSURANCE_ADAPTATION,
+                        INDEX_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
@@ -634,11 +640,16 @@ class fairSTREAMModel(GEBModel):
 
         region_ids = np.unique(region_id)
         size_classes = np.unique(farm_size_class)
+        rate_array = (
+            np.array([16.5, 11.5, 10.0, 7.75, 6.5, 6.5, 6.5, 5.0, 3.0, 3.0]) / 100
+        )
+        interest_rates = np.full(n_farmers, 0.05, dtype=np.float32)
 
         WELL_DEPTH_THRESHOLD = 80
 
         for region_id_class in region_ids:
             for size_class in size_classes:
+                interest_rate_per_agent = rate_array[size_class]
                 agent_subset = np.where(
                     (region_id_class == region_id) & (size_class == farm_size_class)
                 )[0]
@@ -662,6 +673,7 @@ class fairSTREAMModel(GEBModel):
                 )
 
                 adaptations[well_irrigated_agents, WELL_ADAPTATION] = 1
+                interest_rates[agent_subset] = interest_rate_per_agent
 
                 # not_yet_irrigated_agents = np.where(
                 #     adaptations[agent_subset, SURFACE_IRRIGATION_EQUIPMENT] == -1
@@ -825,6 +837,7 @@ class fairSTREAMModel(GEBModel):
                 ]
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
+        self.set_array(interest_rates, name="agents/farmers/interest_rate")
         self.set_array(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
         self.set_array(
             crop_calendar_rotation_years,

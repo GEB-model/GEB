@@ -5,6 +5,7 @@
 .DS_Store
 workspaces/
 geb/hydrology/groundwater/bin
+geb/bin
 tests/output/
 tests/tmp/
 examples/*
@@ -137,3 +138,4 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+GEB.code-workspace

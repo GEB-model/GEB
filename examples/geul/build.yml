@@ -5,6 +5,9 @@ set_time_range:
   start_date: 2000-01-01
   end_date: 2024-12-31
 
+set_ssp:
+  ssp: ssp3
+
 setup_hydrography:
 
 setup_elevation:
@@ -46,7 +49,6 @@ setup_create_farms:
 setup_household_characteristics:
 
 setup_water_demand:
-  ssp: ssp2
 
 setup_farmer_household_characteristics:
 
@@ -354,3 +356,5 @@ setup_SPEI:
 
 setup_discharge_observations:
   custom_river_stations: null
+
+setup_CO2_concentration:
