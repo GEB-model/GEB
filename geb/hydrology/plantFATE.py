@@ -16,7 +16,7 @@ class Model:
     """
 
     def __init__(
-        self, param_file: str | Path, co2_forcing_file: str | Path, use_co2_forcing: str | Path, acclim_forcing_file: str | Path, use_acclim: bool
+        self, param_file: str | Path, acclim_forcing_file: str | Path, use_acclim: bool
     ):
         self.plantFATE_model = patch(str(param_file))
         self.time_unit_base = self.process_time_units()
@@ -26,11 +26,6 @@ class Model:
         if use_acclim:
             self.acclimation_forcing = self.read_acclimation_file(acclim_forcing_file)
             self.use_acclim = use_acclim
-
-        self.use_co2_forcing = use_co2_forcing
-        if use_co2_forcing:
-            self.co2_forcing = self.read_co2_forcing_file(co2_forcing_file)
-            self.use_co2_forcing = use_co2_forcing
 
         self.first_step_was_run = False
 
@@ -42,17 +37,6 @@ class Model:
         alldates = alldates.map(lambda x: x.days - 1)
         df["date_jul"] = alldates
         return df
-
-    def read_co2_forcing_file(self, file):
-        df = pd.read_csv(file)
-        alldates = df["date"].map(
-            lambda x: datetime.strptime(x, "%Y-%m-%d") - self.time_unit_base
-        )
-        alldates = alldates.map(lambda x: x.days - 1)
-        df["date_jul"] = alldates
-        return df
-
-
 
     def process_time_units(self):
         time_unit = self.plantFATE_model.config.time_unit
@@ -71,24 +55,13 @@ class Model:
         photosynthetic_photon_flux_density,
         temperature,
         net_radiation,
+        co2_forcing,
         topsoil_volumetric_water_content,
     ):
         assert self.first_step_was_run, "first step must be run before running a step"
 
-        co2_value = 368.9
-        if (self.use_co2_forcing):
-            # print("CO2 FORCING")
-            index_co2 = self.co2_forcing.index[
-                self.co2_forcing['date_jul'] == self.tcurrent].tolist()
-            co2_value = self.co2_forcing.loc[index_co2, 'co2']
-            # print(index_co2)
-            # print(self.tcurrent)
-            # print(self.co2_forcing.loc[index_co2, 'date_jul'])
-            # print(co2_value)
-        #
-
         self.plantFATE_model.update_climate(
-            co2_value.item(),  # co2
+            co2_forcing,  # co2
             temperature,
             vapour_pressure_deficit,  # kPa -> Pa
             photosynthetic_photon_flux_density,
@@ -127,8 +100,10 @@ class Model:
         vapour_pressure_deficit,
         photosynthetic_photon_flux_density,
         temperature,  # degrees Celcius, mean temperature
-        topsoil_volumetric_water_content,
         net_radiation,
+        co2_forcing,
+        topsoil_volumetric_water_content,
+
     ):
         datestart = datetime(tstart.year, tstart.month, tstart.day)
         datediff = datestart - self.time_unit_base
@@ -142,17 +117,8 @@ class Model:
 
         # print("Running first step - after init")
 
-        co2_value = 368.9
-        if (self.use_co2_forcing):
-            print("CO2 FORCING")
-            index_co2 = self.co2_forcing.index[
-                self.co2_forcing['date_jul'] == self.tcurrent].tolist()
-            co2_value = self.co2_forcing.loc[index_co2, 'co2']
-            print(index_co2)
-            print(co2_value)
-
         self.plantFATE_model.update_climate(
-            co2_value,
+            co2_forcing,
             temperature,
             vapour_pressure_deficit,
             photosynthetic_photon_flux_density,
@@ -180,8 +146,9 @@ class Model:
         vapour_pressure_deficit,
         photosynthetic_photon_flux_density,
         temperature,  # degrees Celcius, mean temperature
-        topsoil_volumetric_water_content,
         net_radiation,
+        co2_forcing,
+        topsoil_volumetric_water_content,
     ):
         self.tcurrent += 1
 
@@ -197,7 +164,7 @@ class Model:
             photosynthetic_photon_flux_density,
             temperature,
             net_radiation,
-            # 250,
+            co2_forcing,
             topsoil_volumetric_water_content,
         )
 

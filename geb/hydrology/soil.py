@@ -1204,14 +1204,7 @@ class Soil(Module):
 
                 PFconfig_ini.parent.mkdir(parents=True, exist_ok=True)
 
-                co2_forcing_file = None
-                use_co2_forcing = False
-                if self.model.config["plantFATE"]["use_co2_forcing"] is True:
-                    print(self.model.config["plantFATE"]["co2_forcing_file"])
-                    co2_forcing_file = self.model.config["plantFATE"]["co2_forcing_file"]
-                    use_co2_forcing = True
-
-                pfModel = plantFATE.Model(PFconfig_ini, co2_forcing_file, use_co2_forcing, False, None)
+                pfModel = plantFATE.Model(PFconfig_ini, None, False)
                 pfModel.plantFATE_model.config.parent_dir = (
                     self.model.simulation_root / "plantFATE"
                 ).as_posix()
@@ -1263,7 +1256,7 @@ class Soil(Module):
 
         PFconfig_ini = self.model.config["plantFATE"]["new_forest_ini_file"]
 
-        pfModel = plantFATE.Model(PFconfig_ini, False, None)
+        pfModel = plantFATE.Model(PFconfig_ini, None, False)
         pfModel.plantFATE_model.config.parent_dir = str(
             self.model.simulation_root / "plantFATE"
         )
@@ -1367,6 +1360,7 @@ class Soil(Module):
         if self.plantFATE_forest_RUs[indx]:
             plantFATE_model = self.model.plantFATE[indx]
             if plantFATE_model is not None:
+
                 plantFATE_data = {
                     "soil_water_potential": self.calculate_soil_water_potential_MPa(
                         soil_moisture=self.HRU.var.w[
@@ -1391,19 +1385,19 @@ class Soil(Module):
                         shortwave_radiation=self.HRU.rsds[indx]
                     ),
                     "temperature": self.HRU.tas[indx] - 273.15,  # - 273.15,  # K to C
-                    "topsoil_volumetric_water_content": self.calculate_topsoil_volumetric_content(
-                        topsoil_water_content=self.HRU.var.w[0, indx],
-                        topsoil_wilting_point=self.HRU.var.wres[0, indx],
-                        topsoil_fieldcap=self.HRU.var.wfc[0, indx],
-                    ),
+                    "co2_forcing": self.model.forcing.load("CO2"),
                     "net_radiation": self.calculate_net_radiation(
                         shortwave_radiation_downwelling=self.HRU.rsds[indx],
                         longwave_radiation_net=self.HRU.rlds[indx],
                         albedo=0.13,  # temporary value for forest
                     ),
+                    "topsoil_volumetric_water_content": self.calculate_topsoil_volumetric_content(
+                        topsoil_water_content=self.HRU.var.w[0, indx],
+                        topsoil_wilting_point=self.HRU.var.wres[0, indx],
+                        topsoil_fieldcap=self.HRU.var.wfc[0, indx],
+                    ),
                     # "net_radiation": self.grid.net_absorbed_radiation_vegetation_MJ_m2_day[i]
                 }
-
                 # print(plantFATE_data)
                 if self.model.current_timestep == 0:
                     plantFATE_model.first_step(
