@@ -6,7 +6,7 @@ from pypfate import Patch as patch
 
 
 class Model:
-    def __init__(self, param_file, acclim_forcing_file, use_acclim):
+    def __init__(self, param_file, co2_forcing_file, use_co2_forcing, acclim_forcing_file, use_acclim):
         self.plantFATE_model = patch(str(param_file))
         self.time_unit_base = self.process_time_units()
         self.tcurrent = 0
@@ -15,6 +15,11 @@ class Model:
         if use_acclim:
             self.acclimation_forcing = self.read_acclimation_file(acclim_forcing_file)
             self.use_acclim = use_acclim
+
+        self.use_co2_forcing = use_co2_forcing
+        if use_co2_forcing:
+            self.co2_forcing = self.read_co2_forcing_file(co2_forcing_file)
+            self.use_co2_forcing = use_co2_forcing
 
         self.first_step_was_run = False
 
@@ -26,6 +31,17 @@ class Model:
         alldates = alldates.map(lambda x: x.days - 1)
         df["date_jul"] = alldates
         return df
+
+    def read_co2_forcing_file(self, file):
+        df = pd.read_csv(file)
+        alldates = df["date"].map(
+            lambda x: datetime.strptime(x, "%Y-%m-%d") - self.time_unit_base
+        )
+        alldates = alldates.map(lambda x: x.days - 1)
+        df["date_jul"] = alldates
+        return df
+
+
 
     def process_time_units(self):
         time_unit = self.plantFATE_model.config.time_unit
@@ -48,13 +64,25 @@ class Model:
     ):
         assert self.first_step_was_run, "first step must be run before running a step"
 
+        co2_value = 368.9
+        if (self.use_co2_forcing):
+            # print("CO2 FORCING")
+            index_co2 = self.co2_forcing.index[
+                self.co2_forcing['date_jul'] == self.tcurrent].tolist()
+            co2_value = self.co2_forcing.loc[index_co2, 'co2']
+            # print(index_co2)
+            # print(self.tcurrent)
+            # print(self.co2_forcing.loc[index_co2, 'date_jul'])
+            # print(co2_value)
+        #
+
         self.plantFATE_model.update_climate(
-            np.float64(368.9),  # co2
-            np.float64(temperature),
-            np.float64(vapour_pressure_deficit),  # kPa -> Pa
-            np.float64(photosynthetic_photon_flux_density),
-            np.float64(soil_water_potential),
-            np.float64(net_radiation),
+            co2_value.item(),  # co2
+            temperature,
+            vapour_pressure_deficit,  # kPa -> Pa
+            photosynthetic_photon_flux_density,
+            soil_water_potential,
+            net_radiation,
         )
         #
         # if (self.use_acclim):
@@ -102,8 +130,18 @@ class Model:
         self.plantFATE_model.reset_time(datediff)
 
         # print("Running first step - after init")
+
+        co2_value = 368.9
+        if (self.use_co2_forcing):
+            print("CO2 FORCING")
+            index_co2 = self.co2_forcing.index[
+                self.co2_forcing['date_jul'] == self.tcurrent].tolist()
+            co2_value = self.co2_forcing.loc[index_co2, 'co2']
+            print(index_co2)
+            print(co2_value)
+
         self.plantFATE_model.update_climate(
-            368.9,
+            co2_value,
             temperature,
             vapour_pressure_deficit,
             photosynthetic_photon_flux_density,

@@ -1191,7 +1191,14 @@ class Soil(Module):
 
                 PFconfig_ini.parent.mkdir(parents=True, exist_ok=True)
 
-                pfModel = plantFATE.Model(PFconfig_ini, False, None)
+                co2_forcing_file = None
+                use_co2_forcing = False
+                if self.model.config["plantFATE"]["use_co2_forcing"] is True:
+                    print(self.model.config["plantFATE"]["co2_forcing_file"])
+                    co2_forcing_file = self.model.config["plantFATE"]["co2_forcing_file"]
+                    use_co2_forcing = True
+
+                pfModel = plantFATE.Model(PFconfig_ini, co2_forcing_file, use_co2_forcing, False, None)
                 pfModel.plantFATE_model.config.parent_dir = (
                     self.model.simulation_root / "plantFATE"
                 ).as_posix()
