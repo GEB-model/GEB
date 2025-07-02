@@ -15,6 +15,7 @@ from geb.cli import (
     init_fn,
     parse_config,
     run_model_with_method,
+    share_fn,
     update_fn,
 )
 from geb.model import GEBModel
@@ -333,3 +334,19 @@ def test_ISIMIP_forcing_low_res():
     }
 
     update_fn(**args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_share():
+    share_fn(
+        working_directory=working_directory,
+        name="test",
+        include_preprocessing=False,
+        include_output=False,
+    )
+
+    output_fn = working_directory / "test.zip"
+
+    assert output_fn.exists()
+
+    output_fn.unlink()
