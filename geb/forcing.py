@@ -117,7 +117,7 @@ class Forcing(Module):
                 )
                 .item()
             )
-        if name == "pr_hourly":
+        elif name == "pr_hourly":
             # For hourly precipitation, we need to read the data for the current time
             # and return it as a numpy array.
             data = self[name].sel(time=time)
