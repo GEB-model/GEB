@@ -2,6 +2,7 @@ import os
 import shutil
 from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -34,7 +35,7 @@ def get_topological_stream_order(rivers):
     topological_stream_order = np.full(len(rivers), -1, dtype=np.int32)
 
     prev_order_idx = ~endpoint.isin(startpoint)
-    topological_stream_order_idx = 0
+    topological_stream_order_idx: int = 0
     topological_stream_order[prev_order_idx] = topological_stream_order_idx
 
     prev_order_start_points = startpoint[prev_order_idx]
@@ -53,7 +54,7 @@ def get_topological_stream_order(rivers):
     return topological_stream_order
 
 
-def assign_calculation_group(rivers):
+def assign_calculation_group(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Assign calculation groups to river segments based on their topological stream order and endpoints.
 
     We want to run every river rivers independently of the other river rivers. Here, we make
@@ -72,14 +73,10 @@ def assign_calculation_group(rivers):
     The outcome is calculation groups 1-6, where 3 and 6 are only used when there are three rivers
     sharing the same endpoint.
 
-    Parameters
-    ----------
-    rivers : GeoDataFrame
-        GeoDataFrame with the river rivers
+    Args:
+        rivers: GeoDataFrame with the river rivers
 
     Returns:
-    -------
-    GeoDataFrame
         GeoDataFrame with an additional column 'calculation_group' that assigns the rivers to a calculation group
     """
 
@@ -120,17 +117,17 @@ def run_sfincs_for_return_periods(
     gpu=False,
 ):
     if export_dir is None:
-        export_dir = model_root / "risk"
+        export_dir: Path = model_root / "risk"
 
     export_dir.mkdir(exist_ok=True, parents=True)
 
-    rivers = import_rivers(model_root, postfix="_return_periods")
+    rivers: gpd.GeoDataFrame = import_rivers(model_root, postfix="_return_periods")
     assert (~rivers["is_downstream_outflow_subbasin"]).all()
 
     rivers["topological_stream_order"] = get_topological_stream_order(rivers)
-    rivers = assign_calculation_group(rivers)
+    rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
 
-    working_dir = model_root / "working_dir"
+    working_dir: Path = model_root / "working_dir"
 
     rp_maps = {}
 
@@ -225,12 +222,3 @@ def run_sfincs_for_return_periods(
         rp_maps[return_period] = rp_map
 
     return rp_maps
-
-
-if __name__ == "__main__":
-    if "snakemake" in locals():
-        model_root = Path(snakemake.params.model_root)  # noqa: F821
-    else:
-        model_root = Path(f"models/basin{232508}")
-
-    run_sfincs_for_return_periods(model_root, clean_working_dir=True, gpu=True)

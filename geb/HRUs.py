@@ -2,6 +2,7 @@
 import math
 import warnings
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal, Union
 
 import geopandas as gpd
@@ -22,7 +23,7 @@ def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
     above a certain threshold. then for each grid cell, it finds the nearest
     river cell. Finally, it maps the nearest river cell to each HRU.
     """
-    valid_indices = np.argwhere(~mask)
+    valid_indices: npt.NDArray[np.int64] = np.argwhere(~mask)
     valid_values = upstream_area[~mask]
 
     above_threshold_mask = valid_values > threshold
@@ -81,11 +82,28 @@ def load_grid(
         raise ValueError("File format not supported.")
 
 
-def load_geom(filepath):
+def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
+    """Load a geometry for the GEB model from disk.
+
+    Args:
+        filepath: Path to the geometry file.
+
+    Returns:
+        A GeoDataFrame containing the geometries.
+
+    """
     return gpd.read_parquet(filepath)
 
 
-def load_water_demand_xr(filepath):
+def load_water_demand_xr(filepath: str | Path) -> xr.Dataset:
+    """Load a water demand dataset from disk.
+
+    Args:
+        filepath: Path to the water demand dataset file.
+
+    Returns:
+        An xarray Dataset containing the water demand data.
+    """
     return xr.open_dataset(
         zarr.storage.LocalStore(
             filepath,

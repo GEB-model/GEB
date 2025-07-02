@@ -2,11 +2,13 @@ import json
 from collections import deque
 from pathlib import Path
 
+import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
 import zarr
+from shapely.geometry.point import Point
 
 from ...HRUs import load_geom
 from ...workflows.io import open_zarr, to_zarr
@@ -66,22 +68,30 @@ class SFINCS:
         else:
             return "run"
 
-    def get_utm_zone(self, region_file):
-        region = load_geom(region_file)
+    def get_utm_zone(self, region_file: Path | str) -> str:
+        """Determine the UTM zone based on the centroid of the region geometry.
+
+        Args:
+            region_file: Path to the region geometry file.
+
+        Returns:
+            The EPSG code for the UTM zone of the centroid of the region.
+        """
+        region: gpd.GeoDataFrame = load_geom(region_file)
+
         # Calculate the central longitude of the dataset
-        centroid = region.geometry.centroid
-        central_lon = centroid.x.mean()  # Mean longitude of the dataset
+        centroid: Point = region.union_all().centroid
 
         # Determine the UTM zone based on the longitude
-        utm_zone = int((central_lon + 180) // 6) + 1
+        utm_zone: int = int((centroid.x + 180) // 6) + 1
 
         # Determine if the data is in the Northern or Southern Hemisphere
         # The EPSG code for UTM in the northern hemisphere is EPSG:326xx (xx = zone)
         # The EPSG code for UTM in the southern hemisphere is EPSG:327xx (xx = zone)
-        if centroid.y.mean() > 0:
-            utm_crs = f"EPSG:326{utm_zone}"  # Northern hemisphere
+        if centroid.y > 0:
+            utm_crs: str = f"EPSG:326{utm_zone}"  # Northern hemisphere
         else:
-            utm_crs = f"EPSG:327{utm_zone}"  # Southern hemisphere
+            utm_crs: str = f"EPSG:327{utm_zone}"  # Southern hemisphere
         return utm_crs
 
     def build(self, event):
@@ -181,7 +191,7 @@ class SFINCS:
                 name="discharge",
             )
 
-        discharge_grid = xr.Dataset({"discharge": discharge_grid})
+        discharge_grid: xr.Dataset = xr.Dataset({"discharge": discharge_grid})
 
         discharge_grid.raster.set_crs(self.model.crs)
         end_time = discharge_grid.time[-1] + pd.Timedelta(
@@ -191,7 +201,9 @@ class SFINCS:
             time=slice(start_time, end_time)
         )
 
-        precipitation_grid = self.model.forcing["pr_hourly"]
+        precipitation_grid: list[xr.DataArray] | xr.DataArray = self.model.forcing[
+            "pr_hourly"
+        ]
 
         if isinstance(precipitation_grid, list):
             precipitation_grid: list[xr.DataArray] = [
@@ -232,9 +244,7 @@ class SFINCS:
             simulation_root=simulation_root,
         )  # xc, yc is for x and y in rotated grid`DD`
 
-        flood_map_name: str = (
-            f"{event['start_time'].isoformat()} - {event['end_time'].isoformat()}.zarr"
-        )
+        flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         if self.model.multiverse_name:
             flood_map_name: str = self.model.multiverse_name + " - " + flood_map_name
         flood_map: xr.DataArray = to_zarr(
@@ -252,7 +262,7 @@ class SFINCS:
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
 
-        model_root = self.sfincs_model_root("entire_region")
+        model_root: Path = self.sfincs_model_root("entire_region")
         if self.config["force_overwrite"] or not (model_root / "sfincs.inp").exists():
             build_sfincs(
                 **self.get_build_parameters(model_root),
@@ -326,9 +336,7 @@ class SFINCS:
             self.run_single_event(event, start_time)
 
     def flood(self, flood_map):
-        damages = self.model.agents.households.flood(
-            flood_map=flood_map, simulation_root=self.model.simulation_root
-        )
+        damages = self.model.agents.households.flood(flood_map=flood_map)
         return damages
 
     def save_discharge(self):
@@ -338,7 +346,7 @@ class SFINCS:
 
     @property
     def discharge_spinup_ds(self):
-        da = open_zarr(
+        da: xr.DataArray = open_zarr(
             self.model.output_folder
             / "report"
             / "spinup"
@@ -374,11 +382,11 @@ class SFINCS:
         return mannings
 
     @property
-    def land_cover(self):
+    def land_cover(self) -> xr.DataArray:
         return open_zarr(self.model.files["other"]["landcover/classification"])
 
     @property
-    def land_cover_mannings_rougness_classification(self):
+    def land_cover_mannings_rougness_classification(self) -> pd.DataFrame:
         return pd.DataFrame(
             data=[
                 [10, "Tree cover", 10, 0.12],
@@ -398,10 +406,18 @@ class SFINCS:
         )
 
     @property
-    def crs(self):
-        crs = self.config["crs"]
+    def crs(self) -> str:
+        """Get the coordinate reference system (CRS) for the model.
+
+        When the CRS is set in the configuration, it will return that value.
+        If the CRS is set to "auto", it will determine the UTM zone based on the routing subbasins geometry.
+
+        Returns:
+             The CRS string, either "auto" or the determined UTM zone.
+        """
+        crs: str = self.config["crs"]
         if crs == "auto":
-            crs = self.get_utm_zone(self.model.files["geoms"]["routing/subbasins"])
+            crs: str = self.get_utm_zone(self.model.files["geoms"]["routing/subbasins"])
         return crs
 
     def get_build_parameters(self, model_root):
