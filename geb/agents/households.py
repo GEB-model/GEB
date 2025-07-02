@@ -277,7 +277,6 @@ class Households(AgentBaseClass):
             ),
             crs="EPSG:4326",
         )
-        household_points["maximum_damage"] = self.var.property_value.data
         household_points["object_type"] = (
             "building_unprotected"  # this must match damage curves
         )
@@ -346,7 +345,7 @@ class Households(AgentBaseClass):
         self.var.household_points = new_locations
 
     def assign_household_attributes_to_buildings(self):
-        """Assigns households attributes (object_type and maximum_damage) to buildings.
+        """Assigns households attributes (object_type and maximum_damage_m2) to buildings.
 
         This is done so we pass the object_type from the households (that depends on their decisions)
         into the object that will go through the damage scanner.
@@ -367,19 +366,19 @@ class Households(AgentBaseClass):
         self.var.buildings_with_households["object_type_left"] = (
             self.var.buildings_with_households["object_type_right"]
         )
-        self.var.buildings_with_households["maximum_damage_left"] = (
-            self.var.buildings_with_households["maximum_damage_right"]
+        self.var.buildings_with_households["maximum_damage_m2_left"] = (
+            self.var.buildings_with_households["maximum_damage_m2_right"]
         )
 
         # Drop the columns that are not needed
         self.var.buildings_with_households = self.var.buildings_with_households.drop(
-            columns=["object_type_right", "maximum_damage_right", "index_right"]
+            columns=["object_type_right", "maximum_damage_m2_right", "index_right"]
         )
 
         self.var.buildings_with_households = self.var.buildings_with_households.rename(
             columns={
                 "object_type_left": "object_type",
-                "maximum_damage_left": "maximum_damage",
+                "maximum_damage_m2_left": "maximum_damage_m2",
             }
         )
 
@@ -934,7 +933,7 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
-        self.var.buildings["maximum_damage"] = self.var.max_dam_buildings_structure
+        self.var.buildings["maximum_damage_m2"] = self.var.max_dam_buildings_structure
 
         with open(
             self.model.files["dict"][
@@ -957,11 +956,14 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.var.max_dam_rail = float(json.load(f)["maximum_damage"])
-        self.rail["maximum_damage"] = self.var.max_dam_rail
+        self.rail["maximum_damage_m"] = self.var.max_dam_rail
 
-        self.var.max_dam_road = {}
+        max_dam_road_m: dict[str, float] = {}
         road_types = [
-            ("residential", "damage_parameters/flood/road/residential/maximum_damage"),
+            (
+                "residential",
+                "damage_parameters/flood/road/residential/maximum_damage",
+            ),
             (
                 "unclassified",
                 "damage_parameters/flood/road/unclassified/maximum_damage",
@@ -989,11 +991,9 @@ class Households(AgentBaseClass):
         for road_type, path in road_types:
             with open(self.model.files["dict"][path], "r") as f:
                 max_damage = json.load(f)
-            self.var.max_dam_road[road_type] = max_damage["maximum_damage"]
+            max_dam_road_m[road_type] = max_damage["maximum_damage"]
 
-        self.roads["maximum_damage"] = self.roads["object_type"].map(
-            self.var.max_dam_road
-        )
+        self.roads["maximum_damage_m"] = self.roads["object_type"].map(max_dam_road_m)
 
         with open(
             self.model.files["dict"][
@@ -1001,7 +1001,7 @@ class Households(AgentBaseClass):
             ],
             "r",
         ) as f:
-            self.var.max_dam_forest = float(json.load(f)["maximum_damage"])
+            self.var.max_dam_forest_m2 = float(json.load(f)["maximum_damage"])
 
         with open(
             self.model.files["dict"][
@@ -1009,7 +1009,7 @@ class Households(AgentBaseClass):
             ],
             "r",
         ) as f:
-            self.var.max_dam_agriculture = float(json.load(f)["maximum_damage"])
+            self.var.max_dam_agriculture_m2 = float(json.load(f)["maximum_damage"])
 
     def load_damage_curves(self):
         # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
@@ -1124,20 +1124,26 @@ class Households(AgentBaseClass):
         if self.config["warning_response"]:
             self.change_household_locations()  # ideally this should be done in the setup_population when building the model
 
-    def flood(self, flood_map, simulation_root):
-        """This function computes the damages for the assets and land use types in the model."""
+    def flood(self, flood_map: xr.DataArray) -> float:
+        """This function computes the damages for the assets and land use types in the model.
+
+        Args:
+            flood_map: The flood map containing water levels for the flood event.
+
+        """
+        flood_map = flood_map.compute()
+
         # Assign household points to buildings
         # This is done to get the correct geometry for the damage scanner
         self.assign_household_attributes_to_buildings()
 
         # Create the folder to save damage maps if it doesn't exist
-        damage_folder = os.path.join(self.model.output_folder, "damage_maps")
-        os.makedirs(damage_folder, exist_ok=True)
+        damage_folder: Path = self.model.output_folder / "damage_maps"
+        damage_folder.mkdir(parents=True, exist_ok=True)
 
         # Compute damages for buildings content and save it to a gpkg file
-        category_name = "buildings_content"
-        filename = f"damage_map_{category_name}.gpkg"
-        save_path = os.path.join(damage_folder, filename)
+        category_name: str = "buildings_content"
+        filename: str = f"damage_map_{category_name}.gpkg"
 
         buildings_centroid = self.var.buildings_centroid.to_crs(flood_map.rio.crs)
         damages_buildings_content = object_scanner(
@@ -1147,22 +1153,27 @@ class Households(AgentBaseClass):
         )
 
         buildings_centroid["damages"] = damages_buildings_content
-        buildings_centroid.to_file(save_path, driver="GPKG")
+        buildings_centroid.to_file(damage_folder / filename, driver="GPKG")
 
         # Compute damages for buildings structure and save it to a gpkg file
-        category_name = "buildings_structure"
-        filename = f"damage_map_{category_name}.gpkg"
-        save_path = os.path.join(damage_folder, filename)
+        category_name: str = "buildings_structure"
+        filename: str = f"damage_map_{category_name}.gpkg"
 
-        buildings = self.var.buildings_with_households.to_crs(flood_map.rio.crs)
-        damages_buildings_structure = object_scanner(
+        buildings: gpd.GeoDataFrame = self.var.buildings_with_households.to_crs(
+            flood_map.rio.crs
+        )
+        damages_buildings_structure: pd.Series = object_scanner(
             objects=buildings,
             hazard=flood_map,
             curves=self.var.buildings_structure_curve,
         )
 
         buildings["damages"] = damages_buildings_structure
-        buildings.to_file(save_path, driver="GPKG")
+
+        assert (buildings["damages"] >= buildings["maximum_damage"]).all(), (
+            "Damages exceed maximum damage for some buildings."
+        )
+        buildings.to_file(damage_folder / filename, driver="GPKG")
 
         total_flood_damages = (
             damages_buildings_content.sum() + damages_buildings_structure.sum()
@@ -1180,7 +1191,7 @@ class Households(AgentBaseClass):
             self.model.crs,
         )
         agriculture["object_type"] = "agriculture"
-        agriculture["maximum_damage"] = self.var.max_dam_agriculture
+        agriculture["maximum_damage"] = self.var.max_dam_agriculture_m2
 
         agriculture = agriculture.to_crs(flood_map.rio.crs)
 
@@ -1199,7 +1210,7 @@ class Households(AgentBaseClass):
             self.model.crs,
         )
         forest["object_type"] = "forest"
-        forest["maximum_damage"] = self.var.max_dam_forest
+        forest["maximum_damage"] = self.var.max_dam_forest_m2
 
         forest = forest.to_crs(flood_map.rio.crs)
 
