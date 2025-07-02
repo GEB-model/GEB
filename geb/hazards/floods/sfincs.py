@@ -10,7 +10,7 @@ import xarray as xr
 import zarr
 from shapely.geometry.point import Point
 
-from ...HRUs import load_geom
+from ...hydrology.HRUs import load_geom
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .build_model import build_sfincs

@@ -23,7 +23,7 @@ import numpy as np
 import numpy.typing as npt
 from honeybees.library.raster import write_to_array
 
-from geb.HRUs import load_grid
+from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 

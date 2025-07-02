@@ -8,7 +8,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from .HRUs import load_geom
+from .hydrology.HRUs import load_geom
 
 
 class DynamicArray:

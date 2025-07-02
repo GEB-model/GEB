@@ -22,8 +22,8 @@ from geb.workflows.io import open_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
-from .HRUs import load_geom
 from .hydrology import Hydrology
+from .hydrology.HRUs import load_geom
 
 
 class GEBModel(Module, HazardDriver, ABM_Model):
