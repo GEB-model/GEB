@@ -244,15 +244,15 @@ class CropFarmers(AgentBaseClass):
         self.var.p_droughts = np.array([100, 50, 25, 10, 5, 2, 1])
 
         # Set water costs
-        self.var.water_costs_m3_channel = self.model.config["agent_settings"]["farmers"][
-            "expected_utility"
-        ]["water_price"]["water_costs_m3_channel"]
-        self.var.water_costs_m3_reservoir = self.model.config["agent_settings"]["farmers"][
-            "expected_utility"
-        ]["water_price"]["water_costs_m3_groundwater"]
-        self.var.water_costs_m3_groundwater = self.model.config["agent_settings"]["farmers"][
-            "expected_utility"
-        ]["water_price"]["water_costs_m3_channel"]
+        self.var.water_costs_m3_channel = self.model.config["agent_settings"][
+            "farmers"
+        ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
+        self.var.water_costs_m3_reservoir = self.model.config["agent_settings"][
+            "farmers"
+        ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
+        self.var.water_costs_m3_groundwater = self.model.config["agent_settings"][
+            "farmers"
+        ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
 
         # Irr efficiency variables
         self.var.lifespan_irrigation = self.model.config["agent_settings"]["farmers"][
@@ -679,7 +679,7 @@ class CropFarmers(AgentBaseClass):
         ] = 0
 
         # Initiate array that tracks the overall yearly costs for all adaptations
-        # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation), 4 irr. field expansion, 
+        # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation), 4 irr. field expansion,
         # 5 is water costs, 6 is personal insurance, 7 is index insurance last is total
         # Columns are the individual loans, i.e. if there are 2 loans for 2 wells, the first and second slot is used
 
@@ -4331,6 +4331,7 @@ class CropFarmers(AgentBaseClass):
         # Subtract it from the total loans and set expired loans to 0
         self.var.all_loans_annual_cost[:, -1, 0] -= total_loan_reduction
         self.var.all_loans_annual_cost[expired_loan_mask] = 0
+        self.var.all_loans_annual_cost[self.var.all_loans_annual_cost < 0] = 0
 
         # Adjust for inflation in separate array for export
         # Calculate the cumulative inflation from the start year to the current year for each farmer
@@ -4354,6 +4355,7 @@ class CropFarmers(AgentBaseClass):
         self.var.adjusted_yearly_income = (
             self.var.insured_yearly_income / cumulative_inflation[..., None]
         )
+        pass
 
     def get_value_per_farmer_from_region_id(
         self, data, time, subset=None

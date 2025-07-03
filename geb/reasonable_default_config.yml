@@ -46,10 +46,10 @@ agent_settings:
   market:
     dynamic_market: false
     price_frequency: yearly
-  government:
-    irrigation_limit:
-      limit: 10000  # previous tried 1700
-      per: capita
+  # government:
+  #   irrigation_limit:
+  #     limit: 10000  # previous tried 1700
+  #     per: capita
   households:
     adapt: false
     expected_utility:
