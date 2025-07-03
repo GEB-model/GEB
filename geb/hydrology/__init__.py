@@ -136,30 +136,9 @@ class Hydrology(Data, Module):
 
         # if self.config["general"]["simulate_forest"] and self.soil.model.spinup is False:
         if self.model.config["general"]["simulate_forest"]:
-            for plantFATE_model in self.plantFATE:
+            for plantFATE_model in self.soil.model.plantFATE:
                 if plantFATE_model is not None:
                     plantFATE_model.finalize()
-
-    @property
-    def n_individuals_per_m2(self):
-        n_invidiuals_per_m2_per_HRU = np.array(
-            [model.n_individuals for model in self.plantFATE if model is not None]
-        )
-        land_use_ratios = self.data.HRU.land_use_ratio[self.soil.plantFATE_forest_RUs]
-        return np.array(
-            (n_invidiuals_per_m2_per_HRU * land_use_ratios).sum()
-            / land_use_ratios.sum()
-        )
-
-    @property
-    def biomass_per_m2(self):
-        biomass_per_m2_per_HRU = np.array(
-            [model.biomass for model in self.plantFATE if model is not None]
-        )
-        land_use_ratios = self.data.HRU.land_use_ratio[self.soil.plantFATE_forest_RUs]
-        return np.array(
-            (biomass_per_m2_per_HRU * land_use_ratios).sum() / land_use_ratios.sum()
-        )
 
     def water_balance(self, total_water_demand_loss_m3):
         # TODO: account for capillar in water balance
