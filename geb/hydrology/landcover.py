@@ -159,7 +159,7 @@ class LandCover(Module):
             ]
         )
 
-        self.HRU.var.cropKC, self.HRU.var.root_depth = get_crop_kc_and_root_depths(
+        crop_factor, self.HRU.var.root_depth = get_crop_kc_and_root_depths(
             self.HRU.var.crop_map,
             self.HRU.var.crop_age_days_map,
             self.HRU.var.crop_harvest_age_days,
@@ -189,21 +189,22 @@ class LandCover(Module):
             fn=None,
         )
 
-        self.HRU.var.cropKC[self.HRU.var.land_use_type == FOREST] = (
-            forest_cropCoefficientNC[self.HRU.var.land_use_type == FOREST]
-        )  # forest
+        crop_factor[self.HRU.var.land_use_type == FOREST] = forest_cropCoefficientNC[
+            self.HRU.var.land_use_type == FOREST
+        ]  # forest
         assert (
             self.HRU.var.crop_map[self.HRU.var.land_use_type == GRASSLAND_LIKE] == -1
         ).all()
 
-        self.HRU.var.cropKC[self.HRU.var.land_use_type == GRASSLAND_LIKE] = 0.2
+        crop_factor[self.HRU.var.land_use_type == GRASSLAND_LIKE] = 0.2
 
         (
             potential_transpiration,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
             snow_melt,
-        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef, snow_melt)
+            snow_evaporation,
+        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef, snow_melt, crop_factor)
 
         timer.new_split("PET")
 
@@ -245,6 +246,7 @@ class LandCover(Module):
             potential_evapotranspiration,
             natural_available_water_infiltration=self.HRU.var.natural_available_water_infiltration,
             actual_irrigation_consumption=self.HRU.var.actual_irrigation_consumption,
+            crop_factor=crop_factor,
         )
         assert not (runoff_soil < 0).any()
         timer.new_split("Soil")
@@ -262,7 +264,7 @@ class LandCover(Module):
             + actual_total_transpiration
             + open_water_evaporation
             + interception_evaporation
-            + self.HRU.var.snowEvap  # ice should be included in the future
+            + snow_evaporation  # ice should be included in the future
             + irrigation_loss_to_evaporation_m
         )
 
@@ -353,7 +355,7 @@ class LandCover(Module):
                     actual_bare_soil_evaporation,
                     open_water_evaporation,
                     interception_evaporation,
-                    self.HRU.var.snowEvap,
+                    snow_evaporation,
                 ],
                 prestorages=[totalstorage_landcover_pre],
                 poststorages=[totalstorage_landcover],

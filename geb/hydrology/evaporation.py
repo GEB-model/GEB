@@ -64,8 +64,12 @@ class Evaporation(Module):
         pass
 
     def step(
-        self, ETRef: npt.NDArray[np.float32], snow_melt: npt.NDArray[np.float32]
+        self,
+        ETRef: npt.NDArray[np.float32],
+        snow_melt: npt.NDArray[np.float32],
+        crop_factor: npt.NDArray[np.float32],
     ) -> tuple[
+        npt.NDArray[np.float32],
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
@@ -76,10 +80,11 @@ class Evaporation(Module):
         Args:
             ETRef: Reference evapotranspiration [m]
             snow_melt: Snow melt [m]
+            crop_factor: Crop factor for each land use type [dimensionless]
 
         Returns:
             Potential transpiration, potential bare soil evaporation,
-            potential evapotranspiration, and remaining snow melt.
+            potential evapotranspiration, remaining snow melt and snow evaporation.
         """
         # calculate potential bare soil evaporation
         potential_bare_soil_evaporation: npt.NDArray[np.float32] = (
@@ -87,10 +92,12 @@ class Evaporation(Module):
         )
 
         # calculate snow evaporation
-        self.HRU.var.snowEvap = np.minimum(snow_melt, potential_bare_soil_evaporation)
-        snow_melt -= self.HRU.var.snowEvap
+        snow_evaporation: npt.NDArray[np.float32] = np.minimum(
+            snow_melt, potential_bare_soil_evaporation
+        )
+        snow_melt -= snow_evaporation
         potential_bare_soil_evaporation: npt.NDArray[np.float32] = (
-            potential_bare_soil_evaporation - self.HRU.var.snowEvap
+            potential_bare_soil_evaporation - snow_evaporation
         )
 
         CO2_ppm: float = self.model.forcing.load("CO2")
@@ -99,14 +106,14 @@ class Evaporation(Module):
         )
 
         potential_evapotranspiration: npt.NDArray[np.float32] = (
-            self.hydrology.crop_factor_calibration_factor * self.HRU.var.cropKC * ETRef
+            self.hydrology.crop_factor_calibration_factor * crop_factor * ETRef
         ) * np.float32(CO2_induced_crop_factor_adustment)
 
         potential_transpiration: npt.NDArray[np.float32] = np.maximum(
             0.0,
             potential_evapotranspiration
             - potential_bare_soil_evaporation
-            - self.HRU.var.snowEvap,
+            - snow_evaporation,
         )
 
         self.report(self, locals())
@@ -116,4 +123,5 @@ class Evaporation(Module):
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
             snow_melt,
+            snow_evaporation,
         )
