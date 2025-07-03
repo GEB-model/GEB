@@ -118,18 +118,18 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         original_pr_hourly: xr.DataArray = self.forcing["pr_hourly"]
 
         forecasts: xr.DataArray = open_zarr(
-            Path("data") / f"{forecast_dt.strftime('%Y%m%dT%H%M%S')}__.zarr"
+            Path("data") / "forecasts" / f"{forecast_dt.strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
         if return_mean_discharge:
-            mean_discharge = {}
+            mean_discharge: dict[Any, float] = {}
 
         for member in forecasts.member:
             self.multiverse_name = member.item()
 
             pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member) / 3600
 
-            pr_hourly_forecast = pr_hourly_forecast.compute()
+            pr_hourly_forecast: xr.DataArray = pr_hourly_forecast.compute()
 
             foecast_end_date = round_up_to_start_of_next_day_unless_midnight(
                 pd.to_datetime(pr_hourly_forecast.time[-1].item()).to_pydatetime()
@@ -417,7 +417,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     def estimate_return_periods(self) -> None:
         """Estimate the risk of the model."""
-        current_time = self.create_datetime(self.config["general"]["start_time"])
+        current_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["start_time"]
+        )
         self.config["general"]["name"] = "estimate_return_periods"
 
         self._initialize(

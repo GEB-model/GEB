@@ -18,7 +18,6 @@ from geb.cli import (
     share_fn,
     update_fn,
 )
-from geb.forcing import Forcing
 from geb.model import GEBModel
 from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
 from geb.workflows.io import WorkingDirectory
@@ -248,7 +247,7 @@ def test_multiverse():
     # add member dimension
     forecast = forecast.expand_dims(dim={"member": [0]}, axis=0)
 
-    forecasts_folder = input_folder / "other" / "climate" / "forecasts"
+    forecasts_folder: Path = working_directory / "data" / "forecasts"
     forecasts_folder.mkdir(parents=True, exist_ok=True)
 
     forecast.to_zarr(
@@ -338,11 +337,13 @@ def test_ISIMIP_forcing_low_res():
 
     This is a special case that requires a specific setup.
     """
-    args = DEFAULT_BUILD_ARGS.copy()
+    args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
 
-    build_config = parse_config(working_directory / args["build_config"])
+    build_config: dict[str, Any] = parse_config(
+        working_directory / args["build_config"]
+    )
 
-    original_time_range = build_config["set_time_range"]
+    original_time_range: dict[str, date] = build_config["set_time_range"]
 
     args["build_config"] = {
         "set_time_range": {
@@ -373,7 +374,7 @@ def test_share():
         include_output=False,
     )
 
-    output_fn = working_directory / "test.zip"
+    output_fn: Path = working_directory / "test.zip"
 
     assert output_fn.exists()
 
