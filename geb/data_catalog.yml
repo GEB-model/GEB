@@ -225,7 +225,7 @@ GTSM:
     category: water level
     paper_doi: doi:10.1038/ncomms11969
     paper_ref: Muis, S. et al. (2016)
-    source_license: Copernicus Product License
+    source_license: CC BY license
     source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/sis-water-level-change-timeseries-cmip6?tab=overview
     source_version: 1.0
     unit: m+MSL
@@ -238,7 +238,7 @@ gebco:
     category: topography
     paper_doi: 10.5285/a29c5465-b138-234d-e053-6c86abc040b9
     paper_ref: Weatherall et al (2020)
-    source_license: https://www.gebco.net/data_and_products/gridded_bathymetry_data/#a1
+    source_license: Public domain (free for any use including commercial)
     source_url: https://www.bodc.ac.uk/data/open_download/gebco/gebco_2024/geotiff/
     source_version: 2020
     unit: m+MSL
@@ -253,7 +253,7 @@ merit_hydro:
     category: topography
     paper_doi: 10.1029/2019WR024873
     paper_ref: Yamazaki et al. (2019)
-    source_license: CC-BY-NC 4.0 or ODbL 1.0
+    source_license: CC-BY-NC 4.0 or ODbL 1.0 (commercial use requires ODbL 1.0 with share-alike)
     source_url: http://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro
     source_version: 1.0
   path: hydrography/merit_hydro_v1.0/{variable}.vrt
@@ -264,31 +264,49 @@ cwatm_soil_5min:
   data_type: RasterDataset
   driver: raster
   path: cwatm_input_5min/soil/{variable}.nc
+  meta:
+    source_license: GNU General Public License V3
+    source_url: https://cwatm.iiasa.ac.at/license.html
 cwatm_forest_5min:
   crs: 4326
   data_type: RasterDataset
   driver: raster
   path: cwatm_input_5min/landcover/forest/{variable}.nc
+  meta:
+    source_license: GNU General Public License V3
+    source_url: https://cwatm.iiasa.ac.at/license.html
 cwatm_grassland_5min:
   crs: 4326
   data_type: RasterDataset
   driver: raster
   path: cwatm_input_5min/landcover/grassland/{variable}.nc
+  meta:
+    source_license: GNU General Public License V3
+    source_url: https://cwatm.iiasa.ac.at/license.html
 cwatm_irrPaddy_5min:
   crs: 4326
   data_type: RasterDataset
   driver: raster
   path: cwatm_input_5min/landcover/irrPaddy/{variable}.nc
+  meta:
+    source_license: GNU General Public License V3
+    source_url: https://cwatm.iiasa.ac.at/license.html
 cwatm_irrNonPaddy_5min:
   crs: 4326
   data_type: RasterDataset
   driver: raster
   path: cwatm_input_5min/landcover/irrNonPaddy/{variable}.nc
+  meta:
+    source_license: GNU General Public License V3
+    source_url: https://cwatm.iiasa.ac.at/license.html
 cwatm_albedo_5min:
   crs: 4326
   data_type: RasterDataset
   driver: netcdf
   path: cwatm_input_5min/landsurface/albedo/albedo.nc
+  meta:
+    source_license: GNU General Public License V3
+    source_url: https://cwatm.iiasa.ac.at/license.html
 hydro_lakes:
   crs: 4326
   data_type: GeoDataFrame
@@ -298,6 +316,7 @@ hydro_lakes:
     notes: HydroLAKES.v10_extract
     source_author: Arjen Haag
     source_version: 1.0
+    source_license: Creative Commons Attribution (CC-BY) 4.0 International License
   path: hydro_lakes/HydroLAKES_polys_v10.gpkg
   rename:
     Vol_total: volume_total
@@ -337,6 +356,7 @@ UN_dev_index:
     category: economics
     source_author: UNDP
     source_url: https://hdr.undp.org/  
+    source_license: Creative Commons Attribution 3.0 IGO
   path: socioeconomic/UN_HDI/human-development-index.csv
   driver: csv
   data_type: DataFrame
@@ -392,13 +412,12 @@ wb_LCU_per_USD:
 gcam_electricity_rates:
   meta:
     category: economics
-  path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
-  driver: csv
-  data_type: DataFrame
-  meta:
     source_url: https://github.com/JGCRI/superwell
     source_version: 1.0
     unit: USD (2016)
+  path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
+  driver: csv
+  data_type: DataFrame
 GADM_level0:
   crs: 4326
   data_type: GeoDataFrame
@@ -445,10 +464,18 @@ GDL_regions_v4:
 GLOPOP-S:
   data_type: Dataset
   path: population/GLOPOP-S/synthpop_{region}_grid.dat.gz
+  meta:
+    source_license: Creative Commons Attribution 4.0 International
+    source_url: https://zenodo.org/records/15680747
+    source_version: N/A
 GLOPOP-SG:
   data_type: RasterDataset
   driver: raster
   path: population/GLOPOP-SG/GLOPOP_SG_V2.zip
+  meta:
+    source_license: Creative Commons Attribution 4.0 International
+    source_url: https://zenodo.org/records/15680747
+    source_version: N/A
 AQUASTAT_municipal_withdrawal:
   data_type: DataFrame
   driver: excel
@@ -545,6 +572,7 @@ preferences_individual:
     source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
     paper_doi: doi.org/10.1093/qje/qjy013
     paper_ref: Falk et al. (2018)
+    source_license: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (non-profit only)
 preferences_country:
   path: socioeconomic/social/cleaned_country_data.csv
   driver: csv
@@ -554,6 +582,7 @@ preferences_country:
     source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
     paper_doi: doi.org/10.1093/qje/qjy013
     paper_ref: Falk et al. (2018)
+    source_license: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (non-profit only)
 cwatm_domestic_water_demand_{scenario}_year:
   crs: 4326
   data_type: RasterDataset
@@ -724,6 +753,7 @@ why_map:
     paper_doi: https://doi.org/10.1007/978-90-481-3426-7_10
     paper_ref: Richts et al. (2011)
     source_url: https://www.whymap.org/whymap/EN/Maps_Data/Gwr/gwr_node_en.html
+    source_license: Creative Commons Attribution-ShareAlike Licence (CC BY-SA)
   path: groundwater/why_map.tif
 fan_initial_groundwater_depth_{continent}:
   crs: 4326
@@ -734,6 +764,7 @@ fan_initial_groundwater_depth_{continent}:
     paper_doi: 10.1126/science.1229881
     paper_ref: Fan et al. (2013, 2020) 
     source_url: http://thredds-gfnl.usc.es/thredds/catalog/GLOBALWTDFTP/catalog.html
+    source_license: cant find
   path: groundwater/groundwater_depth/{continent}.nc
   nodata: 2
   placeholders:
@@ -804,5 +835,5 @@ ERA5_hourly:
   meta:
     category: climate
     source_author: ECMWF
-    source_license: Licence to use Copernicus Products
+    source_license: CC-BY licence
     source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels
