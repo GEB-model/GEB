@@ -36,8 +36,9 @@ def get_river_depth(river_segments, method, bankfull_column):
 
     elif method == "power_law":
         # Calculate 'river depth' using the power law equation
-        c = 0.27
-        d = 0.30  # Powerlaw equation from Andreadis et al (2013)
+        # Change values to match Geul observations better
+        c = 0.63
+        d = 0.31  # Powerlaw equation from Andreadis et al (2013)
         depth = c * (river_segments[bankfull_column].astype(float) ** d)
 
     else:
@@ -169,11 +170,17 @@ def build_sfincs(
         river_representative_points,
         discharge=discharge,
     )
+
+    print(discharge_by_river)
+
     rivers = assign_return_periods(rivers, discharge_by_river, return_periods=[2])
 
     rivers["depth"] = get_river_depth(
         rivers, method=depth_calculation, bankfull_column="Q_2"
     )
+    print("just calculated river depth")
+    print(rivers)
+
     rivers["manning"] = get_river_manning(rivers)
 
     export_rivers(model_root, rivers)

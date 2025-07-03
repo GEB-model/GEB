@@ -1616,25 +1616,36 @@ def calibrate(config, working_directory):
         streamflow_data = pd.read_csv(
             streamflow_path, sep=",", parse_dates=False, index_col=None
         )
+        print(streamflow_data)
         df = streamflow_data.reset_index(drop=True)
-        df.columns = df.iloc[1]
-        df = df.drop([0, 1]).reset_index(drop=True)
+        # df.columns = df.iloc[1]
+        # df = df.drop([0, 1]).reset_index(drop=True)
+
         df["Date"] = pd.to_datetime(
             df["Date"], errors="coerce", infer_datetime_format=True
         )
         df = df.dropna(subset=["Date"])
-        df["Discharge (ML/Day)"] = pd.to_numeric(
-            df["Discharge (ML/Day)"], errors="coerce"
+        df["flow"] = pd.to_numeric(
+            df["flow"], errors="coerce"
         )
-        df = df.dropna(subset=["Discharge (ML/Day)"])
-        df = df[["Date", "Discharge (ML/Day)"]].rename(
-            columns={"Date": "date", "Discharge (ML/Day)": "flow"}
-        )
-        df["flow"] = df["flow"] * (1000.0 / 86400.0)  # ML/day to m³/s
-        df["date"] = df["date"].dt.strftime("%Y-%m-%d")
-        df = df.set_index(pd.to_datetime(df["date"]))
-        df.index.name = "time"
-        observed_streamflow[gauge] = df["flow"]
+        # df = df.dropna(subset=["Discharge (ML/Day)"])
+        df = df[["Date", "flow"]].rename(
+            columns={"Date": "date"}
+        )        # df["flow"] = df["flow"] * (1000.0 / 86400.0)  # ML/day to m³/s
+        
+        # Make the discharge daily, used to be for every 15 min 
+        df = df.set_index("date")
+        
+        daily_df = df.resample("D").mean()
+        daily_df.index.name = "time"
+
+        # df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+        # print(df)
+        # df = df.set_index(pd.to_datetime(df["date"]))
+        # print(df)
+        # df.index.name = "time"
+        # print(df)
+        observed_streamflow[gauge] = daily_df["flow"]
         observed_streamflow[gauge].name = "observed"
 
     # Create DEAP classes
