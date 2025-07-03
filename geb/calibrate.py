@@ -1407,10 +1407,10 @@ def run_model(individual, config, gauges, observed_streamflow):
                 # env["GFORTRAN_UNBUFFERED_ALL"] = "1"
                 # env["OMP_NUM_THREADS"] = "1"
 
-                conda_env_name = "geb_p2"
+                conda_env_name = "geb"
                 cli_py_path = os.path.join(os.environ.get("GEB_PACKAGE_DIR"), "cli.py")
                 conda_activate = os.path.join(
-                    "/scistor/ivm/mka483/miniconda3", "bin", "activate"
+                    "/scistor/ivm/vbl220/miniconda3", "bin", "activate"
                 )
 
                 # Construct the command
