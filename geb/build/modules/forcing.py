@@ -37,17 +37,13 @@ def reproject_and_apply_lapse_rate_temperature(
     assert (T.y.values == elevation_forcing.y.values).all()
 
     t_at_sea_level = T - elevation_forcing * lapse_rate
-    print(t_at_sea_level)
     t_at_sea_level_reprojected = resample_like(
         t_at_sea_level, elevation_target, method="conservative"
     )
-    print(t_at_sea_level_reprojected)
 
     T_grid = t_at_sea_level_reprojected + lapse_rate * elevation_target
     T_grid.name = T.name
     T_grid.attrs = T.attrs
-    print(T_grid)
-
     return T_grid
 
 
@@ -1131,111 +1127,100 @@ class Forcing:
             "tp",  # total_precipitation
             **download_args,
         )
-        pr_hourly = pr_hourly.compute()
-        print(pr_hourly.where(pr_hourly.isnull(), drop=True))
-        target = target.compute()
-        print(target.where(target.isnull(), drop=True))
         elevation_forcing, elevation_target = self.get_elevation_forcing_and_grid(
             self.grid["mask"], pr_hourly, forcing_name="ERA5"
         )
-        elevation_forcing = elevation_forcing.compute()
-        elevation_target = elevation_target.compute()
 
-        print(elevation_forcing.where(elevation_forcing.isnull(), drop=True))
-        print(elevation_target.where(elevation_target.isnull(), drop=True))
+        pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
 
-        # pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
+        # ensure no negative values for precipitation, which may arise due to float precision
+        pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
+        pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
-        # # ensure no negative values for precipitation, which may arise due to float precision
-        # pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        # pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
+        pr = pr_hourly.resample(time="D").mean()  # get daily mean
+        pr = resample_like(pr, target, method="conservative")
+        pr = self.set_pr(pr)
 
-        # pr = pr_hourly.resample(time="D").mean()  # get daily mean
-        # pr = resample_like(pr, target, method="conservative")
-        # pr = self.set_pr(pr)
-
-        hourly_tas = process_ERA5("t2m", **download_args).compute()
-        print(hourly_tas.where(hourly_tas == -999, drop=True))
+        hourly_tas = process_ERA5("t2m", **download_args)
         tas_avg = hourly_tas.resample(time="D").mean()
         tas_avg = reproject_and_apply_lapse_rate_temperature(
             tas_avg, elevation_forcing, elevation_target
         )
-        tas_avg = tas_avg.compute()
-        print(tas_avg.where(tas_avg.isnull(), drop=True))
+
         self.set_tas(tas_avg)
 
-        # tasmax = hourly_tas.resample(time="D").max()
-        # tasmax = reproject_and_apply_lapse_rate_temperature(
-        #     tasmax, elevation_forcing, elevation_target
-        # )
-        # self.set_tasmax(tasmax)
+        tasmax = hourly_tas.resample(time="D").max()
+        tasmax = reproject_and_apply_lapse_rate_temperature(
+            tasmax, elevation_forcing, elevation_target
+        )
+        self.set_tasmax(tasmax)
 
-        # tasmin = hourly_tas.resample(time="D").min()
-        # tasmin = reproject_and_apply_lapse_rate_temperature(
-        #     tasmin, elevation_forcing, elevation_target
-        # )
-        # self.set_tasmin(tasmin)
+        tasmin = hourly_tas.resample(time="D").min()
+        tasmin = reproject_and_apply_lapse_rate_temperature(
+            tasmin, elevation_forcing, elevation_target
+        )
+        self.set_tasmin(tasmin)
 
-        # hourly_dew_point_tas = process_ERA5(
-        #     "d2m",
-        #     **download_args,
-        # )
-        # dew_point_tas = hourly_dew_point_tas.resample(time="D").mean()
-        # dew_point_tas = reproject_and_apply_lapse_rate_temperature(
-        #     dew_point_tas, elevation_forcing, elevation_target
-        # )
+        hourly_dew_point_tas = process_ERA5(
+            "d2m",
+            **download_args,
+        )
+        dew_point_tas = hourly_dew_point_tas.resample(time="D").mean()
+        dew_point_tas = reproject_and_apply_lapse_rate_temperature(
+            dew_point_tas, elevation_forcing, elevation_target
+        )
 
-        # water_vapour_pressure = 0.6108 * np.exp(
-        #     17.27 * (dew_point_tas - 273.15) / (237.3 + (dew_point_tas - 273.15))
-        # )  # calculate water vapour pressure (kPa)
-        # saturation_vapour_pressure = 0.6108 * np.exp(
-        #     17.27 * (tas_avg - 273.15) / (237.3 + (tas_avg - 273.15))
-        # )
+        water_vapour_pressure = 0.6108 * np.exp(
+            17.27 * (dew_point_tas - 273.15) / (237.3 + (dew_point_tas - 273.15))
+        )  # calculate water vapour pressure (kPa)
+        saturation_vapour_pressure = 0.6108 * np.exp(
+            17.27 * (tas_avg - 273.15) / (237.3 + (tas_avg - 273.15))
+        )
 
-        # assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
-        # relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
-        # self.set_hurs(relative_humidity)
+        assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
+        relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
+        self.set_hurs(relative_humidity)
 
-        # hourly_rsds = process_ERA5(
-        #     "ssrd",  # surface_solar_radiation_downwards
-        #     **download_args,
-        # )
-        # rsds = hourly_rsds.resample(time="D").sum() / (
-        #     24 * 3600
-        # )  # get daily sum and convert from J/m2 to W/m2
+        hourly_rsds = process_ERA5(
+            "ssrd",  # surface_solar_radiation_downwards
+            **download_args,
+        )
+        rsds = hourly_rsds.resample(time="D").sum() / (
+            24 * 3600
+        )  # get daily sum and convert from J/m2 to W/m2
 
-        # rsds = resample_like(rsds, target, method="conservative")
-        # self.set_rsds(rsds)
+        rsds = resample_like(rsds, target, method="conservative")
+        self.set_rsds(rsds)
 
-        # hourly_rlds = process_ERA5(
-        #     "strd",  # surface_thermal_radiation_downwards
-        #     **download_args,
-        # )
-        # rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
-        # rlds = resample_like(rlds, target, method="conservative")
-        # self.set_rlds(rlds)
+        hourly_rlds = process_ERA5(
+            "strd",  # surface_thermal_radiation_downwards
+            **download_args,
+        )
+        rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
+        rlds = resample_like(rlds, target, method="conservative")
+        self.set_rlds(rlds)
 
-        # pressure = process_ERA5("sp", **download_args)
-        # pressure = reproject_and_apply_lapse_rate_pressure(
-        #     pressure, elevation_forcing, elevation_target
-        # )
-        # pressure = pressure.resample(time="D").mean()
-        # self.set_ps(pressure)
+        pressure = process_ERA5("sp", **download_args)
+        pressure = reproject_and_apply_lapse_rate_pressure(
+            pressure, elevation_forcing, elevation_target
+        )
+        pressure = pressure.resample(time="D").mean()
+        self.set_ps(pressure)
 
-        # u_wind = process_ERA5(
-        #     "u10",
-        #     **download_args,
-        # )
-        # u_wind = u_wind.resample(time="D").mean()
+        u_wind = process_ERA5(
+            "u10",
+            **download_args,
+        )
+        u_wind = u_wind.resample(time="D").mean()
 
-        # v_wind = process_ERA5(
-        #     "v10",
-        #     **download_args,
-        # )
-        # v_wind = v_wind.resample(time="D").mean()
-        # wind_speed = np.sqrt(u_wind**2 + v_wind**2)
-        # wind_speed = resample_like(wind_speed, target, method="conservative")
-        # self.set_sfcwind(wind_speed)
+        v_wind = process_ERA5(
+            "v10",
+            **download_args,
+        )
+        v_wind = v_wind.resample(time="D").mean()
+        wind_speed = np.sqrt(u_wind**2 + v_wind**2)
+        wind_speed = resample_like(wind_speed, target, method="conservative")
+        self.set_sfcwind(wind_speed)
 
     def setup_forcing_ISIMIP(self, resolution_arcsec: int, forcing: str) -> None:
         """Sets up the forcing data for GEB using ISIMIP data.
@@ -2047,13 +2032,7 @@ class Forcing:
         if elevation_forcing_fp.exists() and elevation_grid_fp.exists():
             elevation_forcing = open_zarr(elevation_forcing_fp)
             elevation_grid = open_zarr(elevation_grid_fp)
-            elevation_grid = elevation_grid.compute()
-            elevation_forcing = elevation_forcing.compute()
 
-            print(elevation_forcing.where(elevation_forcing.isnull(), drop=True))
-            print(elevation_grid.where(elevation_grid.isnull(), drop=True))
-
-            print("dd")
         else:
             print("Reading elevation data...")
             elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
@@ -2065,29 +2044,36 @@ class Forcing:
                 ),
             )
             elevation = elevation.drop("band")
-            elevation = elevation.chunk({"x": 2000, "y": 2000})
             elevation = xr.where(elevation == -9999, 0, elevation)
             elevation.attrs["_FillValue"] = np.nan
             print("elevation")
             print("start resample")
             print(forcing_grid.isel(time=0).drop("time"))
             target = forcing_grid.isel(time=0).drop("time")
+
             elevation_forcing = resample_like(elevation, target, method="bilinear")
+            elevation_forcing = elevation_forcing.chunk({"x": 40, "y": 40})
             print("done resample")
 
             elevation_forcing = to_zarr(
                 elevation_forcing,
                 elevation_forcing_fp,
                 crs=4326,
+                x_chunksize=40,
+                y_chunksize=40,
             )
-            print("start resample chunked")
 
-            elevation_grid = resample_like(elevation, grid, method="conservative")
+            elevation_grid = resample_like(elevation, grid, method="bilinear")
+            elevation_grid = elevation_grid.chunk({"x": 40, "y": 40})
+
             elevation_grid = to_zarr(
                 elevation_grid,
                 elevation_grid_fp,
                 crs=4326,
+                x_chunksize=40,
+                y_chunksize=40,
             )
+
             print("done")
         return elevation_forcing.chunk({"x": -1, "y": -1}), elevation_grid.chunk(
             {"x": -1, "y": -1}

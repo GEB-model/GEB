@@ -9,7 +9,7 @@ fabdem:
     source_license: CC BY-NC-SA 4.0
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
-  path: topography/FABDEM1-2.vrt
+  path: ../../data_catalogue/topography/fabdem.vrt
 
 GRDC:
   crs: 4326
