@@ -306,12 +306,12 @@ def test_multiverse():
 
     flood_map_first_event: xr.DataArray = xr.open_dataarray(
         flood_map_folder
-        / f"{events[0]['start_time'].isoformat()} - {events[0]['end_time'].isoformat()}.zarr"
+        / f"{events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
     )
 
     flood_map_first_event_multiverse: xr.DataArray = xr.open_dataarray(
         flood_map_folder
-        / f"0 - {events[0]['start_time'].isoformat()} - {events[0]['end_time'].isoformat()}.zarr"
+        / f"0 - {events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
     )
 
     np.testing.assert_array_equal(
@@ -322,12 +322,12 @@ def test_multiverse():
 
     flood_map_second_event: xr.DataArray = xr.open_dataarray(
         flood_map_folder
-        / f"{events[1]['start_time'].isoformat()} - {events[1]['end_time'].isoformat()}.zarr"
+        / f"{events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[1]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
     )
 
     flood_map_second_event_multiverse: xr.DataArray = xr.open_dataarray(
         flood_map_folder
-        / f"0 - {events[1]['start_time'].isoformat()} - {forecast_end_date.isoformat()}.zarr"
+        / f"0 - {events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {forecast_end_date.strftime('%Y%m%dT%H%M%S')}.zarr"
     )
 
 

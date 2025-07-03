@@ -1082,7 +1082,7 @@ class Households(AgentBaseClass):
             flood_map: The flood map containing water levels for the flood event.
 
         """
-        flood_map = flood_map.compute()
+        flood_map: xr.DataArray = flood_map.compute()
 
         buildings: gpd.GeoDataFrame = self.var.buildings.copy().to_crs(
             flood_map.rio.crs

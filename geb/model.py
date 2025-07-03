@@ -127,9 +127,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         for member in forecasts.member:
             self.multiverse_name = member.item()
 
-            pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member) / 3600
-
-            pr_hourly_forecast: xr.DataArray = pr_hourly_forecast.compute()
+            pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member)
 
             foecast_end_date = round_up_to_start_of_next_day_unless_midnight(
                 pd.to_datetime(pr_hourly_forecast.time[-1].item()).to_pydatetime()
