@@ -679,27 +679,7 @@ def evaluate(methods: list | None, *args, **kwargs) -> None:
     )
 
 
-@working_directory_option
-@click.option(
-    "--name",
-    "-n",
-    default="model",
-    help="Name used for the zip file.",
-)
-@click.option(
-    "--include-preprocessing",
-    is_flag=True,
-    default=False,
-    help="Include preprocessing files in the zip file.",
-)
-@click.option(
-    "--include-output",
-    is_flag=True,
-    default=False,
-    help="Include output files in the zip file.",
-)
-@cli.command()
-def share(working_directory, name, include_preprocessing, include_output):
+def share_fn(working_directory, name, include_preprocessing, include_output):
     """Share model."""
     with WorkingDirectory(working_directory):
         # create a zip file called model.zip with the folders input, and model files
@@ -768,6 +748,31 @@ def share(working_directory, name, include_preprocessing, include_output):
                 )  # Print progress
             print(f"Exporting file {progress}/{total_files} to {zip_filename}")
             print("Done!")
+
+
+@cli.command()
+@working_directory_option
+@click.option(
+    "--name",
+    "-n",
+    default="model",
+    help="Name used for the zip file.",
+)
+@click.option(
+    "--include-preprocessing",
+    is_flag=True,
+    default=False,
+    help="Include preprocessing files in the zip file.",
+)
+@click.option(
+    "--include-output",
+    is_flag=True,
+    default=False,
+    help="Include output files in the zip file.",
+)
+def share(*args, **kwargs):
+    """Share model as a zip file."""
+    share_fn(*args, **kwargs)
 
 
 if __name__ == "__main__":

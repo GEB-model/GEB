@@ -2,6 +2,7 @@
 import math
 import warnings
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal, Union
 
 import geopandas as gpd
@@ -15,24 +16,44 @@ from numba import njit
 from scipy.spatial import cKDTree
 
 
-def determine_nearest_river_cell(upstream_area, HRU_to_grid, mask, threshold):
+def determine_nearest_river_cell(
+    upstream_area: npt.NDArray[np.float32],
+    HRU_to_grid: npt.NDArray[np.int32],
+    mask: npt.NDArray[np.bool_],
+    threshold_m2: float | int,
+) -> npt.NDArray[np.int32]:
     """This function finds the nearest river cell to each HRU.
 
     It does so by first selecting the rivers, by checking if the upstream area is
     above a certain threshold. then for each grid cell, it finds the nearest
     river cell. Finally, it maps the nearest river cell to each HRU.
+
+    Args:
+        upstream_area: 2D-array of upstream area in m².
+        HRU_to_grid: Array mapping HRUs to grid cells.
+        mask: Mask of the study area.
+        threshold_m2: Threshold in m² to consider a cell as a river.
+
+    Returns:
+        For each HRU, the index of the nearest river cell in the valid grid cells.
     """
-    valid_indices = np.argwhere(~mask)
-    valid_values = upstream_area[~mask]
+    valid_indices: npt.NDArray[np.int64] = np.argwhere(~mask)
+    valid_values: npt.NDArray[np.float32] = upstream_area[~mask]
 
-    above_threshold_mask = valid_values > threshold
-    above_threshold_indices = valid_indices[above_threshold_mask]
-    above_threshold_indices_in_valid = np.flatnonzero(above_threshold_mask)
+    grid_cells_above_threshold_mask: npt.NDArray[np.bool_] = valid_values > threshold_m2
+    grid_cells_above_threshold_indices: npt.NDArray[np.int64] = valid_indices[
+        grid_cells_above_threshold_mask
+    ]
+    grid_cells_above_threshold_indices_in_valid: npt.NDArray[np.int64] = np.flatnonzero(
+        grid_cells_above_threshold_mask
+    )
 
-    tree = cKDTree(above_threshold_indices)
+    tree: cKDTree = cKDTree(grid_cells_above_threshold_indices)
     distances, indices_in_above = tree.query(valid_indices)
 
-    nearest_indices_in_valid = above_threshold_indices_in_valid[indices_in_above]
+    nearest_indices_in_valid: npt.NDArray[np.int32] = (
+        grid_cells_above_threshold_indices_in_valid[indices_in_above]
+    ).astype(np.int32)
 
     assert nearest_indices_in_valid.max() < (~mask).sum()
 
@@ -81,11 +102,28 @@ def load_grid(
         raise ValueError("File format not supported.")
 
 
-def load_geom(filepath):
+def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
+    """Load a geometry for the GEB model from disk.
+
+    Args:
+        filepath: Path to the geometry file.
+
+    Returns:
+        A GeoDataFrame containing the geometries.
+
+    """
     return gpd.read_parquet(filepath)
 
 
-def load_water_demand_xr(filepath):
+def load_water_demand_xr(filepath: str | Path) -> xr.Dataset:
+    """Load a water demand dataset from disk.
+
+    Args:
+        filepath: Path to the water demand dataset file.
+
+    Returns:
+        An xarray Dataset containing the water demand data.
+    """
     return xr.open_dataset(
         zarr.storage.LocalStore(
             filepath,
@@ -509,7 +547,7 @@ class HRUs(BaseVariables):
             upstream_area,
             self.var.HRU_to_grid,
             mask=self.data.grid.mask,
-            threshold=25_000_000,  # 25 km² to align with MERIT-Basins defintion of a river, https://www.reachhydro.org/home/params/merit-basins
+            threshold_m2=25_000_000,  # 25 km² to align with MERIT-Basins defintion of a river, https://www.reachhydro.org/home/params/merit-basins
         )
 
     @property
