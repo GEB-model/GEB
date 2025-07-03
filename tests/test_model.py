@@ -83,6 +83,33 @@ def test_build():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_forcing():
+    with WorkingDirectory(working_directory):
+        model: GEBModel = run_model_with_method(
+            method=None,
+            close_after_run=False,
+            **{**DEFAULT_RUN_ARGS, **{"working_directory": "."}},
+        )
+
+        for name in model.forcing.validators:
+            t_0: datetime = datetime(2010, 1, 1, 0, 0, 0)
+            forcing_0 = model.forcing.load(name, t_0)
+
+            t_1: datetime = datetime(2020, 1, 1, 0, 0, 0)
+            forcing_1 = model.forcing.load(name, t_1)
+
+            if isinstance(forcing_0, (xr.DataArray, np.ndarray)):
+                assert forcing_0.shape == forcing_1.shape, (
+                    f"Shape of forcing data for {name} does not match for times {t_0} and {t_1}."
+                )
+                # non-precipitation forcing basically could never be equal, so we check for inequality
+                if name not in ("pr", "pr_hourly"):
+                    assert not np.array_equal(forcing_0, forcing_1)
+            else:
+                assert forcing_0 != forcing_1
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_alter():
     args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
     args["build_config"] = {"set_ssp": {"ssp": "ssp1"}, "setup_CO2_concentration": {}}
@@ -220,7 +247,7 @@ def test_multiverse():
     # add member dimension
     forecast = forecast.expand_dims(dim={"member": [0]}, axis=0)
 
-    forecasts_folder = input_folder / "other" / "climate" / "forecasts"
+    forecasts_folder: Path = working_directory / "data" / "forecasts"
     forecasts_folder.mkdir(parents=True, exist_ok=True)
 
     forecast.to_zarr(
@@ -279,12 +306,12 @@ def test_multiverse():
 
     flood_map_first_event: xr.DataArray = xr.open_dataarray(
         flood_map_folder
-        / f"{events[0]['start_time'].isoformat()} - {events[0]['end_time'].isoformat()}.zarr"
+        / f"{events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
     )
 
     flood_map_first_event_multiverse: xr.DataArray = xr.open_dataarray(
         flood_map_folder
-        / f"0 - {events[0]['start_time'].isoformat()} - {events[0]['end_time'].isoformat()}.zarr"
+        / f"0 - {events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
     )
 
     np.testing.assert_array_equal(
@@ -295,12 +322,12 @@ def test_multiverse():
 
     flood_map_second_event: xr.DataArray = xr.open_dataarray(
         flood_map_folder
-        / f"{events[1]['start_time'].isoformat()} - {events[1]['end_time'].isoformat()}.zarr"
+        / f"{events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[1]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
     )
 
     flood_map_second_event_multiverse: xr.DataArray = xr.open_dataarray(
         flood_map_folder
-        / f"0 - {events[1]['start_time'].isoformat()} - {forecast_end_date.isoformat()}.zarr"
+        / f"0 - {events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {forecast_end_date.strftime('%Y%m%dT%H%M%S')}.zarr"
     )
 
 
@@ -310,11 +337,13 @@ def test_ISIMIP_forcing_low_res():
 
     This is a special case that requires a specific setup.
     """
-    args = DEFAULT_BUILD_ARGS.copy()
+    args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
 
-    build_config = parse_config(working_directory / args["build_config"])
+    build_config: dict[str, Any] = parse_config(
+        working_directory / args["build_config"]
+    )
 
-    original_time_range = build_config["set_time_range"]
+    original_time_range: dict[str, date] = build_config["set_time_range"]
 
     args["build_config"] = {
         "set_time_range": {
@@ -345,7 +374,7 @@ def test_share():
         include_output=False,
     )
 
-    output_fn = working_directory / "test.zip"
+    output_fn: Path = working_directory / "test.zip"
 
     assert output_fn.exists()
 

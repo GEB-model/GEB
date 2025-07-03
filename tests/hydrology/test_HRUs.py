@@ -1,7 +1,45 @@
 import numpy as np
 import pytest
 
-from geb.HRUs import to_grid, to_HRU
+from geb.hydrology.HRUs import determine_nearest_river_cell, to_grid, to_HRU
+
+
+def test_determine_nearest_river_cell():
+    upstream_area = np.array(
+        [
+            [np.nan, np.nan, 10, np.nan, np.nan],
+            [np.nan, np.nan, 9, np.nan, np.nan],
+            [3, 5, 8, 2, np.nan],
+            [4, 2, 7, 1, 2],
+            [2, 2, 6, 3, np.nan],
+        ]
+    )
+    mask = np.array(
+        [
+            [True, True, False, True, True],
+            [True, True, False, True, True],
+            [False, False, False, False, True],
+            [False, False, False, False, False],
+            [False, False, False, False, True],
+        ]
+    )
+    n_non_masked = (~mask).sum()
+
+    # simulate that last grid cell has 2 HRUs
+    HRU_to_grid = np.arange(n_non_masked + 1, dtype=np.int32)
+    HRU_to_grid[-1] = n_non_masked - 1
+
+    nearest_river = determine_nearest_river_cell(
+        upstream_area,
+        HRU_to_grid=HRU_to_grid,
+        mask=mask,
+        threshold_m2=5,
+    )
+
+    np.testing.assert_array_equal(
+        nearest_river,
+        np.array([0, 1, 4, 4, 4, 4, 8, 8, 8, 8, 8, 13, 13, 13, 13, 13], dtype=np.int32),
+    )
 
 
 @pytest.fixture

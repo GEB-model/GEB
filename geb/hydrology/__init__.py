@@ -21,7 +21,7 @@
 
 import numpy as np
 
-from geb.HRUs import Data
+from geb.hydrology.HRUs import Data
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 

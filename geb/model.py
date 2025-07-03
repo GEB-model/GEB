@@ -18,11 +18,12 @@ from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
 from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
+from geb.workflows.io import open_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
-from .HRUs import load_geom
 from .hydrology import Hydrology
+from .hydrology.HRUs import load_geom
 
 
 class GEBModel(Module, HazardDriver, ABM_Model):
@@ -61,6 +62,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self.store = Store(self)
         self.artists = Artists(self)
+
+        self.forcing = Forcing(self)
 
         # Empty list to hold plantFATE models. If forests are not used, this will be empty
         self.plantFATE = []
@@ -112,28 +115,24 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         store_location: Path = self.simulation_root / "multiverse" / "forecast"
         self.store.save(store_location)
 
-        original_pr_hourly = self.forcing["pr_hourly"]
+        original_pr_hourly: xr.DataArray = self.forcing["pr_hourly"]
 
-        forecasts: xr.DataArray = xr.open_dataarray(
-            self.input_folder
-            / "other"
-            / "climate"
-            / "forecasts"
-            / f"{forecast_dt.strftime('%Y%m%dT%H%M%S')}.zarr"
+        forecasts: xr.DataArray = open_zarr(
+            Path("data") / "forecasts" / f"{forecast_dt.strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
-        end_date = round_up_to_start_of_next_day_unless_midnight(
-            pd.to_datetime(forecasts.time[-1].item()).to_pydatetime()
-        ).date()
-        self.n_timesteps = (end_date - self.start_time.date()).days
-
         if return_mean_discharge:
-            mean_discharge = {}
+            mean_discharge: dict[Any, float] = {}
 
         for member in forecasts.member:
             self.multiverse_name = member.item()
 
             pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member)
+
+            foecast_end_date = round_up_to_start_of_next_day_unless_midnight(
+                pd.to_datetime(pr_hourly_forecast.time[-1].item()).to_pydatetime()
+            ).date()
+            self.n_timesteps = (foecast_end_date - self.start_time.date()).days
 
             # Clip the original precipitation data to the start of the forecast
             # Therefore we take the start of the forecast and subtract one second
@@ -147,13 +146,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             )
 
             # Concatenate the original precipitation data with the forecast data
-            pr_hourly_observed_and_forecasted_combined: xr.DataArray = xr.concat(
-                [
-                    original_pr_hourly_clipped_to_start_of_forecast,
-                    pr_hourly_forecast,
-                ],
-                dim="time",
-            )
+            pr_hourly_observed_and_forecasted_combined: list[xr.DataArray] = [
+                original_pr_hourly_clipped_to_start_of_forecast,
+                pr_hourly_forecast,
+            ]
 
             # Set the pr_hourly forcing data to the combined data
             self.model.forcing["pr_hourly"] = pr_hourly_observed_and_forecasted_combined
@@ -204,6 +200,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                         forecast_dt=dt,
                         return_mean_discharge=True,
                     )
+
+            # If the multiverse function is called and we want to simulate a warning response afterwards,
+            if self.config["agent_settings"]["households"]["warning_response"]:
+                self.agents.households.warning_strategy_1()
+                # self.agents.households.infrastructure_warning_strategy()
 
         t0 = time()
         self.agents.step()
@@ -256,8 +257,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.config["general"]["spinup_time"], datetime.time(0)
         )
         self.timestep_length = timestep_length
-
-        self.forcing = Forcing(self)
 
         if self.simulate_hydrology:
             self.hydrology = Hydrology(self)
@@ -416,7 +415,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     def estimate_return_periods(self) -> None:
         """Estimate the risk of the model."""
-        current_time = self.create_datetime(self.config["general"]["start_time"])
+        current_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["start_time"]
+        )
         self.config["general"]["name"] = "estimate_return_periods"
 
         self._initialize(

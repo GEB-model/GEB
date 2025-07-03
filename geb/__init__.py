@@ -121,7 +121,13 @@ if __debug__:
 os.environ["NUMBA_ENABLE_AVX"] = "0"  # Enable AVX instructions
 # os.environ["NUMBA_PARALLEL_DIAGNOSTICS"] = "4"
 
-load_numba_threading_layer()
+if platform.system() == "Darwin":
+    print(
+        "On Mac OS X, we disable the multi-threading layer by default due to compatibility issues."
+    )
+    os.environ["NUMBA_NUM_THREADS"] = "1"
+else:
+    load_numba_threading_layer()
 
 # xarray uses bottleneck for some operations to speed up computations
 # however, some implementations are numerically unstable, so we disable it
