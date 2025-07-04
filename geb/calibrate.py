@@ -731,20 +731,20 @@ def get_KGE_discharge(run_directory, individual, config, gauges, observed_stream
 
     streamflows = [get_streamflows(gauge, observed_streamflow) for gauge in gauges]
     streamflows = [streamflow for streamflow in streamflows if not streamflow.empty]
+    print(streamflows)
     if config["calibration"]["monthly"] is True:
         # Calculate the monthly mean of the streamflow data
         streamflows = [streamflows.resample("M").mean() for streamflows in streamflows]
 
     KGEs = []
     for streamflow in streamflows:
-        # print(f"Processing: {streamflow}")
+        streamflow = streamflow.dropna()  # If there are any NaNs values the KGE will become NaN, that's why we drop them before doing the calculation
         KGEs.append(
             KGE_calculation(s=streamflow["simulated"], o=streamflow["observed"])
         )
 
     assert KGEs  # Check if KGEs is not empty
     kge = np.mean(KGEs)
-
     print(
         "run_id: " + str(individual.label) + ", KGE_discharge: " + "{0:.3f}".format(kge)
     )
@@ -1625,17 +1625,15 @@ def calibrate(config, working_directory):
             df["Date"], errors="coerce", infer_datetime_format=True
         )
         df = df.dropna(subset=["Date"])
-        df["flow"] = pd.to_numeric(
-            df["flow"], errors="coerce"
-        )
+        df["flow"] = pd.to_numeric(df["flow"], errors="coerce")
         # df = df.dropna(subset=["Discharge (ML/Day)"])
         df = df[["Date", "flow"]].rename(
             columns={"Date": "date"}
-        )        # df["flow"] = df["flow"] * (1000.0 / 86400.0)  # ML/day to m³/s
-        
-        # Make the discharge daily, used to be for every 15 min 
+        )  # df["flow"] = df["flow"] * (1000.0 / 86400.0)  # ML/day to m³/s
+
+        # Make the discharge daily, used to be for every 15 min
         df = df.set_index("date")
-        
+
         daily_df = df.resample("D").mean()
         daily_df.index.name = "time"
 

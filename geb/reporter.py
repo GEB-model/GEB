@@ -386,20 +386,25 @@ class Reporter:
                     decompressed_array = self.decompress(config["varname"], value)
                     value = decompressed_array[int(args[0]), int(args[1])]
                 elif function == "sample_coord":
+                    print("into sample_coords")
                     if config["varname"].startswith("hydrology.grid"):
                         gt = self.model.hydrology.grid.gt
+                        decompressed_array = self.hydrology.grid.decompress(value)
                     elif config["varname"].startswith("hydrology.HRU"):
                         gt = self.hydrology.HRU.gt
+                        decompressed_array = self.hydrology.HRU.decompress(value)
                     else:
-                        raise ValueError
+                        raise ValueError("Unknown varname type")
+
                     px, py = coord_to_pixel((float(args[1]), float(args[0])), gt)
-                    decompressed_array = self.decompress(config["varname"], value)
+
                     try:
                         value = decompressed_array[py, px]
                     except IndexError:
                         raise IndexError(
                             f"The coordinate ({args[0]},{args[1]}) is outside the model domain."
                         )
+
                 elif function in ("weightedmean", "weightednanmean"):
                     if config["type"] == "HRU":
                         cell_area = self.hydrology.HRU.var.cell_area
