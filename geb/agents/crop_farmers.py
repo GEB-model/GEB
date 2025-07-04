@@ -4680,6 +4680,14 @@ class CropFarmers(AgentBaseClass):
                 HRUs_with_removed_farmers.append(
                     self.remove_agent(idx, new_land_use_type)
                 )
+
+        # TODO: remove the social network of the removed farmers only.
+        # because farmers are removed and the current farmers may still
+        # be looking for their friends that are gone, we need to reset
+        # the social network.
+
+        self.set_social_network()
+
         return np.concatenate(HRUs_with_removed_farmers)
 
     def remove_agent(self, farmer_idx: int, new_land_use_type: int) -> np.ndarray:
