@@ -134,7 +134,6 @@ class GroundWater(Module):
             groundwater_storage_pre = self.modflow.groundwater_content_m3
 
         self.modflow.set_recharge_m3(groundwater_recharge * self.grid.var.cell_area)
-        self.modflow.set_recharge_m3(groundwater_recharge * self.modflow.area)
         self.modflow.set_groundwater_abstraction_m3(groundwater_abstraction_m3)
         self.modflow.step()
 
