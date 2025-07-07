@@ -865,7 +865,7 @@ class Routing(Module):
         if __debug__:
             # TODO: make dependent on routing step length
             river_storage_m3: npt.NDArray[np.float32] = self.router.get_total_storage()
-            balance_check(
+            assert balance_check(
                 how="sum",
                 influxes=[
                     total_runoff * self.grid.var.cell_area,
@@ -891,15 +891,19 @@ class Routing(Module):
                 tollerance=100,
             )
 
-            self.routing_loss: np.float64 = (
+            print("over abstraction", over_abstraction_m3.sum())
+
+            routing_loss: np.float64 = (
                 evaporation_in_rivers_m3.sum()
                 + waterbody_evaporation_m3.sum()
                 + outflow_at_pits_m3.sum()
             )
 
-            assert self.routing_loss >= 0, "Routing loss cannot be negative"
+            assert routing_loss >= 0, "Routing loss cannot be negative"
 
         self.report(self, locals())
+
+        return routing_loss, over_abstraction_m3.sum()
 
     @property
     def name(self) -> str:
