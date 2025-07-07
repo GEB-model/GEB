@@ -891,8 +891,6 @@ class Routing(Module):
                 tollerance=100,
             )
 
-            print("over abstraction", over_abstraction_m3.sum())
-
             routing_loss: np.float64 = (
                 evaporation_in_rivers_m3.sum()
                 + waterbody_evaporation_m3.sum()
@@ -903,7 +901,13 @@ class Routing(Module):
 
         self.report(self, locals())
 
-        return routing_loss, over_abstraction_m3.sum()
+        total_over_abstraction_m3: np.float32 = over_abstraction_m3.sum()
+        if total_over_abstraction_m3 > 100:
+            print(
+                f"Total over-abstraction in routing step is {total_over_abstraction_m3:.2f} m³"
+            )
+
+        return routing_loss, total_over_abstraction_m3
 
     @property
     def name(self) -> str:
