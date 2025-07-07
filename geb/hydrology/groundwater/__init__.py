@@ -133,7 +133,8 @@ class GroundWater(Module):
         if __debug__:
             groundwater_storage_pre = self.modflow.groundwater_content_m3
 
-        self.modflow.set_recharge_m(groundwater_recharge)
+        self.modflow.set_recharge_m3(groundwater_recharge * self.grid.var.cell_area)
+        self.modflow.set_recharge_m3(groundwater_recharge * self.modflow.area)
         self.modflow.set_groundwater_abstraction_m3(groundwater_abstraction_m3)
         self.modflow.step()
 
@@ -180,7 +181,7 @@ class GroundWater(Module):
         self, groundwater_storage_pre, groundwater_recharge, groundwater_abstraction_m3
     ):
         drainage_m3 = self.modflow.drainage_m3
-        recharge_m3 = groundwater_recharge * self.modflow.area
+        recharge_m3 = groundwater_recharge * self.grid.var.cell_area
         groundwater_storage_post = self.modflow.groundwater_content_m3
 
         balance_check(

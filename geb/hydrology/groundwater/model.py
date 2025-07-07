@@ -166,6 +166,12 @@ class ModFlowSimulation:
         verbose: Whether to print debug information, defaults to False.
         never_load_from_disk: Whether to never load the model from disk, defaults to False. If set to False, the model input
             will be loaded from disk if it exists and the input parameters have not changed.
+
+    Note:
+        Communication of fluxes should only be done in m3. This is because the calculation
+        of area in MODFLOW is slightly different from the area in GEB, which can lead to
+        discrepancies in the fluxes if they are communicated in meters. This is also
+        why all public methods of this class communicate in m3, and not in m.
     """
 
     def __init__(
@@ -704,7 +710,7 @@ class ModFlowSimulation:
         return drainage
 
     @property
-    def drainage_m(self):
+    def _drainage_m(self):
         return self.drainage_m3 / self.area
 
     @property
@@ -712,19 +718,19 @@ class ModFlowSimulation:
         return self.mf6.get_var_address("RECHARGE", self.name, "RCH_0")
 
     @property
-    def recharge_m(self):
+    def _recharge_m(self):
         recharge = self.mf6.get_value_ptr(self.recharge_tag).copy()
         assert not np.isnan(recharge).any()
         return recharge
 
-    @property
-    def recharge_m3(self):
-        return self.recharge_m * self.area
-
-    @recharge_m.setter
+    @_recharge_m.setter
     def recharge_m(self, value):
         assert not np.isnan(value).any()
         self.mf6.get_value_ptr(self.recharge_tag)[:] = value
+
+    @property
+    def recharge_m3(self):
+        return self._recharge_m * self.area
 
     @property
     def max_iter(self):
@@ -735,9 +741,12 @@ class ModFlowSimulation:
         dt = self.mf6.get_time_step()
         self.mf6.prepare_time_step(dt)
 
-    def set_recharge_m(self, recharge):
-        """Set recharge, value in m/day."""
-        self.recharge_m = recharge
+    # def set_recharge_m(self, recharge):
+    #     """Set recharge, value in m/day."""
+    #     self.recharge_m = recharge
+
+    def set_recharge_m3(self, recharge):
+        self.recharge_m = recharge / self.area
 
     def set_groundwater_abstraction_m3(self, groundwater_abstraction):
         """Set well rate, value in m3/day."""
@@ -824,7 +833,7 @@ class ModFlowSimulation:
                 "\tDrainage (mean)",
                 self.drainage_m3.mean(),
                 "m3",
-                self.drainage_m.mean(),
+                self._drainage_m.mean(),
                 "m",
             )
 
