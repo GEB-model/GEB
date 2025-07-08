@@ -184,8 +184,10 @@ class Router:
 
 @njit(cache=True)
 def update_node_kinematic(
-    Qin, Qold, q, alpha, beta, deltaT, deltaX, epsilon=np.float32(0.0001)
+    Qin, Qold, q, evaporation, alpha, beta, deltaT, deltaX, epsilon=np.float32(0.0001)
 ) -> np.float32:
+    q -= evaporation  # Adjust lateral inflow for evaporation
+
     # If there's no inflow, no previous flow, and no lateral inflow,
     # then the discharge at the new time step will be zero.
     if (Qin + Qold + q) < 1e-30:
@@ -318,6 +320,7 @@ class KinematicWave(Router):
     def _step(
         Qold,
         sideflow_m3,
+        evaporation_m3,
         waterbody_storage_m3,
         outflow_per_waterbody_m3,
         upstream_matrix_from_up_to_downstream,
@@ -389,11 +392,13 @@ class KinematicWave(Router):
             if node_waterbody_id != -1:
                 waterbody_storage_m3[node_waterbody_id] += Qin * dt
                 waterbody_storage_m3[node_waterbody_id] += sideflow_node_m3
+                assert evaporation_m3[node] == 0.0
             else:
                 Qnew[node] = update_node_kinematic(
                     Qin,
                     Qold[node],
                     sideflow_node_m3 / dt / river_length[node],
+                    evaporation_m3[node] / dt / river_length[node],
                     river_alpha[node],
                     river_beta,
                     dt,
@@ -404,12 +409,14 @@ class KinematicWave(Router):
     def step(
         self,
         sideflow_m3,
+        evaporation_m3,
         waterbody_storage_m3,
         outflow_per_waterbody_m3,
     ):
         Q, over_abstraction_m3 = self._step(
             Qold=self.Q_prev,
             sideflow_m3=sideflow_m3,
+            evaporation_m3=evaporation_m3,
             waterbody_storage_m3=waterbody_storage_m3,
             outflow_per_waterbody_m3=outflow_per_waterbody_m3,
             upstream_matrix_from_up_to_downstream=self.upstream_matrix_from_up_to_downstream,
@@ -467,6 +474,7 @@ class Accuflux(Router):
         dt,
         Qold,
         sideflow_m3,
+        evaporation_m3,
         waterbody_storage_m3,
         outflow_per_waterbody_m3,
         upstream_matrix_from_up_to_downstream,
@@ -475,6 +483,7 @@ class Accuflux(Router):
         waterbody_id,
     ):
         Qold += sideflow_m3 / dt
+        Qold -= evaporation_m3 / dt
         Qnew: np.ndarray = np.full_like(Qold, 0.0)
         over_abstraction_m3: np.ndarray = np.zeros_like(Qold, dtype=np.float32)
         for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
@@ -531,16 +540,20 @@ class Accuflux(Router):
     def step(
         self,
         sideflow_m3,
+        evaporation_m3,
         waterbody_storage_m3,
         outflow_per_waterbody_m3,
     ):
         outflow_at_pits_m3 = (
-            self.get_total_storage()[self.is_pit].sum() + sideflow_m3[self.is_pit].sum()
+            self.get_total_storage()[self.is_pit].sum()
+            + sideflow_m3[self.is_pit].sum()
+            - evaporation_m3[self.is_pit].sum()
         )
         Q, over_abstraction_m3 = self._step(
             dt=self.dt,
             Qold=self.Q_prev,
             sideflow_m3=sideflow_m3,
+            evaporation_m3=evaporation_m3,
             waterbody_storage_m3=waterbody_storage_m3,
             outflow_per_waterbody_m3=outflow_per_waterbody_m3,
             upstream_matrix_from_up_to_downstream=self.upstream_matrix_from_up_to_downstream,
@@ -825,10 +838,6 @@ class Routing(Module):
                 == 0
             ).all()
 
-            side_flow_channel_m3_per_routing_step -= (
-                evaporation_in_rivers_m3_per_routing_step
-            )
-
             (
                 self.grid.var.discharge_m3_s,
                 over_abstraction_m3_routing_step,
@@ -836,6 +845,7 @@ class Routing(Module):
                 outflow_at_pits_m3_routing_step,
             ) = self.router.step(
                 sideflow_m3=side_flow_channel_m3_per_routing_step.astype(np.float32),
+                evaporation_m3=evaporation_in_rivers_m3_per_routing_step,
                 waterbody_storage_m3=self.hydrology.lakes_reservoirs.var.storage,
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
             )
@@ -865,7 +875,7 @@ class Routing(Module):
         if __debug__:
             # TODO: make dependent on routing step length
             river_storage_m3: npt.NDArray[np.float32] = self.router.get_total_storage()
-            assert balance_check(
+            balance_check(
                 how="sum",
                 influxes=[
                     total_runoff * self.grid.var.cell_area,
