@@ -194,12 +194,13 @@ def update_node_kinematic(
     deltaX,
     epsilon=np.float32(0.0001),
 ) -> tuple[np.float32, np.float32]:
-    evaporation_m3_s_l = (
+    evaporation_m3_s_l: np.float32 = (
         evaporation_m3_s / deltaX
     )  # Convert evaporation from m3/s to m3/s/m
-    q = Qside / deltaX  # Convert sideflow from m3/s to m3/s/m
+    q: np.float32 = Qside / deltaX  # Convert sideflow from m3/s to m3/s/m
 
-    evaporation_m3_s_l: np.float32 = max(evaporation_m3_s_l, np.float32(0.0))
+    # If evaporation is larger than the inflow and sideflow, we limit it to the sum of inflow and sideflow
+    evaporation_m3_s_l: np.float32 = max(evaporation_m3_s_l, (Qin + Qold) / 2 + q)
 
     q -= evaporation_m3_s_l  # Adjust lateral inflow for evaporation
 
@@ -948,21 +949,23 @@ class Routing(Module):
                     river_storage_m3,
                 ],
                 name="routing_1",
-                tollerance=100,
+                tollerance=10,
             )
 
             routing_loss: np.float64 = (
-                evaporation_in_rivers_m3.sum()
-                + waterbody_evaporation_m3.sum()
-                + outflow_at_pits_m3.sum()
+                evaporation_in_rivers_m3.astype(np.float64).sum()
+                + waterbody_evaporation_m3.astype(np.float64).sum()
+                + outflow_at_pits_m3.astype(np.float64).sum()
             )
 
             assert routing_loss >= 0, "Routing loss cannot be negative"
 
         self.report(self, locals())
 
-        total_over_abstraction_m3: np.float32 = over_abstraction_m3.sum()
-        if total_over_abstraction_m3 > 100:
+        total_over_abstraction_m3: np.float64 = over_abstraction_m3.astype(
+            np.float64
+        ).sum()
+        if over_abstraction_m3.sum() > 100:
             print(
                 f"Total over-abstraction in routing step is {total_over_abstraction_m3:.2f} m³"
             )
