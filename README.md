@@ -13,19 +13,32 @@ GEB can be installed with pip, including all dependencies on Windows, Linux and 
 pip install geb
 ```
 
-or with [uv](https://docs.astral.sh/uv/):
+or with [uv](https://docs.astral.sh/uv/), which first needs to be installed by running:
 
-1) install UV by running:
-  a) on the HPC (cluster): curl -LsSf https://astral.sh/uv/install.sh | sh
-  b) on a Windows PC: powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-2) install packages using: uv sync
 
+on the HPC (cluster):
+  
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+on a Windows PC: 
+
+```bash
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+After, GEB can be installed with: 
+
+```bash
+uv pip install geb --prerelease=allow
+```
 
 To run SFINCS (the hydrodynamic model), you also need to install Docker (on Windows) or Singularity (on Linux and Mac OS X). To install Docker you need to obtain and install Docker from their website (https://www.docker.com/get-started) and make sure Docker or Singularity is running.
 
 ## Development installation and setup
 
-To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use uv to install the dependencies. Therefore, first install [uv](https://docs.astral.sh/uv/#installation) and [git](https://git-scm.com/).
+To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use uv to install the dependencies. Therefore, first install [git](https://git-scm.com/) and uv (see above)
 
 Also create a folder where you would like to store the code and model, we call this the *working directory*. Note that this folder should *NOT* be placed into a cloud synchonized folder (e.g., OneDrive). In this *working directory*, create a folder called *model*, and place the model input files in this folder. The directory structure should look like this:
 
