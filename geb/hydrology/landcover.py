@@ -19,6 +19,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+from typing import Literal
+
 import numpy as np
 import numpy.typing as npt
 import zarr
@@ -28,14 +30,15 @@ from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
 # All natural areas MUST be before the sealed and water areas
-FOREST = 0
-GRASSLAND_LIKE = 1
-PADDY_IRRIGATED = 2
-NON_PADDY_IRRIGATED = 3
-SEALED = 4
-OPEN_WATER = 5
+FOREST: Literal[0] = 0
+GRASSLAND_LIKE: Literal[1] = 1
+PADDY_IRRIGATED: Literal[2] = 2
+NON_PADDY_IRRIGATED: Literal[3] = 3
+SEALED: Literal[4] = 4
+OPEN_WATER: Literal[5] = 5
 
-ALL_LAND_COVER_TYPES = [
+
+ALL_LAND_COVER_TYPES: list[int] = [
     FOREST,
     GRASSLAND_LIKE,
     PADDY_IRRIGATED,
