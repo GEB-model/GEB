@@ -1201,20 +1201,20 @@ class CropFarmers(AgentBaseClass):
                 outfluxes=(
                     self.var.channel_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                    ],
+                    ].astype(np.float64),
                     self.var.reservoir_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                    ],
+                    ].astype(np.float64),
                     self.var.groundwater_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                    ],
+                    ].astype(np.float64),
                 ),
                 prestorages=irrigation_limit_pre[
                     ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                ],
+                ].astype(np.float64),
                 poststorages=self.var.remaining_irrigation_limit_m3[
                     ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                ],
+                ].astype(np.float64),
                 tollerance=50,
             )
 
