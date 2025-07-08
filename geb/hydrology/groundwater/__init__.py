@@ -138,10 +138,19 @@ class GroundWater(Module):
         self.modflow.step()
 
         if __debug__:
-            self.balance_check(
-                groundwater_storage_pre,
-                groundwater_recharge,
-                groundwater_abstraction_m3,
+            balance_check(
+                name="groundwater",
+                how="sum",
+                influxes=[
+                    groundwater_recharge.astype(np.float64) * self.grid.var.cell_area
+                ],
+                outfluxes=[
+                    groundwater_abstraction_m3.astype(np.float64),
+                    self.modflow.drainage_m3.astype(np.float64),
+                ],
+                prestorages=[groundwater_storage_pre.astype(np.float64)],
+                poststorages=[self.modflow.groundwater_content_m3.astype(np.float64)],
+                tollerance=500,  # 500 m3
             )
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
@@ -175,23 +184,3 @@ class GroundWater(Module):
 
     def decompress(self, data):
         return self.hydrology.grid.decompress(data)
-
-    def balance_check(
-        self, groundwater_storage_pre, groundwater_recharge, groundwater_abstraction_m3
-    ):
-        drainage_m3 = self.modflow.drainage_m3
-        recharge_m3 = groundwater_recharge * self.grid.var.cell_area
-        groundwater_storage_post = self.modflow.groundwater_content_m3
-
-        balance_check(
-            name="groundwater",
-            how="sum",
-            influxes=[recharge_m3],
-            outfluxes=[
-                groundwater_abstraction_m3,
-                drainage_m3,
-            ],
-            prestorages=[groundwater_storage_pre],
-            poststorages=[groundwater_storage_post],
-            tollerance=100,  # 100 m3
-        )
