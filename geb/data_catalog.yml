@@ -151,6 +151,7 @@ MIRCA2000_crop_data:
   meta:
     paper_doi: 10.1016/j.jhydrol.2009.07.031
     paper_ref: Siebert et al. (2010)
+    source_license:  Creative Commons Attribution 4.0 International 
 MIRCA2000_crop_data_variants:
   data_type: DataFrame
   driver: excel
@@ -158,6 +159,7 @@ MIRCA2000_crop_data_variants:
   meta:
     paper_doi: adjusted from 10.1016/j.jhydrol.2009.07.031
     paper_ref: Siebert et al. (2010)
+    source_license:  Creative Commons Attribution 4.0 International 
 MIRCA2000_unit_grid:
   data_type: RasterDataset
   driver: raster
@@ -480,6 +482,8 @@ AQUASTAT_municipal_withdrawal:
   data_type: DataFrame
   driver: excel
   path: water_demand/AQUASTAT_municipal_withdrawal.xlsx
+  meta:
+    source_license: CC BY 4.0
 esa_worldcover_2020_v100:
   crs: 4326
   data_type: RasterDataset
@@ -810,7 +814,8 @@ GLOBIOM_regions_59:
   driver: excel
   path: GLOBIOM/Region_Country_Mapping.xlsx
   meta:
-    source_url: https://www.isric.org/explore/soilgrids
+    source_url: https://iiasa.ac.at/models-tools-data/globiom
+    source_license: Creative Commons Attribution-NonCommercial 4.0 International
   driver_kwargs:
     sheet_name: Region59
 GLOBIOM_regions_37:
@@ -818,7 +823,8 @@ GLOBIOM_regions_37:
   driver: excel
   path: GLOBIOM/Region_Country_Mapping.xlsx
   meta:
-    source_url: https://www.isric.org/explore/soilgrids
+    source_url: https://iiasa.ac.at/models-tools-data/globiom
+    source_license: Creative Commons Attribution-NonCommercial 4.0 International
   driver_kwargs:
     sheet_name: Region37
 ISIMIP:

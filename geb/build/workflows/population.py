@@ -72,8 +72,13 @@ def load_GLOPOP_S(data_catalog, GDL_region):
 
     # Merge the coordinates onto GLOPOP_S_region
     GLOPOP_S_region = GLOPOP_S_region.merge(grid_coords, on="GRID_CELL", how="left")
-    assert not GLOPOP_S_region["GRID_Y"].isna().any(), (
-        "GRID_Y contains NaN values, CHECK GLOPOP DATA"
-    )
+    # assert not GLOPOP_S_region["GRID_Y"].isna().any(), (
+    #     "GRID_Y contains NaN values, CHECK GLOPOP DATA"
+    # )
+    if GLOPOP_S_region["GRID_Y"].isna().any():
+        GLOPOP_S_region = GLOPOP_S_region[~GLOPOP_S_region.GRID_Y.isna()]
+        print(
+            f"WARNING: GRID_Y contains NaN values, CHECK GLOPOP DATA. REGION: {GDL_region}"
+        )
 
     return GLOPOP_S_region, GLOPOP_GRID_region

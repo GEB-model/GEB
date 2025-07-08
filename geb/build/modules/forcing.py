@@ -1024,7 +1024,10 @@ class Forcing:
             **kwargs,
             byteshuffle=True,
             filters=filters,
-            time_chunks_per_shard=get_chunk_size(da),
+            # time_chunks_per_shard=get_chunk_size(da),
+            x_chunksize=10,
+            y_chunksize=10,
+            time_chunksize=1,
         )
         self.plot_forcing(da, name)
         return da
@@ -1131,74 +1134,74 @@ class Forcing:
             self.grid["mask"], pr_hourly, forcing_name="ERA5"
         )
 
-        pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
+        # pr_hourly = pr_hourly * (1000 / 3600)  # convert from m/hr to kg/m2/s
 
-        # ensure no negative values for precipitation, which may arise due to float precision
-        pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
+        # # ensure no negative values for precipitation, which may arise due to float precision
+        # pr_hourly = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
+        # pr_hourly = self.set_pr_hourly(pr_hourly)  # weekly chunk size
 
-        pr = pr_hourly.resample(time="D").mean()  # get daily mean
-        pr = resample_like(pr, target, method="conservative")
-        pr = self.set_pr(pr)
+        # pr = pr_hourly.resample(time="D").mean()  # get daily mean
+        # pr = resample_like(pr, target, method="conservative")
+        # pr = self.set_pr(pr)
 
-        hourly_tas = process_ERA5("t2m", **download_args)
-        tas_avg = hourly_tas.resample(time="D").mean()
-        tas_avg = reproject_and_apply_lapse_rate_temperature(
-            tas_avg, elevation_forcing, elevation_target
-        )
+        # hourly_tas = process_ERA5("t2m", **download_args)
+        # tas_avg = hourly_tas.resample(time="D").mean()
+        # tas_avg = reproject_and_apply_lapse_rate_temperature(
+        #     tas_avg, elevation_forcing, elevation_target
+        # )
 
-        self.set_tas(tas_avg)
+        # self.set_tas(tas_avg)
 
-        tasmax = hourly_tas.resample(time="D").max()
-        tasmax = reproject_and_apply_lapse_rate_temperature(
-            tasmax, elevation_forcing, elevation_target
-        )
-        self.set_tasmax(tasmax)
+        # tasmax = hourly_tas.resample(time="D").max()
+        # tasmax = reproject_and_apply_lapse_rate_temperature(
+        #     tasmax, elevation_forcing, elevation_target
+        # )
+        # self.set_tasmax(tasmax)
 
-        tasmin = hourly_tas.resample(time="D").min()
-        tasmin = reproject_and_apply_lapse_rate_temperature(
-            tasmin, elevation_forcing, elevation_target
-        )
-        self.set_tasmin(tasmin)
+        # tasmin = hourly_tas.resample(time="D").min()
+        # tasmin = reproject_and_apply_lapse_rate_temperature(
+        #     tasmin, elevation_forcing, elevation_target
+        # )
+        # self.set_tasmin(tasmin)
 
-        hourly_dew_point_tas = process_ERA5(
-            "d2m",
-            **download_args,
-        )
-        dew_point_tas = hourly_dew_point_tas.resample(time="D").mean()
-        dew_point_tas = reproject_and_apply_lapse_rate_temperature(
-            dew_point_tas, elevation_forcing, elevation_target
-        )
+        # hourly_dew_point_tas = process_ERA5(
+        #     "d2m",
+        #     **download_args,
+        # )
+        # dew_point_tas = hourly_dew_point_tas.resample(time="D").mean()
+        # dew_point_tas = reproject_and_apply_lapse_rate_temperature(
+        #     dew_point_tas, elevation_forcing, elevation_target
+        # )
 
-        water_vapour_pressure = 0.6108 * np.exp(
-            17.27 * (dew_point_tas - 273.15) / (237.3 + (dew_point_tas - 273.15))
-        )  # calculate water vapour pressure (kPa)
-        saturation_vapour_pressure = 0.6108 * np.exp(
-            17.27 * (tas_avg - 273.15) / (237.3 + (tas_avg - 273.15))
-        )
+        # water_vapour_pressure = 0.6108 * np.exp(
+        #     17.27 * (dew_point_tas - 273.15) / (237.3 + (dew_point_tas - 273.15))
+        # )  # calculate water vapour pressure (kPa)
+        # saturation_vapour_pressure = 0.6108 * np.exp(
+        #     17.27 * (tas_avg - 273.15) / (237.3 + (tas_avg - 273.15))
+        # )
 
-        assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
-        relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
-        self.set_hurs(relative_humidity)
+        # assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
+        # relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
+        # self.set_hurs(relative_humidity)
 
-        hourly_rsds = process_ERA5(
-            "ssrd",  # surface_solar_radiation_downwards
-            **download_args,
-        )
-        rsds = hourly_rsds.resample(time="D").sum() / (
-            24 * 3600
-        )  # get daily sum and convert from J/m2 to W/m2
+        # hourly_rsds = process_ERA5(
+        #     "ssrd",  # surface_solar_radiation_downwards
+        #     **download_args,
+        # )
+        # rsds = hourly_rsds.resample(time="D").sum() / (
+        #     24 * 3600
+        # )  # get daily sum and convert from J/m2 to W/m2
 
-        rsds = resample_like(rsds, target, method="conservative")
-        self.set_rsds(rsds)
+        # rsds = resample_like(rsds, target, method="conservative")
+        # self.set_rsds(rsds)
 
-        hourly_rlds = process_ERA5(
-            "strd",  # surface_thermal_radiation_downwards
-            **download_args,
-        )
-        rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
-        rlds = resample_like(rlds, target, method="conservative")
-        self.set_rlds(rlds)
+        # hourly_rlds = process_ERA5(
+        #     "strd",  # surface_thermal_radiation_downwards
+        #     **download_args,
+        # )
+        # rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
+        # rlds = resample_like(rlds, target, method="conservative")
+        # self.set_rlds(rlds)
 
         pressure = process_ERA5("sp", **download_args)
         pressure = reproject_and_apply_lapse_rate_pressure(
