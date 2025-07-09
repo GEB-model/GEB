@@ -155,6 +155,7 @@ def test_update_with_dict():
 @pytest.mark.parametrize(
     "method",
     [
+        "setup_hydrography",
         "setup_crop_prices",
         "setup_discharge_observations",
         "setup_forcing_era5",

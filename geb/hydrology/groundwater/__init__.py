@@ -20,7 +20,7 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
-
+import numpy.typing as npt
 from geb.module import Module
 from geb.workflows import balance_check
 
@@ -155,9 +155,13 @@ class GroundWater(Module):
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
 
-        channel_ratio = get_channel_ratio(
+        channel_ratio: npt.NDArray[np.float32] = get_channel_ratio(
             river_length=self.grid.var.river_length,
-            river_width=self.grid.var.river_width,
+            river_width=np.where(
+                ~np.isnan(self.grid.var.average_river_width),
+                self.grid.var.average_river_width,
+                0,
+            ),
             cell_area=self.grid.var.cell_area,
         )
 

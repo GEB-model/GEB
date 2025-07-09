@@ -434,6 +434,12 @@ class SFINCS:
             "DEMs": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
+            "river_width_alpha": self.hydrology.grid.decompress(
+                self.hydrology.grid.var.river_width_alpha
+            ),
+            "river_width_beta": self.hydrology.grid.decompress(
+                self.hydrology.grid.var.river_width_beta
+            ),
             "mannings": self.mannings,
             "resolution": self.config["resolution"],
             "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],

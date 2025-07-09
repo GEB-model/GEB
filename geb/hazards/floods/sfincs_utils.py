@@ -5,6 +5,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt.log import setuplog
@@ -312,26 +313,40 @@ def get_representative_river_points(river_ID: set, rivers: pd.DataFrame):
         return xys
 
 
-def get_discharge_by_river(river_IDs, points_per_river, discharge):
-    xs, ys = [], []
+def get_discharge_by_river(
+    river_IDs: list[int],
+    points_per_river,
+    discharge: xr.DataArray,
+    river_width_alpha: npt.NDArray[np.float32],
+    river_width_beta: npt.NDArray[np.float32],
+):
+    xs: list[int] = []
+    ys: list[int] = []
     for points in points_per_river:
         xs.extend([p[0] for p in points])
         ys.extend([p[1] for p in points])
 
-    discharge_per_point = discharge.isel(
-        x=xr.DataArray(
-            xs,
-            dims="points",
-        ),
-        y=xr.DataArray(
-            ys,
-            dims="points",
-        ),
+    x_points: xr.DataArray = xr.DataArray(
+        xs,
+        dims="points",
+    )
+    y_points: xr.DataArray = xr.DataArray(
+        ys,
+        dims="points",
+    )
+
+    discharge_per_point: xr.DataArray = discharge.isel(
+        x=x_points,
+        y=y_points,
     ).compute()
     assert not np.isnan(discharge_per_point).any(), "Discharge values contain NaNs"
 
-    discharge_df = pd.DataFrame(index=discharge.time)
-    i = 0
+    river_width_alpha_per_point = river_width_alpha[y_points, x_points]
+    river_width_beta_per_point = river_width_beta[y_points, x_points]
+
+    discharge_df: pd.DataFrame = pd.DataFrame(index=discharge.time)
+
+    i: int = 0
     for river_ID, points in zip(river_IDs, points_per_river, strict=True):
         discharge_per_river = discharge_per_point.isel(
             points=slice(i, i + len(points))
@@ -340,13 +355,19 @@ def get_discharge_by_river(river_IDs, points_per_river, discharge):
         i += len(points)
 
     assert i == len(xs), "Discharge values do not match the number of points"
-    return discharge_per_point
+
+    return discharge_df, river_width_alpha_per_point, river_width_beta_per_point
 
 
-def assign_return_periods(rivers, discharge_series, return_periods, prefix="Q"):
+def assign_return_periods(
+    rivers: pd.DataFrame,
+    discharge_dataframe: pd.DataFrame,
+    return_periods: list[int],
+    prefix: str = "Q",
+):
     assert isinstance(return_periods, list)
     for i, idx in tqdm(enumerate(rivers.index), total=len(rivers)):
-        discharge = pd.Series(discharge_series[:, i], index=discharge_series.time)
+        discharge = discharge_dataframe[idx]
 
         if (discharge < 1e-10).all():
             print(

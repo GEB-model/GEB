@@ -1,9 +1,12 @@
 import logging
 
 import numpy as np
+import numpy.typing as npt
 import pyflwdir
 import xarray as xr
 from hydromt_sfincs import SfincsModel
+
+from geb.hydrology.routing import get_river_width
 
 from .io import export_rivers
 from .sfincs_utils import (
@@ -52,14 +55,6 @@ def get_river_depth(river_segments, method, bankfull_column):
     return depth.astype(np.float32)
 
 
-def get_river_width(river_segments, bankfull_column):
-    # w=a*Q^b Leopold and Maddock
-    a = 7.2
-    b = 0.50
-    width = a * (river_segments[bankfull_column] ** b)
-    return width.astype(np.float32)
-
-
 def get_river_manning(river_segments):
     return np.full(len(river_segments), 0.02)
 
@@ -88,6 +83,8 @@ def build_sfincs(
     region,
     rivers,
     discharge,
+    river_width_alpha: npt.NDArray[np.float32],
+    river_width_beta: npt.NDArray[np.float32],
     mannings,
     resolution,
     nr_subgrid_pixels,
@@ -164,10 +161,14 @@ def build_sfincs(
     for ID in rivers.index:
         river_representative_points.append(get_representative_river_points(ID, rivers))
 
-    discharge_by_river = get_discharge_by_river(
-        rivers.index,
-        river_representative_points,
-        discharge=discharge,
+    discharge_by_river, river_width_alpha_per_river, river_width_beta_per_river = (
+        get_discharge_by_river(
+            rivers.index.tolist(),
+            river_representative_points,
+            discharge=discharge,
+            river_width_alpha=river_width_alpha,
+            river_width_beta=river_width_beta,
+        )
     )
     rivers = assign_return_periods(rivers, discharge_by_river, return_periods=[2])
 
@@ -176,7 +177,22 @@ def build_sfincs(
     )
     rivers["manning"] = get_river_manning(rivers)
 
+    river_width_unknown_mask = rivers["width"].isnull()
+
+    rivers.loc[river_width_unknown_mask, "width"] = get_river_width(
+        river_width_alpha_per_river[river_width_unknown_mask],
+        river_width_beta_per_river[river_width_unknown_mask],
+        rivers.loc[river_width_unknown_mask, "Q_2"],
+    )
+
     export_rivers(model_root, rivers)
+
+    # Because hydromt-sfincs does a lot of filling default values when data
+    # is missing, we need to be extra sure that the required columns are
+    # present and contain valid data.
+    assert rivers["depth"].notnull().all(), "River depth cannot be null"
+    assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
+    assert rivers["width"].notnull().all(), "River width cannot be null"
 
     sf.setup_subgrid(
         datasets_dep=DEMs,
