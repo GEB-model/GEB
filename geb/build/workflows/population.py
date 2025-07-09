@@ -1,5 +1,5 @@
 import gzip
-
+import zipfile
 import numpy as np
 import pandas as pd
 import rioxarray
@@ -26,9 +26,11 @@ def load_GLOPOP_S(data_catalog, GDL_region):
         "GRID_CELL",
     ]
 
+    # get path to GLOPOP tables
     GLOPOP_S = data_catalog.get_source("GLOPOP-S")
+    
     # get path to GLOPOP grid
-    GLOPOP_S_GRID = data_catalog.get_source("GLOPOP-S_grid")
+    GLOPOP_S_GRID = data_catalog.get_source("GLOPOP-SG")
 
     with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
         GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
@@ -42,9 +44,9 @@ def load_GLOPOP_S(data_catalog, GDL_region):
     )
 
     # load grid
-    GLOPOP_GRID_region = rioxarray.open_rasterio(
-        GLOPOP_S_GRID.path.format(region=GDL_region)
-    )
+    fn_grid  = f'/vsizip/{GLOPOP_S_GRID.path}/{GDL_region}_grid_nr.tif' 
+    GLOPOP_GRID_region = GLOPOP_GRID_region = rioxarray.open_rasterio(fn_grid)
+
 
     # Get coordinates of each GRID_CELL in GLOPOP_GRID_region
     grid_coords = pd.DataFrame(
