@@ -281,64 +281,6 @@ class Households(AgentBaseClass):
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
 
-    def change_household_locations(self):
-        """Change the location of the household points to the centroid of the buildings.
-
-        Also, it associates the household points with their postal codes.
-        This is done to get the correct geometry for the warning function
-        """
-        crs: str = self.model.sfincs.crs
-        locations = self.var.household_points.copy()
-        locations.to_crs(
-            crs, inplace=True
-        )  # Change to a projected CRS to get a distance in meters
-
-        buildings_centroid = self.var.buildings_centroid[["geometry"]].copy()
-        buildings_centroid.to_crs(crs, inplace=True)  # Change to the same projected CRS
-
-        # Copy the geometry to a new column otherwise it gets lost in the spatial join
-        buildings_centroid["new_geometry"] = buildings_centroid.geometry
-
-        # Create unique ids for household points and building centroids
-        # This is done to avoid duplicates when doing the spatial join
-        locations["pointid"] = range(locations.shape[0])
-
-        new_locations = gpd.sjoin_nearest(
-            locations,
-            buildings_centroid,
-            how="left",
-            exclusive=True,
-            distance_col="distance",
-        )
-
-        # Sort values by pointid and distance and drop duplicate pointids
-        new_locations = new_locations.sort_values(
-            by=["pointid", "distance"], ascending=True, na_position="last"
-        )
-        new_locations = new_locations.drop_duplicates(subset="pointid", keep="first")
-
-        # Change the geometry of the household points to the geometry of the building centroid
-        new_locations["geometry"] = new_locations["new_geometry"]
-        new_locations.set_geometry("geometry", inplace=True)
-
-        # Drop columns that are not needed
-        new_locations.drop(
-            columns={"index_right", "new_geometry", "distance"}, inplace=True
-        )
-
-        # Associate households with their postal codes to use it later in the warning function
-        PC4: gpd.GeoDataFrame = gpd.read_parquet("data/postal_codes_4.parquet")
-        PC4["postcode"] = PC4["postcode"].astype("int32")
-
-        new_locations = gpd.sjoin(
-            new_locations,
-            PC4[["postcode", "geometry"]],
-            how="left",
-            predicate="intersects",
-        )
-
-        self.var.household_points = new_locations
-
     def get_flood_risk_information_honeybees(self):
         # preallocate array for damages
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
@@ -1068,8 +1010,6 @@ class Households(AgentBaseClass):
     def spinup(self):
         self.construct_income_distribution()
         self.assign_household_attributes()
-        if self.config["warning_response"]:
-            self.change_household_locations()  # ideally this should be done in the setup_population when building the model
 
     def flood(self, flood_map: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.

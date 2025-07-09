@@ -1,7 +1,7 @@
 import json
 import math
 from datetime import datetime
-
+import os
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -1229,6 +1229,9 @@ class Agents:
                         buildings_df = pd.concat([buildings_df, building_gdl])
 
             gdl_name = GDL_region["GDLcode"]
+            os.makedirs(
+                "preprocessing/buildings", exist_ok=True
+            )  # get rid of this later
             buildings_df.to_csv(
                 f"preprocessing/buildings/test_buildings_{gdl_name}.csv"
             )
