@@ -22,7 +22,7 @@ from ..data import (
     load_economic_data,
     load_regional_crop_data_from_dict,
 )
-from ..HRUs import load_grid
+from ..hydrology.HRUs import load_grid
 from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 from ..store import DynamicArray
 from ..workflows import balance_check
@@ -4680,6 +4680,14 @@ class CropFarmers(AgentBaseClass):
                 HRUs_with_removed_farmers.append(
                     self.remove_agent(idx, new_land_use_type)
                 )
+
+        # TODO: remove the social network of the removed farmers only.
+        # because farmers are removed and the current farmers may still
+        # be looking for their friends that are gone, we need to reset
+        # the social network.
+
+        self.set_social_network()
+
         return np.concatenate(HRUs_with_removed_farmers)
 
     def remove_agent(self, farmer_idx: int, new_land_use_type: int) -> np.ndarray:
