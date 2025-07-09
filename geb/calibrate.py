@@ -1808,12 +1808,12 @@ def calibrate(config, working_directory):
                 population + offspring, select_best_n_individuals
             )
 
-        # Optionally retrain a water price model with the best run
-        best_ind = tools.selBest(pareto_front, k=1)[0]
-        runs_path = os.path.join(config["calibration"]["path"], "runs")
-        run_directory = os.path.join(runs_path, best_ind.label)
-        print("Best run for water price model:", best_ind.label)
-        determine_water_price_model(run_directory, config)
+        # # Optionally retrain a water price model with the best run
+        # best_ind = tools.selBest(pareto_front, k=1)[0]
+        # runs_path = os.path.join(config["calibration"]["path"], "runs")
+        # run_directory = os.path.join(runs_path, best_ind.label)
+        # print("Best run for water price model:", best_ind.label)
+        # determine_water_price_model(run_directory, config)
 
         history.update(population)
 
