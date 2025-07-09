@@ -45,7 +45,7 @@ def load_GLOPOP_S(data_catalog, GDL_region):
 
     # load grid
     fn_grid  = f'/vsizip/{GLOPOP_S_GRID.path}/{GDL_region}_grid_nr.tif' 
-    GLOPOP_GRID_region = GLOPOP_GRID_region = rioxarray.open_rasterio(fn_grid)
+    GLOPOP_GRID_region = rioxarray.open_rasterio(fn_grid)
 
 
     # Get coordinates of each GRID_CELL in GLOPOP_GRID_region
