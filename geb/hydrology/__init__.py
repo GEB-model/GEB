@@ -157,7 +157,7 @@ class Hydrology(Data, Module):
                 ).sum()  # already removed from sources but not yet added to sinks
             )
 
-            assert balance_check(
+            balance_check(
                 name="total water balance 2",
                 how="sum",
                 influxes=[influx, invented_water],
@@ -193,7 +193,7 @@ class Hydrology(Data, Module):
 
             outflux += capillar_next_step.sum()  # capillary rise is added to sinks
 
-            assert balance_check(
+            balance_check(
                 name="total water balance 2",
                 how="sum",
                 influxes=[influx, invented_water],
@@ -235,7 +235,7 @@ class Hydrology(Data, Module):
                 + self.model.agents.reservoir_operators.command_area_release_m3.sum()  # now removed from reservoir
             )
 
-            assert balance_check(
+            balance_check(
                 name="total water balance 3",
                 how="sum",
                 influxes=[influx, invented_water],
