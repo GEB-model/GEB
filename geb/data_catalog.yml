@@ -10,6 +10,7 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: ../../data_catalogue/topography/fabdem.vrt
+  path: ../../data_catalogue/topography/fabdem.vrt
 
 GRDC:
   crs: 4326
@@ -132,18 +133,6 @@ geul_dem:
   meta:
     category: topography
   path: project_data/geul/Geul_Filled_DEM_EPSG28992.tif
-gcn250:
-  data_type: RasterDataset
-  driver: raster
-  meta:
-    category: soil
-    paper_doi: 10.1038/s41597-019-0155-x
-    paper_ref: Jaafar et al. (2019)
-    source_license: CC BY 4.0
-    source_url: https://doi.org/10.6084/m9.figshare.7756202.v1
-    source_version: v1
-  nodata: 255
-  path: gcn250/{variable}.tif
 MIRCA2000_crop_data:
   data_type: DataFrame
   driver: excel
@@ -282,33 +271,6 @@ cwatm_grassland_5min:
   data_type: RasterDataset
   driver: raster
   path: cwatm_input_5min/landcover/grassland/{variable}.nc
-  meta:
-    source_license: GNU General Public License V3
-    source_url: https://cwatm.iiasa.ac.at/license.html
-cwatm_irrPaddy_5min:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: cwatm_input_5min/landcover/irrPaddy/{variable}.nc
-  meta:
-    source_license: GNU General Public License V3
-    source_url: https://cwatm.iiasa.ac.at/license.html
-cwatm_irrNonPaddy_5min:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: cwatm_input_5min/landcover/irrNonPaddy/{variable}.nc
-  meta:
-    source_license: GNU General Public License V3
-    source_url: https://cwatm.iiasa.ac.at/license.html
-cwatm_albedo_5min:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: cwatm_input_5min/landsurface/albedo/albedo.nc
-  meta:
-    source_license: GNU General Public License V3
-    source_url: https://cwatm.iiasa.ac.at/license.html
 hydro_lakes:
   crs: 4326
   data_type: GeoDataFrame
@@ -586,20 +548,6 @@ preferences_country:
     source_url:  https://gps.iza.org/dataset/dataset_6708dcdda1d7b.zip
     paper_doi: doi.org/10.1093/qje/qjy013
     paper_ref: Falk et al. (2018)
-    source_license: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (non-profit only)
-cwatm_domestic_water_demand_{scenario}_year:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: water_demand/{scenario}_dom_year_millionm3_5min.nc
-  driver_kwargs:
-    decode_times: false
-  meta:
-    category: water
-    source_license: the Creative Commons Attribution 3.0 License
-    source_url: https://doi.org/10.5194/gmd-9-175-2016
-  placeholders:
-    scenario: ['historical', 'ssp1', 'ssp2', 'ssp3', 'ssp5']
 cwatm_livestock_water_demand_{scenario}_year:
   crs: 4326
   data_type: RasterDataset

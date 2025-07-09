@@ -1661,19 +1661,19 @@ class Agents:
             name="agents/farmers/education_level",
         )
 
-    def create_preferences(self):
+    def create_preferences(self) -> pd.DataFrame:
         # Risk aversion
-        preferences_country_level = self.data_catalog.get_dataframe(
+        preferences_country_level: pd.DataFrame = self.data_catalog.get_dataframe(
             "preferences_country",
             variables=["country", "isocode", "patience", "risktaking"],
         ).dropna()
 
-        preferences_individual_level = self.data_catalog.get_dataframe(
+        preferences_individual_level: pd.DataFrame = self.data_catalog.get_dataframe(
             "preferences_individual",
             variables=["country", "isocode", "patience", "risktaking"],
         ).dropna()
 
-        def scale_to_range(x, new_min, new_max):
+        def scale_to_range(x: pd.Series, new_min: float, new_max: float):
             x_min = x.min()
             x_max = x.max()
             # Avoid division by zero
@@ -1725,7 +1725,7 @@ class Agents:
         )
 
         # List of variables for which to calculate the standard deviation
-        variables = ["discount", "risktaking_gains", "risktaking_losses"]
+        variables: list[str] = ["discount", "risktaking_gains", "risktaking_losses"]
 
         # Convert the variables to numeric, coercing errors to NaN to handle non-numeric entries
         for var in variables:

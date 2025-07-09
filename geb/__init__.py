@@ -35,21 +35,21 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
 
     if platform.system() == "Linux":
         tbb_platform: str = "lin"
-        tbb_file: Path = Path("intel64") / "gcc4.8" / "libtbb.so.12"
+        tbb_file: Path = Path("lib") / "intel64" / "gcc4.8" / "libtbb.so.12"
         tbb_compressed_file: str = f"{tbb_platform}.tgz"
     elif platform.system() == "Windows":
         tbb_platform: str = "win"
-        tbb_file: Path = Path("intel64") / "vc14" / "tbb12.dll"
+        tbb_file: Path = Path("redist") / "intel64" / "vc14" / "tbb12.dll"
         tbb_compressed_file: str = f"{tbb_platform}.zip"
     elif platform.system() == "Darwin":
         tbb_platform: str = "mac"
-        tbb_file: Path = Path("libtbb.12.dylib")
+        tbb_file: Path = Path("lib") / "libtbb.12.dylib"
         tbb_compressed_file: str = f"{tbb_platform}.tgz"
     else:
         raise RuntimeError(f"Unsupported platform: {platform.system()}")
 
     tbb_path: Path = bin_path / tbb_platform
-    tbb_library: Path = tbb_path / tbb_uncompressed_folder / "lib" / tbb_file
+    tbb_library: Path = tbb_path / tbb_uncompressed_folder / tbb_file
 
     if not tbb_library.exists():
         tbb_url: str = f"https://github.com/uxlfoundation/oneTBB/releases/download/v{version}/oneapi-tbb-{version}-{tbb_compressed_file}"
