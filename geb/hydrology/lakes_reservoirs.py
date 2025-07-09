@@ -23,7 +23,7 @@
 import geopandas as gpd
 import numpy as np
 
-from geb.HRUs import load_grid
+from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import balance_check
 

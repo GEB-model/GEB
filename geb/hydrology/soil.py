@@ -28,7 +28,7 @@ import numpy.typing as npt
 from numba import float32, njit, prange
 from tqdm import tqdm
 
-from geb.HRUs import load_grid
+from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
@@ -1469,6 +1469,7 @@ class Soil(Module):
         potential_evapotranspiration,
         natural_available_water_infiltration,
         actual_irrigation_consumption,
+        crop_factor,
     ):
         """Dynamic part of the soil module.
 
@@ -1602,7 +1603,7 @@ class Soil(Module):
                 natural_available_water_infiltration=natural_available_water_infiltration,
                 actual_irrigation_consumption=actual_irrigation_consumption,
                 land_use_type=self.HRU.var.land_use_type,
-                crop_kc=self.HRU.var.cropKC,
+                crop_kc=crop_factor,
                 EWRef=self.HRU.var.EWRef,
                 topwater=self.HRU.var.topwater,
             )
