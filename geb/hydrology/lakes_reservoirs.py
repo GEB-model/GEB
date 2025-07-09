@@ -204,6 +204,8 @@ class LakesReservoirs(Module):
             self.map_water_bodies_IDs(waterBodyID_unmapped)
         )
 
+        self.grid.var.discharge_m3_s[self.grid.var.waterBodyID != -1] = 0.0
+
         self.grid.var.waterbody_outflow_points = self.get_outflows(
             self.grid.var.waterBodyID
         )
