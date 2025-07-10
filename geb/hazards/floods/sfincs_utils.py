@@ -247,9 +247,8 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False) -> int:
     if os.name == "posix":
         # If not a singularity image, add docker:// prefix
         # to the version string
-        version = "/ada-software/containers/sfincs-cpu_latest.sif"
-        # if not version.endswith(".sif"):
-        #     version: str = "docker://" + version
+        if not version.endswith(".sif"):
+            version: str = "docker://" + version
         cmd: list[str] = [
             "singularity",
             "run",
