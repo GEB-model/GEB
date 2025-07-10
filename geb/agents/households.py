@@ -329,7 +329,9 @@ class Households(AgentBaseClass):
         )
 
         # Associate households with their postal codes to use it later in the warning function
-        PC4: gpd.GeoDataFrame = gpd.read_parquet("data/postal_codes_4.parquet")
+        PC4: gpd.GeoDataFrame = gpd.read_parquet(
+            self.model.files["geoms"]["postal_codes"]
+        )
         PC4["postcode"] = PC4["postcode"].astype("int32")
 
         new_locations = gpd.sjoin(
@@ -606,7 +608,7 @@ class Households(AgentBaseClass):
 
             damage_probability_map.to_file(output_path)
 
-    def warning_strategy_1(self, prob_threshold=0.6):
+    def water_level_warning_strategy(self, prob_threshold=0.6, area_threshold=0.1):
         # I probably should use the probability_maps as argument for this function instead of getting it inside the function
         # ideally add an option to choose the warning strategy
 
@@ -624,29 +626,37 @@ class Households(AgentBaseClass):
         for day in days:
             for range_id in range_ids:
                 # Build path to probability map (is there a way of doing it with array instead of raster?)
-                tif_path = Path(
+                prob_map = Path(
                     self.model.output_folder
                     / "prob_maps"
                     / f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.tif"
                 )
 
-                prob_map = rasterio.open(tif_path)
-                prob_array = prob_map.read(1)
-                affine = prob_map.transform
+                # Get the pixel values for each postal code
+                stats = zonal_stats(PC4, prob_map, raster_out=True, nodata=np.nan)
 
-                # Run zonal stats using rasterstats
-                stats = zonal_stats(
-                    PC4, prob_array, affine=affine, stats="max", nodata=np.nan
-                )
-
-                # Iterate through each postal code and check the max probability
-                for i, prob_value in enumerate(stats):
-                    max_prob = prob_value["max"]
+                # Iterate through each postal code and check how many pixels exceed the threshold
+                for i, postalcode in enumerate(stats):
+                    pixel_values = postalcode["mini_raster_array"]
                     pc4_code = PC4.iloc[i]["postcode"]
 
-                    if max_prob >= prob_threshold:
+                    # Only get the values that are within the postal code
+                    postalcode_pixels = pixel_values[~pixel_values.mask]
+
+                    # Calculate the number of pixels with flood prob above the threshold
+                    n_above = np.sum(postalcode_pixels >= prob_threshold)
+
+                    # Calculate the total number of pixels within the postal code
+                    n_total = len(postalcode_pixels)
+
+                    if n_total == 0:
+                        print("No valid pixels found for postal code {pc4_code}")
+                    else:
+                        percentage = n_above / n_total
+
+                    if percentage >= area_threshold:
                         print(
-                            f"Warning issued to postal code {pc4_code} on {day} for range {range_id}"
+                            f"Warning issued to postal code {pc4_code} on {day} for range {range_id}: {percentage:.2%} of pixels > {prob_threshold}"
                         )
 
                         # Filter the affected households based on the postal code
@@ -667,7 +677,7 @@ class Households(AgentBaseClass):
                                 "range": range_id,
                                 "n_affected_households": len(affected_households),
                                 "n_warned_households": n_warned_households,
-                                "max_probability": max_prob,
+                                "percentage_above_threshold": percentage,
                             }
                         )
 
@@ -789,7 +799,6 @@ class Households(AgentBaseClass):
         self.var.risk_perception[household_id] *= 10
 
         print(f"Warning targeted to reach {n_target_households} households.")
-        print(f"Warning supposed to reach {n_warned_households} households.")
         print(f"Warning reached {len(household_id)} households.")
 
         return n_warned_households
@@ -1074,6 +1083,9 @@ class Households(AgentBaseClass):
         self.assign_household_attributes()
         if self.config["warning_response"]:
             self.change_household_locations()  # ideally this should be done in the setup_population when building the model
+        self.water_level_warning_strategy()
+
+        print("test")
 
     def flood(self, flood_map: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.

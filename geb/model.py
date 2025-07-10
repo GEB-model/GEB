@@ -203,7 +203,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
             # If the multiverse function is called and we want to simulate a warning response afterwards,
             if self.config["agent_settings"]["households"]["warning_response"]:
-                self.agents.households.warning_strategy_1()
+                self.agents.households.water_level_warning_strategy()
                 # self.agents.households.infrastructure_warning_strategy()
 
         t0 = time()
