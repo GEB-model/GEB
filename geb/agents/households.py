@@ -307,17 +307,17 @@ class Households(AgentBaseClass):
 
             # cap water levels at damage curve max inundation
             water_levels = np.minimum(
-                water_levels, self.var.buildings_content_curve_interpolator.x.max()
+                water_levels, self.buildings_content_curve_interpolator.x.max()
             )
 
             # interpolate damages
             damages_do_not_adapt[i, :] = (
-                self.var.buildings_content_curve_interpolator(water_levels)
+                self.buildings_content_curve_interpolator(water_levels)
                 * self.var.property_value.data
             )
 
             damages_adapt[i, :] = (
-                self.var.buildings_content_curve_adapted_interpolator(water_levels)
+                self.buildings_content_curve_adapted_interpolator(water_levels)
                 * self.var.property_value.data
             )
 
@@ -996,12 +996,12 @@ class Households(AgentBaseClass):
 
     def create_damage_interpolators(self):
         # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
-        self.var.buildings_content_curve_interpolator = interpolate.interp1d(
+        self.buildings_content_curve_interpolator = interpolate.interp1d(
             x=self.var.buildings_content_curve.index,
             y=self.var.buildings_content_curve["building_unprotected"],
             # fill_value="extrapolate",
         )
-        self.var.buildings_content_curve_adapted_interpolator = interpolate.interp1d(
+        self.buildings_content_curve_adapted_interpolator = interpolate.interp1d(
             x=self.var.buildings_content_curve_adapted.index,
             y=self.var.buildings_content_curve_adapted["building_unprotected"],
             # fill_value="extrapolate",
