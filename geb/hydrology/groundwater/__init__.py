@@ -21,6 +21,7 @@
 
 import numpy as np
 import numpy.typing as npt
+
 from geb.module import Module
 from geb.workflows import balance_check
 

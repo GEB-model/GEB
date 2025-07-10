@@ -1,9 +1,9 @@
 import geopandas as gpd
+import hydromt.data_catalog
 import networkx as nx
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-import hydromt.data_catalog
 import pyflwdir
 import xarray as xr
 from hydromt.exceptions import NoDataException
