@@ -44,12 +44,25 @@ def setup_donor_countries(self, countries_with_data, alternative_countries=None)
     donor_country_dict = {}
     for country in countries_without_data:
         # calculate the HDI of the target country
-        if country not in dev_index.index:
-            raise ValueError(
-                f"Tried to fill data for country {country}, but this country is not present in the Human Development Index data"
+        if country not in dev_index.index:  # if the country does not have HDI data
+            # take the closest country with HDI data
+            region_countries_geometries = global_countries.loc[
+                global_countries.index.isin(region_countries)
+            ]
+            current_country_geometry = global_countries.loc[country].geometry
+            distances = region_countries_geometries.distance(current_country_geometry)
+            distances = distances[
+                distances > 0
+            ]  # remove zero distances (self-distance)
+            closest_country = region_countries_geometries.loc[distances.idxmin()].name
+
+            self.logger.warning(
+                f"Country {country} does not have HDI data available, as it is not an official UN country. Filling it with the closest country with HDI data: {closest_country}."
             )
-        # calculate the HDI difference from countries with data
-        hdi = dev_index.loc[country, "HDI"]
+            hdi = dev_index.loc[closest_country, "HDI"]
+
+        else:
+            hdi = dev_index.loc[country, "HDI"]
 
         donors = potential_donors.copy()
 

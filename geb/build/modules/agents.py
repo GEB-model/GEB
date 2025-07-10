@@ -379,9 +379,8 @@ class Agents:
         # Create a helper to process rates and assert single row data
         def process_rates(df, rate_cols, ISO3, convert_percent_to_ratio=False):
             filtered_data = df.loc[df["Country Code"] == ISO3, rate_cols]
-            assert len(filtered_data) == 1, (
-                f"Expected one row for {ISO3}, got {len(filtered_data)}"
-            )
+            if len(filtered_data) == 0:
+                return list(np.full(len(rate_cols), np.nan, dtype=np.float32))
             if convert_percent_to_ratio:
                 return (filtered_data.iloc[0] / 100 + 1).tolist()
             return filtered_data.iloc[0].tolist()
