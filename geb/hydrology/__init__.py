@@ -58,6 +58,9 @@ class Hydrology(Data, Module):
         Data.__init__(self, model)
         Module.__init__(self, model)
 
+        if not self.model.simulate_hydrology:
+            return
+
         self.dynamic_water_bodies = False
         self.crop_factor_calibration_factor = 1
 

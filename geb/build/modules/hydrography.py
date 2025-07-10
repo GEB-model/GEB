@@ -56,7 +56,15 @@ def get_rivers(
 ) -> gpd.GeoDataFrame:
     rivers: gpd.GeoDataFrame = gpd.read_parquet(
         data_catalog.get_source("MERIT_Basins_riv").path,
-        columns=["COMID", "lengthkm", "uparea", "maxup", "NextDownID", "geometry"],
+        columns=[
+            "COMID",
+            "lengthkm",
+            "slope",
+            "uparea",
+            "maxup",
+            "NextDownID",
+            "geometry",
+        ],
         filters=[
             ("COMID", "in", subbasin_ids),
         ],

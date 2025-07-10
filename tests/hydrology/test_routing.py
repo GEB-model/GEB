@@ -316,7 +316,7 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
             [1, -1, -1, -1],
         ]
     )
-    Q_initial[waterbody_id != -1] = 0
+    Q_initial[waterbody_id != -1] = np.nan
 
     router: Accuflux = Accuflux(
         dt=1,
@@ -360,27 +360,27 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
         outflow_per_waterbody_m3=outflow_per_waterbody_m3,
     )
 
-    assert (
-        Q_new
-        == np.array(
+    np.testing.assert_array_equal(
+        Q_new,
+        np.array(
             [
                 [0, 3, 0, 0],
                 [0, 8, 0, 4],
-                [0, 0, 0, 4],
-                [0, 1, 1, 0],
+                [0, np.nan, 0, 4],
+                [np.nan, 1, 1, 0],
             ]
-        )[mask]
-    ).all()
+        )[mask],
+    )
     assert outflow_at_pits_m3 == 2
 
     assert waterbody_storage_m3[0] == 7  # 10 - 7 + 2 + 1
     assert waterbody_storage_m3[1] == 3  # 5 - 2
     assert (
-        Q_initial[mask].sum()
+        np.nansum(Q_initial[mask])
         + waterbody_storage_m3_pre.sum()
         + sideflow.sum()
         - outflow_at_pits_m3
-        == Q_new.sum() + waterbody_storage_m3.sum()
+        == np.nansum(Q_new) + waterbody_storage_m3.sum()
     )
 
 

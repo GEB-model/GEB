@@ -19,7 +19,7 @@ from .sfincs_utils import (
 logger = logging.getLogger(__name__)
 
 
-def get_river_depth(river_segments, method, bankfull_column):
+def get_river_depth(river_segments, method, parameters, bankfull_column):
     if method == "manning":
         # Set a minimum value for 'rivslp'
         min_rivslp = 1e-5
@@ -34,13 +34,14 @@ def get_river_depth(river_segments, method, bankfull_column):
         # Calculate 'river depth' using the Manning equation
         depth = (
             (0.030 * river_segments[bankfull_column])
-            / (np.sqrt(slope) * river_segments["rivwth"])
+            / (np.sqrt(slope) * river_segments["width"])
         ) ** (3 / 5)
 
     elif method == "power_law":
         # Calculate 'river depth' using the power law equation
-        c = 0.27
-        d = 0.30  # Powerlaw equation from Andreadis et al (2013)
+        # Powerlaw equation from Andreadis et al (2013)
+        c = parameters["c"]
+        d = parameters["d"]
         depth = c * (river_segments[bankfull_column].astype(float) ** d)
 
     else:
@@ -89,7 +90,8 @@ def build_sfincs(
     resolution,
     nr_subgrid_pixels,
     crs,
-    depth_calculation="manning",
+    depth_calculation_method,
+    depth_calculation_parameters,
     derive_river_method=None,
     mask_flood_plains=False,
 ):
@@ -117,7 +119,7 @@ def build_sfincs(
     assert not (derive_river_method and rivers), (
         "Specify either derive_river_method or rivers, not both"
     )
-    assert depth_calculation in [
+    assert depth_calculation_method in [
         "manning",
         "power_law",
     ], "Method should be 'manning' or 'power_law'"
@@ -172,11 +174,6 @@ def build_sfincs(
     )
     rivers = assign_return_periods(rivers, discharge_by_river, return_periods=[2])
 
-    rivers["depth"] = get_river_depth(
-        rivers, method=depth_calculation, bankfull_column="Q_2"
-    )
-    rivers["manning"] = get_river_manning(rivers)
-
     river_width_unknown_mask = rivers["width"].isnull()
 
     rivers.loc[river_width_unknown_mask, "width"] = get_river_width(
@@ -184,6 +181,14 @@ def build_sfincs(
         river_width_beta_per_river[river_width_unknown_mask],
         rivers.loc[river_width_unknown_mask, "Q_2"],
     )
+
+    rivers["depth"] = get_river_depth(
+        rivers,
+        method=depth_calculation_method,
+        parameters=depth_calculation_parameters,
+        bankfull_column="Q_2",
+    )
+    rivers["manning"] = get_river_manning(rivers)
 
     export_rivers(model_root, rivers)
 

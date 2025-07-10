@@ -243,7 +243,10 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False) -> int:
         if version is None:
             raise EnvironmentError("Environment variable SFINCS_GPU_SIF is not set")
     else:
-        version: str = os.getenv("SFINCS_SIF_v220", "deltares/sfincs-cpu:latest")
+        version: str = os.getenv(
+            "SFINCS_SIF_v220",
+            "/ada-software/containers/sfincs-cpu-v2.2.0-col-dEze-Release.sif",
+        )
 
     if os.name == "posix":
         # If not a singularity image, add docker:// prefix
@@ -317,9 +320,9 @@ def get_discharge_by_river(
     river_IDs: list[int],
     points_per_river,
     discharge: xr.DataArray,
-    river_width_alpha: npt.NDArray[np.float32],
-    river_width_beta: npt.NDArray[np.float32],
-):
+    river_width_alpha: npt.NDArray[np.float32] | None = None,
+    river_width_beta: npt.NDArray[np.float32] | None = None,
+) -> tuple[pd.DataFrame, xr.DataArray | None, xr.DataArray | None]:
     xs: list[int] = []
     ys: list[int] = []
     for points in points_per_river:
@@ -341,8 +344,14 @@ def get_discharge_by_river(
     ).compute()
     assert not np.isnan(discharge_per_point).any(), "Discharge values contain NaNs"
 
-    river_width_alpha_per_point = river_width_alpha[y_points, x_points]
-    river_width_beta_per_point = river_width_beta[y_points, x_points]
+    if river_width_alpha is not None:
+        river_width_alpha_per_point = river_width_alpha[y_points, x_points]
+    else:
+        river_width_alpha_per_point = None
+    if river_width_beta is not None:
+        river_width_beta_per_point = river_width_beta[y_points, x_points]
+    else:
+        river_width_beta_per_point = None
 
     discharge_df: pd.DataFrame = pd.DataFrame(index=discharge.time)
 

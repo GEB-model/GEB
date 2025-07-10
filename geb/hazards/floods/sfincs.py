@@ -434,16 +434,23 @@ class SFINCS:
             "DEMs": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
-            "river_width_alpha": self.hydrology.grid.decompress(
-                self.hydrology.grid.var.river_width_alpha
+            "river_width_alpha": self.model.hydrology.grid.decompress(
+                self.model.var.river_width_alpha
             ),
-            "river_width_beta": self.hydrology.grid.decompress(
-                self.hydrology.grid.var.river_width_beta
+            "river_width_beta": self.model.hydrology.grid.decompress(
+                self.model.var.river_width_beta
             ),
             "mannings": self.mannings,
             "resolution": self.config["resolution"],
             "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],
             "crs": self.crs,
-            "depth_calculation": "power_law",
+            "depth_calculation_method": self.model.config["hydrology"]["routing"][
+                "river_depth"
+            ]["method"],
+            "depth_calculation_parameters": self.model.config["hydrology"]["routing"][
+                "river_depth"
+            ]["parameters"]
+            if "parameters" in self.model.config["hydrology"]["routing"]["river_depth"]
+            else {},
             "mask_flood_plains": False,  # setting this to True sometimes leads to errors
         }

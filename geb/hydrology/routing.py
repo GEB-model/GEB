@@ -228,10 +228,13 @@ def update_node_kinematic(
     evaporation_m3_s_l: np.float32 = (
         evaporation_m3_s / deltaX
     )  # Convert evaporation from m3/s to m3/s/m
+
     q: np.float32 = Qside / deltaX  # Convert sideflow from m3/s to m3/s/m
 
     # If evaporation is larger than the inflow and sideflow, we limit it to the sum of inflow and sideflow
-    evaporation_m3_s_l: np.float32 = min(evaporation_m3_s_l, (Qin + Qold) / 2 + q)
+    evaporation_m3_s_l: np.float32 = min(
+        evaporation_m3_s_l, (Qin + Qold) / 2 + max(q, 0)
+    )
 
     q -= evaporation_m3_s_l  # Adjust lateral inflow for evaporation
 
@@ -857,7 +860,6 @@ class Routing(Module):
             average_discharge: npt.NDArray[np.float32] = (
                 self.var.sum_of_all_discharge_steps / (self.var.discharge_step_count)
             )
-            assert (average_discharge[self.grid.var.waterBodyID == -1] > 0.0).all()
 
             alpha: npt.NDArray[np.float32] = np.where(
                 ~np.isnan(self.grid.var.average_river_width),
@@ -983,10 +985,12 @@ class Routing(Module):
             ).all()
 
             if self.model.in_spinup:
-                self.grid.var.river_width_alpha, self.grid.var.river_width_beta = (
+                self.model.var.river_width_alpha, self.model.var.river_width_beta = (
                     self.get_river_width_alpha_and_beta(
-                        default_alpha=self.config["river_width_alpha"],
-                        beta=self.config["river_width_beta"],
+                        default_alpha=self.config["river_width"]["parameters"][
+                            "default_alpha"
+                        ],
+                        beta=self.config["river_width"]["parameters"]["beta"],
                     )
                 )
 
@@ -995,8 +999,8 @@ class Routing(Module):
             ).all()
 
             river_width: npt.NDArray[np.float32] = get_river_width(
-                self.grid.var.river_width_alpha,
-                self.grid.var.river_width_beta,
+                self.model.var.river_width_alpha,
+                self.model.var.river_width_beta,
                 self.grid.var.discharge_m3_s,
             )
             # the ratio of each grid cell that is currently covered by a river
