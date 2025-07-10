@@ -209,7 +209,7 @@ class Router:
         self.is_waterbody_outflow = is_waterbody_outflow
 
         assert Q_initial.shape == self.idxs_up_to_downstream.shape
-        assert (Q_initial[self.waterbody_id != -1] == 0).all()
+        assert np.isnan(Q_initial[self.waterbody_id != -1]).all()
         self.Q_prev = Q_initial
 
 
@@ -350,9 +350,6 @@ class KinematicWave(Router):
         Returns:
             The available storage of the river network.
         """
-        assert not np.isnan(self.Q_prev).any()
-        assert (self.Q_prev >= 0.0).all()
-
         return self.get_total_storage() * maximum_abstraction_ratio
 
     def get_total_storage(self) -> npt.NDArray[np.float32]:
@@ -396,7 +393,7 @@ class KinematicWave(Router):
         river_length: np.ndarray
             Array of floats containing the channel length, must be > 0
         """
-        Qnew: npt.NDArray[np.float32] = np.zeros_like(Qold)
+        Qnew: npt.NDArray[np.float32] = np.full_like(Qold, np.nan, dtype=np.float32)
         actual_evaporation_m3: npt.NDArray[np.float32] = np.zeros_like(
             Qold, dtype=np.float32
         )
@@ -487,7 +484,6 @@ class KinematicWave(Router):
             river_length=self.river_length,
             dt=self.dt,
         )
-        assert (Q[self.waterbody_id != -1] == 0.0).all()
 
         self.Q_prev = Q
 
@@ -527,11 +523,23 @@ class Accuflux(Router):
         super().__init__(dt, river_network, *args, **kwargs)
 
     def get_available_storage(
-        self, maximum_abstraction_ratio=0.9
+        self, maximum_abstraction_ratio: float = 0.9
     ) -> npt.NDArray[np.float32]:
-        assert not np.isnan(self.Q_prev).any()
-        assert (self.Q_prev >= 0.0).all()
-        return self.Q_prev * self.dt * maximum_abstraction_ratio
+        """Get the available storage of the river network, which is the sum of the available storage in each cell.
+
+        Available storage in lakes and reservoirs is set to 0.
+
+        Args:
+            maximum_abstraction_ratio: The maximum abstraction ratio, default is 0.9.
+                This is the ratio of the available storage that can be used for abstraction.
+
+        Returns:
+            The available storage of the river network.
+        """
+        available_storage = self.Q_prev * self.dt * maximum_abstraction_ratio
+        available_storage[self.waterbody_id != -1] = 0.0
+        assert not np.isnan(available_storage).any()
+        return available_storage
 
     @staticmethod
     @njit(cache=True)
@@ -554,11 +562,14 @@ class Accuflux(Router):
             evaporation_m3_s, Qold
         )
         actual_evaporation_m3: npt.NDArray[np.float32] = actual_evaporation_m3_s * dt
+        actual_evaporation_m3[waterbody_id != -1] = 0.0
 
         Qold -= actual_evaporation_m3_s
 
-        Qnew: np.ndarray = np.full_like(Qold, 0.0)
-        over_abstraction_m3: np.ndarray = np.zeros_like(Qold, dtype=np.float32)
+        Qnew: npt.NDArray[np.float32] = np.full_like(Qold, np.nan, dtype=np.float32)
+        over_abstraction_m3: npt.NDArray[np.float32] = np.zeros_like(
+            Qold, dtype=np.float32
+        )
         for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
             node = idxs_up_to_downstream[i]
             upstream_nodes = upstream_matrix_from_up_to_downstream[i]
@@ -634,8 +645,9 @@ class Accuflux(Router):
             is_waterbody_outflow=self.is_waterbody_outflow,
             waterbody_id=self.waterbody_id,
         )
-        assert (Q[self.waterbody_id != -1] == 0.0).all()
+
         self.Q_prev = Q
+
         return (
             Q,
             actual_evaporation_m3,
@@ -659,6 +671,8 @@ class Routing(Module):
 
     def __init__(self, model, hydrology):
         super().__init__(model)
+
+        self.config = model.config["hydrology"]["routing"]
 
         self.default_missing_channel_width: float = (
             3.0  # Default width for missing values
@@ -688,7 +702,7 @@ class Routing(Module):
         )
 
     def set_router(self):
-        routing_algorithm: str = self.model.config["hydrology"]["routing"]["algorithm"]
+        routing_algorithm: str = self.config["algorithm"]
         is_waterbody_outflow: npt.NDArray[np.bool] = (
             self.grid.var.waterbody_outflow_points != -1
         )
@@ -804,8 +818,8 @@ class Routing(Module):
 
     def get_river_width_alpha_and_beta(
         self,
-        beta: float = 0.50,
-        default_alpha: np.float32 = np.float32(7.2),
+        beta: float,
+        default_alpha: float,
     ) -> tuple[npt.NDArray[np.float32], float]:
         """Calculate the river alpha parameter for the kinematic wave routing.
 
@@ -970,12 +984,16 @@ class Routing(Module):
 
             if self.model.in_spinup:
                 self.grid.var.river_width_alpha, self.grid.var.river_width_beta = (
-                    self.get_river_width_alpha_and_beta()
+                    self.get_river_width_alpha_and_beta(
+                        default_alpha=self.config["river_width_alpha"],
+                        beta=self.config["river_width_beta"],
+                    )
                 )
 
             assert (
-                self.grid.var.discharge_m3_s[self.grid.var.waterBodyID == -1] > 0.0
+                self.grid.var.discharge_m3_s[self.grid.var.waterBodyID == -1] >= 0.0
             ).all()
+
             river_width: npt.NDArray[np.float32] = get_river_width(
                 self.grid.var.river_width_alpha,
                 self.grid.var.river_width_beta,
@@ -1006,12 +1024,13 @@ class Routing(Module):
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
             )
 
+            # ensure that discharge is nan for water bodies
+            assert np.isnan(
+                self.grid.var.discharge_m3_s[self.grid.var.waterBodyID != -1]
+            ).all()
+
             self.var.sum_of_all_discharge_steps += self.grid.var.discharge_m3_s
             self.var.discharge_step_count += 1
-
-            assert (
-                self.grid.var.discharge_m3_s[self.grid.var.waterBodyID != -1] == 0
-            ).all()
 
             self.grid.var.discharge_m3_s_substep[subrouting_step, :] = (
                 self.grid.var.discharge_m3_s.copy()
@@ -1030,10 +1049,6 @@ class Routing(Module):
                 )
                 over_abstraction_m3 += over_abstraction_m3_routing_step
                 command_area_release_m3 += command_area_release_m3_routing_step
-
-        assert not np.isnan(self.grid.var.discharge_m3_s).any()
-
-        # print(self.grid.var.discharge_m3_s.max())
 
         if __debug__:
             # TODO: make dependent on routing step length

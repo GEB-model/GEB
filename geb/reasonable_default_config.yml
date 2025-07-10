@@ -41,6 +41,9 @@ hazards:
 hydrology:
   routing:
     algorithm: kinematic_wave  # accuflux or kinematic_wave
+    river_width_alpha: 7.2
+    river_width_beta: 0.5
+
 
 agent_settings:
   market:
