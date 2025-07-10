@@ -666,42 +666,50 @@ def update_fn(
 
         model.read()
 
-        build_config_list: list[str] = build_config.split("::")
-        build_config_file: str = build_config_list[0]
-        methods: dict[Any] = parse_config(build_config_file)
+        if isinstance(build_config, str):
+            build_config_list: list[str] = build_config.split("::")
+            build_config_file: str = build_config_list[0]
 
-        if len(build_config_list) > 1:
-            assert len(build_config_list) == 2
-            build_config_function: str = build_config_list[1]
+            methods: dict[Any] = parse_config(build_config_file)
 
-            # Check if the method is specified with a trailing '+', and if so
-            # we set a flag to keep all subsequent methods
-            if build_config_function.endswith("+"):
-                build_config_function: str = build_config_function[:-1]
-                keep_subsequent_methods: bool = True
-            else:
-                keep_subsequent_methods: bool = False
+            if len(build_config_list) > 1:
+                assert len(build_config_list) == 2
+                build_config_function: str = build_config_list[1]
 
-            if build_config_function not in methods:
-                raise KeyError(
-                    f"Method '{build_config_function}' not found in build config file '{build_config_file}'. "
-                    "Available methods: "
-                    f"{', '.join(methods.keys())}"
-                )
-
-            keys_to_remove: list[str] = []
-
-            for key in methods.keys():
-                if key == build_config_function:
-                    if keep_subsequent_methods:
-                        # keep this method and all subsequent methods
-                        break
+                # Check if the method is specified with a trailing '+', and if so
+                # we set a flag to keep all subsequent methods
+                if build_config_function.endswith("+"):
+                    build_config_function: str = build_config_function[:-1]
+                    keep_subsequent_methods: bool = True
                 else:
-                    keys_to_remove.append(key)
+                    keep_subsequent_methods: bool = False
 
-            # remove all functions from the methods dict except the one we want to run
-            for key in keys_to_remove:
-                del methods[key]
+                if build_config_function not in methods:
+                    raise KeyError(
+                        f"Method '{build_config_function}' not found in build config file '{build_config_file}'. "
+                        "Available methods: "
+                        f"{', '.join(methods.keys())}"
+                    )
+
+                keys_to_remove: list[str] = []
+
+                for key in methods.keys():
+                    if key == build_config_function:
+                        if keep_subsequent_methods:
+                            # keep this method and all subsequent methods
+                            break
+                    else:
+                        keys_to_remove.append(key)
+
+                # remove all functions from the methods dict except the one we want to run
+                for key in keys_to_remove:
+                    del methods[key]
+
+        elif isinstance(build_config, dict):
+            methods = build_config
+
+        else:
+            raise ValueError
 
         model.update(methods=methods)
 
