@@ -149,6 +149,7 @@ class Hydrology:
                     f"Validation data of {Q_obs_station_name} is less than 1 year of data. Skipping this station."
                 )
             else:
+                print(f"Validating {Q_obs_station_name}....")
 
                 def calculate_validation_metrics():
                     """Calculate the validation metrics for the current station."""

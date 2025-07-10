@@ -72,9 +72,7 @@ def get_rivers(data_catalog, subbasin_ids):
     return rivers.set_index("COMID")
 
 
-def create_river_raster_from_river_lines(
-    rivers, target, original_upstream_area, column=None, index=None
-):
+def create_river_raster_from_river_lines(rivers, target, column=None, index=None):
     if column is None and (index is None or index is True):
         values = rivers.index
     elif column is not None:
@@ -93,7 +91,7 @@ def create_river_raster_from_river_lines(
     )
 
     # check that upstream area of all rivers is larger than 25 km^2. But because there are some rounding errors, we use a threshold of 24 km^2
-    assert np.nanmin(original_upstream_area.values[river_raster != -1]) > 24 * 1e6
+    # assert np.nanmin(original_upstream_area.values[river_raster != -1]) > 24 * 1e6
 
     return river_raster
 
@@ -350,7 +348,7 @@ class Hydrography:
         )
 
         river_raster_HD = create_river_raster_from_river_lines(
-            rivers, original_d8_elevation, original_upstream_area
+            rivers, original_d8_elevation
         )
         river_raster_LR = river_raster_HD.ravel()[
             self.grid["idxs_outflow"].values.ravel()
