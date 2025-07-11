@@ -479,7 +479,7 @@ class Agents:
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
-    @build_method
+    @build_method(depends_on=["setup_economic_data"])
     def setup_well_prices_by_reference_year_global(
         self,
         WHY_10: float,
