@@ -23,21 +23,18 @@ class LandSurface:
         """Sets up the cell area map for the model.
 
         Raises:
-        ------
-        ValueError
-            If the grid mask is not available.
+            ValueError: If the grid mask is not available.
 
         Notes:
-        -----
-        This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
-        retrieves the grid mask from the `mask` attribute of the grid, and then calculates the cell area
-        using the `calculate_cell_area()` function. The resulting cell area map is then set as the `cell_area`
-        attribute of the grid.
+            This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
+            retrieves the grid mask from the `mask` attribute of the grid, and then calculates the cell area
+            using the `calculate_cell_area()` function. The resulting cell area map is then set as the `cell_area`
+            attribute of the grid.
 
-        Additionally, this method sets up a subgrid for the cell area map by creating a new grid with the same extent as
-        the subgrid, and then repeating the cell area values from the main grid to the subgrid using the `repeat_grid()`
-        function, and correcting for the subgrid factor. Thus, every subgrid cell within a grid cell has the same value.
-        The resulting subgrid cell area map is then set as the `cell_area` attribute of the subgrid.
+            Additionally, this method sets up a subgrid for the cell area map by creating a new grid with the same extent as
+            the subgrid, and then repeating the cell area values from the main grid to the subgrid using the `repeat_grid()`
+            function, and correcting for the subgrid factor. Thus, every subgrid cell within a grid cell has the same value.
+            The resulting subgrid cell area map is then set as the `cell_area` attribute of the subgrid.
         """
         self.logger.info("Preparing cell area map.")
         mask = self.grid["mask"]
@@ -103,8 +100,10 @@ class LandSurface:
         # subbasins that are not part of the study area
         bounds = tuple(self.geoms["routing/subbasins"].total_bounds)
 
-        fabdem = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
-        fabdem = fabdem.isel(
+        fabdem: xr.DataArray = xr.open_dataarray(
+            self.data_catalog.get_source("fabdem").path
+        )
+        fabdem: xr.DataArray = fabdem.isel(
             band=0,
             **get_window(
                 fabdem.x,
@@ -114,7 +113,7 @@ class LandSurface:
             ),
         ).raster.mask_nodata()
 
-        target = self.subgrid["mask"]
+        target: xr.DataArray = self.subgrid["mask"]
         target.raster.set_crs(4326)
 
         self.set_subgrid(

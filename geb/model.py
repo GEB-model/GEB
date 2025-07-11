@@ -258,8 +258,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )
         self.timestep_length = timestep_length
 
-        if self.simulate_hydrology:
-            self.hydrology = Hydrology(self)
+        self.hydrology = Hydrology(self)
 
         HazardDriver.__init__(self)
         ABM_Model.__init__(
@@ -425,7 +424,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             current_time=current_time,
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
-            load_data_from_store=False,
+            load_data_from_store=True,
             simulate_hydrology=False,
             clean_report_folder=False,
         )
