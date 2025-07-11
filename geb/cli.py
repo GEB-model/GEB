@@ -670,7 +670,14 @@ def update_fn(
             build_config_list: list[str] = build_config.split("::")
             build_config_file: str = build_config_list[0]
 
-            methods: dict[Any] = parse_config(build_config_file)
+            try:
+                methods: dict[Any] = parse_config(build_config_file)
+            except FileNotFoundError:
+                if ":" in build_config_file and "::" not in build_config_file:
+                    raise FileNotFoundError(
+                        f"Build config file '{build_config_file}' not found. Did you mean '{build_config_file.replace(':', '::')}'?"
+                    )
+                raise
 
             if len(build_config_list) > 1:
                 assert len(build_config_list) == 2
