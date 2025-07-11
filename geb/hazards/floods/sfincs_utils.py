@@ -1,4 +1,5 @@
 import os
+import platform
 import subprocess
 from os.path import isfile, join
 from pathlib import Path
@@ -239,16 +240,16 @@ def check_docker_running():
 def run_sfincs_simulation(model_root, simulation_root, gpu=False) -> int:
     # Check if we are on Linux or Windows and run the appropriate script
     if gpu:
-        version: str | None = os.getenv("SFINCS_SIF_GPU", None)
-        if version is None:
-            raise EnvironmentError("Environment variable SFINCS_GPU_SIF is not set")
+        version: str = os.getenv(
+            "SFINCS_SIF_GPU", "mvanormondt/sfincs-gpu:coldeze_combo_ccall"
+        )
     else:
         version: str = os.getenv(
-            "SFINCS_SIF_v220",
-            "/ada-software/containers/sfincs-cpu-v2.2.0-col-dEze-Release.sif",
+            "SFINCS_SIF",
+            "deltares/sfincs-cpu:sfincs-v2.2.0-col-dEze-Release",
         )
 
-    if os.name == "posix":
+    if platform.system() == "Linux":
         # If not a singularity image, add docker:// prefix
         # to the version string
         if not version.endswith(".sif"):

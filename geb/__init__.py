@@ -21,6 +21,16 @@ load_dotenv()
 # set environment variable for GEB package directory
 os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
 
+# Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
+if Path("/scistor/ivm/GEB").exists():
+    os.environ["GEB_DATA_ROOT"] = "/scistor/ivm/GEB"
+    os.environ["SFINCS_SIF"] = (
+        "/ada-software/containers/sfincs-cpu-v2.2.0-col-dEze-Release.sif"
+    )
+    os.environ["SFINCS_SIF_GPU"] = (
+        "/ada-software/containers/sfincs-gpu-coldeze_combo_cc90.sif"
+    )
+
 
 def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     """Load TBB shared library, a very efficient threading layer for parallelizing CPU-bound tasks in Numba-compiled functions.
