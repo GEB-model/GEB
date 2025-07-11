@@ -23,7 +23,7 @@ os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
 
 # Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
 if Path("/scistor/ivm/GEB").exists():
-    os.environ["GEB_DATA_ROOT"] = "/scistor/ivm/GEB"
+    os.environ["GEB_DATA_ROOT"] = "/scistor/ivm/GEB/data_catalog/"
     os.environ["SFINCS_SIF"] = (
         "/ada-software/containers/sfincs-cpu-v2.2.0-col-dEze-Release.sif"
     )
