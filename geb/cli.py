@@ -328,14 +328,22 @@ def multirun(config, working_directory):
         geb_multi_run(config, working_directory)
 
 
-def click_build_options(build_config="build.yml"):
+def click_build_options(build_config="build.yml", build_config_help_extra=None):
     def decorator(func):
+        build_config_help = (
+            f"Path of the model build configuration file. Defaults to '{build_config}'."
+        )
+        if build_config_help_extra:
+            build_config_help += f"""
+
+            {build_config_help_extra}"""
+
         @click_config
         @click.option(
             "--build-config",
             "-b",
             default=build_config,
-            help=f"Path of the model build configuration file. Defaults to '{build_config}'.",
+            help=build_config_help,
         )
         @click.option(
             "--custom-model",
@@ -657,11 +665,67 @@ def update_fn(
         )
 
         model.read()
-        model.update(methods=parse_config(build_config))
+
+        if isinstance(build_config, str):
+            build_config_list: list[str] = build_config.split("::")
+            build_config_file: str = build_config_list[0]
+
+            try:
+                methods: dict[Any] = parse_config(build_config_file)
+            except FileNotFoundError:
+                if ":" in build_config_file and "::" not in build_config_file:
+                    raise FileNotFoundError(
+                        f"Build config file '{build_config_file}' not found. Did you mean '{build_config_file.replace(':', '::')}'?"
+                    )
+                raise
+
+            if len(build_config_list) > 1:
+                assert len(build_config_list) == 2
+                build_config_function: str = build_config_list[1]
+
+                # Check if the method is specified with a trailing '+', and if so
+                # we set a flag to keep all subsequent methods
+                if build_config_function.endswith("+"):
+                    build_config_function: str = build_config_function[:-1]
+                    keep_subsequent_methods: bool = True
+                else:
+                    keep_subsequent_methods: bool = False
+
+                if build_config_function not in methods:
+                    raise KeyError(
+                        f"Method '{build_config_function}' not found in build config file '{build_config_file}'. "
+                        "Available methods: "
+                        f"{', '.join(methods.keys())}"
+                    )
+
+                keys_to_remove: list[str] = []
+
+                for key in methods.keys():
+                    if key == build_config_function:
+                        if keep_subsequent_methods:
+                            # keep this method and all subsequent methods
+                            break
+                    else:
+                        keys_to_remove.append(key)
+
+                # remove all functions from the methods dict except the one we want to run
+                for key in keys_to_remove:
+                    del methods[key]
+
+        elif isinstance(build_config, dict):
+            methods = build_config
+
+        else:
+            raise ValueError
+
+        model.update(methods=methods)
 
 
 @cli.command()
-@click_build_options(build_config="update.yml")
+@click_build_options(
+    build_config="update.yml",
+    build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
+)
 def update(*args, **kwargs):
     update_fn(*args, **kwargs)
 

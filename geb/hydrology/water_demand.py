@@ -100,9 +100,16 @@ class WaterDemand(Module):
         )
 
         available_channel_storage_m3: np.ndarray = (
-            self.hydrology.routing.router.get_available_storage()
+            self.hydrology.routing.router.get_available_storage(
+                maximum_abstraction_ratio=0.1
+            )
         )
-        available_channel_storage_m3[self.grid.var.waterBodyID != -1] = 0.0
+
+        available_channel_storage_m3 = np.maximum(available_channel_storage_m3 - 100, 0)
+
+        assert (
+            available_channel_storage_m3[self.grid.var.waterBodyID != -1] == 0.0
+        ).all()
 
         available_groundwater_m3: np.ndarray = (
             self.hydrology.groundwater.modflow.available_groundwater_m3.copy()

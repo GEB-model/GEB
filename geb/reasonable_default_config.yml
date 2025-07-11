@@ -41,6 +41,12 @@ hazards:
 hydrology:
   routing:
     algorithm: kinematic_wave  # accuflux or kinematic_wave
+    river_width:
+      parameters:
+        default_alpha: 7.2
+        beta: 0.5
+    river_depth:
+      method: manning # or power law. If power law, alpha and beta must be set additionally in the parameters
 
 agent_settings:
   market:

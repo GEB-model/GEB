@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from datetime import date
-from typing import Any, Union
+from typing import Any, Literal, Union
 
 import dask
 import numpy as np
@@ -8,6 +8,7 @@ import pandas as pd
 import xarray
 import xarray as xr
 import xarray_regrid
+from affine import Affine
 from pyresample import geometry
 from pyresample.gradient import (
     block_bilinear_interpolator,
@@ -23,9 +24,9 @@ def repeat_grid(data, factor):
     return data.repeat(factor, axis=-2).repeat(factor, axis=-1)
 
 
-def calculate_cell_area(affine_transform, shape):
-    RADIUS_EARTH_EQUATOR = 40075017  # m
-    distance_1_degree_latitude = RADIUS_EARTH_EQUATOR / 360
+def calculate_cell_area(affine_transform: Affine, shape: tuple[int, int]) -> np.ndarray:
+    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
+    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
 
     height, width = shape
 
