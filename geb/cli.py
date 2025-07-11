@@ -88,7 +88,7 @@ def parse_config(
 
 
 def create_logger(fp):
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("GEB")
     # set log level to debug
     logger.setLevel(logging.DEBUG)
     # create console handler and set level to debug

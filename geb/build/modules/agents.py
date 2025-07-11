@@ -19,6 +19,7 @@ from geb.agents.crop_farmers import (
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
+from geb.build.methods import build_method
 from geb.workflows.io import fetch_and_save, get_window
 
 from ..workflows.conversions import (
@@ -478,6 +479,7 @@ class Agents:
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
+    @build_method
     def setup_well_prices_by_reference_year_global(
         self,
         WHY_10: float,

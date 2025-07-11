@@ -59,8 +59,6 @@ XY_CHUNKSIZE = 3000  # chunksize for xy coordinates
 
 os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 
-logger = logging.getLogger(__name__)
-
 
 def convert_timestamp_to_string(timestamp):
     return timestamp.isoformat()
@@ -521,9 +519,9 @@ class GEBModel(
 ):
     def __init__(
         self,
+        logger: logging.Logger,
         root: str | None = None,
         data_catalogs: List[str] | None = None,
-        logger=logger,
         epsg=4326,
         data_provider: str = "default",
     ):
