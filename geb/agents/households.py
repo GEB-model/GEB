@@ -202,6 +202,15 @@ class Households(AgentBaseClass):
             )
         )
 
+        # load building id household
+        osm_id = load_array(self.model.files["array"]["agents/households/osm_id"])
+        self.var.osm_id = DynamicArray(osm_id, max_n=self.max_n)
+
+        osm_way_id = load_array(
+            self.model.files["array"]["agents/households/osm_way_id"]
+        )
+        self.var.osm_way_id = DynamicArray(osm_way_id, max_n=self.max_n)
+
         # load age household head
         age_household_head = load_array(
             self.model.files["array"]["agents/households/age_household_head"]
@@ -753,9 +762,9 @@ class Households(AgentBaseClass):
             expendature_cap=0.1,  # realy high for now
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data,
+            risk_perception=self.var.risk_perception.data + 1,
             expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data,
+            adaptation_costs=self.var.adaptation_costs.data * 0,
             time_adapted=self.var.time_adapted.data,
             loan_duration=20,
             p_floods=1 / self.return_periods,
@@ -772,7 +781,7 @@ class Households(AgentBaseClass):
             expendature_cap=10,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data,
+            risk_perception=self.var.risk_perception.data + 1,
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
@@ -786,6 +795,23 @@ class Households(AgentBaseClass):
         self.var.adapted[household_adapting] = 1
         self.var.time_adapted[household_adapting] += 1
 
+        # update column in buildings
+        osm_id_adapting = self.var.osm_id.data[household_adapting]
+        os_way_id_adapting = self.var.osm_way_id.data[household_adapting]
+
+        for osm_id in osm_id_adapting:
+            if not np.isnan(osm_id):
+                self.var.buildings.loc[
+                    self.var.buildings["osm_id"] == str(int(osm_id)),
+                    "dry_floodproofing",
+                ] = True
+        for osm_way_id in os_way_id_adapting:
+            if not np.isnan(osm_way_id):
+                self.var.buildings.loc[
+                    self.var.buildings["osm_way_id"] == str(int(osm_way_id)),
+                    "dry_floodproofing",
+                ] = True
+
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting)}")
 
@@ -794,6 +820,8 @@ class Households(AgentBaseClass):
         self.var.buildings = gpd.read_parquet(
             self.model.files["geoms"]["assets/buildings"]
         )
+        self.var.buildings["dry_floodproofing"] = False
+
         self.var.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
