@@ -70,7 +70,7 @@ class Hydrology:
         eval_plot_folder.mkdir(parents=True, exist_ok=True)
         eval_result_folder.mkdir(parents=True, exist_ok=True)
 
-        # load the discharge simulation
+        # load the discharge spinup simulation
         GEB_discharge = xr.open_dataarray(
             self.model.output_folder
             / "report"
