@@ -490,7 +490,8 @@ class KinematicWave(Router):
 
         self.Q_prev = Q
 
-        outflow_at_pits_m3 = (Q[self.is_pit] * self.dt).sum()
+        # Because some pits may also be waterbodies (where Q is NaN), we use nansum
+        outflow_at_pits_m3 = np.nansum(Q[self.is_pit] * self.dt)
 
         return (
             Q,
