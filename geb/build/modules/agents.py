@@ -1174,7 +1174,7 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.setup_farmers(farmers)
 
-    def setup_buildings(self):
+    def setup_buildings_obat(self):
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4",
             geom=self.region,
@@ -1186,7 +1186,7 @@ class Agents:
 
         buildings_df = pd.DataFrame()
 
-        # load GHS_OBAT for countries in model
+        # load GHS_OBAT and Overture buildings for countries in model
         for _, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
             iso_code = GDL_region["iso_code"]
             ghs_obat = load_GHS_OBAT(self.data_catalog, iso_code)
@@ -1235,6 +1235,73 @@ class Agents:
             buildings_df.to_csv(
                 f"preprocessing/buildings/test_buildings_{gdl_name}.csv"
             )
+
+    def setup_buildings(self):
+        GDL_regions = self.data_catalog.get_geodataframe(
+            "GDL_regions_v4",
+            geom=self.region,
+            variables=["GDLcode", "iso_code"],
+        )
+        GDL_regions = GDL_regions[
+            GDL_regions["GDLcode"] != "NA"
+        ]  # remove regions without GDL code
+
+        buildings_df = pd.DataFrame()
+        fp_buildings = self.files["geoms"]["assets/buildings"]
+        buildings = gpd.read_parquet(f'{self.root}/{fp_buildings}')[['osm_id', 'osm_way_id', 'geometry']]
+        # get lat and lon centroid from geometry
+        buildings["lon"] = buildings.centroid.x
+        buildings["lat"] = buildings.centroid.y
+
+
+        # load GHS_OBAT and Overture buildings for countries in model
+        for _, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
+
+            _, GLOPOP_GRID_region = load_GLOPOP_S(
+                self.data_catalog, GDL_region["GDLcode"]
+            )
+            GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
+            res_x, res_y = GLOPOP_GRID_region.rio.resolution()
+            # find objects in GHS_OBAT for each cell in GLOPOP_GRID_region
+
+            # Convert the grid into bounding boxes
+            xmin = GLOPOP_GRID_region.x.values
+            ymax = GLOPOP_GRID_region.y.values
+            xmax = xmin + res_x
+            ymin = ymax + res_y
+
+            # ghs_obat coordinates
+            lons = buildings["lon"]
+            lats = buildings["lat"]
+
+            # Initialize a list to hold the matching indices for each cell
+            all_buildings_idx = []
+            grid_idx = 0
+            # Vectorized spatial filtering
+            for i in range(xmin.size):
+                for j in range(ymin.size):
+                    mask = (
+                        (lons > xmin[i])
+                        & (lons < xmax[i])
+                        & (lats < ymax[j])
+                        & (lats > ymin[j])
+                    )
+                    buildings_idx = np.where(mask)[0]
+                    all_buildings_idx.append(buildings_idx)
+                    grid_idx += 1
+                    if buildings_idx.size > 0:
+                        building_gdl = buildings.iloc[buildings_idx]
+                        building_gdl["grid_idx"] = GLOPOP_GRID_region.values[0][j, i]
+                        buildings_df = pd.concat([buildings_df, building_gdl])
+
+            gdl_name = GDL_region["GDLcode"]
+            os.makedirs(
+                "preprocessing/buildings", exist_ok=True
+            )  # get rid of this later
+            buildings_df.to_csv(
+                f"preprocessing/buildings/test_buildings_{gdl_name}.csv"
+            )
+
 
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
         # load GDL region within model domain
@@ -1368,14 +1435,18 @@ class Agents:
                         lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
                         agents_allocated_to_building["coord_Y"] = lat_agents
                         agents_allocated_to_building["coord_X"] = lon_agents
-                        agents_allocated_to_building["building_id"] = np.array(
-                            buildings_grid_cell["id"]
+                        agents_allocated_to_building["osm_id"] = np.array(
+                            buildings_grid_cell["osm_id"]
                         )[building_id]
+                        agents_allocated_to_building["osm_way_id"] = np.array(
+                            buildings_grid_cell["osm_way_id"]
+                        )[building_id]
+
                         allocated_agents = pd.concat(
                             [allocated_agents, agents_allocated_to_building]
                         )
                         n_agents_allocated += len(agents_allocated_to_building)
-                    # if not, re
+                    # if there are more households than buildings, allocate households to buildings
                     elif (
                         n_agents_in_cell > n_buildings_in_cell
                         and n_buildings_in_cell > 0
@@ -1398,14 +1469,56 @@ class Agents:
                         lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
                         agents_allocated_to_building["coord_Y"] = lat_agents
                         agents_allocated_to_building["coord_X"] = lon_agents
-                        agents_allocated_to_building["building_id"] = np.array(
-                            buildings_grid_cell["id"]
+                        agents_allocated_to_building["osm_id"] = np.array(
+                            buildings_grid_cell["osm_id"]
                         )[building_id]
+                        agents_allocated_to_building["osm_way_id"] = np.array(
+                            buildings_grid_cell["osm_way_id"]
+                        )[building_id]
+
                         allocated_agents = pd.concat(
                             [allocated_agents, agents_allocated_to_building]
                         )
                         assert len(agents_allocated_to_building) == n_buildings_in_cell
                         n_agents_allocated += len(agents_allocated_to_building)
+                        
+                        # now allocate the rest of the households to buildings
+                        indices_to_allocate = np.setdiff1d(
+                            np.arange(n_agents_in_cell),
+                            households_to_put_in_building,
+                        )
+                        if len(indices_to_allocate) > 0:
+                            building_id = np.random.choice(
+                                np.arange(n_buildings_in_cell),
+                                len(indices_to_allocate),
+                                replace=True,
+                            )
+                            agents_allocated_to_building = agents_in_grid_cell.iloc[
+                                indices_to_allocate
+                            ]
+                            lat_agents = np.array(buildings_grid_cell["lat"])[
+                                building_id
+                            ]
+                            lon_agents = np.array(buildings_grid_cell["lon"])[
+                                building_id
+                            ]
+                            agents_allocated_to_building["coord_Y"] = lat_agents
+                            agents_allocated_to_building["coord_X"] = lon_agents
+                            agents_allocated_to_building["osm_id"] = np.array(
+                                buildings_grid_cell["osm_id"]
+                            )[building_id]
+                            agents_allocated_to_building["osm_way_id"] = np.array(
+                                buildings_grid_cell["osm_way_id"]
+                            )[building_id]
+
+                            allocated_agents = pd.concat(
+                                [allocated_agents, agents_allocated_to_building]
+                            )
+                            n_agents_allocated += len(agents_allocated_to_building)
+                        else:
+                            agents_allocated_to_building = pd.DataFrame()
+                            n_agents_allocated += len(agents_allocated_to_building)
+                            households_not_allocated += n_agents_in_cell
 
                     elif n_buildings_in_cell == 0:
                         agents_allocated_to_building = pd.DataFrame()
@@ -1430,6 +1543,8 @@ class Agents:
                 "education_level",
                 "wealth_index",
                 "rural",
+                "osm_id",
+                "osm_way_id",
                 # "building_id"
             ):
                 household_characteristics[column] = np.array(allocated_agents[column])
