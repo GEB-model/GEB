@@ -1248,15 +1248,15 @@ class Agents:
 
         buildings_df = pd.DataFrame()
         fp_buildings = self.files["geoms"]["assets/buildings"]
-        buildings = gpd.read_parquet(f'{self.root}/{fp_buildings}')[['osm_id', 'osm_way_id', 'geometry']]
+        buildings = gpd.read_parquet(f"{self.root}/{fp_buildings}")[
+            ["osm_id", "osm_way_id", "geometry"]
+        ]
         # get lat and lon centroid from geometry
         buildings["lon"] = buildings.centroid.x
         buildings["lat"] = buildings.centroid.y
 
-
         # load GHS_OBAT and Overture buildings for countries in model
         for _, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
-
             _, GLOPOP_GRID_region = load_GLOPOP_S(
                 self.data_catalog, GDL_region["GDLcode"]
             )
@@ -1301,7 +1301,6 @@ class Agents:
             buildings_df.to_csv(
                 f"preprocessing/buildings/test_buildings_{gdl_name}.csv"
             )
-
 
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
         # load GDL region within model domain
@@ -1481,7 +1480,7 @@ class Agents:
                         )
                         assert len(agents_allocated_to_building) == n_buildings_in_cell
                         n_agents_allocated += len(agents_allocated_to_building)
-                        
+
                         # now allocate the rest of the households to buildings
                         indices_to_allocate = np.setdiff1d(
                             np.arange(n_agents_in_cell),
