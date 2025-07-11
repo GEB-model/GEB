@@ -155,6 +155,7 @@ def test_update_with_dict():
 @pytest.mark.parametrize(
     "method",
     [
+        "setup_hydrography",
         "setup_crop_prices",
         "setup_discharge_observations",
         "setup_forcing_era5",
@@ -281,7 +282,7 @@ def test_multiverse():
             days=int(forecast_n_days) + 5
         )
 
-        input_folder = config["general"]["input_folder"]
+        input_folder = Path(config["general"]["input_folder"])
 
         files = input_folder / "files.json"
         files = json.loads(files.read_text())
@@ -427,7 +428,7 @@ def test_share():
             include_output=False,
         )
 
-        output_fn: Path = "test.zip"
+        output_fn: Path = Path("test.zip")
 
         assert output_fn.exists()
 

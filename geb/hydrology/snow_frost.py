@@ -224,7 +224,7 @@ class SnowFrost(Module):
         if __debug__:
             self.HRU.var.prevSnowCover = self.HRU.var.SnowCoverS.copy()
 
-        day_of_year = self.model.current_time.timetuple().tm_yday
+        day_of_year: int = self.model.current_day_of_year
         SeasSnowMeltCoef = (
             self.var.SnowSeason
             * np.sin(math.radians((day_of_year - 81) * self.var.SnowDayDegrees))

@@ -16,13 +16,13 @@ pip install geb
 or with [uv](https://docs.astral.sh/uv/), which first needs to be installed by running:
 
 
-on the HPC (cluster):
+on Linux and Mac OS X:
   
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-on a Windows PC: 
+on Windows: 
 
 ```bash
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"

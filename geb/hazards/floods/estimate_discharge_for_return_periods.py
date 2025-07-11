@@ -25,7 +25,7 @@ def estimate_discharge_for_return_periods(
             get_representative_river_points(ID, rivers_with_forcing_point)
         )
 
-    discharge_by_river = get_discharge_by_river(
+    discharge_by_river, _, _ = get_discharge_by_river(
         rivers_with_forcing_point.index,
         river_representative_points,
         discharge=discharge,
