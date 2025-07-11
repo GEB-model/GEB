@@ -1422,11 +1422,21 @@ class Agents:
                     ]
                     n_agents_in_cell = len(agents_in_grid_cell)
                     n_buildings_in_cell = len(buildings_grid_cell)
-                    # if there are less households in the grid than buildings, allocate randomly
-                    if n_agents_in_cell <= n_buildings_in_cell:
+
+                    # if there are less households in the grid than buildings,
+                    # we assure that each building gets at least one household. To do this, sample households
+                    # without replacement from the grid cell and allocate them to buildings.
+                    if n_agents_in_cell < n_buildings_in_cell:
+                        upsampled_agents_in_cell = agents_in_grid_cell.sample(
+                            n_buildings_in_cell,
+                            replace=True,
+                        )
+                        agents_in_grid_cell = upsampled_agents_in_cell
+                        
+                        
                         building_id = np.random.choice(
                             np.arange(n_buildings_in_cell),
-                            n_agents_in_cell,
+                            n_buildings_in_cell,
                             replace=False,
                         )
                         agents_allocated_to_building = agents_in_grid_cell
@@ -1447,7 +1457,7 @@ class Agents:
                         n_agents_allocated += len(agents_allocated_to_building)
                     # if there are more households than buildings, allocate households to buildings
                     elif (
-                        n_agents_in_cell > n_buildings_in_cell
+                        n_agents_in_cell >= n_buildings_in_cell
                         and n_buildings_in_cell > 0
                     ):
                         # first put a household in each building
