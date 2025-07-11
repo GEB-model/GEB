@@ -211,6 +211,26 @@ class Households(AgentBaseClass):
         )
         self.var.osm_way_id = DynamicArray(osm_way_id, max_n=self.max_n)
 
+        # assign occupancy to building var
+        unique_osm_ids, occupancy_counts = np.unique(
+            self.var.osm_id.data, return_counts=True
+        )
+        unique_osm_way_ids, occupancy_way_counts = np.unique(
+            self.var.osm_way_id.data, return_counts=True
+        )
+        self.var.buildings["occupancy"] = 0
+        for osm_id, occupancy in zip(unique_osm_ids, occupancy_counts):
+            if not np.isnan(osm_id):
+                self.var.buildings.loc[
+                    self.var.buildings["osm_id"] == str(int(osm_id)), "occupancy"
+                ] = occupancy
+        for osm_way_id, occupancy in zip(unique_osm_way_ids, occupancy_way_counts):
+            if not np.isnan(osm_way_id):
+                self.var.buildings.loc[
+                    self.var.buildings["osm_way_id"] == str(int(osm_way_id)),
+                    "occupancy",
+                ] = occupancy
+
         # load age household head
         age_household_head = load_array(
             self.model.files["array"]["agents/households/age_household_head"]
