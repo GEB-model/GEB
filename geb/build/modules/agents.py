@@ -704,9 +704,22 @@ class Agents:
 
         for _, region in self.geoms["regions"].iterrows():
             region_id = str(region["region_id"])
-
             prices = pd.Series(index=range(start_year, end_year + 1))
-            prices.loc[reference_year] = electricity_rates[region["ISO3"]]
+            country = region["ISO3"]
+
+            # implement donors
+            if country not in electricity_rates:
+                countries_with_data = list(electricity_rates.keys())
+                donor_countries = setup_donor_countries(self, countries_with_data)
+                donor_country = donor_countries.get(country, None)
+                self.logger.info(
+                    f"Missing electricity rates for {region['ISO3']}, using donor country {donor_country}"
+                )
+                country = donor_country
+
+            prices.loc[reference_year] = electricity_rates[
+                country
+            ]  # use country or donor country
 
             # Forward calculation from the reference year
             for year in range(reference_year + 1, end_year + 1):
