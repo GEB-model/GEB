@@ -211,25 +211,29 @@ class Households(AgentBaseClass):
         )
         self.var.osm_way_id = DynamicArray(osm_way_id, max_n=self.max_n)
 
-        # assign occupancy to building var
-        unique_osm_ids, occupancy_counts = np.unique(
-            self.var.osm_id.data, return_counts=True
+        # Start by computing occupancy from the var.osm_id and var.osm_way_id arrays
+        osm_id_series = pd.Series(self.var.osm_id.data)
+        osm_way_id_series = pd.Series(self.var.osm_way_id.data)
+
+        # Drop NaNs and convert to string format (matching building ID format)
+        osm_id_counts = (
+            osm_id_series.dropna().astype(int).astype(str).value_counts()
         )
-        unique_osm_way_ids, occupancy_way_counts = np.unique(
-            self.var.osm_way_id.data, return_counts=True
+        osm_way_id_counts = (
+            osm_way_id_series.dropna().astype(int).astype(str).value_counts()
         )
+
+        # Initialize occupancy column
         self.var.buildings["occupancy"] = 0
-        for osm_id, occupancy in zip(unique_osm_ids, occupancy_counts):
-            if not np.isnan(osm_id):
-                self.var.buildings.loc[
-                    self.var.buildings["osm_id"] == str(int(osm_id)), "occupancy"
-                ] = occupancy
-        for osm_way_id, occupancy in zip(unique_osm_way_ids, occupancy_way_counts):
-            if not np.isnan(osm_way_id):
-                self.var.buildings.loc[
-                    self.var.buildings["osm_way_id"] == str(int(osm_way_id)),
-                    "occupancy",
-                ] = occupancy
+
+        # Map the counts back to the buildings dataframe
+        self.var.buildings["occupancy"] = self.var.buildings["osm_id"].map(osm_id_counts).fillna(
+            self.var.buildings["occupancy"]
+        )
+        self.var.buildings["occupancy"] = self.var.buildings["osm_way_id"].map(osm_way_id_counts).fillna(
+            self.var.buildings["occupancy"]
+        )
+
 
         # load age household head
         age_household_head = load_array(
@@ -779,12 +783,12 @@ class Households(AgentBaseClass):
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
-            expendature_cap=0.1,  # realy high for now
+            expendature_cap=1, 
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data + 1,
+            risk_perception=self.var.risk_perception.data+10,
             expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data * 0,
+            adaptation_costs=self.var.adaptation_costs.data*0,
             time_adapted=self.var.time_adapted.data,
             loan_duration=20,
             p_floods=1 / self.return_periods,
@@ -798,10 +802,10 @@ class Households(AgentBaseClass):
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
-            expendature_cap=10,
+            expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data + 1,
+            risk_perception=self.var.risk_perception.data+10,
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
