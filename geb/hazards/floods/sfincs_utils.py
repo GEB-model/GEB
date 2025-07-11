@@ -250,12 +250,12 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False) -> int:
         )
 
     if platform.system() == "Linux":
-        # If not a singularity image, add docker:// prefix
+        # If not a apptainer image, add docker:// prefix
         # to the version string
         if not version.endswith(".sif"):
             version: str = "docker://" + version
         cmd: list[str] = [
-            "singularity",
+            "apptainer",
             "run",
             "-B",  ## Bind mount
             f"{model_root.resolve()}:/data",

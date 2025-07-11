@@ -237,7 +237,7 @@ class SFINCS:
         run_sfincs_simulation(
             simulation_root=simulation_root,
             model_root=model_root,
-            gpu=False,
+            gpu=self.config["SFINCS"]["gpu"],
         )
         flood_map: xr.DataArray = read_maximum_flood_depth(
             model_root=model_root,
@@ -277,7 +277,7 @@ class SFINCS:
         run_sfincs_for_return_periods(
             model_root=model_root,
             return_periods=self.config["return_periods"],
-            gpu=self.config["gpu"],
+            gpu=self.config["SFINCS"]["gpu"],
             export_dir=self.model.output_folder / "flood_maps",
             clean_working_dir=True,
         )
