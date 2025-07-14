@@ -764,26 +764,25 @@ wheels = [
 
 [[package]]
 name = "damagescanner"
-version = "0.8b1"
+version = "0.9b21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "exactextract" },
     { name = "geopandas" },
-    { name = "matplotlib" },
     { name = "numpy" },
-    { name = "packaging" },
     { name = "pandas" },
     { name = "pyproj" },
     { name = "pyyaml" },
     { name = "rasterio" },
     { name = "rioxarray" },
+    { name = "scipy" },
     { name = "shapely" },
     { name = "tqdm" },
     { name = "xarray" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/77/c1/ec6d3816da24ca9b6308f188580c9de948594dece8a2666a323a157d41db/damagescanner-0.8b1.tar.gz", hash = "sha256:9b6dee123308970bfbd551748160fb4c20e4a0b8ec7b3efab658cbac8f00a20c", size = 20231, upload-time = "2024-10-04T14:19:08.887Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/ff/82d6d94a6c0ef03ac5ecd3e8ceb5569fe6c9207c2e3cb3a09bf9937913ab/damagescanner-0.9b21.tar.gz", hash = "sha256:684177fae86269e9d78242bca464bcaf2be95b6f6904349842425420a6ab2e98", size = 33463, upload-time = "2025-07-14T10:26:39.846Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/23/16595d7cf2397836b91f9061d6ec9b0d9b0a7a1423a9f1f0e135eb79a423/damagescanner-0.8b1-py3-none-any.whl", hash = "sha256:ab52f9626eab6b1d96bfac6ad2302853b079e8d34755c5a1c0ac7586077f151a", size = 18844, upload-time = "2024-10-04T14:19:07.236Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/56/59882fb2d31238a5e83dc4dfba095c3ccef427508d43bf8cb77f6fa5cd3d/damagescanner-0.9b21-py3-none-any.whl", hash = "sha256:8ceb89b0db41f327f5032390e6ba3a4754f9977b1635dac6356a55b77cdc9fb6", size = 31383, upload-time = "2025-07-14T10:26:38.83Z" },
 ]
 
 [[package]]
@@ -1237,7 +1236,7 @@ wheels = [
 
 [[package]]
 name = "geb"
-version = "1.0.0b5"
+version = "1.0.0b6"
 source = { editable = "." }
 dependencies = [
     { name = "cartopy" },
@@ -1326,7 +1325,7 @@ requires-dist = [
     { name = "contextily", specifier = ">=1.6.2" },
     { name = "cppimport", marker = "extra == 'plantfate'", specifier = ">=22.8.2" },
     { name = "daft-pgm", marker = "extra == 'fairstream'", specifier = ">=0.1.4" },
-    { name = "damagescanner", specifier = "==0.8b1" },
+    { name = "damagescanner", specifier = "==0.9b21" },
     { name = "dask" },
     { name = "deap", specifier = ">=1.4.1" },
     { name = "flopy", specifier = ">=3.8.0" },
