@@ -376,17 +376,24 @@ class Bucket:
     """
 
     def __init__(self, validator: Callable | None = None):
-        self.validator = validator
+        self._validator = validator
+
+    def __iter__(self):
+        """Iterate over the items in the bucket."""
+        for name, value in self.__dict__.items():
+            if name == "_validator":
+                continue
+            yield name, value
 
     def __setattr__(self, name, value):
         # If the name is 'validator', we allow setting it directly.
         # i.e., we do not validate the validator itself.
-        if name == "validator":
+        if name == "_validator":
             super().__setattr__(name, value)
             return
 
-        if self.validator is not None:
-            if not self.validator(value):
+        if self._validator is not None:
+            if not self._validator(value):
                 raise ValueError(f"Value for {name} does not pass validation: {value}")
 
         assert isinstance(
@@ -410,7 +417,7 @@ class Bucket:
         path.mkdir(parents=True, exist_ok=True)
         for name, value in self.__dict__.items():
             # do not save the validator itself
-            if name == "validator":
+            if name == "_validator":
                 continue
             if isinstance(value, DynamicArray):
                 value.save(path / name)
@@ -523,13 +530,20 @@ class Store:
             path = self.path
 
         for bucket_folder in path.iterdir():
+            # Mac OS X creates a .DS_Store file in directories, which we ignore
+            if bucket_folder.name == ".DS_Store":
+                continue
             bucket = Bucket().load(bucket_folder)
 
             self.buckets[bucket_folder.name] = bucket
 
             split_name = bucket_folder.name.split(".")
 
-            if not self.model.simulate_hydrology and split_name[0] == "hydrology":
+            if (
+                not self.model.simulate_hydrology
+                and (split_name[0] == "hydrology")
+                and not split_name[1] == "grid"
+            ):
                 continue
 
             if len(split_name) == 1:
