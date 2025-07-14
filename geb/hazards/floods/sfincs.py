@@ -270,6 +270,9 @@ class SFINCS:
         estimate_discharge_for_return_periods(
             model_root,
             discharge=self.discharge_spinup_ds,
+            waterbody_ids=self.model.hydrology.grid.decompress(
+                self.model.hydrology.grid.var.waterBodyID
+            ),
             rivers=self.rivers,
             return_periods=self.config["return_periods"],
         )
@@ -434,6 +437,9 @@ class SFINCS:
             "DEMs": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
+            "waterbody_ids": self.model.hydrology.grid.decompress(
+                self.model.hydrology.grid.var.waterBodyID
+            ),
             "river_width_alpha": self.model.hydrology.grid.decompress(
                 self.model.var.river_width_alpha
             ),
