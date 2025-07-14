@@ -13,7 +13,7 @@ class _build_method:
         self.tree = {}
 
     def __call__(
-        self, func: Callable[..., Any] = None, depends_on: None = None
+        self, func: Callable[..., Any] | None = None, depends_on: None = None
     ) -> Callable[..., Any]:
         def partial_decorator(func):
             @functools.wraps(func)
@@ -32,16 +32,15 @@ class _build_method:
                     self.tree[func.__name__] = depends_on
                 else:
                     raise ValueError("depends_on must be a string or a list of strings")
+
+            wrapper.__is_build_method__ = True
             return wrapper
 
         if func is None:
             return partial_decorator
         else:
-            return partial_decorator(func)
+            f = partial_decorator(func)
+            return f
 
 
 build_method = _build_method(logger=logger)
-
-# @build_method(depends_on="test_function")
-# def test_function():
-#     pass

@@ -172,6 +172,7 @@ class Hydrography:
     def __init__(self):
         pass
 
+    @build_method
     def setup_mannings(self) -> None:
         """Sets up the Manning's coefficient for the model.
 
@@ -459,6 +460,7 @@ class Hydrography:
         river_width.data = river_width_data
         self.set_grid(river_width, name="routing/river_width")
 
+    @build_method
     def setup_waterbodies(
         self,
         command_areas=None,

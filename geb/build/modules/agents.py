@@ -39,6 +39,7 @@ class Agents:
     def __init__(self):
         pass
 
+    @build_method
     def setup_water_demand(self):
         """Sets up the water demand data for GEB.
 
@@ -223,6 +224,7 @@ class Agents:
             "ssp2",
         )
 
+    @build_method
     def setup_economic_data(self):
         """Sets up the economic data for GEB.
 
@@ -390,6 +392,7 @@ class Agents:
         self.set_dict(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_dict(lcu_dict, name="socioeconomics/LCU_per_USD")
 
+    @build_method
     def setup_irrigation_sources(self, irrigation_sources):
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
 
@@ -805,6 +808,7 @@ class Agents:
         farmers = pd.read_csv(path, index_col=0)
         self.setup_farmers(farmers)
 
+    @build_method
     def setup_create_farms(
         self,
         region_id_column="region_id",
@@ -1176,6 +1180,7 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.setup_farmers(farmers)
 
+    @build_method
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
@@ -1347,6 +1352,7 @@ class Agents:
                 name=f"agents/households/{household_attribute}",
             )
 
+    @build_method
     def setup_farmer_household_characteristics(self, maximum_age=85):
         n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
@@ -1623,6 +1629,7 @@ class Agents:
 
         return preferences_country_level
 
+    @build_method
     def setup_farmer_characteristics(
         self,
         interest_rate=0.05,
@@ -1941,6 +1948,7 @@ class Agents:
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
+    @build_method
     def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
         """Get assets from OpenStreetMap (OSM) data.
 

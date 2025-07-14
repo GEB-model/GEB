@@ -8,6 +8,7 @@ import pandas as pd
 import xarray as xr
 from honeybees.library.raster import sample_from_map
 
+from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
 from ..workflows.conversions import (
@@ -84,6 +85,7 @@ class Crops:
 
         self.set_dict(crop_data, name="crops/crop_data")
 
+    @build_method
     def setup_crops_from_source(
         self,
         source: Union[str, None] = "MIRCA2000",
@@ -705,6 +707,7 @@ class Crops:
         )
         self.set_dict(cultivation_costs, name="crops/cultivation_costs")
 
+    @build_method
     def setup_crop_prices(
         self,
         crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
@@ -729,6 +732,7 @@ class Crops:
         self.set_dict(crop_prices, name="crops/crop_prices")
         self.set_dict(crop_prices, name="crops/cultivation_costs")
 
+    @build_method
     def determine_crop_area_fractions(self, resolution="5-arcminute"):
         output_folder = "plot/mirca_crops"
         os.makedirs(output_folder, exist_ok=True)
@@ -865,6 +869,7 @@ class Crops:
             save_dir / "crop_irrigated_fraction_all_years.nc"
         )
 
+    @build_method
     def setup_farmer_crop_calendar_multirun(
         self,
         reduce_crops=False,
@@ -880,6 +885,7 @@ class Crops:
                     year_nr, reduce_crops, replace_base, export
                 )
 
+    @build_method
     def setup_farmer_crop_calendar(
         self,
         year=2000,

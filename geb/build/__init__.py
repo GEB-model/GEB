@@ -29,6 +29,8 @@ from pyflwdir import from_array
 from rasterio.env import defenv
 from shapely.geometry import Point
 
+from geb.build.methods import build_method
+
 from ..workflows.io import open_zarr, to_zarr
 from .modules import (
     Agents,
@@ -560,6 +562,7 @@ class GEBModel(
 
         self.files: defaultdict = defaultdict(dict)
 
+    @build_method
     def setup_region(
         self,
         region: dict,
@@ -964,6 +967,7 @@ class GEBModel(
 
         submask = self.set_subgrid(submask, name="mask")
 
+    @build_method
     def set_time_range(self, start_date, end_date):
         assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
@@ -979,6 +983,7 @@ class GEBModel(
     def end_date(self):
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
 
+    @build_method
     def set_ssp(self, ssp: str):
         assert ssp in ["ssp1", "ssp3", "ssp5"], (
             f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
@@ -1058,6 +1063,7 @@ class GEBModel(
             byteshuffle=True,
         )
 
+    @build_method
     def setup_damage_parameters(self, parameters):
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
@@ -1410,8 +1416,16 @@ class GEBModel(
     def check_methods(self, opt):
         """Check all opt keys and raise sensible error messages if unknown."""
         for method in opt.keys():
-            if not callable(getattr(self, method, None)):
-                raise ValueError(f'Build has no method "{method}"')
+            attribute = getattr(self, method, None)
+            if not callable(attribute):
+                raise ValueError(f'Has no method "{method}"')
+            if (
+                not hasattr(attribute, "__is_build_method__")
+                or not attribute.__is_build_method__
+            ):
+                raise ValueError(
+                    f'"{method}" not set as a build method. If you are sure this should be build method, please decorate it with @build_method.'
+                )
         return opt
 
     def run_method(self, method, *args, **kwargs):
