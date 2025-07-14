@@ -87,6 +87,15 @@ class Agents:
 
             def load_water_demand_and_pop_data(ISO3):
                 # Load the municipal water demand data for the given ISO3 code
+                if ISO3 not in municipal_water_demand.index:
+                    countries_with_data = municipal_water_demand.index.unique().tolist()
+                    donor_countries = setup_donor_countries(self, countries_with_data)
+                    ISO3 = donor_countries.get(ISO3, None)
+
+                    self.logger.warning(
+                        f"Country {region['ISO3']} not present in municipal water demand data, using donor country {ISO3}"
+                    )
+
                 municipal_water_demand_region = municipal_water_demand.loc[ISO3]
                 population = municipal_water_demand_region[
                     municipal_water_demand_region["Variable"] == "Total population"
@@ -118,10 +127,6 @@ class Agents:
                     .index.unique()
                     .tolist()
                 )
-                # get all countries with NO data
-                # countries_without_water_withdrawal_data = [
-                #     c for c in municipal_water_demand.index.unique() if c not in countries_with_water_withdrawal_data
-                # ]
 
                 donor_countries = setup_donor_countries(
                     self, countries_with_water_withdrawal_data
@@ -1826,7 +1831,7 @@ class Agents:
                 )
                 # ensure that the country and ISO3 represent the original country, not the donor country
                 region_risk_aversion_data["Country"] = [
-                    name for name, code in COUNTRY_NAME_TO_ISO3.items() if code == ISO3
+                    key for key, val in COUNTRY_NAME_TO_ISO3.items() if val == ISO3
                 ]
                 region_risk_aversion_data["ISO3"] = ISO3
 

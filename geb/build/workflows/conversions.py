@@ -1,6 +1,5 @@
 def setup_donor_countries(self, countries_with_data, alternative_countries=None):
-    """
-    Sets up the donor countries for GEB.
+    """Sets up the donor countries for GEB.
     Output: a dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
     Right now, we return one donor country per country with missing data. This is the country with most similar Human Development Index (HDI) and closest distance to the target country.
 
@@ -10,7 +9,6 @@ def setup_donor_countries(self, countries_with_data, alternative_countries=None)
     Countries (ISO3 codes) that have data available.
 
     """
-
     dev_index = self.data_catalog.get_dataframe(
         "UN_dev_index"
     )  # Human Development Index
@@ -316,7 +314,7 @@ M49_to_ISO3 = {
     798: "TUV",
     800: "UGA",
     804: "UKR",
-    807: "MKD",
+    807: "North MacedoniaD",
     818: "EGY",
     826: "GBR",
     831: "GGY",
@@ -709,6 +707,7 @@ COUNTRY_NAME_TO_ISO3 = {
     "Nigeria": "NGA",
     "Niue": "NIU",
     "Norfolk Island": "NFK",
+    "North Macedonia": "MKD",
     "Oman": "OMN",
     "Palau": "PLW",
     "Palestine, State of": "PSE",
