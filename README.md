@@ -16,13 +16,13 @@ pip install geb
 or with [uv](https://docs.astral.sh/uv/), which first needs to be installed by running:
 
 
-on the HPC (cluster):
+on Linux and Mac OS X:
   
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-on a Windows PC: 
+on Windows: 
 
 ```bash
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -34,7 +34,7 @@ After, GEB can be installed with:
 uv pip install geb --prerelease=allow
 ```
 
-To run SFINCS (the hydrodynamic model), you also need to install Docker (on Windows) or Singularity (on Linux and Mac OS X). To install Docker you need to obtain and install Docker from their website (https://www.docker.com/get-started) and make sure Docker or Singularity is running.
+To run SFINCS (the hydrodynamic model), you also need to install Docker (on Windows) or Apptainer (on Linux and Mac OS X). To install Docker you need to obtain and install Docker from their website (https://www.docker.com/get-started) and make sure Docker or Apptainer is running.
 
 ## Development installation and setup
 

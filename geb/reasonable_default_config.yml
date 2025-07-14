@@ -21,7 +21,6 @@ hazards:
     resolution: 150
     nr_subgrid_pixels: 5
     crs: auto
-    gpu: false
     force_overwrite: true
     return_periods:
       - 2
@@ -33,6 +32,8 @@ hazards:
       - 250
       - 500
       - 1000
+    SFINCS:
+      gpu: false
   damage:
     simulate: false
   erosion:
@@ -41,6 +42,12 @@ hazards:
 hydrology:
   routing:
     algorithm: kinematic_wave  # accuflux or kinematic_wave
+    river_width:
+      parameters:
+        default_alpha: 7.2
+        beta: 0.5
+    river_depth:
+      method: manning # or power law. If power law, alpha and beta must be set additionally in the parameters
 
 agent_settings:
   market:

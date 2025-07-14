@@ -21,6 +21,7 @@ from isimip_client.client import ISIMIPClient
 from numcodecs.zarr3 import FixedScaleOffset
 from tqdm import tqdm
 
+from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
 from ...workflows.io import calculate_scaling, open_zarr, to_zarr
@@ -1107,6 +1108,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
+    @build_method
     def setup_forcing_era5(self):
         target = self.grid["mask"]
         target.raster.set_crs(4326)
@@ -1221,6 +1223,7 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
+    @build_method
     def setup_forcing_ISIMIP(self, resolution_arcsec: int, forcing: str) -> None:
         """Sets up the forcing data for GEB using ISIMIP data.
 
@@ -1266,6 +1269,7 @@ class Forcing:
                 "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
             )
 
+    @build_method
     def setup_forcing(
         self,
         resolution_arcsec: int,
@@ -1836,6 +1840,7 @@ class Forcing:
         wind_output_clipped = self.snap_to_grid(wind_output_clipped, self.grid)
         self.set_sfcwind(wind_output_clipped)
 
+    @build_method
     def setup_SPEI(
         self,
         calibration_period_start: date = date(1981, 1, 1),
@@ -2066,6 +2071,7 @@ class Forcing:
             {"x": -1, "y": -1}
         )
 
+    @build_method
     def setup_CO2_concentration(self) -> None:
         """Aquires the CO2 concentration data for the specified SSP in ppm."""
         da: xr.DataArray = self.construct_ISIMIP_variable(

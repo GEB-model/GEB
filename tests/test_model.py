@@ -155,6 +155,7 @@ def test_update_with_dict():
 @pytest.mark.parametrize(
     "method",
     [
+        "setup_hydrography",
         "setup_crop_prices",
         "setup_discharge_observations",
         "setup_forcing_era5",
@@ -193,6 +194,16 @@ def test_evaluate():
 def test_run():
     with WorkingDirectory(working_directory):
         run_model_with_method(method="run", **DEFAULT_RUN_ARGS)
+
+    if os.getenv("GEB_TEST_GPU", "no") == "yes":
+        with WorkingDirectory(working_directory):
+            args = DEFAULT_RUN_ARGS.copy()
+            args["config"] = parse_config(args["config"])
+            args["config"]["hazards"]["floods"]["SFINCS"]["gpu"] = True
+            args["config"]["general"]["name"] = "run_gpu"
+            run_model_with_method(method="run", **args)
+
+    # TODO: Add similarity check for the output of the CPU and GPU runs
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -257,6 +268,43 @@ def test_estimate_return_periods():
     with WorkingDirectory(working_directory):
         run_model_with_method(method="estimate_return_periods", **DEFAULT_RUN_ARGS)
 
+    if os.getenv("GEB_TEST_GPU", "no") == "yes":
+        flood_maps_CPU: Path = working_directory / "output" / "flood_maps" / "1000.zarr"
+
+        # move the flood maps to a separate folder
+        flood_maps_folder_CPU: Path = tmp_folder / "flood_maps" / "CPU"
+        flood_maps_folder_CPU.mkdir(parents=True, exist_ok=True)
+        flood_maps_CPU.rename(flood_maps_folder_CPU / "1000.zarr")
+
+        with WorkingDirectory(working_directory):
+            args = DEFAULT_RUN_ARGS.copy()
+            args["config"] = parse_config(args["config"])
+            args["config"]["hazards"]["floods"]["SFINCS"]["gpu"] = True
+            run_model_with_method(method="estimate_return_periods", **args)
+
+        flood_maps_folder_GPU: Path = tmp_folder / "flood_maps" / "GPU"
+        flood_maps_folder_GPU.mkdir(parents=True, exist_ok=True)
+        flood_maps_GPU: Path = working_directory / "output" / "flood_maps" / "1000.zarr"
+        flood_maps_GPU.rename(flood_maps_folder_GPU / "1000.zarr")
+
+        # compare the flood maps
+        flood_map_CPU: xr.DataArray = xr.open_dataarray(
+            flood_maps_folder_CPU / "1000.zarr"
+        )
+        flood_map_GPU: xr.DataArray = xr.open_dataarray(
+            flood_maps_folder_GPU / "1000.zarr"
+        )
+
+        flood_map_CPU = flood_map_CPU.fillna(0)
+        flood_map_GPU = flood_map_GPU.fillna(0)
+
+        np.testing.assert_almost_equal(
+            flood_map_CPU.values,
+            flood_map_GPU.values,
+            decimal=1,
+            err_msg="Flood maps for the 1000-year return period do not match between CPU and GPU runs.",
+        )
+
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_multiverse():
@@ -281,7 +329,7 @@ def test_multiverse():
             days=int(forecast_n_days) + 5
         )
 
-        input_folder = config["general"]["input_folder"]
+        input_folder = Path(config["general"]["input_folder"])
 
         files = input_folder / "files.json"
         files = json.loads(files.read_text())
@@ -427,7 +475,7 @@ def test_share():
             include_output=False,
         )
 
-        output_fn: Path = "test.zip"
+        output_fn: Path = Path("test.zip")
 
         assert output_fn.exists()
 

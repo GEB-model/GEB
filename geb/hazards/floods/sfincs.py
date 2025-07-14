@@ -237,7 +237,7 @@ class SFINCS:
         run_sfincs_simulation(
             simulation_root=simulation_root,
             model_root=model_root,
-            gpu=False,
+            gpu=self.config["SFINCS"]["gpu"],
         )
         flood_map: xr.DataArray = read_maximum_flood_depth(
             model_root=model_root,
@@ -270,6 +270,9 @@ class SFINCS:
         estimate_discharge_for_return_periods(
             model_root,
             discharge=self.discharge_spinup_ds,
+            waterbody_ids=self.model.hydrology.grid.decompress(
+                self.model.hydrology.grid.var.waterBodyID
+            ),
             rivers=self.rivers,
             return_periods=self.config["return_periods"],
         )
@@ -277,7 +280,7 @@ class SFINCS:
         run_sfincs_for_return_periods(
             model_root=model_root,
             return_periods=self.config["return_periods"],
-            gpu=self.config["gpu"],
+            gpu=self.config["SFINCS"]["gpu"],
             export_dir=self.model.output_folder / "flood_maps",
             clean_working_dir=True,
         )
@@ -434,10 +437,26 @@ class SFINCS:
             "DEMs": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
+            "waterbody_ids": self.model.hydrology.grid.decompress(
+                self.model.hydrology.grid.var.waterBodyID
+            ),
+            "river_width_alpha": self.model.hydrology.grid.decompress(
+                self.model.var.river_width_alpha
+            ),
+            "river_width_beta": self.model.hydrology.grid.decompress(
+                self.model.var.river_width_beta
+            ),
             "mannings": self.mannings,
             "resolution": self.config["resolution"],
             "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],
             "crs": self.crs,
-            "depth_calculation": "power_law",
+            "depth_calculation_method": self.model.config["hydrology"]["routing"][
+                "river_depth"
+            ]["method"],
+            "depth_calculation_parameters": self.model.config["hydrology"]["routing"][
+                "river_depth"
+            ]["parameters"]
+            if "parameters" in self.model.config["hydrology"]["routing"]["river_depth"]
+            else {},
             "mask_flood_plains": False,  # setting this to True sometimes leads to errors
         }
