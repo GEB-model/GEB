@@ -165,15 +165,13 @@ class Households(AgentBaseClass):
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
     def update_building_attributes(self):
-        """Update building attributes based on household data.""" 
+        """Update building attributes based on household data."""
         # Start by computing occupancy from the var.osm_id and var.osm_way_id arrays
         osm_id_series = pd.Series(self.var.osm_id.data)
         osm_way_id_series = pd.Series(self.var.osm_way_id.data)
 
         # Drop NaNs and convert to string format (matching building ID format)
-        osm_id_counts = (
-            osm_id_series.dropna().astype(int).astype(str).value_counts()
-        )
+        osm_id_counts = osm_id_series.dropna().astype(int).astype(str).value_counts()
         osm_way_id_counts = (
             osm_way_id_series.dropna().astype(int).astype(str).value_counts()
         )
@@ -182,40 +180,53 @@ class Households(AgentBaseClass):
         self.var.buildings["occupancy"] = 0
 
         # Map the counts back to the buildings dataframe
-        self.var.buildings["occupancy"] = self.var.buildings["osm_id"].map(osm_id_counts).fillna(
-            self.var.buildings["occupancy"]
+        self.var.buildings["occupancy"] = (
+            self.var.buildings["osm_id"]
+            .map(osm_id_counts)
+            .fillna(self.var.buildings["occupancy"])
         )
-        self.var.buildings["occupancy"] = self.var.buildings["osm_way_id"].map(osm_way_id_counts).fillna(
-            self.var.buildings["occupancy"]
+        self.var.buildings["occupancy"] = (
+            self.var.buildings["osm_way_id"]
+            .map(osm_way_id_counts)
+            .fillna(self.var.buildings["occupancy"])
         )
 
         # Initialize dry floodproofing status
         self.var.buildings["FLOODPROOFING"] = False
-  
 
     def update_building_adaptation_status(self, household_adapting):
         """Update the floodproofing status of buildings based on adapting households."""
 
         # Extract and clean OSM IDs from adapting households
-        osm_ids = pd.DataFrame(np.unique(self.var.osm_id.data[household_adapting])).dropna()
+        osm_ids = pd.DataFrame(
+            np.unique(self.var.osm_id.data[household_adapting])
+        ).dropna()
         osm_ids = osm_ids.astype(int).astype(str)
         osm_ids["FLOODPROOFING"] = True
         osm_ids = osm_ids.set_index(0)
 
         # Extract and clean OSM way IDs from adapting households
-        osm_way_ids = pd.DataFrame(np.unique(self.var.osm_way_id.data[household_adapting])).dropna()
+        osm_way_ids = pd.DataFrame(
+            np.unique(self.var.osm_way_id.data[household_adapting])
+        ).dropna()
         osm_way_ids = osm_way_ids.astype(int).astype(str)
         osm_way_ids["FLOODPROOFING"] = True
         osm_way_ids = osm_way_ids.set_index(0)
 
         # Add/Update the FLOODPROOFING status in buildings based on OSM way IDs
-        self.var.buildings["FLOODPROOFING"] = self.var.buildings["osm_way_id"].astype(str).map(osm_way_ids["FLOODPROOFING"])
-        self.var.buildings["FLOODPROOFING"] = self.var.buildings["FLOODPROOFING"].fillna(
-            self.var.buildings["osm_id"].astype(str).map(osm_ids["FLOODPROOFING"])
+        self.var.buildings["FLOODPROOFING"] = (
+            self.var.buildings["osm_way_id"]
+            .astype(str)
+            .map(osm_way_ids["FLOODPROOFING"])
         )
+        self.var.buildings["FLOODPROOFING"] = self.var.buildings[
+            "FLOODPROOFING"
+        ].fillna(self.var.buildings["osm_id"].astype(str).map(osm_ids["FLOODPROOFING"]))
 
         # Replace NaNs with False (i.e., buildings not in the adapting households list)
-        self.var.buildings["FLOODPROOFING"] = self.var.buildings["FLOODPROOFING"].fillna(False)
+        self.var.buildings["FLOODPROOFING"] = self.var.buildings[
+            "FLOODPROOFING"
+        ].fillna(False)
 
     def assign_household_attributes(self):
         """Household locations are already sampled from population map in GEBModel.setup_population().
@@ -263,7 +274,7 @@ class Households(AgentBaseClass):
             self.model.files["array"]["agents/households/osm_way_id"]
         )
         self.var.osm_way_id = DynamicArray(osm_way_id, max_n=self.max_n)
-        
+
         # update building attributes based on household data
         self.update_building_attributes()
 
@@ -780,12 +791,12 @@ class Households(AgentBaseClass):
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
-            expendature_cap=1, 
+            expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data+10,
+            risk_perception=self.var.risk_perception.data + 10,
             expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data*0,
+            adaptation_costs=self.var.adaptation_costs.data * 0,
             time_adapted=self.var.time_adapted.data,
             loan_duration=20,
             p_floods=1 / self.return_periods,
@@ -802,7 +813,7 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data+10,
+            risk_perception=self.var.risk_perception.data + 10,
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
@@ -815,8 +826,6 @@ class Households(AgentBaseClass):
         household_adapting = np.where(EU_adapt > EU_do_not_adapt)[0]
         self.var.adapted[household_adapting] = 1
         self.var.time_adapted[household_adapting] += 1
-
-
 
         # update column in buildings
         self.update_building_adaptation_status(household_adapting)
