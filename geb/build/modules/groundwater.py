@@ -1,6 +1,7 @@
 import numpy as np
 import xarray as xr
 
+from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
 from ..workflows.general import (
@@ -12,6 +13,7 @@ class GroundWater:
     def __init__(self):
         pass
 
+    @build_method
     def setup_groundwater(
         self,
         minimum_thickness_confined_layer=50,

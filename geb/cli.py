@@ -88,7 +88,7 @@ def parse_config(
 
 
 def create_logger(fp):
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("GEB")
     # set log level to debug
     logger.setLevel(logging.DEBUG)
     # create console handler and set level to debug
@@ -388,10 +388,12 @@ def get_model_builder_class(custom_model) -> type:
     if custom_model is None:
         return GEBModelBuild
     else:
+        from geb import build as geb_build
+
         importlib.import_module(
             "." + custom_model.split(".")[0], package="geb.build.custom_models"
         )
-        return attrgetter(custom_model)(build.custom_models)
+        return attrgetter(custom_model)(geb_build.custom_models)
 
 
 def customize_data_catalog(data_catalogs, data_root=None):

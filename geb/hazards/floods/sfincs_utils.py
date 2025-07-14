@@ -291,12 +291,34 @@ def run_sfincs_simulation(model_root, simulation_root, gpu=False) -> int:
         return return_code
 
 
-def get_representative_river_points(river_ID: set, rivers: pd.DataFrame):
+def _get_xy(
+    river, waterbody_ids: npt.NDArray[np.int32], up_to_downstream: bool = True
+) -> tuple[int, int] | list:
+    xys = river["hydrography_xy"]
+    if not up_to_downstream:
+        xys = reversed(xys)  # Reverse the order if not going downstream
+    for xy in xys:
+        is_waterbody = waterbody_ids[xy[1], xy[0]] != -1
+        if not is_waterbody:
+            return (xy[0], xy[1])
+    else:
+        return None  # If no valid xy found, return empty list
+
+
+def get_representative_river_points(
+    river_ID: set, rivers: pd.DataFrame, waterbody_ids: npt.NDArray[np.int32]
+) -> list[tuple[float, float]]:
     river = rivers.loc[river_ID]
     if river["represented_in_grid"]:
-        river = rivers.loc[river_ID]
-        xy = river["hydrography_xy"][0]  # get most upstream point
-        return [(xy[0], xy[1])]
+        xy = _get_xy(river, waterbody_ids, up_to_downstream=True)
+        if xy is not None:
+            return [xy]
+        else:
+            print(
+                f"Warning: No valid xy found for river {river_ID}. Skipping this river."
+            )
+            return []  # If no valid xy found, return empty list
+
     else:
         river_IDs = set([river_ID])
         representitative_rivers = set()
@@ -310,20 +332,26 @@ def get_representative_river_points(river_ID: set, rivers: pd.DataFrame):
                 representitative_rivers.add(river_ID)
 
         representitative_rivers = rivers[rivers.index.isin(representitative_rivers)]
-        xys = [
-            (river[-1][0], river[-1][1])
-            for river in representitative_rivers["hydrography_xy"]
-        ]
+        xys = []
+        for river_ID, river in representitative_rivers.iterrows():
+            xy = _get_xy(river, waterbody_ids, up_to_downstream=False)
+            if xy is not None:
+                xys.append(xy)
+            else:
+                print(
+                    f"Warning: No valid xy found for river {river_ID}. Skipping this river."
+                )
+
         return xys
 
 
-def get_discharge_by_river(
+def get_discharge_and_river_parameters_by_river(
     river_IDs: list[int],
     points_per_river,
     discharge: xr.DataArray,
     river_width_alpha: npt.NDArray[np.float32] | None = None,
     river_width_beta: npt.NDArray[np.float32] | None = None,
-) -> tuple[pd.DataFrame, xr.DataArray | None, xr.DataArray | None]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     xs: list[int] = []
     ys: list[int] = []
     for points in points_per_river:
@@ -355,18 +383,66 @@ def get_discharge_by_river(
         river_width_beta_per_point = None
 
     discharge_df: pd.DataFrame = pd.DataFrame(index=discharge.time)
+    river_parameters: pd.DataFrame = pd.DataFrame(
+        index=river_IDs,
+        columns=["river_width_alpha", "river_width_beta"],
+    )
 
     i: int = 0
     for river_ID, points in zip(river_IDs, points_per_river, strict=True):
         discharge_per_river = discharge_per_point.isel(
             points=slice(i, i + len(points))
         ).sum(dim="points")
+
         discharge_df[river_ID] = discharge_per_river
+
+        if river_width_alpha_per_point is not None:
+            river_width_alpha_per_river = river_width_alpha_per_point[
+                i : i + len(points)
+            ].mean()
+            if np.isnan(river_width_alpha_per_river):
+                print(
+                    f"Warning: River width alpha for river {river_ID} is NaN. Setting to 0."
+                )
+                river_width_alpha_per_river = 0.0
+            river_parameters.loc[river_ID, "river_width_alpha"] = (
+                river_width_alpha_per_river
+            )
+
+        if river_width_beta_per_point is not None:
+            river_width_beta_per_river = river_width_beta_per_point[
+                i : i + len(points)
+            ].mean()
+            if np.isnan(river_width_beta_per_river):
+                print(
+                    f"Warning: River width beta for river {river_ID} is NaN. Setting to 1."
+                )
+                river_width_beta_per_river = 1.0
+            river_parameters.loc[river_ID, "river_width_beta"] = (
+                river_width_beta_per_river
+            )
+
         i += len(points)
 
     assert i == len(xs), "Discharge values do not match the number of points"
+    assert i == len(ys), "Discharge values do not match the number of points"
+    assert i == len(river_parameters), (
+        "River parameter values do not match the number of rivers"
+    )
+    # make sure no NaN values are present in the discharge DataFrame
+    assert not discharge_df.isnull().values.any(), "Discharge DataFrame contains NaNs"
 
-    return discharge_df, river_width_alpha_per_point, river_width_beta_per_point
+    if river_width_alpha_per_point is not None:
+        # make sure no NaN values are present in the river parameters DataFrame
+        assert not river_parameters["river_width_alpha"].isnull().values.any(), (
+            "River width alpha DataFrame contains NaNs"
+        )
+    if river_width_beta_per_point is not None:
+        # make sure no NaN values are present in the river parameters DataFrame
+        assert not river_parameters["river_width_beta"].isnull().values.any(), (
+            "River width beta DataFrame contains NaNs"
+        )
+    return discharge_df, river_parameters
 
 
 def assign_return_periods(
