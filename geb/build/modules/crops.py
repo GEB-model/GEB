@@ -23,6 +23,7 @@ class Crops:
     def __init__(self):
         pass
 
+    @build_method
     def setup_crops(
         self,
         crop_data: dict,
@@ -684,6 +685,7 @@ class Crops:
 
         return data
 
+    @build_method
     def setup_cultivation_costs(
         self,
         cultivation_costs: Optional[Union[str, int, float]] = 0,
