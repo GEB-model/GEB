@@ -735,11 +735,22 @@ def update(*args, **kwargs):
 @click.option(
     "--methods", default=None, help="Comma-seperated list of methods to evaluate."
 )
-def evaluate(methods: list | None, *args, **kwargs) -> None:
+@click.option("--spinup_name", default="spinup", help="Name of the evaluation run.")
+@click.option("--run_name", default="default", help="Name of the run to evaluate.")
+def evaluate(methods: list | None, spinup_name, run_name, *args, **kwargs) -> None:
     # If no methods are provided, pass None to run_model_with_method
     methods: list | None = None if not methods else methods.split(",")
+    spinup_name: str
+    run_name: str
     run_model_with_method(
-        method="evaluate", method_args={"methods": methods}, *args, **kwargs
+        method="evaluate",
+        method_args={
+            "methods": methods,
+            "spinup_name": spinup_name,
+            "run_name": run_name,
+        },
+        *args,
+        **kwargs,
     )
 
 

@@ -13,7 +13,9 @@ class Evaluate(Hydrology):
     def __init__(self, model):
         self.model = model
 
-    def run(self, methods: list | None = None) -> None:
+    def run(
+        self, methods: list | None = None, spinup_name: str = "", run_name: str = ""
+    ) -> None:
         """Run the evaluation methods.
 
         Args:
@@ -52,7 +54,9 @@ class Evaluate(Hydrology):
                 raise ValueError(
                     f"Method {method} is not implemented in Evaluate class."
                 )
-            attr()
+            attr(
+                spinup_name=spinup_name, run_name=run_name
+            )  # this calls the method and executes them
 
     @property
     def output_folder_evaluate(self) -> Path:
