@@ -222,7 +222,6 @@ class Households(AgentBaseClass):
         # Update the FLOODPROOFING status for buildings that overlap with the flood map
         self.var.buildings.loc[buildings_mask, "FLOODED"] = True
         self.var.buildings["FLOODED"].fillna(False, inplace=True)
-        self.var.buildings.to_file("building_test.gpkg", driver="GPKG")
 
     def update_building_adaptation_status(self, household_adapting):
         """Update the floodproofing status of buildings based on adapting households."""
@@ -810,12 +809,8 @@ class Households(AgentBaseClass):
         # update risk perceptions
         # self.update_risk_perceptions()
 
-        self.calculate_building_flood_damages()
-
-        # get flood risk information
-        damages_do_not_adapt, damages_adapt = (
-            self.get_flood_risk_information_honeybees()
-        )
+        # calculate damages for adapting and not adapting households based on building footprints
+        damages_do_not_adapt, damages_adapt = self.calculate_building_flood_damages()
 
         # calculate expected utilities
         EU_adapt = self.decision_module.calcEU_adapt(
@@ -1041,6 +1036,12 @@ class Households(AgentBaseClass):
             self.var.buildings_structure_curve["building_unprotected"] * 0.85
         )
 
+        # create another column (curve) in the buildings structure curve for flood-proofed buildings
+        self.var.buildings_structure_curve["building_flood_proofed"] = (
+            self.var.buildings_structure_curve["building_unprotected"] * 0.85
+        )
+        self.var.buildings_structure_curve["building_flood_proofed"].loc[0:1] = 0.0
+
         self.var.buildings_content_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
         )
@@ -1092,7 +1093,10 @@ class Households(AgentBaseClass):
     def calculate_building_flood_damages(self):
         """This function calculates the flood damages for the households in the model.
         It iterates over the return periods and calculates the damages for each household"""
-        for return_period in self.return_periods:
+        damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+        damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+
+        for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
 
             buildings: gpd.GeoDataFrame = self.var.buildings.copy().to_crs(
@@ -1102,8 +1106,8 @@ class Households(AgentBaseClass):
             # subset building to those exposed to flooding
             buildings = buildings[buildings["FLOODED"]]
 
-            # Calculate damages to building structure
-            damages_buildings_structure: pd.Series = VectorScanner(
+            # Calculate damages to building structure (unprotected buildings)
+            damage_unprotected: pd.Series = VectorScanner(
                 feature_file=buildings.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
@@ -1111,10 +1115,58 @@ class Households(AgentBaseClass):
                 curve_path=self.var.buildings_structure_curve,
                 gridded=False,
             )
-            total_damage_structure = damages_buildings_structure["damage"].sum()
+            total_damage_structure = damage_unprotected["damage"].sum()
             print(
-                f"damages to building structure rp{return_period} are: {total_damage_structure}"
+                f"damages to building unprotected structure rp{return_period} are: {total_damage_structure}"
             )
+
+            # Save the damages to the dataframe
+            damage_unprotected = damage_unprotected[["osm_id", "osm_way_id", "damage"]]
+
+            # Calculate damages to building structure (floodproofed buildings)
+            buildings["object_type"] = "building_flood_proofed"
+            damage_flood_proofed: pd.Series = VectorScanner(
+                feature_file=buildings.rename(
+                    columns={"maximum_damage_m2": "maximum_damage"}
+                ),
+                hazard_file=flood_map,
+                curve_path=self.var.buildings_structure_curve,
+                gridded=False,
+            )
+            total_damage_structure = damage_flood_proofed["damage"].sum()
+            print(
+                f"damages to building flood-proofed structure rp{return_period} are: {total_damage_structure}"
+            )
+
+            # add damages to agents (unprotected buildings)
+            for _, row in damage_unprotected.iterrows():
+                damage = row["damage"]
+                if row["osm_id"] is not None:
+                    osm_id = int(row["osm_id"])
+                    idx_agents_in_building = np.where(self.var.osm_id == osm_id)[0]
+                    damages_do_not_adapt[i, idx_agents_in_building] = damage
+                else:
+                    osm_way_id = int(row["osm_way_id"])
+                    idx_agents_in_building_way = np.where(
+                        self.var.osm_way_id == osm_way_id
+                    )[0]
+                    damages_do_not_adapt[i, idx_agents_in_building_way] = damage
+
+            # add damages to agents (flood-proofed buildings)
+            for _, row in damage_flood_proofed.iterrows():
+                damage = row["damage"]
+                if row["osm_id"] is not None:
+                    osm_id = int(row["osm_id"])
+                    idx_agents_in_building = np.where(self.var.osm_id == osm_id)[0]
+                    damages_adapt[i, idx_agents_in_building] = damage
+                else:
+                    osm_way_id = int(row["osm_way_id"])
+                    idx_agents_in_building_way = np.where(
+                        self.var.osm_way_id == osm_way_id
+                    )[0]
+                    damages_adapt[i, idx_agents_in_building_way] = damage
+
+            return damages_do_not_adapt, damages_adapt
 
     def flood(self, flood_map: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
