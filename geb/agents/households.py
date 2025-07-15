@@ -197,6 +197,33 @@ class Households(AgentBaseClass):
         # Initialize dry floodproofing status
         self.var.buildings["FLOODPROOFING"] = False
 
+        # check if building overlaps with the flood map
+        # get highest return period
+        highest_return_period = self.return_periods.max()
+        flood_map = self.flood_maps[highest_return_period].copy()
+        # check if building geometry overlaps with flood map
+        flood_map = flood_map.rio.reproject(self.var.buildings.crs)
+        flood_map = flood_map > 0  # convert to boolean mask
+
+        # convert flood map to polygons
+        flood_map_polygons = from_landuse_raster_to_polygon(
+            flood_map.values,
+            flood_map.rio.transform(),
+            flood_map.rio.crs,
+        )
+
+        flood_map_polygons_union = flood_map_polygons.union_all()
+
+        # Create a mask for buildings that overlap with the flood map
+        buildings_mask = self.var.buildings.geometry.intersects(
+            flood_map_polygons_union
+        )
+
+        # Update the FLOODPROOFING status for buildings that overlap with the flood map
+        self.var.buildings.loc[buildings_mask, "FLOODED"] = True
+        self.var.buildings["FLOODED"].fillna(False, inplace=True)
+        self.var.buildings.to_file("building_test.gpkg", driver="GPKG")
+
     def update_building_adaptation_status(self, household_adapting):
         """Update the floodproofing status of buildings based on adapting households."""
 
@@ -1071,6 +1098,11 @@ class Households(AgentBaseClass):
             buildings: gpd.GeoDataFrame = self.var.buildings.copy().to_crs(
                 self.flood_maps["crs"]
             )
+
+            # subset building to those exposed to flooding
+            buildings = buildings[buildings["FLOODED"]]
+
+            # Calculate damages to building structure
             damages_buildings_structure: pd.Series = VectorScanner(
                 feature_file=buildings.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
