@@ -103,7 +103,10 @@ class Households(AgentBaseClass):
             file_path = (
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
             )
-            flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
+            flood_map = xr.open_dataarray(file_path, engine="zarr")
+            flood_maps[return_period] = flood_map.rio.write_crs(
+                flood_map.attrs["_CRS"]["wkt"]
+            )
         flood_maps["crs"] = pyproj.CRS.from_user_input(
             flood_maps[return_period]._CRS["wkt"]
         )
@@ -780,6 +783,8 @@ class Households(AgentBaseClass):
         # update risk perceptions
         # self.update_risk_perceptions()
 
+        self.calculate_building_flood_damages()
+
         # get flood risk information
         damages_do_not_adapt, damages_adapt = (
             self.get_flood_risk_information_honeybees()
@@ -1056,6 +1061,28 @@ class Households(AgentBaseClass):
     def spinup(self):
         self.construct_income_distribution()
         self.assign_household_attributes()
+
+    def calculate_building_flood_damages(self):
+        """This function calculates the flood damages for the households in the model.
+        It iterates over the return periods and calculates the damages for each household"""
+        for return_period in self.return_periods:
+            flood_map: xr.DataArray = self.flood_maps[return_period]
+
+            buildings: gpd.GeoDataFrame = self.var.buildings.copy().to_crs(
+                self.flood_maps["crs"]
+            )
+            damages_buildings_structure: pd.Series = VectorScanner(
+                feature_file=buildings.rename(
+                    columns={"maximum_damage_m2": "maximum_damage"}
+                ),
+                hazard_file=flood_map,
+                curve_path=self.var.buildings_structure_curve,
+                gridded=False,
+            )
+            total_damage_structure = damages_buildings_structure["damage"].sum()
+            print(
+                f"damages to building structure rp{return_period} are: {total_damage_structure}"
+            )
 
     def flood(self, flood_map: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
