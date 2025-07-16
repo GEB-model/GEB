@@ -13,6 +13,7 @@ import xarray as xr
 from shapely.ops import nearest_points
 from tqdm import tqdm
 
+from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
 """
@@ -177,6 +178,7 @@ class Observations:
     def __init__(self):
         pass
 
+    @build_method(depends_on=["setup_hydrography"])
     def setup_discharge_observations(
         self,
         max_uparea_difference_ratio: float = 0.3,
