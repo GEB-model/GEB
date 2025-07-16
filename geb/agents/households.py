@@ -195,7 +195,7 @@ class Households(AgentBaseClass):
         )
 
         # Initialize dry floodproofing status
-        self.var.buildings["FLOODPROOFING"] = False
+        self.var.buildings["flood_proofed"] = False
 
         # check if building overlaps with the flood map
         # get highest return period
@@ -219,9 +219,9 @@ class Households(AgentBaseClass):
             flood_map_polygons_union
         )
 
-        # Update the FLOODPROOFING status for buildings that overlap with the flood map
-        self.var.buildings.loc[buildings_mask, "FLOODED"] = True
-        self.var.buildings["FLOODED"].fillna(False, inplace=True)
+        # Update the flood_proofed status for buildings that overlap with the flood map
+        self.var.buildings.loc[buildings_mask, "flooded"] = True
+        self.var.buildings["flooded"].fillna(False, inplace=True)
 
     def update_building_adaptation_status(self, household_adapting):
         """Update the floodproofing status of buildings based on adapting households."""
@@ -231,7 +231,7 @@ class Households(AgentBaseClass):
             np.unique(self.var.osm_id.data[household_adapting])
         ).dropna()
         osm_ids = osm_ids.astype(int).astype(str)
-        osm_ids["FLOODPROOFING"] = True
+        osm_ids["flood_proofed"] = True
         osm_ids = osm_ids.set_index(0)
 
         # Extract and clean OSM way IDs from adapting households
@@ -239,22 +239,22 @@ class Households(AgentBaseClass):
             np.unique(self.var.osm_way_id.data[household_adapting])
         ).dropna()
         osm_way_ids = osm_way_ids.astype(int).astype(str)
-        osm_way_ids["FLOODPROOFING"] = True
+        osm_way_ids["flood_proofed"] = True
         osm_way_ids = osm_way_ids.set_index(0)
 
-        # Add/Update the FLOODPROOFING status in buildings based on OSM way IDs
-        self.var.buildings["FLOODPROOFING"] = (
+        # Add/Update the flood_proofed status in buildings based on OSM way IDs
+        self.var.buildings["flood_proofed"] = (
             self.var.buildings["osm_way_id"]
             .astype(str)
-            .map(osm_way_ids["FLOODPROOFING"])
+            .map(osm_way_ids["flood_proofed"])
         )
-        self.var.buildings["FLOODPROOFING"] = self.var.buildings[
-            "FLOODPROOFING"
-        ].fillna(self.var.buildings["osm_id"].astype(str).map(osm_ids["FLOODPROOFING"]))
+        self.var.buildings["flood_proofed"] = self.var.buildings[
+            "flood_proofed"
+        ].fillna(self.var.buildings["osm_id"].astype(str).map(osm_ids["flood_proofed"]))
 
         # Replace NaNs with False (i.e., buildings not in the adapting households list)
-        self.var.buildings["FLOODPROOFING"] = self.var.buildings[
-            "FLOODPROOFING"
+        self.var.buildings["flood_proofed"] = self.var.buildings[
+            "flood_proofed"
         ].fillna(False)
 
     def assign_household_attributes(self):
@@ -1104,7 +1104,7 @@ class Households(AgentBaseClass):
             )
 
             # subset building to those exposed to flooding
-            buildings = buildings[buildings["FLOODED"]]
+            buildings = buildings[buildings["flooded"]]
 
             # Calculate damages to building structure (unprotected buildings)
             damage_unprotected: pd.Series = VectorScanner(
