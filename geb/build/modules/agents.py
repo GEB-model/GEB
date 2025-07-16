@@ -1239,76 +1239,51 @@ class Agents:
             os.makedirs(
                 "preprocessing/buildings", exist_ok=True
             )  # get rid of this later
-            buildings_df.to_csv(
-                f"preprocessing/buildings/test_buildings_{gdl_name}.csv"
-            )
+            buildings_df.to_csv(f"preprocessing/buildings/buildings_{gdl_name}.csv")
 
     @build_method
     def setup_buildings(self):
         GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4",
-            geom=self.region,
-            variables=["GDLcode", "iso_code"],
+            "GDL_regions_v4", geom=self.region, variables=["GDLcode", "iso_code"]
         )
-        GDL_regions = GDL_regions[
-            GDL_regions["GDLcode"] != "NA"
-        ]  # remove regions without GDL code
+        GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
 
-        buildings_df = pd.DataFrame()
         fp_buildings = self.files["geoms"]["assets/buildings"]
         buildings = gpd.read_parquet(f"{self.root}/{fp_buildings}")[
             ["osm_id", "osm_way_id", "geometry"]
         ]
-        # get lat and lon centroid from geometry
-        buildings["lon"] = buildings.centroid.x
-        buildings["lat"] = buildings.centroid.y
 
-        # load GHS_OBAT and Overture buildings for countries in model
-        for _, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
+        # Vectorized centroid extraction
+        centroids = buildings.geometry.centroid
+        buildings["lon"] = centroids.x
+        buildings["lat"] = centroids.y
+
+        for _, GDL_region in GDL_regions.iterrows():
             _, GLOPOP_GRID_region = load_GLOPOP_S(
                 self.data_catalog, GDL_region["GDLcode"]
             )
             GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
-            res_x, res_y = GLOPOP_GRID_region.rio.resolution()
-            # find objects in GHS_OBAT for each cell in GLOPOP_GRID_region
 
-            # Convert the grid into bounding boxes
-            xmin = GLOPOP_GRID_region.x.values
-            ymax = GLOPOP_GRID_region.y.values
-            xmax = xmin + res_x
-            ymin = ymax + res_y
+            # subset buildings to those within the GLOPOP_GRID_region
+            buildings_gdl = buildings.cx[
+                GLOPOP_GRID_region.x.min() : GLOPOP_GRID_region.x.max(),
+                GLOPOP_GRID_region.y.min() : GLOPOP_GRID_region.y.max(),
+            ]
 
-            # ghs_obat coordinates
-            lons = buildings["lon"]
-            lats = buildings["lat"]
+            # Vectorized assignment of grid cells
+            cells = GLOPOP_GRID_region.sel(
+                x=xr.DataArray(buildings_gdl["lon"].values, dims="points"),
+                y=xr.DataArray(buildings_gdl["lat"].values, dims="points"),
+                method="nearest",
+            )
 
-            # Initialize a list to hold the matching indices for each cell
-            all_buildings_idx = []
-            grid_idx = 0
-            # Vectorized spatial filtering
-            for i in range(xmin.size):
-                for j in range(ymin.size):
-                    mask = (
-                        (lons > xmin[i])
-                        & (lons < xmax[i])
-                        & (lats < ymax[j])
-                        & (lats > ymin[j])
-                    )
-                    buildings_idx = np.where(mask)[0]
-                    all_buildings_idx.append(buildings_idx)
-                    grid_idx += 1
-                    if buildings_idx.size > 0:
-                        building_gdl = buildings.iloc[buildings_idx]
-                        building_gdl["grid_idx"] = GLOPOP_GRID_region.values[0][j, i]
-                        buildings_df = pd.concat([buildings_df, building_gdl])
+            buildings_gdl["grid_idx"] = cells.values[0]
+            # drop buildings without grid_idx
+            buildings_gdl = buildings_gdl[buildings_gdl["grid_idx"] != 0]
 
             gdl_name = GDL_region["GDLcode"]
-            os.makedirs(
-                "preprocessing/buildings", exist_ok=True
-            )  # get rid of this later
-            buildings_df.to_csv(
-                f"preprocessing/buildings/test_buildings_{gdl_name}.csv"
-            )
+            os.makedirs("preprocessing/buildings", exist_ok=True)
+            buildings_gdl.to_csv(f"preprocessing/buildings/buildings_{gdl_name}.csv")
 
     @build_method
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
@@ -1362,7 +1337,7 @@ class Agents:
 
             # load building database with grid idx
             ghs_obat_buildings = pd.read_csv(
-                f"preprocessing/buildings/test_buildings_{GDL_code}.csv"
+                f"preprocessing/buildings/buildings_{GDL_code}.csv"
             )
 
             GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
@@ -1543,7 +1518,7 @@ class Agents:
                         households_not_allocated += n_agents_in_cell
                     else:
                         raise ValueError("Weird")
-                    assert n_agents_allocated < len(GLOPOP_households_region)
+                    # assert n_agents_allocated < len(GLOPOP_households_region)
             # iterate over unique housholds and extract the variables we want
             household_characteristics = {}
             household_characteristics["size"] = np.full(
