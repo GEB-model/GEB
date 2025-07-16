@@ -761,19 +761,25 @@ def update(*args, **kwargs):
     help="Include spinup in evaluation.",
 )
 @click.option(
-    "--correct-Q-obs",
+    "--correct-q-obs",
     is_flag=True,
     default=False,
     help="correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the difference in upstream area between the Q_obs station and the simulated discharge",
 )
 def evaluate(
+    working_directory,
+    config,
     methods: list | None,
     spinup_name,
     run_name,
     include_spinup,
-    correct_Q_obs,
-    *args,
-    **kwargs,
+    correct_q_obs,
+    port,
+    gui,
+    no_browser,
+    profiling,
+    optimize,
+    timing,
 ) -> None:
     # If no methods are provided, pass None to run_model_with_method
     methods: list | None = None if not methods else methods.split(",")
@@ -786,10 +792,16 @@ def evaluate(
             "spinup_name": spinup_name,
             "run_name": run_name,
             "include_spinup": include_spinup,
-            "correct_Q_obs": correct_Q_obs,
+            "correct_Q_obs": correct_q_obs,
         },
-        *args,
-        **kwargs,
+        working_directory=working_directory,
+        config=config,
+        port=port,
+        gui=gui,
+        no_browser=no_browser,
+        profiling=profiling,
+        optimize=optimize,
+        timing=timing,
     )
 
 
