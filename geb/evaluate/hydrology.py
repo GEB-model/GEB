@@ -27,6 +27,8 @@ class Hydrology:
 
         Args:
             run_name: Defaults to "default".
+            *args: ignored.
+            **kwargs: ignored.
         """
         # load the discharge simulation
         GEB_discharge = open_zarr(

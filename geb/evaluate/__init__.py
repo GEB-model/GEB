@@ -24,8 +24,12 @@ class Evaluate(Hydrology):
         """Run the evaluation methods.
 
         Args:
-            methods (list, optional): List of method names to run. If None, defaults to
+            methods: List of method names to run. If None, defaults to
                 ["plot_discharge", "evaluate_discharge"].
+            spinup_name: Name of the spinup run. Defaults to "spinup".
+            run_name: Name of the run to evaluate. Defaults to "default".
+            include_spinup: If True, includes the spinup run in the evaluation.
+            correct_Q_obs: If True, corrects the observed discharge values.
 
         Raises:
             AssertionError: If methods is not a list or tuple, or if any method is not a string.
