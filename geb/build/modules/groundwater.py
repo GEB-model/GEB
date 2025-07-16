@@ -13,7 +13,7 @@ class GroundWater:
     def __init__(self):
         pass
 
-    @build_method
+    @build_method(depends_on=["setup_elevation"])
     def setup_groundwater(
         self,
         minimum_thickness_confined_layer=50,

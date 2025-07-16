@@ -178,7 +178,7 @@ class Observations:
     def __init__(self):
         pass
 
-    @build_method
+    @build_method(depends_on=["setup_hydrography"])
     def setup_discharge_observations(
         self,
         max_uparea_difference_ratio: float = 0.3,

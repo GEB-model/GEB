@@ -172,7 +172,7 @@ class Hydrography:
     def __init__(self):
         pass
 
-    @build_method
+    @build_method(depends_on=["setup_hydrography", "setup_cell_area"])
     def setup_mannings(self) -> None:
         """Sets up the Manning's coefficient for the model.
 

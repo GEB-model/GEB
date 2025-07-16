@@ -1108,7 +1108,6 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    @build_method
     def setup_forcing_era5(self):
         target = self.grid["mask"]
         target.raster.set_crs(4326)
@@ -1223,20 +1222,16 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
-    @build_method
-    def setup_forcing_ISIMIP(self, resolution_arcsec: int, forcing: str) -> None:
+    def setup_forcing_ISIMIP(self, resolution_arcsec: int, model: str) -> None:
         """Sets up the forcing data for GEB using ISIMIP data.
 
-        Parameters
-        ----------
-        resolution_arcsec : int
-            The resolution of the data in arcseconds. Supported values are 30 and 1800.
-        forcing : str
-            The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
-            and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
+        Args:
+            resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
+            model: The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
+                and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
         """
         if resolution_arcsec == 30:
-            assert forcing == "chelsa-w5e5", (
+            assert model == "chelsa-w5e5", (
                 "Only chelsa-w5e5 is supported for 30 arcsec resolution"
             )
             # download source data from ISIMIP
@@ -1263,25 +1258,25 @@ class Forcing:
                 "ps",
                 "sfcwind",
             ]
-            self.setup_1800arcsec_variables_isimip(forcing, variables)
+            self.setup_1800arcsec_variables_isimip(model, variables)
         else:
             raise ValueError(
                 "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
             )
 
-    @build_method
+    @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forcing(
         self,
-        resolution_arcsec: int,
-        forcing_name: str | None = None,
-        data_source: str = "ERA5",
+        resolution_arcsec: int | None = None,
+        forcing: str = "ERA5",
+        model: str | None = None,
     ):
         """Sets up the forcing data for GEB.
 
         Args:
-            resolution_arcsec : The resolution of the data in arcseconds. Supported values are 30 and 1800.
-            data_source : The data source to use for the forcing data. Can be ERA5 or ISIMIP. Default is 'era5'.
-            forcing_name : The name of the forcing data to use within the dataset. Only required for ISIMIP data.
+            resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
+            data_source: The data source to use for the forcing data. Can be ERA5 or ISIMIP. Default is 'era5'.
+            model: The name of the forcing data to use within the dataset. Only required for ISIMIP data.
                 For ISIMIP, this can be 'chelsa-w5e5' for 30 arcsec resolution
                 or 'ipsl-cm6a-lr', 'gfdl-esm4', 'mpi-esm1-2-hr', 'mri-esm2-0', or 'mri-esm2-0' for 1800 arcsec resolution.
 
@@ -1298,14 +1293,16 @@ class Forcing:
 
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
         """
-        if data_source == "ISIMIP":
-            self.setup_forcing_ISIMIP(resolution_arcsec, forcing_name)
-        elif data_source == "ERA5":
+        if forcing == "ISIMIP":
+            self.setup_forcing_ISIMIP(resolution_arcsec, model)
+        elif forcing == "ERA5":
             self.setup_forcing_era5()
-        elif data_source == "CMIP":
+        elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
-            raise ValueError(f"Unknown data source: {data_source}")
+            raise ValueError(
+                f"Unknown data source: {forcing}, supported are 'ISIMIP' and 'ERA5'"
+            )
 
     def construct_ISIMIP_variable(
         self, variable_name: str, forcing: str | None, ssp: str
@@ -1840,7 +1837,7 @@ class Forcing:
         wind_output_clipped = self.snap_to_grid(wind_output_clipped, self.grid)
         self.set_sfcwind(wind_output_clipped)
 
-    @build_method
+    @build_method(depends_on=["setup_forcing"])
     def setup_SPEI(
         self,
         calibration_period_start: date = date(1981, 1, 1),
@@ -2071,7 +2068,7 @@ class Forcing:
             {"x": -1, "y": -1}
         )
 
-    @build_method
+    @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_CO2_concentration(self) -> None:
         """Aquires the CO2 concentration data for the specified SSP in ppm."""
         da: xr.DataArray = self.construct_ISIMIP_variable(
