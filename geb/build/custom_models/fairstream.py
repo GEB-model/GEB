@@ -453,7 +453,7 @@ class fairSTREAMModel(GEBModel):
         farm_size_m2 = farm_size_n_cells * mean_cell_size
         return farm_size_m2
 
-    @build_method
+    @build_method(depends_on=["setup_create_farms", "setup_regions_and_land_use"])
     def setup_farmer_crop_calendar(
         self,
         seasons,
@@ -846,7 +846,7 @@ class fairSTREAMModel(GEBModel):
             name="agents/farmers/crop_calendar_rotation_years",
         )
 
-    @build_method
+    @build_method(depends_on=["setup_create_farms", "setup_cell_area"])
     def setup_farmer_characteristics(
         self,
         risk_aversion_mean,

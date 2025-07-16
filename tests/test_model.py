@@ -1,14 +1,17 @@
 import json
 import os
+import shutil
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+import networkx as nx
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
+from geb.build.methods import build_method
 from geb.cli import (
     alter_fn,
     build_fn,
@@ -58,7 +61,7 @@ def test_init():
             "config": "model.yml",
             "build_config": "build.yml",
             "update_config": "update.yml",
-            "working_directory": working_directory,
+            "working_directory": ".",
             "from_example": "geul",
             "basin_id": "23011134",
         }
@@ -83,6 +86,45 @@ def test_init():
 def test_build():
     with WorkingDirectory(working_directory):
         build_fn(**DEFAULT_BUILD_ARGS)
+
+
+@pytest.mark.skipif(
+    IN_GITHUB_ACTIONS or os.getenv("GEB_TEST_ALL", "no") != "yes",
+    reason="Too heavy for GitHub Actions and needs GEB_TEST_ALL=yes.",
+)
+def test_build_dependencies():
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_BUILD_ARGS.copy()
+        build_config = parse_config(args["build_config"])
+        build_config = {"setup_region": build_config["setup_region"]}
+        args["build_config"] = build_config
+        build_fn(**args)
+
+        shutil.copy(Path("input") / "files.json", Path("input") / "files.json.bak")
+
+    for method in build_method.methods:
+        # Skip the setup_region method as this is a special case that is handled separately.
+        if method == "setup_region":
+            continue
+
+        # get all nodes which this node depends on
+        dependencies = build_method.get_dependencies(method)
+        with WorkingDirectory(working_directory):
+            shutil.copy(Path("input") / "files.json.bak", Path("input") / "files.json")
+            args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
+            build_config_original = parse_config(args["build_config"])
+
+            if method not in build_config_original:
+                continue
+
+            build_config = {}
+            for dependency in dependencies:
+                build_config[dependency] = build_config_original[dependency]
+
+            build_config[method] = build_config_original[method]
+
+            args["build_config"] = build_config
+            update_fn(**args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

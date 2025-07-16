@@ -52,31 +52,26 @@ def get_pressure_correction_factor(DEM, g, Mo, lapse_rate):
 
 
 def reproject_and_apply_lapse_rate_pressure(
-    pressure,
-    elevation_forcing,
-    elevation_target,
-    g=9.80665,
-    Mo=0.0289644,
-    lapse_rate=-0.0065,
+    pressure: xr.DataArray,
+    elevation_forcing: xr.DataArray,
+    elevation_target: xr.DataArray,
+    g: float = 9.80665,
+    Mo: float = 0.0289644,
+    lapse_rate: float = -0.0065,
 ) -> xr.DataArray:
     """Pressure correction based on elevation lapse_rate.
 
-    Parameters
-    ----------
-    dem_model : xarray.DataArray
-        DataArray with high res lat/lon axis and elevation data
-    g : float, default 9.80665
-        gravitational constant [m s-2]
-
-    Mo : float, default 0.0289644
-        molecular weight of gas [kg / mol]
-    lapse_rate : float, deafult -0.0065
-        lapse rate of temperature [C m-1]
+    Args:
+        pressure: Pressure data to reproject and apply lapse rate to [Pa].
+        elevation_forcing: Elevation data for the forcing grid [m].
+        elevation_target: Elevation data for the target grid [m].
+        g: gravitational constant [m s-2]
+        Mo: molecular weight of gas [kg / mol]
+        lapse_rate: lapse rate of temperature [C m-1]
 
     Returns:
-    -------
-    press_fact : xarray.DataArray
-        pressure correction factor
+        press_fact : xarray.DataArray
+            pressure correction factor
     """
     assert (pressure.x.values == elevation_forcing.x.values).all()
     assert (pressure.y.values == elevation_forcing.y.values).all
@@ -1108,7 +1103,6 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    @build_method
     def setup_forcing_era5(self):
         target = self.grid["mask"]
         target.raster.set_crs(4326)
@@ -1223,20 +1217,16 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
-    @build_method
-    def setup_forcing_ISIMIP(self, resolution_arcsec: int, forcing: str) -> None:
+    def setup_forcing_ISIMIP(self, resolution_arcsec: int, model: str) -> None:
         """Sets up the forcing data for GEB using ISIMIP data.
 
-        Parameters
-        ----------
-        resolution_arcsec : int
-            The resolution of the data in arcseconds. Supported values are 30 and 1800.
-        forcing : str
-            The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
-            and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
+        Args:
+            resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
+            model: The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
+                and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
         """
         if resolution_arcsec == 30:
-            assert forcing == "chelsa-w5e5", (
+            assert model == "chelsa-w5e5", (
                 "Only chelsa-w5e5 is supported for 30 arcsec resolution"
             )
             # download source data from ISIMIP
@@ -1263,25 +1253,25 @@ class Forcing:
                 "ps",
                 "sfcwind",
             ]
-            self.setup_1800arcsec_variables_isimip(forcing, variables)
+            self.setup_1800arcsec_variables_isimip(model, variables)
         else:
             raise ValueError(
                 "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
             )
 
-    @build_method
+    @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forcing(
         self,
-        resolution_arcsec: int,
-        forcing_name: str | None = None,
-        data_source: str = "ERA5",
+        resolution_arcsec: int | None = None,
+        forcing: str = "ERA5",
+        model: str | None = None,
     ):
         """Sets up the forcing data for GEB.
 
         Args:
-            resolution_arcsec : The resolution of the data in arcseconds. Supported values are 30 and 1800.
-            data_source : The data source to use for the forcing data. Can be ERA5 or ISIMIP. Default is 'era5'.
-            forcing_name : The name of the forcing data to use within the dataset. Only required for ISIMIP data.
+            resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
+            forcing: The data source to use for the forcing data. Can be ERA5 or ISIMIP. Default is 'era5'.
+            model: The name of the forcing data to use within the dataset. Only required for ISIMIP data.
                 For ISIMIP, this can be 'chelsa-w5e5' for 30 arcsec resolution
                 or 'ipsl-cm6a-lr', 'gfdl-esm4', 'mpi-esm1-2-hr', 'mri-esm2-0', or 'mri-esm2-0' for 1800 arcsec resolution.
 
@@ -1298,14 +1288,16 @@ class Forcing:
 
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
         """
-        if data_source == "ISIMIP":
-            self.setup_forcing_ISIMIP(resolution_arcsec, forcing_name)
-        elif data_source == "ERA5":
+        if forcing == "ISIMIP":
+            self.setup_forcing_ISIMIP(resolution_arcsec, model)
+        elif forcing == "ERA5":
             self.setup_forcing_era5()
-        elif data_source == "CMIP":
+        elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
-            raise ValueError(f"Unknown data source: {data_source}")
+            raise ValueError(
+                f"Unknown data source: {forcing}, supported are 'ISIMIP' and 'ERA5'"
+            )
 
     def construct_ISIMIP_variable(
         self, variable_name: str, forcing: str | None, ssp: str
@@ -1440,23 +1432,18 @@ class Forcing:
     def setup_30arcsec_variables_isimip(self, variables: List[str]):
         """Sets up the high-resolution climate variables for GEB.
 
-        Parameters
-        ----------
-        variables : list of str
-            The list of climate variables to set up.
-        folder: str
-            The folder to save the forcing data in.
+        Args:
+            variables: The list of climate variables to set up.
 
         Notes:
-        -----
-        This method sets up the high-resolution climate variables for GEB. It downloads the specified
-        climate variables from the ISIMIP dataset for the specified time period. The data is downloaded using the
-        `download_isimip` method.
+            This method sets up the high-resolution climate variables for GEB. It downloads the specified
+            climate variables from the ISIMIP dataset for the specified time period. The data is downloaded using the
+            `download_isimip` method.
 
-        The method renames the longitude and latitude dimensions of the downloaded data to 'x' and 'y', respectively. It
-        then clips the data to the bounding box of the model grid using the `clip_bbox` method of the `raster` object.
+            The method renames the longitude and latitude dimensions of the downloaded data to 'x' and 'y', respectively. It
+            then clips the data to the bounding box of the model grid using the `clip_bbox` method of the `raster` object.
 
-        The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
+            The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
         def download_variable(variable):
@@ -1709,13 +1696,6 @@ class Forcing:
     def setup_pressure_isimip_30arcsec(self):
         """Sets up the surface pressure data for GEB.
 
-        Parameters
-        ----------
-        folder: str
-            The folder to save the forcing data in.
-
-        Notes:
-        -----
         This method sets up the surface pressure data for GEB. It then downloads
         the orography data and surface pressure data from the ISIMIP dataset for the specified time period using the
         `download_isimip` method. The data is downloaded at a 30 arcsec resolution.
@@ -1840,7 +1820,7 @@ class Forcing:
         wind_output_clipped = self.snap_to_grid(wind_output_clipped, self.grid)
         self.set_sfcwind(wind_output_clipped)
 
-    @build_method
+    @build_method(depends_on=["setup_forcing"])
     def setup_SPEI(
         self,
         calibration_period_start: date = date(1981, 1, 1),
@@ -2071,7 +2051,7 @@ class Forcing:
             {"x": -1, "y": -1}
         )
 
-    @build_method
+    @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_CO2_concentration(self) -> None:
         """Aquires the CO2 concentration data for the specified SSP in ppm."""
         da: xr.DataArray = self.construct_ISIMIP_variable(

@@ -20,7 +20,7 @@ class LandSurface:
     def __init__(self):
         pass
 
-    @build_method
+    @build_method(depends_on=["setup_regions_and_land_use"])
     def setup_cell_area(self) -> None:
         """Sets up the cell area map for the model.
 
@@ -79,7 +79,7 @@ class LandSurface:
             name="cell_area",
         )
 
-    @build_method
+    @build_method(depends_on=["setup_hydrography"])
     def setup_elevation(
         self,
         DEMs=[
@@ -157,7 +157,7 @@ class LandSurface:
 
         self.set_dict(DEMs, name="hydrodynamics/DEM_config")
 
-    @build_method
+    @build_method(depends_on=[])
     def setup_regions_and_land_use(
         self,
         region_database="GADM_level1",
@@ -316,7 +316,7 @@ class LandSurface:
         cultivated_land = self.snap_to_grid(cultivated_land, self.subgrid)
         self.set_subgrid(cultivated_land, name="landsurface/cultivated_land")
 
-    @build_method
+    @build_method(depends_on=[])
     def setup_land_use_parameters(
         self,
         land_cover="esa_worldcover_2021_v200",
@@ -443,7 +443,7 @@ class LandSurface:
                 name=f"landcover/{land_use_type}/interception_capacity",
             )
 
-    @build_method
+    @build_method(depends_on=[])
     def setup_soil_parameters(self) -> None:
         """Sets up the soil parameters for the model.
 
