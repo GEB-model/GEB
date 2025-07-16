@@ -35,7 +35,7 @@ For example, to export the total bare soil evaporation, gridded daily discharge,
             actual_bare_soil_evaporation_weighted_sum:
                 varname: .actual_bare_soil_evaporation
                 type: HRU
-                function: weightednansum
+                function: weightednanmean
         hydrology.routing:
             discharge_daily:
                 varname: grid.var.discharge_m3_s
