@@ -14,7 +14,12 @@ class Evaluate(Hydrology):
         self.model = model
 
     def run(
-        self, methods: list | None = None, spinup_name: str = "", run_name: str = ""
+        self,
+        methods: list | None = None,
+        spinup_name: str = "spinup",
+        run_name: str = "default",
+        include_spinup: bool = False,
+        correct_Q_obs: bool = False,
     ) -> None:
         """Run the evaluation methods.
 
@@ -55,7 +60,10 @@ class Evaluate(Hydrology):
                     f"Method {method} is not implemented in Evaluate class."
                 )
             attr(
-                spinup_name=spinup_name, run_name=run_name
+                spinup_name=spinup_name,
+                run_name=run_name,
+                include_spinup=include_spinup,
+                correct_Q_obs=correct_Q_obs,
             )  # this calls the method and executes them
 
     @property

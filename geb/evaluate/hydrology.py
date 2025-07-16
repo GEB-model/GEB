@@ -13,7 +13,7 @@ import xarray as xr
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
 
-from geb.workflows.io import to_zarr
+from geb.workflows.io import open_zarr, to_zarr
 
 
 class Hydrology:
@@ -22,11 +22,14 @@ class Hydrology:
     def __init__(self):
         pass
 
-    def plot_discharge(
-        self, spinup_name: str = "spinup", run_name: str = "default"
-    ) -> None:
+    def plot_discharge(self, run_name: str = "default", *args, **kwargs) -> None:
+        """Method to plot the mean discharge from the GEB model.
+
+        Args:
+            run_name: Defaults to "default".
+        """
         # load the discharge simulation
-        GEB_discharge = xr.open_dataarray(
+        GEB_discharge = open_zarr(
             self.model.output_folder
             / "report"
             / run_name
@@ -57,15 +60,19 @@ class Hydrology:
 
     def evaluate_discharge(
         self,
-        correct_Q_obs=False,
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
+        correct_Q_obs=False,
     ) -> None:
         """Method to evaluate the discharge grid from GEB against observations from the Q_obs database.
 
-        Correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the diff in upstream area
-        between the Q_obs station and the discharge from GEB.
+        Args:
+            spinup_name: Name of the spinup run to include in the evaluation.
+            run_name: Name of the run to evaluate.
+            include_spinup: Whether to include the spinup run in the evaluation.
+            correct_Q_obs: Whether to correct the Q_obs discharge timeseries for the difference in upstream area
+                between the Q_obs station and the discharge from GEB.
         """
         # check if setup_discharge_observations method has been executed
         if not self.model.files["geoms"].get("discharge/discharge_snapped_locations"):
@@ -85,7 +92,7 @@ class Hydrology:
         eval_plot_folder.mkdir(parents=True, exist_ok=True)
         eval_result_folder.mkdir(parents=True, exist_ok=True)
 
-        GEB_discharge = xr.open_dataarray(
+        GEB_discharge = open_zarr(
             self.model.output_folder
             / "report"
             / run_name
@@ -101,7 +108,7 @@ class Hydrology:
 
         if include_spinup:
             # load the discharge spinup simulation
-            GEB_discharge_spinup = xr.open_dataarray(
+            GEB_discharge_spinup = open_zarr(
                 self.model.output_folder
                 / "report"
                 / spinup_name
