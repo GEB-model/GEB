@@ -18,6 +18,7 @@ from geb.agents.crop_farmers import (
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
+from geb.build.methods import build_method
 
 from .. import GEBModel
 from ..workflows.general import repeat_grid
@@ -452,6 +453,7 @@ class fairSTREAMModel(GEBModel):
         farm_size_m2 = farm_size_n_cells * mean_cell_size
         return farm_size_m2
 
+    @build_method(depends_on=["setup_create_farms", "setup_regions_and_land_use"])
     def setup_farmer_crop_calendar(
         self,
         seasons,
@@ -844,6 +846,7 @@ class fairSTREAMModel(GEBModel):
             name="agents/farmers/crop_calendar_rotation_years",
         )
 
+    @build_method(depends_on=["setup_create_farms", "setup_cell_area"])
     def setup_farmer_characteristics(
         self,
         risk_aversion_mean,

@@ -19,6 +19,7 @@ from geb.agents.crop_farmers import (
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
+from geb.build.methods import build_method
 from geb.workflows.io import fetch_and_save, get_window
 
 from ..workflows.conversions import (
@@ -38,6 +39,14 @@ class Agents:
     def __init__(self):
         pass
 
+    @build_method(
+        depends_on=[
+            "set_ssp",
+            "set_time_range",
+            "setup_regions_and_land_use",
+            "setup_household_characteristics",
+        ]
+    )
     def setup_water_demand(self):
         """Sets up the water demand data for GEB.
 
@@ -222,6 +231,7 @@ class Agents:
             "ssp2",
         )
 
+    @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
     def setup_economic_data(self):
         """Sets up the economic data for GEB.
 
@@ -389,9 +399,11 @@ class Agents:
         self.set_dict(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_dict(lcu_dict, name="socioeconomics/LCU_per_USD")
 
+    @build_method
     def setup_irrigation_sources(self, irrigation_sources):
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
 
+    @build_method(depends_on=["set_time_range", "setup_economic_data"])
     def setup_irrigation_prices_by_reference_year(
         self,
         operation_surface: float,
@@ -478,6 +490,7 @@ class Agents:
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
+    @build_method(depends_on=["setup_economic_data"])
     def setup_well_prices_by_reference_year_global(
         self,
         WHY_10: float,
@@ -803,6 +816,7 @@ class Agents:
         farmers = pd.read_csv(path, index_col=0)
         self.setup_farmers(farmers)
 
+    @build_method(depends_on=["setup_regions_and_land_use", "setup_cell_area"])
     def setup_create_farms(
         self,
         region_id_column="region_id",
@@ -1174,6 +1188,7 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.setup_farmers(farmers)
 
+    @build_method(depends_on=["setup_regions_and_land_use"])
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
@@ -1345,6 +1360,7 @@ class Agents:
                 name=f"agents/households/{household_attribute}",
             )
 
+    @build_method(depends_on=["setup_create_farms"])
     def setup_farmer_household_characteristics(self, maximum_age=85):
         n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
@@ -1532,19 +1548,19 @@ class Agents:
             name="agents/farmers/education_level",
         )
 
-    def create_preferences(self):
+    def create_preferences(self) -> pd.DataFrame:
         # Risk aversion
-        preferences_country_level = self.data_catalog.get_dataframe(
+        preferences_country_level: pd.DataFrame = self.data_catalog.get_dataframe(
             "preferences_country",
             variables=["country", "isocode", "patience", "risktaking"],
         ).dropna()
 
-        preferences_individual_level = self.data_catalog.get_dataframe(
+        preferences_individual_level: pd.DataFrame = self.data_catalog.get_dataframe(
             "preferences_individual",
             variables=["country", "isocode", "patience", "risktaking"],
         ).dropna()
 
-        def scale_to_range(x, new_min, new_max):
+        def scale_to_range(x: pd.Series, new_min: float, new_max: float):
             x_min = x.min()
             x_max = x.max()
             # Avoid division by zero
@@ -1596,7 +1612,7 @@ class Agents:
         )
 
         # List of variables for which to calculate the standard deviation
-        variables = ["discount", "risktaking_gains", "risktaking_losses"]
+        variables: list[str] = ["discount", "risktaking_gains", "risktaking_losses"]
 
         # Convert the variables to numeric, coercing errors to NaN to handle non-numeric entries
         for var in variables:
@@ -1621,6 +1637,9 @@ class Agents:
 
         return preferences_country_level
 
+    @build_method(
+        depends_on=["setup_create_farms", "setup_farmer_household_characteristics"]
+    )
     def setup_farmer_characteristics(
         self,
         interest_rate=0.05,
@@ -1939,6 +1958,7 @@ class Agents:
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
+    @build_method(depends_on=[])
     def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
         """Get assets from OpenStreetMap (OSM) data.
 

@@ -19,6 +19,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+from typing import Literal
+
 import numpy as np
 import numpy.typing as npt
 import zarr
@@ -28,14 +30,15 @@ from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
 # All natural areas MUST be before the sealed and water areas
-FOREST = 0
-GRASSLAND_LIKE = 1
-PADDY_IRRIGATED = 2
-NON_PADDY_IRRIGATED = 3
-SEALED = 4
-OPEN_WATER = 5
+FOREST: Literal[0] = 0
+GRASSLAND_LIKE: Literal[1] = 1
+PADDY_IRRIGATED: Literal[2] = 2
+NON_PADDY_IRRIGATED: Literal[3] = 3
+SEALED: Literal[4] = 4
+OPEN_WATER: Literal[5] = 5
 
-ALL_LAND_COVER_TYPES = [
+
+ALL_LAND_COVER_TYPES: list[int] = [
     FOREST,
     GRASSLAND_LIKE,
     PADDY_IRRIGATED,
@@ -159,7 +162,7 @@ class LandCover(Module):
             ]
         )
 
-        self.HRU.var.cropKC, self.HRU.var.root_depth = get_crop_kc_and_root_depths(
+        crop_factor, self.HRU.var.root_depth = get_crop_kc_and_root_depths(
             self.HRU.var.crop_map,
             self.HRU.var.crop_age_days_map,
             self.HRU.var.crop_harvest_age_days,
@@ -181,7 +184,7 @@ class LandCover(Module):
         ] = 0.05  # fallow land. The rooting depth
 
         forest_cropCoefficientNC = self.hydrology.to_HRU(
-            data=self.hydrology.grid.compress(
+            data=self.grid.compress(
                 self.grid.var.forest_kc_per_10_days[
                     (self.model.current_day_of_year - 1) // 10
                 ]
@@ -189,21 +192,22 @@ class LandCover(Module):
             fn=None,
         )
 
-        self.HRU.var.cropKC[self.HRU.var.land_use_type == FOREST] = (
-            forest_cropCoefficientNC[self.HRU.var.land_use_type == FOREST]
-        )  # forest
+        crop_factor[self.HRU.var.land_use_type == FOREST] = forest_cropCoefficientNC[
+            self.HRU.var.land_use_type == FOREST
+        ]  # forest
         assert (
             self.HRU.var.crop_map[self.HRU.var.land_use_type == GRASSLAND_LIKE] == -1
         ).all()
 
-        self.HRU.var.cropKC[self.HRU.var.land_use_type == GRASSLAND_LIKE] = 0.2
+        crop_factor[self.HRU.var.land_use_type == GRASSLAND_LIKE] = 0.2
 
         (
             potential_transpiration,
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
             snow_melt,
-        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef, snow_melt)
+            snow_evaporation,
+        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef, snow_melt, crop_factor)
 
         timer.new_split("PET")
 
@@ -215,6 +219,8 @@ class LandCover(Module):
             rain=rain,
             snow_melt=snow_melt,
         )  # first thing that evaporates is the intercepted water.
+
+        del potential_transpiration
 
         timer.new_split("Interception")
 
@@ -229,14 +235,14 @@ class LandCover(Module):
         timer.new_split("Demand")
 
         # Soil for forest, grassland, and irrigated land
-        capillar = self.hydrology.to_HRU(data=self.hydrology.grid.var.capillar, fn=None)
+        capillar = self.hydrology.to_HRU(data=self.grid.var.capillar, fn=None)
 
         (
             interflow,
             runoff_soil,
             groundwater_recharge,
             open_water_evaporation,
-            actual_total_transpiration,
+            actual_transpiration,
             actual_bare_soil_evaporation,
         ) = self.hydrology.soil.step(
             capillar,
@@ -245,6 +251,7 @@ class LandCover(Module):
             potential_evapotranspiration,
             natural_available_water_infiltration=self.HRU.var.natural_available_water_infiltration,
             actual_irrigation_consumption=self.HRU.var.actual_irrigation_consumption,
+            crop_factor=crop_factor,
         )
         assert not (runoff_soil < 0).any()
         timer.new_split("Soil")
@@ -259,10 +266,10 @@ class LandCover(Module):
 
         self.HRU.var.actual_evapotranspiration = (
             actual_bare_soil_evaporation
-            + actual_total_transpiration
+            + actual_transpiration
             + open_water_evaporation
             + interception_evaporation
-            + self.HRU.var.snowEvap  # ice should be included in the future
+            + snow_evaporation  # ice should be included in the future
             + irrigation_loss_to_evaporation_m
         )
 
@@ -276,6 +283,7 @@ class LandCover(Module):
             self.HRU.var.crop_map != -1
         ] += potential_evapotranspiration[self.HRU.var.crop_map != -1]
 
+        assert not np.isnan(self.HRU.var.actual_evapotranspiration).any()
         assert not (runoff < 0).any()
         assert not np.isnan(interflow).any()
         assert not np.isnan(groundwater_recharge).any()
@@ -309,7 +317,7 @@ class LandCover(Module):
                     runoff,
                     interflow,
                     groundwater_recharge,
-                    actual_total_transpiration,
+                    actual_transpiration,
                     actual_bare_soil_evaporation,
                     open_water_evaporation,
                 ],
@@ -349,11 +357,11 @@ class LandCover(Module):
                     runoff,
                     interflow,
                     groundwater_recharge,
-                    actual_total_transpiration,
+                    actual_transpiration,
                     actual_bare_soil_evaporation,
                     open_water_evaporation,
                     interception_evaporation,
-                    self.HRU.var.snowEvap,
+                    snow_evaporation,
                 ],
                 prestorages=[totalstorage_landcover_pre],
                 poststorages=[totalstorage_landcover],

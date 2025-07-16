@@ -1,6 +1,8 @@
 import geopandas as gpd
+import hydromt.data_catalog
 import networkx as nx
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import pyflwdir
 import xarray as xr
@@ -10,6 +12,7 @@ from rasterio.features import rasterize
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString
 
+from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
 
 
@@ -49,10 +52,20 @@ def get_subbasins_geometry(data_catalog, subbasin_ids):
     return subbasins.set_index("COMID")
 
 
-def get_rivers(data_catalog, subbasin_ids):
-    rivers = gpd.read_parquet(
+def get_rivers(
+    data_catalog: hydromt.data_catalog.DataCatalog, subbasin_ids: list[int]
+) -> gpd.GeoDataFrame:
+    rivers: gpd.GeoDataFrame = gpd.read_parquet(
         data_catalog.get_source("MERIT_Basins_riv").path,
-        columns=["COMID", "lengthkm", "uparea", "maxup", "NextDownID", "geometry"],
+        columns=[
+            "COMID",
+            "lengthkm",
+            "slope",
+            "uparea",
+            "maxup",
+            "NextDownID",
+            "geometry",
+        ],
         filters=[
             ("COMID", "in", subbasin_ids),
         ],
@@ -62,7 +75,7 @@ def get_rivers(data_catalog, subbasin_ids):
         }
     )
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
-    rivers = rivers.drop(columns=["uparea"])
+    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
     # reverse the river lines to have the downstream direction
@@ -159,6 +172,7 @@ class Hydrography:
     def __init__(self):
         pass
 
+    @build_method(depends_on=["setup_hydrography", "setup_cell_area"])
     def setup_mannings(self) -> None:
         """Sets up the Manning's coefficient for the model.
 
@@ -214,6 +228,7 @@ class Hydrography:
 
         self.set_geoms(subbasins, name="routing/subbasins")
 
+    @build_method
     def setup_hydrography(self):
         original_d8_elevation = self.other["drainage/original_d8_elevation"]
         original_d8_ldd = self.other["drainage/original_d8_flow_directions"]
@@ -292,37 +307,41 @@ class Hydrography:
         )
 
         # flow direction
-        ldd = self.full_like(
+        ldd: npt.NDArray[np.uint8] = self.full_like(
             outflow_elevation, fill_value=255, nodata=255, dtype=np.uint8
         )
         ldd.data = flow_raster.to_array(ftype="ldd")
         self.set_grid(ldd, name="routing/ldd")
 
         # upstream area
-        upstream_area = self.full_like(
+        upstream_area: xr.DataArray = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        upstream_area_data = flow_raster.upstream_area(unit="m2").astype(np.float32)
+        upstream_area_data: npt.NDArray[np.float32] = flow_raster.upstream_area(
+            unit="m2"
+        ).astype(np.float32)
         upstream_area_data[upstream_area_data == -9999.0] = np.nan
         upstream_area.data = upstream_area_data
         self.set_grid(upstream_area, name="routing/upstream_area")
 
         # river length
-        river_length = self.full_like(
+        river_length: xr.DataArray = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        river_length_data = flow_raster_original.subgrid_rivlen(
-            self.grid["idxs_outflow"].values, unit="m", direction="down"
+        river_length_data: npt.NDArray[np.float32] = (
+            flow_raster_original.subgrid_rivlen(
+                self.grid["idxs_outflow"].values, unit="m", direction="down"
+            )
         )
         river_length_data[river_length_data == -9999.0] = np.nan
         river_length.data = river_length_data
         self.set_grid(river_length, name="routing/river_length")
 
         # river slope
-        river_slope = self.full_like(
+        river_slope: xr.DataArray = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        river_slope_data = flow_raster_original.subgrid_rivslp(
+        river_slope_data: npt.NDArray[np.float32] = flow_raster_original.subgrid_rivslp(
             self.grid["idxs_outflow"].values, original_d8_elevation
         )
         river_slope_data[river_slope_data == -9999.0] = np.nan
@@ -333,30 +352,32 @@ class Hydrography:
         )
 
         # river width
-        subbasin_ids = self.geoms["routing/subbasins"].index
+        subbasin_ids: list[int] = self.geoms["routing/subbasins"].index.tolist()
 
         self.logger.info("Retrieving river data")
-        rivers = get_rivers(self.data_catalog, subbasin_ids)
+        rivers: gpd.GeoDataFrame = get_rivers(self.data_catalog, subbasin_ids)
 
         self.logger.info("Processing river data")
         # remove all rivers that are both shorter than 1 km and have no upstream river
-        rivers = rivers[~((rivers["lengthkm"] < 1) & (rivers["maxup"] == 0))]
+        rivers: gpd.GeoDataFrame = rivers[
+            ~((rivers["lengthkm"] < 1) & (rivers["maxup"] == 0))
+        ]
 
-        rivers = rivers.join(
+        rivers: gpd.GeoDataFrame = rivers.join(
             self.geoms["routing/subbasins"][
                 ["is_downstream_outflow_subbasin", "associated_upstream_basins"]
             ],
             how="left",
         )
 
-        river_raster_HD = create_river_raster_from_river_lines(
+        river_raster_HD: npt.NDArray[np.int32] = create_river_raster_from_river_lines(
             rivers, original_d8_elevation, original_upstream_area
         )
-        river_raster_LR = river_raster_HD.ravel()[
+        river_raster_LR: npt.NDArray[np.int32] = river_raster_HD.ravel()[
             self.grid["idxs_outflow"].values.ravel()
         ].reshape(self.grid["idxs_outflow"].shape)
 
-        missing_rivers = set(rivers.index) - set(
+        missing_rivers: set[int] = set(rivers.index) - set(
             np.unique(river_raster_LR[river_raster_LR != -1]).tolist()
         )
 
@@ -391,8 +412,8 @@ class Hydrography:
                 f"River segment {COMID} has inconsistent raster values"
             )
 
-            ys = ys[up_to_downstream_ids]
-            xs = xs[up_to_downstream_ids]
+            ys: npt.NDArray[np.in64] = ys[up_to_downstream_ids]
+            xs: npt.NDArray[np.in64] = xs[up_to_downstream_ids]
             assert ys.size > 0, "No xy coordinates found for river segment"
             rivers.at[COMID, "hydrography_xy"] = list(zip(xs, ys, strict=True))
             rivers.at[COMID, "hydrography_upstream_area_m2"] = (
@@ -406,7 +427,7 @@ class Hydrography:
                     "rasterization of the river lines"
                 )
 
-        COMID_IDs_raster = self.full_like(
+        COMID_IDs_raster: xr.DataArray = self.full_like(
             outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
         )
         COMID_IDs_raster.data = river_raster_LR
@@ -416,33 +437,30 @@ class Hydrography:
             self.data_catalog, rivers
         )
 
-        SWORD_river_widths = get_SWORD_river_widths(self.data_catalog, SWORD_reach_IDs)
-        MINIMUM_RIVER_WIDTH = 3.0
+        SWORD_river_widths: npt.NDArray[np.float64] = get_SWORD_river_widths(
+            self.data_catalog, SWORD_reach_IDs
+        )
+
         rivers["width"] = np.nansum(
             SWORD_river_widths * SWORD_reach_lengths, axis=0
         ) / np.nansum(SWORD_reach_lengths, axis=0)
         # ensure that all rivers with a SWORD ID have a width
         assert (~np.isnan(rivers["width"][(SWORD_reach_IDs != -1).any(axis=0)])).all()
 
-        # set initial width guess where width is not available from SWORD
-        rivers.loc[rivers["width"].isnull(), "width"] = rivers[
-            rivers["width"].isnull()
-        ]["uparea_m2"] / (10 * 1e6)
-        rivers["width"] = rivers["width"].clip(lower=float(MINIMUM_RIVER_WIDTH))
-
         self.set_geoms(rivers, name="routing/rivers")
 
-        river_with_mapper = rivers["width"].to_dict()
-        river_width_data = np.vectorize(
-            lambda ID: river_with_mapper.get(ID, float(MINIMUM_RIVER_WIDTH))
+        river_with_mapper: dict[int, float] = rivers["width"].to_dict()
+        river_width_data: npt.NDArray[np.float32] = np.vectorize(
+            lambda ID: river_with_mapper.get(ID, np.nan)
         )(COMID_IDs_raster.values).astype(np.float32)
 
-        river_width = self.full_like(
+        river_width: xr.DataArray = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
         river_width.data = river_width_data
         self.set_grid(river_width, name="routing/river_width")
 
+    @build_method
     def setup_waterbodies(
         self,
         command_areas=None,

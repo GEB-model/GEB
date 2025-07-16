@@ -13,7 +13,7 @@ import xarray as xr
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
 
-from geb.workflows.io import to_zarr
+from geb.workflows.io import open_zarr, to_zarr
 
 
 class Hydrology:
@@ -22,12 +22,19 @@ class Hydrology:
     def __init__(self):
         pass
 
-    def plot_discharge(self):
+    def plot_discharge(self, run_name: str = "default", *args, **kwargs) -> None:
+        """Method to plot the mean discharge from the GEB model.
+
+        Args:
+            run_name: Defaults to "default".
+            *args: ignored.
+            **kwargs: ignored.
+        """
         # load the discharge simulation
-        GEB_discharge = xr.open_dataarray(
+        GEB_discharge = open_zarr(
             self.model.output_folder
             / "report"
-            / "default"
+            / run_name
             / "hydrology.routing"
             / "discharge_daily.zarr"
         )
@@ -53,12 +60,29 @@ class Hydrology:
             self.output_folder_evaluate / "mean_discharge_m3_per_s.png", dpi=300
         )
 
-    def evaluate_discharge(self, correct_Q_obs=False):
+    def evaluate_discharge(
+        self,
+        spinup_name: str = "spinup",
+        run_name: str = "default",
+        include_spinup: bool = False,
+        correct_Q_obs=False,
+    ) -> None:
         """Method to evaluate the discharge grid from GEB against observations from the Q_obs database.
 
-        Correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the diff in upstream area
-        between the Q_obs station and the discharge from GEB.
+        Args:
+            spinup_name: Name of the spinup run to include in the evaluation.
+            run_name: Name of the run to evaluate.
+            include_spinup: Whether to include the spinup run in the evaluation.
+            correct_Q_obs: Whether to correct the Q_obs discharge timeseries for the difference in upstream area
+                between the Q_obs station and the discharge from GEB.
         """
+        # check if setup_discharge_observations method has been executed
+        if not self.model.files["geoms"].get("discharge/discharge_snapped_locations"):
+            print(
+                "Discharge observations not set up, probably no stations present in the basin. Skipping discharge evaluation."
+            )
+            return
+
         #  create folders
         eval_plot_folder: Path = (
             Path(self.output_folder_evaluate) / "discharge" / "plots"
@@ -70,15 +94,31 @@ class Hydrology:
         eval_plot_folder.mkdir(parents=True, exist_ok=True)
         eval_result_folder.mkdir(parents=True, exist_ok=True)
 
-        # load the discharge simulation
-        GEB_discharge = xr.open_dataarray(
+        GEB_discharge = open_zarr(
             self.model.output_folder
             / "report"
-            / "spinup"
+            / run_name
             / "hydrology.routing"
             / "discharge_daily.zarr"
         )
 
+        # check if run file exists, if not, raise an error
+        if not (self.model.output_folder / "report" / run_name).exists():
+            raise FileNotFoundError(
+                f"Run folder '{run_name}' does not exist in the report directory. Did you run the model?"
+            )
+
+        if include_spinup:
+            # load the discharge spinup simulation
+            GEB_discharge_spinup = open_zarr(
+                self.model.output_folder
+                / "report"
+                / spinup_name
+                / "hydrology.routing"
+                / "discharge_daily.zarr"
+            )
+
+            GEB_discharge = xr.concat([GEB_discharge_spinup, GEB_discharge], dim="time")
         # load input data files
         snapped_locations = gpd.read_parquet(
             self.model.files["geoms"]["discharge/discharge_snapped_locations"]
@@ -143,129 +183,120 @@ class Hydrology:
 
             validation_df = create_validation_df()
 
-            # skip station if validation df has less than 1 year of data (365 rows)
-            if validation_df.shape[0] < 365:
-                print(
-                    f"Validation data of {Q_obs_station_name} is less than 1 year of data. Skipping this station."
+            def calculate_validation_metrics():
+                """Calculate the validation metrics for the current station."""
+                # calculate kupta coefficient
+                y_true = validation_df["Q_obs"].values
+                y_pred = validation_df["Q_sim"].values
+                evaluator = RegressionMetric(y_true, y_pred)  # from permetrics package
+
+                KGE = (
+                    evaluator.kling_gupta_efficiency()
+                )  # https://hess.copernicus.org/articles/23/4323/2019/
+                NSE = evaluator.nash_sutcliffe_efficiency()  # https://hess.copernicus.org/articles/27/1827/2023/hess-27-1827-2023.pdf
+                R = evaluator.pearson_correlation_coefficient()
+
+                return KGE, NSE, R
+
+            KGE, NSE, R = calculate_validation_metrics()
+
+            def plot_validation_graphs(ID):
+                """Plot the validation results for the current station."""
+                # scatter plot
+                fig, ax = plt.subplots()
+                ax.scatter(validation_df["Q_obs"], validation_df["Q_sim"])
+                ax.set_xlabel(
+                    "Q_obs Discharge observations [m3/s] (%s)" % Q_obs_station_name
                 )
-            else:
-
-                def calculate_validation_metrics():
-                    """Calculate the validation metrics for the current station."""
-                    # calculate kupta coefficient
-                    y_true = validation_df["Q_obs"].values
-                    y_pred = validation_df["Q_sim"].values
-                    evaluator = RegressionMetric(
-                        y_true, y_pred
-                    )  # from permetrics package
-
-                    KGE = (
-                        evaluator.kling_gupta_efficiency()
-                    )  # https://hess.copernicus.org/articles/23/4323/2019/
-                    NSE = evaluator.nash_sutcliffe_efficiency()  # https://hess.copernicus.org/articles/27/1827/2023/hess-27-1827-2023.pdf
-                    R = evaluator.pearson_correlation_coefficient()
-
-                    return KGE, NSE, R
-
-                KGE, NSE, R = calculate_validation_metrics()
-
-                def plot_validation_graphs(ID):
-                    """Plot the validation results for the current station."""
-                    # scatter plot
-                    fig, ax = plt.subplots()
-                    ax.scatter(validation_df["Q_obs"], validation_df["Q_sim"])
-                    ax.set_xlabel(
-                        "Q_obs Discharge observations [m3/s] (%s)" % Q_obs_station_name
-                    )
-                    ax.set_ylabel("GEB discharge simulation [m3/s]")
-                    ax.set_title("GEB vs observations (discharge)")
-                    m, b = np.polyfit(validation_df["Q_obs"], validation_df["Q_sim"], 1)
-                    ax.plot(
-                        validation_df["Q_obs"],
-                        m * validation_df["Q_obs"] + b,
-                        color="red",
-                    )
-                    ax.text(0.02, 0.9, f"$R$ = {R:.2f}", transform=ax.transAxes)
-                    ax.text(0.02, 0.85, f"KGE = {KGE:.2f}", transform=ax.transAxes)
-                    ax.text(0.02, 0.8, f"NSE = {NSE:.2f}", transform=ax.transAxes)
-                    ax.text(
-                        0.02,
-                        0.75,
-                        f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
-                        transform=ax.transAxes,
-                    )
-
-                    plt.savefig(
-                        eval_plot_folder / f"scatter_plot_{ID}.png",
-                        dpi=300,
-                        bbox_inches="tight",
-                    )
-
-                    plt.show()
-                    plt.close()
-
-                    # timeseries plot
-                    fig, ax = plt.subplots(figsize=(7, 4))
-                    ax.plot(
-                        validation_df.index,
-                        validation_df["Q_sim"],
-                        label="GEB simulation",
-                    )
-                    ax.plot(
-                        validation_df.index,
-                        validation_df["Q_obs"],
-                        label="Q_obs observations",
-                    )
-                    ax.set_ylabel("Discharge [m3/s]")
-                    ax.set_xlabel("Time")
-                    ax.legend()
-
-                    ax.text(
-                        0.02, 0.9, f"$R^2$={R:.2f}", transform=ax.transAxes, fontsize=12
-                    )
-                    ax.text(
-                        0.02,
-                        0.85,
-                        f"KGE={KGE:.2f}",
-                        transform=ax.transAxes,
-                        fontsize=12,
-                    )
-                    ax.text(
-                        0.02, 0.8, f"NSE={NSE:.2f}", transform=ax.transAxes, fontsize=12
-                    )
-                    ax.text(
-                        0.02,
-                        0.75,
-                        f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
-                        transform=ax.transAxes,
-                        fontsize=12,
-                    )
-                    plt.title(
-                        f"GEB discharge vs observations for station {Q_obs_station_name}"
-                    )
-                    plt.savefig(
-                        eval_plot_folder / f"timeseries_plot_{ID}.png",
-                        dpi=300,
-                        bbox_inches="tight",
-                    )
-                    plt.show()
-                    plt.close()
-
-                plot_validation_graphs(ID)
-
-                # attach to the evaluation dataframe
-                evaluation_per_station.append(
-                    {
-                        "station_ID": ID,
-                        "station_name": Q_obs_station_name,
-                        "x": Q_obs_station_coords[0],
-                        "y": Q_obs_station_coords[1],
-                        "Q_obs_to_GEB_upstream_area_ratio": Q_obs_to_GEB_upstream_area_ratio,
-                        "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
-                        "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
-                        "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
-                    }
+                ax.set_ylabel("GEB discharge simulation [m3/s]")
+                ax.set_title("GEB vs observations (discharge)")
+                m, b = np.polyfit(validation_df["Q_obs"], validation_df["Q_sim"], 1)
+                ax.plot(
+                    validation_df["Q_obs"],
+                    m * validation_df["Q_obs"] + b,
+                    color="red",
                 )
+                ax.text(0.02, 0.9, f"$R$ = {R:.2f}", transform=ax.transAxes)
+                ax.text(0.02, 0.85, f"KGE = {KGE:.2f}", transform=ax.transAxes)
+                ax.text(0.02, 0.8, f"NSE = {NSE:.2f}", transform=ax.transAxes)
+                ax.text(
+                    0.02,
+                    0.75,
+                    f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
+                    transform=ax.transAxes,
+                )
+
+                plt.savefig(
+                    eval_plot_folder / f"scatter_plot_{ID}.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+
+                plt.show()
+                plt.close()
+
+                # timeseries plot
+                fig, ax = plt.subplots(figsize=(7, 4))
+                ax.plot(
+                    validation_df.index,
+                    validation_df["Q_sim"],
+                    label="GEB simulation",
+                )
+                ax.plot(
+                    validation_df.index,
+                    validation_df["Q_obs"],
+                    label="Q_obs observations",
+                )
+                ax.set_ylabel("Discharge [m3/s]")
+                ax.set_xlabel("Time")
+                ax.legend()
+
+                ax.text(
+                    0.02, 0.9, f"$R^2$={R:.2f}", transform=ax.transAxes, fontsize=12
+                )
+                ax.text(
+                    0.02,
+                    0.85,
+                    f"KGE={KGE:.2f}",
+                    transform=ax.transAxes,
+                    fontsize=12,
+                )
+                ax.text(
+                    0.02, 0.8, f"NSE={NSE:.2f}", transform=ax.transAxes, fontsize=12
+                )
+                ax.text(
+                    0.02,
+                    0.75,
+                    f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
+                    transform=ax.transAxes,
+                    fontsize=12,
+                )
+                plt.title(
+                    f"GEB discharge vs observations for station {Q_obs_station_name}"
+                )
+                plt.savefig(
+                    eval_plot_folder / f"timeseries_plot_{ID}.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                plt.show()
+                plt.close()
+
+            plot_validation_graphs(ID)
+
+            # attach to the evaluation dataframe
+            evaluation_per_station.append(
+                {
+                    "station_ID": ID,
+                    "station_name": Q_obs_station_name,
+                    "x": Q_obs_station_coords[0],
+                    "y": Q_obs_station_coords[1],
+                    "Q_obs_to_GEB_upstream_area_ratio": Q_obs_to_GEB_upstream_area_ratio,
+                    "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
+                    "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
+                    "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
+                }
+            )
 
         evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
         evaluation_df.to_excel(
@@ -469,30 +500,34 @@ class Hydrology:
                 vmax=evaluation_gdf["NSE"].max(),
                 caption="NSE",
             )
-            colormap_upstream = cm.LinearColormap(
-                colors=[
-                    "red",
-                    "orange",
-                    "yellow",
-                    "blue",
-                    "green",
-                ],  # Updated color scheme
-                vmin=evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].min(),
-                vmax=evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].max(),
-                caption="Upstream Area Ratio",
-            )
 
             # Add colormaps to the map
             colormap_r.add_to(m)
             colormap_kge.add_to(m)
             colormap_nse.add_to(m)
-            colormap_upstream.add_to(m)
+
+            if not evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].isna().all():
+                colormap_upstream = cm.LinearColormap(
+                    colors=[
+                        "red",
+                        "orange",
+                        "yellow",
+                        "blue",
+                        "green",
+                    ],  # Updated color scheme
+                    vmin=evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].min(),
+                    vmax=evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].max(),
+                    caption="Upstream Area Ratio",
+                )
+                colormap_upstream.add_to(m)
+                layer_upstream = folium.FeatureGroup(
+                    name="Upstream Area Ratio", show=False
+                )
 
             # Create FeatureGroups for R, KGE, and NSE
             layer_r = folium.FeatureGroup(name="R", show=True)
             layer_kge = folium.FeatureGroup(name="KGE", show=False)
             layer_nse = folium.FeatureGroup(name="NSE", show=False)
-            layer_upstream = folium.FeatureGroup(name="Upstream Area Ratio", show=False)
 
             # Add markers for R, KGE, and NSE to their respective layers
             for station_ID, row in evaluation_gdf.iterrows():
@@ -564,11 +599,12 @@ class Hydrology:
                     popup=popup_nse,
                 ).add_to(layer_nse)
 
-                # Add Upstream Area Ratio layer
-                if ~np.isnan(row["Q_obs_to_GEB_upstream_area_ratio"]):
+                if not evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].isna().all():
+                    # Add Upstream Area Ratio layer
                     color_upstream = colormap_upstream(
                         float(row["Q_obs_to_GEB_upstream_area_ratio"])
                     )
+
                     popup_upstream = folium.Popup(popup_html, max_width=400)
                     folium.CircleMarker(
                         location=coords,
@@ -584,13 +620,16 @@ class Hydrology:
             layer_r.add_to(m)
             layer_kge.add_to(m)
             layer_nse.add_to(m)
-            layer_upstream.add_to(m)
 
             # Add the colormaps to the map
             colormap_r.add_to(m)
             colormap_kge.add_to(m)
             colormap_nse.add_to(m)
-            colormap_upstream.add_to(m)
+
+            # add upstream area (if not ONLY nans)
+            if not evaluation_gdf["Q_obs_to_GEB_upstream_area_ratio"].isna().all():
+                layer_upstream.add_to(m)
+                colormap_upstream.add_to(m)
 
             # Add the catchment shapefile as a GeoJSON layer
             folium.GeoJson(

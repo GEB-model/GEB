@@ -22,7 +22,7 @@ from ..data import (
     load_economic_data,
     load_regional_crop_data_from_dict,
 )
-from ..HRUs import load_grid
+from ..hydrology.HRUs import load_grid
 from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 from ..store import DynamicArray
 from ..workflows import balance_check
@@ -1201,20 +1201,20 @@ class CropFarmers(AgentBaseClass):
                 outfluxes=(
                     self.var.channel_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                    ],
+                    ].astype(np.float64),
                     self.var.reservoir_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                    ],
+                    ].astype(np.float64),
                     self.var.groundwater_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                    ],
+                    ].astype(np.float64),
                 ),
                 prestorages=irrigation_limit_pre[
                     ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                ],
+                ].astype(np.float64),
                 poststorages=self.var.remaining_irrigation_limit_m3[
                     ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                ],
+                ].astype(np.float64),
                 tollerance=50,
             )
 
@@ -1468,6 +1468,7 @@ class CropFarmers(AgentBaseClass):
         self.var.harvested_crop.fill(-1)
         # If there are fields to be harvested, compute yield ratio and various related metrics
         if np.count_nonzero(harvest):
+            print(f"Harvesting {np.count_nonzero(harvest)} fields.")
             # Get yield ratio for the harvested crops
             yield_ratio_per_field = self.get_yield_ratio(
                 harvest,
@@ -1970,6 +1971,13 @@ class CropFarmers(AgentBaseClass):
         )
         if farmers_selling_land.size > 0:
             self.remove_agents(farmers_selling_land)
+
+        number_of_planted_fields = np.count_nonzero(plant_map >= 0)
+        if number_of_planted_fields > 0:
+            print(
+                f"Planting {number_of_planted_fields} fields with crops: "
+                f"{np.unique(plant_map[plant_map >= 0])}"
+            )
 
         self.HRU.var.crop_map = np.where(
             plant_map >= 0, plant_map, self.HRU.var.crop_map
