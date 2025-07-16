@@ -9,6 +9,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import xarray as xr
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
@@ -662,3 +663,67 @@ class Hydrology:
         create_folium_map(evaluation_gdf)
 
         print("Discharge evaluation dashboard created.")
+
+    def create_water_circle(
+        self,
+        *args,
+        **kwargs,
+    ) -> None:
+        """Create a water circle plot for the GEB model.
+
+        Adapted from: https://github.com/mikhailsmilovic/flowplot
+        Also see the paper: https://doi.org/10.1088/1748-9326/ad18de
+
+        Args:
+            run_name: Name of the run to evaluate.
+            include_spinup: Whether to include the spinup run in the evaluation.
+            spinup_name: Name of the spinup run to include in the evaluation.
+        """
+        hierarchy = {
+            "rain": "in",
+            "snow": "in",
+            "evaporation": "out",
+            "storage change": "storage change",
+        }
+
+        variables = ["rain", "snow", "evaporation", "storage change"]
+
+        water_circle = []
+        for flow_name in variables:
+            flow_sum = 10  # Placeholder for flow
+            parent = hierarchy[flow_name]
+            water_circle.append((parent, flow_name, flow_sum))
+
+        water_circle = pd.DataFrame(water_circle, columns=["hierarchy", "name", "flow"])
+
+        print(water_circle)
+
+        water_circle = px.sunburst(
+            water_circle,
+            path=["hierarchy", "name"],
+            values="flow",
+            color="hierarchy",
+            color_discrete_map={
+                "in": "#636EFA",  # blue
+                "out": "#EF5538",  # red
+                "balance": "black",  # black
+                "storage change": "#D2D2D3",  # gray
+            },
+        )
+
+        water_circle.update_layout(template="plotly_dark")
+        water_circle.update_layout(
+            plot_bgcolor="#000000",
+            paper_bgcolor="#000000",
+            title=dict(
+                text="water circle",
+                xanchor="center",
+                yanchor="bottom",
+                y=0.04,
+                x=0.5,
+            ),
+        )
+
+        water_circle.write_image(
+            self.output_folder_evaluate / "water_circle.png", scale=5
+        )
