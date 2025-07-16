@@ -1243,6 +1243,7 @@ class Agents:
                 f"preprocessing/buildings/test_buildings_{gdl_name}.csv"
             )
 
+    @build_method
     def setup_buildings(self):
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4",
@@ -1309,6 +1310,7 @@ class Agents:
                 f"preprocessing/buildings/test_buildings_{gdl_name}.csv"
             )
 
+    @build_method
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
@@ -1439,8 +1441,7 @@ class Agents:
                             replace=True,
                         )
                         agents_in_grid_cell = upsampled_agents_in_cell
-                        
-                        
+
                         building_id = np.random.choice(
                             np.arange(n_buildings_in_cell),
                             n_buildings_in_cell,
