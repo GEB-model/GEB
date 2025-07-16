@@ -122,19 +122,16 @@ class Crops:
 
     def process_crop_data(
         self,
-        crop_prices,
-        translate_crop_names=None,
-        adjust_currency=False,
+        crop_prices: str | int | float,
+        translate_crop_names: dict | None = None,
+        adjust_currency: bool = False,
     ):
         """Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
 
         Args:
-            crop_prices : str, int, or float
-                If 'FAO_stat', fetches crop price data from FAO statistics. Otherwise, it can be a constant value for crop prices.
-            project_past_until_year : int, optional
-                The year to project past data until. Defaults to False.
-            project_future_until_year : int, optional
-                The year to project future data until. Defaults to False.
+            crop_prices: If 'FAO_stat', fetches crop price data from FAO statistics. Otherwise, it can be a constant value for crop prices.
+            translate_crop_names: A dictionary mapping crop names to their translated names.
+            adjust_currency: If True, adjusts the crop prices based on currency conversion rates.
 
         Returns:
             A dictionary containing processed crop data in a time series format or as a constant value.
