@@ -1156,8 +1156,11 @@ class GEBModel(
 
         self.geoms[name] = fp_with_root
 
-    def write_file_library(self):
-        file_library: defaultdict = self.read_file_library()
+    def write_file_library(self, read_first: bool = True) -> None:
+        if read_first:
+            file_library: defaultdict = self.read_file_library()
+        else:
+            file_library: defaultdict = defaultdict(dict)
 
         # merge file library from disk with new files, prioritizing new files
         for type_name, type_files in self.files.items():
@@ -1456,7 +1459,10 @@ class GEBModel(
         for method in methods:
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
-            self.write_file_library()
+            if method == "setup_region":
+                self.write_file_library(read_first=False)
+            else:
+                self.write_file_library(read_first=True)
 
         self.logger.info("Finished!")
 
