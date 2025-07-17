@@ -691,6 +691,7 @@ class Hydrology:
                         "forest": 3,  # Placeholder for flow
                         "grassland": 2,  # Placeholder for flow
                         "cropland": 1,  # Placeholder for flow
+                        "_self": 5,  # Placeholder for flow
                     },  # Placeholder for flow
                     "evaporation": 4,  # Placeholder for flow
                 },  # Placeholder for flow
@@ -724,6 +725,11 @@ class Hydrology:
                 parent: Parent of the current flow section.
                 flow: Name of the current flow section.
                 value: Value of the current flow section, can be a number or a dictionary.
+                    If a number, it is a flow and added to the water circle list immediately.
+                    If a dictionary, it contains sub-sections, and it is processed recursively.
+
+                    If one of the sections is _self, it is the size of the remainder section itself.
+                    This is useful when not all of the section is made up of its children.
 
             Raises:
                 ValueError: If the value type is not int, float, or dict.
@@ -742,12 +748,16 @@ class Hydrology:
                     parent is not None and parent != ""
                 ):  # this is the case for the root section
                     color_map[flow] = color_map[parent]
+                _self = 0
                 for sub_section, sub_value in value.items():
+                    if sub_section == "_self":
+                        _self = sub_value
+                        continue  # skip the _self section
                     water_circle_list, color_map = add_flow(
                         water_circle_list, color_map, flow, sub_section, sub_value
                     )
                 if flow is not None:
-                    water_circle_list.append((parent, flow, 0))
+                    water_circle_list.append((parent, flow, _self))
             else:
                 raise ValueError(
                     f"Invalid value type for section '{flow}': {value}. Expected dict, int, or float."
