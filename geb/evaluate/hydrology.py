@@ -74,7 +74,7 @@ class Hydrology:
         GEB_discharge = xr.open_dataarray(
             self.model.output_folder
             / "report"
-            / "spinup"
+            / "default"
             / "hydrology.routing"
             / "discharge_daily.zarr"
         )
@@ -86,7 +86,7 @@ class Hydrology:
         Q_obs = pd.read_parquet(
             self.model.files["table"]["discharge/Q_obs"]
         )  # load the Q_obs discharge data
-
+        print(Q_obs)
         region_shapefile = gpd.read_parquet(
             self.model.files["geoms"]["mask"]
         )  # load the region shapefile
@@ -255,9 +255,13 @@ class Hydrology:
                     years_to_plot = [
                         2010,
                         2011,
-                        20212,
+                        2012,
                         2013,
                         2014,
+                        2015,
+                        2016,
+                        2017,
+                        2018,
                         2019,
                         2020,
                         2021,

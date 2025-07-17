@@ -260,7 +260,7 @@ class Observations:
             Q_station["date"] = pd.to_datetime(Q_station["date"], format=dt_format)
             Q_station.set_index("date", inplace=True)
             Q_station["Q"] = Q_station["Q"].astype(float)  # convert to float
-            Q_station = Q_station.resample("D", label="left").mean()
+            Q_station = Q_station.resample("D", label="left").max()
             Q_station.index.name = "time"  # rename index to time
 
             # delete missing values in the dataframe

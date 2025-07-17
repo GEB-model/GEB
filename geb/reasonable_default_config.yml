@@ -67,7 +67,7 @@ agent_settings:
           max: 10
           min: 0.01
   farmers:
-    ruleset: base
+    ruleset:  
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
