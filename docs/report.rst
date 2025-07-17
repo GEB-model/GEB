@@ -86,6 +86,8 @@ The following options are supported.
     * **nansum**: The sum of the variable is calculated and reported, ignoring NaN values.
     * **weightedmean**: The mean of the variable is calculated and reported, weighted by the grid cell area.
     * **weightednanmean**: The mean of the variable is calculated and reported, weighted by the grid cell area, ignoring NaN values.
+    * **weightedsum**: The sum of the variable is calculated and reported, weighted by the grid cell area. This means that the variable is multiplied by the grid cell area before summing. This is (for example) useful for variables that are reported in meters, and are now converted to cubic meters.
+    * **weightednansum**: The sum of the variable is calculated and reported, weighted by the grid cell area, ignoring NaN values. This means that the variable is multiplied by the grid cell area before summing, ignoring NaN values.
     * **sample,[y],[x]**: Sample a specific variable at specific y,x pixel. 0,0 is the top left corner of the grid. Example is **sample,1,2** to sample the variable at pixel 1,2.
     * **sample_coord,[lat],[lon]**: Sample a specific variable at specific coordinates using the lat,lon coordinates of the grid. The coordinates are in the same coordinate system as the grid. Example is **sample_coord,52.38,4.89** to sample the variable at coordinates latitude 52.38 and longitude 4.89 (Amsterdam). Note that when reporting discharge, it is important to make sure that the location is in the actual river you want to sample from. You can refer to the upstream area in the input files to find the actual river.
 

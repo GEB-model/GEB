@@ -405,7 +405,12 @@ class Reporter:
                         raise IndexError(
                             f"The coordinate ({args[0]},{args[1]}) is outside the model domain."
                         )
-                elif function in ("weightedmean", "weightednanmean"):
+                elif function in (
+                    "weightedmean",
+                    "weightednanmean",
+                    "weightedsum",
+                    "weightednansum",
+                ):
                     if config["type"] == "HRU":
                         cell_area = self.hydrology.HRU.var.cell_area
                     else:
@@ -414,6 +419,10 @@ class Reporter:
                         value = np.average(value, weights=cell_area)
                     elif function == "weightednanmean":
                         value = np.nansum(value * cell_area) / np.sum(cell_area)
+                    elif function == "weightedsum":
+                        value = np.sum(value * cell_area)
+                    elif function == "weightednansum":
+                        value = np.nansum(value * cell_area)
 
                 else:
                     raise ValueError(f"Function {function} not recognized")
