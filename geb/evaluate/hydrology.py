@@ -687,7 +687,11 @@ class Hydrology:
             },
             "out": {
                 "evapotranspiration": {
-                    "transpiration": 3,  # Placeholder for flow
+                    "transpiration": {
+                        "forest": 3,  # Placeholder for flow
+                        "grassland": 2,  # Placeholder for flow
+                        "cropland": 1,  # Placeholder for flow
+                    },  # Placeholder for flow
                     "evaporation": 4,  # Placeholder for flow
                 },  # Placeholder for flow
             },
@@ -704,28 +708,66 @@ class Hydrology:
             "balance": "#000000",
             "storage change": "#D2D2D3",
         }
-        for section, variables in hierarchy.items():
-            if isinstance(variables, dict):
-                section_remainder: float = 0.0
-                for variable, value in variables.items():
-                    color_map[variable] = color_map[section]
-                    water_circle_list.append((section, variable, value))
-            elif isinstance(variables, (int, float)):
-                section_remainder: float = 2.0
+
+        def add_flow(
+            water_circle_list: list[tuple[str, str, float | int]],
+            color_map: dict[str, str],
+            parent: str,
+            flow: str | None,
+            value: int | float | dict[str, Any],
+        ) -> tuple[list[tuple[str, str, float | int]], dict[str, str]]:
+            """Recursive function to add flows to the water circle list.
+
+            Args:
+                water_circle_list: List of tuples containing the water circle data with parent, flow, and value.
+                color_map: Dictionary mapping flow names to colors.
+                parent: Parent of the current flow section.
+                flow: Name of the current flow section.
+                value: Value of the current flow section, can be a number or a dictionary.
+
+            Raises:
+                ValueError: If the value type is not int, float, or dict.
+
+            Returns:
+                Updated water circle list with the new flow added.
+                Updated color map with the new flow color added.
+            """
+            if isinstance(value, (int, float)):  # stopping condition
+                # if the value is a number, it is a flow
+                water_circle_list.append((parent, flow, value))
+                if parent is not None:
+                    color_map[flow] = color_map[parent]
+            elif isinstance(value, dict):
+                if (
+                    parent is not None and parent != ""
+                ):  # this is the case for the root section
+                    color_map[flow] = color_map[parent]
+                for sub_section, sub_value in value.items():
+                    water_circle_list, color_map = add_flow(
+                        water_circle_list, color_map, flow, sub_section, sub_value
+                    )
+                if flow is not None:
+                    water_circle_list.append((parent, flow, 0))
             else:
                 raise ValueError(
-                    f"Invalid hierarchy value for section '{section}': {variables}"
+                    f"Invalid value type for section '{flow}': {value}. Expected dict, int, or float."
                 )
 
-            water_circle_list.append(("", section, section_remainder))
+            return water_circle_list, color_map
+
+        water_circle_list, color_map = add_flow(
+            water_circle_list, color_map, "", None, hierarchy
+        )
 
         water_circle_df: pd.DataFrame = pd.DataFrame(
-            water_circle_list, columns=["section", "flow", "value"]
+            water_circle_list, columns=["parent", "flow", "value"]
         )
+
+        print(water_circle_df)
 
         water_circle = px.sunburst(
             water_circle_df,
-            parents="section",
+            parents="parent",
             names="flow",
             values="value",
             color="flow",
