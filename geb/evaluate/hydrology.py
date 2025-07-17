@@ -713,7 +713,7 @@ class Hydrology:
         def add_flow(
             water_circle_list: list[tuple[str, str, float | int]],
             color_map: dict[str, str],
-            parent: str,
+            parent: str | None,
             flow: str | None,
             value: int | float | dict[str, Any],
         ) -> tuple[list[tuple[str, str, float | int]], dict[str, str]]:
@@ -744,9 +744,7 @@ class Hydrology:
                 if parent is not None:
                     color_map[flow] = color_map[parent]
             elif isinstance(value, dict):
-                if (
-                    parent is not None and parent != ""
-                ):  # this is the case for the root section
+                if parent is not None:  # this is the case for the root section
                     color_map[flow] = color_map[parent]
                 _self = 0
                 for sub_section, sub_value in value.items():
@@ -766,7 +764,7 @@ class Hydrology:
             return water_circle_list, color_map
 
         water_circle_list, color_map = add_flow(
-            water_circle_list, color_map, "", None, hierarchy
+            water_circle_list, color_map, parent=None, flow=None, value=hierarchy
         )
 
         water_circle_df: pd.DataFrame = pd.DataFrame(
