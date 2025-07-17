@@ -233,6 +233,17 @@ def test_evaluate():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate_water_circle():
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "methods": ["water_circle"],
+        }
+        args["method_args"] = method_args
+        run_model_with_method(method="evaluate", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_run():
     with WorkingDirectory(working_directory):
         run_model_with_method(method="run", **DEFAULT_RUN_ARGS)
