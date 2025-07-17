@@ -1,5 +1,6 @@
 import base64
 from pathlib import Path
+from typing import Any
 
 import branca.colormap as cm
 import contextily as ctx
@@ -664,7 +665,7 @@ class Hydrology:
 
         print("Discharge evaluation dashboard created.")
 
-    def create_water_circle(
+    def water_circle(
         self,
         *args,
         **kwargs,
@@ -679,36 +680,56 @@ class Hydrology:
             include_spinup: Whether to include the spinup run in the evaluation.
             spinup_name: Name of the spinup run to include in the evaluation.
         """
-        hierarchy = {
-            "rain": "in",
-            "snow": "in",
-            "evaporation": "out",
-            "storage change": "storage change",
+        hierarchy: dict[str, Any] = {
+            "in": {
+                "rain": 10,  # Placeholder for flow
+                "snow": 5,  # Placeholder for flow
+            },
+            "out": {
+                "evapotranspiration": {
+                    "transpiration": 3,  # Placeholder for flow
+                    "evaporation": 4,  # Placeholder for flow
+                },  # Placeholder for flow
+            },
+            "storage change": 2,  # Placeholder for flow
         }
 
-        variables = ["rain", "snow", "evaporation", "storage change"]
+        # the size of a section is the sum of the flows in that section
+        # plus the size of the section itself. So if all of the section
+        # is made up of its children, the size of the section is 0.
+        water_circle_list: list[tuple[str, str, float | int]] = []
+        color_map: dict[str, str] = {
+            "in": "#636EFA",
+            "out": "#EF5538",
+            "balance": "#000000",
+            "storage change": "#D2D2D3",
+        }
+        for section, variables in hierarchy.items():
+            if isinstance(variables, dict):
+                section_remainder: float = 0.0
+                for variable, value in variables.items():
+                    color_map[variable] = color_map[section]
+                    water_circle_list.append((section, variable, value))
+            elif isinstance(variables, (int, float)):
+                section_remainder: float = 2.0
+            else:
+                raise ValueError(
+                    f"Invalid hierarchy value for section '{section}': {variables}"
+                )
 
-        water_circle = []
-        for flow_name in variables:
-            flow_sum = 10  # Placeholder for flow
-            parent = hierarchy[flow_name]
-            water_circle.append((parent, flow_name, flow_sum))
+            water_circle_list.append(("", section, section_remainder))
 
-        water_circle = pd.DataFrame(water_circle, columns=["hierarchy", "name", "flow"])
-
-        print(water_circle)
+        water_circle_df: pd.DataFrame = pd.DataFrame(
+            water_circle_list, columns=["section", "flow", "value"]
+        )
 
         water_circle = px.sunburst(
-            water_circle,
-            path=["hierarchy", "name"],
-            values="flow",
-            color="hierarchy",
-            color_discrete_map={
-                "in": "#636EFA",  # blue
-                "out": "#EF5538",  # red
-                "balance": "black",  # black
-                "storage change": "#D2D2D3",  # gray
-            },
+            water_circle_df,
+            parents="section",
+            names="flow",
+            values="value",
+            color="flow",
+            color_discrete_map=color_map,
         )
 
         water_circle.update_layout(template="plotly_dark")
