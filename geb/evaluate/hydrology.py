@@ -10,7 +10,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 import xarray as xr
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
@@ -667,6 +667,9 @@ class Hydrology:
 
     def water_circle(
         self,
+        run_name: str,
+        include_spinup: bool,
+        spinup_name: str,
         *args,
         **kwargs,
     ) -> None:
@@ -679,19 +682,21 @@ class Hydrology:
             run_name: Name of the run to evaluate.
             include_spinup: Whether to include the spinup run in the evaluation.
             spinup_name: Name of the spinup run to include in the evaluation.
+            *args: ignored.
+            **kwargs: ignored.
         """
         hierarchy: dict[str, Any] = {
             "in": {
                 "rain": 10,  # Placeholder for flow
-                "snow": 5,  # Placeholder for flow
+                "snow": 7,  # Placeholder for flow
             },
             "out": {
                 "evapotranspiration": {
                     "transpiration": {
-                        "forest": 3,  # Placeholder for flow
+                        "forest": 5,  # Placeholder for flow
                         "grassland": 2,  # Placeholder for flow
                         "cropland": 1,  # Placeholder for flow
-                        "_self": 5,  # Placeholder for flow
+                        "_self": 3,  # Placeholder for flow
                     },  # Placeholder for flow
                     "evaporation": 4,  # Placeholder for flow
                 },  # Placeholder for flow
@@ -713,6 +718,7 @@ class Hydrology:
         def add_flow(
             water_circle_list: list[tuple[str, str, float | int]],
             color_map: dict[str, str],
+            root_section: str | None,
             parent: str | None,
             flow: str | None,
             value: int | float | dict[str, Any],
@@ -722,6 +728,7 @@ class Hydrology:
             Args:
                 water_circle_list: List of tuples containing the water circle data with parent, flow, and value.
                 color_map: Dictionary mapping flow names to colors.
+                root_section: Root section of the current flow hierarchy.
                 parent: Parent of the current flow section.
                 flow: Name of the current flow section.
                 value: Value of the current flow section, can be a number or a dictionary.
@@ -739,23 +746,36 @@ class Hydrology:
                 Updated color map with the new flow color added.
             """
             if isinstance(value, (int, float)):  # stopping condition
-                # if the value is a number, it is a flow
-                water_circle_list.append((parent, flow, value))
+                # adopt the color of the parent if it exists
                 if parent is not None:
                     color_map[flow] = color_map[parent]
+                else:  # if no parent, this is a root section
+                    root_section = flow
+                water_circle_list.append(
+                    (root_section, parent, flow, value, color_map[flow])
+                )
             elif isinstance(value, dict):
-                if parent is not None:  # this is the case for the root section
+                if parent is not None:  # adopt the color of the parent
                     color_map[flow] = color_map[parent]
+                else:  # if no parent, this is a root section
+                    root_section = flow
                 _self = 0
                 for sub_section, sub_value in value.items():
                     if sub_section == "_self":
                         _self = sub_value
                         continue  # skip the _self section
                     water_circle_list, color_map = add_flow(
-                        water_circle_list, color_map, flow, sub_section, sub_value
+                        water_circle_list,
+                        color_map,
+                        root_section,
+                        flow,
+                        sub_section,
+                        sub_value,
                     )
                 if flow is not None:
-                    water_circle_list.append((parent, flow, _self))
+                    water_circle_list.append(
+                        (root_section, parent, flow, _self, color_map[flow])
+                    )
             else:
                 raise ValueError(
                     f"Invalid value type for section '{flow}': {value}. Expected dict, int, or float."
@@ -763,25 +783,52 @@ class Hydrology:
 
             return water_circle_list, color_map
 
-        water_circle_list, color_map = add_flow(
-            water_circle_list, color_map, parent=None, flow=None, value=hierarchy
+        water_circle_list, _ = add_flow(
+            water_circle_list,
+            color_map,
+            root_section=None,
+            parent=None,
+            flow=None,
+            value=hierarchy,
         )
 
         water_circle_df: pd.DataFrame = pd.DataFrame(
-            water_circle_list, columns=["parent", "flow", "value"]
+            water_circle_list,
+            columns=["root_section", "parent", "flow", "value", "color"],
         )
 
-        print(water_circle_df)
+        root_section_totals = water_circle_df.groupby("root_section").sum("value")
 
-        water_circle = px.sunburst(
-            water_circle_df,
-            parents="parent",
-            names="flow",
-            values="value",
-            color="flow",
-            color_discrete_map=color_map,
+        if (
+            root_section_totals.loc["out", "value"]
+            > root_section_totals.loc["in", "value"]
+        ):
+            category_order = ["storage change", "in", "out"]
+        else:
+            category_order = ["in", "out", "storage change"]
+
+        water_circle_df["root_section"] = pd.Categorical(
+            water_circle_df["root_section"],
+            categories=category_order,
+            ordered=True,
+        )
+        # sort the sections with storage change first
+        water_circle_df = water_circle_df.sort_values(
+            by=["root_section", "value"],
+            ascending=[True, False],
         )
 
+        water_circle = go.Figure(
+            go.Sunburst(
+                labels=water_circle_df["flow"],
+                parents=water_circle_df["parent"],
+                values=water_circle_df["value"],
+                sort=False,
+                marker=dict(colors=water_circle_df["color"]),
+            )
+        )
+
+        water_circle.update_layout(margin=dict(l=20, r=20, t=20, b=45))
         water_circle.update_layout(template="plotly_dark")
         water_circle.update_layout(
             plot_bgcolor="#000000",
