@@ -108,7 +108,12 @@ class Reporter:
             module_name: The name of the module to which the variable belongs.
             name: The name of the variable.
         """
-        if config["type"] in ("grid", "HRU"):
+        if config["type"] == "scalar":
+            assert "function" not in config or config["function"] is None, (
+                "Scalar variables cannot have a function. "
+            )
+            return []
+        elif config["type"] in ("grid", "HRU"):
             if config["function"] is not None:
                 return []
             else:
@@ -262,7 +267,7 @@ class Reporter:
 
         else:
             raise ValueError(
-                f"Type {config['type']} not recognized. Must be 'grid', 'agents' or 'HRU'."
+                f"Type {config['type']} not recognized. Must be 'scalar', 'grid', 'agents' or 'HRU'."
             )
 
     def maybe_report_value(
@@ -332,10 +337,10 @@ class Reporter:
         if isinstance(value, list):
             value = [v.item() for v in value]
             for v in value:
-                self.check_value(v)
+                assert not np.isnan(value) and not np.isinf(v)
         elif np.isscalar(value):
             value = value.item()
-            self.check_value(value)
+            assert not np.isnan(value) and not np.isinf(value)
 
         self.process_value(module_name, name, value, config)
 
@@ -498,10 +503,13 @@ class Reporter:
         """At the end of the model run, all previously collected data is reported to disk."""
         for module_name, variables in self.variables.items():
             for name, values in variables.items():
-                if (
+                if self.model.config["report"][module_name][name][
+                    "type"
+                ] == "scalar" or (
                     self.model.config["report"][module_name][name]["function"]
                     is not None
                 ):
+                    # if the variable is a scalar or has an aggregation function, we report
                     df = pd.DataFrame.from_records(
                         values, columns=["date", name], index="date"
                     )

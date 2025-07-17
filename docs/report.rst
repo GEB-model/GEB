@@ -46,6 +46,10 @@ For example, to export the total bare soil evaporation, gridded daily discharge,
                 varname: var.channel_abstraction_m3_by_farmer
                 type: agents
                 function: mean
+        hydrology:
+            storage:
+                varname: .current_storage
+                type: scalar
 
 The following options are supported.
 
@@ -57,10 +61,13 @@ The following options are supported.
   + **local variable**: Any variable that exists within the `step` function of the module. This is useful for reporting variables that are not stored between timesteps. Local variables are prefixed with ".", for exampe `.actual_bare_soil_evaporation` in the example above.
 * **type**: The type of the variable. This can be one of the following:
 
+  * **scalar**: A scalar variable that is reported as a single value.
   * **grid**: A variable that is stored in the grid structure of GEB.
   * **HRU**: A variable that is stored in the hydrological response unit (HRU) structure of GEB.
   * **agents**: A variable that is stored in the agents. This is a 1D array with the same length as the number of agents. The variable will be reported as a 1D array.
 * **function**: The function to be used to process the variable before reporting. The supported options vary per type. Each type supports the **null** function, which means that no function is applied and the variable is reported as is in a zarr file. In all other cases the variable is reported at the end of the model run in a csv file. The following functions are supported:
+
+  * **scalar**: No functions are applied to scalar variables. Reporting is done as a single value in a csv file (per timestep).
 
   * **agents**:
 
