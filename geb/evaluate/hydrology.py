@@ -685,23 +685,103 @@ class Hydrology:
             *args: ignored.
             **kwargs: ignored.
         """
+        folder = self.model.output_folder / "report" / run_name
+
+        storage = pd.read_csv(folder / "hydrology" / "storage.csv")
+        storage_change = storage.iloc[-1]["storage"] - storage.iloc[0]["storage"]
+
+        rain = pd.read_csv(
+            folder / "hydrology.snowfrost" / "rain.csv",
+            index_col=0,
+            parse_dates=True,
+        )["rain"].sum()
+        snow = pd.read_csv(
+            folder / "hydrology.snowfrost" / "snow.csv",
+            index_col=0,
+            parse_dates=True,
+        )["snow"].sum()
+
+        domestic_water_loss = pd.read_csv(
+            folder / "hydrology.water_demand" / "domestic water loss.csv",
+            index_col=0,
+            parse_dates=True,
+        )["domestic water loss"].sum()
+        industry_water_loss = pd.read_csv(
+            folder / "hydrology.water_demand" / "industry water loss.csv",
+            index_col=0,
+            parse_dates=True,
+        )["industry water loss"].sum()
+        livestock_water_loss = pd.read_csv(
+            folder / "hydrology.water_demand" / "livestock water loss.csv",
+            index_col=0,
+            parse_dates=True,
+        )["livestock water loss"].sum()
+
+        river_outflow = pd.read_csv(
+            folder / "hydrology.routing" / "river outflow.csv",
+            index_col=0,
+            parse_dates=True,
+        )["river outflow"].sum()
+
+        transpiration = pd.read_csv(
+            folder / "hydrology.landcover" / "transpiration.csv",
+            index_col=0,
+            parse_dates=True,
+        )["transpiration"].sum()
+        bare_soil_evaporation = pd.read_csv(
+            folder / "hydrology.landcover" / "bare soil evaporation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["bare soil evaporation"].sum()
+        direct_evaporation = pd.read_csv(
+            folder / "hydrology.landcover" / "direct evaporation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["direct evaporation"].sum()
+        interception_evaporation = pd.read_csv(
+            folder / "hydrology.landcover" / "interception evaporation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["interception evaporation"].sum()
+        snow_sublimation = pd.read_csv(
+            folder / "hydrology.landcover" / "snow sublimation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["snow sublimation"].sum()
+        river_evaporation = pd.read_csv(
+            folder / "hydrology.routing" / "river evaporation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["river evaporation"].sum()
+        waterbody_evaporation = pd.read_csv(
+            folder / "hydrology.routing" / "waterbody evaporation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["waterbody evaporation"].sum()
+
         hierarchy: dict[str, Any] = {
             "in": {
-                "rain": 10,  # Placeholder for flow
-                "snow": 7,  # Placeholder for flow
+                "rain": rain,
+                "snow": snow,
             },
             "out": {
                 "evapotranspiration": {
-                    "transpiration": {
-                        "forest": 5,  # Placeholder for flow
-                        "grassland": 2,  # Placeholder for flow
-                        "cropland": 1,  # Placeholder for flow
-                        "_self": 3,  # Placeholder for flow
-                    },  # Placeholder for flow
-                    "evaporation": 4,  # Placeholder for flow
-                },  # Placeholder for flow
+                    "transpiration": transpiration,
+                    "bare soil evaporation": bare_soil_evaporation,
+                    "direct evaporation": direct_evaporation,
+                    "interception evaporation": interception_evaporation,
+                    "snow sublimation": snow_sublimation,
+                    "river evaporation": river_evaporation,
+                    "waterbody evaporation": waterbody_evaporation,
+                },
+                "water demand": {
+                    "domestic water loss": domestic_water_loss,
+                    "industry water loss": industry_water_loss,
+                    "livestock water loss": livestock_water_loss,
+                },
+                "river outflow": river_outflow,
             },
-            "storage change": 2,  # Placeholder for flow
+            "storage change": storage_change,
         }
 
         # the size of a section is the sum of the flows in that section

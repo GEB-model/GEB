@@ -1084,10 +1084,20 @@ class Routing(Module):
                 tollerance=100,
             )
 
-            routing_loss: np.float64 = (
+            total_evaporation_in_rivers_m3: np.float64 = (
                 evaporation_in_rivers_m3.astype(np.float64).sum()
-                + waterbody_evaporation_m3.astype(np.float64).sum()
-                + outflow_at_pits_m3.astype(np.float64).sum()
+            )
+            total_waterbody_evaporation_m3: np.float64 = (
+                waterbody_evaporation_m3.astype(np.float64).sum()
+            )
+            total_outflow_at_pits_m3: np.float64 = outflow_at_pits_m3.astype(
+                np.float64
+            ).sum()
+
+            routing_loss: np.float64 = (
+                total_evaporation_in_rivers_m3
+                + total_waterbody_evaporation_m3
+                + total_outflow_at_pits_m3
             )
 
             assert routing_loss >= 0, "Routing loss cannot be negative"

@@ -92,12 +92,12 @@ class Evaporation(Module):
         )
 
         # calculate snow evaporation
-        snow_evaporation: npt.NDArray[np.float32] = np.minimum(
+        snow_sublimation: npt.NDArray[np.float32] = np.minimum(
             snow_melt, potential_bare_soil_evaporation
         )
-        snow_melt -= snow_evaporation
+        snow_melt -= snow_sublimation
         potential_bare_soil_evaporation: npt.NDArray[np.float32] = (
-            potential_bare_soil_evaporation - snow_evaporation
+            potential_bare_soil_evaporation - snow_sublimation
         )
 
         CO2_ppm: float = self.model.forcing.load("CO2")
@@ -113,7 +113,7 @@ class Evaporation(Module):
             0.0,
             potential_evapotranspiration
             - potential_bare_soil_evaporation
-            - snow_evaporation,
+            - snow_sublimation,
         )
 
         self.report(self, locals())
@@ -123,5 +123,5 @@ class Evaporation(Module):
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
             snow_melt,
-            snow_evaporation,
+            snow_sublimation,
         )

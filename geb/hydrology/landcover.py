@@ -206,7 +206,7 @@ class LandCover(Module):
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
             snow_melt,
-            snow_evaporation,
+            snow_sublimation,
         ) = self.hydrology.evaporation.step(self.HRU.var.ETRef, snow_melt, crop_factor)
 
         timer.new_split("PET")
@@ -269,7 +269,7 @@ class LandCover(Module):
             + actual_transpiration
             + open_water_evaporation
             + interception_evaporation
-            + snow_evaporation  # ice should be included in the future
+            + snow_sublimation  # ice should be included in the future
             + irrigation_loss_to_evaporation_m
         )
 
@@ -361,7 +361,7 @@ class LandCover(Module):
                     actual_bare_soil_evaporation,
                     open_water_evaporation,
                     interception_evaporation,
-                    snow_evaporation,
+                    snow_sublimation,
                 ],
                 prestorages=[totalstorage_landcover_pre],
                 poststorages=[totalstorage_landcover],
