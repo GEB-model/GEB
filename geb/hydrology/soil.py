@@ -301,7 +301,7 @@ def get_available_water_infiltration(
     actual_irrigation_consumption,
     land_use_type,
     crop_kc,
-    EWRef,
+    reference_evapotranspiration_water,
     topwater,
 ):
     """Update the soil water storage based on the water balance calculations.
@@ -328,7 +328,9 @@ def get_available_water_infiltration(
             if crop_kc[i] > np.float32(0.75):
                 topwater[i] += available_water_infiltration[i]
 
-            open_water_evaporation[i] = min(max(np.float32(0.0), topwater[i]), EWRef[i])
+            open_water_evaporation[i] = min(
+                max(np.float32(0.0), topwater[i]), reference_evapotranspiration_water[i]
+            )
             topwater[i] -= open_water_evaporation[i]
             if crop_kc[i] > np.float32(0.75):
                 available_water_infiltration[i] = topwater[i]
@@ -1604,7 +1606,7 @@ class Soil(Module):
                 actual_irrigation_consumption=actual_irrigation_consumption,
                 land_use_type=self.HRU.var.land_use_type,
                 crop_kc=crop_factor,
-                EWRef=self.HRU.var.EWRef,
+                reference_evapotranspiration_water=self.HRU.var.reference_evapotranspiration_water,
                 topwater=self.HRU.var.topwater,
             )
         )

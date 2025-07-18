@@ -207,7 +207,9 @@ class LandCover(Module):
             potential_evapotranspiration,
             snow_melt,
             snow_sublimation,
-        ) = self.hydrology.evaporation.step(self.HRU.var.ETRef, snow_melt, crop_factor)
+        ) = self.hydrology.evaporation.step(
+            self.HRU.var.reference_evapotranspiration_grass, snow_melt, crop_factor
+        )
 
         timer.new_split("PET")
 

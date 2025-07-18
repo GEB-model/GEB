@@ -45,7 +45,7 @@ class Interception(Module):
     ====================  ================================================================================  =========
     Variable [self.var]   Description                                                                       Unit
     ====================  ================================================================================  =========
-    EWRef                 potential evaporation rate from water surface                                     m
+    reference_evapotranspiration_water                 potential evaporation rate from water surface                                     m
     interceptCap          interception capacity of vegetation                                               m
     minInterceptCap       Maximum interception read from file for forest and grassland land cover           m
     interception_storage         simulated vegetation interception storage                                         m
@@ -184,7 +184,7 @@ class Interception(Module):
         interception_evaporation[sealed_area] = np.maximum(
             np.minimum(
                 self.HRU.var.interception_storage[sealed_area],
-                self.HRU.var.EWRef[sealed_area],
+                self.HRU.var.reference_evapotranspiration_water[sealed_area],
             ),
             self.HRU.full_compressed(0, dtype=np.float32)[sealed_area],
         )

@@ -927,7 +927,9 @@ class Routing(Module):
         potential_evaporation_per_water_body_m3_per_routing_step = (
             np.bincount(
                 self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
-                weights=self.grid.var.EWRef[self.grid.var.waterBodyID != -1],
+                weights=self.grid.var.reference_evapotranspiration_water[
+                    self.grid.var.waterBodyID != -1
+                ],
             )
             / np.bincount(self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1])
             * self.hydrology.lakes_reservoirs.var.lake_area
@@ -1013,7 +1015,9 @@ class Routing(Module):
 
             # calculate evaporation from rivers per timestep usting the current channel ratio
             potential_evaporation_in_rivers_m3_per_routing_step = (
-                self.grid.var.EWRef * channel_ratio * self.grid.var.cell_area
+                self.grid.var.reference_evapotranspiration_water
+                * channel_ratio
+                * self.grid.var.cell_area
             ) / self.var.n_routing_substeps
 
             (
