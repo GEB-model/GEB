@@ -227,53 +227,6 @@ class Hydrology:
                     f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
                     transform=ax.transAxes,
                 )
-            else:
-                print(f"Validating {Q_obs_station_name}....")
-
-                def calculate_validation_metrics():
-                    """Calculate the validation metrics for the current station."""
-                    # calculate kupta coefficient
-                    y_true = validation_df["Q_obs"].values
-                    y_pred = validation_df["Q_sim"].values
-                    evaluator = RegressionMetric(
-                        y_true, y_pred
-                    )  # from permetrics package
-
-                    KGE = (
-                        evaluator.kling_gupta_efficiency()
-                    )  # https://hess.copernicus.org/articles/23/4323/2019/
-                    NSE = evaluator.nash_sutcliffe_efficiency()  # https://hess.copernicus.org/articles/27/1827/2023/hess-27-1827-2023.pdf
-                    R = evaluator.pearson_correlation_coefficient()
-
-                    return KGE, NSE, R
-
-                KGE, NSE, R = calculate_validation_metrics()
-
-                def plot_validation_graphs(ID):
-                    """Plot the validation results for the current station."""
-                    # scatter plot
-                    fig, ax = plt.subplots()
-                    ax.scatter(validation_df["Q_obs"], validation_df["Q_sim"])
-                    ax.set_xlabel(
-                        "Q_obs Discharge observations [m3/s] (%s)" % Q_obs_station_name
-                    )
-                    ax.set_ylabel("GEB discharge simulation [m3/s]")
-                    ax.set_title("GEB vs observations (discharge)")
-                    m, b = np.polyfit(validation_df["Q_obs"], validation_df["Q_sim"], 1)
-                    ax.plot(
-                        validation_df["Q_obs"],
-                        m * validation_df["Q_obs"] + b,
-                        color="red",
-                    )
-                    ax.text(0.02, 0.9, f"$R$ = {R:.2f}", transform=ax.transAxes)
-                    ax.text(0.02, 0.85, f"KGE = {KGE:.2f}", transform=ax.transAxes)
-                    ax.text(0.02, 0.8, f"NSE = {NSE:.2f}", transform=ax.transAxes)
-                    ax.text(
-                        0.02,
-                        0.75,
-                        f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
-                        transform=ax.transAxes,
-                    )
 
                 plt.savefig(
                     eval_plot_folder / f"scatter_plot_{ID}.png",
