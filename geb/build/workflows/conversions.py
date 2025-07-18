@@ -1,13 +1,17 @@
-def setup_donor_countries(self, countries_with_data, alternative_countries=None):
+def setup_donor_countries(
+    self, countries_with_data: list[str], alternative_countries: list[str] | None = None
+) -> dict[str, str]:
     """Sets up the donor countries for GEB.
-    Output: a dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
-    Right now, we return one donor country per country with missing data. This is the country with most similar Human Development Index (HDI) and closest distance to the target country.
 
-    Parameters
-    ----------
-    countries_with_data: list
-    Countries (ISO3 codes) that have data available.
+    Args:
+        self: The GEB build instance.
+        countries_with_data: list
+            Countries (ISO3 codes) that have data available.
+        alternative_countries: list, optional
+            Alternative countries to consider as donors, e.g. GLOBIOM regions inside the model domain.
 
+    Returns:
+        A dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
     """
     dev_index = self.data_catalog.get_dataframe(
         "UN_dev_index"
