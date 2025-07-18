@@ -1017,7 +1017,6 @@ class Forcing:
         ]
 
         da = self._mask_forcing(da, value=-offset)
-        print(get_chunk_size(da))
         da = self.set_other(
             da,
             name=name,
@@ -1026,7 +1025,6 @@ class Forcing:
             byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
-            time_chunksize=get_chunk_size(da, target=1e7),
         )
         self.plot_forcing(da, name)
         return da
@@ -2037,9 +2035,7 @@ class Forcing:
             elevation_grid = open_zarr(elevation_grid_fp)
 
         else:
-            print("Reading elevation data...")
             elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
-            print("done reading elevation data")
             elevation = elevation.isel(
                 band=0,
                 **get_window(
@@ -2049,32 +2045,22 @@ class Forcing:
             elevation = elevation.drop("band")
             elevation = xr.where(elevation == -9999, 0, elevation)
             elevation.attrs["_FillValue"] = np.nan
-            print("elevation")
-            print("start resample")
-            print(forcing_grid.isel(time=0).drop("time"))
             target = forcing_grid.isel(time=0).drop("time")
 
             elevation_forcing = resample_like(elevation, target, method="bilinear")
-            elevation_forcing = elevation_forcing.chunk({"x": 40, "y": 40})
-            print("done resample")
 
             elevation_forcing = to_zarr(
                 elevation_forcing,
                 elevation_forcing_fp,
                 crs=4326,
-                x_chunksize=40,
-                y_chunksize=40,
             )
 
             elevation_grid = resample_like(elevation, grid, method="bilinear")
-            elevation_grid = elevation_grid.chunk({"x": 40, "y": 40})
 
             elevation_grid = to_zarr(
                 elevation_grid,
                 elevation_grid_fp,
                 crs=4326,
-                x_chunksize=40,
-                y_chunksize=40,
             )
 
             print("done")

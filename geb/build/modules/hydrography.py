@@ -101,10 +101,6 @@ def create_river_raster_from_river_lines(rivers, target, column=None, index=None
         transform=target.rio.transform(),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
     )
-
-    # check that upstream area of all rivers is larger than 25 km^2. But because there are some rounding errors, we use a threshold of 24 km^2
-    # assert np.nanmin(original_upstream_area.values[river_raster != -1]) > 24 * 1e6
-
     return river_raster
 
 

@@ -932,7 +932,6 @@ class Crops:
             self.data_catalog,
             MIRCA_units=np.unique(MIRCA_unit_grid.values),
         )
-        # Note: missing MIRCA units should be improved further! Check with Jens
         if any(value in [None, "", [], {}] for value in crop_calendar.values()):
             missing_mirca_unit = [
                 unit for unit, calendars in crop_calendar.items() if not calendars
@@ -962,7 +961,7 @@ class Crops:
                 )
 
         else:
-            print("All keys have valid values.")
+            self.logger.debug("All keys have valid values.")
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"
