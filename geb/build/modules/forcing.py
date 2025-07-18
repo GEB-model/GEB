@@ -27,7 +27,6 @@ from geb.workflows.io import get_window
 from ...workflows.io import calculate_scaling, open_zarr, to_zarr
 from ..workflows.general import (
     interpolate_na_along_time_dim,
-    resample_chunked,
     resample_like,
 )
 
@@ -37,10 +36,12 @@ def reproject_and_apply_lapse_rate_temperature(
 ) -> xr.DataArray:
     assert (T.x.values == elevation_forcing.x.values).all()
     assert (T.y.values == elevation_forcing.y.values).all()
+
     t_at_sea_level = T - elevation_forcing * lapse_rate
     t_at_sea_level_reprojected = resample_like(
         t_at_sea_level, elevation_target, method="conservative"
     )
+
     T_grid = t_at_sea_level_reprojected + lapse_rate * elevation_target
     T_grid.name = T.name
     T_grid.attrs = T.attrs
@@ -1137,11 +1138,11 @@ class Forcing:
         pr = self.set_pr(pr)
 
         hourly_tas = process_ERA5("t2m", **download_args)
-
         tas_avg = hourly_tas.resample(time="D").mean()
         tas_avg = reproject_and_apply_lapse_rate_temperature(
             tas_avg, elevation_forcing, elevation_target
         )
+
         self.set_tas(tas_avg)
 
         tasmax = hourly_tas.resample(time="D").max()
@@ -1196,10 +1197,11 @@ class Forcing:
         self.set_rlds(rlds)
 
         pressure = process_ERA5("sp", **download_args)
+        pressure = pressure.resample(time="D").mean()
         pressure = reproject_and_apply_lapse_rate_pressure(
             pressure, elevation_forcing, elevation_target
         )
-        pressure = pressure.resample(time="D").mean()
+
         self.set_ps(pressure)
 
         u_wind = process_ERA5(
@@ -2011,42 +2013,42 @@ class Forcing:
         elevation_forcing_fp: Path = (
             self.preprocessing_dir / "climate" / forcing_name / "DEM_forcing.zarr"
         )
-        elevation_grid_fp: Path = self.preprocessing_dir / "climate" / "DEM.zarr"
+        elevation_grid_fp = self.preprocessing_dir / "climate" / "DEM.zarr"
+
         if elevation_forcing_fp.exists() and elevation_grid_fp.exists():
-            elevation_forcing: xr.DataArray = open_zarr(elevation_forcing_fp)
-            elevation_grid: xr.DataArray = open_zarr(elevation_grid_fp)
+            elevation_forcing = open_zarr(elevation_forcing_fp)
+            elevation_grid = open_zarr(elevation_grid_fp)
+
         else:
-            elevation: xr.DataArray = xr.open_dataarray(
-                self.data_catalog.get_source("fabdem").path
+            elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
+            elevation = elevation.isel(
+                band=0,
+                **get_window(
+                    elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
+                ),
             )
-            elevation: xr.DataArray = (
-                elevation.isel(
-                    band=0,
-                    **get_window(
-                        elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
-                    ),
-                )
-                .raster.mask_nodata()
-                .fillna(0)
-                .chunk({"x": 2000, "y": 2000})
-            )
-            elevation_forcing: xr.DataArray = resample_chunked(
-                elevation,
-                forcing_grid.isel(time=0).chunk({"x": 10, "y": 10}),
-                method="bilinear",
-            )
-            elevation_forcing: xr.DataArray = to_zarr(
+            elevation = elevation.drop("band")
+            elevation = xr.where(elevation == -9999, 0, elevation)
+            elevation.attrs["_FillValue"] = np.nan
+            target = forcing_grid.isel(time=0).drop("time")
+
+            elevation_forcing = resample_like(elevation, target, method="bilinear")
+
+            elevation_forcing = to_zarr(
                 elevation_forcing,
                 elevation_forcing_fp,
                 crs=4326,
             )
-            elevation_grid: xr.DataArray = resample_chunked(
-                elevation, grid.chunk({"x": 50, "y": 50}), method="bilinear"
-            )
-            elevation_grid: xr.DataArray = to_zarr(
-                elevation_grid, elevation_grid_fp, crs=4326
+
+            elevation_grid = resample_like(elevation, grid, method="bilinear")
+
+            elevation_grid = to_zarr(
+                elevation_grid,
+                elevation_grid_fp,
+                crs=4326,
             )
 
+            print("done")
         return elevation_forcing.chunk({"x": -1, "y": -1}), elevation_grid.chunk(
             {"x": -1, "y": -1}
         )

@@ -24,17 +24,23 @@ def load_GLOPOP_S(data_catalog, GDL_region):
         "WALL",
         "ROOF",
         "SOURCE",
-        "GRID_CELL",
+        "GRID_CELL",  # CHECK WHAT THE NEW COLUMN IS (ASK MARIJN)
     ]
 
-    # get path to GLOPOP tables
-    GLOPOP_S = data_catalog.get_source("GLOPOP-S")
+    GLOPOP_SG = data_catalog.get_source("GLOPOP-SG")
 
-    # get path to GLOPOP grid
-    GLOPOP_S_GRID = data_catalog.get_source("GLOPOP-SG")
-
-    with gzip.open(GLOPOP_S.path.format(region=GDL_region), "rb") as f:
-        GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
+    # load the GLOPOP files for the specified GDL region
+    file_name_tif = f"{GDL_region}_grid_nr.tif"
+    file_name_gz = f"synthpop_{GDL_region}_grid.dat.gz"
+    # Open the zip file
+    with zipfile.ZipFile(GLOPOP_SG.path, "r") as zip_ref:
+        # Open the GLOPOP_SG grid file
+        with zip_ref.open(file_name_tif) as file:
+            GLOPOP_GRID_region = rioxarray.open_rasterio(file)
+        # Open the GLOPOP_SG synthpop file
+        with zip_ref.open(file_name_gz) as file:
+            with gzip.open(file, "rb") as f:
+                GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
 
     n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
     GLOPOP_S_region = pd.DataFrame(
@@ -43,10 +49,6 @@ def load_GLOPOP_S(data_catalog, GDL_region):
         ).transpose(),
         columns=GLOPOP_S_attribute_names,
     )
-
-    # load grid
-    fn_grid = f"/vsizip/{GLOPOP_S_GRID.path}/{GDL_region}_grid_nr.tif"
-    GLOPOP_GRID_region = rioxarray.open_rasterio(fn_grid)
 
     # Get coordinates of each GRID_CELL in GLOPOP_GRID_region
     grid_coords = pd.DataFrame(
@@ -61,7 +63,17 @@ def load_GLOPOP_S(data_catalog, GDL_region):
     grid_coords["coord_Y"] = GLOPOP_GRID_region.y.values[grid_coords["GRID_Y"]]
     grid_coords["coord_X"] = GLOPOP_GRID_region.x.values[grid_coords["GRID_X"]]
 
+    # no nans in GRID_Y
+
     # Merge the coordinates onto GLOPOP_S_region
     GLOPOP_S_region = GLOPOP_S_region.merge(grid_coords, on="GRID_CELL", how="left")
+    # assert not GLOPOP_S_region["GRID_Y"].isna().any(), (
+    #     "GRID_Y contains NaN values, CHECK GLOPOP DATA"
+    # )
+    if GLOPOP_S_region["GRID_Y"].isna().any():
+        GLOPOP_S_region = GLOPOP_S_region[~GLOPOP_S_region.GRID_Y.isna()]
+        print(
+            f"WARNING: GRID_Y contains NaN values, CHECK GLOPOP DATA. REGION: {GDL_region}"
+        )
 
     return GLOPOP_S_region, GLOPOP_GRID_region
