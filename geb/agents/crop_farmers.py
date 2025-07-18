@@ -964,7 +964,7 @@ class CropFarmers(AgentBaseClass):
 
     def save_water_deficit(self, discount_factor=0.2):
         water_deficit_day_m3 = (
-            self.HRU.var.ETRef - self.HRU.pr
+            self.HRU.var.reference_evapotranspiration_grass - self.HRU.pr
         ) * self.HRU.var.cell_area
         water_deficit_day_m3[water_deficit_day_m3 < 0] = 0
 

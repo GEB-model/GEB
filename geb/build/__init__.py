@@ -29,6 +29,8 @@ from pyflwdir import from_array
 from rasterio.env import defenv
 from shapely.geometry import Point
 
+from geb.build.methods import build_method
+
 from ..workflows.io import open_zarr, to_zarr
 from .modules import (
     Agents,
@@ -58,8 +60,6 @@ defenv(**GDAL_HTTP_ENV_OPTS)
 XY_CHUNKSIZE = 3000  # chunksize for xy coordinates
 
 os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
-
-logger = logging.getLogger(__name__)
 
 
 def convert_timestamp_to_string(timestamp):
@@ -521,9 +521,9 @@ class GEBModel(
 ):
     def __init__(
         self,
+        logger: logging.Logger,
         root: str | None = None,
         data_catalogs: List[str] | None = None,
-        logger=logger,
         epsg=4326,
         data_provider: str = "default",
     ):
@@ -562,6 +562,7 @@ class GEBModel(
 
         self.files: defaultdict = defaultdict(dict)
 
+    @build_method
     def setup_region(
         self,
         region: dict,
@@ -966,6 +967,7 @@ class GEBModel(
 
         submask = self.set_subgrid(submask, name="mask")
 
+    @build_method
     def set_time_range(self, start_date, end_date):
         assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
@@ -981,6 +983,7 @@ class GEBModel(
     def end_date(self):
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
 
+    @build_method
     def set_ssp(self, ssp: str):
         assert ssp in ["ssp1", "ssp3", "ssp5"], (
             f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
@@ -1060,6 +1063,7 @@ class GEBModel(
             byteshuffle=True,
         )
 
+    @build_method
     def setup_damage_parameters(self, parameters):
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
@@ -1152,8 +1156,11 @@ class GEBModel(
 
         self.geoms[name] = fp_with_root
 
-    def write_file_library(self):
-        file_library: defaultdict = self.read_file_library()
+    def write_file_library(self, read_first: bool = True) -> None:
+        if read_first:
+            file_library: defaultdict = self.read_file_library()
+        else:
+            file_library: defaultdict = defaultdict(dict)
 
         # merge file library from disk with new files, prioritizing new files
         for type_name, type_files in self.files.items():
@@ -1409,13 +1416,6 @@ class GEBModel(
             **kwargs,
         )
 
-    def check_methods(self, opt):
-        """Check all opt keys and raise sensible error messages if unknown."""
-        for method in opt.keys():
-            if not callable(getattr(self, method, None)):
-                raise ValueError(f'Build has no method "{method}"')
-        return opt
-
     def run_method(self, method, *args, **kwargs):
         """Log method parameters before running a method."""
         func = getattr(self, method)
@@ -1433,39 +1433,45 @@ class GEBModel(
                 if len(args) > i:
                     v = args[i]
                 params[k] = v
-        # log options
-        for k, v in params.items():
-            if v is not inspect._empty:
-                self.logger.info(f"{method}.{k}: {v}")
         return func(*args, **kwargs)
 
-    def run_methods(self, methods):
+    def run_methods(self, methods, validate_order: bool = True) -> None:
+        """Run methods in the order specified in the methods dictionary.
+
+        Args:
+            methods: A dictionary with method names as keys and their parameters as values.
+            validate_order: If True, validate the order of methods using the build_method decorator.
+        """
         # then loop over other methods
+        # TODO: Allow validate order for custom models
+        build_method.validate_methods(methods, validate_order=validate_order)
         for method in methods:
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
-            self.write_file_library()
+            if method == "setup_region":
+                self.write_file_library(read_first=False)
+            else:
+                self.write_file_library(read_first=True)
 
         self.logger.info("Finished!")
 
     def build(self, region: dict, methods: dict):
+        """Build the model with the specified region and methods."""
         methods: dict[str:Any] = methods or {}
-        methods = self.check_methods(methods)
         methods["setup_region"].update(region=region)
 
-        self.run_methods(methods)
+        self.run_methods(methods, validate_order=True and type(self) is GEBModel)
 
     def update(
         self,
         methods: dict,
     ):
         methods = methods or {}
-        methods = self.check_methods(methods)
 
         if "setup_region" in methods:
             raise ValueError('"setup_region" can only be called when building a model.')
 
-        self.run_methods(methods)
+        self.run_methods(methods, validate_order=False and type(self) is GEBModel)
 
     def get_linear_indices(self, da):
         """Get linear indices for each cell in a 2D DataArray."""

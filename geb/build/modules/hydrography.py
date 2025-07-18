@@ -12,6 +12,7 @@ from rasterio.features import rasterize
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString
 
+from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
 
 
@@ -165,6 +166,7 @@ class Hydrography:
     def __init__(self):
         pass
 
+    @build_method(depends_on=["setup_hydrography", "setup_cell_area"])
     def setup_mannings(self) -> None:
         """Sets up the Manning's coefficient for the model.
 
@@ -220,6 +222,7 @@ class Hydrography:
 
         self.set_geoms(subbasins, name="routing/subbasins")
 
+    @build_method
     def setup_hydrography(self):
         original_d8_elevation = self.other["drainage/original_d8_elevation"]
         original_d8_ldd = self.other["drainage/original_d8_flow_directions"]
@@ -451,6 +454,7 @@ class Hydrography:
         river_width.data = river_width_data
         self.set_grid(river_width, name="routing/river_width")
 
+    @build_method
     def setup_waterbodies(
         self,
         command_areas=None,

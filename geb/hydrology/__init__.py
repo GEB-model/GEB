@@ -217,14 +217,16 @@ class Hydrology(Data, Module):
         self.lakes_res_small.step()
         timer.new_split("Small waterbodies")
 
-        routing_loss, over_abstraction_m3 = self.routing.step(
+        routing_loss_m3, over_abstraction_m3 = self.routing.step(
             total_runoff, channel_abstraction_m3, return_flow
         )
+
+        current_storage: np.float64 = self.get_current_storage()
 
         if __debug__:
             influx += over_abstraction_m3
 
-            outflux += routing_loss
+            outflux += routing_loss_m3
             invented_water += (
                 (interflow + runoff + return_flow) * self.grid.var.cell_area
             ).sum()  # added to sinks, so remove from invented water
@@ -246,7 +248,7 @@ class Hydrology(Data, Module):
                     outflux,
                 ],
                 prestorages=[prev_storage],
-                poststorages=[self.get_current_storage()],
+                poststorages=[current_storage],
                 tollerance=self.grid.compressed_size
                 / 3,  # increase tollerance for large models
             )

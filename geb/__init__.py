@@ -28,7 +28,7 @@ if Path("/scistor/ivm/GEB").exists():
         "/ada-software/containers/sfincs-cpu-v2.2.0-col-dEze-Release.sif"
     )
     os.environ["SFINCS_SIF_GPU"] = (
-        "/ada-software/containers/sfincs-gpu-coldeze_combo_cc90.sif"
+        "/ada-software/containers/sfincs-gpu.coldeze_combo_ccall.sif"
     )
 
 

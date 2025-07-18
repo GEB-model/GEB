@@ -8,6 +8,7 @@ import pandas as pd
 import xarray as xr
 from honeybees.library.raster import sample_from_map
 
+from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
 from ..workflows.conversions import (
@@ -23,6 +24,7 @@ class Crops:
     def __init__(self):
         pass
 
+    @build_method(depends_on=[])
     def setup_crops(
         self,
         crop_data: dict,
@@ -85,6 +87,7 @@ class Crops:
 
         self.set_dict(crop_data, name="crops/crop_data")
 
+    @build_method(depends_on=[])
     def setup_crops_from_source(
         self,
         source: Union[str, None] = "MIRCA2000",
@@ -120,38 +123,30 @@ class Crops:
 
     def process_crop_data(
         self,
-        crop_prices,
-        translate_crop_names=None,
-        adjust_currency=False,
+        crop_prices: str | int | float,
+        translate_crop_names: dict | None = None,
+        adjust_currency: bool = False,
     ):
         """Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
 
-        Parameters
-        ----------
-        crop_prices : str, int, or float
-            If 'FAO_stat', fetches crop price data from FAO statistics. Otherwise, it can be a constant value for crop prices.
-        project_past_until_year : int, optional
-            The year to project past data until. Defaults to False.
-        project_future_until_year : int, optional
-            The year to project future data until. Defaults to False.
+        Args:
+            crop_prices: If 'FAO_stat', fetches crop price data from FAO statistics. Otherwise, it can be a constant value for crop prices.
+            translate_crop_names: A dictionary mapping crop names to their translated names.
+            adjust_currency: If True, adjusts the crop prices based on currency conversion rates.
 
         Returns:
-        -------
-        dict
             A dictionary containing processed crop data in a time series format or as a constant value.
 
         Raises:
-        ------
-        ValueError
-            If crop_prices is neither a valid file path nor an integer/float.
+            ValueError
+                If crop_prices is neither a valid file path nor an integer/float.
 
         Notes:
-        -----
-        The function performs the following steps:
-        1. Fetches and processes crop data from FAO statistics if crop_prices is 'FAO_stat'.
-        2. Adjusts the data for countries with missing values using PPP conversion rates.
-        3. Determines price variability and performs interpolation/extrapolation of crop prices.
-        4. Formats the processed data into a nested dictionary structure.
+            The function performs the following steps:
+            1. Fetches and processes crop data from FAO statistics if crop_prices is 'FAO_stat'.
+            2. Adjusts the data for countries with missing values using PPP conversion rates.
+            3. Determines price variability and performs interpolation/extrapolation of crop prices.
+            4. Formats the processed data into a nested dictionary structure.
         """
         if crop_prices == "FAO_stat":
             crop_data = self.data_catalog.get_dataframe(
@@ -711,6 +706,7 @@ class Crops:
 
         return data
 
+    @build_method(depends_on=["set_time_range"])
     def setup_cultivation_costs(
         self,
         cultivation_costs: Optional[Union[str, int, float]] = 0,
@@ -734,6 +730,15 @@ class Crops:
         )
         self.set_dict(cultivation_costs, name="crops/cultivation_costs")
 
+    @build_method(
+        depends_on=[
+            "set_time_range",
+            "setup_regions_and_land_use",
+            "setup_economic_data",
+            "setup_crops_from_source",
+            "setup_farmer_crop_calendar",
+        ]
+    )
     def setup_crop_prices(
         self,
         crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
@@ -758,6 +763,7 @@ class Crops:
         self.set_dict(crop_prices, name="crops/crop_prices")
         self.set_dict(crop_prices, name="crops/cultivation_costs")
 
+    @build_method(depends_on=[])
     def determine_crop_area_fractions(self, resolution="5-arcminute"):
         output_folder = "plot/mirca_crops"
         os.makedirs(output_folder, exist_ok=True)
@@ -894,6 +900,7 @@ class Crops:
             save_dir / "crop_irrigated_fraction_all_years.nc"
         )
 
+    @build_method(depends_on=[])
     def setup_farmer_crop_calendar_multirun(
         self,
         reduce_crops=False,
@@ -909,6 +916,7 @@ class Crops:
                     year_nr, reduce_crops, replace_base, export
                 )
 
+    @build_method(depends_on=["setup_create_farms"])
     def setup_farmer_crop_calendar(
         self,
         year=2000,
