@@ -1086,6 +1086,7 @@ class GEBModel(
                         name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
 
+    @build_method
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors
     ):
