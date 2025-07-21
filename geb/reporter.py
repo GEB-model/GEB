@@ -86,6 +86,16 @@ class Reporter:
             and self.model.config["report"]
         ):
             self.activated = True
+
+            to_delete = []
+            for module_name, configs in self.model.config["report"].items():
+                if module_name.startswith("_"):
+                    # skip internal modules
+                    to_delete.append(module_name)
+
+            for module_name in to_delete:
+                del self.model.config["report"][module_name]
+
             for module_name, configs in self.model.config["report"].items():
                 self.variables[module_name] = {}
                 for name, config in configs.items():
@@ -324,11 +334,23 @@ class Reporter:
         if fancy_index:
             fancy_index = fancy_index.group(0)
             varname = varname.replace(fancy_index, "")
+
+        # get the variable
         if varname.startswith("."):
             varname = varname[1:]
-            value = local_variables[varname]
+            try:
+                value = local_variables[varname]
+            except KeyError:
+                raise KeyError(
+                    f"Variable {varname} not found in local variables of {module_name}. "
+                )
         else:
-            value = attrgetter(varname)(module)
+            try:
+                value = attrgetter(varname)(module)
+            except AttributeError:
+                raise AttributeError(
+                    f"Attribute {varname} not found in module {module_name}. "
+                )
 
         if fancy_index:
             value = eval(f"value{fancy_index}")
