@@ -752,8 +752,8 @@ def update(*args, **kwargs):
 @click.option(
     "--methods", default=None, help="Comma-seperated list of methods to evaluate."
 )
-@click.option("--spinup_name", default="spinup", help="Name of the evaluation run.")
-@click.option("--run_name", default="default", help="Name of the run to evaluate.")
+@click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
+@click.option("--run-name", default="default", help="Name of the run to evaluate.")
 @click.option(
     "--include-spinup",
     is_flag=True,
