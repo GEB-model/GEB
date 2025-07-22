@@ -70,6 +70,7 @@ class Households(AgentBaseClass):
         self.load_objects()
         self.load_max_damage_values()
         self.load_damage_curves()
+        self.load_wlranges_and_measures()
 
         if self.model.in_spinup:
             self.spinup()
@@ -220,10 +221,29 @@ class Households(AgentBaseClass):
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
-        # initiate array for warning range [0=not reached, 1=reached]
+        # initiate array for warning range [0 = not warned, 1 = warned]
         self.var.warning_reached = DynamicArray(
             np.zeros(self.n, np.int32), max_n=self.max_n
         )
+
+        # initiate array for response probability (between 0 and 1)
+        rng = np.random.default_rng(42)
+        self.var.response_probability = DynamicArray(
+            rng.random(self.n), max_n=self.max_n
+        )
+
+        # initiate array for evacuation status [0=not evacuated, 1=evacuated]
+        self.var.evacuated = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
+
+        # initiate array for storing the recommended measures received with the warnings
+        # self.var.recommended_measures = DynamicArray(
+        #     np.empty(self.n, dtype=object), max_n=self.max_n
+        # ) --> assert error, cannot be dtype cannot be object --> not dynamic for now
+        self.var.recommended_measures = np.array([set() for _ in range(self.n)])
+
+        # initiate array for storing the actions taken by the household
+        # --> assert error, cannot be dtype cannot be object --> not dynamic for now
+        self.var.actions_taken = np.array([set() for _ in range(self.n)])
 
         # initiate array with risk perception [dummy data for now]
         self.var.risk_perc_min = self.model.config["agent_settings"]["households"][
@@ -506,7 +526,7 @@ class Households(AgentBaseClass):
                 (1, 0.1, 1.0),
                 (2, 1.0, 2.0),
                 (3, 2.0, None),
-            ]  # NEED TO CREATE A PARQUET FILE WITH THE RIGHT RANGES
+            ]  # should I create a parquet file or a json file(dict) with these ranges?
 
         elif strategy == 2:
             # Water level ranges for strategy 2 (based on critical infrastructure)
@@ -614,6 +634,7 @@ class Households(AgentBaseClass):
 
         days = self.model.config["general"]["forecasts"]["days"]
         range_ids = [1, 2, 3]
+        # range_ids = list(self.var.wlranges_and_measures.keys()) activate later when you have the prob maps
         warnings_log = []
 
         # Create probability maps
@@ -656,7 +677,7 @@ class Households(AgentBaseClass):
 
                     if percentage >= area_threshold:
                         print(
-                            f"Warning issued to postal code {pc4_code} on {day} for range {range_id}: {percentage:.2%} of pixels > {prob_threshold}"
+                            f"Warning issued to postal code {pc4_code} on {day} for range {range_id}: {percentage:.0%} of pixels > {prob_threshold}"
                         )
 
                         # Filter the affected households based on the postal code
@@ -667,7 +688,7 @@ class Households(AgentBaseClass):
                         # Communicate the warning to the target households
                         # This function should return the number of households that were warned
                         n_warned_households = self.warning_communication(
-                            target_households=affected_households
+                            affected_households, range_id
                         )
 
                         warnings_log.append(
@@ -717,7 +738,7 @@ class Households(AgentBaseClass):
             / "prob_maps"
             / f"prob_map_range1_forecast{day.strftime('%Y-%m-%d')}_strategy2.tif"
         )
-        # prob_tif_path = "C:\\Users\\adq582\\Documents\\Programming\\GEB\\models\\geul\\base\\output\\prob_maps\\prob_map_range1_forecast2021-07-13_strategy2.tif"
+
         prob_map = rasterio.open(prob_tif_path)
         prob_array = prob_map.read(1)
         affine = prob_map.transform
@@ -748,6 +769,7 @@ class Households(AgentBaseClass):
                 n_warned_households = self.warning_communication(
                     target_households=affected_households
                 )
+                # need to give the warning communication function the range measures
                 # Need to think about how to deal with the communication efficiency for the two different strategies
 
                 print(
@@ -766,18 +788,30 @@ class Households(AgentBaseClass):
             path = os.path.join(self.model.output_folder, "warning_log_energy.csv")
             pd.DataFrame(warning_log).to_csv(path, index=False)
 
-    def warning_communication(self, target_households):
-        """Communicates the warning to households based on the communication efficiency.
+        # NEED TO ADD A CHECK IF THE LEADTIME IS < THAN 48H TO DO THIS STRATEGY
 
+    def warning_communication(self, target_households, range_id, warning_range=0.35):
+        # need to get the range measures from the other functions
+        """Communicates a warning to households based on the communication efficiency.
         changes risk perception --> to be moved to the update risk perception function;
-        and return the number of households that were warned
+        and return the number of households that were warned. need to describe what each argument in the function is
         """
         print("Communicating the warning...")
-        # Define the % of households reached by the warning
-        warning_range = 0.35
+
+        # Get the measures and evacuation advice from the dict with wl ranges and measures
+        wlranges_and_measures = self.var.wlranges_and_measures
+        measures = wlranges_and_measures[range_id]["measure"]
+        evacuate = wlranges_and_measures[range_id]["evacuate"]
 
         # Total number of target households
         n_target_households = len(target_households)
+
+        # Get lead time in hours
+        start_time = self.model.config["hazards"]["floods"]["events"][0][
+            "start_time"
+        ].date()
+        current_time = self.model.current_time.date()
+        lead_time = (start_time - current_time).total_seconds() / 3600
 
         # If no target households, return 0 warned households
         if n_target_households == 0:
@@ -785,23 +819,154 @@ class Households(AgentBaseClass):
 
         # Get random indices to change the warning state
         n_warned_households = int(n_target_households * warning_range)
-        indices = np.random.choice(
+        position_indices = np.random.choice(
             n_target_households, n_warned_households, replace=False
         )
+        selected_households = target_households.iloc[position_indices]
 
-        # Get the pointids of the households that should get the warning
-        household_id = target_households.iloc[indices]["pointid"]
+        warned_ids = []
+        for _, row in selected_households.iterrows():
+            # Get the 'original' index of the household point
+            household_id = row["pointid"]
 
-        # Change warning reached attribute to 1 (received a warning)
-        self.var.warning_reached[household_id] = 1
+            # If the household has already evacuated, do not communicate the warning
+            if self.var.evacuated[household_id] == 1:
+                continue
 
-        # Increase risk perception of households who received the warning
-        self.var.risk_perception[household_id] *= 10
+            # Get current recommended measures as a set
+            received = self.var.recommended_measures[household_id]
+            # this should be the set where you store the recommended measures
+
+            # If the household did not get the warning yet, issue warning with recommended measures
+            # (if received already contains the measures, do not warn again)
+            if not received.issuperset(measures):
+                self.var.warning_reached[household_id] = 1
+                self.var.recommended_measures[household_id].update(measures)
+                warned_ids.append(household_id)
+
+            # If evacuation is advised and household did not get the evacuation warning yet, and lead time ≤ 48h, issue evacuation warning
+            if evacuate and "evacuate" not in received and lead_time <= 48:
+                self.var.warning_reached[household_id] = 1
+                self.var.recommended_measures[household_id].add("evacuate")
+                warned_ids.append(household_id)
 
         print(f"Warning targeted to reach {n_target_households} households.")
-        print(f"Warning reached {len(household_id)} households.")
+        print(f"Warning reached {len(set(warned_ids))} households.")
 
         return n_warned_households
+        # Need to add the evacuation warning from second warning strategy in case the leadtime is <48h and there is no evacuation warning coming from the first strategy
+
+    def household_decision_making(self, responsive_ratio=0.7):
+        """This function simulates the decision-making process of households that received warnings,
+        based on recommended measures, lead time, and implementation times.
+        """
+        print("Running emergency response decision-making for households...")
+
+        # Initialize an empty list to log actions taken
+        actions_log = []
+
+        # Get lead time in hours
+        start_time = self.model.config["hazards"]["floods"]["events"][0][
+            "start_time"
+        ].date()
+        current_time = self.model.current_time.date()
+        lead_time = (start_time - current_time).total_seconds() / 3600
+
+        implementation_times = self.var.implementation_times
+        evacuation_time = implementation_times["evacuate"]
+
+        # Filter households that did not evacuate, were warned and are responsive
+        # (AND FILTER OUT WHO TOOK ACTION, BUT THERE IS THE PROBLEM WITH EVACUATION...)
+        not_evacuated_ids = self.var.evacuated == 0
+        warned_ids = self.var.warning_reached == 1
+        responsive_ids = self.var.response_probability < responsive_ratio
+
+        eligible_ids = warned_ids & not_evacuated_ids & responsive_ids
+
+        # Apply the indices to household_points (maybe I can get the postal codes or add actions to this one)
+        eligible_households = self.var.household_points[eligible_ids]
+
+        # For every eligible household, check the measures and their time of implementation
+        for household_id, _ in eligible_households.iterrows():
+            actions = []
+            possible_measures = self.var.recommended_measures[household_id]
+            total_time_all = sum(
+                implementation_times[measure] for measure in possible_measures
+            )
+
+            # Check if evacuation is in the recommended measures
+            evacuate = "evacuate" in possible_measures
+
+            # Check if there were advised any inplace measures
+            inplace_measures = [
+                measure for measure in possible_measures if measure != "evacuate"
+            ]
+
+            # If only inplace measures are advised...
+            if not evacuate:
+                if self.var.actions_taken[household_id]:
+                    continue  # Skip if actions were already taken
+
+                # If lead time is sufficient for all (inplace) measures, take all measures
+                if lead_time >= total_time_all:
+                    actions = list(possible_measures)
+                else:
+                    # If lead time is not sufficient for all measures, check if any measure can be done
+                    actions = [
+                        measure
+                        for measure in possible_measures
+                        if implementation_times[measure] <= lead_time
+                    ]
+                    # Take only the first measure from the list that fits the lead time
+                    actions = actions[:1] if actions else []
+
+            # If evacuation is advised...
+            else:
+                # Check if lead time is sufficient for all measures and evacuation
+                if lead_time >= total_time_all:
+                    actions = list(possible_measures)
+                    self.var.evacuated[household_id] = 1
+                elif inplace_measures:
+                    # If lead time is not sufficient for all measures, check if any inplace measure can be done before evacuation
+                    for m in inplace_measures:
+                        measure_implementation_time = implementation_times[m]
+                        if measure_implementation_time + evacuation_time <= lead_time:
+                            actions = [m, "evacuate"]
+                            self.var.evacuated[household_id] = 1
+                            break
+                    else:
+                        if evacuation_time <= lead_time:
+                            actions = ["evacuate"]
+                            self.var.evacuated[household_id] = 1
+                # elif evacuation_time <= lead_time:
+                #     # If no inplace measures are advised and there is enough time, only evacuate
+                #     actions = ["evacuate"]
+                #     self.var.evacuated[household_id] = 1 --> Actually I think I dont need this
+
+            # If there are actions to take, log them and update self.var.actions_taken
+            if actions:
+                self.var.actions_taken[household_id].update(actions)
+                # self.var.household_points.at[household_id, "actions_taken"] = (
+                #    self.var.actions_taken[household_id]
+                # )
+                actions_log.append(
+                    {
+                        "lead_time": lead_time,
+                        "postal_code": self.var.household_points.loc[
+                            household_id, "postcode"
+                        ],
+                        "household_id": household_id,
+                        "actions": actions,
+                    }
+                )
+
+        # Save actions log
+        path = os.path.join(self.model.output_folder, "actions_log.csv")
+        pd.DataFrame(actions_log).to_csv(path, index=False)
+
+        # NEED TO INCLUDE 2ND STRATEGY HERE
+        # NEED TO SAVE THE ACTIONS LOG
+        # NEED TO SAVE THE ACTIONS TAKEN IN THE VAR OBJECT AS SET OR LIST
 
     def decide_household_strategy(self):
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
@@ -1065,6 +1230,15 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "rail"}
         )
 
+    def load_wlranges_and_measures(self):
+        with open(self.model.files["dict"]["measures/implementation_times"], "r") as f:
+            self.var.implementation_times = json.load(f)
+
+        with open(self.model.files["dict"]["measures/wl_ranges"], "r") as f:
+            dict = json.load(f)
+            # convert the keys (range ids) to integers and store them in a new dictionary
+            self.var.wlranges_and_measures = {int(k): v for k, v in dict.items()}
+
     def create_damage_interpolators(self):
         # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
         self.var.buildings_content_curve_interpolator = interpolate.interp1d(
@@ -1084,6 +1258,7 @@ class Households(AgentBaseClass):
         if self.config["warning_response"]:
             self.change_household_locations()  # ideally this should be done in the setup_population when building the model
         self.water_level_warning_strategy()
+        self.household_decision_making()
 
         print("test")
 
@@ -1109,6 +1284,7 @@ class Households(AgentBaseClass):
         buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
             buildings, household_points, how="left", exclusive=True
         )
+        # I need to check if this is working
 
         buildings["object_type"] = "building_unprotected"
         buildings.loc[buildings["protect_building"], "object_type"] = (
