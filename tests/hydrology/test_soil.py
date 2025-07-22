@@ -7,8 +7,11 @@ import pytest
 
 import geb.hydrology.soil
 from geb.hydrology.soil import (
+    adjust_roots_for_soil_water_stress,
     get_critical_soil_moisture_content,
     get_fraction_easily_available_soil_water,
+    get_infiltration_capacity,
+    get_saturated_area_fraction,
     get_soil_moisture_at_pressure,
     get_soil_water_flow_parameters,
     get_transpiration_factor,
@@ -19,6 +22,143 @@ from ..testconfig import output_folder
 
 output_folder_soil = output_folder / "soil"
 output_folder_soil.mkdir(exist_ok=True)
+
+
+def test_get_saturated_area_fraction():
+    saturated_area_fraction = get_saturated_area_fraction(
+        soil_water_storage=0.0, soil_water_storage_max=0.7, arno_beta=0.5
+    )
+    assert saturated_area_fraction == 0.0
+
+    saturated_area_fraction = get_saturated_area_fraction(
+        soil_water_storage=0.7, soil_water_storage_max=0.7, arno_beta=0.5
+    )
+    assert saturated_area_fraction == 1.0
+
+    saturated_area_fraction_half_arno_0_5 = get_saturated_area_fraction(
+        soil_water_storage=0.35, soil_water_storage_max=0.7, arno_beta=0.5
+    )
+    assert saturated_area_fraction_half_arno_0_5 < 0.5
+
+    saturated_area_fraction_half_arno_0_1 = get_saturated_area_fraction(
+        soil_water_storage=0.35, soil_water_storage_max=0.7, arno_beta=0.1
+    )
+    assert saturated_area_fraction_half_arno_0_1 < saturated_area_fraction_half_arno_0_5
+
+
+def test_get_infiltration_capacity():
+    get_infiltration_capacity(
+        w=np.array([0.3, 0.3], dtype=np.float32),
+        ws=np.array([0.39, 0.4], dtype=np.float32),
+        arno_beta=0.1,
+    )
+    # get_infiltration_capacity(
+    #     w=np.array([0.1, 0.2], dtype=np.float32),
+    #     ws=np.array([0.3, 0.4], dtype=np.float32),
+    #     arno_beta=0.1,
+    # )
+
+
+def test_adjust_roots_for_soil_water_stress():
+    soil_layer_height = np.array([1.0, 1.0, 1.0, 1.0])
+    geb.hydrology.soil.N_SOIL_LAYERS = soil_layer_height.shape[0]
+
+    transpiration_factor_per_layer = adjust_roots_for_soil_water_stress(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=2.0,
+        w=np.array([0.3, 0.3, 0.3, 0.3]),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3]),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15]),
+        p=1.0,
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+    np.testing.assert_equal(
+        transpiration_factor_per_layer,
+        np.array([0.5, 0.5, 0.0, 0.0]),
+    )
+
+    transpiration_factor_per_layer = adjust_roots_for_soil_water_stress(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=2.5,
+        w=np.array([0.3, 0.3, 0.3, 0.3]),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3]),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15]),
+        p=1.0,
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+    np.testing.assert_equal(
+        transpiration_factor_per_layer,
+        np.array([0.4, 0.4, 0.2, 0.0]),
+    )
+
+    transpiration_factor_per_layer = adjust_roots_for_soil_water_stress(
+        soil_layer_height=np.array([0.05, 1.0, 1.0, 1.0]),
+        effective_root_depth=2.5,
+        w=np.array([0.03, 0.3, 0.3, 0.3]),
+        wfc=np.array([0.04, 0.3, 0.3, 0.3]),
+        wwp=np.array([0.01, 0.15, 0.15, 0.15]),
+        p=1.0,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.02, 0.4, 0.4, 0.18]),
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+
+    transpiration_factor_per_layer = adjust_roots_for_soil_water_stress(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=2.5,
+        w=np.array([0.15, 0.3, 0.3, 0.3]),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3]),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15]),
+        p=1.0,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.0, 1 / 3 * 2, 1 / 3, 0.0]),
+    )
+
+    transpiration_factor_per_layer = adjust_roots_for_soil_water_stress(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=2.5,
+        w=np.array([0.15, 0.15, 0.15, 0.3]),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3]),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15]),
+        p=1.0,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.0, 0.0, 0.0, 0.0]),
+    )
+
+    transpiration_factor_per_layer = adjust_roots_for_soil_water_stress(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=2.5,
+        w=np.array([0.16, 0.16, 0.16, 0.3]),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3]),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15]),
+        p=1.0,
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+    np.testing.assert_equal(
+        transpiration_factor_per_layer,
+        np.array([1.0 / 2.5, 1.0 / 2.5, 0.5 / 2.5, 0.0]),
+    )  # at p of 1, we can still extract water as we like
+
+    transpiration_factor_per_layer = adjust_roots_for_soil_water_stress(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=2.5,
+        w=np.array([0.16, 0.16, 0.16, 0.16]),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3]),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15]),
+        p=0.5,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.1333333 / 2.5, 0.1333333 / 2.5, 0.066666 / 2.5, 0.0]),
+        decimal=4,
+    )  # but at lower p, this becomes much more difficult
+    assert transpiration_factor_per_layer.sum() < 1.0
 
 
 def test_get_transpiration_factor():
