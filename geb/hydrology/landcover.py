@@ -199,7 +199,7 @@ class LandCover(Module):
             self.HRU.var.crop_map[self.HRU.var.land_use_type == GRASSLAND_LIKE] == -1
         ).all()
 
-        crop_factor[self.HRU.var.land_use_type == GRASSLAND_LIKE] = 0.2
+        crop_factor[self.HRU.var.land_use_type == GRASSLAND_LIKE] = 1.0  # grassland
 
         (
             potential_transpiration,
