@@ -167,17 +167,12 @@ def get_fraction_easily_available_soil_water(
     Calculation is based on crop group number and potential evapotranspiration
     following Van Diepen et al., 1988: WOFOST 6.0, p.87.
 
-    Parameters
-    ----------
-    crop_group_number : np.ndarray
-        The crop group number is a indicator of adaptation to dry climate,
-        Van Diepen et al., 1988: WOFOST 6.0, p.87
-    potential_evapotranspiration : np.ndarray
-        Potential evapotranspiration in m
+    Args:
+        crop_group_number: The crop group number is a indicator of adaptation to dry climate,
+            Van Diepen et al., 1988: WOFOST 6.0, p.87
+        potential_evapotranspiration: Potential evapotranspiration in m
 
     Returns:
-    -------
-    np.ndarray
         The fraction of easily available soil water, p is closer to 0 if evapo is bigger and cropgroup is smaller
     """
     potential_evapotranspiration_cm: np.float32 = (
@@ -190,9 +185,9 @@ def get_fraction_easily_available_soil_water(
 
     # Additional correction for crop groups 1 and 2
     if crop_group_number <= np.float32(2.5):
-        p: np.float32 = p + (potential_evapotranspiration_cm - np.float32(0.6)) / (
-            crop_group_number * (crop_group_number + np.float32(3.0))
-        )
+        p: np.float32 = np.float32(p) + (
+            potential_evapotranspiration_cm - np.float32(0.6)
+        ) / (crop_group_number * (crop_group_number + np.float32(3.0)))
 
     if p < np.float32(0):
         p: np.float32 = np.float32(0)
@@ -219,7 +214,19 @@ def get_transpiration_factor(w, wwp, wcrit):
 
 
 @njit(cache=True, inline="always")
-def get_root_ratios(root_depth, soil_layer_height):
+def get_root_ratios(
+    root_depth: np.float32, soil_layer_height: npt.NDArray[np.float32]
+) -> npt.NDArray[np.float32]:
+    """Calculate the root ratios for each soil layer based on the effective root depth.
+
+    Args:
+        root_depth: The effective root depth in meters.
+        soil_layer_height: The height of each soil layer in meters.
+
+    Returns:
+        A numpy array of root ratios for each soil layer, where each ratio
+        is the proportion of the soil layer that has roots in it.
+    """
     remaining_root_depth = root_depth
     root_ratios = np.zeros_like(soil_layer_height)
     for layer in range(N_SOIL_LAYERS):
@@ -230,6 +237,42 @@ def get_root_ratios(root_depth, soil_layer_height):
         if remaining_root_depth < np.float32(0):
             return root_ratios
     return root_ratios
+
+
+@njit(cache=True, inline="always")
+def get_root_mass_ratios(
+    root_depth: np.float32,
+    root_ratios: npt.NDArray[np.float32],
+    soil_layer_height: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Calculate the root mass ratios for each soil layer assuming a triangular root distribution.
+
+    Args:
+        root_depth: The effective root depth in meters.
+        root_ratios: The root ratios for each soil layer, where each ratio
+
+    Returns:
+        A numpy array of root mass ratios for each soil layer. The total root mass ratio is 1.
+    """
+    current_depth = np.float32(0)
+    root_mass_ratio = np.zeros_like(soil_layer_height, dtype=np.float32)
+
+    root_triangle_area = np.float32(0.5) * root_depth * root_depth
+
+    for layer in range(N_SOIL_LAYERS):
+        if root_ratios[layer] == np.float32(0):
+            break  # No roots in this layer (so also not in remaining), skip further calculations
+
+        triangle_block_height = soil_layer_height[layer] * root_ratios[layer]
+        triangle_block_center_point_depth = triangle_block_height / 2 + current_depth
+        triangle_block_width = root_depth - triangle_block_center_point_depth
+        root_mass_ratio[layer] = (
+            triangle_block_height * triangle_block_width / root_triangle_area
+        )
+
+        current_depth += soil_layer_height[layer]
+
+    return root_mass_ratio
 
 
 def get_crop_group_number(
@@ -320,13 +363,46 @@ def rise_from_groundwater(
 
 
 @njit(inline="always", cache=True)
-def adjust_roots_for_soil_water_stress(
-    soil_layer_height, effective_root_depth, w, wfc, wwp, p
-):
+def get_transpiration_factor_per_layer(
+    soil_layer_height: npt.NDArray[np.float32],
+    effective_root_depth: np.float32,
+    w: npt.NDArray[np.float32],
+    wfc: npt.NDArray[np.float32],
+    wwp: npt.NDArray[np.float32],
+    p: np.float32,
+    correct_root_mass: bool = True,
+) -> npt.NDArray[np.float32]:
+    """Calculate the transpiration factor for each soil layer based on the available water and root ratios.
+
+    Args:
+        soil_layer_height: height of each soil layer in meters.
+        effective_root_depth: root depth in meters, which is the maximum depth where roots can extract water.
+        w: soil water content in each layer in meters.
+        wfc: field capacity in each layer in meters.
+        wwp: wilting point in each layer in meters.
+        p: ratio of easily available soil water, which is a measure of how easily plants can extract water from the soil.
+        correct_root_mass: If True, the root mass ratio is corrected assuming a triangular root distribution.
+
+    Returns:
+        A numpy array of transpiration factors [0-1] for each soil layer, where each factor
+            is the proportion of the available water in that layer that can be used
+            for transpiration. If plenty of water available, sums to 1, else less than 1.
+    """
     root_ratios = get_root_ratios(
         effective_root_depth,
         soil_layer_height,
     )
+
+    if correct_root_mass:
+        root_mass_ratio_per_layer = get_root_mass_ratios(
+            effective_root_depth,
+            root_ratios,
+            soil_layer_height,
+        )
+    else:
+        root_mass_ratio_per_layer = (
+            soil_layer_height * root_ratios / effective_root_depth
+        )
 
     w_available = (w * root_ratios).sum()
     wfc_available = (wfc * root_ratios).sum()
@@ -336,20 +412,15 @@ def adjust_roots_for_soil_water_stress(
     critical_soil_moisture_content = get_critical_soil_moisture_content(
         p, wfc_available, wwp_available
     )
-    transpiration_factor_total = (
-        get_transpiration_factor(
-            w_available, wwp_available, critical_soil_moisture_content
-        )
-        * effective_root_depth
+    transpiration_factor_total = get_transpiration_factor(
+        w_available, wwp_available, critical_soil_moisture_content
     )
     if transpiration_factor_total == np.float32(0):
-        return np.zeros_like(soil_layer_height)
+        return np.zeros_like(w)
 
-    transpiration_factor_per_layer = np.zeros_like(soil_layer_height)
+    transpiration_factor_per_layer = np.zeros_like(w)
 
     for layer in range(N_SOIL_LAYERS):
-        root_length_within_layer = soil_layer_height[layer] * root_ratios[layer]
-
         critical_soil_moisture_content_layer = get_critical_soil_moisture_content(
             p, wfc[layer], wwp[layer]
         )
@@ -358,14 +429,13 @@ def adjust_roots_for_soil_water_stress(
             get_transpiration_factor(
                 w[layer], wwp[layer], critical_soil_moisture_content_layer
             )
-            * root_length_within_layer
+            * root_mass_ratio_per_layer[layer]
         )
 
     transpiration_factor_per_layer = (
         transpiration_factor_per_layer
         / transpiration_factor_per_layer.sum()
         * transpiration_factor_total
-        / effective_root_depth
     )
 
     return transpiration_factor_per_layer
@@ -438,8 +508,11 @@ def evapotranspirate(
                 effective_root_depth = np.maximum(
                     np.float32(minimum_effective_root_depth), root_depth[i]
                 )
+                fraction_easily_available_soil_water = np.float32(
+                    fraction_easily_available_soil_water
+                )
 
-                transpiration_factor_per_layer = adjust_roots_for_soil_water_stress(
+                transpiration_factor_per_layer = get_transpiration_factor_per_layer(
                     soil_layer_height[:, i],
                     effective_root_depth,
                     w[:, i],
@@ -483,7 +556,7 @@ def evapotranspirate(
                 w[0, i] -= actual_bare_soil_evaporation[i]
                 w[0, i] = max(
                     w[0, i], wres[0, i]
-                )  # soil moisture can never be lower than wres
+                )  # soil moisture can ne ver be lower than wres
             else:
                 # if the soil is frozen, no evaporation occurs
                 # if the field is flooded (paddy irrigation), no bare soil evaporation occurs
@@ -658,34 +731,34 @@ def vertical_water_transport(
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
     delta_z = (soil_layer_height[:-1, :] + soil_layer_height[1:, :]) / 2
 
+    # for i in prange(land_use_type.size):
+    #     # Preferential flow calculation. Higher preferential flow constant results in less preferential flow
+    #     # because relative saturation is always below 1
+    #     if (
+    #         not soil_is_frozen[i]
+    #         and land_use_type[i] != PADDY_IRRIGATED
+    #         and capillary_rise_from_groundwater[i]
+    #         == np.float32(
+    #             0
+    #         )  # preferential flow only occurs when there is no capillary rise from groundwater
+    #     ):
+    #         soil_water_storage = w[0, i] + w[1, i]
+    #         soil_water_storage_max = ws[0, i] + ws[1, i]
+
+    #         relative_saturation = min(
+    #             soil_water_storage / soil_water_storage_max, np.float32(1)
+    #         )
+    #         preferential_flow[i] = (
+    #             available_water_infiltration[i]
+    #             * relative_saturation**preferential_flow_constant
+    #         )
+    #         preferential_flow[i] = 0
+
     potential_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
     for i in prange(land_use_type.size):
         potential_infiltration[i] = get_infiltration_capacity(
             w[:, i], ws[:, i], arno_beta[i]
         )
-
-    for i in prange(land_use_type.size):
-        # Preferential flow calculation. Higher preferential flow constant results in less preferential flow
-        # because relative saturation is always below 1
-        if (
-            not soil_is_frozen[i]
-            and land_use_type[i] != PADDY_IRRIGATED
-            and capillary_rise_from_groundwater[i]
-            == np.float32(
-                0
-            )  # preferential flow only occurs when there is no capillary rise from groundwater
-        ):
-            soil_water_storage = w[0, i] + w[1, i]
-            soil_water_storage_max = ws[0, i] + ws[1, i]
-
-            relative_saturation = min(
-                soil_water_storage / soil_water_storage_max, np.float32(1)
-            )
-            preferential_flow[i] = (
-                available_water_infiltration[i]
-                * relative_saturation**preferential_flow_constant
-            )
-            preferential_flow[i] = 0
 
     for i in prange(land_use_type.size):
         # If the soil is frozen, no infiltration occurs
@@ -758,12 +831,14 @@ def vertical_water_transport(
             N_SOIL_LAYERS - 2, -1, -1
         ):  # From top (0) to bottom (N_SOIL_LAYERS - 1)
             # Compute the geometric mean of the conductivities
-            unsaturated_hydraulic_conductivity_avg = max(
-                unsaturated_hydraulic_conductivity[layer + 1, i],
-                unsaturated_hydraulic_conductivity[layer, i],
+            unsaturated_hydraulic_conductivity_avg = np.sqrt(
+                unsaturated_hydraulic_conductivity[layer + 1, i]
+                * unsaturated_hydraulic_conductivity[layer, i],
             )
 
             # Compute flux using Darcy's law. The -1 accounts for gravity.
+            # Positive flux is downwards; see minus sign in the equation, which negates
+            # the -1 of gravity and other terms.
             flux = -unsaturated_hydraulic_conductivity_avg * (
                 (psi[layer + 1, i] - psi[layer, i]) / delta_z[layer, i] - np.float32(1)
             )
@@ -779,8 +854,11 @@ def vertical_water_transport(
             # Limit flux by available water in source and storage capacity of sink
             remaining_storage_capacity_sink = ws[sink, i] - w[sink, i]
             available_water_source = w[source, i] - wres[source, i]
+
             positive_flux = min(
-                positive_flux, remaining_storage_capacity_sink, available_water_source
+                positive_flux,
+                remaining_storage_capacity_sink,
+                available_water_source,
             )
 
             # Update water content in source and sink layers

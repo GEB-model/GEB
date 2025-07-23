@@ -53,7 +53,7 @@ class Hydrology:
 
         fig, ax = plt.subplots(figsize=(10, 10))
 
-        mean_discharge.plot(ax=ax, cmap="Blues", norm=mcolors.LogNorm(vmin=1))
+        mean_discharge.plot(ax=ax, cmap="Blues")
 
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
@@ -121,6 +121,7 @@ class Hydrology:
             )
 
             GEB_discharge = xr.concat([GEB_discharge_spinup, GEB_discharge], dim="time")
+
         # load input data files
         snapped_locations = gpd.read_parquet(
             self.model.files["geoms"]["discharge/discharge_snapped_locations"]
@@ -173,6 +174,8 @@ class Hydrology:
                     how="inner",
                     suffixes=("_obs", "_sim"),
                 )  # merge the two dataframes on the index (time)
+
+                validation_df = validation_df.tail(len(validation_df) // 2)
 
                 validation_df.dropna(how="any", inplace=True)  # drop rows with nans
 
@@ -243,14 +246,17 @@ class Hydrology:
                     validation_df.index,
                     validation_df["Q_sim"],
                     label="GEB simulation",
+                    linewidth=0.5,
                 )
                 ax.plot(
                     validation_df.index,
                     validation_df["Q_obs"],
                     label="Q_obs observations",
+                    linewidth=0.5,
                 )
                 ax.set_ylabel("Discharge [m3/s]")
                 ax.set_xlabel("Time")
+                ax.set_ylim(0, None)
                 ax.legend()
 
                 ax.text(
@@ -269,6 +275,13 @@ class Hydrology:
                 ax.text(
                     0.02,
                     0.75,
+                    f"Mean={validation_df['Q_sim'].mean():.2f}",
+                    transform=ax.transAxes,
+                    fontsize=12,
+                )
+                ax.text(
+                    0.02,
+                    0.70,
                     f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
                     transform=ax.transAxes,
                     fontsize=12,
