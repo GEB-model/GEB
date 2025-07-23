@@ -200,7 +200,7 @@ def test_update_with_dict():
         "setup_hydrography",
         "setup_crop_prices",
         "setup_discharge_observations",
-        "setup_forcing_era5",
+        "setup_forcing",
         "setup_water_demand",
         "setup_SPEI",
         "setup_CO2_concentration",
@@ -230,17 +230,6 @@ def test_spinup():
 def test_evaluate():
     with WorkingDirectory(working_directory):
         run_model_with_method(method="evaluate", **DEFAULT_RUN_ARGS)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate_water_circle():
-    with WorkingDirectory(working_directory):
-        args = DEFAULT_RUN_ARGS.copy()
-        method_args = {
-            "methods": ["water_circle"],
-        }
-        args["method_args"] = method_args
-        run_model_with_method(method="evaluate", **args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -349,6 +338,17 @@ def test_run():
             run_model_with_method(method="run", **args)
 
     # TODO: Add similarity check for the output of the CPU and GPU runs
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate_water_circle():
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "methods": ["water_circle"],
+        }
+        args["method_args"] = method_args
+        run_model_with_method(method="evaluate", **args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -595,9 +595,10 @@ def test_ISIMIP_forcing_low_res():
                 "start_date": date(2001, 1, 1),
                 "end_date": date(2024, 12, 31),
             },
-            "setup_forcing_ISIMIP": {
+            "setup_forcing": {
+                "forcing": "ISIMIP",
                 "resolution_arcsec": 1800,
-                "forcing": "gfdl-esm4",
+                "model": "gfdl-esm4",
             },
         }
         update_fn(**args)
