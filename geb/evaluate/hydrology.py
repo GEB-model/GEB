@@ -175,8 +175,6 @@ class Hydrology:
                     suffixes=("_obs", "_sim"),
                 )  # merge the two dataframes on the index (time)
 
-                validation_df = validation_df.tail(len(validation_df) // 2)
-
                 validation_df.dropna(how="any", inplace=True)  # drop rows with nans
 
                 if correct_Q_obs:
