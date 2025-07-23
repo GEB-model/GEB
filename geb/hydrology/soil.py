@@ -1532,7 +1532,7 @@ class Soil(Module):
         # set the frost index threshold as global variable for numba
         global FROST_INDEX_THRESHOLD
         FROST_INDEX_THRESHOLD = np.float32(
-            self.model.hydrology.snowfrost.var.frost_indexThreshold
+            self.model.hydrology.snowfrost.var.frost_index_threshold
         )
 
     def step(
