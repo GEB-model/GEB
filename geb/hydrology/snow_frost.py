@@ -161,22 +161,22 @@ class SnowFrost(Module):
 
         self.HRU.var.DeltaTSnow = elevation_std * TemperatureLapseRate
 
-        self.var.SnowDayDegrees: float = 0.9856
+        self.var.SnowDayDegrees = 0.9856
         # day of the year to degrees: 360/365.25 = 0.9856
-        self.var.summerSeasonStart: int = 165
+        self.var.summerSeasonStart = 165
         # self.var.IceDayDegrees = 1.915
-        self.var.IceDayDegrees: float = 180.0 / (259 - self.var.summerSeasonStart)
+        self.var.IceDayDegrees = 180.0 / (259 - self.var.summerSeasonStart)
         # days of summer (15th June-15th Sept.) to degree: 180/(259-165)
         SnowSeasonAdj: float = 0.001
-        self.var.SnowSeason: float = SnowSeasonAdj * 0.5
+        self.var.SnowSeason = SnowSeasonAdj * 0.5
         # default value of range  of seasonal melt factor is set to 0.001 m C-1 day-1
         # 0.5 x range of sinus function [-1,1]
-        self.var.TempSnow: float = 1.0
-        self.var.SnowFactor: float = 1.0
-        self.var.SnowMeltCoef: float = self.model.config["parameters"]["SnowMeltCoef"]
-        self.var.IceMeltCoef: float = 0.007
+        self.var.TempSnow = 1.0
+        self.var.SnowFactor = 1.0
+        self.var.SnowMeltCoef = self.model.config["parameters"]["SnowMeltCoef"]
+        self.var.IceMeltCoef = 0.007
 
-        self.var.TempMelt: float = 1.0
+        self.var.TempMelt = 1.0
 
         # initialize snowcovers as many as snow layers -> read them as SnowCover1 , SnowCover2 ...
         # SnowCover1 is the highest zone
