@@ -79,15 +79,13 @@ class WaterDemand(Module):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Get available water from reservoirs, channels, and groundwater.
 
-        Parameters
-        ----------
-        gross_irrigation_demand_m3_per_command_area : np.ndarray
-            Gross irrigation demand in m3 per command area.
+        Args:
+        gross_irrigation_demand_m3_per_command_area: Gross irrigation demand in m3 per command area.
 
         Returns:
-        -------
-        tuple[np.ndarray, np.ndarray, np.ndarray]
-            Available water in m3 from channels, reservoirs, and groundwater.
+            Available water in m3 from channels
+            Available water in m3 reservoirs
+            Available water in groundwater.
         """
         available_reservoir_storage_m3: np.ndarray = np.zeros(
             self.hydrology.lakes_reservoirs.n, dtype=np.float32

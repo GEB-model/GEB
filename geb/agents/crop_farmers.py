@@ -1035,6 +1035,7 @@ class CropFarmers(AgentBaseClass):
                 w=self.HRU.var.w,
                 ws=self.HRU.var.ws,
                 arno_beta=self.HRU.var.arno_beta,
+                saturated_hydraulic_conductivity=self.HRU.var.saturated_hydraulic_conductivity,
                 remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
                 cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
                 crop_calendar=self.var.crop_calendar.data,

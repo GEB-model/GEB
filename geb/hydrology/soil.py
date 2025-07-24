@@ -671,24 +671,29 @@ def get_saturated_area_fraction(
     return saturated_area_fraction
 
 
+# @njit(cache=True, inline="always")
+# def get_infiltration_capacity(w, ws, arno_beta):
+#     # Fraction of pixel that is at saturation
+#     # TODO: Use saturated hydraulic conductivity to compute storage depth to consider
+#     soil_water_storage = w[0] + w[1] + w[2]
+#     soil_water_storage_max = ws[0] + ws[1] + ws[2]
+
+#     saturated_area_fraction = get_saturated_area_fraction(
+#         soil_water_storage, soil_water_storage_max, arno_beta
+#     )
+
+#     infiltration_capacity = (
+#         soil_water_storage_max
+#         / (arno_beta + np.float32(1))
+#         * (1 - saturated_area_fraction) ** ((arno_beta + np.float32(1)) / arno_beta)
+#     )
+
+#     return infiltration_capacity
+
+
 @njit(cache=True, inline="always")
-def get_infiltration_capacity(w, ws, arno_beta):
-    # Fraction of pixel that is at saturation
-    # TODO: Use saturated hydraulic conductivity to compute storage depth to consider
-    soil_water_storage = w[0] + w[1] + w[2]
-    soil_water_storage_max = ws[0] + ws[1] + ws[2]
-
-    saturated_area_fraction = get_saturated_area_fraction(
-        soil_water_storage, soil_water_storage_max, arno_beta
-    )
-
-    infiltration_capacity = (
-        soil_water_storage_max
-        / (arno_beta + np.float32(1))
-        * (1 - saturated_area_fraction) ** ((arno_beta + np.float32(1)) / arno_beta)
-    )
-
-    return infiltration_capacity
+def get_infiltration_capacity(w, ws, saturated_hydraulic_conductivity):
+    return saturated_hydraulic_conductivity[0]
 
 
 # Do NOT use fastmath here. This leads to unexpected behaviour with NaNs
@@ -728,7 +733,11 @@ def vertical_water_transport(
     #         w[:, i], ws[:, i], arno_beta[i]
     #     )
 
-    potential_infiltration = saturated_hydraulic_conductivity[0, :]
+    # potential_infiltration = saturated_hydraulic_conductivity[0, :]
+
+    potential_infiltration = get_infiltration_capacity(
+        w, ws, saturated_hydraulic_conductivity
+    )
 
     for i in prange(land_use_type.size):
         # If the soil is frozen, no infiltration occurs
