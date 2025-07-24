@@ -378,6 +378,11 @@ class Observations:
             index="time", columns="station_ID", values="discharge"
         )
         discharge_df.dropna(how="all", inplace=True)  # remove rows that are all nan
+        if len(Q_obs_clipped.id.values) == 0:
+            self.logger.warning(
+                "No discharge stations found in basin area. Skipping discharge snapping."
+            )
+            return  # Exit the method early
 
         # Snapping to river and validation of discharges
         # create list for results of snapping
