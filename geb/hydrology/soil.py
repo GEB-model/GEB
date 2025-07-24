@@ -250,6 +250,7 @@ def get_root_mass_ratios(
     Args:
         root_depth: The effective root depth in meters.
         root_ratios: The root ratios for each soil layer, where each ratio
+        soil_layer_height: The height of each soil layer in meters.
 
     Returns:
         A numpy array of root mass ratios for each soil layer. The total root mass ratio is 1.
@@ -649,9 +650,9 @@ def get_saturated_area_fraction(
     even if the overall average soil moisture is relatively low.
 
     Args:
-        w : the current soil water storage in the first two layers or more
-        ws : the maximum soil water storage in the first two layers or more
-        arno_beta : the arno beta parameter, which is a measure of the saturation of the soil
+        soil_water_storage: the current soil water storage in the first two layers or more
+        soil_water_storage_max: the maximum soil water storage in the first two layers or more
+        arno_beta: the arno beta parameter, which is a measure of the saturation of the soil
 
     Returns:
         The fraction of the pixel that is at saturation, between 0 and
@@ -856,9 +857,9 @@ def thetas_toth(
     Soil Sci., 66, 226-238. doi: 10.1111/ejss.121921211, 2015.
 
     Args:
-        bdod  bulk density [g /cm3].
         soil_organic_carbon: soil organic carbon content [%].
-        sand: sand percentage [%].
+        bulk_density: bulk density [g /cm3].
+        clay: clay percentage [%].
         silt: fsilt percentage [%].
         is_top_soil: top soil flag.
 
@@ -895,9 +896,9 @@ def thetas_wosten(
 
     Args:
         clay: Clay percentage (C).
-        bulk_density  Bulk density (D).
+        bulk_density: Bulk density (D).
         silt: Silt percentage (S).
-        organic_matter: Organic matter percentage (OM).
+        soil_organic_carbon: Organic matter percentage (OM).
         is_topsoil: 1 for topsoil, 0 for subsoil.
 
     Returns:
@@ -1052,7 +1053,7 @@ def kv_brakensiek(
 
     Args:
         thetas: saturated water content [m3/m3].
-        clay  clay percentage [%].
+        clay: clay percentage [%].
         sand: sand percentage [%].
 
     Returns:
