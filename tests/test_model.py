@@ -227,12 +227,6 @@ def test_spinup():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate():
-    with WorkingDirectory(working_directory):
-        run_model_with_method(method="evaluate", **DEFAULT_RUN_ARGS)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_run():
     args = DEFAULT_RUN_ARGS.copy()
 
@@ -349,6 +343,12 @@ def test_evaluate_water_circle():
         }
         args["method_args"] = method_args
         run_model_with_method(method="evaluate", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate():
+    with WorkingDirectory(working_directory):
+        run_model_with_method(method="evaluate", **DEFAULT_RUN_ARGS)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -538,7 +538,7 @@ def test_multiverse():
             geb.step()
 
         mean_discharge: float = (
-            geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
+            geb.hydrology.routing.grid.var.discharge_m3_s_substep.mean().item()
         )
 
         geb.step_to_end()
