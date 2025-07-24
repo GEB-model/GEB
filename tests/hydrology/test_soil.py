@@ -151,17 +151,13 @@ def test_get_saturated_area_fraction():
     assert saturated_area_fraction_half_arno_0_1 < saturated_area_fraction_half_arno_0_5
 
 
-def test_get_infiltration_capacity():
-    get_infiltration_capacity(
-        w=np.array([0.3, 0.3], dtype=np.float32),
-        ws=np.array([0.39, 0.4], dtype=np.float32),
-        arno_beta=0.1,
-    )
-    # get_infiltration_capacity(
-    #     w=np.array([0.1, 0.2], dtype=np.float32),
-    #     ws=np.array([0.3, 0.4], dtype=np.float32),
-    #     arno_beta=0.1,
-    # )
+# def test_get_infiltration_capacity():
+#     infiltration_capacity = get_infiltration_capacity(
+#         w=np.array([0.3, 0.3, 0.3], dtype=np.float32),
+#         ws=np.array([0.34, 0.4, 0.3], dtype=np.float32),
+#         saturated_hydraulic_conductivity=np.array([0.1, 0.1, 0.1], dtype=np.float32),
+#     )
+#     assert math.isclose(infiltration_capacity, 0.1, rel_tol=1e-4)
 
 
 def test_get_transpiration_factor_per_layer():
@@ -710,7 +706,6 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
         available_water_infiltration, -9999, dtype=np.float32
     )  # no frost
     arno_beta = np.full_like(available_water_infiltration, 0.5, dtype=np.float32)
-    preferential_flow_constant = 4.5
     topwater = np.zeros_like(available_water_infiltration)
 
     geb.hydrology.soil.N_SOIL_LAYERS = soil_layer_height.shape[0]
@@ -756,7 +751,7 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     plot_soil_layers(axes[0], soil_layer_height, w, wres, ws)
 
-    preferential_flow, direct_runoff, groundwater_recharge = vertical_water_transport(
+    direct_runoff, groundwater_recharge = vertical_water_transport(
         available_water_infiltration=available_water_infiltration,
         capillary_rise_from_groundwater=np.full_like(
             available_water_infiltration, capillary_rise_from_groundwater
@@ -769,7 +764,6 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
         land_use_type=land_use_type,
         frost_index=frost_index,
         arno_beta=arno_beta,
-        preferential_flow_constant=preferential_flow_constant,
         w=w,
         topwater=topwater,
         soil_layer_height=soil_layer_height,
@@ -784,25 +778,22 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     available_water_infiltration.fill(0)
     for _ in range(1000):
-        preferential_flow, direct_runoff, groundwater_recharge = (
-            vertical_water_transport(
-                available_water_infiltration=available_water_infiltration,
-                capillary_rise_from_groundwater=np.full_like(
-                    available_water_infiltration, capillary_rise_from_groundwater
-                ),
-                ws=ws,
-                wres=wres,
-                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
-                lambda_=lambda_,
-                bubbling_pressure_cm=bubbling_pressure_cm,
-                land_use_type=land_use_type,
-                frost_index=frost_index,
-                arno_beta=arno_beta,
-                preferential_flow_constant=preferential_flow_constant,
-                w=w,
-                topwater=topwater,
-                soil_layer_height=soil_layer_height,
-            )
+        direct_runoff, groundwater_recharge = vertical_water_transport(
+            available_water_infiltration=available_water_infiltration,
+            capillary_rise_from_groundwater=np.full_like(
+                available_water_infiltration, capillary_rise_from_groundwater
+            ),
+            ws=ws,
+            wres=wres,
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+            lambda_=lambda_,
+            bubbling_pressure_cm=bubbling_pressure_cm,
+            land_use_type=land_use_type,
+            frost_index=frost_index,
+            arno_beta=arno_beta,
+            w=w,
+            topwater=topwater,
+            soil_layer_height=soil_layer_height,
         )
 
     plot_soil_layers(axes[2], soil_layer_height, w, wres, ws)

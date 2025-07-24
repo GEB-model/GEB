@@ -681,16 +681,10 @@ def get_infiltration_capacity(w, ws, arno_beta):
         soil_water_storage, soil_water_storage_max, arno_beta
     )
 
-    # store = soil_water_storage_max / (arno_beta + np.float32(1))
-    # pot_beta = (arno_beta + np.float32(1)) / arno_beta
-    # infiltration_capacity_old = store - store * (
-    #     np.float32(1) - (np.float32(1) - saturated_area_fraction) ** pot_beta
-    # )
-
     infiltration_capacity = (
         soil_water_storage_max
         / (arno_beta + np.float32(1))
-        * (1 - saturated_area_fraction) ** (arno_beta + np.float32(1))
+        * (1 - saturated_area_fraction) ** ((arno_beta + np.float32(1)) / arno_beta)
     )
 
     return infiltration_capacity
@@ -709,7 +703,6 @@ def vertical_water_transport(
     land_use_type,
     frost_index,
     arno_beta,
-    preferential_flow_constant,
     w,
     topwater,
     soil_layer_height,
@@ -717,54 +710,30 @@ def vertical_water_transport(
     """Simulates vertical transport of water in the soil using Darcy's equation.
 
     Returns:
-        preferential_flow : np.ndarray
-            The preferential flow of water through the soil
         direct_runoff : np.ndarray
             The direct runoff of water from the soil
         groundwater_recharge : np.ndarray
             The recharge of groundwater from the soil
     """
     # Initialize variables
-    preferential_flow = np.zeros_like(land_use_type, dtype=np.float32)
     direct_runoff = np.zeros_like(land_use_type, dtype=np.float32)
 
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
     delta_z = (soil_layer_height[:-1, :] + soil_layer_height[1:, :]) / 2
 
+    # potential_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
     # for i in prange(land_use_type.size):
-    #     # Preferential flow calculation. Higher preferential flow constant results in less preferential flow
-    #     # because relative saturation is always below 1
-    #     if (
-    #         not soil_is_frozen[i]
-    #         and land_use_type[i] != PADDY_IRRIGATED
-    #         and capillary_rise_from_groundwater[i]
-    #         == np.float32(
-    #             0
-    #         )  # preferential flow only occurs when there is no capillary rise from groundwater
-    #     ):
-    #         soil_water_storage = w[0, i] + w[1, i]
-    #         soil_water_storage_max = ws[0, i] + ws[1, i]
+    #     potential_infiltration[i] = get_infiltration_capacity(
+    #         w[:, i], ws[:, i], arno_beta[i]
+    #     )
 
-    #         relative_saturation = min(
-    #             soil_water_storage / soil_water_storage_max, np.float32(1)
-    #         )
-    #         preferential_flow[i] = (
-    #             available_water_infiltration[i]
-    #             * relative_saturation**preferential_flow_constant
-    #         )
-    #         preferential_flow[i] = 0
-
-    potential_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
-    for i in prange(land_use_type.size):
-        potential_infiltration[i] = get_infiltration_capacity(
-            w[:, i], ws[:, i], arno_beta[i]
-        )
+    potential_infiltration = saturated_hydraulic_conductivity[0, :]
 
     for i in prange(land_use_type.size):
         # If the soil is frozen, no infiltration occurs
         infiltration = min(
             potential_infiltration[i] * ~soil_is_frozen[i],
-            available_water_infiltration[i] - preferential_flow[i],
+            available_water_infiltration[i],
         )
         remaining_infiltration = np.float32(infiltration)  # make a copy
         for layer in range(3):
@@ -787,7 +756,7 @@ def vertical_water_transport(
             topwater[i] = max(np.float32(0), topwater[i] - direct_runoff[i])
         else:
             direct_runoff[i] = max(
-                (available_water_infiltration[i] - infiltration - preferential_flow[i]),
+                (available_water_infiltration[i] - infiltration),
                 np.float32(0),
             )
 
@@ -824,7 +793,7 @@ def vertical_water_transport(
         w[layer, i] -= flux
         w[layer, i] = max(w[layer, i], wres[layer, i])
 
-        groundwater_recharge[i] = flux + preferential_flow[i]
+        groundwater_recharge[i] = flux
 
         # Compute fluxes between layers using Darcy's law
         for layer in range(
@@ -869,7 +838,7 @@ def vertical_water_transport(
             w[sink, i] = min(w[sink, i], ws[sink, i])
             w[source, i] = max(w[source, i], wres[source, i])
 
-    return preferential_flow, direct_runoff, groundwater_recharge
+    return direct_runoff, groundwater_recharge
 
 
 def thetas_toth(
@@ -886,16 +855,15 @@ def thetas_toth(
     New generation of hydraulic pedotransfer functions for Europe, Eur. J.
     Soil Sci., 66, 226-238. doi: 10.1111/ejss.121921211, 2015.
 
-    Parameters
-    ----------
-    bdod  bulk density [g /cm3].
-    sand: sand percentage [%].
-    silt: fsilt percentage [%].
-    is_top_soil: top soil flag.
+    Args:
+        bdod  bulk density [g /cm3].
+        soil_organic_carbon: soil organic carbon content [%].
+        sand: sand percentage [%].
+        silt: fsilt percentage [%].
+        is_top_soil: top soil flag.
 
     Returns:
-    -------
-    thetas: saturated water content [cm3/cm3].
+        thetas: saturated water content [cm3/cm3].
 
     """
     return (
@@ -914,6 +882,45 @@ def thetas_toth(
     )
 
 
+def thetas_wosten(
+    clay: npt.NDArray[np.float32],
+    bulk_density: npt.NDArray[np.float32],
+    silt: npt.NDArray[np.float32],
+    soil_organic_carbon: npt.NDArray[np.float32],
+    is_topsoil: npt.NDArray[np.bool_],
+) -> npt.NDArray[np.float32]:
+    """Calculates the saturated water content (theta_S) based on the provided equation.
+
+    From: https://doi.org/10.1016/S0016-7061(98)00132-3
+
+    Args:
+        clay: Clay percentage (C).
+        bulk_density  Bulk density (D).
+        silt: Silt percentage (S).
+        organic_matter: Organic matter percentage (OM).
+        is_topsoil: 1 for topsoil, 0 for subsoil.
+
+    Returns:
+        float: The calculated saturated water content (theta_S).
+    """
+    theta_s = (
+        0.7919
+        + 0.00169 * clay
+        - 0.29619 * bulk_density
+        - 0.000001491 * silt**2
+        + 0.0000821 * soil_organic_carbon**2
+        + 0.02427 * (1 / clay)
+        + 0.01113 * (1 / silt)
+        + 0.01472 * np.log(silt)
+        - 0.0000733 * soil_organic_carbon * clay
+        - 0.000619 * bulk_density * clay
+        - 0.001183 * bulk_density * soil_organic_carbon
+        - 0.0001664 * is_topsoil * silt
+    )
+
+    return theta_s
+
+
 def thetar_brakensiek(
     sand: npt.NDArray[np.float32],
     clay: npt.NDArray[np.float32],
@@ -930,20 +937,13 @@ def thetar_brakensiek(
         soil groups and curve numbers for range land soils, ASAE Paper no. PNR-84-203,
         St. Joseph, Michigan, USA, 1984.
 
-    Parameters
-    ----------
-    sand: float
-        sand percentage [%].
-    clay: float
-        clay percentage [%].
-    thetas : float
-        saturated water content [m3/m3].
+    Args:
+        sand: sand percentage [%].
+        clay: clay percentage [%].
+        thetas: saturated water content [m3/m3].
 
     Returns:
-    -------
-    thetar : float
         residual water content [m3/m3].
-
     """
     return (
         np.float32(-0.0182482)
@@ -958,18 +958,40 @@ def thetar_brakensiek(
     )
 
 
-def get_bubbling_pressure(clay, sand, thetas):
+def get_bubbling_pressure(
+    clay: npt.NDArray[np.float32],
+    sand: npt.NDArray[np.float32],
+    thetas: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Determine bubbling pressure [cm].
+
+    Thetas is equal to porosity (Φ) in this case.
+
+    Based on:
+    Rawls,W. J., and Brakensiek, D. L.: Estimation of SoilWater Retention and
+    Hydraulic Properties, In H. J. Morel-Seytoux (Ed.),
+    Unsaturated flow in hydrologic modelling - Theory and practice, NATO ASI Series 9,
+    275-300, Dordrecht, The Netherlands: Kluwer Academic Publishing, 1989.
+
+    Args:
+        clay: clay percentage [%].
+        sand: sand percentage [%].
+        thetas: saturated water content [m3/m3].
+
+    Returns:
+        bubbling_pressure: bubbling pressure [cm].
+    """
     bubbling_pressure = np.exp(
         5.3396738
         + 0.1845038 * clay
         - 2.48394546 * thetas
         - 0.00213853 * clay**2
-        - 0.0435649 * sand * thetas
+        - 0.04356349 * sand * thetas
         - 0.61745089 * clay * thetas
         - 0.00001282 * sand**2 * clay
         + 0.00895359 * clay**2 * thetas
         - 0.00072472 * sand**2 * thetas
-        + 0.0000054 * sand * clay**2
+        + 0.0000054 * clay**2 * sand
         + 0.00143598 * sand**2 * thetas**2
         - 0.00855375 * clay**2 * thetas**2
         + 0.50028060 * thetas**2 * clay
@@ -983,23 +1005,18 @@ def get_pore_size_index_brakensiek(sand, thetas, clay):
     Thetas is equal to porosity (Φ) in this case.
 
     Based on:
+
     Rawls,W. J., and Brakensiek, D. L.: Estimation of SoilWater Retention and
     Hydraulic Properties, In H. J. Morel-Seytoux (Ed.),
     Unsaturated flow in hydrologic modelling - Theory and practice, NATO ASI Series 9,
     275-300, Dordrecht, The Netherlands: Kluwer Academic Publishing, 1989.
 
-    Parameters
-    ----------
-    sand: float
-        sand percentage [%].
-    thetas : float
-        saturated water content [m3/m3].
-    clay: float
-        clay percentage [%].
+    Args:
+        sand: sand percentage [%].
+        thetas: saturated water content [m3/m3].
+        clay: clay percentage [%].
 
     Returns:
-    -------
-    poresizeindex : float
         pore size distribution index [-].
 
     """
@@ -1021,7 +1038,11 @@ def get_pore_size_index_brakensiek(sand, thetas, clay):
     return poresizeindex
 
 
-def kv_brakensiek(thetas, clay, sand):
+def kv_brakensiek(
+    thetas: npt.NDArray[np.float32],
+    clay: npt.NDArray[np.float32],
+    sand: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Determine saturated hydraulic conductivity kv [m/day].
 
     Based on:
@@ -1029,37 +1050,95 @@ def kv_brakensiek(thetas, clay, sand):
       soil groups and curve numbers for range land soils, ASAE Paper no. PNR-84-203,
       St. Joseph, Michigan, USA, 1984.
 
-    Parameters
-    ----------
-    thetas: float
-        saturated water content [m3/m3].
-    clay : float
-        clay percentage [%].
-    sand: float
-        sand percentage [%].
+    Args:
+        thetas: saturated water content [m3/m3].
+        clay  clay percentage [%].
+        sand: sand percentage [%].
 
     Returns:
-    -------
-    kv : float
         saturated hydraulic conductivity [m/day].
-
     """
     kv = np.exp(
         19.52348 * thetas
         - 8.96847
         - 0.028212 * clay
-        + (1.8107 * 10**-4) * sand**2
-        - (9.4125 * 10**-3) * clay**2
+        + 0.00018107 * sand**2
+        - 0.0094125 * clay**2
         - 8.395215 * thetas**2
         + 0.077718 * sand * thetas
         - 0.00298 * sand**2 * thetas**2
         - 0.019492 * clay**2 * thetas**2
-        + (1.73 * 10**-5) * sand**2 * clay
+        + 0.0000173 * sand**2 * clay
         + 0.02733 * clay**2 * thetas
         + 0.001434 * sand**2 * thetas
-        - (3.5 * 10**-6) * clay**2 * sand
+        - 0.0000035 * clay**2 * sand
     )  # cm / hr
     kv = kv * 24 / 100  # convert to m/day
+    return kv
+
+
+def kv_wosten(
+    silt: npt.NDArray[np.float32],
+    clay: npt.NDArray[np.float32],
+    bulk_density: npt.NDArray[np.float32],
+    organic_matter: npt.NDArray[np.float32],
+    is_topsoil: npt.NDArray[np.bool_],
+) -> npt.NDArray[np.float32]:
+    """Calculates the saturated value based on the provided equation.
+
+    From: https://doi.org/10.1016/S0016-7061(98)00132-3
+
+    Args:
+        silt: Silt percentage (S).
+        is_topsoil: 1 for topsoil, 0 for subsoil.
+        bulk_density: Bulk density (D).
+        clay: Clay percentage (C).
+        organic_matter: Organic matter percentage (OM).
+
+    Returns:
+        float: The calculated Ks* value.
+    """
+    ks = (
+        np.exp(
+            7.755
+            + 0.0352 * silt
+            + np.float32(0.93) * is_topsoil
+            - 0.967 * bulk_density**2
+            - 0.000484 * clay**2
+            - 0.000322 * silt**2
+            + 0.001 * (1 / silt)
+            - 0.0748 * (1 / organic_matter)
+            - 0.643 * np.log(silt)
+            - 0.01398 * bulk_density * clay
+            - 0.1673 * bulk_density * organic_matter
+            + 0.02986 * np.float32(is_topsoil) * clay
+            - 0.03305 * np.float32(is_topsoil) * silt
+        )
+        / 100
+    )  # convert to m/day
+
+    return ks
+
+
+def kv_cosby(sand, clay):
+    """Determine saturated hydraulic conductivity kv [m/day].
+
+    based on:
+      Cosby, B.J., Hornberger, G.M., Clapp, R.B., Ginn, T.R., 1984.
+      A statistical exploration of the relationship of soil moisture characteristics to
+      the physical properties of soils. Water Resour. Res. 20(6) 682-690.
+
+    Args:
+        sand: sand percentage [%].
+        clay: clay percentage [%].
+
+    Returns:
+        kv: saturated hydraulic conductivity [m/day].
+
+    """
+    kv = (
+        60.96 * 10.0 ** (-0.6 + 0.0126 * sand - 0.0064 * clay) * 10.0 / 1000.0
+    )  # convert to m/day
 
     return kv
 
@@ -1147,6 +1226,7 @@ class Soil(Module):
             clay=self.HRU.var.clay,
             silt=self.HRU.var.silt,
         )
+
         thetar: npt.NDArray[np.float32] = thetar_brakensiek(
             sand=self.HRU.var.sand, clay=self.HRU.var.clay, thetas=thetas
         )
@@ -1203,9 +1283,21 @@ class Soil(Module):
             0, dtype=np.float32
         )
 
-        self.HRU.var.saturated_hydraulic_conductivity: npt.NDArray[np.float32] = (
-            kv_brakensiek(thetas=thetas, clay=self.HRU.var.clay, sand=self.HRU.var.sand)
-        )
+        # self.HRU.var.saturated_hydraulic_conductivity: npt.NDArray[np.float32] = (
+        #     kv_brakensiek(thetas=thetas, clay=self.HRU.var.clay, sand=self.HRU.var.sand)
+        # )
+
+        # self.HRU.var.saturated_hydraulic_conductivity = kv_cosby(
+        #     sand=self.HRU.var.sand, clay=self.HRU.var.clay
+        # )  # m/day
+
+        self.HRU.var.saturated_hydraulic_conductivity = kv_wosten(
+            silt=self.HRU.var.silt,
+            clay=self.HRU.var.clay,
+            bulk_density=bulk_density,
+            organic_matter=soil_organic_carbon,
+            is_topsoil=is_top_soil,
+        )  # m/day
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
@@ -1214,11 +1306,6 @@ class Soil(Module):
         )
         self.HRU.var.natural_crop_groups: npt.NDArray[np.float32] = (
             self.hydrology.to_HRU(data=natural_crop_groups)
-        )
-
-        # ------------ Preferential Flow constant ------------------------------------------
-        self.var.preferential_flow_constant = float(
-            self.model.config["parameters"]["preferentialFlowConstant"]
         )
 
         self.HRU.var.arno_beta = self.HRU.full_compressed(np.nan, dtype=np.float32)
@@ -1548,7 +1635,7 @@ class Soil(Module):
         """Dynamic part of the soil module.
 
         For each of the land cover classes the vertical water transport is simulated
-        Distribution of water holding capiacity in 3 soil layers based on saturation excess overland flow, preferential flow
+        Distribution of water holding capiacity in 3 soil layers based on saturation excess overland flow
         Dependend on soil depth, soil hydraulic parameters
         """
         timer = TimingModule("Soil")
@@ -1802,7 +1889,6 @@ class Soil(Module):
         timer.new_split("Evapotranspiration")
 
         n_substeps = 3
-        preferential_flow = np.zeros_like(self.HRU.var.land_use_type, dtype=np.float32)
         direct_runoff = np.zeros_like(self.HRU.var.land_use_type, dtype=np.float32)
         groundwater_recharge = np.zeros_like(
             self.HRU.var.land_use_type, dtype=np.float32
@@ -1817,7 +1903,6 @@ class Soil(Module):
 
         for _ in range(n_substeps):
             (
-                preferential_flow_substep,
                 direct_runoff_substep,
                 groundwater_recharge_substep,
             ) = vertical_water_transport(
@@ -1831,13 +1916,11 @@ class Soil(Module):
                 self.HRU.var.land_use_type,
                 self.HRU.var.frost_index,
                 self.HRU.var.arno_beta,
-                np.float32(self.var.preferential_flow_constant),
                 self.HRU.var.w,
                 self.HRU.var.topwater,
                 self.HRU.var.soil_layer_height,
             )
 
-            preferential_flow += preferential_flow_substep
             direct_runoff += direct_runoff_substep
             groundwater_recharge[bioarea] += groundwater_recharge_substep[bioarea]
 
@@ -1850,7 +1933,6 @@ class Soil(Module):
 
         runoff = direct_runoff + runoff_from_groundwater
 
-        assert preferential_flow.dtype == np.float32
         assert runoff.dtype == np.float32
 
         if __debug__:
