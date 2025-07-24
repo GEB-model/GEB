@@ -538,7 +538,7 @@ def test_multiverse():
             geb.step()
 
         mean_discharge: float = (
-            geb.hydrology.routing.grid.var.discharge_m3_s_substep.mean().item()
+            geb.hydrology.routing.grid.var.discharge_m3_s.mean().item()
         )
 
         geb.step_to_end()
