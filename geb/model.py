@@ -129,10 +129,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
             pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member)
 
-            foecast_end_date = round_up_to_start_of_next_day_unless_midnight(
+            forecast_end_date = round_up_to_start_of_next_day_unless_midnight(
                 pd.to_datetime(pr_hourly_forecast.time[-1].item()).to_pydatetime()
             ).date()
-            self.n_timesteps = (foecast_end_date - self.start_time.date()).days
+            self.n_timesteps = (forecast_end_date - self.start_time.date()).days
 
             # Clip the original precipitation data to the start of the forecast
             # Therefore we take the start of the forecast and subtract one second

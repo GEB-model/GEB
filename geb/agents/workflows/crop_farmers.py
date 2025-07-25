@@ -365,6 +365,7 @@ def get_potential_irrigation_consumption_m(
     w,
     ws,
     arno_beta: np.float32,
+    saturated_hydraulic_conductivity: np.float32,
     fraction_irrigated_field: np.float32,
     max_paddy_water_level_farmer,
     crop_group: np.float32,
@@ -416,7 +417,11 @@ def get_potential_irrigation_consumption_m(
         else:
             potential_irrigation_consumption_m = np.float32(0)
 
-        infiltration_capacity = get_infiltration_capacity(w, ws, arno_beta)
+        infiltration_capacity = get_infiltration_capacity(
+            w=w,
+            ws=ws,
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+        )
         potential_irrigation_consumption_m = np.minimum(
             potential_irrigation_consumption_m, infiltration_capacity
         )
@@ -445,6 +450,7 @@ def get_gross_irrigation_demand_m3(
     w: npt.NDArray[np.float64],
     ws: npt.NDArray[np.float64],
     arno_beta: npt.NDArray[np.float32],
+    saturated_hydraulic_conductivity: npt.NDArray[np.float32],
     remaining_irrigation_limit_m3: npt.NDArray[np.float32],
     cumulative_water_deficit_m3: npt.NDArray[np.float32],
     crop_calendar: npt.NDArray[np.int32],
@@ -494,6 +500,9 @@ def get_gross_irrigation_demand_m3(
                 w=w[:, field],
                 ws=ws[:, field],
                 arno_beta=arno_beta[field],
+                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[
+                    :, field
+                ],
                 fraction_irrigated_field=fraction_irrigated_field[farmer],
                 max_paddy_water_level_farmer=max_paddy_water_level[farmer],
                 crop_group=crop_group_numbers[crop],

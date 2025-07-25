@@ -426,9 +426,6 @@ def get_discharge_and_river_parameters_by_river(
 
     assert i == len(xs), "Discharge values do not match the number of points"
     assert i == len(ys), "Discharge values do not match the number of points"
-    assert i == len(river_parameters), (
-        "River parameter values do not match the number of rivers"
-    )
     # make sure no NaN values are present in the discharge DataFrame
     assert not discharge_df.isnull().values.any(), "Discharge DataFrame contains NaNs"
 
@@ -478,6 +475,12 @@ def assign_return_periods(
             return_periods, discharge_per_return_period
         ):
             rivers.loc[idx, f"{prefix}_{return_period}"] = discharge_value
+            if (
+                discharge_value > 400_000
+            ):  # Amazon has a maximum recorded discharge of about 340,000 m3/s
+                raise ValueError(
+                    f"Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}."
+                )
     return rivers
 
 

@@ -14,6 +14,7 @@ from geb.workflows.io import get_window
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
     M49_to_ISO3,
+    setup_donor_countries,
 )
 from ..workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from ..workflows.farmers import get_farm_locations
@@ -187,6 +188,18 @@ class Crops:
             ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
                 GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
             ]["ISO3"]
+
+            missing_regions_in_GLOBIOM = set(ISO3_codes_region) - set(
+                ISO3_codes_GLOBIOM_region
+            )
+            self.logger.info(
+                f"Regions in the model not present in GLOBIOM: {missing_regions_in_GLOBIOM}"
+            )
+            for region in missing_regions_in_GLOBIOM:
+                if not crop_data[crop_data["ISO3"] == region].empty:
+                    raise ValueError(
+                        f"Region {region} is not present in GLOBIOM, but it has crop data. This situation gives problems in the donate_and_receive_crop_prices function, because it will substitute the region's data for donor data. Please consult Tim to change the function"
+                    )
 
             # Setup dataFrame for further data corrections
             donor_data = {}
@@ -469,20 +482,36 @@ class Crops:
         2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
         3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
         4. Drops the 'ISO3' column before returning the updated DataFrame.
+
+        Note: some countries without data are also not in the GLOBIOM dataset (e.g Liechtenstein (LIE)). For these countries, we cannot assess which donor we should take, and the country_data will be empty for these countries. Therefore, we first estimate the most similar country based on the setup_donor_countries function.
+        The ISO3 of these countries will be replaced by the ISO3 of the donor. However, the region_id will remain the same, so that only the data is used from the donor, but still the original region is used.
         """
         # create a copy of the data to avoid using data that was adjusted in this function
         data_out = None
 
         for _, region in recipient_regions.iterrows():
             ISO3 = region["ISO3"]
-            if ISO3 == "AND":
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":
-                ISO3 = "CHE"
             region_id = region["region_id"]
             self.logger.info(f"Processing region {region_id}")
+
             # Filter the data for the current country
             country_data = donor_data[donor_data["ISO3"] == ISO3]
+
+            if country_data.empty:
+                countries_with_donor_data = donor_data.ISO3.unique().tolist()
+                donor_countries = setup_donor_countries(self, countries_with_donor_data)
+                ISO3 = donor_countries.get(ISO3, None)
+                self.logger.info(
+                    f"Missing donor data for {region['ISO3']}, using donor country {ISO3}"
+                )
+                assert ISO3 is not None, (
+                    f"Could not find a donor country for {region['ISO3']}. Please check the donor countries setup."
+                )
+                country_data = donor_data[donor_data["ISO3"] == ISO3]
+                assert not country_data.empty, (
+                    f"Donor country {ISO3} has no data for {region['ISO3']}. Please check the donor countries setup."
+                )
+                # note: it can be that a country is donor for another in the first donor step (outside this function) (e.g. Isreal for cyprus), and that here cyprus is again selected as a donor country for another country (e.g. Liechtenstein)
 
             GLOBIOM_region = GLOBIOM_regions.loc[
                 GLOBIOM_regions["ISO3"] == ISO3, "Region37"
@@ -911,6 +940,36 @@ class Crops:
             self.data_catalog,
             MIRCA_units=np.unique(MIRCA_unit_grid.values),
         )
+        if any(value in [None, "", [], {}] for value in crop_calendar.values()):
+            missing_mirca_unit = [
+                unit for unit, calendars in crop_calendar.items() if not calendars
+            ]
+            self.logger.warning(
+                f"Missing crop calendar for MIRCA unit(s): {missing_mirca_unit}"
+            )
+
+            for mirca_unit in missing_mirca_unit:
+                # Filter out the current mirca_unit from crop_calendar.keys()
+                valid_keys = [key for key in crop_calendar.keys() if key != mirca_unit]
+
+                # Find the closest MIRCA unit with a crop calendar
+                if valid_keys:  # Ensure there are valid keys to process
+                    closest_mirca_unit = min(
+                        valid_keys, key=lambda x: abs(x - mirca_unit)
+                    )
+                else:
+                    raise ValueError(
+                        f"No valid MIRCA units found to replace missing crop calendar for {mirca_unit}."
+                    )
+
+                # use this closest_mirca_unit to fill the missing crop calendar
+                crop_calendar[mirca_unit] = crop_calendar[closest_mirca_unit]
+                self.logger.info(
+                    f"Filling missing crop calendar for MIRCA unit {mirca_unit} with data from {closest_mirca_unit}."
+                )
+
+        else:
+            self.logger.debug("All keys have valid values.")
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"

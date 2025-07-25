@@ -1,5 +1,6 @@
 import base64
 from pathlib import Path
+from typing import Any
 
 import branca.colormap as cm
 import contextily as ctx
@@ -9,6 +10,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import xarray as xr
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
@@ -51,7 +53,7 @@ class Hydrology:
 
         fig, ax = plt.subplots(figsize=(10, 10))
 
-        mean_discharge.plot(ax=ax, cmap="Blues", norm=mcolors.LogNorm(vmin=1))
+        mean_discharge.plot(ax=ax, cmap="Blues")
 
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
@@ -119,6 +121,7 @@ class Hydrology:
             )
 
             GEB_discharge = xr.concat([GEB_discharge_spinup, GEB_discharge], dim="time")
+
         # load input data files
         snapped_locations = gpd.read_parquet(
             self.model.files["geoms"]["discharge/discharge_snapped_locations"]
@@ -241,14 +244,17 @@ class Hydrology:
                     validation_df.index,
                     validation_df["Q_sim"],
                     label="GEB simulation",
+                    linewidth=0.5,
                 )
                 ax.plot(
                     validation_df.index,
                     validation_df["Q_obs"],
                     label="Q_obs observations",
+                    linewidth=0.5,
                 )
                 ax.set_ylabel("Discharge [m3/s]")
                 ax.set_xlabel("Time")
+                ax.set_ylim(0, None)
                 ax.legend()
 
                 ax.text(
@@ -267,6 +273,13 @@ class Hydrology:
                 ax.text(
                     0.02,
                     0.75,
+                    f"Mean={validation_df['Q_sim'].mean():.2f}",
+                    transform=ax.transAxes,
+                    fontsize=12,
+                )
+                ax.text(
+                    0.02,
+                    0.70,
                     f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
                     transform=ax.transAxes,
                     fontsize=12,
@@ -662,3 +675,264 @@ class Hydrology:
         create_folium_map(evaluation_gdf)
 
         print("Discharge evaluation dashboard created.")
+
+    def water_circle(
+        self,
+        run_name: str,
+        include_spinup: bool,
+        spinup_name: str,
+        *args,
+        **kwargs,
+    ) -> None:
+        """Create a water circle plot for the GEB model.
+
+        Adapted from: https://github.com/mikhailsmilovic/flowplot
+        Also see the paper: https://doi.org/10.1088/1748-9326/ad18de
+
+        Args:
+            run_name: Name of the run to evaluate.
+            include_spinup: Whether to include the spinup run in the evaluation.
+            spinup_name: Name of the spinup run to include in the evaluation.
+            *args: ignored.
+            **kwargs: ignored.
+        """
+        folder = self.model.output_folder / "report" / run_name
+
+        storage = pd.read_csv(folder / "hydrology" / "storage.csv")
+        storage_change = storage.iloc[-1]["storage"] - storage.iloc[0]["storage"]
+
+        rain = pd.read_csv(
+            folder / "hydrology.snowfrost" / "rain.csv",
+            index_col=0,
+            parse_dates=True,
+        )["rain"].sum()
+        snow = pd.read_csv(
+            folder / "hydrology.snowfrost" / "snow.csv",
+            index_col=0,
+            parse_dates=True,
+        )["snow"].sum()
+
+        domestic_water_loss = pd.read_csv(
+            folder / "hydrology.water_demand" / "domestic water loss.csv",
+            index_col=0,
+            parse_dates=True,
+        )["domestic water loss"].sum()
+        industry_water_loss = pd.read_csv(
+            folder / "hydrology.water_demand" / "industry water loss.csv",
+            index_col=0,
+            parse_dates=True,
+        )["industry water loss"].sum()
+        livestock_water_loss = pd.read_csv(
+            folder / "hydrology.water_demand" / "livestock water loss.csv",
+            index_col=0,
+            parse_dates=True,
+        )["livestock water loss"].sum()
+
+        river_outflow = pd.read_csv(
+            folder / "hydrology.routing" / "river outflow.csv",
+            index_col=0,
+            parse_dates=True,
+        )["river outflow"].sum()
+
+        transpiration = pd.read_csv(
+            folder / "hydrology.landcover" / "transpiration.csv",
+            index_col=0,
+            parse_dates=True,
+        )["transpiration"].sum()
+        bare_soil_evaporation = pd.read_csv(
+            folder / "hydrology.landcover" / "bare soil evaporation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["bare soil evaporation"].sum()
+        direct_evaporation = pd.read_csv(
+            folder / "hydrology.landcover" / "direct evaporation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["direct evaporation"].sum()
+        interception_evaporation = pd.read_csv(
+            folder / "hydrology.landcover" / "interception evaporation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["interception evaporation"].sum()
+        snow_sublimation = pd.read_csv(
+            folder / "hydrology.landcover" / "snow sublimation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["snow sublimation"].sum()
+        river_evaporation = pd.read_csv(
+            folder / "hydrology.routing" / "river evaporation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["river evaporation"].sum()
+        waterbody_evaporation = pd.read_csv(
+            folder / "hydrology.routing" / "waterbody evaporation.csv",
+            index_col=0,
+            parse_dates=True,
+        )["waterbody evaporation"].sum()
+
+        hierarchy: dict[str, Any] = {
+            "in": {
+                "rain": rain,
+                "snow": snow,
+            },
+            "out": {
+                "evapotranspiration": {
+                    "transpiration": transpiration,
+                    "bare soil evaporation": bare_soil_evaporation,
+                    "direct evaporation": direct_evaporation,
+                    "interception evaporation": interception_evaporation,
+                    "snow sublimation": snow_sublimation,
+                    "river evaporation": river_evaporation,
+                    "waterbody evaporation": waterbody_evaporation,
+                },
+                "water demand": {
+                    "domestic water loss": domestic_water_loss,
+                    "industry water loss": industry_water_loss,
+                    "livestock water loss": livestock_water_loss,
+                },
+                "river outflow": river_outflow,
+            },
+            "storage change": storage_change,
+        }
+
+        # the size of a section is the sum of the flows in that section
+        # plus the size of the section itself. So if all of the section
+        # is made up of its children, the size of the section is 0.
+        water_circle_list: list[tuple[str, str, float | int]] = []
+        color_map: dict[str, str] = {
+            "in": "#636EFA",
+            "out": "#EF5538",
+            "balance": "#000000",
+            "storage change": "#D2D2D3",
+        }
+
+        def add_flow(
+            water_circle_list: list[tuple[str, str, float | int]],
+            color_map: dict[str, str],
+            root_section: str | None,
+            parent: str | None,
+            flow: str | None,
+            value: int | float | dict[str, Any],
+        ) -> tuple[list[tuple[str, str, float | int]], dict[str, str]]:
+            """Recursive function to add flows to the water circle list.
+
+            Args:
+                water_circle_list: List of tuples containing the water circle data with parent, flow, and value.
+                color_map: Dictionary mapping flow names to colors.
+                root_section: Root section of the current flow hierarchy.
+                parent: Parent of the current flow section.
+                flow: Name of the current flow section.
+                value: Value of the current flow section, can be a number or a dictionary.
+                    If a number, it is a flow and added to the water circle list immediately.
+                    If a dictionary, it contains sub-sections, and it is processed recursively.
+
+                    If one of the sections is _self, it is the size of the remainder section itself.
+                    This is useful when not all of the section is made up of its children.
+
+            Raises:
+                ValueError: If the value type is not int, float, or dict.
+
+            Returns:
+                Updated water circle list with the new flow added.
+                Updated color map with the new flow color added.
+            """
+            if isinstance(value, (int, float)):  # stopping condition
+                # adopt the color of the parent if it exists
+                if parent is not None:
+                    color_map[flow] = color_map[parent]
+                else:  # if no parent, this is a root section
+                    root_section = flow
+                water_circle_list.append(
+                    (root_section, parent, flow, value, color_map[flow])
+                )
+            elif isinstance(value, dict):
+                if parent is not None:  # adopt the color of the parent
+                    color_map[flow] = color_map[parent]
+                else:  # if no parent, this is a root section
+                    root_section = flow
+                _self = 0
+                for sub_section, sub_value in value.items():
+                    if sub_section == "_self":
+                        _self = sub_value
+                        continue  # skip the _self section
+                    water_circle_list, color_map = add_flow(
+                        water_circle_list,
+                        color_map,
+                        root_section,
+                        flow,
+                        sub_section,
+                        sub_value,
+                    )
+                if flow is not None:
+                    water_circle_list.append(
+                        (root_section, parent, flow, _self, color_map[flow])
+                    )
+            else:
+                raise ValueError(
+                    f"Invalid value type for section '{flow}': {value}. Expected dict, int, or float."
+                )
+
+            return water_circle_list, color_map
+
+        water_circle_list, _ = add_flow(
+            water_circle_list,
+            color_map,
+            root_section=None,
+            parent=None,
+            flow=None,
+            value=hierarchy,
+        )
+
+        water_circle_df: pd.DataFrame = pd.DataFrame(
+            water_circle_list,
+            columns=["root_section", "parent", "flow", "value", "color"],
+        )
+
+        root_section_totals = water_circle_df.groupby("root_section").sum("value")
+
+        if (
+            root_section_totals.loc["out", "value"]
+            > root_section_totals.loc["in", "value"]
+        ):
+            category_order = ["storage change", "in", "out"]
+        else:
+            category_order = ["in", "out", "storage change"]
+
+        water_circle_df["root_section"] = pd.Categorical(
+            water_circle_df["root_section"],
+            categories=category_order,
+            ordered=True,
+        )
+        # sort the sections with storage change first
+        water_circle_df = water_circle_df.sort_values(
+            by=["root_section", "value"],
+            ascending=[True, False],
+        )
+
+        water_circle = go.Figure(
+            go.Sunburst(
+                labels=water_circle_df["flow"],
+                parents=water_circle_df["parent"],
+                values=water_circle_df["value"],
+                sort=False,
+                marker=dict(colors=water_circle_df["color"]),
+            )
+        )
+
+        water_circle.update_layout(margin=dict(l=20, r=20, t=20, b=45))
+        water_circle.update_layout(template="plotly_dark")
+        water_circle.update_layout(
+            plot_bgcolor="#000000",
+            paper_bgcolor="#000000",
+            title=dict(
+                text="water circle",
+                xanchor="center",
+                yanchor="bottom",
+                y=0.04,
+                x=0.5,
+            ),
+        )
+
+        water_circle.write_image(
+            self.output_folder_evaluate / "water_circle.png", scale=5
+        )

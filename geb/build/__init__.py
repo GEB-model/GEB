@@ -1086,6 +1086,7 @@ class GEBModel(
                         name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
 
+    @build_method
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors
     ):
@@ -1416,21 +1417,6 @@ class GEBModel(
             **kwargs,
         )
 
-    def check_methods(self, opt):
-        """Check all opt keys and raise sensible error messages if unknown."""
-        for method in opt.keys():
-            attribute = getattr(self, method, None)
-            if not callable(attribute):
-                raise ValueError(f'Has no method "{method}"')
-            if (
-                not hasattr(attribute, "__is_build_method__")
-                or not attribute.__is_build_method__
-            ):
-                raise ValueError(
-                    f'"{method}" not set as a build method. If you are sure this should be build method, please decorate it with @build_method.'
-                )
-        return opt
-
     def run_method(self, method, *args, **kwargs):
         """Log method parameters before running a method."""
         func = getattr(self, method)
@@ -1448,14 +1434,18 @@ class GEBModel(
                 if len(args) > i:
                     v = args[i]
                 params[k] = v
-        # log options
-        for k, v in params.items():
-            if v is not inspect._empty:
-                self.logger.info(f"{method}.{k}: {v}")
         return func(*args, **kwargs)
 
-    def run_methods(self, methods):
+    def run_methods(self, methods, validate_order: bool = True) -> None:
+        """Run methods in the order specified in the methods dictionary.
+
+        Args:
+            methods: A dictionary with method names as keys and their parameters as values.
+            validate_order: If True, validate the order of methods using the build_method decorator.
+        """
         # then loop over other methods
+        # TODO: Allow validate order for custom models
+        build_method.validate_methods(methods, validate_order=validate_order)
         for method in methods:
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
@@ -1467,23 +1457,22 @@ class GEBModel(
         self.logger.info("Finished!")
 
     def build(self, region: dict, methods: dict):
+        """Build the model with the specified region and methods."""
         methods: dict[str:Any] = methods or {}
-        methods = self.check_methods(methods)
         methods["setup_region"].update(region=region)
 
-        self.run_methods(methods)
+        self.run_methods(methods, validate_order=True and type(self) is GEBModel)
 
     def update(
         self,
         methods: dict,
     ):
         methods = methods or {}
-        methods = self.check_methods(methods)
 
         if "setup_region" in methods:
             raise ValueError('"setup_region" can only be called when building a model.')
 
-        self.run_methods(methods)
+        self.run_methods(methods, validate_order=False and type(self) is GEBModel)
 
     def get_linear_indices(self, da):
         """Get linear indices for each cell in a 2D DataArray."""

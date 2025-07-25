@@ -165,6 +165,7 @@ class GroundWater(Module):
             ),
             cell_area=self.grid.var.cell_area,
         )
+        channel_ratio.fill(1)
 
         # this is the capillary rise for the NEXT timestep
         self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
@@ -172,7 +173,7 @@ class GroundWater(Module):
 
         # capriseindex is 1 where capilary rise occurs
         self.hydrology.HRU.capriseindex = self.hydrology.to_HRU(
-            data=np.float32(groundwater_drainage > 0)
+            data=np.float32(self.grid.var.capillar > 0)
         )
 
         self.report(self, locals())
