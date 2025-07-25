@@ -4,6 +4,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import osmnx as ox
 import pandas as pd
 import pyproj
 import rasterio
@@ -510,7 +511,8 @@ class Households(AgentBaseClass):
         return ensemble_damage_maps
 
     def create_flood_probability_maps(self):
-        # Create a probability map based on the ensemble of flood maps based on the strategy (ideally)
+        """Creates flood probability maps based on the ensemble of flood maps for different warning strategies."""
+        # Load the ensemble of flood maps
         ensemble_flood_maps = self.load_ensemble_flood_maps()
 
         days = self.model.config["general"]["forecasts"]["days"]
@@ -521,15 +523,15 @@ class Households(AgentBaseClass):
         os.makedirs(prob_folder, exist_ok=True)
 
         if strategy == 1:
-            # Water level ranges for strategy 1 (based on suitable measures and possible impacts)
+            # Water level ranges used for warning strategy 1 (based on water levels)
             ranges = [
                 (1, 0.1, 1.0),
                 (2, 1.0, 2.0),
                 (3, 2.0, None),
-            ]  # should I create a parquet file or a json file(dict) with these ranges?
+            ]  # Need to change it later to the actual json dictionary
 
         elif strategy == 2:
-            # Water level ranges for strategy 2 (based on critical infrastructure)
+            # Water level ranges for strategy 2 (based on critical infrastructure hits)
             ranges = [(1, 0.3, None)]
 
         probability_maps = {}
@@ -571,7 +573,7 @@ class Households(AgentBaseClass):
             (3, 1500000, 7500000),
             (4, 7500000, None),
         ]
-        # NEED TO CREATE A PARQUET FILE WITH THE RIGHT RANGES
+        # Later need to create a json dictionary with the right damage ranges
 
         # Load the ensemble of damage maps
         damage_ensemble = self.load_ensemble_damage_maps()
@@ -634,7 +636,7 @@ class Households(AgentBaseClass):
 
         days = self.model.config["general"]["forecasts"]["days"]
         range_ids = [1, 2, 3]
-        # range_ids = list(self.var.wlranges_and_measures.keys()) activate later when you have the prob maps
+        # range_ids = list(self.var.wlranges_and_measures.keys()) activate it later when you have the prob maps for all right ranges
         warnings_log = []
 
         # Create probability maps
@@ -643,6 +645,7 @@ class Households(AgentBaseClass):
         # Load households and postal codes
         households = self.var.household_points.copy()
         PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        # Maybe load this as a global var (?) instead of loading it each time
 
         for day in days:
             for range_id in range_ids:
@@ -706,20 +709,129 @@ class Households(AgentBaseClass):
         path = os.path.join(self.model.output_folder, "warnings_log.csv")
         pd.DataFrame(warnings_log).to_csv(path, index=False)
 
-    def infrastructure_warning_strategy(self, prob_threshold=0.6):
-        # Load postal codes and substations
+    def get_critical_infrastructure(self):
+        # Maybe this need to be run only once when loading the assets
+        """Extract critical infrastructure elements from OSM using the catchment polygon as boundary."""
+        catchment_boundary = gpd.read_parquet(
+            self.model.files["geoms"]["catchment_boundary"]
+        )
+
+        # OSM needs a shapely geometry in EPSG:4326
+        catchment_boundary = catchment_boundary.to_crs(epsg=4326)
+        catchment_boundary = catchment_boundary.geometry.iloc[0]
+
+        # Define the crs for the output data
+        wanted_crs = self.model.config["hazards"]["floods"]["crs"]
+
+        # Define the queries for vulnerable and emergency facilities
+        # These queries are based on OSM tags, you can modify them as needed
+        # OSMnx considers an AND statement across different tag keys, so we need to split queries and then combine them later
+        queries = {
+            "vulnerable_facilities_query": {
+                "amenity": [
+                    "hospital",
+                    "school",
+                    "kindergarten",
+                    "nursing_home",
+                    "childcare",
+                ]
+            },
+            "emergency_facilities_query1": {"amenity": ["fire_station", "police"]},
+            "emergency_facilities_query2": {"emergency": ["ambulance_station"]},
+        }
+
+        # Extract the wanted facilities from OSM using the queries
+        gdf = {}
+        for key, query in queries.items():
+            gdf[key] = ox.features_from_polygon(catchment_boundary, query)
+
+        # Combine emergency facilities from both queries
+        emergency_facilities = gpd.GeoDataFrame(
+            pd.concat(
+                [
+                    gdf["emergency_facilities_query1"],
+                    gdf["emergency_facilities_query2"],
+                ],
+                ignore_index=True,
+            )
+        )
+        vulnerable_facilities = gdf["vulnerable_facilities_query"]
+
+        dataset = {
+            "vulnerable_facilities": vulnerable_facilities,
+            "emergency_facilities": emergency_facilities,
+        }
+
+        # Reproject the facilities to the wanted CRS and save them to gpkg files
+        for name, facility in dataset.items():
+            facility = facility.to_crs(wanted_crs)
+            save_path = os.path.join(self.model.output_folder, f"{name}.gpkg")
+            facility.to_file(save_path, driver="GPKG")
+
+        critical_facilities = list(dataset.values())
+        self.var.buildings = self.update_buildings_w_critical_infrastructure(
+            critical_facilities
+        )
+
+        self.var.buildings.to_file(
+            os.path.join(
+                self.model.output_folder, "buildings_with_critical_infrastructure.gpkg"
+            ),
+            driver="GPKG",
+        )
+
+    def update_buildings_w_critical_infrastructure(self, critical_infrastructure):
+        """Updates the buildings layer with the attributes from the critical infrastructure layer based on spatial intersection."""
+        buildings = self.var.buildings.copy()
+
+        for critical_infrastructure_type in critical_infrastructure:
+            # Spatial join: find which facility features intersect which buildings
+            joined = gpd.sjoin(
+                buildings,
+                critical_infrastructure_type,
+                how="left",
+                predicate="intersects",
+                lsuffix="bld",
+                rsuffix="fac",
+            )
+
+            # Take only the first match for each building
+            # This is to avoid duplicating buildings if they intersect with multiple facilities
+            joined = joined[~joined.index.duplicated(keep="first")]
+
+            # Identify shared columns
+            common_cols = buildings.columns.intersection(
+                critical_infrastructure_type.columns
+            )
+            common_cols = [
+                col for col in common_cols if col not in ("geometry", "index_right")
+            ]
+
+            print("testing common columns")
+
+            # Replace only where there was a match in the column name
+            for col in common_cols:
+                col_fac = f"{col}_fac"
+                if col_fac in joined.columns:
+                    buildings[col] = joined[col_fac].combine_first(buildings[col])
+
+        return buildings
+
+    def critical_infrastructure_warning_strategy(self, prob_threshold=0.6):
+        """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations."""
+        # Load postal codes
         PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
         substations = gpd.read_parquet(
             self.model.files["geoms"]["assets/energy_substations"]
         )
 
-        # Get the forecast start date from the config
+        # Get the forecast start date from the config (to know to which forecast day the warnings are associated to)
         day = self.model.config["general"]["forecasts"]["days"][0]
 
         # Create flood probability maps for critical substation hit (config needs to be set as strategy 2)
         self.create_flood_probability_maps()
 
-        # Assign substations to postal codes based on distance -- THIS NEEDS TO BE IMPROVED
+        # Assign substations to postal codes based on distance -- Need to improve this with Thiessen polygons or similar
         PC4_with_substations = gpd.sjoin_nearest(
             PC4, substations[["fid", "geometry"]], how="left", distance_col="distance"
         )
@@ -1257,6 +1369,7 @@ class Households(AgentBaseClass):
         self.assign_household_attributes()
         if self.config["warning_response"]:
             self.change_household_locations()  # ideally this should be done in the setup_population when building the model
+        self.get_critical_infrastructure()
         self.water_level_warning_strategy()
         self.household_decision_making()
 
@@ -1279,7 +1392,9 @@ class Households(AgentBaseClass):
         )
 
         household_points["protect_building"] = False
-        household_points.loc[self.var.risk_perception >= 0.1, "protect_building"] = True
+        household_points.loc[self.var.risk_perception >= 0.1, "protect_building"] = (
+            True  # Need to change this
+        )
 
         buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
             buildings, household_points, how="left", exclusive=True
