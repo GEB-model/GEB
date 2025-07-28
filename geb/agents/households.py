@@ -863,17 +863,11 @@ class Households(AgentBaseClass):
 
     def load_objects(self):
         # Load buildings
-        self.var.buildings = gpd.read_parquet(
-            self.model.files["geoms"]["assets/buildings"]
-        )
-        self.var.buildings["dry_floodproofing"] = False
-
-        self.var.buildings["object_type"] = (
+        self.buildings = gpd.read_parquet(self.model.files["geoms"]["assets/buildings"])
+        self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
-        self.var.buildings_centroid = gpd.GeoDataFrame(
-            geometry=self.var.buildings.centroid
-        )
+        self.var.buildings_centroid = gpd.GeoDataFrame(geometry=self.buildings.centroid)
         self.var.buildings_centroid["object_type"] = (
             "building_unprotected"  # before it was "building_content"
         )
@@ -896,7 +890,7 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
-        self.var.buildings["maximum_damage_m2"] = self.var.max_dam_buildings_structure
+        self.buildings["maximum_damage_m2"] = self.var.max_dam_buildings_structure
 
         with open(
             self.model.files["dict"][
@@ -1179,9 +1173,7 @@ class Households(AgentBaseClass):
         flood_map: xr.DataArray = flood_map.compute()
         # flood_map = flood_map.chunk({"x": 100, "y": 1000})
 
-        buildings: gpd.GeoDataFrame = self.var.buildings.copy().to_crs(
-            flood_map.rio.crs
-        )
+        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_map.rio.crs)
         household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
             flood_map.rio.crs
         )

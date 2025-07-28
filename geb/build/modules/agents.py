@@ -27,6 +27,7 @@ from ..workflows.conversions import (
     COUNTRY_NAME_TO_ISO3,
     GLOBIOM_NAME_TO_ISO3,
     SUPERWELL_NAME_TO_ISO3,
+    setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
 from ..workflows.general import (
@@ -39,7 +40,14 @@ class Agents:
     def __init__(self):
         pass
 
-    @build_method
+    @build_method(
+        depends_on=[
+            "set_ssp",
+            "set_time_range",
+            "setup_regions_and_land_use",
+            "setup_household_characteristics",
+        ]
+    )
     def setup_water_demand(self):
         """Sets up the water demand data for GEB.
 
@@ -58,6 +66,9 @@ class Agents:
         """
         self.logger.info("Setting up municipal water demands")
 
+        start_model_time = self.start_date.year
+        end_model_time = self.end_date.year
+
         municipal_water_demand = self.data_catalog.get_dataframe(
             "AQUASTAT_municipal_withdrawal"
         )
@@ -65,6 +76,12 @@ class Agents:
             AQUASTAT_NAME_TO_ISO3
         )
         municipal_water_demand = municipal_water_demand.set_index("ISO3")
+
+        # Filter the data for the model time
+        municipal_water_demand = municipal_water_demand[
+            (municipal_water_demand["Year"] >= start_model_time)
+            & (municipal_water_demand["Year"] <= end_model_time)
+        ]
 
         municipal_water_demand_per_capita = np.full_like(
             self.array["agents/households/region_id"],
@@ -75,34 +92,62 @@ class Agents:
         municipal_water_withdrawal_m3_per_capita_per_day_multiplier = pd.DataFrame()
         for _, region in self.geoms["regions"].iterrows():
             ISO3 = region["ISO3"]
-
-            if (
-                ISO3 == "AND"
-            ):  # for Andorra (not available in World Bank data), use Spain's data
-                self.logger.warning(
-                    "Andorra's economic data not available, using Spain's data"
-                )
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":  # for Liechtenstein, use Switzerland's data
-                self.logger.warning(
-                    "Liechtenstein's economic data not available, using Switzerland's data"
-                )
-                ISO3 = "CHE"
-
             region_id = region["region_id"]
 
-            # select domestic water demand for the region
-            municipal_water_demand_region = municipal_water_demand.loc[ISO3]
-            population = municipal_water_demand_region[
-                municipal_water_demand_region["Variable"] == "Total population"
-            ]
-            population = population.set_index("Year")
-            population = population["Value"] * 1000
+            def load_water_demand_and_pop_data(ISO3):
+                # Load the municipal water demand data for the given ISO3 code
+                if ISO3 not in municipal_water_demand.index:
+                    countries_with_data = municipal_water_demand.index.unique().tolist()
+                    donor_countries = setup_donor_countries(self, countries_with_data)
+                    ISO3 = donor_countries.get(ISO3, None)
 
-            municipal_water_withdrawal = municipal_water_demand_region[
-                municipal_water_demand_region["Variable"]
-                == "Municipal water withdrawal"
-            ]
+                    self.logger.warning(
+                        f"Country {region['ISO3']} not present in municipal water demand data, using donor country {ISO3}"
+                    )
+
+                municipal_water_demand_region = municipal_water_demand.loc[ISO3]
+                population = municipal_water_demand_region[
+                    municipal_water_demand_region["Variable"] == "Total population"
+                ]
+                population = population.set_index("Year")
+                population = population["Value"] * 1000
+
+                municipal_water_withdrawal = municipal_water_demand_region[
+                    municipal_water_demand_region["Variable"]
+                    == "Municipal water withdrawal"
+                ]
+                return municipal_water_withdrawal, population
+
+            municipal_water_withdrawal, population = load_water_demand_and_pop_data(
+                ISO3
+            )
+
+            if population.isna().any() or len(population) == 0:
+                raise ValueError(
+                    f"Missing population data for {ISO3}. Please check the population dataset."
+                )
+            if len(municipal_water_withdrawal) == 0:
+                countries_with_water_withdrawal_data = (
+                    municipal_water_demand[
+                        municipal_water_demand["Variable"]
+                        == "Municipal water withdrawal"
+                    ]
+                    .dropna(axis=0, how="any")
+                    .index.unique()
+                    .tolist()
+                )
+
+                donor_countries = setup_donor_countries(
+                    self, countries_with_water_withdrawal_data
+                )
+                donor_country = donor_countries.get(ISO3, None)
+                self.logger.info(
+                    f"Missing municipal water withdrawal data for {ISO3}, filling with donor country {donor_country}"
+                )
+                municipal_water_withdrawal, population = load_water_demand_and_pop_data(
+                    donor_country
+                )
+
             assert len(municipal_water_withdrawal) > 0, (
                 f"Missing municipal water withdrawal data for {ISO3}"
             )
@@ -113,7 +158,55 @@ class Agents:
             municipal_water_withdrawal_m3_per_capita_per_day = (
                 municipal_water_withdrawal / population / 365.2425
             )
-            municipal_water_withdrawal_m3_per_capita_per_day: pd.DataFrame = (
+
+            if municipal_water_withdrawal_m3_per_capita_per_day.isna().any():
+                missing_years = municipal_water_withdrawal_m3_per_capita_per_day[
+                    municipal_water_withdrawal_m3_per_capita_per_day.isna()
+                ].index.tolist()
+                # filter out years that are not in the model time
+                missing_years = [year for year in missing_years]
+                # get all the countries with data for these years
+                municipal_water_withdrawal_insert = municipal_water_demand[
+                    municipal_water_demand["Variable"] == "Municipal water withdrawal"
+                ]
+                # countries wirth data for ALL the missing years
+                countries_with_data = (
+                    municipal_water_withdrawal_insert.loc[
+                        municipal_water_withdrawal_insert["Year"].isin(missing_years)
+                    ]
+                    .dropna(axis=0, how="any")
+                    .index.unique()
+                    .tolist()
+                )
+
+                # fill the municipal water withdrawal data for missing years from donor countries
+                donor_countries = setup_donor_countries(self, countries_with_data)
+                donor_country = donor_countries.get(ISO3, None)
+                self.logger.info(
+                    f"Missing municipal water withdrawal data for {ISO3}, using donor country {donor_country}"
+                )
+                municipal_water_withdrawal_donor, population_donor = (
+                    load_water_demand_and_pop_data(donor_country)
+                )
+
+                municipal_water_withdrawal_donor = (
+                    municipal_water_withdrawal_donor.set_index("Year")
+                )
+                municipal_water_withdrawal_donor = (
+                    municipal_water_withdrawal_donor["Value"] * 10e9
+                )
+
+                municipal_water_withdrawal_m3_per_capita_per_day_donor = (
+                    municipal_water_withdrawal_donor / population_donor / 365.2425
+                )
+
+                # use the donor country data to fill the missing values
+                for year in missing_years:
+                    municipal_water_withdrawal_m3_per_capita_per_day.loc[year] = (
+                        municipal_water_withdrawal_m3_per_capita_per_day_donor.loc[year]
+                    )
+
+            municipal_water_withdrawal_m3_per_capita_per_day = (
                 municipal_water_withdrawal_m3_per_capita_per_day
             ).dropna()
 
@@ -134,19 +227,32 @@ class Agents:
                 f"Too large water withdrawal data for {ISO3}"
             )
 
-            municipal_water_demand_2000_m3_per_capita_per_day: pd.DataFrame = (
+            # set baseline year for municipal water demand
+            if 2000 not in municipal_water_withdrawal_m3_per_capita_per_day.index:
+                # get first year with data
+                first_year = municipal_water_withdrawal_m3_per_capita_per_day.index[0]
+                self.logger.warning(
+                    f"Missing 2000 data for {ISO3}, using first year {first_year} as baseline"
+                )
+                municipal_water_demand_baseline_m3_per_capita_per_day = (
+                    municipal_water_withdrawal_m3_per_capita_per_day.loc[
+                        first_year
+                    ].item()
+                )
+            # use the 2000 as baseline (default)
+            municipal_water_demand_baseline_m3_per_capita_per_day: pd.DataFrame = (
                 municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
             )
 
             municipal_water_demand_per_capita[
                 self.array["agents/households/region_id"] == region_id
-            ] = municipal_water_demand_2000_m3_per_capita_per_day
+            ] = municipal_water_demand_baseline_m3_per_capita_per_day
 
             # scale municipal water demand table to use baseline as 1.00 and scale other values
             # relatively
             municipal_water_withdrawal_m3_per_capita_per_day_multiplier[region_id] = (
                 municipal_water_withdrawal_m3_per_capita_per_day
-                / municipal_water_demand_2000_m3_per_capita_per_day
+                / municipal_water_demand_baseline_m3_per_capita_per_day
             )
 
         # we don't want to calculate the water demand for every year,
@@ -224,7 +330,7 @@ class Agents:
             "ssp2",
         )
 
-    @build_method
+    @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
     def setup_economic_data(self):
         """Sets up the economic data for GEB.
 
@@ -245,6 +351,7 @@ class Agents:
 
         # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
+        inflation_rates_country_index = inflation_rates.set_index("Country Code")
         price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
         LCU_per_USD = self.data_catalog.get_dataframe("wb_LCU_per_USD")
 
@@ -287,9 +394,8 @@ class Agents:
         # Create a helper to process rates and assert single row data
         def process_rates(df, rate_cols, ISO3, convert_percent_to_ratio=False):
             filtered_data = df.loc[df["Country Code"] == ISO3, rate_cols]
-            assert len(filtered_data) == 1, (
-                f"Expected one row for {ISO3}, got {len(filtered_data)}"
-            )
+            if len(filtered_data) == 0:
+                return list(np.full(len(rate_cols), np.nan, dtype=np.float32))
             if convert_percent_to_ratio:
                 return (filtered_data.iloc[0] / 100 + 1).tolist()
             return filtered_data.iloc[0].tolist()
@@ -303,27 +409,7 @@ class Agents:
 
         for _, region in self.geoms["regions"].iterrows():
             region_id = str(region["region_id"])
-
-            # Store data in dictionaries
-            # lending_rates_dict["data"][region_id] = process_rates(
-            #     lending_rates,
-            #     years_lending_rates,
-            #     region["ISO3"],
-            #     convert_percent_to_ratio=True,
-            # )
             ISO3 = region["ISO3"]
-            if (
-                ISO3 == "AND"
-            ):  # for Andorra (not available in World Bank data), use Spain's data
-                self.logger.warning(
-                    "Andorra's economic data not available, using Spain's data"
-                )
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":  # for Liechtenstein, use Switzerland's data
-                self.logger.warning(
-                    "Liechtenstein's economic data not available, using Switzerland's data"
-                )
-                ISO3 = "CHE"
 
             local_inflation_rates = process_rates(
                 inflation_rates,
@@ -331,6 +417,36 @@ class Agents:
                 ISO3,
                 convert_percent_to_ratio=True,
             )
+
+            if np.isnan(local_inflation_rates).any():
+                # get index of nans in local_inflation_rates
+                nan_indices = np.where(np.isnan(local_inflation_rates))[0]
+                nan_years = [years_inflation_rates[i] for i in nan_indices]
+
+                countries_with_data = (
+                    inflation_rates_country_index[nan_years]
+                    .dropna(axis=0, how="any")
+                    .index.tolist()
+                )
+
+                ## get all the donor countries for countries in the dataset
+                donor_countries = setup_donor_countries(self, countries_with_data)
+                donor_country = donor_countries.get(ISO3, None)
+
+                self.logger.info(
+                    f"Missing inflation rates for {ISO3}, using donor country {donor_country}"
+                )
+                donor_country_inflation_rates = process_rates(
+                    inflation_rates,
+                    years_inflation_rates,
+                    donor_country,
+                    convert_percent_to_ratio=True,
+                )
+
+                # Replace NaN values in local_inflation_rates with values from similar_country_average_inflation
+                for idx, value in zip(nan_indices, donor_country_inflation_rates):
+                    local_inflation_rates[idx] = value
+
             assert not np.isnan(local_inflation_rates).any(), (
                 f"Missing inflation rates for {region['ISO3']}"
             )
@@ -341,6 +457,31 @@ class Agents:
             price_ratio_dict["data"][region_id] = process_rates(
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
+
+            if np.all(np.isnan(price_ratio_dict["data"][region_id])):
+                # check which countries are NOT fully nan
+                price_ratio_filter_index = price_ratio_filtered.set_index(
+                    "Country Code"
+                )
+                countries_with_price_ratio_data = (
+                    price_ratio_filter_index[years_price_ratio]
+                    .dropna(axis=0, how="all")
+                    .index.unique()
+                    .tolist()
+                )
+                donor_countries = setup_donor_countries(
+                    self, countries_with_price_ratio_data
+                )
+                donor_country = donor_countries.get(ISO3, None)
+                price_ratio_dict["data"][region_id] = process_rates(
+                    price_ratio_filtered,
+                    years_price_ratio,
+                    donor_country,
+                )
+
+                self.logger.info(
+                    f"Missing price ratio data for {ISO3}, using donor country {donor_country}"
+                )
 
             lcu_dict["data"][region_id] = process_rates(
                 lcu_filtered, years_lcu, region["ISO3"]
@@ -396,6 +537,7 @@ class Agents:
     def setup_irrigation_sources(self, irrigation_sources):
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
 
+    @build_method(depends_on=["set_time_range", "setup_economic_data"])
     def setup_irrigation_prices_by_reference_year(
         self,
         operation_surface: float,
@@ -580,9 +722,22 @@ class Agents:
 
         for _, region in self.geoms["regions"].iterrows():
             region_id = str(region["region_id"])
-
             prices = pd.Series(index=range(start_year, end_year + 1))
-            prices.loc[reference_year] = electricity_rates[region["ISO3"]]
+            country = region["ISO3"]
+
+            # implement donors
+            if country not in electricity_rates:
+                countries_with_data = list(electricity_rates.keys())
+                donor_countries = setup_donor_countries(self, countries_with_data)
+                donor_country = donor_countries.get(country, None)
+                self.logger.info(
+                    f"Missing electricity rates for {region['ISO3']}, using donor country {donor_country}"
+                )
+                country = donor_country
+
+            prices.loc[reference_year] = electricity_rates[
+                country
+            ]  # use country or donor country
 
             # Forward calculation from the reference year
             for year in range(reference_year + 1, end_year + 1):
@@ -808,12 +963,11 @@ class Agents:
         farmers = pd.read_csv(path, index_col=0)
         self.setup_farmers(farmers)
 
-    @build_method
+    @build_method(depends_on=["setup_regions_and_land_use", "setup_cell_area"])
     def setup_create_farms(
         self,
         region_id_column="region_id",
         country_iso3_column="ISO3",
-        farm_size_donor_countries=None,
         data_source="lowder",
         size_class_boundaries=None,
     ):
@@ -834,7 +988,7 @@ class Agents:
         -----
         This method sets up the farmers for GEB. This is a simplified method that generates an example set of agent data.
         It first calculates the number of farmers and their farm sizes for each region based on the agricultural data for
-        that region based on theamount of farm land and data from a global database on farm sizes per country. It then
+        that region based on the amount of farm land and data from a global database on farm sizes per country. It then
         randomly assigns crops, irrigation sources, household sizes, and daily incomes and consumption levels to each farmer.
 
         A paper that reports risk aversion values for 75 countries is this one: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2646134
@@ -855,9 +1009,6 @@ class Agents:
             }
         else:
             assert size_class_boundaries is not None
-            assert farm_size_donor_countries is None, (
-                "farm_size_donor_countries is only used for lowder data"
-            )
 
         cultivated_land = self.region_subgrid["landsurface/full_region_cultivated_land"]
         assert cultivated_land.dtype == bool, "Cultivated land must be boolean"
@@ -901,17 +1052,25 @@ class Agents:
             )
 
         all_agents = []
+
         self.logger.info(f"Starting processing of {len(regions_shapes)} regions")
+
+        farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
+        farm_size_donor_country = setup_donor_countries(self, farm_countries_list)
+
         for i, (_, region) in enumerate(regions_shapes.iterrows()):
             UID = region[region_id_column]
             if data_source == "lowder":
                 ISO3 = region[country_iso3_column]
-                if farm_size_donor_countries:
-                    assert isinstance(farm_size_donor_countries, dict)
-                    ISO3 = farm_size_donor_countries.get(ISO3, ISO3)
                 self.logger.info(
                     f"Processing region ({i + 1}/{len(regions_shapes)}) with ISO3 {ISO3}"
                 )
+
+                if ISO3 in farm_size_donor_country.keys():
+                    ISO3 = farm_size_donor_country.get(ISO3)
+                    self.logger.info(
+                        f"Missing farm sizes for {region[country_iso3_column]}, using donor country {ISO3}"
+                    )
             else:
                 state, district, tehsil = (
                     region["state_name"],
@@ -1180,7 +1339,7 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.setup_farmers(farmers)
 
-    @build_method
+    @build_method(depends_on=["setup_regions_and_land_use"])
     def setup_buildings_obat(self):
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4",
@@ -1587,7 +1746,7 @@ class Agents:
                 name=f"agents/households/{household_attribute}",
             )
 
-    @build_method
+    @build_method(depends_on=["setup_create_farms"])
     def setup_farmer_household_characteristics(self, maximum_age=85):
         n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
@@ -1647,11 +1806,6 @@ class Agents:
             self.logger.info(
                 f"Setting up farmer household characteristics for {GDL_region} ({GDL_idx + 1}/{len(GDL_regions)})"
             )
-            if GDL_region == "ANDt":
-                GDL_region = "ESPr112"
-            if GDL_region == "LIEt":
-                GDL_region = "CHEr105"
-
             GLOPOP_S_region, _ = load_GLOPOP_S(self.data_catalog, GDL_region)
 
             # select farmers only
@@ -1864,7 +2018,9 @@ class Agents:
 
         return preferences_country_level
 
-    @build_method
+    @build_method(
+        depends_on=["setup_create_farms", "setup_farmer_household_characteristics"]
+    )
     def setup_farmer_characteristics(
         self,
         interest_rate=0.05,
@@ -1904,13 +2060,34 @@ class Agents:
 
         donor_data = {}
         for ISO3 in ISO3_codes_GLOBIOM_region:
-            if ISO3 == "AND":
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":
-                ISO3 = "CHE"
             region_risk_aversion_data = preferences_global[
                 preferences_global["ISO3"] == ISO3
             ]
+            if region_risk_aversion_data.empty:
+                countries_with_preferences_data = (
+                    preferences_global["ISO3"].unique().tolist()
+                )
+                donor_countries = setup_donor_countries(
+                    self,
+                    countries_with_preferences_data,
+                    ISO3_codes_GLOBIOM_region.to_list(),
+                )
+
+                donor_country = donor_countries.get(ISO3, None)
+                assert donor_country is not None, f"No donor country found for {ISO3}"
+
+                region_risk_aversion_data = preferences_global[
+                    preferences_global["ISO3"] == donor_country
+                ]
+
+                self.logger.info(
+                    f"Missing risk aversion data for {ISO3}, filling with {donor_country} instead."
+                )
+                # ensure that the country and ISO3 represent the original country, not the donor country
+                region_risk_aversion_data["Country"] = [
+                    key for key, val in COUNTRY_NAME_TO_ISO3.items() if val == ISO3
+                ]
+                region_risk_aversion_data["ISO3"] = ISO3
 
             region_risk_aversion_data = region_risk_aversion_data[
                 [
@@ -2183,7 +2360,7 @@ class Agents:
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
-    @build_method
+    @build_method(depends_on=[])
     def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
         """Get assets from OpenStreetMap (OSM) data.
 

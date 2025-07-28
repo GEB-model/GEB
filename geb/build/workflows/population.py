@@ -51,11 +51,6 @@ def load_GLOPOP_S(data_catalog, GDL_region):
             with gzip.open(file, "rb") as f:
                 GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
 
-    # reading method old file
-    # GLOPOP_S = data_catalog.get_source("GLOPOP-S").path.format(region=GDL_region)
-    # with gzip.open(GLOPOP_S, "rb") as f:
-    #     GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
-
     n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
     GLOPOP_S_region = pd.DataFrame(
         np.reshape(

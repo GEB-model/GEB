@@ -964,7 +964,7 @@ class CropFarmers(AgentBaseClass):
 
     def save_water_deficit(self, discount_factor=0.2):
         water_deficit_day_m3 = (
-            self.HRU.var.ETRef - self.HRU.pr
+            self.HRU.var.reference_evapotranspiration_grass - self.HRU.pr
         ) * self.HRU.var.cell_area
         water_deficit_day_m3[water_deficit_day_m3 < 0] = 0
 
@@ -1034,7 +1034,8 @@ class CropFarmers(AgentBaseClass):
                 wilting_point=self.HRU.var.wwp,
                 w=self.HRU.var.w,
                 ws=self.HRU.var.ws,
-                arno_beta=self.HRU.var.arnoBeta,
+                arno_beta=self.HRU.var.arno_beta,
+                saturated_hydraulic_conductivity=self.HRU.var.saturated_hydraulic_conductivity,
                 remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
                 cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
                 crop_calendar=self.var.crop_calendar.data,

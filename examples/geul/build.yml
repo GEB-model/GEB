@@ -347,7 +347,8 @@ setup_damage_parameters:
             - [6.00, 0.05]
           maximum_damage: 25
 
-setup_forcing_era5:
+setup_forcing:
+  forcing: ERA5
 
 setup_SPEI:
   window_months: 12
