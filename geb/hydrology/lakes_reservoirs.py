@@ -205,7 +205,7 @@ class LakesReservoirs(Module):
         )
 
         # set discharge to NaN for all cells that are not part of a water body
-        self.grid.var.discharge_m3_s[self.grid.var.waterBodyID != -1] = np.nan
+        self.grid.var.discharge_m3_s_substep[self.grid.var.waterBodyID != -1] = np.nan
 
         self.grid.var.waterbody_outflow_points = self.get_outflows(
             self.grid.var.waterBodyID

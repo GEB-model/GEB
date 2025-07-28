@@ -8,7 +8,7 @@ import pandas as pd
 import pyproj
 import rasterio
 import xarray as xr
-from damagescanner.core import object_scanner
+from damagescanner.vector import VectorScanner
 from honeybees.library.raster import sample_from_map
 from rasterio.features import shapes
 from rasterstats import point_query, zonal_stats
@@ -853,15 +853,11 @@ class Households(AgentBaseClass):
 
     def load_objects(self):
         # Load buildings
-        self.var.buildings = gpd.read_parquet(
-            self.model.files["geoms"]["assets/buildings"]
-        )
-        self.var.buildings["object_type"] = (
+        self.buildings = gpd.read_parquet(self.model.files["geoms"]["assets/buildings"])
+        self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
-        self.var.buildings_centroid = gpd.GeoDataFrame(
-            geometry=self.var.buildings.centroid
-        )
+        self.var.buildings_centroid = gpd.GeoDataFrame(geometry=self.buildings.centroid)
         self.var.buildings_centroid["object_type"] = (
             "building_unprotected"  # before it was "building_content"
         )
@@ -884,7 +880,7 @@ class Households(AgentBaseClass):
             "r",
         ) as f:
             self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
-        self.var.buildings["maximum_damage_m2"] = self.var.max_dam_buildings_structure
+        self.buildings["maximum_damage_m2"] = self.var.max_dam_buildings_structure
 
         with open(
             self.model.files["dict"][
@@ -1083,10 +1079,9 @@ class Households(AgentBaseClass):
 
         """
         flood_map: xr.DataArray = flood_map.compute()
+        # flood_map = flood_map.chunk({"x": 100, "y": 1000})
 
-        buildings: gpd.GeoDataFrame = self.var.buildings.copy().to_crs(
-            flood_map.rio.crs
-        )
+        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_map.rio.crs)
         household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
             flood_map.rio.crs
         )
@@ -1117,39 +1112,39 @@ class Households(AgentBaseClass):
         ].apply(lambda x: "building_protected" if x else "building_unprotected")
         buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
-        damages_buildings_content = object_scanner(
-            objects=buildings_centroid,
-            hazard=flood_map,
-            curves=self.var.buildings_content_curve,
+        damages_buildings_content = VectorScanner(
+            feature_file=buildings_centroid,
+            hazard_file=flood_map,
+            curve_path=self.var.buildings_content_curve,
+            gridded=False,
         )
 
-        total_damages_content = damages_buildings_content.sum()
+        total_damages_content = damages_buildings_content["damage"].sum()
         print(f"damages to building content are: {total_damages_content}")
 
-        buildings_centroid["damages"] = damages_buildings_content
-        buildings_centroid.to_file(damage_folder / filename, driver="GPKG")
+        damages_buildings_content.to_file(damage_folder / filename, driver="GPKG")
 
         # Compute damages for buildings structure and save it to a gpkg file
         category_name: str = "buildings_structure"
         filename: str = f"damage_map_{category_name}.gpkg"
 
-        damages_buildings_structure: pd.Series = object_scanner(
-            objects=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),
-            hazard=flood_map,
-            curves=self.var.buildings_structure_curve,
+        damages_buildings_structure: pd.Series = VectorScanner(
+            feature_file=buildings.rename(
+                columns={"maximum_damage_m2": "maximum_damage"}
+            ),
+            hazard_file=flood_map,
+            curve_path=self.var.buildings_structure_curve,
+            gridded=False,
         )
 
-        total_damage_structure = damages_buildings_structure.sum()
+        total_damage_structure = damages_buildings_structure["damage"].sum()
         print(f"damages to building structure are: {total_damage_structure}")
 
-        buildings["damages"] = damages_buildings_structure
+        damages_buildings_structure.to_file(damage_folder / filename, driver="GPKG")
 
-        buildings.to_file(damage_folder / filename, driver="GPKG")
-
-        total_flood_damages = (
-            damages_buildings_content.sum() + damages_buildings_structure.sum()
+        print(
+            f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
         )
-        print(f"Total damages to buildings are: {total_flood_damages}")
 
         agriculture = from_landuse_raster_to_polygon(
             self.HRU.decompress(self.HRU.var.land_owners != -1),
@@ -1161,12 +1156,13 @@ class Households(AgentBaseClass):
 
         agriculture = agriculture.to_crs(flood_map.rio.crs)
 
-        damages_agriculture = object_scanner(
-            objects=agriculture,
-            hazard=flood_map,
-            curves=self.var.agriculture_curve,
+        damages_agriculture = VectorScanner(
+            feature_file=agriculture,
+            hazard_file=flood_map,
+            curve_path=self.var.agriculture_curve,
+            gridded=False,
         )
-        total_damages_agriculture = damages_agriculture.sum()
+        total_damages_agriculture = damages_agriculture["damage"].sum()
         print(f"damages to agriculture are: {total_damages_agriculture}")
 
         # Load landuse and make turn into polygons
@@ -1180,28 +1176,33 @@ class Households(AgentBaseClass):
 
         forest = forest.to_crs(flood_map.rio.crs)
 
-        damages_forest = object_scanner(
-            objects=forest, hazard=flood_map, curves=self.var.forest_curve
+        damages_forest = VectorScanner(
+            feature_file=forest,
+            hazard_file=flood_map,
+            curve_path=self.var.forest_curve,
+            gridded=False,
         )
-        total_damages_forest = damages_forest.sum()
+        total_damages_forest = damages_forest["damage"].sum()
         print(f"damages to forest are: {total_damages_forest}")
 
         roads = self.roads.to_crs(flood_map.rio.crs)
-        damages_roads = object_scanner(
-            objects=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
-            hazard=flood_map,
-            curves=self.var.road_curves,
+        damages_roads = VectorScanner(
+            feature_file=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
+            hazard_file=flood_map,
+            curve_path=self.var.road_curves,
+            gridded=False,
         )
-        total_damages_roads = damages_roads.sum()
+        total_damages_roads = damages_roads["damage"].sum()
         print(f"damages to roads are: {total_damages_roads} ")
 
         rail = self.rail.to_crs(flood_map.rio.crs)
-        damages_rail = object_scanner(
-            objects=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
-            hazard=flood_map,
-            curves=self.var.rail_curve,
+        damages_rail = VectorScanner(
+            feature_file=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
+            hazard_file=flood_map,
+            curve_path=self.var.rail_curve,
+            gridded=False,
         )
-        total_damages_rail = damages_rail.sum()
+        total_damages_rail = damages_rail["damage"].sum()
         print(f"damages to rail are: {total_damages_rail}")
 
         total_flood_damages = (

@@ -13,6 +13,7 @@ import xarray as xr
 from shapely.ops import nearest_points
 from tqdm import tqdm
 
+from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
 """
@@ -177,6 +178,7 @@ class Observations:
     def __init__(self):
         pass
 
+    @build_method(depends_on=["setup_hydrography"])
     def setup_discharge_observations(
         self,
         max_uparea_difference_ratio: float = 0.3,
@@ -277,7 +279,7 @@ class Observations:
             return Q_station, station_coords
 
         if custom_river_stations is not None:
-            for station in os.listdir(custom_river_stations):
+            for station in os.listdir(Path(self.root).parent / custom_river_stations):
                 if not station.endswith(".csv"):
                     # raise error
                     raise ValueError(f"File {station} is not a csv file")
@@ -355,7 +357,14 @@ class Observations:
         # convert all the -999 values to NaN
         Q_obs_clipped = Q_obs_clipped.where(Q_obs_clipped != -999, np.nan)
 
-        # save Q_obs clipped data as parquet file for later use
+        if len(Q_obs_clipped.id) == 0:
+            # exit function/method
+            self.logger.warning(
+                "No discharge stations found in the region. Skipping discharge observations setup."
+            )
+            return
+
+        # check if there are any NaN values in the Q_obs dataset
         discharge_df = Q_obs_clipped.runoff_mean.to_dataframe().reset_index()
         discharge_df.rename(
             columns={
@@ -369,6 +378,11 @@ class Observations:
             index="time", columns="station_ID", values="discharge"
         )
         discharge_df.dropna(how="all", inplace=True)  # remove rows that are all nan
+        if len(Q_obs_clipped.id.values) == 0:
+            self.logger.warning(
+                "No discharge stations found in basin area. Skipping discharge snapping."
+            )
+            return  # Exit the method early
 
         # Snapping to river and validation of discharges
         # create list for results of snapping

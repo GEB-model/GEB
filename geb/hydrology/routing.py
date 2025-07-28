@@ -490,7 +490,8 @@ class KinematicWave(Router):
 
         self.Q_prev = Q
 
-        outflow_at_pits_m3 = (Q[self.is_pit] * self.dt).sum()
+        # Because some pits may also be waterbodies (where Q is NaN), we use nansum
+        outflow_at_pits_m3 = np.nansum(Q[self.is_pit] * self.dt)
 
         return (
             Q,
@@ -718,7 +719,7 @@ class Routing(Module):
             self.router = KinematicWave(
                 dt=self.var.routing_step_length_seconds,
                 river_network=self.river_network,
-                Q_initial=self.grid.var.discharge_m3_s,
+                Q_initial=self.grid.var.discharge_m3_s_substep,
                 river_width=river_width,
                 river_length=self.grid.var.river_length,
                 river_alpha=self.grid.var.river_alpha,
@@ -730,7 +731,7 @@ class Routing(Module):
             self.router = Accuflux(
                 dt=self.var.routing_step_length_seconds,
                 river_network=self.river_network,
-                Q_initial=self.grid.var.discharge_m3_s,
+                Q_initial=self.grid.var.discharge_m3_s_substep,
                 waterbody_id=self.grid.var.waterBodyID,
                 is_waterbody_outflow=is_waterbody_outflow,
             )
@@ -805,13 +806,13 @@ class Routing(Module):
         ) ** self.var.river_beta
 
         # Initialize discharge with zero
-        self.grid.var.discharge_m3_s = self.grid.full_compressed(
+        self.grid.var.discharge_m3_s_substep = self.grid.full_compressed(
             1e-30, dtype=np.float32
         )
-        self.grid.var.discharge_m3_s_substep = np.full(
-            (self.var.n_routing_substeps, self.grid.var.discharge_m3_s.size),
+        self.grid.var.discharge_m3_s_per_substep = np.full(
+            (self.var.n_routing_substeps, self.grid.var.discharge_m3_s_substep.size),
             0,
-            dtype=self.grid.var.discharge_m3_s.dtype,
+            dtype=self.grid.var.discharge_m3_s_substep.dtype,
         )
 
         self.var.sum_of_all_discharge_steps = self.grid.full_compressed(
@@ -917,16 +918,18 @@ class Routing(Module):
 
         runoff_m3_per_routing_step[self.grid.var.waterBodyID != -1] = 0.0
 
-        self.grid.var.discharge_m3_s_substep = np.full(
-            (self.var.n_routing_substeps, self.grid.var.discharge_m3_s.size),
+        self.grid.var.discharge_m3_s_per_substep = np.full(
+            (self.var.n_routing_substeps, self.grid.var.discharge_m3_s_substep.size),
             np.nan,
-            dtype=self.grid.var.discharge_m3_s.dtype,
+            dtype=self.grid.var.discharge_m3_s_substep.dtype,
         )
 
         potential_evaporation_per_water_body_m3_per_routing_step = (
             np.bincount(
                 self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
-                weights=self.grid.var.EWRef[self.grid.var.waterBodyID != -1],
+                weights=self.grid.var.reference_evapotranspiration_water[
+                    self.grid.var.waterBodyID != -1
+                ],
             )
             / np.bincount(self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1])
             * self.hydrology.lakes_reservoirs.var.lake_area
@@ -995,13 +998,14 @@ class Routing(Module):
                 )
 
             assert (
-                self.grid.var.discharge_m3_s[self.grid.var.waterBodyID == -1] >= 0.0
+                self.grid.var.discharge_m3_s_substep[self.grid.var.waterBodyID == -1]
+                >= 0.0
             ).all()
 
             river_width: npt.NDArray[np.float32] = get_river_width(
                 self.model.var.river_width_alpha,
                 self.model.var.river_width_beta,
-                self.grid.var.discharge_m3_s,
+                self.grid.var.discharge_m3_s_substep,
             )
             # the ratio of each grid cell that is currently covered by a river
             channel_ratio: npt.NDArray[np.float32] = get_channel_ratio(
@@ -1012,11 +1016,13 @@ class Routing(Module):
 
             # calculate evaporation from rivers per timestep usting the current channel ratio
             potential_evaporation_in_rivers_m3_per_routing_step = (
-                self.grid.var.EWRef * channel_ratio * self.grid.var.cell_area
+                self.grid.var.reference_evapotranspiration_water
+                * channel_ratio
+                * self.grid.var.cell_area
             ) / self.var.n_routing_substeps
 
             (
-                self.grid.var.discharge_m3_s,
+                self.grid.var.discharge_m3_s_substep,
                 actual_evaporation_in_rivers_m3_per_routing_step,
                 over_abstraction_m3_routing_step,
                 self.hydrology.lakes_reservoirs.var.storage,
@@ -1030,14 +1036,14 @@ class Routing(Module):
 
             # ensure that discharge is nan for water bodies
             assert np.isnan(
-                self.grid.var.discharge_m3_s[self.grid.var.waterBodyID != -1]
+                self.grid.var.discharge_m3_s_substep[self.grid.var.waterBodyID != -1]
             ).all()
 
-            self.var.sum_of_all_discharge_steps += self.grid.var.discharge_m3_s
+            self.var.sum_of_all_discharge_steps += self.grid.var.discharge_m3_s_substep
             self.var.discharge_step_count += 1
 
-            self.grid.var.discharge_m3_s_substep[subrouting_step, :] = (
-                self.grid.var.discharge_m3_s.copy()
+            self.grid.var.discharge_m3_s_per_substep[subrouting_step, :] = (
+                self.grid.var.discharge_m3_s_substep.copy()
             )
 
             assert (self.router.get_available_storage() >= 0.0).all()
@@ -1053,6 +1059,10 @@ class Routing(Module):
                 )
                 over_abstraction_m3 += over_abstraction_m3_routing_step
                 command_area_release_m3 += command_area_release_m3_routing_step
+
+        self.grid.var.discharge_m3_s = self.grid.var.discharge_m3_s_per_substep.mean(
+            axis=0
+        )
 
         if __debug__:
             # TODO: make dependent on routing step length
@@ -1083,10 +1093,20 @@ class Routing(Module):
                 tollerance=100,
             )
 
-            routing_loss: np.float64 = (
+            total_evaporation_in_rivers_m3: np.float64 = (
                 evaporation_in_rivers_m3.astype(np.float64).sum()
-                + waterbody_evaporation_m3.astype(np.float64).sum()
-                + outflow_at_pits_m3.astype(np.float64).sum()
+            )
+            total_waterbody_evaporation_m3: np.float64 = (
+                waterbody_evaporation_m3.astype(np.float64).sum()
+            )
+            total_outflow_at_pits_m3: np.float64 = outflow_at_pits_m3.astype(
+                np.float64
+            ).sum()
+
+            routing_loss: np.float64 = (
+                total_evaporation_in_rivers_m3
+                + total_waterbody_evaporation_m3
+                + total_outflow_at_pits_m3
             )
 
             assert routing_loss >= 0, "Routing loss cannot be negative"

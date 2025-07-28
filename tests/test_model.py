@@ -1,14 +1,17 @@
 import json
 import os
+import shutil
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+import networkx as nx
 import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
 
+from geb.build.methods import build_method
 from geb.cli import (
     alter_fn,
     build_fn,
@@ -58,7 +61,7 @@ def test_init():
             "config": "model.yml",
             "build_config": "build.yml",
             "update_config": "update.yml",
-            "working_directory": working_directory,
+            "working_directory": ".",
             "from_example": "geul",
             "basin_id": "23011134",
         }
@@ -83,6 +86,45 @@ def test_init():
 def test_build():
     with WorkingDirectory(working_directory):
         build_fn(**DEFAULT_BUILD_ARGS)
+
+
+@pytest.mark.skipif(
+    IN_GITHUB_ACTIONS or os.getenv("GEB_TEST_ALL", "no") != "yes",
+    reason="Too heavy for GitHub Actions and needs GEB_TEST_ALL=yes.",
+)
+def test_build_dependencies():
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_BUILD_ARGS.copy()
+        build_config = parse_config(args["build_config"])
+        build_config = {"setup_region": build_config["setup_region"]}
+        args["build_config"] = build_config
+        build_fn(**args)
+
+        shutil.copy(Path("input") / "files.json", Path("input") / "files.json.bak")
+
+    for method in build_method.methods:
+        # Skip the setup_region method as this is a special case that is handled separately.
+        if method == "setup_region":
+            continue
+
+        # get all nodes which this node depends on
+        dependencies = build_method.get_dependencies(method)
+        with WorkingDirectory(working_directory):
+            shutil.copy(Path("input") / "files.json.bak", Path("input") / "files.json")
+            args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
+            build_config_original = parse_config(args["build_config"])
+
+            if method not in build_config_original:
+                continue
+
+            build_config = {}
+            for dependency in dependencies:
+                build_config[dependency] = build_config_original[dependency]
+
+            build_config[method] = build_config_original[method]
+
+            args["build_config"] = build_config
+            update_fn(**args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -158,7 +200,7 @@ def test_update_with_dict():
         "setup_hydrography",
         "setup_crop_prices",
         "setup_discharge_observations",
-        "setup_forcing_era5",
+        "setup_forcing",
         "setup_water_demand",
         "setup_SPEI",
         "setup_CO2_concentration",
@@ -185,15 +227,128 @@ def test_spinup():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate():
+def test_run():
+    args = DEFAULT_RUN_ARGS.copy()
+
     with WorkingDirectory(working_directory):
-        run_model_with_method(method="evaluate", **DEFAULT_RUN_ARGS)
+        args["config"] = parse_config(args["config"])
+        args["config"]["report"].update(
+            {
+                "hydrology": {
+                    "storage": {
+                        "varname": ".current_storage",
+                        "type": "scalar",
+                    },
+                    "routing loss": {
+                        "varname": ".routing_loss_m3",
+                        "type": "scalar",
+                    },
+                }
+            }
+        )
+        args["config"]["report"].update(
+            {
+                "hydrology.snowfrost": {
+                    "rain": {
+                        "varname": ".rain",
+                        "type": "HRU",
+                        "function": "weightedsum",
+                    },
+                    "snow": {
+                        "varname": ".snow",
+                        "type": "HRU",
+                        "function": "weightedsum",
+                    },
+                }
+            }
+        )
+        args["config"]["report"].update(
+            {
+                "hydrology.routing": {
+                    "river evaporation": {
+                        "varname": ".total_evaporation_in_rivers_m3",
+                        "type": "scalar",
+                    },
+                    "waterbody evaporation": {
+                        "varname": ".total_waterbody_evaporation_m3",
+                        "type": "scalar",
+                    },
+                    "river outflow": {
+                        "varname": ".total_outflow_at_pits_m3",
+                        "type": "scalar",
+                    },
+                }
+            }
+        )
+        args["config"]["report"]["hydrology.water_demand"] = {
+            "domestic water loss": {
+                "varname": ".domestic_water_loss_m3",
+                "type": "scalar",
+            },
+            "industry water loss": {
+                "varname": ".industry_water_loss_m3",
+                "type": "scalar",
+            },
+            "livestock water loss": {
+                "varname": ".livestock_water_loss_m3",
+                "type": "scalar",
+            },
+        }
+        args["config"]["report"]["hydrology.landcover"] = {
+            "transpiration": {
+                "varname": ".actual_transpiration",
+                "type": "HRU",
+                "function": "weightedsum",
+            },
+            "bare soil evaporation": {
+                "varname": ".actual_bare_soil_evaporation",
+                "type": "HRU",
+                "function": "weightedsum",
+            },
+            "direct evaporation": {
+                "varname": ".open_water_evaporation",
+                "type": "HRU",
+                "function": "weightedsum",
+            },
+            "interception evaporation": {
+                "varname": ".interception_evaporation",
+                "type": "HRU",
+                "function": "weightedsum",
+            },
+            "snow sublimation": {
+                "varname": ".snow_sublimation",
+                "type": "HRU",
+                "function": "weightedsum",
+            },
+        }
+        run_model_with_method(method="run", **args)
+
+    if os.getenv("GEB_TEST_GPU", "no") == "yes":
+        with WorkingDirectory(working_directory):
+            args = DEFAULT_RUN_ARGS.copy()
+            args["config"] = parse_config(args["config"])
+            args["config"]["hazards"]["floods"]["SFINCS"]["gpu"] = True
+            args["config"]["general"]["name"] = "run_gpu"
+            run_model_with_method(method="run", **args)
+
+    # TODO: Add similarity check for the output of the CPU and GPU runs
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_run():
+def test_evaluate_water_circle():
     with WorkingDirectory(working_directory):
-        run_model_with_method(method="run", **DEFAULT_RUN_ARGS)
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "methods": ["water_circle"],
+        }
+        args["method_args"] = method_args
+        run_model_with_method(method="evaluate", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate():
+    with WorkingDirectory(working_directory):
+        run_model_with_method(method="evaluate", **DEFAULT_RUN_ARGS)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -257,6 +412,43 @@ def test_run_yearly():
 def test_estimate_return_periods():
     with WorkingDirectory(working_directory):
         run_model_with_method(method="estimate_return_periods", **DEFAULT_RUN_ARGS)
+
+    if os.getenv("GEB_TEST_GPU", "no") == "yes":
+        flood_maps_CPU: Path = working_directory / "output" / "flood_maps" / "1000.zarr"
+
+        # move the flood maps to a separate folder
+        flood_maps_folder_CPU: Path = tmp_folder / "flood_maps" / "CPU"
+        flood_maps_folder_CPU.mkdir(parents=True, exist_ok=True)
+        flood_maps_CPU.rename(flood_maps_folder_CPU / "1000.zarr")
+
+        with WorkingDirectory(working_directory):
+            args = DEFAULT_RUN_ARGS.copy()
+            args["config"] = parse_config(args["config"])
+            args["config"]["hazards"]["floods"]["SFINCS"]["gpu"] = True
+            run_model_with_method(method="estimate_return_periods", **args)
+
+        flood_maps_folder_GPU: Path = tmp_folder / "flood_maps" / "GPU"
+        flood_maps_folder_GPU.mkdir(parents=True, exist_ok=True)
+        flood_maps_GPU: Path = working_directory / "output" / "flood_maps" / "1000.zarr"
+        flood_maps_GPU.rename(flood_maps_folder_GPU / "1000.zarr")
+
+        # compare the flood maps
+        flood_map_CPU: xr.DataArray = xr.open_dataarray(
+            flood_maps_folder_CPU / "1000.zarr"
+        )
+        flood_map_GPU: xr.DataArray = xr.open_dataarray(
+            flood_maps_folder_GPU / "1000.zarr"
+        )
+
+        flood_map_CPU = flood_map_CPU.fillna(0)
+        flood_map_GPU = flood_map_GPU.fillna(0)
+
+        np.testing.assert_almost_equal(
+            flood_map_CPU.values,
+            flood_map_GPU.values,
+            decimal=1,
+            err_msg="Flood maps for the 1000-year return period do not match between CPU and GPU runs.",
+        )
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -403,9 +595,10 @@ def test_ISIMIP_forcing_low_res():
                 "start_date": date(2001, 1, 1),
                 "end_date": date(2024, 12, 31),
             },
-            "setup_forcing_ISIMIP": {
+            "setup_forcing": {
+                "forcing": "ISIMIP",
                 "resolution_arcsec": 1800,
-                "forcing": "gfdl-esm4",
+                "model": "gfdl-esm4",
             },
         }
         update_fn(**args)

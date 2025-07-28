@@ -12,6 +12,7 @@ from rasterio.features import rasterize
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString
 
+from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
 
 
@@ -84,9 +85,7 @@ def get_rivers(
     return rivers.set_index("COMID")
 
 
-def create_river_raster_from_river_lines(
-    rivers, target, original_upstream_area, column=None, index=None
-):
+def create_river_raster_from_river_lines(rivers, target, column=None, index=None):
     if column is None and (index is None or index is True):
         values = rivers.index
     elif column is not None:
@@ -103,10 +102,6 @@ def create_river_raster_from_river_lines(
         transform=target.rio.transform(),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
     )
-
-    # check that upstream area of all rivers is larger than 25 km^2. But because there are some rounding errors, we use a threshold of 24 km^2
-    assert np.nanmin(original_upstream_area.values[river_raster != -1]) > 24 * 1e6
-
     return river_raster
 
 
@@ -171,6 +166,7 @@ class Hydrography:
     def __init__(self):
         pass
 
+    @build_method(depends_on=["setup_hydrography", "setup_cell_area"])
     def setup_mannings(self) -> None:
         """Sets up the Manning's coefficient for the model.
 
@@ -226,6 +222,7 @@ class Hydrography:
 
         self.set_geoms(subbasins, name="routing/subbasins")
 
+    @build_method
     def setup_hydrography(self):
         original_d8_elevation = self.other["drainage/original_d8_elevation"]
         original_d8_ldd = self.other["drainage/original_d8_flow_directions"]
@@ -368,7 +365,7 @@ class Hydrography:
         )
 
         river_raster_HD: npt.NDArray[np.int32] = create_river_raster_from_river_lines(
-            rivers, original_d8_elevation, original_upstream_area
+            rivers, original_d8_elevation
         )
         river_raster_LR: npt.NDArray[np.int32] = river_raster_HD.ravel()[
             self.grid["idxs_outflow"].values.ravel()
@@ -457,6 +454,7 @@ class Hydrography:
         river_width.data = river_width_data
         self.set_grid(river_width, name="routing/river_width")
 
+    @build_method
     def setup_waterbodies(
         self,
         command_areas=None,

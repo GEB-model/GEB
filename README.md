@@ -34,7 +34,7 @@ After, GEB can be installed with:
 uv pip install geb --prerelease=allow
 ```
 
-To run SFINCS (the hydrodynamic model), you also need to install Docker (on Windows) or Singularity (on Linux and Mac OS X). To install Docker you need to obtain and install Docker from their website (https://www.docker.com/get-started) and make sure Docker or Singularity is running.
+To run SFINCS (the hydrodynamic model), you also need to install Docker (on Windows) or Apptainer (on Linux and Mac OS X). To install Docker you need to obtain and install Docker from their website (https://www.docker.com/get-started) and make sure Docker or Apptainer is running.
 
 ## Development installation and setup
 
