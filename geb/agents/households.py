@@ -305,7 +305,8 @@ class Households(AgentBaseClass):
         self.var.osm_way_id = DynamicArray(osm_way_id, max_n=self.max_n)
 
         # update building attributes based on household data
-        self.update_building_attributes()
+        if self.config["adapt"]:
+            self.update_building_attributes()
 
         # load age household head
         age_household_head = load_array(
