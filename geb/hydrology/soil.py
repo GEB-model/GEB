@@ -748,7 +748,8 @@ def vertical_water_transport(
             potential_infiltration[i] * ~soil_is_frozen[i],
             available_water_infiltration[i],
         )
-        remaining_infiltration = np.float32(infiltration)  # make a copy
+        remaining_infiltration = np.float32(infiltration[i])
+        # make a copy
         for layer in range(3):
             capacity = ws[layer, i] - w[layer, i]
             if remaining_infiltration > capacity:
@@ -760,7 +761,7 @@ def vertical_water_transport(
                 w[layer, i] = min(w[layer, i], ws[layer, i])
                 break
 
-        infiltration -= remaining_infiltration
+        infiltration[i] -= remaining_infiltration
 
         # Runoff and topwater update for paddy fields
         if land_use_type[i] == PADDY_IRRIGATED:
@@ -769,7 +770,7 @@ def vertical_water_transport(
             topwater[i] = max(np.float32(0), topwater[i] - direct_runoff[i])
         else:
             direct_runoff[i] = max(
-                (available_water_infiltration[i] - infiltration),
+                (available_water_infiltration[i] - infiltration[i]),
                 np.float32(0),
             )
 
@@ -851,7 +852,7 @@ def vertical_water_transport(
             w[sink, i] = min(w[sink, i], ws[sink, i])
             w[source, i] = max(w[source, i], wres[source, i])
 
-    return direct_runoff, groundwater_recharge
+    return direct_runoff, groundwater_recharge, infiltration
 
 
 def thetas_toth(

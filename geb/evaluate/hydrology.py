@@ -289,88 +289,88 @@ class Hydrology:
                 )
                 plt.savefig(
                     eval_plot_folder / f"timeseries_plot_{ID}.png",
-                        dpi=300,
-                        bbox_inches="tight",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                plt.show()
+                plt.close()
+
+                # Making plot for just 1 year
+                years_to_plot = [
+                    2010,
+                    2011,
+                    2012,
+                    2013,
+                    2014,
+                    2015,
+                    2016,
+                    2017,
+                    2018,
+                    2019,
+                    2020,
+                    2021,
+                    2022,
+                ]
+
+                for year in years_to_plot:
+                    # Filter data for the current year
+                    one_year_df = validation_df[validation_df.index.year == year]
+
+                    # Skip if there's no data for the year
+                    if one_year_df.empty:
+                        print(f"No data available for year {year}, skipping.")
+                        continue
+
+                    # Create the plot
+                    fig, ax = plt.subplots(figsize=(7, 4))
+                    ax.plot(
+                        one_year_df.index,
+                        one_year_df["Q_sim"],
+                        label="GEB simulation",
                     )
-                    plt.show()
-                    plt.close()
+                    ax.plot(
+                        one_year_df.index,
+                        one_year_df["Q_obs"],
+                        label="Q_obs observations",
+                    )
+                    ax.set_ylabel("Discharge [m3/s]")
+                    ax.set_xlabel("Time")
+                    ax.legend()
 
-                    # Making plot for just 1 year
-                    years_to_plot = [
-                        2010,
-                        2011,
-                        2012,
-                        2013,
-                        2014,
-                        2015,
-                        2016,
-                        2017,
-                        2018,
-                        2019,
-                        2020,
-                        2021,
-                        2022,
-                    ]
+                    ax.text(
+                        0.02,
+                        0.9,
+                        f"$R^2$={R:.2f}",
+                        transform=ax.transAxes,
+                        fontsize=12,
+                    )
+                    ax.text(
+                        0.02,
+                        0.85,
+                        f"KGE={KGE:.2f}",
+                        transform=ax.transAxes,
+                        fontsize=12,
+                    )
+                    ax.text(
+                        0.02,
+                        0.8,
+                        f"NSE={NSE:.2f}",
+                        transform=ax.transAxes,
+                        fontsize=12,
+                    )
+                    ax.text(
+                        0.02,
+                        0.75,
+                        f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
+                        transform=ax.transAxes,
+                        fontsize=12,
+                    )
 
-                    for year in years_to_plot:
-                        # Filter data for the current year
-                        one_year_df = validation_df[validation_df.index.year == year]
-
-                        # Skip if there's no data for the year
-                        if one_year_df.empty:
-                            print(f"No data available for year {year}, skipping.")
-                            continue
-
-                        # Create the plot
-                        fig, ax = plt.subplots(figsize=(7, 4))
-                        ax.plot(
-                            one_year_df.index,
-                            one_year_df["Q_sim"],
-                            label="GEB simulation",
-                        )
-                        ax.plot(
-                            one_year_df.index,
-                            one_year_df["Q_obs"],
-                            label="Q_obs observations",
-                        )
-                        ax.set_ylabel("Discharge [m3/s]")
-                        ax.set_xlabel("Time")
-                        ax.legend()
-
-                        ax.text(
-                            0.02,
-                            0.9,
-                            f"$R^2$={R:.2f}",
-                            transform=ax.transAxes,
-                            fontsize=12,
-                        )
-                        ax.text(
-                            0.02,
-                            0.85,
-                            f"KGE={KGE:.2f}",
-                            transform=ax.transAxes,
-                            fontsize=12,
-                        )
-                        ax.text(
-                            0.02,
-                            0.8,
-                            f"NSE={NSE:.2f}",
-                            transform=ax.transAxes,
-                            fontsize=12,
-                        )
-                        ax.text(
-                            0.02,
-                            0.75,
-                            f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
-                            transform=ax.transAxes,
-                            fontsize=12,
-                        )
-
-                        plt.title(
-                            f"GEB discharge vs observations for {year} at station {Q_obs_station_name}"
-                        )
-                        plt.savefig(
-                            eval_plot_folder / f"timeseries_plot_{ID}_{year}.png",
+                    plt.title(
+                        f"GEB discharge vs observations for {year} at station {Q_obs_station_name}"
+                    )
+                    plt.savefig(
+                        eval_plot_folder / f"timeseries_plot_{ID}_{year}.png",
                         dpi=300,
                         bbox_inches="tight",
                     )
