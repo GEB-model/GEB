@@ -1340,67 +1340,6 @@ class Agents:
         self.setup_farmers(farmers)
 
     @build_method(depends_on=["setup_regions_and_land_use"])
-    def setup_buildings_obat(self):
-        GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4",
-            geom=self.region,
-            variables=["GDLcode", "iso_code"],
-        )
-        GDL_regions = GDL_regions[
-            GDL_regions["GDLcode"] != "NA"
-        ]  # remove regions without GDL code
-
-        buildings_df = pd.DataFrame()
-
-        # load GHS_OBAT and Overture buildings for countries in model
-        for _, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
-            iso_code = GDL_region["iso_code"]
-            ghs_obat = load_GHS_OBAT(self.data_catalog, iso_code)
-
-            _, GLOPOP_GRID_region = load_GLOPOP_S(
-                self.data_catalog, GDL_region["GDLcode"]
-            )
-            GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
-            res_x, res_y = GLOPOP_GRID_region.rio.resolution()
-            # find objects in GHS_OBAT for each cell in GLOPOP_GRID_region
-
-            # Convert the grid into bounding boxes
-            xmin = GLOPOP_GRID_region.x.values
-            ymax = GLOPOP_GRID_region.y.values
-            xmax = xmin + res_x
-            ymin = ymax + res_y
-
-            # ghs_obat coordinates
-            lons = ghs_obat["lon"]
-            lats = ghs_obat["lat"]
-
-            # Initialize a list to hold the matching indices for each cell
-            all_buildings_idx = []
-            grid_idx = 0
-            # Vectorized spatial filtering
-            for i in range(xmin.size):
-                for j in range(ymin.size):
-                    mask = (
-                        (lons > xmin[i])
-                        & (lons < xmax[i])
-                        & (lats < ymax[j])
-                        & (lats > ymin[j])
-                    )
-                    buildings_idx = np.where(mask)[0]
-                    all_buildings_idx.append(buildings_idx)
-                    grid_idx += 1
-                    if buildings_idx.size > 0:
-                        building_gdl = ghs_obat.iloc[buildings_idx]
-                        building_gdl["grid_idx"] = GLOPOP_GRID_region.values[0][j, i]
-                        buildings_df = pd.concat([buildings_df, building_gdl])
-
-            gdl_name = GDL_region["GDLcode"]
-            os.makedirs(
-                "preprocessing/buildings", exist_ok=True
-            )  # get rid of this later
-            buildings_df.to_csv(f"preprocessing/buildings/buildings_{gdl_name}.csv")
-
-    @build_method
     def setup_buildings(self):
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4", geom=self.region, variables=["GDLcode", "iso_code"]
