@@ -180,29 +180,29 @@ class Households(AgentBaseClass):
         )
 
         # Initialize occupancy column
-        self.var.buildings["occupancy"] = 0
+        self.buildings["occupancy"] = 0
 
         # Map the counts back to the buildings dataframe
-        self.var.buildings["occupancy"] = (
-            self.var.buildings["osm_id"]
+        self.buildings["occupancy"] = (
+            self.buildings["osm_id"]
             .map(osm_id_counts)
-            .fillna(self.var.buildings["occupancy"])
+            .fillna(self.buildings["occupancy"])
         )
-        self.var.buildings["occupancy"] = (
-            self.var.buildings["osm_way_id"]
+        self.buildings["occupancy"] = (
+            self.buildings["osm_way_id"]
             .map(osm_way_id_counts)
-            .fillna(self.var.buildings["occupancy"])
+            .fillna(self.buildings["occupancy"])
         )
 
         # Initialize dry floodproofing status
-        self.var.buildings["flood_proofed"] = False
+        self.buildings["flood_proofed"] = False
 
         # check if building overlaps with the flood map
         # get highest return period
         highest_return_period = self.return_periods.max()
         flood_map = self.flood_maps[highest_return_period].copy()
         # check if building geometry overlaps with flood map
-        flood_map = flood_map.rio.reproject(self.var.buildings.crs)
+        flood_map = flood_map.rio.reproject(self.buildings.crs)
         flood_map = flood_map > 0  # convert to boolean mask
 
         # convert flood map to polygons
@@ -215,13 +215,11 @@ class Households(AgentBaseClass):
         flood_map_polygons_union = flood_map_polygons.union_all()
 
         # Create a mask for buildings that overlap with the flood map
-        buildings_mask = self.var.buildings.geometry.intersects(
-            flood_map_polygons_union
-        )
+        buildings_mask = self.buildings.geometry.intersects(flood_map_polygons_union)
 
         # Update the flood_proofed status for buildings that overlap with the flood map
-        self.var.buildings.loc[buildings_mask, "flooded"] = True
-        self.var.buildings["flooded"].fillna(False, inplace=True)
+        self.buildings.loc[buildings_mask, "flooded"] = True
+        self.buildings["flooded"].fillna(False, inplace=True)
 
     def update_building_adaptation_status(self, household_adapting):
         """Update the floodproofing status of buildings based on adapting households."""
@@ -243,19 +241,15 @@ class Households(AgentBaseClass):
         osm_way_ids = osm_way_ids.set_index(0)
 
         # Add/Update the flood_proofed status in buildings based on OSM way IDs
-        self.var.buildings["flood_proofed"] = (
-            self.var.buildings["osm_way_id"]
-            .astype(str)
-            .map(osm_way_ids["flood_proofed"])
+        self.buildings["flood_proofed"] = (
+            self.buildings["osm_way_id"].astype(str).map(osm_way_ids["flood_proofed"])
         )
-        self.var.buildings["flood_proofed"] = self.var.buildings[
-            "flood_proofed"
-        ].fillna(self.var.buildings["osm_id"].astype(str).map(osm_ids["flood_proofed"]))
+        self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(
+            self.buildings["osm_id"].astype(str).map(osm_ids["flood_proofed"])
+        )
 
         # Replace NaNs with False (i.e., buildings not in the adapting households list)
-        self.var.buildings["flood_proofed"] = self.var.buildings[
-            "flood_proofed"
-        ].fillna(False)
+        self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(False)
 
     def assign_household_attributes(self):
         """Household locations are already sampled from population map in GEBModel.setup_population().
@@ -386,48 +380,6 @@ class Households(AgentBaseClass):
         print(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
-
-    def get_flood_risk_information_honeybees(self):
-        # preallocate array for damages
-        damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
-        damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
-
-        # load damage interpolators (cannot be store in bucket, therefor outside spinup)
-        if not hasattr(self, "buildings_content_curve_interpolator"):
-            self.create_damage_interpolators()
-
-            # if not hasattr(self.var, "locations_reprojected_to_flood_map"):
-            self.reproject_locations_to_floodmap_crs()
-
-        # loop over return periods
-        for i, return_period in enumerate(self.return_periods):
-            # get flood map
-            flood_map = self.flood_maps[return_period]
-
-            # sample waterlevels for individual households
-            water_levels = sample_from_map(
-                flood_map.values,
-                self.var.locations_reprojected_to_flood_map.data,
-                self.flood_maps["gdal_geotransform"],
-            )
-
-            # cap water levels at damage curve max inundation
-            water_levels = np.minimum(
-                water_levels, self.buildings_content_curve_interpolator.x.max()
-            )
-
-            # interpolate damages
-            damages_do_not_adapt[i, :] = (
-                self.buildings_content_curve_interpolator(water_levels)
-                * self.var.property_value.data
-            )
-
-            damages_adapt[i, :] = (
-                self.buildings_content_curve_adapted_interpolator(water_levels)
-                * self.var.property_value.data
-            )
-
-        return damages_do_not_adapt, damages_adapt
 
     def update_risk_perceptions(self):
         # update timer
@@ -867,8 +819,8 @@ class Households(AgentBaseClass):
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
-        self.var.buildings_centroid = gpd.GeoDataFrame(geometry=self.buildings.centroid)
-        self.var.buildings_centroid["object_type"] = (
+        self.buildings_centroid = gpd.GeoDataFrame(geometry=self.buildings.centroid)
+        self.buildings_centroid["object_type"] = (
             "building_unprotected"  # before it was "building_content"
         )
 
@@ -902,9 +854,7 @@ class Households(AgentBaseClass):
         self.var.max_dam_buildings_content = float(
             max_dam_buildings_content["maximum_damage"]
         )
-        self.var.buildings_centroid["maximum_damage"] = (
-            self.var.max_dam_buildings_content
-        )
+        self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         with open(
             self.model.files["dict"][
@@ -1016,49 +966,49 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "agriculture"}
         )
 
-        self.var.buildings_structure_curve = pd.read_parquet(
+        self.buildings_structure_curve = pd.read_parquet(
             self.model.files["table"][
                 "damage_parameters/flood/buildings/structure/curve"
             ]
         )
-        self.var.buildings_structure_curve.set_index("severity", inplace=True)
-        self.var.buildings_structure_curve = self.var.buildings_structure_curve.rename(
+        self.buildings_structure_curve.set_index("severity", inplace=True)
+        self.buildings_structure_curve = self.buildings_structure_curve.rename(
             columns={"damage_ratio": "building_unprotected"}
         )
 
         # create another column (curve) in the buildings structure curve for protected buildings
-        self.var.buildings_structure_curve["building_protected"] = (
-            self.var.buildings_structure_curve["building_unprotected"] * 0.85
+        self.buildings_structure_curve["building_protected"] = (
+            self.buildings_structure_curve["building_unprotected"] * 0.85
         )
 
         # create another column (curve) in the buildings structure curve for flood-proofed buildings
-        self.var.buildings_structure_curve["building_flood_proofed"] = (
-            self.var.buildings_structure_curve["building_unprotected"] * 0.85
+        self.buildings_structure_curve["building_flood_proofed"] = (
+            self.buildings_structure_curve["building_unprotected"] * 0.85
         )
-        self.var.buildings_structure_curve["building_flood_proofed"].loc[0:1] = 0.0
+        self.buildings_structure_curve["building_flood_proofed"].loc[0:1] = 0.0
 
-        self.var.buildings_content_curve = pd.read_parquet(
+        self.buildings_content_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
         )
-        self.var.buildings_content_curve.set_index("severity", inplace=True)
-        self.var.buildings_content_curve = self.var.buildings_content_curve.rename(
+        self.buildings_content_curve.set_index("severity", inplace=True)
+        self.buildings_content_curve = self.buildings_content_curve.rename(
             columns={"damage_ratio": "building_unprotected"}
         )
 
         # create another column (curve) in the buildings content curve for protected buildings
-        self.var.buildings_content_curve["building_protected"] = (
-            self.var.buildings_content_curve["building_unprotected"] * 0.7
+        self.buildings_content_curve["building_protected"] = (
+            self.buildings_content_curve["building_unprotected"] * 0.7
         )
 
         # create damage curves for adaptation
-        buildings_content_curve_adapted = self.var.buildings_content_curve.copy()
+        buildings_content_curve_adapted = self.buildings_content_curve.copy()
         buildings_content_curve_adapted.loc[0:1] = (
             0  # assuming zero damages untill 1m water depth
         )
         buildings_content_curve_adapted.loc[1:] *= (
             0.8  # assuming 80% damages above 1m water depth
         )
-        self.var.buildings_content_curve_adapted = buildings_content_curve_adapted
+        self.buildings_content_curve_adapted = buildings_content_curve_adapted
 
         self.var.rail_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/rail/main/curve"]
@@ -1071,13 +1021,13 @@ class Households(AgentBaseClass):
     def create_damage_interpolators(self):
         # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
         self.buildings_content_curve_interpolator = interpolate.interp1d(
-            x=self.var.buildings_content_curve.index,
-            y=self.var.buildings_content_curve["building_unprotected"],
+            x=self.buildings_content_curve.index,
+            y=self.buildings_content_curve["building_unprotected"],
             # fill_value="extrapolate",
         )
         self.buildings_content_curve_adapted_interpolator = interpolate.interp1d(
-            x=self.var.buildings_content_curve_adapted.index,
-            y=self.var.buildings_content_curve_adapted["building_unprotected"],
+            x=self.buildings_content_curve_adapted.index,
+            y=self.buildings_content_curve_adapted["building_unprotected"],
             # fill_value="extrapolate",
         )
 
@@ -1090,16 +1040,14 @@ class Households(AgentBaseClass):
         It iterates over the return periods and calculates the damages for each household"""
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
+            self.flood_maps["crs"]
+        )
+        # subset building to those exposed to flooding
+        buildings = buildings[buildings["flooded"]]
 
         for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
-
-            buildings: gpd.GeoDataFrame = self.var.buildings.copy().to_crs(
-                self.flood_maps["crs"]
-            )
-
-            # subset building to those exposed to flooding
-            buildings = buildings[buildings["flooded"]]
 
             # Calculate damages to building structure (unprotected buildings)
             damage_unprotected: pd.Series = VectorScanner(
@@ -1107,30 +1055,31 @@ class Households(AgentBaseClass):
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
                 hazard_file=flood_map,
-                curve_path=self.var.buildings_structure_curve,
+                curve_path=self.buildings_structure_curve,
                 gridded=False,
             )
             total_damage_structure = damage_unprotected["damage"].sum()
             print(
-                f"damages to building unprotected structure rp{return_period} are: {total_damage_structure}"
+                f"damages to building unprotected structure rp{return_period} are: {round(total_damage_structure / 1e6, 2)} M€"
             )
 
             # Save the damages to the dataframe
             damage_unprotected = damage_unprotected[["osm_id", "osm_way_id", "damage"]]
 
             # Calculate damages to building structure (floodproofed buildings)
-            buildings["object_type"] = "building_flood_proofed"
+            buildings_floodproofed = buildings.copy()
+            buildings_floodproofed["object_type"] = "building_flood_proofed"
             damage_flood_proofed: pd.Series = VectorScanner(
-                feature_file=buildings.rename(
+                feature_file=buildings_floodproofed.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
                 hazard_file=flood_map,
-                curve_path=self.var.buildings_structure_curve,
+                curve_path=self.buildings_structure_curve,
                 gridded=False,
             )
             total_damage_structure = damage_flood_proofed["damage"].sum()
             print(
-                f"damages to building flood-proofed structure rp{return_period} are: {total_damage_structure}"
+                f"damages to building flood-proofed structure rp{return_period} are: {round(total_damage_structure / 1e6, 2)} M€"
             )
 
             # add damages to agents (unprotected buildings)
@@ -1161,7 +1110,7 @@ class Households(AgentBaseClass):
                     )[0]
                     damages_adapt[i, idx_agents_in_building_way] = damage
 
-            return damages_do_not_adapt, damages_adapt
+        return damages_do_not_adapt, damages_adapt
 
     def flood(self, flood_map: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
@@ -1207,7 +1156,7 @@ class Households(AgentBaseClass):
         damages_buildings_content = VectorScanner(
             feature_file=buildings_centroid,
             hazard_file=flood_map,
-            curve_path=self.var.buildings_content_curve,
+            curve_path=self.buildings_content_curve,
             gridded=False,
         )
 
@@ -1225,7 +1174,7 @@ class Households(AgentBaseClass):
                 columns={"maximum_damage_m2": "maximum_damage"}
             ),
             hazard_file=flood_map,
-            curve_path=self.var.buildings_structure_curve,
+            curve_path=self.buildings_structure_curve,
             gridded=False,
         )
 
@@ -1350,6 +1299,9 @@ class Households(AgentBaseClass):
             and self.model.current_time.month == 1
             and self.model.current_time.day == 1
         ):
+            if "flooded" not in self.buildings.columns:
+                self.update_building_attributes()
+
             print("Thinking about adapting...")
             self.decide_household_strategy()
         self.report(self, locals())
