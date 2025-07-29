@@ -9,7 +9,6 @@ import pyproj
 import rasterio
 import xarray as xr
 from damagescanner.vector import VectorScanner
-from honeybees.library.raster import sample_from_map
 from rasterio.features import shapes
 from rasterstats import point_query, zonal_stats
 from scipy import interpolate
@@ -1057,6 +1056,7 @@ class Households(AgentBaseClass):
                 hazard_file=flood_map,
                 curve_path=self.buildings_structure_curve,
                 gridded=False,
+                disable_progress=False,
             )
             total_damage_structure = damage_unprotected["damage"].sum()
             print(
@@ -1076,6 +1076,7 @@ class Households(AgentBaseClass):
                 hazard_file=flood_map,
                 curve_path=self.buildings_structure_curve,
                 gridded=False,
+                disable_progress=False,
             )
             total_damage_structure = damage_flood_proofed["damage"].sum()
             print(
