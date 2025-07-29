@@ -23,6 +23,7 @@ from honeybees.visualization.modules.ChartVisualization import ChartModule
 
 from geb import __version__
 from geb.build import GEBModel as GEBModelBuild
+from geb.build.methods import build_method
 from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
@@ -88,7 +89,10 @@ def parse_config(
 
 
 def create_logger(fp):
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("GEB")
+    # remove any previous handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
     # set log level to debug
     logger.setLevel(logging.DEBUG)
     # create console handler and set level to debug
@@ -328,14 +332,22 @@ def multirun(config, working_directory):
         geb_multi_run(config, working_directory)
 
 
-def click_build_options(build_config="build.yml"):
+def click_build_options(build_config="build.yml", build_config_help_extra=None):
     def decorator(func):
+        build_config_help = (
+            f"Path of the model build configuration file. Defaults to '{build_config}'."
+        )
+        if build_config_help_extra:
+            build_config_help += f"""
+
+            {build_config_help_extra}"""
+
         @click_config
         @click.option(
             "--build-config",
             "-b",
             default=build_config,
-            help=f"Path of the model build configuration file. Defaults to '{build_config}'.",
+            help=build_config_help,
         )
         @click.option(
             "--custom-model",
@@ -380,10 +392,12 @@ def get_model_builder_class(custom_model) -> type:
     if custom_model is None:
         return GEBModelBuild
     else:
+        from geb import build as geb_build
+
         importlib.import_module(
             "." + custom_model.split(".")[0], package="geb.build.custom_models"
         )
-        return attrgetter(custom_model)(build.custom_models)
+        return attrgetter(custom_model)(geb_build.custom_models)
 
 
 def customize_data_catalog(data_catalogs, data_root=None):
@@ -421,7 +435,9 @@ def get_builder(config, data_catalog, custom_model, data_provider, data_root):
         "data_provider": data_provider,
     }
 
-    return get_model_builder_class(custom_model)(**arguments)
+    builder_class = get_model_builder_class(custom_model)(**arguments)
+    build_method.validate_tree()
+    return builder_class
 
 
 def init_fn(
@@ -602,7 +618,7 @@ def alter_fn(
                 for file_name, file_path in files.items():
                     if not file_path.startswith("/"):
                         original_files[file_class][file_name] = str(
-                            from_model / original_input_path / file_path
+                            Path("..") / original_input_path / file_path
                         )
 
         input_folder.mkdir(parents=True, exist_ok=True)
@@ -657,11 +673,76 @@ def update_fn(
         )
 
         model.read()
-        model.update(methods=parse_config(build_config))
+
+        if isinstance(build_config, str):
+            build_config_list: list[str] = build_config.split("::")
+            build_config_file: str = build_config_list[0]
+
+            try:
+                methods: dict[Any] = parse_config(build_config_file)
+            except FileNotFoundError:
+                if ":" in build_config_file and "::" not in build_config_file:
+                    raise FileNotFoundError(
+                        f"Build config file '{build_config_file}' not found. Did you mean '{build_config_file.replace(':', '::')}'?"
+                    )
+                raise
+
+            if len(build_config_list) > 1:
+                assert len(build_config_list) == 2
+                build_config_function: str = build_config_list[1]
+
+                # Check if the method is specified with a trailing '+' or '#'.
+                # If + we set a flag to keep all subsequent methods
+                # If # we set a flag to keep all dependent methods
+                if build_config_function.endswith("+"):
+                    build_config_function: str = build_config_function[:-1]
+                    keys_to_remove: list[str] = []
+
+                    for key in methods.keys():
+                        if key == build_config_function:
+                            break
+                        else:
+                            keys_to_remove.append(key)
+                    else:
+                        raise KeyError(
+                            f"Method '{build_config_function}' not found in build config file '{build_config_file}'. "
+                            "Available methods: "
+                            f"{', '.join(methods.keys())}"
+                        )
+
+                    # remove all functions from the methods dict except the one we want to run
+                    for key in keys_to_remove:
+                        del methods[key]
+
+                elif build_config_function.endswith("#"):
+                    build_config_function: str = build_config_function[:-1]
+                    dependents: list[str] = build_method.get_dependents(
+                        build_config_function
+                    )
+                    dependents.append(build_config_function)
+                    methods = {
+                        dependent: methods[dependent]
+                        for dependent in dependents
+                        if dependent in methods
+                    }
+
+                else:
+                    methods = {build_config_function: methods[build_config_function]}
+
+        elif isinstance(build_config, dict):
+            methods = build_config
+
+        else:
+            raise ValueError
+
+        model.update(methods=methods)
 
 
 @cli.command()
-@click_build_options(build_config="update.yml")
+@click_build_options(
+    build_config="update.yml",
+    build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
+)
 def update(*args, **kwargs):
     update_fn(*args, **kwargs)
 
@@ -671,35 +752,60 @@ def update(*args, **kwargs):
 @click.option(
     "--methods", default=None, help="Comma-seperated list of methods to evaluate."
 )
-def evaluate(methods: list | None, *args, **kwargs) -> None:
+@click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
+@click.option("--run-name", default="default", help="Name of the run to evaluate.")
+@click.option(
+    "--include-spinup",
+    is_flag=True,
+    default=False,
+    help="Include spinup in evaluation.",
+)
+@click.option(
+    "--correct-q-obs",
+    is_flag=True,
+    default=False,
+    help="correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the difference in upstream area between the Q_obs station and the simulated discharge",
+)
+def evaluate(
+    working_directory,
+    config,
+    methods: list | None,
+    spinup_name,
+    run_name,
+    include_spinup,
+    correct_q_obs,
+    port,
+    gui,
+    no_browser,
+    profiling,
+    optimize,
+    timing,
+) -> None:
     # If no methods are provided, pass None to run_model_with_method
     methods: list | None = None if not methods else methods.split(",")
+    spinup_name: str
+    run_name: str
     run_model_with_method(
-        method="evaluate", method_args={"methods": methods}, *args, **kwargs
+        method="evaluate",
+        method_args={
+            "methods": methods,
+            "spinup_name": spinup_name,
+            "run_name": run_name,
+            "include_spinup": include_spinup,
+            "correct_Q_obs": correct_q_obs,
+        },
+        working_directory=working_directory,
+        config=config,
+        port=port,
+        gui=gui,
+        no_browser=no_browser,
+        profiling=profiling,
+        optimize=optimize,
+        timing=timing,
     )
 
 
-@working_directory_option
-@click.option(
-    "--name",
-    "-n",
-    default="model",
-    help="Name used for the zip file.",
-)
-@click.option(
-    "--include-preprocessing",
-    is_flag=True,
-    default=False,
-    help="Include preprocessing files in the zip file.",
-)
-@click.option(
-    "--include-output",
-    is_flag=True,
-    default=False,
-    help="Include output files in the zip file.",
-)
-@cli.command()
-def share(working_directory, name, include_preprocessing, include_output):
+def share_fn(working_directory, name, include_preprocessing, include_output):
     """Share model."""
     with WorkingDirectory(working_directory):
         # create a zip file called model.zip with the folders input, and model files
@@ -768,6 +874,31 @@ def share(working_directory, name, include_preprocessing, include_output):
                 )  # Print progress
             print(f"Exporting file {progress}/{total_files} to {zip_filename}")
             print("Done!")
+
+
+@cli.command()
+@working_directory_option
+@click.option(
+    "--name",
+    "-n",
+    default="model",
+    help="Name used for the zip file.",
+)
+@click.option(
+    "--include-preprocessing",
+    is_flag=True,
+    default=False,
+    help="Include preprocessing files in the zip file.",
+)
+@click.option(
+    "--include-output",
+    is_flag=True,
+    default=False,
+    help="Include output files in the zip file.",
+)
+def share(*args, **kwargs):
+    """Share model as a zip file."""
+    share_fn(*args, **kwargs)
 
 
 if __name__ == "__main__":

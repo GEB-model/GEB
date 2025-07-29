@@ -22,7 +22,7 @@ from ..data import (
     load_economic_data,
     load_regional_crop_data_from_dict,
 )
-from ..HRUs import load_grid
+from ..hydrology.HRUs import load_grid
 from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 from ..store import DynamicArray
 from ..workflows import balance_check
@@ -964,7 +964,7 @@ class CropFarmers(AgentBaseClass):
 
     def save_water_deficit(self, discount_factor=0.2):
         water_deficit_day_m3 = (
-            self.HRU.var.ETRef - self.HRU.pr
+            self.HRU.var.reference_evapotranspiration_grass - self.HRU.pr
         ) * self.HRU.var.cell_area
         water_deficit_day_m3[water_deficit_day_m3 < 0] = 0
 
@@ -1034,7 +1034,8 @@ class CropFarmers(AgentBaseClass):
                 wilting_point=self.HRU.var.wwp,
                 w=self.HRU.var.w,
                 ws=self.HRU.var.ws,
-                arno_beta=self.HRU.var.arnoBeta,
+                arno_beta=self.HRU.var.arno_beta,
+                saturated_hydraulic_conductivity=self.HRU.var.saturated_hydraulic_conductivity,
                 remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
                 cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
                 crop_calendar=self.var.crop_calendar.data,
@@ -1201,20 +1202,20 @@ class CropFarmers(AgentBaseClass):
                 outfluxes=(
                     self.var.channel_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                    ],
+                    ].astype(np.float64),
                     self.var.reservoir_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                    ],
+                    ].astype(np.float64),
                     self.var.groundwater_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                    ],
+                    ].astype(np.float64),
                 ),
                 prestorages=irrigation_limit_pre[
                     ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                ],
+                ].astype(np.float64),
                 poststorages=self.var.remaining_irrigation_limit_m3[
                     ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                ],
+                ].astype(np.float64),
                 tollerance=50,
             )
 
@@ -1468,6 +1469,7 @@ class CropFarmers(AgentBaseClass):
         self.var.harvested_crop.fill(-1)
         # If there are fields to be harvested, compute yield ratio and various related metrics
         if np.count_nonzero(harvest):
+            print(f"Harvesting {np.count_nonzero(harvest)} fields.")
             # Get yield ratio for the harvested crops
             yield_ratio_per_field = self.get_yield_ratio(
                 harvest,
@@ -1970,6 +1972,13 @@ class CropFarmers(AgentBaseClass):
         )
         if farmers_selling_land.size > 0:
             self.remove_agents(farmers_selling_land)
+
+        number_of_planted_fields = np.count_nonzero(plant_map >= 0)
+        if number_of_planted_fields > 0:
+            print(
+                f"Planting {number_of_planted_fields} fields with crops: "
+                f"{np.unique(plant_map[plant_map >= 0])}"
+            )
 
         self.HRU.var.crop_map = np.where(
             plant_map >= 0, plant_map, self.HRU.var.crop_map
@@ -4680,6 +4689,14 @@ class CropFarmers(AgentBaseClass):
                 HRUs_with_removed_farmers.append(
                     self.remove_agent(idx, new_land_use_type)
                 )
+
+        # TODO: remove the social network of the removed farmers only.
+        # because farmers are removed and the current farmers may still
+        # be looking for their friends that are gone, we need to reset
+        # the social network.
+
+        self.set_social_network()
+
         return np.concatenate(HRUs_with_removed_farmers)
 
     def remove_agent(self, farmer_idx: int, new_land_use_type: int) -> np.ndarray:

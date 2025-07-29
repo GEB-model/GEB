@@ -23,7 +23,7 @@
 import geopandas as gpd
 import numpy as np
 
-from geb.HRUs import load_grid
+from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import balance_check
 
@@ -203,6 +203,9 @@ class LakesReservoirs(Module):
         self.grid.var.waterBodyID, self.var.waterbody_mapping = (
             self.map_water_bodies_IDs(waterBodyID_unmapped)
         )
+
+        # set discharge to NaN for all cells that are not part of a water body
+        self.grid.var.discharge_m3_s_substep[self.grid.var.waterBodyID != -1] = np.nan
 
         self.grid.var.waterbody_outflow_points = self.get_outflows(
             self.grid.var.waterBodyID

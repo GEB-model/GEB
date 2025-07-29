@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
 from ..workflows.general import (
@@ -19,25 +20,23 @@ class LandSurface:
     def __init__(self):
         pass
 
+    @build_method(depends_on=["setup_regions_and_land_use"])
     def setup_cell_area(self) -> None:
         """Sets up the cell area map for the model.
 
         Raises:
-        ------
-        ValueError
-            If the grid mask is not available.
+            ValueError: If the grid mask is not available.
 
         Notes:
-        -----
-        This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
-        retrieves the grid mask from the `mask` attribute of the grid, and then calculates the cell area
-        using the `calculate_cell_area()` function. The resulting cell area map is then set as the `cell_area`
-        attribute of the grid.
+            This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
+            retrieves the grid mask from the `mask` attribute of the grid, and then calculates the cell area
+            using the `calculate_cell_area()` function. The resulting cell area map is then set as the `cell_area`
+            attribute of the grid.
 
-        Additionally, this method sets up a subgrid for the cell area map by creating a new grid with the same extent as
-        the subgrid, and then repeating the cell area values from the main grid to the subgrid using the `repeat_grid()`
-        function, and correcting for the subgrid factor. Thus, every subgrid cell within a grid cell has the same value.
-        The resulting subgrid cell area map is then set as the `cell_area` attribute of the subgrid.
+            Additionally, this method sets up a subgrid for the cell area map by creating a new grid with the same extent as
+            the subgrid, and then repeating the cell area values from the main grid to the subgrid using the `repeat_grid()`
+            function, and correcting for the subgrid factor. Thus, every subgrid cell within a grid cell has the same value.
+            The resulting subgrid cell area map is then set as the `cell_area` attribute of the subgrid.
         """
         self.logger.info("Preparing cell area map.")
         mask = self.grid["mask"]
@@ -80,6 +79,7 @@ class LandSurface:
             name="cell_area",
         )
 
+    @build_method(depends_on=["setup_hydrography"])
     def setup_elevation(
         self,
         DEMs=[
@@ -103,8 +103,10 @@ class LandSurface:
         # subbasins that are not part of the study area
         bounds = tuple(self.geoms["routing/subbasins"].total_bounds)
 
-        fabdem = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
-        fabdem = fabdem.isel(
+        fabdem: xr.DataArray = xr.open_dataarray(
+            self.data_catalog.get_source("fabdem").path
+        )
+        fabdem: xr.DataArray = fabdem.isel(
             band=0,
             **get_window(
                 fabdem.x,
@@ -114,7 +116,7 @@ class LandSurface:
             ),
         ).raster.mask_nodata()
 
-        target = self.subgrid["mask"]
+        target: xr.DataArray = self.subgrid["mask"]
         target.raster.set_crs(4326)
 
         self.set_subgrid(
@@ -155,6 +157,7 @@ class LandSurface:
 
         self.set_dict(DEMs, name="hydrodynamics/DEM_config")
 
+    @build_method(depends_on=[])
     def setup_regions_and_land_use(
         self,
         region_database="GADM_level1",
@@ -195,6 +198,15 @@ class LandSurface:
             geom=self.region,
             predicate="intersects",
         ).rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
+
+        # save global countries and their centroids (used for calculating euclidian distances)
+        global_countries = self.data_catalog.get_geodataframe("GADM_level0").rename(
+            columns={"GID_0": "ISO3"}
+        )
+        global_countries["geometry"] = global_countries.centroid
+        global_countries = global_countries.set_index("ISO3")
+        self.set_geoms(global_countries, name="global_countries")
+
         assert np.unique(regions["region_id"]).shape[0] == regions.shape[0], (
             f"Region database must contain unique region IDs ({self.data_catalog[region_database].path})"
         )
@@ -313,6 +325,7 @@ class LandSurface:
         cultivated_land = self.snap_to_grid(cultivated_land, self.subgrid)
         self.set_subgrid(cultivated_land, name="landsurface/cultivated_land")
 
+    @build_method(depends_on=[])
     def setup_land_use_parameters(
         self,
         land_cover="esa_worldcover_2021_v200",
@@ -439,6 +452,7 @@ class LandSurface:
                 name=f"landcover/{land_use_type}/interception_capacity",
             )
 
+    @build_method(depends_on=[])
     def setup_soil_parameters(self) -> None:
         """Sets up the soil parameters for the model.
 
