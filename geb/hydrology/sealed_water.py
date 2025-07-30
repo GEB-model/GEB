@@ -27,8 +27,7 @@ from .landcover import OPEN_WATER, SEALED
 
 
 class SealedWater(Module):
-    """
-    Sealed and open water runoff
+    """Sealed and open water runoff.
 
     calculated runoff from impermeable surface (sealed) and into water bodies
 
@@ -38,7 +37,7 @@ class SealedWater(Module):
     ====================  ================================================================================  =========
     Variable [self.var]   Description                                                                       Unit
     ====================  ================================================================================  =========
-    EWRef                 potential evaporation rate from water surface                                     m
+    reference_evapotranspiration_water                 potential evaporation rate from water surface                                     m
     capillar              Simulated flow from groundwater to the third CWATM soil layer                     m
     availWaterInfiltrati  quantity of water reaching the soil after interception, more snowmelt             m
     direct_runoff          Simulated surface runoff                                                          m
@@ -65,8 +64,7 @@ class SealedWater(Module):
         pass
 
     def step(self, capillar, open_water_evaporation):
-        """
-        Dynamic part of the sealed_water module
+        """Dynamic part of the sealed_water module.
 
         runoff calculation for open water and sealed areas
 
@@ -81,9 +79,11 @@ class SealedWater(Module):
 
         assert (capillar[sealed_water_area] >= 0).all()
 
-        # evaporation from precipitation fallen on sealed area (ponds) estimated as 0.2 x EWRef
+        # evaporation from precipitation fallen on sealed area (ponds) estimated as 0.2 x reference_evapotranspiration_water
         # evaporation from open water and channels is calculated in the routing module
-        open_water_evaporation[sealed_area] = 0.2 * self.HRU.var.EWRef[sealed_area]
+        open_water_evaporation[sealed_area] = (
+            0.2 * self.HRU.var.reference_evapotranspiration_water[sealed_area]
+        )
 
         runoff = np.zeros_like(
             self.HRU.var.natural_available_water_infiltration, dtype=np.float32

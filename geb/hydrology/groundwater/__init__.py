@@ -20,6 +20,7 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
+import numpy.typing as npt
 
 from geb.module import Module
 from geb.workflows import balance_check
@@ -29,6 +30,15 @@ from .model import ModFlowSimulation
 
 
 class GroundWater(Module):
+    """Implements groundwater hydrology submodel, responsible for flow, abstraction, outflow, and percolation.
+
+    This model communicates with the ModFlow simulation to manage groundwater flow and storage.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology
@@ -124,24 +134,38 @@ class GroundWater(Module):
         if __debug__:
             groundwater_storage_pre = self.modflow.groundwater_content_m3
 
-        self.modflow.set_recharge_m(groundwater_recharge)
+        self.modflow.set_recharge_m3(groundwater_recharge * self.grid.var.cell_area)
         self.modflow.set_groundwater_abstraction_m3(groundwater_abstraction_m3)
         self.modflow.step()
 
         if __debug__:
-            self.balance_check(
-                groundwater_storage_pre,
-                groundwater_recharge,
-                groundwater_abstraction_m3,
+            balance_check(
+                name="groundwater",
+                how="sum",
+                influxes=[
+                    groundwater_recharge.astype(np.float64) * self.grid.var.cell_area
+                ],
+                outfluxes=[
+                    groundwater_abstraction_m3.astype(np.float64),
+                    self.modflow.drainage_m3.astype(np.float64),
+                ],
+                prestorages=[groundwater_storage_pre.astype(np.float64)],
+                poststorages=[self.modflow.groundwater_content_m3.astype(np.float64)],
+                tollerance=500,  # 500 m3
             )
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
 
-        channel_ratio = get_channel_ratio(
+        channel_ratio: npt.NDArray[np.float32] = get_channel_ratio(
             river_length=self.grid.var.river_length,
-            river_width=self.grid.var.river_width,
+            river_width=np.where(
+                ~np.isnan(self.grid.var.average_river_width),
+                self.grid.var.average_river_width,
+                0,
+            ),
             cell_area=self.grid.var.cell_area,
         )
+        channel_ratio.fill(1)
 
         # this is the capillary rise for the NEXT timestep
         self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
@@ -149,7 +173,7 @@ class GroundWater(Module):
 
         # capriseindex is 1 where capilary rise occurs
         self.hydrology.HRU.capriseindex = self.hydrology.to_HRU(
-            data=np.float32(groundwater_drainage > 0)
+            data=np.float32(self.grid.var.capillar > 0)
         )
 
         self.report(self, locals())
@@ -166,23 +190,3 @@ class GroundWater(Module):
 
     def decompress(self, data):
         return self.hydrology.grid.decompress(data)
-
-    def balance_check(
-        self, groundwater_storage_pre, groundwater_recharge, groundwater_abstraction_m3
-    ):
-        drainage_m3 = self.modflow.drainage_m3
-        recharge_m3 = groundwater_recharge * self.modflow.area
-        groundwater_storage_post = self.modflow.groundwater_content_m3
-
-        balance_check(
-            name="groundwater",
-            how="sum",
-            influxes=[recharge_m3],
-            outfluxes=[
-                groundwater_abstraction_m3,
-                drainage_m3,
-            ],
-            prestorages=[groundwater_storage_pre],
-            poststorages=[groundwater_storage_post],
-            tollerance=100,  # 100 m3
-        )

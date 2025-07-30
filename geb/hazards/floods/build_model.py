@@ -1,14 +1,18 @@
 import logging
 
+import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import pyflwdir
 import xarray as xr
 from hydromt_sfincs import SfincsModel
 
+from geb.hydrology.routing import get_river_width
+
 from .io import export_rivers
 from .sfincs_utils import (
     assign_return_periods,
-    get_discharge_by_river,
+    get_discharge_and_river_parameters_by_river,
     get_logger,
     get_representative_river_points,
 )
@@ -16,7 +20,12 @@ from .sfincs_utils import (
 logger = logging.getLogger(__name__)
 
 
-def get_river_depth(river_segments, method, bankfull_column):
+def get_river_depth(
+    river_segments: gpd.GeoDataFrame,
+    method: str,
+    parameters: dict[str, float | int],
+    bankfull_column: str,
+) -> npt.NDArray[np.float32]:
     if method == "manning":
         # Set a minimum value for 'rivslp'
         min_rivslp = 1e-5
@@ -29,15 +38,19 @@ def get_river_depth(river_segments, method, bankfull_column):
             slope,
         )
         # Calculate 'river depth' using the Manning equation
-        depth = (
-            (0.030 * river_segments[bankfull_column])
-            / (np.sqrt(slope) * river_segments["rivwth"])
-        ) ** (3 / 5)
+        width = river_segments["width"]
+        bankfull_discharge = river_segments[bankfull_column]
+        assert (bankfull_discharge[width == 0] == 0).all()
+        width = np.where(
+            width == 0, 1, width
+        )  # Avoid division by zero. Since Q is 0, depth will also be 0.
+        depth = ((0.030 * bankfull_discharge) / (np.sqrt(slope) * width)) ** (3 / 5)
 
     elif method == "power_law":
         # Calculate 'river depth' using the power law equation
-        c = 0.27
-        d = 0.30  # Powerlaw equation from Andreadis et al (2013)
+        # Powerlaw equation from Andreadis et al (2013)
+        c = parameters["c"]
+        d = parameters["d"]
         depth = c * (river_segments[bankfull_column].astype(float) ** d)
 
     else:
@@ -50,14 +63,6 @@ def get_river_depth(river_segments, method, bankfull_column):
     depth = np.where(depth < min_rivdph, min_rivdph, depth)
     # Convert 'rivdph' to float
     return depth.astype(np.float32)
-
-
-def get_river_width(river_segments, bankfull_column):
-    # w=a*Q^b Leopold and Maddock
-    a = 7.2
-    b = 0.50
-    width = a * (river_segments[bankfull_column] ** b)
-    return width.astype(np.float32)
 
 
 def get_river_manning(river_segments):
@@ -88,16 +93,19 @@ def build_sfincs(
     region,
     rivers,
     discharge,
+    waterbody_ids: npt.NDArray[np.int32],
+    river_width_alpha: npt.NDArray[np.float32],
+    river_width_beta: npt.NDArray[np.float32],
     mannings,
     resolution,
     nr_subgrid_pixels,
     crs,
-    depth_calculation="manning",
+    depth_calculation_method,
+    depth_calculation_parameters,
     derive_river_method=None,
     mask_flood_plains=False,
 ):
-    """
-    Build a SFINCS model for a given basin_id and configuration file.
+    """Build a SFINCS model for a given basin_id and configuration file.
 
     Parameters
     ----------
@@ -121,7 +129,7 @@ def build_sfincs(
     assert not (derive_river_method and rivers), (
         "Specify either derive_river_method or rivers, not both"
     )
-    assert depth_calculation in [
+    assert depth_calculation_method in [
         "manning",
         "power_law",
     ], "Method should be 'manning' or 'power_law'"
@@ -163,21 +171,43 @@ def build_sfincs(
 
     river_representative_points = []
     for ID in rivers.index:
-        river_representative_points.append(get_representative_river_points(ID, rivers))
+        river_representative_points.append(
+            get_representative_river_points(ID, rivers, waterbody_ids)
+        )
 
-    discharge_by_river = get_discharge_by_river(
-        rivers.index,
+    discharge_by_river, river_parameters = get_discharge_and_river_parameters_by_river(
+        rivers.index.tolist(),
         river_representative_points,
         discharge=discharge,
+        river_width_alpha=river_width_alpha,
+        river_width_beta=river_width_beta,
     )
     rivers = assign_return_periods(rivers, discharge_by_river, return_periods=[2])
 
+    river_width_unknown_mask = rivers["width"].isnull()
+
+    rivers.loc[river_width_unknown_mask, "width"] = get_river_width(
+        river_parameters["river_width_alpha"][river_width_unknown_mask],
+        river_parameters["river_width_beta"][river_width_unknown_mask],
+        rivers.loc[river_width_unknown_mask, "Q_2"],
+    )
+
     rivers["depth"] = get_river_depth(
-        rivers, method=depth_calculation, bankfull_column="Q_2"
+        rivers,
+        method=depth_calculation_method,
+        parameters=depth_calculation_parameters,
+        bankfull_column="Q_2",
     )
     rivers["manning"] = get_river_manning(rivers)
 
     export_rivers(model_root, rivers)
+
+    # Because hydromt-sfincs does a lot of filling default values when data
+    # is missing, we need to be extra sure that the required columns are
+    # present and contain valid data.
+    assert rivers["width"].notnull().all(), "River width cannot be null"
+    assert rivers["depth"].notnull().all(), "River depth cannot be null"
+    assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
 
     sf.setup_subgrid(
         datasets_dep=DEMs,

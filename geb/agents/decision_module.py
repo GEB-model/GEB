@@ -16,21 +16,13 @@ class DecisionModule:
         n_agents: int,
         discount_rate: np.ndarray,
     ) -> np.ndarray:
-        """This function iterates through each (no)flood event i (see manuscript for details). It calculates the time discounted NPV of each event i:
+        """This function iterates through each (no)flood event i (see manuscript for details).
 
-        Args:
-            n_floods: number of flood maps included in model run
-            wealth: array containing the wealth of each household
-            income: array containing the income of each household
-            max_T: time horizon (same for each agent)
-            expected_damages: array containing the expected damages of each household under all events i
-            n_agents: number of household agents in the current admin unit
-            r: time discounting rate
+        It calculates the time discounted NPV of each event i:
 
         Returns:
             NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
         """
-
         # Allocate array
         NPV_summed = np.full((n_floods + 3, n_agents), -1, dtype=np.float32)
 
@@ -82,22 +74,9 @@ class DecisionModule:
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
-        Args:
-            n_agents: number of agents in the floodplain.
-            wealth: array containing the wealth of each household.
-            income: array containing the income of each household.
-            risk_perception: array containing the risk perception of each household (see manuscript for details).
-            expected_damages: array expected damages for each flood event for each agent under no implementation of dry flood proofing.
-            adapted: array containing the adaptation status of each agent (1 = adapted, 0 = not adapted).
-            p_droughts: array containing the exceedance probabilities of each flood event included in the analysis.
-            T: array containing the decision horizon of each agent.
-            r: time discounting factor.
-            sigma: risk aversion setting.
-
         Returns:
             EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
         """
-
         # Ensure p floods is in increasing order
         indices = np.argsort(p_droughts)
         total_profits = total_profits[indices]
@@ -184,6 +163,7 @@ class DecisionModule:
         total_profits: np.ndarray,
     ) -> np.ndarray:
         """This function calculates the discounted subjective utility for adapting for each agent.
+
         We take into account the current adaptation status of each agent, so that agents also consider the number of years of remaining loan payment.
 
         Args:
@@ -208,7 +188,6 @@ class DecisionModule:
         Returns:
             EU_adapt: array containing the time-discounted subjective utility of adapting for each agent.
         """
-
         # Preallocate arrays
         EU_adapt = np.full(n_agents, -np.inf, dtype=np.float32)
 

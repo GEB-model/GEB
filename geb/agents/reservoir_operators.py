@@ -286,14 +286,7 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         daily_substeps,
     ):
-        """
-        Parameters
-        ----------
-
-        minimum_release_m3 : float
-            The minimum release from the reservoir. This is the environmental flow requirement
-            in m3/s. It is assumed that this is the same for all reservoirs.
-        """
+        """Adjusts the provisional reservoir release to ensure it meets environmental flow requirements, does not exceed the reservoir capacity, and maintains a minimum usable release."""
         # release is at least 10% of the mean monthly inflow (environmental flow)
         reservoir_release_m3 = np.maximum(
             provisional_reservoir_release_m3, environmental_flow_requirement_m3
@@ -351,9 +344,7 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         n_monthly_substeps,
     ):
-        """
-        https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py
-        """
+        """https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py."""
         # Based on Shin et al. (2019)
         # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
         M = 0.1
@@ -417,15 +408,15 @@ class ReservoirOperators(AgentBaseClass):
     def get_flood_control_reservoir_release(
         self, cpa, cond_ppose, qin, S_begin_yr, mtifl, alpha
     ):
-        """
-        Computes release from flood control reservoirs
+        """Computes release from flood control reservoirs.
+
         cpa = reservoir capacity                                    (m^3)
         cond_ppose = array containing irrigation reservoir cells
         based on selection mask
         qin = inflow                                                (m^3/s)
         Sini = initial storage                                      (m^3)
         mtifl = annual mean total annual inflow                     (m^3/s)
-        alpha = reservoir capacity reduction factor                 (dimensionless)
+        alpha = reservoir capacity reduction factor                 (dimensionless).
         """
         # flood Reservoirs
         # initialization
@@ -462,16 +453,6 @@ class ReservoirOperators(AgentBaseClass):
         temp4 = np.multiply((1 - temp1), qin_flood[cond2])
         Rflood_final[cond2] = temp3 + temp4
         return Rflood_final
-
-    def get_available_water_reservoir_command_areas(self, gross_irrigation_demand_m3):
-        # TODO: only farmers that use surface irrigation
-        command_areas = self.model.hydrology.HRU.var.reservoir_command_areas
-        irrigation_demand_per_command_area = np.bincount(
-            command_areas[command_areas != -1],
-            weights=gross_irrigation_demand_m3[command_areas != -1],
-        )
-        assert irrigation_demand_per_command_area.size == self.storage.size
-        return 0
 
     def step(self) -> None:
         # operational year should start after the end of the rainy season

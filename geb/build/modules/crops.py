@@ -8,11 +8,13 @@ import pandas as pd
 import xarray as xr
 from honeybees.library.raster import sample_from_map
 
+from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
     M49_to_ISO3,
+    setup_donor_countries,
 )
 from ..workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from ..workflows.farmers import get_farm_locations
@@ -22,6 +24,7 @@ class Crops:
     def __init__(self):
         pass
 
+    @build_method(depends_on=[])
     def setup_crops(
         self,
         crop_data: dict,
@@ -84,14 +87,13 @@ class Crops:
 
         self.set_dict(crop_data, name="crops/crop_data")
 
+    @build_method(depends_on=[])
     def setup_crops_from_source(
         self,
         source: Union[str, None] = "MIRCA2000",
         crop_specifier: Union[str, None] = None,
     ):
-        """
-        Sets up the crops data for the model.
-        """
+        """Sets up the crops data for the model."""
         self.logger.info("Preparing crops data")
 
         assert source in ("MIRCA2000",), (
@@ -121,41 +123,31 @@ class Crops:
 
     def process_crop_data(
         self,
-        crop_prices,
-        translate_crop_names=None,
-        adjust_currency=False,
+        crop_prices: str | int | float,
+        translate_crop_names: dict | None = None,
+        adjust_currency: bool = False,
     ):
-        """
-        Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
+        """Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
 
-        Parameters
-        ----------
-        crop_prices : str, int, or float
-            If 'FAO_stat', fetches crop price data from FAO statistics. Otherwise, it can be a constant value for crop prices.
-        project_past_until_year : int, optional
-            The year to project past data until. Defaults to False.
-        project_future_until_year : int, optional
-            The year to project future data until. Defaults to False.
+        Args:
+            crop_prices: If 'FAO_stat', fetches crop price data from FAO statistics. Otherwise, it can be a constant value for crop prices.
+            translate_crop_names: A dictionary mapping crop names to their translated names.
+            adjust_currency: If True, adjusts the crop prices based on currency conversion rates.
 
-        Returns
-        -------
-        dict
+        Returns:
             A dictionary containing processed crop data in a time series format or as a constant value.
 
-        Raises
-        ------
-        ValueError
-            If crop_prices is neither a valid file path nor an integer/float.
+        Raises:
+            ValueError
+                If crop_prices is neither a valid file path nor an integer/float.
 
-        Notes
-        -----
-        The function performs the following steps:
-        1. Fetches and processes crop data from FAO statistics if crop_prices is 'FAO_stat'.
-        2. Adjusts the data for countries with missing values using PPP conversion rates.
-        3. Determines price variability and performs interpolation/extrapolation of crop prices.
-        4. Formats the processed data into a nested dictionary structure.
+        Notes:
+            The function performs the following steps:
+            1. Fetches and processes crop data from FAO statistics if crop_prices is 'FAO_stat'.
+            2. Adjusts the data for countries with missing values using PPP conversion rates.
+            3. Determines price variability and performs interpolation/extrapolation of crop prices.
+            4. Formats the processed data into a nested dictionary structure.
         """
-
         if crop_prices == "FAO_stat":
             crop_data = self.data_catalog.get_dataframe(
                 "FAO_crop_price",
@@ -196,6 +188,18 @@ class Crops:
             ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
                 GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
             ]["ISO3"]
+
+            missing_regions_in_GLOBIOM = set(ISO3_codes_region) - set(
+                ISO3_codes_GLOBIOM_region
+            )
+            self.logger.info(
+                f"Regions in the model not present in GLOBIOM: {missing_regions_in_GLOBIOM}"
+            )
+            for region in missing_regions_in_GLOBIOM:
+                if not crop_data[crop_data["ISO3"] == region].empty:
+                    raise ValueError(
+                        f"Region {region} is not present in GLOBIOM, but it has crop data. This situation gives problems in the donate_and_receive_crop_prices function, because it will substitute the region's data for donor data. Please consult Tim to change the function"
+                    )
 
             # Setup dataFrame for further data corrections
             donor_data = {}
@@ -296,10 +300,6 @@ class Crops:
             ]
 
             data = self.inter_and_extrapolate_prices(data, unique_regions)
-
-            # remove columns that are not needed anymore
-            data = data.drop(columns=["_crop_price_inflation"])
-            data = data.drop(columns=["_crop_price_LCU_USD"])
 
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
@@ -458,7 +458,8 @@ class Crops:
     def donate_and_receive_crop_prices(
         self, donor_data, recipient_regions, GLOBIOM_regions
     ):
-        """
+        """Gets crop prices from other to fill missing data.
+
         If there are multiple countries in one selected basin, where one country has prices for a certain crop, but the other does not,
         this gives issues. This function adjusts crop data for those countries by filling in missing values using data from nearby regions
         and PPP conversion rates.
@@ -469,33 +470,48 @@ class Crops:
             A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'. The DataFrame
             contains crop prices for different regions.
 
-        Returns
+        Returns:
         -------
         DataFrame
             The updated DataFrame with missing crop data filled in using PPP conversion rates from nearby regions.
 
-        Notes
+        Notes:
         -----
         The function performs the following steps:
         1. Identifies columns where all values are NaN for each country and stores this information.
         2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
         3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
         4. Drops the 'ISO3' column before returning the updated DataFrame.
-        """
 
+        Note: some countries without data are also not in the GLOBIOM dataset (e.g Liechtenstein (LIE)). For these countries, we cannot assess which donor we should take, and the country_data will be empty for these countries. Therefore, we first estimate the most similar country based on the setup_donor_countries function.
+        The ISO3 of these countries will be replaced by the ISO3 of the donor. However, the region_id will remain the same, so that only the data is used from the donor, but still the original region is used.
+        """
         # create a copy of the data to avoid using data that was adjusted in this function
         data_out = None
 
         for _, region in recipient_regions.iterrows():
             ISO3 = region["ISO3"]
-            if ISO3 == "AND":
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":
-                ISO3 = "CHE"
             region_id = region["region_id"]
             self.logger.info(f"Processing region {region_id}")
+
             # Filter the data for the current country
             country_data = donor_data[donor_data["ISO3"] == ISO3]
+
+            if country_data.empty:
+                countries_with_donor_data = donor_data.ISO3.unique().tolist()
+                donor_countries = setup_donor_countries(self, countries_with_donor_data)
+                ISO3 = donor_countries.get(ISO3, None)
+                self.logger.info(
+                    f"Missing donor data for {region['ISO3']}, using donor country {ISO3}"
+                )
+                assert ISO3 is not None, (
+                    f"Could not find a donor country for {region['ISO3']}. Please check the donor countries setup."
+                )
+                country_data = donor_data[donor_data["ISO3"] == ISO3]
+                assert not country_data.empty, (
+                    f"Donor country {ISO3} has no data for {region['ISO3']}. Please check the donor countries setup."
+                )
+                # note: it can be that a country is donor for another in the first donor step (outside this function) (e.g. Isreal for cyprus), and that here cyprus is again selected as a donor country for another country (e.g. Liechtenstein)
 
             GLOBIOM_region = GLOBIOM_regions.loc[
                 GLOBIOM_regions["ISO3"] == ISO3, "Region37"
@@ -555,8 +571,8 @@ class Crops:
         return data_out
 
     def assign_crop_price_inflation(self, costs, unique_regions):
-        """
-        Determines the price inflation of all crops in the region and adds a column that describes this inflation.
+        """Determines the price inflation of all crops in the region and adds a column that describes this inflation.
+
         If there is no data for a certain year, the inflation rate is taken from the socioeconomics data.
 
         Parameters
@@ -564,7 +580,7 @@ class Crops:
         costs : DataFrame
             A DataFrame containing the cost data for different regions. The DataFrame should be indexed by region IDs.
 
-        Returns
+        Returns:
         -------
         DataFrame
             The updated DataFrame with a new column 'changes' that contains the average price changes for each region.
@@ -616,8 +632,7 @@ class Crops:
         return costs
 
     def inter_and_extrapolate_prices(self, data, unique_regions, adjust_currency=False):
-        """
-        Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
+        """Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
 
         Parameters
         ----------
@@ -625,13 +640,13 @@ class Crops:
             A DataFrame containing crop price data for different regions. The DataFrame should be indexed by region IDs
             and have columns corresponding to different crops.
 
-        Returns
+        Returns:
         -------
         DataFrame
             The updated DataFrame with interpolated and extrapolated crop prices. Columns for 'others perennial' and 'others annual'
             crops are also added.
 
-        Notes
+        Notes:
         -----
         The function performs the following steps:
         1. Extracts crop names from the internal crop data dictionary.
@@ -640,7 +655,6 @@ class Crops:
         4. Filters and updates the original data with the computed averages.
         5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
         """
-
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
         for _, region in unique_regions.iterrows():
             region_id = region["region_id"]
@@ -686,18 +700,20 @@ class Crops:
                 else:
                     data.loc[region_id, crop] = crop_data
 
-        data = data.drop(columns=["_crop_price_LCU_USD"])
+        # remove columns that are not needed anymore
         data = data.drop(columns=["_crop_price_inflation"])
+        data = data.drop(columns=["_crop_price_LCU_USD"])
+
         return data
 
+    @build_method(depends_on=["set_time_range"])
     def setup_cultivation_costs(
         self,
         cultivation_costs: Optional[Union[str, int, float]] = 0,
         translate_crop_names: Optional[Dict[str, str]] = None,
         adjust_currency=False,
     ):
-        """
-        Sets up the cultivation costs for the model.
+        """Sets up the cultivation costs for the model.
 
         Parameters
         ----------
@@ -714,14 +730,22 @@ class Crops:
         )
         self.set_dict(cultivation_costs, name="crops/cultivation_costs")
 
+    @build_method(
+        depends_on=[
+            "set_time_range",
+            "setup_regions_and_land_use",
+            "setup_economic_data",
+            "setup_crops_from_source",
+            "setup_farmer_crop_calendar",
+        ]
+    )
     def setup_crop_prices(
         self,
         crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
         translate_crop_names: Optional[Dict[str, str]] = None,
         adjust_currency=False,
     ):
-        """
-        Sets up the crop prices for the model.
+        """Sets up the crop prices for the model.
 
         Parameters
         ----------
@@ -737,8 +761,9 @@ class Crops:
             adjust_currency=adjust_currency,
         )
         self.set_dict(crop_prices, name="crops/crop_prices")
-        # self.set_dict(crop_prices, name="crops/cultivation_costs")
+        self.set_dict(crop_prices, name="crops/cultivation_costs")
 
+    @build_method(depends_on=[])
     def determine_crop_area_fractions(self, resolution="5-arcminute"):
         output_folder = "plot/mirca_crops"
         os.makedirs(output_folder, exist_ok=True)
@@ -875,6 +900,7 @@ class Crops:
             save_dir / "crop_irrigated_fraction_all_years.nc"
         )
 
+    @build_method(depends_on=[])
     def setup_farmer_crop_calendar_multirun(
         self,
         reduce_crops=False,
@@ -890,6 +916,7 @@ class Crops:
                     year_nr, reduce_crops, replace_base, export
                 )
 
+    @build_method(depends_on=["setup_create_farms"])
     def setup_farmer_crop_calendar(
         self,
         year=2000,
@@ -913,6 +940,36 @@ class Crops:
             self.data_catalog,
             MIRCA_units=np.unique(MIRCA_unit_grid.values),
         )
+        if any(value in [None, "", [], {}] for value in crop_calendar.values()):
+            missing_mirca_unit = [
+                unit for unit, calendars in crop_calendar.items() if not calendars
+            ]
+            self.logger.warning(
+                f"Missing crop calendar for MIRCA unit(s): {missing_mirca_unit}"
+            )
+
+            for mirca_unit in missing_mirca_unit:
+                # Filter out the current mirca_unit from crop_calendar.keys()
+                valid_keys = [key for key in crop_calendar.keys() if key != mirca_unit]
+
+                # Find the closest MIRCA unit with a crop calendar
+                if valid_keys:  # Ensure there are valid keys to process
+                    closest_mirca_unit = min(
+                        valid_keys, key=lambda x: abs(x - mirca_unit)
+                    )
+                else:
+                    raise ValueError(
+                        f"No valid MIRCA units found to replace missing crop calendar for {mirca_unit}."
+                    )
+
+                # use this closest_mirca_unit to fill the missing crop calendar
+                crop_calendar[mirca_unit] = crop_calendar[closest_mirca_unit]
+                self.logger.info(
+                    f"Filling missing crop calendar for MIRCA unit {mirca_unit} with data from {closest_mirca_unit}."
+                )
+
+        else:
+            self.logger.debug("All keys have valid values.")
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"

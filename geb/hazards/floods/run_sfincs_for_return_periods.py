@@ -2,6 +2,7 @@ import os
 import shutil
 from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -11,7 +12,7 @@ from tqdm import tqdm
 from geb.workflows.io import to_zarr
 
 from .io import import_rivers
-from .postprocess_model import read_flood_map
+from .postprocess_model import read_maximum_flood_depth
 from .sfincs_utils import (
     get_end_point,
     get_logger,
@@ -22,9 +23,11 @@ from .sfincs_utils import (
 
 
 def get_topological_stream_order(rivers):
-    """Calculate the topological stream order for each river segment. The topological stream order is
-    calculated by following the river rivers upstream and each time finding the rivers that connect
-    to the previous segment."""
+    """Calculate the topological stream order for each river segment.
+
+    The topological stream order is calculated by following the river rivers upstream
+    and each time finding the rivers that connect to the previous segment.
+    """
     # find endpoints of each geometry
     startpoint = rivers.geometry.apply(lambda geom: geom.coords[0])
     endpoint = rivers.geometry.apply(lambda geom: geom.coords[-1])
@@ -32,7 +35,7 @@ def get_topological_stream_order(rivers):
     topological_stream_order = np.full(len(rivers), -1, dtype=np.int32)
 
     prev_order_idx = ~endpoint.isin(startpoint)
-    topological_stream_order_idx = 0
+    topological_stream_order_idx: int = 0
     topological_stream_order[prev_order_idx] = topological_stream_order_idx
 
     prev_order_start_points = startpoint[prev_order_idx]
@@ -51,8 +54,10 @@ def get_topological_stream_order(rivers):
     return topological_stream_order
 
 
-def assign_calculation_group(rivers):
-    """We want to run every river rivers independently of the other river rivers. Here, we make
+def assign_calculation_group(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Assign calculation groups to river segments based on their topological stream order and endpoints.
+
+    We want to run every river rivers independently of the other river rivers. Here, we make
     two observations:
 
     1. If two river rivers have the same endpoint, they must performed in another run.
@@ -68,14 +73,10 @@ def assign_calculation_group(rivers):
     The outcome is calculation groups 1-6, where 3 and 6 are only used when there are three rivers
     sharing the same endpoint.
 
-    Parameters
-    ----------
-    rivers : GeoDataFrame
-        GeoDataFrame with the river rivers
+    Args:
+        rivers: GeoDataFrame with the river rivers
 
-    Returns
-    -------
-    GeoDataFrame
+    Returns:
         GeoDataFrame with an additional column 'calculation_group' that assigns the rivers to a calculation group
     """
 
@@ -116,17 +117,17 @@ def run_sfincs_for_return_periods(
     gpu=False,
 ):
     if export_dir is None:
-        export_dir = model_root / "risk"
+        export_dir: Path = model_root / "risk"
 
     export_dir.mkdir(exist_ok=True, parents=True)
 
-    rivers = import_rivers(model_root, postfix="_return_periods")
+    rivers: gpd.GeoDataFrame = import_rivers(model_root, postfix="_return_periods")
     assert (~rivers["is_downstream_outflow_subbasin"]).all()
 
     rivers["topological_stream_order"] = get_topological_stream_order(rivers)
-    rivers = assign_calculation_group(rivers)
+    rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
 
-    working_dir = model_root / "working_dir"
+    working_dir: Path = model_root / "working_dir"
 
     rp_maps = {}
 
@@ -134,7 +135,7 @@ def run_sfincs_for_return_periods(
         print(f"Running SFINCS for return period {return_period} years")
         rp_map = []
 
-        working_dir_return_period = working_dir / f"rp_{return_period}"
+        working_dir_return_period: Path = working_dir / f"rp_{return_period}"
         for group, group_rivers in tqdm(rivers.groupby("calculation_group")):
             simulation_root = working_dir_return_period / str(group)
 
@@ -145,7 +146,7 @@ def run_sfincs_for_return_periods(
             inflow_nodes = inflow_nodes.reset_index(drop=True)
             inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(get_start_point)
 
-            Q = [
+            Q: list[pd.DataFrame] = [
                 pd.DataFrame.from_dict(
                     inflow_nodes[f"hydrograph_{return_period}"].iloc[idx],
                     orient="index",
@@ -153,16 +154,18 @@ def run_sfincs_for_return_periods(
                 )
                 for idx in inflow_nodes.index
             ]
-            Q = pd.concat(Q, axis=1)
+            Q: pd.DataFrame = pd.concat(Q, axis=1)
             Q.index = pd.to_datetime(Q.index)
 
-            Q = (
+            Q: pd.DataFrame = (
                 Q.fillna(method="ffill").fillna(  # pad with 0's before
                     method="bfill"
                 )  # and after
             )
 
-            sf = SfincsModel(root=model_root, mode="r+", logger=get_logger())
+            sf: SfincsModel = SfincsModel(
+                root=model_root, mode="r+", logger=get_logger()
+            )
             sf.setup_config(
                 tref=Q.index[0],
                 tstart=Q.index[0],
@@ -195,16 +198,18 @@ def run_sfincs_for_return_periods(
 
             run_sfincs_simulation(model_root, simulation_root, gpu=gpu)
 
-            max_depth = read_flood_map(model_root, simulation_root)
+            max_depth: xr.DataArray = read_maximum_flood_depth(
+                model_root, simulation_root
+            )
 
             rp_map.append(max_depth)
 
-        rp_map = xr.concat(rp_map, dim="node")
-        rp_map = rp_map.max(dim="node")
+        rp_map: xr.DataArray = xr.concat(rp_map, dim="node")
+        rp_map: xr.DataArray = rp_map.max(dim="node")
         rp_map.attrs["_FillValue"] = max_depth.attrs["_FillValue"]
 
         if export:
-            rp_map = to_zarr(
+            rp_map: xr.DataArray = to_zarr(
                 rp_map,
                 export_dir / f"{return_period}.zarr",
                 crs=rp_map.rio.crs,
@@ -217,12 +222,3 @@ def run_sfincs_for_return_periods(
         rp_maps[return_period] = rp_map
 
     return rp_maps
-
-
-if __name__ == "__main__":
-    if "snakemake" in locals():
-        model_root = Path(snakemake.params.model_root)  # noqa: F821
-    else:
-        model_root = Path(f"models/basin{232508}")
-
-    run_sfincs_for_return_periods(model_root, clean_working_dir=True, gpu=True)

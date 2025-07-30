@@ -21,7 +21,6 @@ hazards:
     resolution: 150
     nr_subgrid_pixels: 5
     crs: auto
-    gpu: false
     force_overwrite: true
     return_periods:
       - 2
@@ -33,6 +32,8 @@ hazards:
       - 250
       - 500
       - 1000
+    SFINCS:
+      gpu: false
   damage:
     simulate: false
   erosion:
@@ -41,6 +42,12 @@ hazards:
 hydrology:
   routing:
     algorithm: kinematic_wave  # accuflux or kinematic_wave
+    river_width:
+      parameters:
+        default_alpha: 7.2
+        beta: 0.5
+    river_depth:
+      method: manning # or power law. If power law, alpha and beta must be set additionally in the parameters
 
 agent_settings:
   market:
@@ -52,6 +59,7 @@ agent_settings:
   #     per: capita
   households:
     adapt: false
+    warning_response: false
     expected_utility:
       flood_risk_calculations:
         risk_perception:
@@ -146,6 +154,7 @@ draw:
       draw_every_nth: 1
 
 report:
+  _water_cirle: true
   hydrology.routing:
     discharge_daily:
       varname: grid.var.discharge_m3_s
@@ -156,10 +165,9 @@ report:
 
 parameters:
   SnowMeltCoef: 0.004
-  arnoBeta_add: 0.6653797014119323
+  arno_beta_add: 0.0
   lakeAFactor: 1
-  lakeEvaFactor: 2.6777823102359894
-  manningsN: 0.8269807271111366
+  manningsN: 1
   preferentialFlowConstant: 3.14300925049279
 
 plantFATE:

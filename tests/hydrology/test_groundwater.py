@@ -1,9 +1,14 @@
 import math
+import os
 from copy import deepcopy
+from pathlib import Path
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
+from affine import Affine
 
+from geb.build.workflows.general import calculate_cell_area
 from geb.hydrology.groundwater.model import (
     ModFlowSimulation,
     distribute_well_rate_per_layer,
@@ -23,9 +28,9 @@ def decompress(array, mask):
     return out
 
 
-XSIZE = 12
-YSIZE = 10
-NLAY = 2
+XSIZE: Literal[12] = 12
+YSIZE: Literal[10] = 10
+NLAY: Literal[2] = 2
 
 # Create a topography 2D map
 x = np.linspace(-5, 5, XSIZE)
@@ -37,7 +42,16 @@ basin_mask = np.zeros((YSIZE, XSIZE), dtype=bool)
 basin_mask[0] = True
 basin_mask[-3:-1, 0:3] = True
 
-gt = (4.864242872511027, 0.0001, 0, 52.33412139354429, 0, -0.0001)
+gt: tuple[float, float, float, float, float, float] = (
+    4.864242872511027,
+    0.0001,
+    0,
+    52.33412139354429,
+    0,
+    -0.0001,
+)
+
+cell_area = calculate_cell_area(Affine.from_gdal(*gt), (YSIZE, XSIZE))
 
 
 def compress(array, mask):
@@ -57,6 +71,8 @@ for layer in range(NLAY):
 
 
 class DummyGrid:
+    """A dummy grid class to simulate the grid structure."""
+
     def __init__(self):
         pass
 
@@ -65,14 +81,22 @@ class DummyGrid:
 
 
 class DummyHydrology:
+    """A dummy hydrology class to simulate the hydrology structure."""
+
     def __init__(self):
         self.grid = DummyGrid()
 
 
 class DummyModel:
+    """A dummy model class to simulate the MODFLOW model structure."""
+
     def __init__(self):
         self.simulation_root_spinup = tmp_folder / "modflow"
         self.hydrology = DummyHydrology()
+
+    @property
+    def bin_folder(self) -> Path:
+        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
 
 default_params = {
@@ -92,7 +116,7 @@ default_params = {
 
 
 def test_modflow_simulation_initialization():
-    sim = ModFlowSimulation(**default_params)
+    sim: ModFlowSimulation = ModFlowSimulation(**default_params)
     assert sim.n_active_cells == (~basin_mask).sum()
     # In the Netherlands, the average area of a cell with this gt is ~75.8 m2
     assert np.allclose(sim.area, 75.8, atol=0.1)
@@ -101,7 +125,7 @@ def test_modflow_simulation_initialization():
 def test_step():
     parameters = deepcopy(default_params)
 
-    sim = ModFlowSimulation(**parameters)
+    sim: ModFlowSimulation = ModFlowSimulation(**parameters)
 
     groundwater_content_prev = sim.groundwater_content_m3.sum()
     sim.step()
@@ -126,8 +150,9 @@ def test_recharge():
 
     groundwater_content_prev = sim.groundwater_content_m3.sum()
 
-    recharge = np.full((YSIZE, XSIZE), 0.1)
-    sim.set_recharge_m(compress(recharge, sim.basin_mask))
+    recharge_m = np.full((YSIZE, XSIZE), 0.1)
+    recharge_m3 = recharge_m * cell_area
+    sim.set_recharge_m3(compress(recharge_m3, sim.basin_mask))
     sim.step()
 
     drainage_m3 = np.nansum(sim.drainage_m3)
@@ -163,13 +188,16 @@ def test_drainage():
 
     groundwater_content_prev = np.nansum(sim.groundwater_content_m3)
 
-    sim.set_recharge_m(compress(np.full((YSIZE, XSIZE), 0.1), sim.basin_mask))
+    recharge_m = np.full((YSIZE, XSIZE), 0.1)
+    recharge_m3 = recharge_m * cell_area
+
+    sim.set_recharge_m3(compress(recharge_m3, sim.basin_mask))
     sim.step()
 
     drainage = np.nansum(sim.drainage_m3)
     assert drainage.sum() > 0
 
-    assert np.nansum(sim.drainage_m * sim.area) == np.nansum(drainage)
+    assert math.isclose(np.nansum(sim._drainage_m * sim.area), np.nansum(drainage))
 
     groundwater_content = np.nansum(sim.groundwater_content_m3)
 
@@ -269,7 +297,9 @@ def visualize_modflow_results(sim, axes):
     plt.colorbar(im4, ax=ax4, label="Depth (m)")
 
     # Plot drainage
-    im5 = ax5.imshow(decompress(sim.drainage_m, sim.basin_mask), cmap="Blues")
+    drainage_m3 = decompress(sim.drainage_m3, sim.basin_mask)
+    drainage = drainage_m3 / cell_area
+    im5 = ax5.imshow(drainage, cmap="Blues")
     ax5.set_title("Drainage")
     plt.colorbar(im5, ax=ax5, label="Drainage (m/day)")
 
@@ -284,8 +314,9 @@ def test_modflow_simulation_with_visualization():
 
     # Run the simulation for a few steps
     for i in range(5):
-        recharge = np.random.uniform(0, 0.001, size=(YSIZE, XSIZE))
-        sim.set_recharge_m(compress(recharge, sim.basin_mask))
+        recharge_m = np.random.uniform(0, 0.001, size=(YSIZE, XSIZE))
+        recharge_m3 = recharge_m * cell_area
+        sim.set_recharge_m3(compress(recharge_m3, sim.basin_mask))
 
         groundwater_abstracton = np.full((YSIZE, XSIZE), 0.0)
         groundwater_abstracton[2, 2] = 1.25
@@ -308,8 +339,9 @@ def test_modflow_simulation_with_restore():
     parameters["heads"][:,] = compress(topography, basin_mask)
     sim = ModFlowSimulation(**parameters)
 
-    recharge = np.random.uniform(0, 0.001, size=(YSIZE, XSIZE))
-    sim.set_recharge_m(compress(recharge, sim.basin_mask))
+    recharge_m = np.random.uniform(0, 0.001, size=(YSIZE, XSIZE))
+    recharge_m3 = recharge_m * cell_area
+    sim.set_recharge_m3(compress(recharge_m3, sim.basin_mask))
 
     groundwater_abstracton = np.full((YSIZE, XSIZE), 0.0)
     groundwater_abstracton[2, 2] = 1.25

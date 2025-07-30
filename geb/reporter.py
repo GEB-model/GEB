@@ -86,6 +86,16 @@ class Reporter:
             and self.model.config["report"]
         ):
             self.activated = True
+
+            to_delete = []
+            for module_name, configs in self.model.config["report"].items():
+                if module_name.startswith("_"):
+                    # skip internal modules
+                    to_delete.append(module_name)
+
+            for module_name in to_delete:
+                del self.model.config["report"][module_name]
+
             for module_name, configs in self.model.config["report"].items():
                 self.variables[module_name] = {}
                 for name, config in configs.items():
@@ -96,7 +106,9 @@ class Reporter:
             self.activated = False
 
     def create_variable(self, config: dict, module_name: str, name: str) -> None:
-        """This function creates a variable for the reporter. For
+        """This function creates a variable for the reporter.
+
+        For
         configurations without a aggregation function, a zarr file is created. For
         configurations with an aggregation function, the data
         is stored in memory and exported on the final timestep.
@@ -106,7 +118,12 @@ class Reporter:
             module_name: The name of the module to which the variable belongs.
             name: The name of the variable.
         """
-        if config["type"] in ("grid", "HRU"):
+        if config["type"] == "scalar":
+            assert "function" not in config or config["function"] is None, (
+                "Scalar variables cannot have a function. "
+            )
+            return []
+        elif config["type"] in ("grid", "HRU"):
             if config["function"] is not None:
                 return []
             else:
@@ -260,7 +277,7 @@ class Reporter:
 
         else:
             raise ValueError(
-                f"Type {config['type']} not recognized. Must be 'grid', 'agents' or 'HRU'."
+                f"Type {config['type']} not recognized. Must be 'scalar', 'grid', 'agents' or 'HRU'."
             )
 
     def maybe_report_value(
@@ -274,11 +291,13 @@ class Reporter:
         """This method is used to save and/or export model values.
 
         Args:
+            module_name: Name of the module to which the value belongs.
             name: Name of the value to be exported.
-            value: The array itself.
-            conf: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.
+            module: The module to report data from.
+            local_variables: A dictionary of local variables from the function
+                that calls this one.
+            config: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.
         """
-
         # here we return None if the value is not to be reported on this timestep
         if "frequency" in config:
             if config["frequency"] == "initial":
@@ -315,11 +334,23 @@ class Reporter:
         if fancy_index:
             fancy_index = fancy_index.group(0)
             varname = varname.replace(fancy_index, "")
+
+        # get the variable
         if varname.startswith("."):
             varname = varname[1:]
-            value = local_variables[varname]
+            try:
+                value = local_variables[varname]
+            except KeyError:
+                raise KeyError(
+                    f"Variable {varname} not found in local variables of {module_name}. "
+                )
         else:
-            value = attrgetter(varname)(module)
+            try:
+                value = attrgetter(varname)(module)
+            except AttributeError:
+                raise AttributeError(
+                    f"Attribute {varname} not found in module {module_name}. "
+                )
 
         if fancy_index:
             value = eval(f"value{fancy_index}")
@@ -328,10 +359,10 @@ class Reporter:
         if isinstance(value, list):
             value = [v.item() for v in value]
             for v in value:
-                self.check_value(v)
+                assert not np.isnan(value) and not np.isinf(v)
         elif np.isscalar(value):
             value = value.item()
-            self.check_value(value)
+            assert not np.isnan(value) and not np.isinf(value)
 
         self.process_value(module_name, name, value, config)
 
@@ -344,7 +375,7 @@ class Reporter:
             module_name: Name of the module to which the value belongs.
             name: Name of the value to be exported.
             value: The array itself.
-            conf: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
+            config: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
         """
         if config["type"] in ("grid", "HRU"):
             if config["function"] is None:
@@ -396,7 +427,12 @@ class Reporter:
                         raise IndexError(
                             f"The coordinate ({args[0]},{args[1]}) is outside the model domain."
                         )
-                elif function in ("weightedmean", "weightednanmean"):
+                elif function in (
+                    "weightedmean",
+                    "weightednanmean",
+                    "weightedsum",
+                    "weightednansum",
+                ):
                     if config["type"] == "HRU":
                         cell_area = self.hydrology.HRU.var.cell_area
                     else:
@@ -405,6 +441,10 @@ class Reporter:
                         value = np.average(value, weights=cell_area)
                     elif function == "weightednanmean":
                         value = np.nansum(value * cell_area) / np.sum(cell_area)
+                    elif function == "weightedsum":
+                        value = np.sum(value * cell_area)
+                    elif function == "weightednansum":
+                        value = np.nansum(value * cell_area)
 
                 else:
                     raise ValueError(f"Function {function} not recognized")
@@ -494,10 +534,13 @@ class Reporter:
         """At the end of the model run, all previously collected data is reported to disk."""
         for module_name, variables in self.variables.items():
             for name, values in variables.items():
-                if (
+                if self.model.config["report"][module_name][name][
+                    "type"
+                ] == "scalar" or (
                     self.model.config["report"][module_name][name]["function"]
                     is not None
                 ):
+                    # if the variable is a scalar or has an aggregation function, we report
                     df = pd.DataFrame.from_records(
                         values, columns=["date", name], index="date"
                     )
@@ -512,7 +555,7 @@ class Reporter:
 
         Args:
             module: The module to report data from.
-            variables: A dictionary of local variables from the function
+            local_variables: A dictionary of local variables from the function
                 that calls this one.
             module_name: The name of the module.
         """

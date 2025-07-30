@@ -1,9 +1,12 @@
 import copy
 import datetime
+import os
 from pathlib import Path
 from time import time
+from typing import Any, Literal, overload
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 from honeybees.model import Model as ABM_Model
@@ -14,21 +17,23 @@ from geb.hazards.driver import HazardDriver
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
+from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
+from geb.workflows.io import open_zarr
 
 from .evaluate import Evaluate
-from .HRUs import load_geom
+from .forcing import Forcing
 from .hydrology import Hydrology
+from .hydrology.HRUs import load_geom
 
 
 class GEBModel(Module, HazardDriver, ABM_Model):
     """GEB parent class.
 
-    Parameters
-    ----------
-    config: Filepath of the YAML-configuration file (e.g. model.yml).
-    files: Dictionary with the paths of the input files.
-    mode: Mode of the model. Either `w` (write) or `r` (read).
-    timing: Boolean indicating if the model steps should be timed.
+    Args:
+        config: Filepath of the YAML-configuration file (e.g. model.yml).
+        files: Dictionary with the paths of the input files.
+        mode: Mode of the model. Either `w` (write) or `r` (read).
+        timing: Boolean indicating if the model steps should be timed.
     """
 
     def __init__(
@@ -45,7 +50,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self._multiverse_name = None
 
-        self.config = self.setup_config(config)
+        self.config = config
 
         # make a deep copy to avoid issues when the model is initialized multiple times
         self.files = copy.deepcopy(files)
@@ -58,6 +63,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.store = Store(self)
         self.artists = Artists(self)
 
+        self.forcing = Forcing(self)
+
         # Empty list to hold plantFATE models. If forests are not used, this will be empty
         self.plantFATE = []
 
@@ -65,7 +72,16 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     def name(self) -> str:
         return ""
 
-    def restore(self, store_location: str, timestep: int) -> None:
+    def restore(
+        self, store_location: str | Path, timestep: int, n_timesteps: int
+    ) -> None:
+        """Restore the model state to the original state given by the function input.
+
+        Args:
+            store_location: Location of the store to restore the model state from.
+            timestep: timestep to restore the model state to.
+            n_timesteps: number of timesteps (i.e., the final timestep) to restore the model state to.
+        """
         self.store.load(store_location)
 
         # restore the heads of the groundwater model
@@ -76,45 +92,70 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.hydrology.routing.grid.var.discharge_m3_s.copy()
         )
         self.current_timestep = timestep
+        self.n_timesteps = n_timesteps
+
+    @overload
+    def multiverse(
+        self, forecast_dt: datetime.datetime, return_mean_discharge: Literal[True]
+    ) -> dict[Any, float]: ...
+
+    @overload
+    def multiverse(
+        self, forecast_dt: datetime.datetime, return_mean_discharge: Literal[False]
+    ) -> None: ...
 
     def multiverse(
-        self, return_mean_discharge: bool = False
-    ) -> None | dict[str, float]:
+        self, forecast_dt: datetime.datetime, return_mean_discharge: bool = False
+    ) -> None | dict[Any, float]:
         # copy current state of timestep and time
-        store_timestep = copy.copy(self.current_timestep)
+        store_timestep: int = copy.copy(self.current_timestep)
+        store_n_timesteps: int = copy.copy(self.n_timesteps)
 
         # set a folder to store the initial state of the multiverse
-        store_location = self.simulation_root / "multiverse" / "forecast"
+        store_location: Path = self.simulation_root / "multiverse" / "forecast"
         self.store.save(store_location)
 
-        precipitation_dataarray = self.sfincs.precipitation_dataarray
+        original_pr_hourly: xr.DataArray = self.forcing["pr_hourly"]
 
-        forecasts = xr.open_dataset(
-            self.input_folder
-            / "other"
-            / "climate"
-            / "forecasts"
-            / f"{self.current_time.strftime('%Y%m%d')}.zarr"
+        forecasts: xr.DataArray = open_zarr(
+            Path("data") / "forecasts" / f"{forecast_dt.strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
-        end_date = forecasts.time[-1].dt.date.item()
-        n_timesteps = (end_date - self.current_time.date()).days
-
         if return_mean_discharge:
-            mean_discharge = {}
+            mean_discharge: dict[Any, float] = {}
 
         for member in forecasts.member:
             self.multiverse_name = member.item()
-            # self.sfincs.precipitation_dataarray = (
-            #     forecasts.sel(member=member).rename({"accum_precipitation": "precip"})
-            #     / 3600
-            # )
-            self.sfincs.precipitation_dataarray = (
-                precipitation_dataarray / 100 * member.item()
+
+            pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member)
+
+            forecast_end_date = round_up_to_start_of_next_day_unless_midnight(
+                pd.to_datetime(pr_hourly_forecast.time[-1].item()).to_pydatetime()
+            ).date()
+            self.n_timesteps = (forecast_end_date - self.start_time.date()).days
+
+            # Clip the original precipitation data to the start of the forecast
+            # Therefore we take the start of the forecast and subtract one second
+            # to ensure that the original precipitation data does not overlap with the forecast
+            original_pr_hourly_clipped_to_start_of_forecast: xr.DataArray = (
+                original_pr_hourly.sel(
+                    time=slice(
+                        None, (pr_hourly_forecast.time[0] - pd.Timedelta(seconds=1))
+                    )
+                )
             )
+
+            # Concatenate the original precipitation data with the forecast data
+            pr_hourly_observed_and_forecasted_combined: list[xr.DataArray] = [
+                original_pr_hourly_clipped_to_start_of_forecast,
+                pr_hourly_forecast,
+            ]
+
+            # Set the pr_hourly forcing data to the combined data
+            self.model.forcing["pr_hourly"] = pr_hourly_observed_and_forecasted_combined
+
             print(f"Running forecast member {member.item()}...")
-            for _ in range(n_timesteps):
-                self.step()
+            self.step_to_end()
 
             if return_mean_discharge:
                 mean_discharge[member.item()] = (
@@ -122,13 +163,17 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 ).item()
 
             # restore the initial state of the multiverse
-            self.restore(store_location=store_location, timestep=store_timestep)
+            self.restore(
+                store_location=store_location,
+                timestep=store_timestep,
+                n_timesteps=store_n_timesteps,
+            )
 
         print("Forecast finished, restoring all conditions...")
 
         # restore the precipitation dataarray, step out of the multiverse
-        self.sfincs.precipitation_dataarray = precipitation_dataarray
-        self.multiverse_name = None
+        self.forcing["pr_hourly"] = original_pr_hourly
+        self.multiverse_name: None = None
 
         if return_mean_discharge:
             return mean_discharge
@@ -136,8 +181,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             return None
 
     def step(self) -> None:
-        """
-        Forward the model by the given the number of steps.
+        """Forward the model by the given the number of steps.
 
         Args:
             step_size: Number of steps the model should take. Can be integer or string `day`, `week`, `month`, `year`, `decade` or `century`.
@@ -148,27 +192,46 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.config["general"]["forecasts"]["use"]
             and self.multiverse_name
             is None  # only start multiverse if not already in one
-            and self.current_time.date() in self.config["general"]["forecasts"]["days"]
+            and self.current_time.date()
         ):
-            self.multiverse()
+            for dt in self.config["general"]["forecasts"]["times"]:
+                if dt.date() == self.current_time.date():
+                    self.multiverse(
+                        forecast_dt=dt,
+                        return_mean_discharge=True,
+                    )
+
+            # If the multiverse function is called and we want to simulate a warning response afterwards,
+            if self.config["agent_settings"]["households"]["warning_response"]:
+                self.agents.households.warning_strategy_1()
+                # self.agents.households.infrastructure_warning_strategy()
 
         t0 = time()
-        HazardDriver.step(self, 1)
         self.agents.step()
         if self.simulate_hydrology:
             self.hydrology.step()
+
+        HazardDriver.step(self)
 
         self.report(self, locals())
 
         t1 = time()
         print(
-            f"{self.current_time} ({round(t1 - t0, 4)}s)",
+            f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}finished {self.current_time} ({round(t1 - t0, 4)}s)",
             flush=True,
         )
 
         self.current_timestep += 1
 
-    def create_datetime(self, date):
+    def create_datetime(self, date: datetime.date) -> datetime.datetime:
+        """Create a datetime object from a date with time set to midnight.
+
+        Args:
+            date:  Date object to convert to datetime.
+
+        Returns:
+            Datetime object with time set to midnight.
+        """
         return datetime.datetime.combine(date, datetime.time(0))
 
     def _initialize(
@@ -195,8 +258,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )
         self.timestep_length = timestep_length
 
-        if self.simulate_hydrology:
-            self.hydrology = Hydrology(self)
+        self.hydrology = Hydrology(self)
 
         HazardDriver.__init__(self)
         ABM_Model.__init__(
@@ -219,20 +281,31 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if create_reporter:
             self.reporter = Reporter(self, clean=clean_report_folder)
 
-    def run(self, initialize_only=False) -> None:
+    def step_to_end(self) -> None:
+        """Run the model to the end of the simulation period."""
+        for _ in range(self.n_timesteps - self.current_timestep):
+            self.step()
+
+    def run(self, initialize_only: bool = False) -> None:
         """Run the model for the entire period, and export water table in case of spinup scenario."""
         if not self.store.path.exists():
             raise FileNotFoundError(
                 f"The initial conditions folder ({self.store.path.resolve()}) does not exist. Spinup is required before running the model. Please run the spinup first."
             )
 
-        current_time = self.create_datetime(self.config["general"]["start_time"])
-        end_time = self.create_datetime(self.config["general"]["end_time"])
+        current_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["start_time"]
+        )
+        end_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["end_time"]
+        )
 
-        timestep_length = datetime.timedelta(days=1)
-        n_timesteps = (end_time + timestep_length - current_time) / timestep_length
+        timestep_length: datetime.timedelta = datetime.timedelta(days=1)
+        n_timesteps: float | int = (
+            end_time + timestep_length - current_time
+        ) / timestep_length
         assert n_timesteps.is_integer()
-        n_timesteps = int(n_timesteps)
+        n_timesteps: int = int(n_timesteps)
         assert n_timesteps > 0, "End time is before or identical to start time"
 
         self._initialize(
@@ -247,15 +320,22 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if initialize_only:
             return
 
-        for _ in range(self.n_timesteps):
-            self.step()
+        self.step_to_end()
 
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
     def run_yearly(self) -> None:
-        current_time = self.create_datetime(self.config["general"]["start_time"])
-        end_time = self.create_datetime(self.config["general"]["end_time"])
+        current_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["start_time"]
+        )
+        end_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["end_time"]
+        )
+
+        assert self.config["hazards"]["floods"]["simulate"] is False, (
+            "Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config."
+        )
 
         assert current_time.month == 1 and current_time.day == 1, (
             "In yearly mode start time should be the first day of the year"
@@ -276,13 +356,12 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             load_data_from_store=True,
         )
 
-        for _ in range(self.n_timesteps):
-            self.step()
+        self.step_to_end()
 
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
-    def spinup(self, initialize_only=False) -> None:
+    def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period."""
         # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
         current_time = self.create_datetime(self.config["general"]["spinup_time"])
@@ -326,8 +405,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if initialize_only:
             return
 
-        for _ in range(self.n_timesteps):
-            self.step()
+        self.step_to_end()
 
         print("Spinup finished, saving conditions at end of spinup...")
         self.store.save()
@@ -336,7 +414,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     def estimate_return_periods(self) -> None:
         """Estimate the risk of the model."""
-        current_time = self.create_datetime(self.config["general"]["start_time"])
+        current_time: datetime.datetime = self.create_datetime(
+            self.config["general"]["start_time"]
+        )
         self.config["general"]["name"] = "estimate_return_periods"
 
         self._initialize(
@@ -344,7 +424,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             current_time=current_time,
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
-            load_data_from_store=False,
+            load_data_from_store=True,
             simulate_hydrology=False,
             clean_report_folder=False,
         )
@@ -427,6 +507,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         return Path(self.config["general"]["input_folder"])
 
     @property
+    def bin_folder(self) -> Path:
+        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
+
+    @property
     def crs(self):
         return 4326
 
@@ -457,7 +541,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             and hasattr(self, "simulate_hydrology")
             and self.simulate_hydrology
         ):
-            Hydrology.finalize(self)
+            Hydrology.finalize(self.hydrology)
 
             from geb.workflows.io import all_async_readers
 

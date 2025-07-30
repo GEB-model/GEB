@@ -1,6 +1,7 @@
 import numpy as np
 import xarray as xr
 
+from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
 from ..workflows.general import (
@@ -12,6 +13,7 @@ class GroundWater:
     def __init__(self):
         pass
 
+    @build_method(depends_on=["setup_elevation"])
     def setup_groundwater(
         self,
         minimum_thickness_confined_layer=50,
@@ -19,9 +21,9 @@ class GroundWater:
         intial_heads_source="GLOBGM",
         force_one_layer=True,
     ):
-        """
-        Sets up the MODFLOW grid for GEB. This code is adopted from the GLOBGM
-        model (https://github.com/UU-Hydro/GLOBGM). Also see ThirdPartyNotices.txt
+        """Sets up the MODFLOW grid for GEB.
+
+        This code is adopted from the GLOBGM model (https://github.com/UU-Hydro/GLOBGM). Also see ThirdPartyNotices.txt.
 
         Parameters
         ----------

@@ -30,6 +30,8 @@ from pyflwdir import from_array
 from rasterio.env import defenv
 from shapely.geometry import Point
 
+from geb.build.methods import build_method
+
 from ..workflows.io import open_zarr, to_zarr
 from .modules import (
     Agents,
@@ -60,8 +62,6 @@ XY_CHUNKSIZE = 3000  # chunksize for xy coordinates
 
 os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 
-logger = logging.getLogger(__name__)
-
 
 def convert_timestamp_to_string(timestamp):
     return timestamp.isoformat()
@@ -69,9 +69,7 @@ def convert_timestamp_to_string(timestamp):
 
 @contextmanager
 def suppress_logging_warning(logger):
-    """
-    A context manager to suppress logging warning messages temporarily.
-    """
+    """A context manager to suppress logging warning messages temporarily."""
     current_level = logger.getEffectiveLevel()
     logger.setLevel(logging.ERROR)  # Set level to ERROR to suppress WARNING messages
     try:
@@ -89,28 +87,25 @@ class PathEncoder(json.JSONEncoder):
 
 
 def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
-    """
-    Convert a boolean mask to an undirected NetworkX graph.
+    """Convert a boolean mask to an undirected NetworkX graph.
+
     Additional attributes can be passed as keyword arguments, which
     will be added as attributes to the nodes of the graph.
 
-    Parameters:
-    -----------
-    mask : xarray.DataArray or numpy.ndarray
-        Boolean mask where True values are nodes in the graph
-    connectivity : int
-        4 for von Neumann neighborhood (up, down, left, right)
-        8 for Moore neighborhood (includes diagonals)
-    kwargs : dict
-        Additional attributes to be added to the nodes of the graph.
-        Must be 2D arrays with the same shape as the mask.
+    Args:
+        mask (xarray.DataArray or numpy.ndarray):
+            Boolean mask where True values are nodes in the graph
+        connectivity (int):
+            4 for von Neumann neighborhood (up, down, left, right)
+            8 for Moore neighborhood (includes diagonals)
+        **kwargs:
+            Additional attributes to be added to the nodes of the graph.
+            Must be 2D arrays with the same shape as the mask.
 
     Returns:
-    --------
-    G : networkx.Graph
-        Undirected graph where nodes are (y,x) coordinates of True cells
+        networkx.Graph:
+            Undirected graph where nodes are (y,x) coordinates of True cells
     """
-
     # check dtypes
     assert isinstance(mask, (np.ndarray))
     for item in kwargs.values():
@@ -475,18 +470,12 @@ def create_riverine_mask(
 ) -> xr.DataArray:
     """Create a riverine mask from the ldd and the river network.
 
-    Parameters
-    ----------
-    ldd : xarray.DataArray
-        The local drainage direction (ldd) data array.
-    ldd_network : pyflwdir.FlwdirRaster
-        The flow direction raster created from the ldd data.
-    geom : geopandas.GeoDataFrame
-        The geometry of the riverine basin, which is used to clip the mask.
+    Args:
+        ldd : The local drainage direction (ldd) data array.
+        ldd_network : The flow direction raster created from the ldd data.
+        geom : The geometry of the riverine basin, which is used to clip the mask.
 
-    Returns
-    -------
-    xarray.DataArray
+    Returns:
         A boolean mask where True indicates riverine cells and False indicates non-riverine cells.
 
     """
@@ -519,16 +508,12 @@ def create_riverine_mask(
     return riverine_mask
 
 
-class DelayedReader:
+class DelayedReader(dict):
     def __init__(self, reader: Any) -> None:
         self.reader: Any = reader
-        self.items: dict[str, Any] = {}
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.items[key] = value
 
     def __getitem__(self, key: str) -> Any:
-        fp: str | Path = self.items[key]
+        fp = super().__getitem__(key)
         return self.reader(fp)
 
 
@@ -537,9 +522,9 @@ class GEBModel(
 ):
     def __init__(
         self,
+        logger: logging.Logger,
         root: str | None = None,
         data_catalogs: List[str] | None = None,
-        logger=logger,
         epsg=4326,
         data_provider: str = "default",
     ):
@@ -578,6 +563,7 @@ class GEBModel(
 
         self.files: defaultdict = defaultdict(dict)
 
+    @build_method
     def setup_region(
         self,
         region: dict,
@@ -586,23 +572,25 @@ class GEBModel(
         include_coastal_area: bool = True,
     ) -> None:
         """Creates a 2D regular grid or reads an existing grid.
+
         An 2D regular grid will be created from a geometry (geom_fn) or bbox. If an existing
         grid is given, then no new grid will be generated.
 
         Adds/Updates model layers:
         * **grid** grid mask: add grid mask to grid object
 
-        Parameters
-        ----------
-        region : dict
-            Dictionary describing region of interest, e.g.:
-            * {'basin': [x, y]}
+        Args:
+            region: Dictionary describing region of interest, e.g.:
+                * {'basin': [x, y]}
 
-            Region must be of kind [basin, subbasin].
-        subgrid_factor : int
-            GEB implements a subgrid. This parameter determines the factor by which the subgrid is smaller than the original grid.
+                Region must be of kind [basin, subbasin].
+            subgrid_factor: GEB implements a subgrid. This parameter determines the factor by which the subgrid is smaller than the original grid.
+            resolution_arcsec: Resolution of the grid in arcseconds. Must be a multiple of 3 to align with MERIT.
+            include_coastal_area: Because the subbasins are delinated using a minimum upstream area small basins near the coast are not included.
+                If this parameter is set to True, the coastal area will be included in the riverine mask by automatically extending the riverine mask to the coastal area,
+                by finding all coastal basins between the outlets within the study area and half the distance to the nearest outlet outside the study area.
+                All cells upstream of these coastal basins will be included in the riverine mask.
         """
-
         assert resolution_arcsec % 3 == 0, (
             "resolution_arcsec must be a multiple of 3 to align with MERIT"
         )
@@ -980,6 +968,7 @@ class GEBModel(
 
         submask = self.set_subgrid(submask, name="mask")
 
+    @build_method
     def set_time_range(self, start_date, end_date):
         assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
@@ -994,6 +983,29 @@ class GEBModel(
     @property
     def end_date(self):
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
+
+    @build_method
+    def set_ssp(self, ssp: str):
+        assert ssp in ["ssp1", "ssp3", "ssp5"], (
+            f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
+        )
+        self.set_dict({"ssp": ssp}, name="ssp")
+
+    @property
+    def ssp(self):
+        return self.dict["ssp"]["ssp"] if "ssp" in self.dict else "ssp3"
+
+    @property
+    def ISIMIP_ssp(self):
+        """Returns the ISIMIP SSP name."""
+        if self.ssp == "ssp1":
+            return "ssp126"
+        elif self.ssp == "ssp3":
+            return "ssp370"
+        elif self.ssp == "ssp5":
+            return "ssp585"
+        else:
+            raise ValueError(f"SSP {self.ssp} not supported.")
 
     def snap_to_grid(
         self,
@@ -1052,6 +1064,7 @@ class GEBModel(
             byteshuffle=True,
         )
 
+    @build_method
     def setup_damage_parameters(self, parameters):
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
@@ -1074,6 +1087,7 @@ class GEBModel(
                         name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
 
+    @build_method
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors
     ):
@@ -1083,33 +1097,35 @@ class GEBModel(
         self.set_table(risk_scaling_factors, name="precipitation_scaling_factors")
 
     def set_table(self, table, name, write=True):
-        self.table[name] = table
+        fp: Path = Path("table") / (name + ".parquet")
+        fp_with_root: Path = Path(self.root, fp)
         if write:
-            fn = Path("table") / (name + ".parquet")
-            self.logger.info(f"Writing file {fn}")
+            self.logger.info(f"Writing file {fp}")
 
-            self.files["table"][name] = fn
+            self.files["table"][name] = fp
 
-            fp = Path(self.root, fn)
-            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp_with_root.parent.mkdir(parents=True, exist_ok=True)
             # brotli is a bit slower but gives better compression,
             # gzip is faster to read. Higher compression levels
             # generally don't make it slower to read, therefore
             # we use the highest compression level for gzip
             table.to_parquet(
-                fp, engine="pyarrow", compression="gzip", compression_level=9
+                fp_with_root, engine="pyarrow", compression="gzip", compression_level=9
             )
 
+        self.table[name] = fp_with_root
+
     def set_array(self, data, name, write=True):
-        self.array[name] = data
+        fp: Path = Path("array") / (name + ".zarr")
+        fp_with_root: Path = Path(self.root, fp)
 
         if write:
-            fn = Path("array") / (name + ".zarr")
-            self.logger.info(f"Writing file {fn}")
-            self.files["array"][name] = fn
-            fp = Path(self.root, fn)
-            fp.parent.mkdir(parents=True, exist_ok=True)
-            zarr.save_array(fp, data, overwrite=True)
+            self.logger.info(f"Writing file {fp}")
+            self.files["array"][name] = fp
+            fp_with_root.parent.mkdir(parents=True, exist_ok=True)
+            zarr.save_array(fp_with_root, data, overwrite=True)
+
+        self.array[name] = fp_with_root
 
     def set_dict(self, data, name, write=True):
         fp: Path = Path("dict") / (name + ".json")
@@ -1131,7 +1147,7 @@ class GEBModel(
         if write:
             self.logger.info(f"Writing file {fp}")
             self.files["geoms"][name] = fp
-            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp_with_root.parent.mkdir(parents=True, exist_ok=True)
             # brotli is a bit slower but gives better compression,
             # gzip is faster to read. Higher compression levels
             # generally don't make it slower to read, therefore
@@ -1142,8 +1158,11 @@ class GEBModel(
 
         self.geoms[name] = fp_with_root
 
-    def write_file_library(self):
-        file_library: defaultdict = self.read_file_library()
+    def write_file_library(self, read_first: bool = True) -> None:
+        if read_first:
+            file_library: defaultdict = self.read_file_library()
+        else:
+            file_library: defaultdict = defaultdict(dict)
 
         # merge file library from disk with new files, prioritizing new files
         for type_name, type_files in self.files.items():
@@ -1253,27 +1272,30 @@ class GEBModel(
 
     def _set_grid(
         self,
-        grid_name,
-        grid,
+        grid_name: str,
+        grid: xr.Dataset,
         data: xr.DataArray,
         name: str,
-        write,
-        x_chunksize=XY_CHUNKSIZE,
-        y_chunksize=XY_CHUNKSIZE,
+        write: bool,
+        x_chunksize: int = XY_CHUNKSIZE,
+        y_chunksize: int = XY_CHUNKSIZE,
     ):
-        """Add data to grid.
+        """Add data to grid dataset.
 
         All layers of grid must have identical spatial coordinates.
 
-        Parameters
-        ----------
-        data: xarray.DataArray or xarray.Dataset
-            new map layer to add to grid
-        name: str
-            Name of new map layer, this is used to overwrite the name of a DataArray
-            and ignored if data is a Dataset
-        """
+        Args:
+            grid_name: name of the grid, e.g. "grid", "subgrid", "region_subgrid"
+            grid: the gridded dataset itself
+            data: the data to add to the grid
+            write: if True, write the data to disk
+            name: the name of the layer that will be added to the grid.
+            x_chunksize: the chunk size in the x dimension for writing to zarr
+            y_chunksize: the chunk size in the y dimension for writing to zarr
 
+        Returns:
+            grid: the updated grid with the new layer addedå
+        """
         assert isinstance(data, xr.DataArray)
 
         if name in grid:
@@ -1341,13 +1363,6 @@ class GEBModel(
         )
         return self.region_subgrid[name]
 
-    def set_alternate_root(self, root, mode):
-        relative_path = Path(os.path.relpath(Path(self.root), root.resolve()))
-        for data in self.files.values():
-            for name, fn in data.items():
-                data[name] = relative_path / fn
-        super().set_root(root, mode)
-
     @property
     def subgrid_factor(self) -> int:
         """The factor by which the subgrid is smaller than the original grid."""
@@ -1403,13 +1418,6 @@ class GEBModel(
             **kwargs,
         )
 
-    def check_methods(self, opt):
-        """Check all opt keys and raise sensible error messages if unknown."""
-        for method in opt.keys():
-            if not callable(getattr(self, method, None)):
-                raise ValueError(f'Build has no method "{method}"')
-        return opt
-
     def run_method(self, method, *args, **kwargs):
         """Log method parameters before running a method."""
         func = getattr(self, method)
@@ -1427,39 +1435,45 @@ class GEBModel(
                 if len(args) > i:
                     v = args[i]
                 params[k] = v
-        # log options
-        for k, v in params.items():
-            if v is not inspect._empty:
-                self.logger.info(f"{method}.{k}: {v}")
         return func(*args, **kwargs)
 
-    def run_methods(self, methods):
+    def run_methods(self, methods, validate_order: bool = True) -> None:
+        """Run methods in the order specified in the methods dictionary.
+
+        Args:
+            methods: A dictionary with method names as keys and their parameters as values.
+            validate_order: If True, validate the order of methods using the build_method decorator.
+        """
         # then loop over other methods
+        # TODO: Allow validate order for custom models
+        build_method.validate_methods(methods, validate_order=validate_order)
         for method in methods:
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
-            self.write_file_library()
+            if method == "setup_region":
+                self.write_file_library(read_first=False)
+            else:
+                self.write_file_library(read_first=True)
 
         self.logger.info("Finished!")
 
     def build(self, region: dict, methods: dict):
+        """Build the model with the specified region and methods."""
         methods: dict[str:Any] = methods or {}
-        methods = self.check_methods(methods)
         methods["setup_region"].update(region=region)
 
-        self.run_methods(methods)
+        self.run_methods(methods, validate_order=True and type(self) is GEBModel)
 
     def update(
         self,
         methods: dict,
     ):
         methods = methods or {}
-        methods = self.check_methods(methods)
 
         if "setup_region" in methods:
             raise ValueError('"setup_region" can only be called when building a model.')
 
-        self.run_methods(methods)
+        self.run_methods(methods, validate_order=False and type(self) is GEBModel)
 
     def get_linear_indices(self, da):
         """Get linear indices for each cell in a 2D DataArray."""

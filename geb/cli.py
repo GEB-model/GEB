@@ -1,6 +1,7 @@
 import cProfile
 import functools
 import importlib
+import json
 import logging
 import os
 import platform
@@ -12,6 +13,7 @@ import zipfile
 from operator import attrgetter
 from pathlib import Path
 from pstats import Stats
+from typing import Any
 
 import click
 import yaml
@@ -20,6 +22,8 @@ from honeybees.visualization.ModularVisualization import ModularServer
 from honeybees.visualization.modules.ChartVisualization import ChartModule
 
 from geb import __version__
+from geb.build import GEBModel as GEBModelBuild
+from geb.build.methods import build_method
 from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
@@ -49,7 +53,7 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
 
 def parse_config(
     config_path: dict | Path | str, current_directory: Path | None = None
-) -> dict:
+) -> dict[str, Any]:
     """Parse config."""
     if current_directory is None:
         current_directory = Path.cwd()
@@ -85,7 +89,10 @@ def parse_config(
 
 
 def create_logger(fp):
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("GEB")
+    # remove any previous handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
     # set log level to debug
     logger.setLevel(logging.DEBUG)
     # create console handler and set level to debug
@@ -116,11 +123,13 @@ def cli(ctx):  # , quiet, verbose):
 
 
 def click_config(func):
+    default: str = "model.yml"
+
     @click.option(
         "--config",
         "-c",
-        default="model.yml",
-        help="Path of the model configuration file.",
+        default=default,
+        help=f"Path of the model configuration file. Defaults to '{default}'.",
     )
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -210,9 +219,9 @@ def run_model_with_method(
             os.execv(sys.executable, ["-O"] + sys.argv)
 
     with WorkingDirectory(working_directory):
-        config = parse_config(config)
+        config: dict[str, Any] = parse_config(config)
 
-        files = parse_config(
+        files: dict[str, Any] = parse_config(
             "input/files.json"
             if "files" not in config["general"]
             else config["general"]["files"]
@@ -323,14 +332,22 @@ def multirun(config, working_directory):
         geb_multi_run(config, working_directory)
 
 
-def click_build_options(build_config="build.yml"):
+def click_build_options(build_config="build.yml", build_config_help_extra=None):
     def decorator(func):
+        build_config_help = (
+            f"Path of the model build configuration file. Defaults to '{build_config}'."
+        )
+        if build_config_help_extra:
+            build_config_help += f"""
+
+            {build_config_help_extra}"""
+
         @click_config
         @click.option(
             "--build-config",
             "-b",
             default=build_config,
-            help="Path of the model build configuration file.",
+            help=build_config_help,
         )
         @click.option(
             "--custom-model",
@@ -360,7 +377,7 @@ def click_build_options(build_config="build.yml"):
                 "GEB_DATA_ROOT",
                 Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / ".." / "data_catalog",
             ),
-            help="Root folder where the data is located.",
+            help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -371,23 +388,24 @@ def click_build_options(build_config="build.yml"):
     return decorator
 
 
-def get_model_builder_class(custom_model):
-    from geb import build
-
+def get_model_builder_class(custom_model) -> type:
     if custom_model is None:
-        return build.GEBModel
+        return GEBModelBuild
     else:
+        from geb import build as geb_build
+
         importlib.import_module(
             "." + custom_model.split(".")[0], package="geb.build.custom_models"
         )
-        return attrgetter(custom_model)(build.custom_models)
+        return attrgetter(custom_model)(geb_build.custom_models)
 
 
 def customize_data_catalog(data_catalogs, data_root=None):
     """This functions adds the GEB_DATA_ROOT to the data catalog if it is set as an environment variable.
-    This enables reading the data catalog from a different location than the location of the yml-file
-    without the need to specify root in the meta of the data catalog."""
 
+    This enables reading the data catalog from a different location than the location of the yml-file
+    without the need to specify root in the meta of the data catalog.
+    """
     if data_root:
         customized_data_catalogs = []
         for data_catalog in data_catalogs:
@@ -417,12 +435,15 @@ def get_builder(config, data_catalog, custom_model, data_provider, data_root):
         "data_provider": data_provider,
     }
 
-    return get_model_builder_class(custom_model)(**arguments)
+    builder_class = get_model_builder_class(custom_model)(**arguments)
+    build_method.validate_tree()
+    return builder_class
 
 
 def init_fn(
     config: str | Path,
     build_config: str | Path,
+    update_config: str | Path,
     working_directory: str | Path,
     from_example: str,
     basin_id: str | None = None,
@@ -430,27 +451,21 @@ def init_fn(
 ) -> None:
     """Create a new model.
 
-    Parameters
-    ----------
-    config : str | Path
-        Path to the model configuration file to create.
-    build_config : str | Path
-        Path to the model build configuration file to create.
-    working_directory : str | Path
-        Working directory for the model.
-    from_example : str
-        Name of the example to use as a base for the model.
-    basin_id : str | None, optional
-        Basin ID(s) to use for the model. Can be a comma-separated list of integers.
-        If not set, the basin ID is taken from the config file.
-    overwrite : bool, optional
-        If True, overwrite existing config and build config files. Defaults to False.
+    Args:
+        config: Path to the model configuration file to create.
+        build_config: Path to the model build configuration file to create.
+        update_config: Path to the model update configuration file to create.
+        working_directory: Working directory for the model.
+        from_example: Name of the example to use as a base for the model.
+        basin_id:Basin ID(s) to use for the model. Can be a comma-separated list of integers.
+            If not set, the basin ID is taken from the config file.
+        overwrite: If True, overwrite existing config and build config files. Defaults to False.
 
     """
-
-    config = Path(config)
-    build_config = Path(build_config)
-    working_directory = Path(working_directory)
+    config: Path = Path(config)
+    build_config: Path = Path(build_config)
+    update_config: Path = Path(update_config)
+    working_directory: Path = Path(working_directory)
 
     if not working_directory.exists():
         working_directory.mkdir(parents=True, exist_ok=True)
@@ -458,12 +473,17 @@ def init_fn(
     with WorkingDirectory(working_directory):
         if config.exists() and not overwrite:
             raise FileExistsError(
-                f"Config file {config} already exists. Please remove it or use a different name."
+                f"Config file {config} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
         if build_config.exists() and not overwrite:
             raise FileExistsError(
-                f"Build config file {build_config} already exists. Please remove it or use a different name."
+                f"Build config file {build_config} already exists. Please remove it or use a different name, or use --overwrite."
+            )
+
+        if update_config.exists() and not overwrite:
+            raise FileExistsError(
+                f"Update config file {update_config} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
         example_folder: Path = (
@@ -482,16 +502,20 @@ def init_fn(
         if basin_id is not None:
             # Allow passing a comma-separated list of integers
             if "," in basin_id:
-                basin_ids = [int(x) for x in basin_id.split(",") if x.strip()]
+                basin_ids: list[int] = [
+                    int(x) for x in basin_id.split(",") if x.strip()
+                ]
             else:
-                basin_ids = int(basin_id)
+                basin_ids: int = int(basin_id)
 
             config_dict["general"]["region"]["subbasin"] = basin_ids
 
         with open(config, "w") as f:
-            yaml.dump(config_dict, f, default_flow_style=False)
+            # do not sort keys, to keep the order of the config file
+            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
         shutil.copy(example_folder / "build.yml", build_config)
+        shutil.copy(example_folder / "update.yml", update_config)
 
 
 @cli.command()
@@ -500,7 +524,13 @@ def init_fn(
     "--build-config",
     "-b",
     default="build.yml",
-    help="Path of the model build configuration file.",
+    help="Path of the model build configuration file. Defaults to 'build.yml'.",
+)
+@click.option(
+    "--update-config",
+    "-u",
+    default="update.yml",
+    help="Path of the model update configuration file.",
 )
 @click.option(
     "--from-example",
@@ -536,7 +566,6 @@ def build_fn(
     data_root,
 ):
     """Build model."""
-
     with WorkingDirectory(working_directory):
         model = get_builder(
             config,
@@ -557,20 +586,45 @@ def build(*args, **kwargs):
     build_fn(*args, **kwargs)
 
 
-@cli.command()
-@click_build_options()
-@click.option("--model", "-m", default="../base", help="Folder for base model.")
-def alter(
+def alter_fn(
     data_catalog,
-    config,
-    build_config,
+    config: dict,
+    build_config: dict,
     custom_model,
-    working_directory,
-    model,
+    working_directory: Path | str,
+    from_model: str,
     data_provider,
     data_root,
-):
+) -> None:
+    from_model: Path = Path(from_model)
+
     with WorkingDirectory(working_directory):
+        original_config: Path = from_model / config
+
+        config_dict: dict[str, str] = {"inherits": str(original_config)}
+        with open(config, "w") as f:
+            # do not sort keys, to keep the order of the config file
+            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+
+        config_from_original_model = parse_config(from_model / config)
+        input_folder: Path = Path(config_from_original_model["general"]["input_folder"])
+
+        original_input_path: Path = from_model / input_folder
+
+        with open(original_input_path / "files.json", "r") as f:
+            original_files = json.load(f)
+
+            for file_class, files in original_files.items():
+                for file_name, file_path in files.items():
+                    if not file_path.startswith("/"):
+                        original_files[file_class][file_name] = str(
+                            Path("..") / original_input_path / file_path
+                        )
+
+        input_folder.mkdir(parents=True, exist_ok=True)
+        with open(input_folder / "files.json", "w") as f:
+            json.dump(original_files, f, indent=4)
+
         model = get_builder(
             config,
             data_catalog,
@@ -579,13 +633,24 @@ def alter(
             data_root,
         )
         model.read()
-        model.set_alternate_root(
-            Path(".") / Path(config["general"]["input_folder"]), mode="w+"
-        )
+
         model.update(
             methods=parse_config(build_config),
-            # model_out=Path(".") / Path(config["general"]["input_folder"]),
         )
+
+
+@cli.command()
+@click_build_options()
+@click.option("--from-model", default="../base", help="Folder for the existing model.")
+def alter(*args, **kwargs):
+    """Create alternative version from base model with only changed files.
+
+    This command is useful to create a new model based on an existing one, but with
+    only a few changes. It will copy the base model and overwrite the files that are
+    specified in the config and build config files. The rest of the files will be
+    linked to the original model to reduce disk space.
+    """
+    alter_fn(*args, **kwargs)
 
 
 def update_fn(
@@ -608,11 +673,76 @@ def update_fn(
         )
 
         model.read()
-        model.update(methods=parse_config(build_config))
+
+        if isinstance(build_config, str):
+            build_config_list: list[str] = build_config.split("::")
+            build_config_file: str = build_config_list[0]
+
+            try:
+                methods: dict[Any] = parse_config(build_config_file)
+            except FileNotFoundError:
+                if ":" in build_config_file and "::" not in build_config_file:
+                    raise FileNotFoundError(
+                        f"Build config file '{build_config_file}' not found. Did you mean '{build_config_file.replace(':', '::')}'?"
+                    )
+                raise
+
+            if len(build_config_list) > 1:
+                assert len(build_config_list) == 2
+                build_config_function: str = build_config_list[1]
+
+                # Check if the method is specified with a trailing '+' or '#'.
+                # If + we set a flag to keep all subsequent methods
+                # If # we set a flag to keep all dependent methods
+                if build_config_function.endswith("+"):
+                    build_config_function: str = build_config_function[:-1]
+                    keys_to_remove: list[str] = []
+
+                    for key in methods.keys():
+                        if key == build_config_function:
+                            break
+                        else:
+                            keys_to_remove.append(key)
+                    else:
+                        raise KeyError(
+                            f"Method '{build_config_function}' not found in build config file '{build_config_file}'. "
+                            "Available methods: "
+                            f"{', '.join(methods.keys())}"
+                        )
+
+                    # remove all functions from the methods dict except the one we want to run
+                    for key in keys_to_remove:
+                        del methods[key]
+
+                elif build_config_function.endswith("#"):
+                    build_config_function: str = build_config_function[:-1]
+                    dependents: list[str] = build_method.get_dependents(
+                        build_config_function
+                    )
+                    dependents.append(build_config_function)
+                    methods = {
+                        dependent: methods[dependent]
+                        for dependent in dependents
+                        if dependent in methods
+                    }
+
+                else:
+                    methods = {build_config_function: methods[build_config_function]}
+
+        elif isinstance(build_config, dict):
+            methods = build_config
+
+        else:
+            raise ValueError
+
+        model.update(methods=methods)
 
 
 @cli.command()
-@click_build_options(build_config="update.yml")
+@click_build_options(
+    build_config="update.yml",
+    build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
+)
 def update(*args, **kwargs):
     update_fn(*args, **kwargs)
 
@@ -622,37 +752,61 @@ def update(*args, **kwargs):
 @click.option(
     "--methods", default=None, help="Comma-seperated list of methods to evaluate."
 )
-def evaluate(methods: list | None, *args, **kwargs) -> None:
+@click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
+@click.option("--run-name", default="default", help="Name of the run to evaluate.")
+@click.option(
+    "--include-spinup",
+    is_flag=True,
+    default=False,
+    help="Include spinup in evaluation.",
+)
+@click.option(
+    "--correct-q-obs",
+    is_flag=True,
+    default=False,
+    help="correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the difference in upstream area between the Q_obs station and the simulated discharge",
+)
+def evaluate(
+    working_directory,
+    config,
+    methods: list | None,
+    spinup_name,
+    run_name,
+    include_spinup,
+    correct_q_obs,
+    port,
+    gui,
+    no_browser,
+    profiling,
+    optimize,
+    timing,
+) -> None:
     # If no methods are provided, pass None to run_model_with_method
     methods: list | None = None if not methods else methods.split(",")
+    spinup_name: str
+    run_name: str
     run_model_with_method(
-        method="evaluate", method_args={"methods": methods}, *args, **kwargs
+        method="evaluate",
+        method_args={
+            "methods": methods,
+            "spinup_name": spinup_name,
+            "run_name": run_name,
+            "include_spinup": include_spinup,
+            "correct_Q_obs": correct_q_obs,
+        },
+        working_directory=working_directory,
+        config=config,
+        port=port,
+        gui=gui,
+        no_browser=no_browser,
+        profiling=profiling,
+        optimize=optimize,
+        timing=timing,
     )
 
 
-@working_directory_option
-@click.option(
-    "--name",
-    "-n",
-    default="model",
-    help="Name used for the zip file.",
-)
-@click.option(
-    "--include-preprocessing",
-    is_flag=True,
-    default=False,
-    help="Include preprocessing files in the zip file.",
-)
-@click.option(
-    "--include-output",
-    is_flag=True,
-    default=False,
-    help="Include output files in the zip file.",
-)
-@cli.command()
-def share(working_directory, name, include_preprocessing, include_output):
+def share_fn(working_directory, name, include_preprocessing, include_output):
     """Share model."""
-
     with WorkingDirectory(working_directory):
         # create a zip file called model.zip with the folders input, and model files
         # in the working directory
@@ -720,6 +874,31 @@ def share(working_directory, name, include_preprocessing, include_output):
                 )  # Print progress
             print(f"Exporting file {progress}/{total_files} to {zip_filename}")
             print("Done!")
+
+
+@cli.command()
+@working_directory_option
+@click.option(
+    "--name",
+    "-n",
+    default="model",
+    help="Name used for the zip file.",
+)
+@click.option(
+    "--include-preprocessing",
+    is_flag=True,
+    default=False,
+    help="Include preprocessing files in the zip file.",
+)
+@click.option(
+    "--include-output",
+    is_flag=True,
+    default=False,
+    help="Include output files in the zip file.",
+)
+def share(*args, **kwargs):
+    """Share model as a zip file."""
+    share_fn(*args, **kwargs)
 
 
 if __name__ == "__main__":
