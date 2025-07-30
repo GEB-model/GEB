@@ -10,7 +10,8 @@ from hydromt.exceptions import NoDataException
 from pyflwdir import FlwdirRaster
 from rasterio.features import rasterize
 from scipy.ndimage import value_indices
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point
+import os
 
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
@@ -644,3 +645,56 @@ class Hydrography:
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_geoms(waterbodies, name="waterbodies/waterbody_data")
+
+    @build_method
+    def setup_coastal_hydrographs(self):
+        fp_coast_hg = self.data_catalog.get_source("COAST_HG").path
+        coast_hg = xr.open_dataset(fp_coast_hg)
+        # Select stations within model bounds
+
+        min_lon, min_lat, max_lon, max_lat = self.bounds
+
+        # Apply the condition for bounding box
+        subset = coast_hg.where(
+            (coast_hg.station_x_coordinate >= min_lon)
+            & (coast_hg.station_x_coordinate <= max_lon)
+            & (coast_hg.station_y_coordinate >= min_lat)
+            & (coast_hg.station_y_coordinate <= max_lat),
+            drop=True,
+        )
+
+        # export the hydrograph timeseries for each station
+        timeseries_data = (
+            subset.to_dataframe()
+            .reset_index()[["time", "station_id", "hydrograph_spring_tide_signal"]]
+            .pivot(
+                index="time",
+                columns="station_id",
+                values="hydrograph_spring_tide_signal",
+            )
+        )
+
+        # now also prepare a DataFrame with the station ids and coordinates
+        station_df = pd.DataFrame(
+            {
+                "station_id": subset.station_id.values.astype(str),
+                "longitude": subset.station_x_coordinate.values,
+                "latitude": subset.station_y_coordinate.values,
+            }
+        )
+        gdf = gpd.GeoDataFrame(
+            station_df,
+            geometry=[
+                Point(xy) for xy in zip(station_df.longitude, station_df.latitude)
+            ],
+            crs="EPSG:4326",
+        )
+
+        # export all files
+        target_folder = "input/other/coastal_hydrographs"
+        os.makedirs(target_folder, exist_ok=True)
+        timeseries_data.to_csv(f"{target_folder}/coastal_hydrographs.csv")
+        gdf.to_file(f"{target_folder}/stations.geojson", driver="GeoJSON")
+        self.logger.info(
+            f"Coastal hydrographs exported to {target_folder}/coastal_hydrographs"
+        )
