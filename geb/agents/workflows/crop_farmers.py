@@ -2,6 +2,7 @@ from typing import Union
 
 import numpy as np
 from numba import njit, prange
+import numpy.typing as npt
 
 from geb.hydrology.soil import (
     get_fraction_easily_available_soil_water,
