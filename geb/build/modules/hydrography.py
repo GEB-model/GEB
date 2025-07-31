@@ -647,6 +647,134 @@ class Hydrography:
         self.set_geoms(waterbodies, name="waterbodies/waterbody_data")
 
     @build_method
+    def setup_gtsm_water_levels(self):
+        """Sets up the GTSM hydrographs for the model."""
+        self.logger.info("Setting up GTSM hydrographs")
+        temporal_range = np.arange(2005, 2010, 1, dtype=np.int32)
+        min_lon, min_lat, max_lon, max_lat = self.bounds
+        output = {}
+        for year in temporal_range:
+            for month in np.arange(1, 13):
+                path_water_level = self.data_catalog.get_source("GTSM").path.format(
+                    year, f"{month:02d}"
+                )
+                # Load the GTSM water level data
+                water_levels = xr.open_dataset(path_water_level)
+                # subset based on the model bounds
+                subset = water_levels.where(
+                    (water_levels.station_x_coordinate >= min_lon)
+                    & (water_levels.station_x_coordinate <= max_lon)
+                    & (water_levels.station_y_coordinate >= min_lat)
+                    & (water_levels.station_y_coordinate <= max_lat),
+                    drop=True,
+                )
+                # export the hydrograph timeseries for each station
+                for station in subset.stations.values:
+                    timeseries_data = (
+                        subset.sel(stations=station)
+                        .to_dataframe()
+                        .reset_index()[["time", "waterlevel"]]
+                    )
+                    timeseries_data.set_index("time", inplace=True)
+
+                    if station not in output:
+                        output[station] = pd.DataFrame()
+                    output[station] = pd.concat(
+                        [output[station], timeseries_data], axis=0, ignore_index=False
+                    )
+                print(f"Processed GTSM data for {year}-{month:02d}")
+        # now also prepare a DataFrame with the station ids and coordinates
+        station_df = pd.DataFrame(
+            {
+                "station_id": subset.stations.values.astype(str),
+                "longitude": subset.station_x_coordinate.values,
+                "latitude": subset.station_y_coordinate.values,
+            }
+        )
+        gdf = gpd.GeoDataFrame(
+            station_df,
+            geometry=[
+                Point(xy) for xy in zip(station_df.longitude, station_df.latitude)
+            ],
+            crs="EPSG:4326",
+        )
+        # export all files
+        target_folder = "input/other/gtsm"
+        os.makedirs(target_folder, exist_ok=True)
+        for station, timeseries_data in output.items():
+            timeseries_data.to_pickle(
+                f"{target_folder}/gtsm_water_levels_{station}.pkl"
+            )
+        gdf.to_file(f"{target_folder}/stations.geojson", driver="GeoJSON")
+        self.logger.info(
+            f"GTSM hydrographs exported to {target_folder}/gtsm_water_levels"
+        )
+
+    @build_method
+    def setup_gtsm_surge_levels(self):
+        """Sets up the GTSM surge hydrographs for the model."""
+        self.logger.info("Setting up GTSM surge hydrographs")
+        temporal_range = np.arange(2005, 2010, 1, dtype=np.int32)
+        min_lon, min_lat, max_lon, max_lat = self.bounds
+        output = {}
+        for year in temporal_range:
+            for month in np.arange(1, 13):
+                path_water_level = self.data_catalog.get_source(
+                    "GTSM_surge"
+                ).path.format(year, f"{month:02d}")
+                # Load the GTSM water level data
+                water_levels = xr.open_dataset(path_water_level)
+                # subset based on the model bounds
+                subset = water_levels.where(
+                    (water_levels.station_x_coordinate >= min_lon)
+                    & (water_levels.station_x_coordinate <= max_lon)
+                    & (water_levels.station_y_coordinate >= min_lat)
+                    & (water_levels.station_y_coordinate <= max_lat),
+                    drop=True,
+                )
+                # export the hydrograph timeseries for each station
+                for station in subset.stations.values:
+                    timeseries_data = (
+                        subset.sel(stations=station)
+                        .to_dataframe()
+                        .reset_index()[["time", "surge"]]
+                    )
+                    timeseries_data.set_index("time", inplace=True)
+
+                    if station not in output:
+                        output[station] = pd.DataFrame()
+                    output[station] = pd.concat(
+                        [output[station], timeseries_data], axis=0, ignore_index=False
+                    )
+                print(f"Processed GTSM data for {year}-{month:02d}")
+        # now also prepare a DataFrame with the station ids and coordinates
+        station_df = pd.DataFrame(
+            {
+                "station_id": subset.stations.values.astype(str),
+                "longitude": subset.station_x_coordinate.values,
+                "latitude": subset.station_y_coordinate.values,
+            }
+        )
+        gdf = gpd.GeoDataFrame(
+            station_df,
+            geometry=[
+                Point(xy) for xy in zip(station_df.longitude, station_df.latitude)
+            ],
+            crs="EPSG:4326",
+        )
+        # export all files
+        target_folder = "input/other/gtsm"
+        os.makedirs(target_folder, exist_ok=True)
+        for station, timeseries_data in output.items():
+            timeseries_data.to_pickle(f"{target_folder}/gtsm_surge_{station}.pkl")
+        gdf.to_file(
+            f"{target_folder}/stations_surge.geojson", driver="GeoJSON"
+        )  # this is to make sure the stations are the same as the water levels
+        self.logger.info(
+            f"GTSM surge hydrographs exported to {target_folder}/gtsm_surge"
+        )
+
+    @build_method
     def setup_coastal_hydrographs(self):
         fp_coast_hg = self.data_catalog.get_source("COAST_HG").path
         coast_hg = xr.open_dataset(fp_coast_hg)

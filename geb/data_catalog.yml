@@ -215,9 +215,20 @@ global_irrigation_area_{irrigation_type}:
     irrigation_type: [aei, aai, aeisw, aeigw]
 GTSM:
   data_type: Dataset
-  path: GTSM/reanalysis_waterlevel_10min_*_v1.nc
+  path: GTSM/reanalysis_waterlevel_10min_{}_{}_v1.nc
   meta:
     category: water level
+    paper_doi: doi:10.1038/ncomms11969
+    paper_ref: Muis, S. et al. (2016)
+    source_license: CC BY license
+    source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/sis-water-level-change-timeseries-cmip6?tab=overview
+    source_version: 1.0
+    unit: m+MSL
+GTSM_surge:
+  data_type: Dataset
+  path: GTSM/reanalysis_surge_10min_{}_{}_v2.nc
+  meta:
+    category: surge water level
     paper_doi: doi:10.1038/ncomms11969
     paper_ref: Muis, S. et al. (2016)
     source_license: CC BY license
