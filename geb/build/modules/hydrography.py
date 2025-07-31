@@ -650,7 +650,7 @@ class Hydrography:
     def setup_gtsm_water_levels(self):
         """Sets up the GTSM hydrographs for the model."""
         self.logger.info("Setting up GTSM hydrographs")
-        temporal_range = np.arange(2005, 2010, 1, dtype=np.int32)
+        temporal_range = np.arange(1979, 2019, 1, dtype=np.int32)
         min_lon, min_lat, max_lon, max_lat = self.bounds
         output = {}
         for year in temporal_range:
@@ -714,7 +714,7 @@ class Hydrography:
     def setup_gtsm_surge_levels(self):
         """Sets up the GTSM surge hydrographs for the model."""
         self.logger.info("Setting up GTSM surge hydrographs")
-        temporal_range = np.arange(2005, 2010, 1, dtype=np.int32)
+        temporal_range = np.arange(1979, 2019, 1, dtype=np.int32)
         min_lon, min_lat, max_lon, max_lat = self.bounds
         output = {}
         for year in temporal_range:
