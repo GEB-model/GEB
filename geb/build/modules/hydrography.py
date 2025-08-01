@@ -775,7 +775,9 @@ class Hydrography:
         )
 
     @build_method
-    def setup_coastal_hydrographs(self):
+    def setup_coastal_hydrograph(self):
+        """Sets up the coastal hydrographs for the model using only the 100-year return period from Dullaarts database.
+        Other rps are not available."""
         fp_coast_hg = self.data_catalog.get_source("COAST_HG").path
         coast_hg = xr.open_dataset(fp_coast_hg)
         # Select stations within model bounds
@@ -825,4 +827,21 @@ class Hydrography:
         gdf.to_file(f"{target_folder}/stations.geojson", driver="GeoJSON")
         self.logger.info(
             f"Coastal hydrographs exported to {target_folder}/coastal_hydrographs"
+        )
+
+    @build_method
+    def setup_coast_rp(self):
+        """Sets up the coastal return period data for the model."""
+        self.logger.info("Setting up coastal return period data")
+        gtsm_folder = "input/other/gtsm"
+        stations = gpd.read_file(f"{gtsm_folder}/stations.geojson", driver="GeoJSON")
+        station_ids = stations["station_id"].values.astype(int)
+        fp_coast_rp = self.data_catalog.get_source("COAST_RP").path
+        coast_rp = pd.read_pickle(fp_coast_rp)
+        # Select stations within model bounds
+        coast_rp = coast_rp.loc[station_ids]
+        # export
+        coast_rp.to_pickle(f"{gtsm_folder}/coastal_return_periods.pkl")
+        self.logger.info(
+            f"Coastal return period data exported to {gtsm_folder}/coastal_return_periods.pkl"
         )

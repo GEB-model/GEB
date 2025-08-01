@@ -1,15 +1,11 @@
 import os
 import pandas as pd
-import xarray as xr
-import time
 import numpy as np
 import warnings
-import traceback
 import geopandas as gpd
 
 warnings.filterwarnings("ignore")
 import itertools
-import netCDF4
 import scipy.signal as ss
 from datetime import timedelta, datetime
 import matplotlib.pyplot as plt
@@ -20,14 +16,74 @@ def generate_storm_surge_hydrographs(model, make_plot=True):
     # read geojson file to get station ids
     station_ids = gpd.read_file(gtsm_folder / "stations.geojson")
     os.makedirs("plot/gtsm", exist_ok=True)
+    percentile = 0.99
+    offset = 0
+    rps = pd.read_pickle(f"{gtsm_folder}/coastal_return_periods.pkl")
+    return_periods = [int(rp) for rp in rps.columns.tolist()]
+    df_event = {}
+    df_event_spring = {}
 
     for station in station_ids["station_id"]:
+        df_event[station] = {}
+        df_event_spring[station] = {}
+
         average_tide_signal, spring_tide_signal = generate_tide_signals(
             station, gtsm_folder, make_plot=make_plot
         )
         surge_hydrograph_height, surge_hydrograph_duration_mean = (
-            generate_surge_hydrograph(station, gtsm_folder, 0.99, make_plot)
+            generate_surge_hydrograph(station, gtsm_folder, percentile, make_plot)
         )
+        for rp in return_periods:
+            df_event[station][rp], df_event_spring[station][rp] = (
+                generate_storm_tide_hydrograph(
+                    rps,
+                    station,
+                    gtsm_folder,
+                    average_tide_signal,
+                    spring_tide_signal,
+                    surge_hydrograph_duration_mean,
+                    surge_hydrograph_height,
+                    percentile,
+                    rp,
+                    offset,
+                    make_plot,
+                )
+            )
+
+    # save storm tide hydrograph (normal tide)
+    export_folder = gtsm_folder / "hydrographs"
+    os.makedirs(export_folder, exist_ok=True)
+    export = {}
+    for station, rp in df_event.items():
+        for rp, df in rp.items():
+            if rp not in export:
+                export[rp] = df["twl"].to_frame(name=station)
+            else:
+                export[rp] = pd.concat(
+                    [export[rp], df["twl"].to_frame(name=station)], axis=1
+                )
+    for rp in export:
+        export[rp].to_csv(export_folder / f"gtsm_normal_tide_hydrograph_rp{rp:04d}.csv")
+
+    # save storm tide hydrograph (spring tide)
+    export_spring = {}
+    for station, rp in df_event_spring.items():
+        for rp, df in rp.items():
+            if rp not in export_spring:
+                export_spring[rp] = df["twl"].to_frame(name=station)
+            else:
+                export_spring[rp] = pd.concat(
+                    [export_spring[rp], df["twl"].to_frame(name=station)], axis=1
+                )
+    for rp in export_spring:
+        export_spring[rp].to_csv(
+            export_folder / f"gtsm_spring_tide_hydrograph_rp{rp:04d}.csv"
+        )
+
+    # df_event_to_file = df_event["twl"].to_frame(name=station)
+    # normal_tide = pd.concat([normal_tide, df_event_to_file], axis=1)
+    # df_event_spring_to_file = df_event_spring["twl"].to_frame(name=station)
+    # spring_tide = pd.concat([spring_tide, df_event_spring_to_file], axis=1)
 
 
 def generate_tide_signals(station, gtsm_folder, make_plot=True):
@@ -174,7 +230,7 @@ def generate_tide_signals(station, gtsm_folder, make_plot=True):
             linestyle="solid",
             label="spring tide signal",
         )
-        plt.title("tidal cycles")
+        plt.title(f"tidal cycles {station}")
         plt.ylabel("water level (m)")
         plt.xlabel("time (hours)")
         plt.xticks([0, 6, 12, 18, 24, 30, 36], ["0", "6", "12", "18", "24", "30", "36"])
@@ -344,7 +400,7 @@ def generate_surge_hydrograph(station, gtsm_folder, percentile, make_plot):
         plt.legend(loc="upper left", fontsize=9)
         plt.xlabel("time relative to peak (hours)")
         plt.ylabel("normalized surge level")
-        plt.title("surge hydrograph")
+        plt.title(f"surge hydrograph {station}")
         plt.ylim(0, 1.25)
         plt.xlim(-35, 35)
         plt.xticks(
@@ -365,3 +421,198 @@ def generate_surge_hydrograph(station, gtsm_folder, percentile, make_plot):
         plt.close("all")
 
     return surge_hydrograph_height, surge_hydrograph_duration_mean
+
+
+def generate_storm_tide_hydrograph(
+    rps,
+    station,
+    gtsm_folder,
+    average_tide_signal,
+    spring_tide_signal,
+    surge_hydrograph_duration_mean,
+    surge_hydrograph_height,
+    percentile,
+    rp,
+    offset,
+    make_plot,
+):
+    surgepd = pd.read_pickle(f"{gtsm_folder}/gtsm_surge_{int(station):04d}.pkl")
+    tidepd = pd.read_pickle(f"{gtsm_folder}/gtsm_water_levels_{int(station):04d}.pkl")
+    surgepd = surgepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
+    tidepd = tidepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
+
+    rl = rps[str(rp)].loc[int(station)]
+    xvalues = np.around(np.arange(-36, 36.1, 1 / 6), 3)
+
+    surge_height = rl - np.max(average_tide_signal)
+    surge_rise = np.flip(
+        np.interp(
+            np.arange(0, np.nanmax(np.ceil(surge_hydrograph_duration_mean[:448])), 1),
+            np.flip(surge_hydrograph_duration_mean[:448]),
+            np.flip(surge_hydrograph_height[:448] * surge_height),
+        )
+    )
+    surge_fall = np.interp(
+        np.arange(
+            0, np.nanmax(np.ceil(np.flipud(surge_hydrograph_duration_mean[447:]))), 1
+        ),
+        surge_hydrograph_duration_mean[447:],
+        surge_hydrograph_height[447:] * surge_height,
+    )
+    surge_rise_full = np.hstack((np.zeros(448 - len(surge_rise)), surge_rise))
+    surge_fall_full = np.hstack((surge_fall, np.zeros(447 - len(surge_fall))))
+    surge = np.hstack((surge_rise_full, surge_fall_full[1:]))
+    df_event = pd.DataFrame(
+        data={
+            "tide": average_tide_signal,
+            "surge": surge,
+            "twl": average_tide_signal + surge,
+        },
+        index=pd.date_range(start="1/1/2000", periods=len(surge), freq="10T"),
+    )
+    storm_tide_hydrograph_average_tide_signal = df_event.twl.values
+
+    surge_height_spring = rl - np.max(spring_tide_signal)
+    surge_rise_spring = np.flip(
+        np.interp(
+            np.arange(0, np.nanmax(np.ceil(surge_hydrograph_duration_mean[:448])), 1),
+            np.flip(surge_hydrograph_duration_mean[:448]),
+            np.flip(surge_hydrograph_height[:448] * surge_height_spring),
+        )
+    )
+    surge_fall_spring = np.interp(
+        np.arange(
+            0, np.nanmax(np.ceil(np.flipud(surge_hydrograph_duration_mean[447:]))), 1
+        ),
+        surge_hydrograph_duration_mean[447:],
+        surge_hydrograph_height[447:] * surge_height_spring,
+    )
+    surge_rise_full_spring = np.hstack(
+        (np.zeros(448 - len(surge_rise_spring)), surge_rise_spring)
+    )
+    surge_fall_full_spring = np.hstack(
+        (surge_fall_spring, np.zeros(447 - len(surge_fall_spring)))
+    )
+    surge_spring = np.hstack((surge_rise_full_spring, surge_fall_full_spring[1:]))
+    df_event_spring = pd.DataFrame(
+        data={
+            "tide": spring_tide_signal,
+            "surge": surge_spring,
+            "twl": spring_tide_signal + surge_spring,
+        },
+        index=pd.date_range(start="1/1/2000", periods=len(surge_spring), freq="10T"),
+    )
+    storm_tide_hydrograph_spring_tide_signal = df_event_spring.twl.values
+
+    # plot
+    if make_plot:
+        df_event_plot = df_event[149 : 149 * 5]
+        plt.plot(
+            xvalues,
+            df_event_plot.tide.values[82:515],
+            label="average tide signal",
+            color="black",
+            linestyle="-",
+            zorder=9,
+        )
+        plt.plot(
+            xvalues,
+            df_event_plot.surge.values[82:515],
+            label="scaled surge hydrograph",
+            color="green",
+            linestyle="-",
+            zorder=10,
+        )
+        plt.plot(
+            xvalues,
+            df_event_plot.surge.values[82:515] / surge_height,
+            label="average surge hydrograph",
+            color="green",
+            linestyle="--",
+            zorder=10,
+        )
+        plt.plot(
+            xvalues,
+            df_event_plot.twl.values[82:515],
+            label="storm tide hydrograph",
+            color="tab:blue",
+            zorder=8,
+        )
+        plt.legend(fontsize=9, loc="upper left")
+        plt.xlabel("time relative to peak (hours)")
+        plt.ylabel("water level (m)")
+        plt.title(f"storm tide hydrograph {station}")
+        plt.xticks(
+            [-36, -24, -12, 0, 12, 24, 36], ["-36", "-24", "-12", "0", "12", "24", "36"]
+        )
+        plt.title(f"storm tide RP{rp} hydrograph {station}")
+        plt.grid()
+        ymin, ymax = plt.ylim()
+        plt.ylim(top=((ymax - ymin) * 0.20 + ymax))
+        plt.xlim(-36, 36)
+        plt.savefig(
+            "plot/gtsm/rp%4d_storm_tide_hydrograph_station_%05d_percentile_%02d.png"
+            % (rp, int(station), percentile * 100),
+            format="png",
+            bbox_inches="tight",
+            dpi=300,
+        )
+        plt.close("all")
+
+        df_event_plot_spring = df_event_spring[149 : 149 * 5]
+        plt.plot(
+            xvalues,
+            df_event_plot_spring.tide.values[82:515],
+            label="spring tide signal",
+            color="black",
+            linestyle="-",
+            zorder=9,
+        )
+        plt.plot(
+            xvalues,
+            df_event_plot_spring.surge.values[82:515],
+            label="scaled surge hydrograph",
+            color="green",
+            linestyle="-",
+            zorder=10,
+        )
+        plt.plot(
+            xvalues,
+            df_event_plot_spring.surge.values[82:515] / surge_height_spring,
+            label="average surge hydrograph",
+            color="green",
+            linestyle="--",
+            zorder=10,
+        )
+        plt.plot(
+            xvalues,
+            df_event_plot_spring.twl.values[82:515],
+            label="storm tide hydrograph",
+            color="tab:blue",
+            zorder=8,
+        )
+        plt.legend(fontsize=9, loc="upper left")
+        plt.xlabel("time relative to peak (hours)")
+        plt.ylabel("water level (m)")
+        plt.title(f"storm tide hydrograph {station}")
+        plt.xticks(
+            [-36, -24, -12, 0, 12, 24, 36], ["-36", "-24", "-12", "0", "12", "24", "36"]
+        )
+        plt.title(f"storm tide RP{rp} hydrograph {station}")
+        plt.grid()
+        ymin, ymax = plt.ylim()
+        plt.ylim(top=((ymax - ymin) * 0.20 + ymax))
+        plt.xlim(-36, 36)
+        plt.savefig(
+            "plot/gtsm/rp%4d_storm_tide_spring_tide_hydrograph_station_%05d_percentile_%02d.png"
+            % (int(rp), int(station), percentile * 100),
+            format="png",
+            bbox_inches="tight",
+            dpi=300,
+        )
+        plt.close("all")
+
+    return (
+        df_event,
+        df_event_spring,
+    )

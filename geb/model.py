@@ -419,7 +419,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     def create_coastal_hydrographs(self):
         """Generate storm surge hydrographs for the model."""
 
-        generate_storm_surge_hydrographs(self, make_plot=True)
+        generate_storm_surge_hydrographs(self)
 
     def estimate_return_periods(self) -> None:
         """Estimate the risk of the model."""
