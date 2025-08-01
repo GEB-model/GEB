@@ -22,7 +22,12 @@ def generate_storm_surge_hydrographs(model, make_plot=True):
     os.makedirs("plot/gtsm", exist_ok=True)
 
     for station in station_ids["station_id"]:
-        generate_tide_signals(station, gtsm_folder, make_plot=make_plot)
+        average_tide_signal, spring_tide_signal = generate_tide_signals(
+            station, gtsm_folder, make_plot=make_plot
+        )
+        surge_hydrograph_height, surge_hydrograph_duration_mean = (
+            generate_surge_hydrograph(station, gtsm_folder, 0.99, make_plot)
+        )
 
 
 def generate_tide_signals(station, gtsm_folder, make_plot=True):
@@ -186,3 +191,177 @@ def generate_tide_signals(station, gtsm_folder, make_plot=True):
         )
         plt.close("all")
     return average_tide_signal, spring_tide_signal
+
+
+def generate_surge_hydrograph(station, gtsm_folder, percentile, make_plot):
+    surgepd = pd.read_pickle(
+        gtsm_folder / f"gtsm_surge_{int(station):04d}.pkl"
+    )  # read surge data
+    surgepd = surgepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
+    surgepd = surgepd.dropna()  # drop NaN values
+
+    # select surge maxima's
+    distance = 432
+    surge_maxima_index, surge_maxima_values = ss.find_peaks(
+        surgepd.surge.values, distance=distance, height=-10
+    )
+    surge_peaks = pd.DataFrame(
+        data={"waterlevel": surge_maxima_values["peak_heights"]},
+        index=surgepd.index.values[surge_maxima_index.tolist()],
+    ).sort_values(by="waterlevel")
+    surge_peaks_POT = surge_peaks[
+        surge_peaks.waterlevel >= surge_peaks.quantile(percentile).waterlevel
+    ]  # 0.6 #1.5 #0.8
+    surge_array = surgepd.surge.values
+
+    # generate storm surge hydrograph
+    hours = 36
+    df_before_peak = pd.DataFrame(index=np.around(np.arange(0, 1.0001, 0.005), 3))
+    df_after_peak = pd.DataFrame(index=np.around(np.arange(0, 1.0001, 0.005), 3))
+    for k in range(len(surge_peaks_POT)):
+        timeseries_before_peak = surgepd.loc[
+            surge_peaks_POT.iloc[k].name
+            - timedelta(hours=hours) : surge_peaks_POT.iloc[k].name
+        ]
+        timeseries_after_peak = surgepd.loc[
+            surge_peaks_POT.iloc[k].name : surge_peaks_POT.iloc[k].name
+            + timedelta(hours=hours)
+        ]
+
+        normalized_before_peak = (
+            timeseries_before_peak / timeseries_before_peak.surge.max()
+        )
+        normalized_after_peak = (
+            timeseries_after_peak / timeseries_after_peak.surge.max()
+        )
+
+        # maybe select that part from where the values never exceed zero anymore? Or just use the whole timeslice, independent from value?
+        if normalized_after_peak.surge.min() < 0:
+            select_stop = np.argwhere(normalized_after_peak.surge.values < 0)[0][0]
+        else:
+            select_stop = hours * 6
+
+        if normalized_before_peak.surge.min() < 0:
+            select_start = np.argwhere(normalized_before_peak.surge.values < 0)[-1][0]
+        else:
+            select_start = 1
+
+        # this part is only for plotting
+        normalized_before_25 = normalized_before_peak[select_start:]
+        normalized_after_25 = normalized_after_peak[:select_stop]
+        normalized_after_25_plot = normalized_after_peak[: select_stop + 1]
+        yy = np.concatenate(
+            (
+                normalized_before_25.surge.values[:-1],
+                normalized_after_25_plot.surge.values,
+            )
+        )
+        xx = (
+            np.arange(-len(normalized_before_25) + 1, len(normalized_after_25_plot)) / 6
+        )
+        if k == 0:
+            plt.plot(
+                xx, yy, linewidth=0.5, color="grey", alpha=0.5, label="storm surges"
+            )
+        else:
+            plt.plot(xx, yy, linewidth=0.5, color="grey", alpha=0.5)
+
+        for l in df_before_peak.index.values:
+            df_before_peak.loc[l, "event" + str(k)] = np.nansum(
+                normalized_before_25.surge.values > l
+            )
+
+        for l in df_after_peak.index.values:
+            df_after_peak.loc[l, "event" + str(k)] = np.nansum(
+                normalized_after_25.surge.values > l
+            )
+
+    df_before_peak["mean"] = df_before_peak.mean(axis=1)
+    df_before_peak["75th"] = df_before_peak.drop("mean", axis=1).quantile(
+        q=0.75, axis=1
+    )
+    df_before_peak["25th"] = df_before_peak.drop("mean", axis=1).quantile(
+        q=0.25, axis=1
+    )
+    df_after_peak["mean"] = df_after_peak.mean(axis=1)
+    df_after_peak["75th"] = df_after_peak.drop("mean", axis=1).quantile(q=0.75, axis=1)
+    df_after_peak["25th"] = df_after_peak.drop("mean", axis=1).quantile(q=0.25, axis=1)
+
+    surge_hydrograph_height = np.concatenate(
+        (
+            np.zeros(247),
+            np.hstack(
+                (df_before_peak.index.values, np.flipud(df_after_peak.index.values)[1:])
+            ),
+            np.zeros(246),
+        )
+    )
+    surge_hydrograph_duration_mean = np.concatenate(
+        (
+            np.full(247, np.nan),
+            np.hstack(
+                (
+                    df_before_peak["mean"].values,
+                    np.flipud(df_after_peak["mean"].values)[1:],
+                )
+            ),
+            np.full(246, np.nan),
+        )
+    )
+
+    if make_plot:
+        plt.plot(
+            -df_before_peak["mean"].values * (1 / 6),
+            df_before_peak.index.values,
+            label="surge hydrograph",
+            color="green",
+            linewidth=3,
+            linestyle="--",
+        )
+        plt.plot(
+            df_after_peak["mean"].values * (1 / 6),
+            df_after_peak.index.values,
+            color="green",
+            linewidth=3,
+            linestyle="--",
+        )
+        plt.fill_betweenx(
+            df_before_peak.index.values,
+            -df_before_peak["25th"].values * (1 / 6),
+            -df_before_peak["75th"].values * (1 / 6),
+            fc="green",
+            alpha=0.3,
+            label="P 25th-75th",
+        )
+        plt.fill_betweenx(
+            df_after_peak.index.values,
+            df_after_peak["25th"].values * (1 / 6),
+            df_after_peak["75th"].values * (1 / 6),
+            fc="green",
+            alpha=0.3,
+        )
+
+        plt.legend(loc="upper left", fontsize=9)
+        plt.xlabel("time relative to peak (hours)")
+        plt.ylabel("normalized surge level")
+        plt.title("surge hydrograph")
+        plt.ylim(0, 1.25)
+        plt.xlim(-35, 35)
+        plt.xticks(
+            [-36, -24, -12, 0, 12, 24, 36], ["-36", "-24", "-12", "0", "12", "24", "36"]
+        )
+        plt.yticks(
+            [0, 0.2, 0.4, 0.6, 0.8, 1, 1.2],
+            ["0.0", "0.2", "0.4", "0.6", "0.8", "1.0", "1.2"],
+        )
+        plt.grid()
+        plt.savefig(
+            "plot/gtsm/surge_hydrograph_station_%05d_percentile_%02d.png"
+            % (int(station), percentile * 100),
+            format="png",
+            bbox_inches="tight",
+            dpi=300,
+        )
+        plt.close("all")
+
+    return surge_hydrograph_height, surge_hydrograph_duration_mean
