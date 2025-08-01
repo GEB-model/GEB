@@ -14,6 +14,8 @@ from honeybees.model import Model as ABM_Model
 from geb.agents import Agents
 from geb.artists import Artists
 from geb.hazards.driver import HazardDriver
+from geb.hazards.floods.construct_storm_surge_hydrographs import generate_tide_signals
+
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
@@ -411,6 +413,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.store.save()
 
         self.reporter.finalize()
+
+    def generate_storm_surge_hydrographs(self):
+        """Generate storm surge hydrographs for the model."""
+
+        generate_tide_signals(self, make_plot=True)
 
     def estimate_return_periods(self) -> None:
         """Estimate the risk of the model."""
