@@ -66,10 +66,12 @@ class Households(AgentBaseClass):
 
         if self.config["adapt"]:
             self.load_flood_maps()
+            self.load_wind_maps()
 
         self.load_objects()
         self.load_max_damage_values()
         self.load_damage_curves()
+        self.load_windstorm_damage_curve()
 
         if self.model.in_spinup:
             self.spinup()
@@ -114,6 +116,34 @@ class Households(AgentBaseClass):
             flood_maps[return_period].rio.transform().to_gdal()
         )
         self.flood_maps = flood_maps
+
+    # Modification
+    def load_wind_maps(self):
+        """Load wind maps in this case for the 50 and 100 return periods.This maps are created separately and copied to the "wind_maps" folder.Creating the folder and copying the wind maps should be done manually."""
+        self.windstorm_return_periods = np.array(
+            self.model.config["hazards"]["windstorm"]["return_periods"]
+        )
+
+        windstorm_maps = {}
+        windstorm_path = self.model.output_folder / "wind_maps"
+        for return_period in self.windstorm_return_periods:
+            file_path = (
+                windstorm_path / f"T{return_period}_crs28992.tif"
+            )  # adjust to file name
+            ds = xr.open_dataarray(file_path, engine="rasterio")
+
+            # Reproject to match flood map CRS if needed (check if this is necessary)
+            if ds.rio.crs != self.flood_maps["crs"]:
+                ds = ds.rio.reproject(self.flood_maps["crs"])
+
+            windstorm_maps[return_period] = ds
+
+        windstorm_maps["crs"] = self.flood_maps["crs"]
+        windstorm_maps["gdal_geotransform"] = (
+            windstorm_maps[return_period].rio.transform().to_gdal()
+        )
+        self.windstorm_maps = windstorm_maps
+        print("Wind maps loaded for return periods:", self.windstorm_return_periods)
 
     def construct_income_distribution(self):
         # These settings are dummy data now. Should come from subnational datasets.
@@ -223,7 +253,6 @@ class Households(AgentBaseClass):
 
     def update_building_adaptation_status(self, household_adapting):
         """Update the floodproofing status of buildings based on adapting households."""
-
         # Extract and clean OSM IDs from adapting households
         osm_ids = pd.DataFrame(
             np.unique(self.var.osm_id.data[household_adapting])
@@ -833,6 +862,8 @@ class Households(AgentBaseClass):
         self.rail = gpd.read_parquet(self.model.files["geoms"]["assets/rails"])
         self.rail["object_type"] = "rail"
 
+        # Export buildings as GeoPackage to models/geul/base
+
     def load_max_damage_values(self):
         # Load maximum damages
         with open(
@@ -943,6 +974,8 @@ class Households(AgentBaseClass):
                 severity_column = df["severity"]
 
             df = df.rename(columns={"damage_ratio": road_type})
+            print(f"Loaded DataFrame shape: {df.shape}")
+            print(df.head())
 
             road_curves.append(df[[road_type]])
 
@@ -1031,13 +1064,68 @@ class Households(AgentBaseClass):
             # fill_value="extrapolate",
         )
 
+    def load_windstorm_damage_curve(self):
+        # The function loads the damage curves for windstorms need to look for a windstorm damage function.
+        # We could use Koks & Haer., 2020 similar to what they did in the CLIMAAX handbook. (Ted WCR)
+        # For the purpose of building this code we will focus only on concrete building type when selecting the damage curves.summary_
+
+        # self.buildings_structure_curve = pd.read_parquet(
+        #    self.model.files["table"][
+        #        "damage_parameters/windstorm/buildings/residential/curve"
+        #    ]
+        # )
+        wind_building_curves = []
+        # This path should be created with the windstorm vulnerability curves by Koks & Haer., 2020.
+        wind_building_types = [
+            (
+                "residential",
+                "damage_parameters/windstorm/buildings/residential/curve",
+            ),
+        ]
+        print("LOADED DAMAGE TABLES:")
+        for key in self.model.files["table"].keys():
+            print(key)
+
+        wind_severity_column = None
+        for building_type, path in wind_building_types:
+            print(f"Loading damage curve for {building_type} from: {path}")
+
+            df = pd.read_parquet(self.model.files["table"][path])
+            print(f"Loaded DataFrame shape: {df.shape}")
+            print(df.head())
+
+            if wind_severity_column is None:
+                wind_severity_column = df["severity"]
+                print("Stored wind_severity column")
+
+            df = df.rename(columns={"damage_ratio": building_type})
+            wind_building_curves.append(df[[building_type]])
+
+        self.var.wind_buildings_structure_curves = pd.concat(
+            [wind_severity_column] + wind_building_curves, axis=1
+        )
+
+        print("Final wind_buildings_structure_curve:")
+
+    def create_wind_damage_interpolators(self):
+        # Create interpolators for windstorm damage curves.
+        # For now only concrete and unprotected buildings, no adaptation measures are considered.
+
+        self.windstorm_building_curve_interpolator = interpolate.interp1d(
+            x=self.wind_buildings_curve.index,
+            y=self.wind_building_curve["residential"],
+            bounds_error=False,
+            # fill_value="extrapolate",
+        )
+
     def spinup(self):
         self.construct_income_distribution()
         self.assign_household_attributes()
 
     def calculate_building_flood_damages(self):
         """This function calculates the flood damages for the households in the model.
-        It iterates over the return periods and calculates the damages for each household"""
+        It iterates over the return periods and calculates the damages for each household
+        """
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(

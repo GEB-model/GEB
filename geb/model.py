@@ -358,6 +358,14 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self.step_to_end()
 
+        # MODIFICATION
+        # Export final buildings after simulation
+        # self.agents.households.buildings.to_file(
+        #    "C:/Users/nxu279/GitHub/GEB_try/models/geul/base/buildings_final.gpkg",
+        #    layer="buildings",
+        #    driver="GPKG",
+        # )
+
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
