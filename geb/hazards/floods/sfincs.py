@@ -296,7 +296,6 @@ class SFINCS:
         start_time = event["start_time"]
 
         if self.model.config["hazards"]["floods"]["flood_risk"]:
-            print("config settings are read")
             scale_factors = pd.read_parquet(
                 self.model.files["table"]["hydrodynamics/risk_scaling_factors"]
             )

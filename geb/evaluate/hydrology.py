@@ -1029,22 +1029,6 @@ class Hydrology:
             *args: ignored.
             **kwargs: ignored.
         """
-        eval_hydrodynamics_folders = Path(self.output_folder_evaluate) / "hydrodynamics"
-
-        eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
-
-        # check if run file exists, if not, raise an error
-        if not (self.model.output_folder / "flood_maps").exists():
-            raise FileNotFoundError(
-                "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
-            )
-
-        # load the discharge simulation
-        flood_map = open_zarr(
-            self.model.output_folder
-            / "flood_maps"
-            / "2021-07-12T09:00:00 - 2021-07-20T09:00:00.zarr"  # Change to autatically find right file name
-        )
 
         # define all helper functions
         def count_pixels_condition_xarray(data_array, condition):
@@ -1275,9 +1259,42 @@ class Hydrology:
 
                 return performance_numbers
 
-        calculate_performance_metrics(
-            observation="/scistor/ivm/vbl220/PhD/geul_flood_extent_5m.tif",
-            flood_map=flood_map,
-        )
+        self.config = self.model.config["hazards"]
+
+        eval_hydrodynamics_folders = Path(self.output_folder_evaluate) / "hydrodynamics"
+
+        eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
+
+        # check if run file exists, if not, raise an error
+        if not (self.model.output_folder / "flood_maps").exists():
+            raise FileNotFoundError(
+                "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
+            )
+        from datetime import datetime
+
+        for event in self.config["floods"]["events"]:
+            # # Parse datetime strings from config
+            # start_time = datetime.strptime(event["start_time"], "%Y-%m-%d %H:%M:%S")
+            # end_time = datetime.strptime(event["end_time"], "%Y-%m-%d %H:%M:%S")
+
+            # Build filename dynamically
+            flood_map_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
+
+            # Build the full path
+            flood_map_path = (
+                Path(self.model.output_folder) / "flood_maps" / flood_map_name
+            )
+            flood_map = open_zarr(flood_map_path)
+            #     # Open the zarr file
+            #     flood_map = open_zarr(
+            #         self.model.output_folder
+            #     / "flood_maps"
+            #     / "2021-07-12T09:00:00 - 2021-07-20T09:00:00.zarr"  # Change to autatically find right file name
+            # )
+
+            calculate_performance_metrics(
+                observation="/scistor/ivm/vbl220/PhD/geul_flood_extent_5m.tif",
+                flood_map=flood_map,
+            )
 
         print("Flood map performance metrics calculated.")
