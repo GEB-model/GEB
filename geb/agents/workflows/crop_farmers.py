@@ -980,7 +980,7 @@ def gev_ppf_scalar(u, c, loc, scale):
 @njit(cache=True, parallel=True)
 def compute_premiums_and_best_contracts_numba(
     gev_params,
-    spei_hist,
+    values_history,
     losses,
     strike_vals,
     exit_vals,
@@ -1006,7 +1006,7 @@ def compute_premiums_and_best_contracts_numba(
     """
     np.random.seed(seed)
     n_agents = gev_params.shape[0]
-    n_years = spei_hist.shape[1]
+    n_years = values_history.shape[1]
     n_strikes = strike_vals.shape[0]
     n_exits = exit_vals.shape[0]
     n_rates = rate_vals.shape[0]
@@ -1019,7 +1019,6 @@ def compute_premiums_and_best_contracts_numba(
     best_prem_arr = np.empty(n_agents, dtype=np.float64)
 
     for agent_idx in prange(n_agents):
-        # Extract GEV parameters
         shape = -gev_params[agent_idx, 0]
         loc = gev_params[agent_idx, 1]
         scale = gev_params[agent_idx, 2]
@@ -1062,7 +1061,7 @@ def compute_premiums_and_best_contracts_numba(
                 sum_ratio_sq = 0.0
                 sum_ratio_loss = 0.0
                 for yr in range(n_years):
-                    shortfall = strike - spei_hist[agent_idx, yr]
+                    shortfall = strike - values_history[agent_idx, yr]
                     if shortfall <= 0.0:
                         ratio = 0.0
                     elif shortfall >= denom:

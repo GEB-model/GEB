@@ -14,6 +14,7 @@ from honeybees.library.raster import pixels_to_coords, sample_from_map
 from numba import njit
 from scipy.optimize import curve_fit
 from scipy.stats import genextreme
+import xarray as xr
 
 from geb.workflows import TimingModule
 
@@ -26,7 +27,7 @@ from ..HRUs import load_grid
 from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 from ..store import DynamicArray
 from ..workflows import balance_check
-from ..workflows.io import load_array
+from ..workflows.io import load_array, open_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
@@ -53,6 +54,7 @@ IRRIGATION_EFFICIENCY_ADAPTATION = 2
 FIELD_EXPANSION_ADAPTATION = 3
 PERSONAL_INSURANCE_ADAPTATION = 4
 INDEX_INSURANCE_ADAPTATION = 5
+PR_INSURANCE_ADAPTATION = 6
 
 
 def cumulative_mean(mean, counter, update, mask=None):
@@ -187,6 +189,10 @@ class CropFarmers(AgentBaseClass):
             not self.config["expected_utility"]["insurance"]["index_insurance"][
                 "ruleset"
             ]
+            == "no-adaptation"
+        )
+        self.pr_insurance_adaptation_active = (
+            not self.config["expected_utility"]["insurance"]["pr_insurance"]["ruleset"]
             == "no-adaptation"
         )
         self.microcredit_adaptation_active = (
@@ -480,6 +486,13 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
 
+        self.var.cumulative_pr_during_growing_season = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=0,
+        )
+
         # set no irrigation limit for farmers by default
         self.var.irrigation_limit_m3 = DynamicArray(
             n=self.var.n,
@@ -544,7 +557,7 @@ class CropFarmers(AgentBaseClass):
             dtype=np.float32,
             fill_value=0,
         )
-        self.var.yearly_SPEI = DynamicArray(
+        self.var.yearly_pr = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
             extra_dims=(self.var.total_spinup_time,),
@@ -757,6 +770,22 @@ class CropFarmers(AgentBaseClass):
 
         assert not np.all(np.isnan(self.var.GEV_parameters))
 
+        self.var.GEV_pr_parameters = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            extra_dims=(3,),
+            extra_dims_names=("gev_parameters",),
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+
+        for i, varname in enumerate(["pr_gev_c", "pr_gev_loc", "pr_gev_scale"]):
+            GEV_pr_grid = getattr(self.grid, varname)
+            self.var.GEV_pr_parameters[:, i] = sample_from_map(
+                GEV_pr_grid, self.var.locations.data, self.grid.gt
+            )
+
+        assert not np.all(np.isnan(self.var.GEV_parameters))
         self.var.risk_perc_min = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -801,6 +830,15 @@ class CropFarmers(AgentBaseClass):
         self.var.cumulative_water_deficit_current_day = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=0,
+        )
+
+        self.var.cumulative_pr_mm = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            extra_dims=(366,),
+            extra_dims_names=("day",),
             dtype=np.float32,
             fill_value=0,
         )
@@ -972,6 +1010,21 @@ class CropFarmers(AgentBaseClass):
     @property
     def is_in_command_area(self):
         return self.farmer_command_area != -1
+
+    def save_pr(self):
+        pr = self.HRU.pr * (24 * 3600)  # mm / day
+
+        pr_day_mm_per_farmer = np.bincount(
+            self.HRU.var.land_owners[self.HRU.var.land_owners != -1],
+            weights=pr[self.HRU.var.land_owners != -1],
+        ) / np.bincount(self.HRU.var.land_owners[self.HRU.var.land_owners != -1])
+
+        day_index = self.model.current_day_of_year - 1
+
+        self.var.cumulative_pr_mm[:, day_index] = pr_day_mm_per_farmer
+
+        if day_index == 364 and not calendar.isleap(self.model.current_time.year):
+            self.var.cumulative_pr_mm[:, 365] = self.var.cumulative_pr_mm[:, 364]
 
     def save_water_deficit(self, discount_factor=0.2):
         water_deficit_day_m3 = (
@@ -1566,6 +1619,9 @@ class CropFarmers(AgentBaseClass):
 
             self.save_yearly_income(self.income_farmer, potential_income_farmer)
             self.save_harvest_spei(harvesting_farmers)
+            self.save_harvest_precipitation(
+                harvesting_farmers, current_crop_age[harvesting_farmers]
+            )
             self.drought_risk_perception(harvesting_farmers, current_crop_age)
 
             ## After updating the drought risk perception, set the previous month for the next timestep as the current for this timestep.
@@ -1808,9 +1864,9 @@ class CropFarmers(AgentBaseClass):
         # Calculate personal loss
         avg_income_per_agent = np.nanmean(income_masked, axis=1)
         losses = np.maximum(avg_income_per_agent[:, None] - income_masked, 0)
-        years_observed = np.sum(~np.isnan(income_masked), axis=1)
         self.var.agent_pure_premiums = np.mean(losses, axis=1)
 
+        years_observed = np.sum(~np.isnan(income_masked), axis=1)
         # Initialize arrays for coefficients and R²
         group_mean_premiums = np.zeros(n_groups, dtype=float)
         for group_idx in range(n_groups):
@@ -1840,17 +1896,21 @@ class CropFarmers(AgentBaseClass):
 
         return credibility_premiums
 
-    def premium_index_insurance(self, potential_insured_loss):
+    def premium_index_insurance(
+        self,
+        potential_insured_loss,
+        history,
+        gev_params,
+        strike_vals,
+        exit_vals,
+        rate_vals,
+    ):
         # Make a series of candidate insurance contracts and find the optimal contract
         # with the least basis risk considering past losses
         mask_columns = np.all(self.var.yearly_income == 0, axis=0)
-        gev_params = self.var.GEV_parameters.data
-        strike_vals = np.round(np.arange(0.0, -2.6, -0.2), 2)
-        exit_vals = np.round(np.arange(-2, -3.6, -0.2), 2)
-        rate_vals = np.linspace(50, 10000, 10)
 
         potential_insured_loss_masked = potential_insured_loss[:, ~mask_columns]
-        spei_hist = self.var.yearly_SPEI.data[:, ~mask_columns]
+        history_masked = history[:, ~mask_columns]
 
         (
             best_strike_idx,
@@ -1860,7 +1920,7 @@ class CropFarmers(AgentBaseClass):
             best_prem,
         ) = compute_premiums_and_best_contracts_numba(
             gev_params,
-            spei_hist,
+            history_masked,
             potential_insured_loss_masked,
             strike_vals,
             exit_vals,
@@ -1869,16 +1929,9 @@ class CropFarmers(AgentBaseClass):
             seed=42,
         )
 
-        n_agents = gev_params.shape[0]
-        best_strike = np.empty(n_agents, dtype=np.float64)
-        best_exit = np.empty(n_agents, dtype=np.float64)
-        best_rate = np.empty(n_agents, dtype=np.float64)
-        best_prem = np.empty(n_agents, dtype=np.float64)
-
-        for i in range(n_agents):
-            best_strike[i] = strike_vals[best_strike_idx[i]]
-            best_exit[i] = exit_vals[best_exit_idx[i]]
-            best_rate[i] = rate_vals[best_rate_idx[i]]
+        best_strike = strike_vals[best_strike_idx]
+        best_exit = exit_vals[best_exit_idx]
+        best_rate = rate_vals[best_rate_idx]
         best_premiums = best_prem
 
         return (best_strike, best_exit, best_rate, best_premiums)
@@ -2064,6 +2117,24 @@ class CropFarmers(AgentBaseClass):
             np.mean(full_size_SPEI_per_farmer[harvesting_farmers]),
         )
 
+    def save_harvest_precipitation(self, harvesting_farmers, crop_age):
+        avg_age = np.mean(crop_age, dtype=np.int32)
+        end_day = self.model.current_day_of_year - 1
+        start_day = end_day - avg_age
+
+        n_days = self.var.cumulative_pr_mm.shape[1]
+        day_idx = np.arange(start_day, end_day) % n_days
+
+        season_pr_per_farmer = np.sum(
+            self.var.cumulative_pr_mm[np.ix_(harvesting_farmers, day_idx)], axis=1
+        )
+
+        self.var.cumulative_pr_during_growing_season[harvesting_farmers] += (
+            season_pr_per_farmer
+        )
+
+        pass
+
     def save_yearly_spei(self):
         assert self.model.current_time.month == 1
 
@@ -2087,6 +2158,14 @@ class CropFarmers(AgentBaseClass):
         # Reset the cumulative SPEI array at the beginning of the year
         self.var.cumulative_SPEI_during_growing_season.fill(0)
         self.var.cumulative_SPEI_count_during_growing_season.fill(0)
+
+    def save_yearly_pr(self):
+        assert self.model.current_time.month == 1
+
+        shift_and_update(
+            self.var.yearly_pr, self.var.cumulative_pr_during_growing_season
+        )
+        self.var.cumulative_pr_during_growing_season.fill(0)
 
     def save_yearly_income(
         self,
@@ -4486,6 +4565,8 @@ class CropFarmers(AgentBaseClass):
         self.water_abstraction_sum()
         timer.new_split("water abstraction calculation")
 
+        self.save_pr()
+
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
             if self.model.current_time.year - 1 > self.model.spinup_start.year:
@@ -4498,6 +4579,7 @@ class CropFarmers(AgentBaseClass):
 
                 # Save SPEI after 1 year, otherwise doesnt line up with harvests
                 self.save_yearly_spei()
+                self.save_yearly_pr()
 
             # Set yearly yield ratio based on the difference between saved actual and potential profit
             self.var.yearly_yield_ratio = (
@@ -4578,6 +4660,7 @@ class CropFarmers(AgentBaseClass):
                 if (
                     self.personal_insurance_adaptation_active
                     or self.index_insurance_adaptation_active
+                    or self.pr_insurance_adaptation_active
                 ):
                     # save the base relations for determining the difference with and without insurance
                     farmer_yield_probability_relation_base = (
@@ -4604,9 +4687,18 @@ class CropFarmers(AgentBaseClass):
                     )
                     timer.new_split("personal insurance")
                 if self.index_insurance_adaptation_active:
+                    gev_params = self.var.GEV_parameters.data
+                    strike_vals = np.round(np.arange(0.0, -2.6, -0.2), 2)
+                    exit_vals = np.round(np.arange(-2, -3.6, -0.2), 2)
+                    rate_vals = np.geomspace(10, 5000, 10)
                     # Calculate best strike, exit, rate for chosen contract
                     strike, exit, rate, index_premium = self.premium_index_insurance(
-                        potential_insured_loss
+                        potential_insured_loss=potential_insured_loss,
+                        history=self.var.yearly_SPEI.data,
+                        gev_params=gev_params,
+                        strike_vals=strike_vals,
+                        exit_vals=exit_vals,
+                        rate_vals=rate_vals,
                     )
                     potential_insured_loss_index = self.insured_payouts_index(
                         strike, exit, rate
@@ -4615,7 +4707,31 @@ class CropFarmers(AgentBaseClass):
                         self.insured_yields(potential_insured_loss_index)
                     )
                     timer.new_split("index insurance")
-
+                if self.pr_insurance_adaptation_active:
+                    gev_params = self.var.GEV_parameters.data
+                    strike_vals = np.round(np.arange(1500, 300, -100), 2)
+                    low, high, N = 0, 800, 10
+                    u = np.linspace(0, 1, N)  # linear grid on [0,1]
+                    s = 0.5 * (1 - np.cos(np.pi * u))
+                    exit_vals = low + s * (high - low)
+                    # exit_vals = np.round(np.arange(600, 50, -50), 2)
+                    rate_vals = np.geomspace(10, 5000, 10)
+                    # Calculate best strike, exit, rate for chosen contract
+                    strike, exit, rate, pr_premium = self.premium_index_insurance(
+                        potential_insured_loss=potential_insured_loss,
+                        history=self.var.yearly_pr.data,
+                        gev_params=gev_params,
+                        strike_vals=strike_vals,
+                        exit_vals=exit_vals,
+                        rate_vals=rate_vals,
+                    )
+                    potential_insured_loss_pr = self.insured_payouts_index(
+                        strike, exit, rate
+                    )
+                    farmer_yield_probability_relation_insured_pr = self.insured_yields(
+                        potential_insured_loss_pr
+                    )
+                    timer.new_split("precipitation insurance")
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(farmer_yield_probability_relation == 0):
                     if self.wells_adaptation_active:
@@ -4639,6 +4755,7 @@ class CropFarmers(AgentBaseClass):
                     if (
                         self.personal_insurance_adaptation_active
                         and self.index_insurance_adaptation_active
+                        and self.pr_insurance_adaptation_active
                     ):
                         # In scenario with both insurance, compare simultaneously
                         self.adapt_insurance(
@@ -4646,15 +4763,17 @@ class CropFarmers(AgentBaseClass):
                                 [
                                     PERSONAL_INSURANCE_ADAPTATION,
                                     INDEX_INSURANCE_ADAPTATION,
+                                    PR_INSURANCE_ADAPTATION,
                                 ]
                             ),
-                            ["Personal", "Index"],
+                            ["Personal", "Index", "Precipitation"],
                             farmer_yield_probability_relation_base,
                             [
                                 farmer_yield_probability_relation_insured_personal,
                                 farmer_yield_probability_relation_insured_index,
+                                farmer_yield_probability_relation_insured_pr,
                             ],
-                            [personal_premium, index_premium],
+                            [personal_premium, index_premium, pr_premium],
                         )
                     elif self.personal_insurance_adaptation_active:
                         self.adapt_insurance(
@@ -4664,7 +4783,7 @@ class CropFarmers(AgentBaseClass):
                             [farmer_yield_probability_relation_insured_personal],
                             [personal_premium],
                         )
-                        timer.new_split("pers. insurance")
+                        timer.new_split("adapt pers. insurance")
                     elif self.index_insurance_adaptation_active:
                         self.adapt_insurance(
                             [INDEX_INSURANCE_ADAPTATION],
@@ -4673,8 +4792,16 @@ class CropFarmers(AgentBaseClass):
                             [farmer_yield_probability_relation_insured_index],
                             [index_premium],
                         )
-
-                        timer.new_split("index insurance")
+                        timer.new_split("adapt index insurance")
+                    elif self.pr_insurance_adaptation_active:
+                        self.adapt_insurance(
+                            [PR_INSURANCE_ADAPTATION],
+                            ["Precipitation"],
+                            farmer_yield_probability_relation_base,
+                            [farmer_yield_probability_relation_insured_pr],
+                            [pr_premium],
+                        )
+                        timer.new_split("adapt prec. insurance")
                 else:
                     raise AssertionError(
                         "Cannot adapt without yield - probability relation"
