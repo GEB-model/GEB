@@ -486,7 +486,7 @@ class Grid(BaseVariables):
     @property
     def spei(self):
         if not hasattr(self, "spei_ds"):
-            self.spei_ds = self.load_forcing_ds("spei")
+            self.spei_ds = self.load_forcing_ds("SPEI")
         spei = self.load_forcing(self.spei_ds, self.model.current_time)
         assert not np.isnan(spei).any()
         return spei
@@ -502,6 +502,18 @@ class Grid(BaseVariables):
     @property
     def gev_scale(self):
         return load_grid(self.model.files["grid"]["climate/gev_scale"])
+
+    @property
+    def pr_gev_c(self):
+        return load_grid(self.model.files["grid"]["climate/pr_gev_c"])
+
+    @property
+    def pr_gev_loc(self):
+        return load_grid(self.model.files["grid"]["climate/pr_gev_loc"])
+
+    @property
+    def pr_gev_scale(self):
+        return load_grid(self.model.files["grid"]["climate/pr_gev_scale"])
 
 
 class HRUs(BaseVariables):
