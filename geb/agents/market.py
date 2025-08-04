@@ -89,7 +89,7 @@ class Market(AgentBaseClass):
             extra_dims=(2,),
             extra_dims_names=("params",),
         )
-        
+
         with open(self.model.files["dict"]["socioeconomics/inflation_rates"], "r") as f:
             inflation = json.load(f)
             inflation["time"] = [int(time) for time in inflation["time"]]
@@ -108,7 +108,7 @@ class Market(AgentBaseClass):
     def estimate_price_model(self) -> None:
         estimation_start_year = 1  # skip first year
         estimation_end_year = (
-            self.model.config["general"]["start_time"].year
+            self.model.current_time.year
             - self.model.config["general"]["spinup_time"].year
         )
 
@@ -161,7 +161,10 @@ class Market(AgentBaseClass):
             )
             price_pred_per_region[region_idx, :] = price_pred
 
-        assert np.all(price_pred_per_region[:, self.var.production[:, self.year_index - 1] > 0] > 0), "Negative prices predicted"
+        assert np.all(
+            price_pred_per_region[:, self.var.production[:, self.year_index - 1] > 0]
+            > 0
+        ), "Negative prices predicted"
 
         # TODO: This assumes that the inflation is the same for all regions (region_idx=0)
         return (
@@ -196,8 +199,23 @@ class Market(AgentBaseClass):
         if not self.model.simulate_hydrology:
             return
         self.track_production_and_price()
-        if self.model.current_time == self.model.end_time and self.model.in_spinup:
+        if (
+            # run price model at the end of the spinup
+            (self.model.current_time == self.model.end_time and self.model.in_spinup)
+            or
+            # and on 5-year anniversaries
+            (
+                not self.model.in_spinup
+                and (self.model.start_time.year - self.model.current_time.year) % 5 == 0
+                and (
+                    self.model.current_time.month == 1
+                    and self.model.current_time.day == 1
+                )
+                and (self.model.current_time.year - self.model.start_time.year) >= 5
+            )
+        ):
             self.estimate_price_model()
+
         self.report(self, locals())
 
     @property
