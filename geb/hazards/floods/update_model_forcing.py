@@ -24,12 +24,93 @@ def to_sfincs_datetime(dt: datetime) -> str:
     return dt.strftime("%Y%m%d %H%M%S")
 
 
+def update_sfincs_model_forcing_coastal(
+    model_root: Path,
+    simulation_root: Path,
+):
+    # update waterlevel boundary conditions for coastal flooding here. setup_waterlevel_forcing()
+    # setup curve number infiltration with recovery based on global CN dataset (optional)
+
+    # read model
+    sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
+
+    # update mode time based on event tstart and tend from event dict
+    # waterlevel = sf.data_catalog.get_dataset(
+    #     "waterlevel"
+    # ).compute()  # define water levels and stations in data_catalog.yml
+
+    locations = gpd.GeoDataFrame(
+        gpd.read_file(
+            "/scistor/ivm/ltf200/GEB/models/models/boulogne_sur_mer/base/input/other/gtsm/stations.geojson"
+        ).rename(columns={"station_id": "stations"})
+    ).set_index("stations")
+    # convert index to int
+    locations.index = locations.index.astype(int)
+
+    # sf.setup_config(
+    #     tref=to_sfincs_datetime(event["start_time"]),
+    #     tstart=to_sfincs_datetime(event["start_time"]),
+    #     tstop=to_sfincs_datetime(event["end_time"]),
+    # )
+
+    # locations = gpd.GeoDataFrame(
+    #     index=waterlevel.stations,
+    #     geometry=gpd.points_from_xy(
+    #         waterlevel.station_x_coordinate, waterlevel.station_y_coordinate
+    #     ),
+    #     crs=4326,
+    # )
+
+    # timeseries = pd.DataFrame(
+    #     index=waterlevel.time, columns=waterlevel.stations, data=waterlevel.data
+    # )
+
+    timeseries = pd.read_csv(
+        "/scistor/ivm/ltf200/GEB/models/models/boulogne_sur_mer/base/input/other/gtsm/hydrographs/gtsm_spring_tide_hydrograph_rp0100.csv",
+        index_col=0,
+    )
+    timeseries.index = pd.to_datetime(timeseries.index, format="%Y-%m-%d %H:%M:%S")
+    # convert columns to int
+    timeseries.columns = timeseries.columns.astype(int)
+    assert timeseries.columns.equals(locations.index)
+
+    # locations = locations.reset_index(names="stations")
+    # locations.index = locations.index + 1  # for hydromt/SFINCS index should start at 1
+    timeseries.columns = locations.index
+    timeseries *= 100  # convert from m to cm
+    timeseries = timeseries.iloc[300:-300]  # trim the first and last 300 rows
+
+    sf.setup_config(
+        tref=to_sfincs_datetime(timeseries.index[0]),
+        tstart=to_sfincs_datetime(timeseries.index[0]),
+        tstop=to_sfincs_datetime(timeseries.index[-1]),
+    )
+    # sf.config["dtmaxout"] = len(timeseries) * 10
+
+    sf.setup_waterlevel_forcing(timeseries=timeseries, locations=locations)
+    # configure_sfincs_model(sf, model_root, simulation_root)
+    # write settings to model directory
+    sf.setup_config(
+        alpha=0.5
+    )  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
+    sf.setup_config(tspinup=86400)  # spinup time in seconds
+    sf.setup_config(dtout=900)  # output time step in seconds
+    # change root to the output and write
+    # sf.set_root(simulation_root, mode="w+") # write to base model for now
+    sf._write_gis = True
+    sf.write_grid()
+    sf.write_forcing()
+    sf.write_config()
+    sf.plot_basemap(fn_out="src_points_check.png")
+    sf.plot_forcing(fn_out="forcing.png")
+
+
 def update_sfincs_model_forcing(
     model_root,
     simulation_root,
     event,
-    discharge_grid,
-    uparea_discharge_grid,
+    discharge_grid,  # for rivers
+    uparea_discharge_grid,  # for rivers
     forcing_method,
     precipitation_grid=None,
 ):
@@ -255,11 +336,13 @@ def update_sfincs_model_forcing(
             #     uparea=uparea_discharge_grid,
             # )
 
-    # detect whether water level forcing should be set
+    # detect whether water level forcing should be set (use this under forcing == coastal) PLot basemap and forcing to check
     if (
         sf.grid["msk"] == 2
     ).any():  # if mask is 2, the model requires water level forcing
-        waterlevel = sf.data_catalog.get_dataset("waterlevel").compute()
+        waterlevel = sf.data_catalog.get_dataset(
+            "waterlevel"
+        ).compute()  # define water levels and stations in data_catalog.yml
 
         locations = gpd.GeoDataFrame(
             index=waterlevel.stations,

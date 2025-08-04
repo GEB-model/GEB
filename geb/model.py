@@ -418,7 +418,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     def create_coastal_hydrographs(self):
         """Generate storm surge hydrographs for the model."""
-
         generate_storm_surge_hydrographs(self)
 
     def estimate_return_periods(self) -> None:
@@ -439,7 +438,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )
 
         HazardDriver.initialize(self, longest_flood_event=30)
+        self.sfincs.get_coastal_return_period_maps()
         self.sfincs.get_return_period_maps()
+        # self.sfincs.get_coastal_return_period_maps()
 
     def evaluate(self, *args, **kwargs) -> None:
         print("Evaluating model...")

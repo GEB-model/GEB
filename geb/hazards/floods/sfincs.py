@@ -13,14 +13,18 @@ from shapely.geometry.point import Point
 from ...hydrology.HRUs import load_geom
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
-from .build_model import build_sfincs
+from .build_model import build_sfincs, build_sfincs_coastal
 from .estimate_discharge_for_return_periods import estimate_discharge_for_return_periods
 from .postprocess_model import read_maximum_flood_depth
 from .run_sfincs_for_return_periods import (
     run_sfincs_for_return_periods,
+    run_sfincs_for_return_periods_coastal,
 )
 from .sfincs_utils import run_sfincs_simulation
-from .update_model_forcing import update_sfincs_model_forcing
+from .update_model_forcing import (
+    update_sfincs_model_forcing,
+    update_sfincs_model_forcing_coastal,
+)
 
 
 class SFINCS:
@@ -256,6 +260,21 @@ class SFINCS:
 
         damages = self.flood(flood_map=flood_map)
         return damages
+
+    def get_coastal_return_period_maps(self):
+        model_root: Path = self.sfincs_model_root("entire_region_coastal")
+        build_parameters = self.get_build_parameters(model_root)
+        build_parameters["region"] = load_geom(self.model.files["geoms"]["mask"])
+        build_sfincs_coastal(
+            **build_parameters,
+        )
+
+        run_sfincs_for_return_periods_coastal(
+            model_root=model_root,
+            gpu=self.config["SFINCS"]["gpu"],
+            export_dir=self.model.output_folder / "flood_maps",
+            clean_working_dir=True,
+        )
 
     def get_return_period_maps(self):
         # close the zarr store
