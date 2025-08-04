@@ -42,6 +42,7 @@ class Evaluate(Hydrology):
             methods: list = [
                 "plot_discharge",
                 "evaluate_discharge",
+                "evaluate_hydrodynamics",
             ]
         else:
             assert isinstance(methods, (list, tuple)), (

@@ -1018,3 +1018,266 @@ class Hydrology:
         water_circle.write_image(
             self.output_folder_evaluate / "water_circle.png", scale=5
         )
+
+    def evaluate_hydrodynamics(
+        self, run_name: str = "default", *args, **kwargs
+    ) -> None:
+        """Method to plot the mean discharge from the GEB model.
+
+        Args:
+            run_name: Defaults to "default".
+            *args: ignored.
+            **kwargs: ignored.
+        """
+        eval_hydrodynamics_folders = Path(self.output_folder_evaluate) / "hydrodynamics"
+
+        eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
+
+        # check if run file exists, if not, raise an error
+        if not (self.model.output_folder / "flood_maps").exists():
+            raise FileNotFoundError(
+                "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
+            )
+
+        # load the discharge simulation
+        flood_map = open_zarr(
+            self.model.output_folder
+            / "flood_maps"
+            / "2021-07-12T09:00:00 - 2021-07-20T09:00:00.zarr"  # Change to autatically find right file name
+        )
+
+        # define all helper functions
+        def count_pixels_condition_xarray(data_array, condition):
+            count = xr.where(condition, 1, 0).sum()
+            return count
+
+        def calculate_hit_rate(model, observations):
+            miss = np.sum((model == 0) & (observations == 1))
+            hit = np.sum((model == 1) & (observations == 1))
+            hit_rate = hit / (hit + miss)
+            return hit_rate
+
+        def calculate_false_alarm_ratio(model, observations):
+            false_alarm = np.sum((model == 1) & (observations == 0))
+            hit = np.sum((model == 1) & (observations == 1))
+            false_alarm_ratio = false_alarm / (false_alarm + hit)
+            return false_alarm_ratio
+
+        def calculate_critical_success_index(model, observations):
+            hit = np.sum((model == 1) & (observations == 1))
+            false_alarm = np.sum((model == 1) & (observations == 0))
+            miss = np.sum((model == 0) & (observations == 1))
+            critical_success_index = hit / (hit + false_alarm + miss)
+            return critical_success_index
+
+        # Main function for the peformance metrics
+        def calculate_performance_metrics(observation, flood_map):
+            import os
+
+            import matplotlib.colors as mcolors
+            import matplotlib.lines as mlines
+            import matplotlib.patches as mpatches
+            import matplotlib.pyplot as plt
+            import rioxarray as rxr
+            from matplotlib.colors import LightSource
+            from matplotlib_scalebar.scalebar import ScaleBar
+            from rasterio.crs import CRS
+
+            # Step 1A: Open observation raster
+            obs = rxr.open_rasterio(observation)
+
+            # Step 1B: Open simulation raster
+            sim = flood_map.raster.reproject_like(obs)
+
+            # Step 1C: Remove rivers from simulation and observation maps
+
+            rivers = gpd.read_parquet(
+                Path("simulation_root")
+                / run_name
+                / "SFINCS"
+                / "run"
+                / "segments.geoparquet"
+            )
+
+            # rivers = gpd.read_file(
+            #     "/scistor/ivm/vbl220/PhD/models/geulnew/simulation_root/baseline_blokbui/SFINCS/23250850/rivers.gpkg"
+            # )
+            crs_wgs84 = CRS.from_epsg(4326)
+            crs_mercator = CRS.from_epsg(3857)
+            rivers.set_crs(crs_wgs84, inplace=True)
+            gdf_mercator = rivers.to_crs(crs_mercator)
+            gdf_mercator["geometry"] = gdf_mercator.buffer(gdf_mercator["width"] / 2)
+            gdf_buffered = gdf_mercator.to_crs(sim.rio.crs)
+            rivers_mask_sim = sim.raster.geometry_mask(
+                gdf=gdf_buffered, all_touched=True
+            )
+            sim_no_rivers = sim.where(~rivers_mask_sim).fillna(0)
+
+            gdf_buffered = gdf_buffered.to_crs(obs.rio.crs)
+            rivers_mask_obs = obs.raster.geometry_mask(
+                gdf=gdf_buffered, all_touched=True
+            )
+            obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
+
+            # Step 1D: Clip files using the first region
+            region = gpd.read_file(
+                Path("simulation_root")
+                / run_name
+                / "SFINCS"
+                / "run"
+                / "gis"
+                / "region.geojson"
+            ).to_crs(obs.rio.crs)
+            # region = gpd.read_file(
+            #     "/scistor/ivm/vbl220/PhD/models/geulnew/detailed_region.gpkg"
+            # ).to_crs(obs.rio.crs)
+            obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
+
+            # validation_extent = gpd.read_file(
+            #     "/scistor/ivm/vbl220/PhD/validation_extent.gpkg"
+            # ).to_crs(region.crs)
+            # obs_final = obs_region.rio.clip(
+            #     validation_extent.geometry.values, validation_extent.crs
+            # )
+            # sim_final = sim_no_rivers.rio.clip(
+            #     validation_extent.geometry.values, validation_extent.crs
+            # )
+
+            # Step 1E: Clip using the additional shapefile
+            extra_clip_region = gpd.read_file(
+                "/scistor/ivm/vbl220/PhD/Geul_v1/Geul_FloodExtent_v1.shp"
+            ).set_crs(28992)
+            extra_clip_region = extra_clip_region.to_crs(region.crs)
+            extra_clip_region_buffer = extra_clip_region.buffer(160)
+            sim_extra_clipped = sim_no_rivers.rio.clip(
+                extra_clip_region_buffer.geometry.values, extra_clip_region_buffer.crs
+            )
+            clipped_out = (sim_no_rivers > 0.15) & (sim_extra_clipped.isnull())
+            clipped_out_raster = sim_no_rivers.where(clipped_out)
+
+            # Step 2: Mask water depth values
+            hmin = 0.15
+            simulation_final = sim_extra_clipped > hmin
+            observation_final = obs_region > 0
+
+            # Step 3: Calculate performance metrics
+            hit_rate = (
+                calculate_hit_rate(simulation_final, observation_final).compute() * 100
+            )
+            false_rate = (
+                calculate_false_alarm_ratio(
+                    simulation_final, observation_final
+                ).compute()
+                * 100
+            )
+            csi = (
+                calculate_critical_success_index(
+                    simulation_final, observation_final
+                ).compute()
+                * 100
+            )
+
+            # Step 4: Save results to file and plot the results
+            elevation_data = rxr.open_rasterio(
+                "/scistor/ivm/vbl220/PhD/models/geul2/base/input/SFINCS/Filled_DEM_EPSG28992.tif"
+            ).sel(band=1)  # Make relative
+            ls = LightSource(azdeg=315, altdeg=45)
+            hillshade = ls.hillshade(
+                elevation_data.data.squeeze(), vert_exag=1, dx=1, dy=1
+            )
+
+            if simulation_final.sum() > 0:
+                misses = (observation_final == 1) & (simulation_final == 0)
+                simulation_masked = simulation_final.where(simulation_final == 1)
+                hits = simulation_masked.where(observation_final)
+                misses_masked = misses.where(misses == 1)
+
+                green_cmap = mcolors.ListedColormap(["green"])  # Hits
+                orange_cmap = mcolors.ListedColormap(["orange"])  # False alarms
+                red_cmap = mcolors.ListedColormap(["red"])  # Misses
+                blue_cmap = mcolors.ListedColormap(["#72c1db"])  # No observation data
+
+                fig, ax = plt.subplots(figsize=(10, 10))
+
+                ax.imshow(
+                    hillshade,
+                    cmap="gray",
+                    extent=(
+                        elevation_data.x.min(),
+                        elevation_data.x.max(),
+                        elevation_data.y.min(),
+                        elevation_data.y.max(),
+                    ),
+                )
+
+                region.boundary.plot(
+                    ax=ax, edgecolor="black", linewidth=2, label="Region Boundary"
+                )
+
+                clipped_out_raster.plot(
+                    ax=ax, cmap=blue_cmap, add_colorbar=False, add_labels=False
+                )  # Plot clipped areas
+                simulation_masked.plot(
+                    ax=ax, cmap=orange_cmap, add_colorbar=False, add_labels=False
+                )
+                hits.plot(ax=ax, cmap=green_cmap, add_colorbar=False, add_labels=False)
+                misses_masked.plot(
+                    ax=ax, cmap=red_cmap, add_colorbar=False, add_labels=False
+                )
+
+                scalebar = ScaleBar(
+                    1, location="lower left", font_properties={"size": 12}
+                )
+                ax.add_artist(scalebar)
+
+                ax.set_aspect("equal")
+                ax.axis("off")
+                handles = [
+                    mpatches.Patch(color=green_cmap(0.5)),
+                    mpatches.Patch(color=red_cmap(0.5)),
+                    mpatches.Patch(color=orange_cmap(0.5)),
+                    mpatches.Patch(color=blue_cmap(0.5)),
+                    mlines.Line2D([], [], color="black", linewidth=2),
+                ]
+
+                labels = [
+                    "Hits",
+                    "Misses",
+                    "False alarms",
+                    "No observation data",
+                    "Region",
+                ]
+
+                plt.legend(
+                    handles=handles, labels=labels, loc="upper right", fontsize=16
+                )
+
+                simulation_filename = os.path.splitext(os.path.basename("flood_map"))[
+                    0
+                ]  # Make relative to name of flood map
+                plt.savefig(
+                    eval_hydrodynamics_folders / f"{simulation_filename}_plot.png"
+                )
+
+                performance_numbers = (
+                    eval_hydrodynamics_folders
+                    / f"{simulation_filename}_performance_metrics.txt"
+                )
+
+                with open(performance_numbers, "w") as f:
+                    f.write(f"Hit rate (H): {hit_rate}\n")
+                    f.write(f"False alarm rate (F): {false_rate}\n")
+                    f.write(f"Critical Success Index (CSI) (C): {csi}\n")
+                    f.write(f"Number of flooded pixels: {simulation_final.sum()}\n")
+                    f.write(
+                        f"Flooded area (km2): {simulation_final.sum() * (5 * 5) / 1000000}"
+                    )
+
+                return performance_numbers
+
+        calculate_performance_metrics(
+            observation="/scistor/ivm/vbl220/PhD/geul_flood_extent_5m.tif",
+            flood_map=flood_map,
+        )
+
+        print("Flood map performance metrics calculated.")

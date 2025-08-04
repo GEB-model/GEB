@@ -60,7 +60,7 @@ class Market(AgentBaseClass):
         n_years = (
             self.model.config["general"]["end_time"].year
             - self.model.config["general"]["spinup_time"].year
-        ) + 1
+        ) + 10
         self.var.production = DynamicArray(
             n=n_crops,
             max_n=n_crops,
@@ -195,6 +195,11 @@ class Market(AgentBaseClass):
 
     @property
     def year_index(self) -> int:
+        print("time is:")
+        print(
+            self.model.current_time.year
+            - self.model.config["general"]["spinup_time"].year
+        )
         return (
             self.model.current_time.year
             - self.model.config["general"]["spinup_time"].year

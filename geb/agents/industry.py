@@ -87,6 +87,13 @@ class Industry(AgentBaseClass):
                 / self.HRU.var.cell_area
             )  # convert to m/day
 
+            print("Scaling water demand")
+            print(self.model.config["parameters"]["water_demand_multiplier"])
+            water_demand = (
+                water_demand
+                * self.model.config["parameters"]["water_demand_multiplier"]
+            )
+
             water_consumption = (
                 self.model.industry_water_consumption_ds.sel(
                     time=self.model.current_time, method="ffill"

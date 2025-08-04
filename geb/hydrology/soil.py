@@ -1313,6 +1313,11 @@ class Soil(Module):
             is_topsoil=is_top_soil,
         )  # m/day
 
+        self.HRU.var.saturated_hydraulic_conductivity = (
+            self.HRU.var.saturated_hydraulic_conductivity
+            * self.model.config["parameters"]["ksat_multiplier"]
+        )  # calibration parameter
+        print("used ksat calibration parameter")
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
         natural_crop_groups: npt.NDArray[np.float32] = self.hydrology.grid.load(
