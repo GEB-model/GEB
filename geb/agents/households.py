@@ -130,13 +130,13 @@ class Households(AgentBaseClass):
             file_path = (
                 windstorm_path / f"T{return_period}_crs28992.tif"
             )  # adjust to file name
-            ds = xr.open_dataarray(file_path, engine="rasterio")
+            windstorm_map = xr.open_dataarray(file_path, engine="rasterio")
 
             # Reproject to match flood map CRS if needed (check if this is necessary)
-            if ds.rio.crs != self.flood_maps["crs"]:
-                ds = ds.rio.reproject(self.flood_maps["crs"])
+            if windstorm_map.rio.crs != self.flood_maps["crs"]:
+                windstorm_map = windstorm_map.rio.reproject(self.flood_maps["crs"])
 
-            windstorm_maps[return_period] = ds
+            windstorm_maps[return_period] = windstorm_map
 
         windstorm_maps["crs"] = self.flood_maps["crs"]
         windstorm_maps["gdal_geotransform"] = (
@@ -792,6 +792,7 @@ class Households(AgentBaseClass):
         # self.update_risk_perceptions()
 
         # calculate damages for adapting and not adapting households based on building footprints
+        wind_damages = self.calculate_building_wind_damages()
         damages_do_not_adapt, damages_adapt = self.calculate_building_flood_damages()
 
         # calculate expected utilities
@@ -1065,47 +1066,27 @@ class Households(AgentBaseClass):
         )
 
     def load_windstorm_damage_curve(self):
-        # The function loads the damage curves for windstorms need to look for a windstorm damage function.
-        # We could use Koks & Haer., 2020 similar to what they did in the CLIMAAX handbook. (Ted WCR)
-        # For the purpose of building this code we will focus only on concrete building type when selecting the damage curves.summary_
-
-        # self.buildings_structure_curve = pd.read_parquet(
-        #    self.model.files["table"][
-        #        "damage_parameters/windstorm/buildings/residential/curve"
-        #    ]
-        # )
-        wind_building_curves = []
-        # This path should be created with the windstorm vulnerability curves by Koks & Haer., 2020.
-        wind_building_types = [
-            (
-                "residential",
-                "damage_parameters/windstorm/buildings/residential/curve",
-            ),
-        ]
-        print("LOADED DAMAGE TABLES:")
-        for key in self.model.files["table"].keys():
-            print(key)
-
-        wind_severity_column = None
-        for building_type, path in wind_building_types:
-            print(f"Loading damage curve for {building_type} from: {path}")
-
-            df = pd.read_parquet(self.model.files["table"][path])
-            print(f"Loaded DataFrame shape: {df.shape}")
-            print(df.head())
-
-            if wind_severity_column is None:
-                wind_severity_column = df["severity"]
-                print("Stored wind_severity column")
-
-            df = df.rename(columns={"damage_ratio": building_type})
-            wind_building_curves.append(df[[building_type]])
-
-        self.var.wind_buildings_structure_curves = pd.concat(
-            [wind_severity_column] + wind_building_curves, axis=1
+        ###MODIFIED load_damage_curves() -> load_windstorm_damage_curves()
+        """The function loads the damage curves for windstorms need to look for a windstorm damage function.
+        We could use Koks & Haer., 2020 similar to what they did in the CLIMAAX handbook. (Ted WCR)
+        For the purpose of building this code we will focus only on concrete building type when selecting the damage curves.
+        """
+        # Use only the residential concrete building type for now
+        self.wind_buildings_structure_curve = pd.read_parquet(
+            self.model.files["table"][
+                "damage_parameters/windstorm/buildings/residential/curve"
+            ]
+        )
+        self.wind_buildings_structure_curve = (
+            self.wind_buildings_structure_curve.rename(
+                columns={"damage_ratio": "building_unprotected"}
+            )
         )
 
-        print("Final wind_buildings_structure_curve:")
+        print("Curve exists:", hasattr(self, "wind_buildings_structure_curve"))
+        print("Type of curve_path:", type(self.wind_buildings_structure_curve))
+        print(f"Loaded DataFrame shape: {self.wind_buildings_structure_curve.shape}")
+        print(self.wind_buildings_structure_curve.head())
 
     def create_wind_damage_interpolators(self):
         # Create interpolators for windstorm damage curves.
@@ -1199,6 +1180,59 @@ class Households(AgentBaseClass):
                     damages_adapt[i, idx_agents_in_building_way] = damage
 
         return damages_do_not_adapt, damages_adapt
+
+    def calculate_building_wind_damages(self):
+        """This function calculates the wind damages for the households in the model.
+        It iterates over the return periods and calculates the damages for each household
+        """
+        print("Starting wind damage calculation...")
+
+        wind_damages = np.zeros(
+            (self.windstorm_return_periods.size, self.n), np.float32
+        )
+        # damages_wind_adapt = ....
+        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
+            self.flood_maps["crs"]
+        )
+
+        for i, return_period in enumerate(self.windstorm_return_periods):
+            windstorm_map: xr.DataArray = self.windstorm_maps[return_period]
+            print(f"\nReturn period: {return_period}")
+
+            # Calculate damages to building structure (for now there is no adaptation)
+            wind_damage_unprotected: pd.Series = VectorScanner(
+                feature_file=buildings.rename(
+                    columns={"maximum_damage_m2": "maximum_damage"}
+                ),
+                hazard_file=windstorm_map,
+                curve_path=self.wind_buildings_structure_curve,
+                gridded=False,
+            )
+            total_wind_damage_structure = wind_damage_unprotected["damage"].sum()
+            print(
+                f"Wind damages to building unprotected structure rp{return_period} are: {round(total_wind_damage_structure / 1e6, 2)} M€"
+            )
+
+            # Save the damages to the datafarame
+            wind_damage_unprotected = wind_damage_unprotected[
+                ["osm_id", "osm_way_id", "damage"]
+            ]
+
+            # Add damges to agents (unprotected buildings)
+            for _, row in wind_damage_unprotected.iterrows():
+                damage = row["damage"]
+                if row["osm_id"] is not None:
+                    osm_id = int(row["osm_id"])
+                    idx_agents_in_building = np.where(self.var.osm_id == osm_id)[0]
+                    wind_damages[i, idx_agents_in_building] = damage
+                else:
+                    osm_way_id = int(row["osm_way_id"])
+                    idx_agents_in_building_way = np.where(
+                        self.var.osm_way_id == osm_way_id
+                    )[0]
+                    wind_damages[i, idx_agents_in_building_way] = damage
+            print("Wind damage calculation complete")
+        return wind_damages
 
     def flood(self, flood_map: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
