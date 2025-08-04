@@ -1,17 +1,24 @@
 import base64
 from pathlib import Path
 from typing import Any
+import os
 
 import branca.colormap as cm
 import contextily as ctx
 import folium
 import geopandas as gpd
 import matplotlib.colors as mcolors
+import matplotlib.lines as mlines
+import matplotlib.patches as mpatches
+from matplotlib.colors import LightSource
+from matplotlib_scalebar.scalebar import ScaleBar
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import xarray as xr
+import rioxarray as rxr
+from rasterio.crs import CRS
 from permetrics.regression import RegressionMetric
 from tqdm import tqdm
 
@@ -1030,11 +1037,6 @@ class Hydrology:
             **kwargs: ignored.
         """
 
-        # define all helper functions
-        def count_pixels_condition_xarray(data_array, condition):
-            count = xr.where(condition, 1, 0).sum()
-            return count
-
         def calculate_hit_rate(model, observations):
             miss = np.sum((model == 0) & (observations == 1))
             hit = np.sum((model == 1) & (observations == 1))
@@ -1055,26 +1057,11 @@ class Hydrology:
             return critical_success_index
 
         # Main function for the peformance metrics
-        def calculate_performance_metrics(observation, flood_map):
-            import os
-
-            import matplotlib.colors as mcolors
-            import matplotlib.lines as mlines
-            import matplotlib.patches as mpatches
-            import matplotlib.pyplot as plt
-            import rioxarray as rxr
-            from matplotlib.colors import LightSource
-            from matplotlib_scalebar.scalebar import ScaleBar
-            from rasterio.crs import CRS
-
-            # Step 1A: Open observation raster
+        def calculate_performance_metrics(observation, flood_map_path):
+            # Step 1: Open needed datasets
+            flood_map = open_zarr(flood_map_path)
             obs = rxr.open_rasterio(observation)
-
-            # Step 1B: Open simulation raster
             sim = flood_map.raster.reproject_like(obs)
-
-            # Step 1C: Remove rivers from simulation and observation maps
-
             rivers = gpd.read_parquet(
                 Path("simulation_root")
                 / run_name
@@ -1082,10 +1069,16 @@ class Hydrology:
                 / "run"
                 / "segments.geoparquet"
             )
+            region = gpd.read_file(
+                Path("simulation_root")
+                / run_name
+                / "SFINCS"
+                / "run"
+                / "gis"
+                / "region.geojson"
+            ).to_crs(obs.rio.crs)
 
-            # rivers = gpd.read_file(
-            #     "/scistor/ivm/vbl220/PhD/models/geulnew/simulation_root/baseline_blokbui/SFINCS/23250850/rivers.gpkg"
-            # )
+            # Step 2: Clip out rivers from observations and simulations
             crs_wgs84 = CRS.from_epsg(4326)
             crs_mercator = CRS.from_epsg(3857)
             rivers.set_crs(crs_wgs84, inplace=True)
@@ -1103,34 +1096,13 @@ class Hydrology:
             )
             obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
 
-            # Step 1D: Clip files using the first region
-            region = gpd.read_file(
-                Path("simulation_root")
-                / run_name
-                / "SFINCS"
-                / "run"
-                / "gis"
-                / "region.geojson"
-            ).to_crs(obs.rio.crs)
-            # region = gpd.read_file(
-            #     "/scistor/ivm/vbl220/PhD/models/geulnew/detailed_region.gpkg"
-            # ).to_crs(obs.rio.crs)
+            # Step 3: Clip out region from observations
             obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
 
-            # validation_extent = gpd.read_file(
-            #     "/scistor/ivm/vbl220/PhD/validation_extent.gpkg"
-            # ).to_crs(region.crs)
-            # obs_final = obs_region.rio.clip(
-            #     validation_extent.geometry.values, validation_extent.crs
-            # )
-            # sim_final = sim_no_rivers.rio.clip(
-            #     validation_extent.geometry.values, validation_extent.crs
-            # )
-
-            # Step 1E: Clip using the additional shapefile
+            # Step 4: Clip using the extent of the observations
             extra_clip_region = gpd.read_file(
                 "/scistor/ivm/vbl220/PhD/Geul_v1/Geul_FloodExtent_v1.shp"
-            ).set_crs(28992)
+            ).set_crs(28992)  # TODO: make dynamic
             extra_clip_region = extra_clip_region.to_crs(region.crs)
             extra_clip_region_buffer = extra_clip_region.buffer(160)
             sim_extra_clipped = sim_no_rivers.rio.clip(
@@ -1139,12 +1111,12 @@ class Hydrology:
             clipped_out = (sim_no_rivers > 0.15) & (sim_extra_clipped.isnull())
             clipped_out_raster = sim_no_rivers.where(clipped_out)
 
-            # Step 2: Mask water depth values
+            # Step 5: Mask water depth values
             hmin = 0.15
             simulation_final = sim_extra_clipped > hmin
             observation_final = obs_region > 0
 
-            # Step 3: Calculate performance metrics
+            # Step 6: Calculate performance metrics
             hit_rate = (
                 calculate_hit_rate(simulation_final, observation_final).compute() * 100
             )
@@ -1161,7 +1133,7 @@ class Hydrology:
                 * 100
             )
 
-            # Step 4: Save results to file and plot the results
+            # Step 7: Save results to file and plot the results
             elevation_data = rxr.open_rasterio(
                 "/scistor/ivm/vbl220/PhD/models/geul2/base/input/SFINCS/Filled_DEM_EPSG28992.tif"
             ).sel(band=1)  # Make relative
@@ -1200,7 +1172,7 @@ class Hydrology:
 
                 clipped_out_raster.plot(
                     ax=ax, cmap=blue_cmap, add_colorbar=False, add_labels=False
-                )  # Plot clipped areas
+                )
                 simulation_masked.plot(
                     ax=ax, cmap=orange_cmap, add_colorbar=False, add_labels=False
                 )
@@ -1236,9 +1208,9 @@ class Hydrology:
                     handles=handles, labels=labels, loc="upper right", fontsize=16
                 )
 
-                simulation_filename = os.path.splitext(os.path.basename("flood_map"))[
-                    0
-                ]  # Make relative to name of flood map
+                simulation_filename = os.path.splitext(
+                    os.path.basename(flood_map_path)
+                )[0]
                 plt.savefig(
                     eval_hydrodynamics_folders / f"{simulation_filename}_plot.png"
                 )
@@ -1270,31 +1242,17 @@ class Hydrology:
             raise FileNotFoundError(
                 "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
             )
-        from datetime import datetime
 
+        # Calculate performance metrics for every event in config file
         for event in self.config["floods"]["events"]:
-            # # Parse datetime strings from config
-            # start_time = datetime.strptime(event["start_time"], "%Y-%m-%d %H:%M:%S")
-            # end_time = datetime.strptime(event["end_time"], "%Y-%m-%d %H:%M:%S")
-
-            # Build filename dynamically
             flood_map_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
-
-            # Build the full path
             flood_map_path = (
                 Path(self.model.output_folder) / "flood_maps" / flood_map_name
             )
-            flood_map = open_zarr(flood_map_path)
-            #     # Open the zarr file
-            #     flood_map = open_zarr(
-            #         self.model.output_folder
-            #     / "flood_maps"
-            #     / "2021-07-12T09:00:00 - 2021-07-20T09:00:00.zarr"  # Change to autatically find right file name
-            # )
 
             calculate_performance_metrics(
                 observation="/scistor/ivm/vbl220/PhD/geul_flood_extent_5m.tif",
-                flood_map=flood_map,
+                flood_map_path=flood_map_path,
             )
 
         print("Flood map performance metrics calculated.")
