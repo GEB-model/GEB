@@ -13,6 +13,7 @@ from scipy.stats import chi2_contingency, norm
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
     INDEX_INSURANCE_ADAPTATION,
+    PR_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
     PERSONAL_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
@@ -650,6 +651,38 @@ class fairSTREAMModel(GEBModel):
         farm_size_m2 = farm_size_n_cells * mean_cell_size
         return farm_size_m2
 
+    def setup_pr_GEV(self):
+        import xclim.indices as xci
+        import xarray as xr
+        from ...workflows.io import open_zarr
+
+        pr: xr.DataArray = open_zarr(
+            Path("input/other/climate/pr.zarr"),
+        ) * (24 * 3600)
+        pr_monthly: xr.DataArray = pr.resample(time="M").sum(dim="time", skipna=True)
+
+        pr_yearly_max = (
+            pr_monthly.groupby("time.year")
+            .max(dim="time", skipna=True)
+            .rename({"year": "time"})
+            .chunk({"time": -1})
+            .compute()
+        )
+
+        gev_pr = xci.stats.fit(pr_yearly_max, dist="genextreme").compute()
+
+        self.set_grid(
+            gev_pr.sel(dparams="c").astype(np.float32), name="climate/pr_gev_c"
+        )
+        self.set_grid(
+            gev_pr.sel(dparams="loc").astype(np.float32), name="climate/pr_gev_loc"
+        )
+        self.set_grid(
+            gev_pr.sel(dparams="scale").astype(np.float32),
+            name="climate/pr_gev_scale",
+        )
+        pass
+
     def setup_farmer_crop_calendar(
         self,
         seasons,
@@ -672,6 +705,7 @@ class fairSTREAMModel(GEBModel):
                         FIELD_EXPANSION_ADAPTATION,
                         PERSONAL_INSURANCE_ADAPTATION,
                         INDEX_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
