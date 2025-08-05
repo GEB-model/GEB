@@ -29,15 +29,7 @@ from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
 from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 from geb.workflows.io import WorkingDirectory
-
-
-def multi_level_merge(dict1, dict2):
-    for key, value in dict2.items():
-        if key in dict1 and isinstance(dict1[key], dict) and isinstance(value, dict):
-            multi_level_merge(dict1[key], value)
-        else:
-            dict1[key] = value
-    return dict1
+from geb.workflows.methods import multi_level_merge
 
 
 class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
