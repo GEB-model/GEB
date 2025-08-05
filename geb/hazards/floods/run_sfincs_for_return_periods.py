@@ -143,11 +143,13 @@ def run_sfincs_for_return_periods_coastal(
             return_period=return_period,
         )
 
-        sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
+        sf: SfincsModel = SfincsModel(
+            root=simulation_root, mode="r+", logger=get_logger()
+        )
 
         sf.read()
         # copy the model root to the simulation root
-        sf.set_root(simulation_root, mode="w+")
+        # sf.set_root(simulation_root, mode="w+")
         # sf._write_gis = False
 
         sf.setup_config(
@@ -159,9 +161,7 @@ def run_sfincs_for_return_periods_coastal(
             )
         )
         sf.write_config()
-        sf.plot_basemap(variable="msk", fn_out="mask.png")
-        # sf.plot_basemap(fn_out="src_points_check.png")
-        sf.plot_forcing(fn_out="forcing.png")
+
         # only export if working dir is not cleaned afterwards anyway
         if not clean_working_dir:
             sf.plot_basemap(fn_out="basemap.png")

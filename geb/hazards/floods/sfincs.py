@@ -6,11 +6,13 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import rasterio
 import xarray as xr
 import zarr
 from shapely.geometry.point import Point
+from shapely.geometry import shape
 
-from ...hydrology.HRUs import load_geom
+from ...hydrology.HRUs import load_geom, load_grid
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .build_model import build_sfincs, build_sfincs_coastal
@@ -261,10 +263,83 @@ class SFINCS:
         damages = self.flood(flood_map=flood_map)
         return damages
 
+    def build_mask_for_coastal_sfincs(self):
+        """Builds a mask to define the active cells and boundaries for the coastal SFINCS model."""
+        # Load the dataset (assumes NetCDF with CF conventions and georeferencing info)
+        mask = xr.load_dataset(self.model.files["other"]["drainage/mask"])
+
+        # Extract the mask variable
+        mask_var = mask["mask"]
+
+        # Make sure it has a CRS
+        if mask_var.rio.crs is None:
+            mask_var = mask_var.rio.write_crs(
+                "EPSG:4326", inplace=False
+            )  # or your known CRS
+
+        # Extract binary mask values
+        mask_data = mask_var.values.astype(np.uint8)
+
+        # Get transform from raster metadata
+        transform = mask_var.rio.transform()
+
+        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
+        shapes = rasterio.features.shapes(mask_data, mask=None, transform=transform)
+
+        # Build GeoDataFrame from the shapes generator
+        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
+
+        gdf = gpd.GeoDataFrame.from_records(records)
+        gdf.set_geometry("geometry", inplace=True)
+        gdf.crs = mask_var.rio.crs
+        # include a 1km buffer to the mask to include the coastal areas
+        # Keep only mask == 1
+        gdf = gdf[gdf["value"] == 1]
+        # gdf.geometry = gdf.geometry.buffer(0.00833)
+
+        return gdf
+
+    def build_coastal_boundary_mask(self):
+        """Builds a mask to define the coastal boundaries for the SFINCS model."""
+        coastline = xr.load_dataset(
+            self.model.files["other"]["drainage/simulated_coastline"]
+        )
+
+        # Make sure it has a CRS
+        if coastline.rio.crs is None:
+            coastline = coastline.rio.write_crs(
+                "EPSG:4326", inplace=False
+            )  # check CRS for later applications
+
+        # Extract binary mask values
+        coastline_data = coastline["simulated_coastline"].values.astype(np.uint8)
+
+        # Get transform from raster metadata
+        transform = coastline.rio.transform()
+
+        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
+        shapes = rasterio.features.shapes(
+            coastline_data, mask=None, transform=transform
+        )
+
+        # Build GeoDataFrame from the shapes generator
+        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
+
+        gdf = gpd.GeoDataFrame.from_records(records)
+        gdf.set_geometry("geometry", inplace=True)
+        gdf = gdf.set_crs(coastline.rio.crs, inplace=True)
+        gdf = gdf[gdf["value"] == 1]  # Keep only mask == 1
+
+        return gdf
+        # convert the coastline to a GeoDataFrame
+
     def get_coastal_return_period_maps(self):
+        coastal_mask = self.build_mask_for_coastal_sfincs()
+        boundary_mask = self.build_coastal_boundary_mask()
         model_root: Path = self.sfincs_model_root("entire_region_coastal")
         build_parameters = self.get_build_parameters(model_root)
-        build_parameters["region"] = load_geom(self.model.files["geoms"]["mask"])
+        build_parameters["region"] = coastal_mask
+        build_parameters["boundary_mask"] = boundary_mask
         build_sfincs_coastal(
             **build_parameters,
         )

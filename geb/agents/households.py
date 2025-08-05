@@ -222,7 +222,6 @@ class Households(AgentBaseClass):
 
     def update_building_adaptation_status(self, household_adapting):
         """Update the floodproofing status of buildings based on adapting households."""
-
         # Extract and clean OSM IDs from adapting households
         osm_ids = pd.DataFrame(
             np.unique(self.var.osm_id.data[household_adapting])
@@ -1036,7 +1035,10 @@ class Households(AgentBaseClass):
 
     def calculate_building_flood_damages(self):
         """This function calculates the flood damages for the households in the model.
-        It iterates over the return periods and calculates the damages for each household"""
+
+        It iterates over the return periods and calculates the damages for each household
+        based on the flood maps and the building footprints.
+        """
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(

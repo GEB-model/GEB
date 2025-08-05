@@ -1,3 +1,5 @@
+import os
+
 import geopandas as gpd
 import hydromt.data_catalog
 import networkx as nx
@@ -11,7 +13,6 @@ from pyflwdir import FlwdirRaster
 from rasterio.features import rasterize
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, Point
-import os
 
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
@@ -778,7 +779,8 @@ class Hydrography:
     def setup_coastal_hydrograph(self):
         """Sets up the coastal hydrographs for the model using only the 100-year return period from Dullaarts database.
 
-        Other rps are not available.
+        This is done for rps [2, 5, 10, 20, 50, 100, 250, 500, 1000],
+        other rps are not available.
         """
         fp_coast_hg = self.data_catalog.get_source("COAST_HG").path
         coast_hg = xr.open_dataset(fp_coast_hg)

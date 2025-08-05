@@ -17,7 +17,6 @@ from geb.hazards.driver import HazardDriver
 from geb.hazards.floods.construct_storm_surge_hydrographs import (
     generate_storm_surge_hydrographs,
 )
-
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store

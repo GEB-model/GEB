@@ -91,6 +91,7 @@ def build_sfincs_coastal(
     model_root,
     DEMs,  # check where this is defined
     region,
+    boundary_mask,
     rivers,
     discharge,
     waterbody_ids: npt.NDArray[np.int32],
@@ -153,7 +154,7 @@ def build_sfincs_coastal(
         do_mask_flood_plains(sf)
     else:
         sf.setup_mask_active(
-            region, zmin=-500, reset_mask=True
+            region, zmin=-5e2, reset_mask=True
         )  # TODO: Improve mask setup # take a look at this for coastal setup (now set to )
 
     river_representative_points = []
@@ -223,8 +224,10 @@ def build_sfincs_coastal(
 
     sf.setup_mask_bounds(
         btype="waterlevel",
-        zmax=0,  # Maximum elevation of boundary cells [m] to assign as waterlevel boundary
+        # include_mask=boundary_mask,
+        zmax=10,  # Maximum elevation of boundary cells [m] to assign as waterlevel boundary
         reset_bounds=True,
+        all_touched=True,
     )
 
     # write all components, except forcing which must be done after the model building

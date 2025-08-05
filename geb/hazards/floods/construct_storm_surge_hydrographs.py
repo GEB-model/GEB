@@ -3,15 +3,15 @@ import pandas as pd
 import numpy as np
 import warnings
 import geopandas as gpd
-
-warnings.filterwarnings("ignore")
 import itertools
 import scipy.signal as ss
 from datetime import timedelta, datetime
 import matplotlib.pyplot as plt
 
+warnings.filterwarnings("ignore")
 
-def generate_storm_surge_hydrographs(model, make_plot=True):
+
+def generate_storm_surge_hydrographs(model, make_plot=False):
     gtsm_folder = model.input_folder / "other" / "gtsm"
     # read geojson file to get station ids
     station_ids = gpd.read_file(gtsm_folder / "stations.geojson")
@@ -268,7 +268,6 @@ def generate_surge_hydrograph(station, gtsm_folder, percentile, make_plot):
     surge_peaks_POT = surge_peaks[
         surge_peaks.waterlevel >= surge_peaks.quantile(percentile).waterlevel
     ]  # 0.6 #1.5 #0.8
-    surge_array = surgepd.surge.values
 
     # generate storm surge hydrograph
     hours = 36
@@ -470,8 +469,6 @@ def generate_storm_tide_hydrograph(
         },
         index=pd.date_range(start="1/1/2000", periods=len(surge), freq="10T"),
     )
-    storm_tide_hydrograph_average_tide_signal = df_event.twl.values
-
     surge_height_spring = rl - np.max(spring_tide_signal)
     surge_rise_spring = np.flip(
         np.interp(
@@ -502,7 +499,6 @@ def generate_storm_tide_hydrograph(
         },
         index=pd.date_range(start="1/1/2000", periods=len(surge_spring), freq="10T"),
     )
-    storm_tide_hydrograph_spring_tide_signal = df_event_spring.twl.values
 
     # plot
     if make_plot:

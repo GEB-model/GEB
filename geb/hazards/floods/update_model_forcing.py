@@ -34,7 +34,6 @@ def update_sfincs_model_forcing_coastal(
 
     # read model
     sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
-
     # update mode time based on event tstart and tend from event dict
     # waterlevel = sf.data_catalog.get_dataset(
     #     "waterlevel"
@@ -99,10 +98,12 @@ def update_sfincs_model_forcing_coastal(
     # change root to the output and write
     # sf.set_root(simulation_root, mode="w+") # write to base model for now
     sf._write_gis = True
+    sf.set_root(simulation_root, mode="w+")  # write to base model for now
     sf.write_grid()
     sf.write_forcing()
     sf.write_config()
     sf.plot_basemap(fn_out="src_points_check.png")
+    sf.plot_basemap(variable="msk", fn_out="mask.png")
     sf.plot_forcing(fn_out="forcing.png")
 
 
