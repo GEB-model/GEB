@@ -234,93 +234,10 @@ def test_run():
         args["config"] = parse_config(args["config"])
         args["config"]["report"].update(
             {
-                "hydrology": {
-                    "storage": {
-                        "varname": ".current_storage",
-                        "type": "scalar",
-                    },
-                    "routing loss": {
-                        "varname": ".routing_loss_m3",
-                        "type": "scalar",
-                    },
-                }
+                "_water_circle": True,
             }
         )
-        args["config"]["report"].update(
-            {
-                "hydrology.snowfrost": {
-                    "rain": {
-                        "varname": ".rain",
-                        "type": "HRU",
-                        "function": "weightedsum",
-                    },
-                    "snow": {
-                        "varname": ".snow",
-                        "type": "HRU",
-                        "function": "weightedsum",
-                    },
-                }
-            }
-        )
-        args["config"]["report"].update(
-            {
-                "hydrology.routing": {
-                    "river evaporation": {
-                        "varname": ".total_evaporation_in_rivers_m3",
-                        "type": "scalar",
-                    },
-                    "waterbody evaporation": {
-                        "varname": ".total_waterbody_evaporation_m3",
-                        "type": "scalar",
-                    },
-                    "river outflow": {
-                        "varname": ".total_outflow_at_pits_m3",
-                        "type": "scalar",
-                    },
-                }
-            }
-        )
-        args["config"]["report"]["hydrology.water_demand"] = {
-            "domestic water loss": {
-                "varname": ".domestic_water_loss_m3",
-                "type": "scalar",
-            },
-            "industry water loss": {
-                "varname": ".industry_water_loss_m3",
-                "type": "scalar",
-            },
-            "livestock water loss": {
-                "varname": ".livestock_water_loss_m3",
-                "type": "scalar",
-            },
-        }
-        args["config"]["report"]["hydrology.landcover"] = {
-            "transpiration": {
-                "varname": ".actual_transpiration",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "bare soil evaporation": {
-                "varname": ".actual_bare_soil_evaporation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "direct evaporation": {
-                "varname": ".open_water_evaporation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "interception evaporation": {
-                "varname": ".interception_evaporation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "snow sublimation": {
-                "varname": ".snow_sublimation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-        }
+
         run_model_with_method(method="run", **args)
 
     if os.getenv("GEB_TEST_GPU", "no") == "yes":

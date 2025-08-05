@@ -150,7 +150,7 @@ draw:
       draw_every_nth: 1
 
 report:
-  _water_cirle: true
+  _water_circle: false
   hydrology.routing:
     discharge_daily:
       varname: grid.var.discharge_m3_s
