@@ -742,7 +742,9 @@ def update(*args, **kwargs):
 @cli.command()
 @click_run_options()
 @click.option(
-    "--methods", default=None, help="Comma-seperated list of methods to evaluate."
+    "--methods",
+    default="plot_discharge,evaluate_discharge",
+    help="Comma-seperated list of methods to evaluate. Currently supported methods: 'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.",
 )
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
@@ -760,10 +762,10 @@ def update(*args, **kwargs):
 )
 def evaluate(
     working_directory,
-    config,
-    methods: list | None,
-    spinup_name,
-    run_name,
+    config: dict | str,
+    methods: str,
+    spinup_name: str,
+    run_name: str,
     include_spinup,
     correct_q_obs,
     port,
@@ -774,13 +776,16 @@ def evaluate(
     timing,
 ) -> None:
     # If no methods are provided, pass None to run_model_with_method
-    methods: list | None = None if not methods else methods.split(",")
+    methods_list: list[str] = methods.split(",")
+    methods_list: list[str] = [
+        method.replace("-", "_").strip() for method in methods_list
+    ]
     spinup_name: str
     run_name: str
     run_model_with_method(
         method="evaluate",
         method_args={
-            "methods": methods,
+            "methods": methods_list,
             "spinup_name": spinup_name,
             "run_name": run_name,
             "include_spinup": include_spinup,

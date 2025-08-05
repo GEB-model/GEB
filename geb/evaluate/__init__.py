@@ -15,7 +15,7 @@ class Evaluate(Hydrology):
 
     def run(
         self,
-        methods: list | None = None,
+        methods: list,
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
@@ -24,7 +24,7 @@ class Evaluate(Hydrology):
         """Run the evaluation methods.
 
         Args:
-            methods: List of method names to run. If None, defaults to
+            methods: List of method names to run. Defaults to
                 ["plot_discharge", "evaluate_discharge"].
             spinup_name: Name of the spinup run. Defaults to "spinup".
             run_name: Name of the run to evaluate. Defaults to "default".
@@ -38,18 +38,10 @@ class Evaluate(Hydrology):
         Returns:
             None
         """
-        if methods is None:
-            methods: list = [
-                "plot_discharge",
-                "evaluate_discharge",
-            ]
-        else:
-            assert isinstance(methods, (list, tuple)), (
-                "Methods should be a list or tuple."
-            )
-            assert all(isinstance(method, str) for method in methods), (
-                "All methods should be strings."
-            )
+        assert isinstance(methods, (list, tuple)), "Methods should be a list or tuple."
+        assert all(isinstance(method, str) for method in methods), (
+            "All methods should be strings."
+        )
 
         for method in methods:
             assert hasattr(self, method), (

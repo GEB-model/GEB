@@ -13,6 +13,86 @@ from honeybees.library.raster import coord_to_pixel
 from geb.store import DynamicArray
 from geb.workflows.methods import multi_level_merge
 
+WATER_CIRCLE_REPORT_CONFIG = {
+    "hydrology": {
+        "_water_circle_storage": {
+            "varname": ".current_storage",
+            "type": "scalar",
+        },
+        "_water_circle_routing_loss": {
+            "varname": ".routing_loss_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.snowfrost": {
+        "_water_circle_rain": {
+            "varname": ".rain",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_snow": {
+            "varname": ".snow",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+    },
+    "hydrology.routing": {
+        "_water_circle_river_evaporation": {
+            "varname": ".total_evaporation_in_rivers_m3",
+            "type": "scalar",
+        },
+        "_water_circle_waterbody_evaporation": {
+            "varname": ".total_waterbody_evaporation_m3",
+            "type": "scalar",
+        },
+        "_water_circle_river_outflow": {
+            "varname": ".total_outflow_at_pits_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.water_demand": {
+        "_water_circle_domestic_water_loss": {
+            "varname": ".domestic_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_circle_industry_water_loss": {
+            "varname": ".industry_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_circle_livestock_water_loss": {
+            "varname": ".livestock_water_loss_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.landcover": {
+        "_water_circle_transpiration": {
+            "varname": ".actual_transpiration",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_bare_soil_evaporation": {
+            "varname": ".actual_bare_soil_evaporation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_direct_evaporation": {
+            "varname": ".open_water_evaporation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_interception_evaporation": {
+            "varname": ".interception_evaporation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_snow_sublimation": {
+            "varname": ".snow_sublimation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+    },
+}
+
 
 def create_time_array(
     start: datetime.datetime,
@@ -93,89 +173,12 @@ class Reporter:
             to_delete: list[str] = []
             for module_name, module_values in list(report_config.items()):
                 if module_name.startswith("_"):
-                    if module_name == "_water_circle" and module_values is True:
-                        report_config = multi_level_merge(
-                            report_config,
-                            {
-                                "hydrology": {
-                                    "_water_circle_storage": {
-                                        "varname": ".current_storage",
-                                        "type": "scalar",
-                                    },
-                                    "_water_circle_routing_loss": {
-                                        "varname": ".routing_loss_m3",
-                                        "type": "scalar",
-                                    },
-                                },
-                                "hydrology.snowfrost": {
-                                    "_water_circle_rain": {
-                                        "varname": ".rain",
-                                        "type": "HRU",
-                                        "function": "weightedsum",
-                                    },
-                                    "_water_circle_snow": {
-                                        "varname": ".snow",
-                                        "type": "HRU",
-                                        "function": "weightedsum",
-                                    },
-                                },
-                                "hydrology.routing": {
-                                    "_water_circle_river_evaporation": {
-                                        "varname": ".total_evaporation_in_rivers_m3",
-                                        "type": "scalar",
-                                    },
-                                    "_water_circle_waterbody_evaporation": {
-                                        "varname": ".total_waterbody_evaporation_m3",
-                                        "type": "scalar",
-                                    },
-                                    "_water_circle_river_outflow": {
-                                        "varname": ".total_outflow_at_pits_m3",
-                                        "type": "scalar",
-                                    },
-                                },
-                                "hydrology.water_demand": {
-                                    "_water_circle_domestic_water_loss": {
-                                        "varname": ".domestic_water_loss_m3",
-                                        "type": "scalar",
-                                    },
-                                    "_water_circle_industry_water_loss": {
-                                        "varname": ".industry_water_loss_m3",
-                                        "type": "scalar",
-                                    },
-                                    "_water_circle_livestock_water_loss": {
-                                        "varname": ".livestock_water_loss_m3",
-                                        "type": "scalar",
-                                    },
-                                },
-                                "hydrology.landcover": {
-                                    "_water_circle_transpiration": {
-                                        "varname": ".actual_transpiration",
-                                        "type": "HRU",
-                                        "function": "weightedsum",
-                                    },
-                                    "_water_circle_bare_soil_evaporation": {
-                                        "varname": ".actual_bare_soil_evaporation",
-                                        "type": "HRU",
-                                        "function": "weightedsum",
-                                    },
-                                    "_water_circle_direct_evaporation": {
-                                        "varname": ".open_water_evaporation",
-                                        "type": "HRU",
-                                        "function": "weightedsum",
-                                    },
-                                    "_water_circle_interception_evaporation": {
-                                        "varname": ".interception_evaporation",
-                                        "type": "HRU",
-                                        "function": "weightedsum",
-                                    },
-                                    "_water_circle_snow_sublimation": {
-                                        "varname": ".snow_sublimation",
-                                        "type": "HRU",
-                                        "function": "weightedsum",
-                                    },
-                                },
-                            },
-                        )
+                    if module_name == "_water_circle":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                WATER_CIRCLE_REPORT_CONFIG,
+                            )
                     else:
                         raise ValueError(
                             f"Module {module_name} is not a valid module for reporting."
