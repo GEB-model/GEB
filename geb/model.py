@@ -416,10 +416,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self.reporter.finalize()
 
-    def create_coastal_hydrographs(self):
-        """Generate storm surge hydrographs for the model."""
-        generate_storm_surge_hydrographs(self)
-
     def estimate_return_periods(self) -> None:
         """Estimate the risk of the model."""
         current_time: datetime.datetime = self.create_datetime(
@@ -438,6 +434,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )
 
         HazardDriver.initialize(self, longest_flood_event=30)
+        generate_storm_surge_hydrographs(self)
         self.sfincs.get_coastal_return_period_maps()
         self.sfincs.get_return_period_maps()
         # self.sfincs.get_coastal_return_period_maps()

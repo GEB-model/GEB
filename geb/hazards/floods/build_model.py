@@ -221,6 +221,12 @@ def build_sfincs_coastal(
         nrmax=500,
     )
 
+    sf.setup_mask_bounds(
+        btype="waterlevel",
+        zmax=0,  # Maximum elevation of boundary cells [m] to assign as waterlevel boundary
+        reset_bounds=True,
+    )
+
     # write all components, except forcing which must be done after the model building
     sf.write_grid()
     sf.write_geoms()
@@ -230,8 +236,6 @@ def build_sfincs_coastal(
 
     sf.plot_basemap(fn_out="basemap.png")
     sf.plot_basemap(variable="msk", fn_out="mask.png")
-
-    pass
 
 
 def build_sfincs(

@@ -112,6 +112,7 @@ def assign_calculation_group(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 def run_sfincs_for_return_periods_coastal(
     model_root,
     gpu=True,
+    return_periods=[2, 5, 10, 25, 50, 100, 250, 500, 1000],
     export_dir=None,
     clean_working_dir=True,
     export=True,
@@ -128,49 +129,54 @@ def run_sfincs_for_return_periods_coastal(
     # rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
 
     working_dir: Path = model_root / "working_dir"
+    rp_maps = {}
 
-    simulation_root = working_dir / "coastal"
+    for return_period in return_periods:
+        simulation_root = working_dir / f"coastal_rp_{return_period:04d}"
 
-    shutil.rmtree(simulation_root, ignore_errors=True)  # remove old simulation root
-    simulation_root.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(simulation_root, ignore_errors=True)  # remove old simulation root
+        simulation_root.mkdir(parents=True, exist_ok=True)
 
-    update_sfincs_model_forcing_coastal(
-        model_root=model_root, simulation_root=simulation_root
-    )
-
-    sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
-
-    sf.read()
-    # copy the model root to the simulation root
-    sf.set_root(simulation_root, mode="w+")
-    # sf._write_gis = False
-
-    sf.setup_config(
-        **make_relative_paths(
-            sf.config,
-            model_root,
-            simulation_root,
-            relpath=os.path.relpath(model_root, simulation_root),
+        update_sfincs_model_forcing_coastal(
+            model_root=model_root,
+            simulation_root=simulation_root,
+            return_period=return_period,
         )
-    )
-    sf.write_config()
-    sf.plot_basemap(variable="msk", fn_out="mask.png")
-    # sf.plot_basemap(fn_out="src_points_check.png")
-    sf.plot_forcing(fn_out="forcing.png")
-    # only export if working dir is not cleaned afterwards anyway
-    if not clean_working_dir:
-        sf.plot_basemap(fn_out="basemap.png")
 
-    run_sfincs_simulation(model_root, simulation_root, gpu=gpu)
+        sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
 
-    max_depth: xr.DataArray = read_maximum_flood_depth(model_root, simulation_root)
+        sf.read()
+        # copy the model root to the simulation root
+        sf.set_root(simulation_root, mode="w+")
+        # sf._write_gis = False
 
-    if export:
-        max_depth: xr.DataArray = to_zarr(
-            max_depth,
-            export_dir / f"coastal_flood.zarr",
-            crs=max_depth.rio.crs,
+        sf.setup_config(
+            **make_relative_paths(
+                sf.config,
+                model_root,
+                simulation_root,
+                relpath=os.path.relpath(model_root, simulation_root),
+            )
         )
+        sf.write_config()
+        sf.plot_basemap(variable="msk", fn_out="mask.png")
+        # sf.plot_basemap(fn_out="src_points_check.png")
+        sf.plot_forcing(fn_out="forcing.png")
+        # only export if working dir is not cleaned afterwards anyway
+        if not clean_working_dir:
+            sf.plot_basemap(fn_out="basemap.png")
+
+        run_sfincs_simulation(model_root, simulation_root, gpu=gpu)
+
+        max_depth: xr.DataArray = read_maximum_flood_depth(model_root, simulation_root)
+        rp_maps[return_period] = max_depth
+        if export:
+            max_depth: xr.DataArray = to_zarr(
+                max_depth,
+                export_dir / f"coastal_flood_rp_{return_period:04d}.zarr",
+                crs=max_depth.rio.crs,
+            )
+    return rp_maps
 
 
 def run_sfincs_for_return_periods(

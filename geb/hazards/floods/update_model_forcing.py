@@ -27,6 +27,7 @@ def to_sfincs_datetime(dt: datetime) -> str:
 def update_sfincs_model_forcing_coastal(
     model_root: Path,
     simulation_root: Path,
+    return_period: int,
 ):
     # update waterlevel boundary conditions for coastal flooding here. setup_waterlevel_forcing()
     # setup curve number infiltration with recovery based on global CN dataset (optional)
@@ -66,7 +67,7 @@ def update_sfincs_model_forcing_coastal(
     # )
 
     timeseries = pd.read_csv(
-        "/scistor/ivm/ltf200/GEB/models/models/boulogne_sur_mer/base/input/other/gtsm/hydrographs/gtsm_spring_tide_hydrograph_rp0100.csv",
+        f"/scistor/ivm/ltf200/GEB/models/models/boulogne_sur_mer/base/input/other/gtsm/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv",
         index_col=0,
     )
     timeseries.index = pd.to_datetime(timeseries.index, format="%Y-%m-%d %H:%M:%S")
@@ -77,7 +78,7 @@ def update_sfincs_model_forcing_coastal(
     # locations = locations.reset_index(names="stations")
     # locations.index = locations.index + 1  # for hydromt/SFINCS index should start at 1
     timeseries.columns = locations.index
-    timeseries *= 100  # convert from m to cm
+    # timeseries *= 100  # convert from m to cm
     timeseries = timeseries.iloc[300:-300]  # trim the first and last 300 rows
 
     sf.setup_config(

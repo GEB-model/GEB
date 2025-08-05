@@ -777,7 +777,9 @@ class Hydrography:
     @build_method
     def setup_coastal_hydrograph(self):
         """Sets up the coastal hydrographs for the model using only the 100-year return period from Dullaarts database.
-        Other rps are not available."""
+
+        Other rps are not available.
+        """
         fp_coast_hg = self.data_catalog.get_source("COAST_HG").path
         coast_hg = xr.open_dataset(fp_coast_hg)
         # Select stations within model bounds
