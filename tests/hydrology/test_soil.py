@@ -775,13 +775,10 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
     # soil_thickness = np.array([[0.4, 0.4, 0.4, 0.4, 0.4, 0.4]])
     soil_layer_height = np.vstack([soil_layer_height] * ncols).T
 
-    available_water_infiltration = np.full(ncols, 0.005, dtype=np.float32)
-    land_use_type = np.full_like(available_water_infiltration, 0.1, dtype=np.int32)
-    frost_index = np.full_like(
-        available_water_infiltration, -9999, dtype=np.float32
-    )  # no frost
-    arno_beta = np.full_like(available_water_infiltration, 0.5, dtype=np.float32)
-    topwater = np.zeros_like(available_water_infiltration)
+    topwater = np.full(ncols, 0.005, dtype=np.float32)
+    land_use_type = np.full_like(topwater, 0.1, dtype=np.int32)
+    frost_index = np.full_like(topwater, -9999, dtype=np.float32)  # no frost
+    arno_beta = np.full_like(topwater, 0.5, dtype=np.float32)
 
     geb.hydrology.soil.N_SOIL_LAYERS = soil_layer_height.shape[0]
     geb.hydrology.soil.FROST_INDEX_THRESHOLD = 0
@@ -827,10 +824,7 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
     plot_soil_layers(axes[0], soil_layer_height, w, wres, ws)
 
     direct_runoff, groundwater_recharge = vertical_water_transport(
-        available_water_infiltration=available_water_infiltration,
-        capillary_rise_from_groundwater=np.full_like(
-            available_water_infiltration, capillary_rise_from_groundwater
-        ),
+        capillary_rise_from_groundwater=np.zeros_like(topwater),
         ws=ws,
         wres=wres,
         saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
@@ -851,12 +845,11 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     plot_soil_layers(axes[1], soil_layer_height, w, wres, ws)
 
-    available_water_infiltration.fill(0)
+    topwater.fill(0)
     for _ in range(1000):
         direct_runoff, groundwater_recharge = vertical_water_transport(
-            available_water_infiltration=available_water_infiltration,
             capillary_rise_from_groundwater=np.full_like(
-                available_water_infiltration, capillary_rise_from_groundwater
+                topwater, capillary_rise_from_groundwater
             ),
             ws=ws,
             wres=wres,
