@@ -682,6 +682,7 @@ class Hydrology:
         include_spinup: bool,
         spinup_name: str,
         *args,
+        export=True,
         **kwargs,
     ) -> None:
         """Create a water circle plot for the GEB model.
@@ -932,6 +933,9 @@ class Hydrology:
             ),
         )
 
-        water_circle.write_image(
-            self.output_folder_evaluate / "water_circle.png", scale=5
-        )
+        if export:
+            water_circle.write_image(
+                self.output_folder_evaluate / "water_circle.png", scale=5
+            )
+
+        return water_circle
