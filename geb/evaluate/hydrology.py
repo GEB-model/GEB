@@ -1038,23 +1038,23 @@ class Hydrology:
         """
 
         def calculate_hit_rate(model, observations):
-            miss = np.sum((model == 0) & (observations == 1))
-            hit = np.sum((model == 1) & (observations == 1))
+            miss = np.sum(((model == 0) & (observations == 1)).values)
+            hit = np.sum(((model == 1) & (observations == 1)).values)
             hit_rate = hit / (hit + miss)
-            return hit_rate
+            return float(hit_rate)
 
         def calculate_false_alarm_ratio(model, observations):
-            false_alarm = np.sum((model == 1) & (observations == 0))
-            hit = np.sum((model == 1) & (observations == 1))
+            false_alarm = np.sum(((model == 1) & (observations == 0)).values)
+            hit = np.sum(((model == 1) & (observations == 1)).values)
             false_alarm_ratio = false_alarm / (false_alarm + hit)
-            return false_alarm_ratio
+            return float(false_alarm_ratio)
 
         def calculate_critical_success_index(model, observations):
-            hit = np.sum((model == 1) & (observations == 1))
-            false_alarm = np.sum((model == 1) & (observations == 0))
-            miss = np.sum((model == 0) & (observations == 1))
-            critical_success_index = hit / (hit + false_alarm + miss)
-            return critical_success_index
+            hit = np.sum(((model == 1) & (observations == 1)).values)
+            false_alarm = np.sum(((model == 1) & (observations == 0)).values)
+            miss = np.sum(((model == 0) & (observations == 1)).values)
+            csi = hit / (hit + false_alarm + miss)
+            return float(csi)
 
         # Main function for the peformance metrics
         def calculate_performance_metrics(observation, flood_map_path):
@@ -1117,21 +1117,21 @@ class Hydrology:
             observation_final = obs_region > 0
 
             # Step 6: Calculate performance metrics
-            hit_rate = (
-                calculate_hit_rate(simulation_final, observation_final).compute() * 100
-            )
+            # Compute the arrays first to get concrete values
+            sim_final_computed = simulation_final.compute()
+            obs_final_computed = observation_final.compute()
+
+            hit_rate = calculate_hit_rate(sim_final_computed, obs_final_computed) * 100
             false_rate = (
-                calculate_false_alarm_ratio(
-                    simulation_final, observation_final
-                ).compute()
+                calculate_false_alarm_ratio(sim_final_computed, obs_final_computed)
                 * 100
             )
             csi = (
-                calculate_critical_success_index(
-                    simulation_final, observation_final
-                ).compute()
+                calculate_critical_success_index(sim_final_computed, obs_final_computed)
                 * 100
             )
+            flooded_pixels = float(sim_final_computed.sum().item())
+            flooded_area_km2 = flooded_pixels * (5 * 5) / 1_000_000
 
             # Step 7: Save results to file and plot the results
             elevation_data = rxr.open_rasterio(
@@ -1224,10 +1224,8 @@ class Hydrology:
                     f.write(f"Hit rate (H): {hit_rate}\n")
                     f.write(f"False alarm rate (F): {false_rate}\n")
                     f.write(f"Critical Success Index (CSI) (C): {csi}\n")
-                    f.write(f"Number of flooded pixels: {simulation_final.sum()}\n")
-                    f.write(
-                        f"Flooded area (km2): {simulation_final.sum() * (5 * 5) / 1000000}"
-                    )
+                    f.write(f"Number of flooded pixels: {flooded_pixels}\n")
+                    f.write(f"Flooded area (km2): {flooded_area_km2}")
 
                 return performance_numbers
 
