@@ -173,7 +173,7 @@ def run_sfincs_for_return_periods_coastal(
         if export:
             max_depth: xr.DataArray = to_zarr(
                 max_depth,
-                export_dir / f"coastal_flood_rp_{return_period:04d}.zarr",
+                export_dir / f"coastal_{return_period:04d}.zarr",
                 crs=max_depth.rio.crs,
             )
     return rp_maps
@@ -282,7 +282,7 @@ def run_sfincs_for_return_periods(
         if export:
             rp_map: xr.DataArray = to_zarr(
                 rp_map,
-                export_dir / f"{return_period}.zarr",
+                export_dir / f"riverine_{return_period:04d}.zarr",
                 crs=rp_map.rio.crs,
             )
 

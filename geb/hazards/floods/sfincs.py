@@ -11,6 +11,7 @@ import xarray as xr
 import zarr
 from shapely.geometry.point import Point
 from shapely.geometry import shape
+from rioxarray.merge import merge_arrays
 
 from ...hydrology.HRUs import load_geom, load_grid
 from ...workflows.io import open_zarr, to_zarr
@@ -25,7 +26,6 @@ from .run_sfincs_for_return_periods import (
 from .sfincs_utils import run_sfincs_simulation
 from .update_model_forcing import (
     update_sfincs_model_forcing,
-    update_sfincs_model_forcing_coastal,
 )
 
 
@@ -331,7 +331,6 @@ class SFINCS:
         gdf = gdf[gdf["value"] == 1]  # Keep only mask == 1
 
         return gdf
-        # convert the coastline to a GeoDataFrame
 
     def get_coastal_return_period_maps(self):
         coastal_mask = self.build_mask_for_coastal_sfincs()
@@ -344,14 +343,16 @@ class SFINCS:
             **build_parameters,
         )
 
-        run_sfincs_for_return_periods_coastal(
+        rp_maps_coastal = run_sfincs_for_return_periods_coastal(
             model_root=model_root,
             gpu=self.config["SFINCS"]["gpu"],
             export_dir=self.model.output_folder / "flood_maps",
             clean_working_dir=True,
+            return_periods=self.config["return_periods"],
         )
+        return rp_maps_coastal
 
-    def get_return_period_maps(self):
+    def get_riverine_return_period_maps(self):
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
@@ -371,7 +372,7 @@ class SFINCS:
             return_periods=self.config["return_periods"],
         )
 
-        run_sfincs_for_return_periods(
+        rp_maps_riverine = run_sfincs_for_return_periods(
             model_root=model_root,
             return_periods=self.config["return_periods"],
             gpu=self.config["SFINCS"]["gpu"],
@@ -384,6 +385,56 @@ class SFINCS:
             self.model.reporter.variables["discharge_daily"] = zarr.ZipStore(
                 self.model.config["report_hydrology"]["discharge_daily"]["path"],
                 mode="a",
+            )
+        return rp_maps_riverine
+
+    def merge_return_period_maps(self, rp_maps_coastal, rp_maps_riverine):
+        """Merges the return period maps for riverine and coastal floods into a single dataset."""
+
+        for return_period in self.config["return_periods"]:
+            coastal_da = rp_maps_coastal[return_period]
+            riverine_da = rp_maps_riverine[return_period]
+
+            # --- 2. Get union bounds ---
+            riv_bounds = riverine_da.rio.bounds()  # (minx, miny, maxx, maxy)
+            coa_bounds = coastal_da.rio.bounds()
+
+            minx = min(riv_bounds[0], coa_bounds[0])
+            miny = min(riv_bounds[1], coa_bounds[1])
+            maxx = max(riv_bounds[2], coa_bounds[2])
+            maxy = max(riv_bounds[3], coa_bounds[3])
+
+            # --- 3. Pick resolution ---
+            # Use riverine resolution (y is negative if north-up, so take abs)
+            res_x, res_y = riverine_da.rio.resolution()
+            res_x = abs(res_x)
+            res_y = abs(res_y)
+
+            # --- 4. Build template coords ---
+            width = int(np.ceil((maxx - minx) / res_x))
+            height = int(np.ceil((maxy - miny) / res_y))
+
+            x_coords = minx + (np.arange(width) + 0.5) * res_x
+            y_coords = maxy - (np.arange(height) + 0.5) * res_y  # top→bottom
+
+            template = xr.DataArray(
+                np.full((height, width), np.nan, dtype=riverine_da.dtype),
+                coords={"y": y_coords, "x": x_coords},
+                dims=("y", "x"),
+            ).rio.write_crs(riverine_da.rio.crs)
+
+            # --- 5. Reproject both datasets to the template ---
+            riverine_reproj = riverine_da.rio.reproject_match(template)
+            coastal_reproj = coastal_da.rio.reproject_match(template)
+
+            # --- 6. Merge via maximum ---
+            rp_map = xr.concat([riverine_reproj, coastal_reproj], dim="stacked").max(
+                dim="stacked", skipna=True
+            )
+            rp_map.rio.write_crs(riverine_da.rio.crs)
+
+            rp_map.to_zarr(
+                self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
             )
 
     def run(self, event):

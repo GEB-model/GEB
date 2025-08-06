@@ -40,9 +40,9 @@ def update_sfincs_model_forcing_coastal(
     # ).compute()  # define water levels and stations in data_catalog.yml
 
     locations = gpd.GeoDataFrame(
-        gpd.read_file(
-            "/scistor/ivm/ltf200/GEB/models/models/boulogne_sur_mer/base/input/other/gtsm/stations.geojson"
-        ).rename(columns={"station_id": "stations"})
+        gpd.read_file(Path("input/other/gtsm/stations.geojson")).rename(
+            columns={"station_id": "stations"}
+        )
     ).set_index("stations")
     # convert index to int
     locations.index = locations.index.astype(int)
@@ -66,7 +66,9 @@ def update_sfincs_model_forcing_coastal(
     # )
 
     timeseries = pd.read_csv(
-        f"/scistor/ivm/ltf200/GEB/models/models/boulogne_sur_mer/base/input/other/gtsm/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv",
+        Path(
+            f"input/other/gtsm/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
+        ),
         index_col=0,
     )
     timeseries.index = pd.to_datetime(timeseries.index, format="%Y-%m-%d %H:%M:%S")
