@@ -6,7 +6,14 @@ import numpy as np
 import pytest
 
 import geb.hydrology.soil
+from geb.hydrology.landcover import (
+    NON_PADDY_IRRIGATED,
+    OPEN_WATER,
+    PADDY_IRRIGATED,
+    SEALED,
+)
 from geb.hydrology.soil import (
+    add_water_to_topwater_and_evaporate_open_water,
     get_critical_soil_moisture_content,
     get_fraction_easily_available_soil_water,
     get_infiltration_capacity,
@@ -688,6 +695,74 @@ def plot_soil_layers(ax, soil_thickness, w, wres, ws, fluxes=None):
     ax.set_xlabel("Layer index")
     ax.set_ylabel("Soil layer depth")
     ax.invert_yaxis()
+
+
+def test_add_water_to_topwater_and_evaporate_open_water():
+    topwater = np.array([0.05, 0.0, 0.0, 0.0], dtype=np.float32)
+    topwater_pre = topwater.copy()
+    natural_available_water_infiltration = np.array(
+        [0.01, 0.01, 0.01, 0.01], dtype=np.float32
+    )
+    actual_irrigation_consumption = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    land_use_type = np.array(
+        [PADDY_IRRIGATED, NON_PADDY_IRRIGATED, SEALED, OPEN_WATER], dtype=np.int32
+    )
+    reference_evapatotranspiration_water = np.array(
+        [
+            0.025,
+            0.025,
+            0.025,
+            0.025,
+        ],
+        dtype=np.float32,
+    )
+
+    open_water_evaporation = add_water_to_topwater_and_evaporate_open_water(
+        natural_available_water_infiltration=natural_available_water_infiltration,
+        actual_irrigation_consumption=actual_irrigation_consumption,
+        land_use_type=land_use_type,
+        reference_evapotranspiration_water=reference_evapatotranspiration_water,
+        topwater=topwater,
+    )
+    assert (open_water_evaporation >= 0.0).all()
+    assert (topwater >= 0.0).all()
+
+    np.testing.assert_array_almost_equal(
+        topwater_pre
+        + natural_available_water_infiltration
+        + actual_irrigation_consumption,
+        topwater + open_water_evaporation,
+    )
+
+    topwater = topwater_pre.copy()
+
+    reference_evapatotranspiration_water = np.array(
+        [
+            1,
+            1,
+            1,
+            1,
+        ],
+        dtype=np.float32,
+    )
+
+    open_water_evaporation = add_water_to_topwater_and_evaporate_open_water(
+        natural_available_water_infiltration=natural_available_water_infiltration,
+        actual_irrigation_consumption=actual_irrigation_consumption,
+        land_use_type=land_use_type,
+        reference_evapotranspiration_water=reference_evapatotranspiration_water,
+        topwater=topwater,
+    )
+
+    np.testing.assert_array_almost_equal(
+        topwater_pre
+        + natural_available_water_infiltration
+        + actual_irrigation_consumption,
+        topwater + open_water_evaporation,
+    )
+
+    assert (open_water_evaporation >= 0.0).all()
+    assert (topwater >= 0.0).all()
 
 
 @pytest.mark.parametrize("capillary_rise_from_groundwater", [0.0, 0.01])

@@ -241,7 +241,7 @@ class LandCover(Module):
 
         (
             interflow,
-            runoff_soil,
+            runoff,
             groundwater_recharge,
             open_water_evaporation,
             actual_transpiration,
@@ -253,18 +253,9 @@ class LandCover(Module):
             potential_evapotranspiration,
             natural_available_water_infiltration=self.HRU.var.natural_available_water_infiltration,
             actual_irrigation_consumption=self.HRU.var.actual_irrigation_consumption,
-            crop_factor=crop_factor,
         )
-        assert not (runoff_soil < 0).any()
-        timer.new_split("Soil")
-
-        runoff_sealed_water, open_water_evaporation = self.hydrology.sealed_water.step(
-            capillar, open_water_evaporation
-        )
-        timer.new_split("Sealed")
-
-        runoff = np.nan_to_num(runoff_soil) + np.nan_to_num(runoff_sealed_water)
         assert (runoff >= 0).all()
+        timer.new_split("Soil")
 
         self.HRU.var.actual_evapotranspiration = (
             actual_bare_soil_evaporation
@@ -316,12 +307,12 @@ class LandCover(Module):
                     self.HRU.var.actual_irrigation_consumption,
                 ],
                 outfluxes=[
-                    runoff,
                     interflow,
+                    runoff,
                     groundwater_recharge,
+                    open_water_evaporation,
                     actual_transpiration,
                     actual_bare_soil_evaporation,
-                    open_water_evaporation,
                 ],
                 prestorages=[np.nansum(w_pre, axis=0), topwater_pre],
                 poststorages=[
@@ -329,6 +320,9 @@ class LandCover(Module):
                     self.HRU.var.topwater,
                 ],
                 tollerance=1e-6,
+                error_identifiers={
+                    "land_use_type": self.HRU.var.land_use_type,
+                },
             )
 
             totalstorage_landcover = (

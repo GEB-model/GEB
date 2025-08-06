@@ -35,7 +35,6 @@ from .landcover import LandCover
 from .potential_evapotranspiration import PotentialEvapotranspiration
 from .routing import Routing
 from .runoff_concentration import RunoffConcentration
-from .sealed_water import SealedWater
 from .snow_frost import SnowFrost
 from .soil import Soil
 from .water_demand import WaterDemand
@@ -73,7 +72,6 @@ class Hydrology(Data, Module):
         self.evaporation = Evaporation(self.model, self)
         self.groundwater = GroundWater(self.model, self)
         self.interception = Interception(self.model, self)
-        self.sealed_water = SealedWater(self.model, self)
         self.runoff_concentration = RunoffConcentration(self.model, self)
         self.lakes_res_small = SmallLakesReservoirs(self.model, self)
         self.routing = Routing(self.model, self)

@@ -36,6 +36,7 @@ from .landcover import (
     FOREST,
     GRASSLAND_LIKE,
     NON_PADDY_IRRIGATED,
+    OPEN_WATER,
     PADDY_IRRIGATED,
     SEALED,
 )
@@ -288,57 +289,73 @@ def get_crop_group_number(
 
 
 @njit(cache=True, parallel=True)
-def get_available_water_infiltration(
-    natural_available_water_infiltration,
-    actual_irrigation_consumption,
-    land_use_type,
-    crop_kc,
-    reference_evapotranspiration_water,
-    topwater,
-):
-    """Update the soil water storage based on the water balance calculations.
+def add_water_to_topwater_and_evaporate_open_water(
+    natural_available_water_infiltration: npt.NDArray[np.float32],
+    actual_irrigation_consumption: npt.NDArray[np.float32],
+    land_use_type: npt.NDArray[np.int32],
+    reference_evapotranspiration_water: npt.NDArray[np.float32],
+    topwater: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Add available water from natural and innatural sources to the topwater and calculate open water evaporation.
 
-    Parameters
-    ----------
-    wwp : np.ndarray
+    Args:
+        natural_available_water_infiltration: The natural available water infiltration in m.
+        actual_irrigation_consumption: The actual irrigation consumption in m.
+        land_use_type: The land use type of the hydrological response unit.
+        reference_evapotranspiration_water: The reference evapotranspiration from water in m.
+        topwater: The topwater in m, which is the water available for evaporation and transpiration.
+
+    Returns:
+        The open water evaporation in m, which is the water evaporated from open water areas.
 
     Notes:
-    -----
-    This function requires N_SOIL_LAYERS to be defined in the global scope. Which can help
-    the compiler to optimize the code better.
+        Also updates topwater in place
     """
-    available_water_infiltration = np.zeros_like(land_use_type, dtype=np.float32)
-    open_water_evaporation = np.zeros_like(land_use_type, dtype=np.float32)
+    open_water_evaporation: npt.NDArray[np.float32] = np.zeros_like(
+        land_use_type, dtype=np.float32
+    )
+
     for i in prange(land_use_type.size):
-        available_water_infiltration[i] = (
+        topwater[i] += (
             natural_available_water_infiltration[i] + actual_irrigation_consumption[i]
         )
-        if available_water_infiltration[i] < np.float32(0):
-            available_water_infiltration[i] = np.float32(0)
-        # paddy irrigated land
         if land_use_type[i] == PADDY_IRRIGATED:
-            if crop_kc[i] > np.float32(0.75):
-                topwater[i] += available_water_infiltration[i]
-
-            open_water_evaporation[i] = min(
-                max(np.float32(0.0), topwater[i]), reference_evapotranspiration_water[i]
+            open_water_evaporation[i] = np.minimum(
+                np.maximum(np.float32(0.0), topwater[i]),
+                reference_evapotranspiration_water[i],
             )
-            topwater[i] -= open_water_evaporation[i]
-            if crop_kc[i] > np.float32(0.75):
-                available_water_infiltration[i] = topwater[i]
-            else:
-                available_water_infiltration[i] += topwater[i]
-    return available_water_infiltration, open_water_evaporation
+        elif land_use_type[i] == SEALED:
+            # evaporation from precipitation fallen on sealed area (ponds)
+            # estimated as 0.2 x reference_evapotranspiration_water
+            open_water_evaporation[i] = np.minimum(
+                0.2 * reference_evapotranspiration_water[i], topwater[i]
+            )
+        else:
+            # no open water evaporation for other land use types (thus using default of 0)
+            # note that evaporation from open water and channels is calculated in the routing module
+            pass
+        topwater[i] -= open_water_evaporation[i]
+    return open_water_evaporation
 
 
 @njit(cache=True, parallel=True)
 def rise_from_groundwater(
-    w,
-    ws,
-    capillary_rise_from_groundwater,
-):
-    bottom_soil_layer_index = N_SOIL_LAYERS - 1
-    runoff_from_groundwater = np.zeros_like(
+    w: npt.NDArray[np.float32],
+    ws: npt.NDArray[np.float32],
+    capillary_rise_from_groundwater: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Adds capillary rise from groundwater to the bottom soil layer and moves excess water upwards.
+
+    Args:
+        w: Soil water content in each layer in meters.
+        ws: Saturated soil water content in each layer in meters.
+        capillary_rise_from_groundwater: Capillary rise from groundwater in meters.
+
+    Returns:
+        The runoff from groundwater in meters, which is the excess water that cannot be stored in the soil layers.
+    """
+    bottom_soil_layer_index: int = N_SOIL_LAYERS - 1
+    runoff_from_groundwater: npt.NDArray[np.float32] = np.zeros_like(
         capillary_rise_from_groundwater, dtype=np.float32
     )
 
@@ -460,7 +477,6 @@ def evapotranspirate(
     w,
     topwater,
     open_water_evaporation,
-    available_water_infiltration,
     minimum_effective_root_depth: float,
     mask_transpiration,
     mask_soil_evaporation,
@@ -489,7 +505,6 @@ def evapotranspirate(
                 )
                 remaining_potential_transpiration -= transpiration_from_topwater
                 topwater[i] -= transpiration_from_topwater
-                available_water_infiltration[i] -= transpiration_from_topwater
                 transpiration[i] += transpiration_from_topwater
 
             if not soil_is_frozen[i]:
@@ -692,14 +707,27 @@ def get_saturated_area_fraction(
 
 
 @njit(cache=True, inline="always")
-def get_infiltration_capacity(w, ws, saturated_hydraulic_conductivity):
+def get_infiltration_capacity(
+    w: npt.NDArray[np.float32],
+    ws: npt.NDArray[np.float32],
+    saturated_hydraulic_conductivity: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Calculate the infiltration capacity based on the current soil moisture, maximum soil moisture, and saturated hydraulic conductivity.
+
+    Args:
+        w: Current soil moisture content.
+        ws: Maximum soil moisture content.
+        saturated_hydraulic_conductivity: Saturated hydraulic conductivity of the soil.
+
+    Returns:
+        Infiltration capacity for each pixel.
+    """
     return saturated_hydraulic_conductivity[0]
 
 
 # Do NOT use fastmath here. This leads to unexpected behaviour with NaNs
 @njit(cache=True, parallel=True, fastmath=False)
 def vertical_water_transport(
-    available_water_infiltration,
     capillary_rise_from_groundwater,
     ws,
     wres,
@@ -733,20 +761,21 @@ def vertical_water_transport(
     #         w[:, i], ws[:, i], arno_beta[i]
     #     )
 
-    # potential_infiltration = saturated_hydraulic_conductivity[0, :]
-
     potential_infiltration = get_infiltration_capacity(
-        w, ws, saturated_hydraulic_conductivity
+        w=w, ws=ws, saturated_hydraulic_conductivity=saturated_hydraulic_conductivity
     )
 
     for i in prange(land_use_type.size):
         # If the soil is frozen, no infiltration occurs
         infiltration = min(
-            potential_infiltration[i] * ~soil_is_frozen[i],
-            available_water_infiltration[i],
+            potential_infiltration[i]
+            * ~soil_is_frozen[i]
+            * ~(land_use_type[i] == SEALED)
+            * ~(land_use_type[i] == OPEN_WATER),
+            topwater[i],
         )
         remaining_infiltration = np.float32(infiltration)  # make a copy
-        for layer in range(3):
+        for layer in range(N_SOIL_LAYERS):
             capacity = ws[layer, i] - w[layer, i]
             if remaining_infiltration > capacity:
                 w[layer, i] = ws[layer, i]  # fill the layer to capacity
@@ -758,17 +787,17 @@ def vertical_water_transport(
                 break
 
         infiltration -= remaining_infiltration
+        topwater[i] -= infiltration
 
-        # Runoff and topwater update for paddy fields
-        if land_use_type[i] == PADDY_IRRIGATED:
-            topwater[i] = max(np.float32(0), topwater[i] - infiltration)
-            direct_runoff[i] = max(0, topwater[i] - np.float32(0.05))
-            topwater[i] = max(np.float32(0), topwater[i] - direct_runoff[i])
-        else:
-            direct_runoff[i] = max(
-                (available_water_infiltration[i] - infiltration),
-                np.float32(0),
-            )
+        assert topwater[i] >= 0
+
+        direct_runoff[i] = max(
+            0, topwater[i] - np.float32(0.05) * (land_use_type[i] == PADDY_IRRIGATED)
+        )
+
+        topwater[i] = topwater[i] - direct_runoff[i]
+
+        assert topwater[i] >= 0
 
     psi, unsaturated_hydraulic_conductivity = get_soil_water_flow_parameters(
         w.ravel(),
@@ -1640,7 +1669,6 @@ class Soil(Module):
         potential_evapotranspiration,
         natural_available_water_infiltration,
         actual_irrigation_consumption,
-        crop_factor,
     ):
         """Dynamic part of the soil module.
 
@@ -1727,9 +1755,144 @@ class Soil(Module):
                 self.plant_new_forest(i)
                 # self.plantFATE_forest_RUs[new_forest_HRUs] = True
 
-        interflow = self.HRU.full_compressed(0, dtype=np.float32)
-
         timer = TimingModule("Soil")
+
+        open_water_evaporation = np.zeros_like(
+            self.HRU.var.land_use_type, dtype=np.float32
+        )
+        runoff_from_groundwater = np.zeros_like(
+            self.HRU.var.land_use_type, dtype=np.float32
+        )
+        direct_runoff = np.zeros_like(self.HRU.var.land_use_type, dtype=np.float32)
+        groundwater_recharge = np.zeros_like(
+            self.HRU.var.land_use_type, dtype=np.float32
+        )
+
+        n_substeps = 3
+        for _ in range(n_substeps):
+            open_water_evaporation += add_water_to_topwater_and_evaporate_open_water(
+                natural_available_water_infiltration=natural_available_water_infiltration
+                / n_substeps,
+                actual_irrigation_consumption=actual_irrigation_consumption
+                / n_substeps,
+                land_use_type=self.HRU.var.land_use_type,
+                reference_evapotranspiration_water=self.HRU.var.reference_evapotranspiration_water
+                / n_substeps,
+                topwater=self.HRU.var.topwater,
+            )
+
+            runoff_from_groundwater += rise_from_groundwater(
+                w=self.HRU.var.w,
+                ws=self.HRU.var.ws,
+                capillary_rise_from_groundwater=capillary_rise_from_groundwater.astype(
+                    np.float32
+                )
+                / n_substeps,
+            )
+
+            (
+                direct_runoff_substep,
+                groundwater_recharge_substep,
+            ) = vertical_water_transport(
+                capillary_rise_from_groundwater / n_substeps,
+                self.HRU.var.ws,
+                self.HRU.var.wres,
+                self.HRU.var.saturated_hydraulic_conductivity / n_substeps,
+                self.HRU.var.lambda_pore_size_distribution,
+                self.HRU.var.bubbling_pressure_cm,
+                self.HRU.var.land_use_type,
+                self.HRU.var.frost_index,
+                self.HRU.var.arno_beta,
+                self.HRU.var.w,
+                self.HRU.var.topwater,
+                self.HRU.var.soil_layer_height,
+            )
+
+            direct_runoff += direct_runoff_substep
+            groundwater_recharge[bioarea] += groundwater_recharge_substep[bioarea]
+
+        assert not np.isnan(open_water_evaporation).any()
+        assert not np.isnan(self.HRU.var.topwater).any()
+
+        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
+        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
+
+        timer.new_split("Vertical transport")
+
+        if __debug__:
+            assert balance_check(
+                name="soil_1",
+                how="cellwise",
+                influxes=[
+                    natural_available_water_infiltration,
+                    actual_irrigation_consumption,
+                    capillary_rise_from_groundwater,
+                ],
+                outfluxes=[
+                    open_water_evaporation,
+                    runoff_from_groundwater,
+                    direct_runoff,
+                    groundwater_recharge,
+                ],
+                prestorages=[
+                    np.nansum(w_pre, axis=0),
+                    topwater_pre,
+                ],
+                poststorages=[
+                    np.nansum(self.HRU.var.w, axis=0),
+                    self.HRU.var.topwater,
+                ],
+                tollerance=1e-6,
+                error_identifiers={
+                    "land_use_type": self.HRU.var.land_use_type,
+                },
+            )
+
+        interflow = self.HRU.full_compressed(0, dtype=np.float32)
+        runoff = direct_runoff + runoff_from_groundwater  # merge runoff sources
+
+        del runoff_from_groundwater
+        del direct_runoff
+
+        assert not np.isnan(runoff).any()
+        assert runoff.dtype == np.float32
+
+        timer.new_split("Evapotranspiration")
+
+        mask_soil_evaporation = self.HRU.var.land_use_type < SEALED
+        mask_transpiration = self.HRU.var.land_use_type < SEALED
+        if self.model.config["general"]["simulate_forest"]:
+            mask_transpiration[self.plantFATE_forest_RUs] = False
+
+        (
+            transpiration,
+            actual_bare_soil_evaporation,
+        ) = evapotranspirate(
+            wwp=self.HRU.var.wwp,
+            wfc=self.HRU.var.wfc,
+            wres=self.HRU.var.wres,
+            soil_layer_height=self.HRU.var.soil_layer_height,
+            land_use_type=self.HRU.var.land_use_type,
+            root_depth=self.HRU.var.root_depth,
+            crop_map=self.HRU.var.crop_map,
+            natural_crop_groups=self.HRU.var.natural_crop_groups,
+            potential_transpiration=potential_transpiration,
+            potential_bare_soil_evaporation=potential_bare_soil_evaporation,
+            potential_evapotranspiration=potential_evapotranspiration,
+            frost_index=self.HRU.var.frost_index,
+            crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
+                "crop_group_number"
+            ].values.astype(np.float32),
+            w=self.HRU.var.w,
+            topwater=self.HRU.var.topwater,
+            open_water_evaporation=open_water_evaporation,
+            minimum_effective_root_depth=self.var.minimum_effective_root_depth,
+            mask_transpiration=mask_transpiration,
+            mask_soil_evaporation=mask_soil_evaporation,
+        )
+        assert transpiration.dtype == np.float32
+        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
+        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
         self.grid.vapour_pressure_deficit_KPa = (
             self.calculate_vapour_pressure_deficit_kPa(
@@ -1769,70 +1932,36 @@ class Soil(Module):
             soil_tickness=soil_height_forest,
         )
 
-        available_water_infiltration, open_water_evaporation = (
-            get_available_water_infiltration(
-                natural_available_water_infiltration=natural_available_water_infiltration,
-                actual_irrigation_consumption=actual_irrigation_consumption,
-                land_use_type=self.HRU.var.land_use_type,
-                crop_kc=crop_factor,
-                reference_evapotranspiration_water=self.HRU.var.reference_evapotranspiration_water,
-                topwater=self.HRU.var.topwater,
+        if __debug__:
+            assert balance_check(
+                name="soil_2",
+                how="cellwise",
+                influxes=[
+                    natural_available_water_infiltration,
+                    actual_irrigation_consumption,
+                    capillary_rise_from_groundwater,
+                ],
+                outfluxes=[
+                    open_water_evaporation,
+                    runoff,
+                    interflow,
+                    transpiration,
+                    actual_bare_soil_evaporation,
+                    groundwater_recharge,
+                ],
+                prestorages=[
+                    np.nansum(w_pre, axis=0),
+                    topwater_pre,
+                ],
+                poststorages=[
+                    np.nansum(self.HRU.var.w, axis=0),
+                    self.HRU.var.topwater,
+                ],
+                tollerance=1e-6,
+                error_identifiers={
+                    "land_use_type": self.HRU.var.land_use_type,
+                },
             )
-        )
-
-        timer.new_split("Available infiltration")
-
-        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
-        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
-
-        runoff_from_groundwater = rise_from_groundwater(
-            w=self.HRU.var.w,
-            ws=self.HRU.var.ws,
-            capillary_rise_from_groundwater=capillary_rise_from_groundwater.astype(
-                np.float32
-            ),
-        )
-
-        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
-        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
-
-        timer.new_split("Capillary rise from groundwater")
-
-        mask_soil_evaporation = self.HRU.var.land_use_type < SEALED
-        mask_transpiration = self.HRU.var.land_use_type < SEALED
-        if self.model.config["general"]["simulate_forest"]:
-            mask_transpiration[self.plantFATE_forest_RUs] = False
-
-        (
-            transpiration,
-            actual_bare_soil_evaporation,
-        ) = evapotranspirate(
-            wwp=self.HRU.var.wwp,
-            wfc=self.HRU.var.wfc,
-            wres=self.HRU.var.wres,
-            soil_layer_height=self.HRU.var.soil_layer_height,
-            land_use_type=self.HRU.var.land_use_type,
-            root_depth=self.HRU.var.root_depth,
-            crop_map=self.HRU.var.crop_map,
-            natural_crop_groups=self.HRU.var.natural_crop_groups,
-            potential_transpiration=potential_transpiration,
-            potential_bare_soil_evaporation=potential_bare_soil_evaporation,
-            potential_evapotranspiration=potential_evapotranspiration,
-            frost_index=self.HRU.var.frost_index,
-            crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
-                "crop_group_number"
-            ].values.astype(np.float32),
-            w=self.HRU.var.w,
-            topwater=self.HRU.var.topwater,
-            open_water_evaporation=open_water_evaporation,
-            available_water_infiltration=available_water_infiltration,
-            minimum_effective_root_depth=self.var.minimum_effective_root_depth,
-            mask_transpiration=mask_transpiration,
-            mask_soil_evaporation=mask_soil_evaporation,
-        )
-        assert transpiration.dtype == np.float32
-        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
-        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
         if self.model.config["general"]["simulate_forest"]:
             plantfate_transpiration = np.zeros(len(self.plantFATE_forest_RUs))
@@ -1893,136 +2022,49 @@ class Soil(Module):
                 HRU_data=plantfate_num_ind, fn="weightedmean"
             )
 
-        # actual_bare_soil_evaporation += plantfate_bare_soil_evaporation
-        # print(plantfate_bare_soil_evaporation)
-
-        timer.new_split("Evapotranspiration")
-
-        n_substeps = 3
-        direct_runoff = np.zeros_like(self.HRU.var.land_use_type, dtype=np.float32)
-        groundwater_recharge = np.zeros_like(
-            self.HRU.var.land_use_type, dtype=np.float32
-        )
-        #
-        # print(self.HRU.var.w[:, self.plantFATE_forest_RUs])
-        # print(self.HRU.var.ws[:, self.plantFATE_forest_RUs])
-        # print(self.HRU.var.wres[:, self.plantFATE_forest_RUs])
-
-        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
-        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
-
-        for _ in range(n_substeps):
-            (
-                direct_runoff_substep,
-                groundwater_recharge_substep,
-            ) = vertical_water_transport(
-                available_water_infiltration / n_substeps,
-                capillary_rise_from_groundwater / n_substeps,
-                self.HRU.var.ws,
-                self.HRU.var.wres,
-                self.HRU.var.saturated_hydraulic_conductivity / n_substeps,
-                self.HRU.var.lambda_pore_size_distribution,
-                self.HRU.var.bubbling_pressure_cm,
-                self.HRU.var.land_use_type,
-                self.HRU.var.frost_index,
-                self.HRU.var.arno_beta,
-                self.HRU.var.w,
-                self.HRU.var.topwater,
-                self.HRU.var.soil_layer_height,
-            )
-
-            direct_runoff += direct_runoff_substep
-            groundwater_recharge[bioarea] += groundwater_recharge_substep[bioarea]
-
-        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
-        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
-        timer.new_split("Vertical transport")
-
-        assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
-        assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
-
-        runoff = direct_runoff + runoff_from_groundwater
-
-        assert runoff.dtype == np.float32
-
-        if __debug__:
-            assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
-            assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
-            assert (interflow == 0).all()  # interflow is not implemented (see above)
-            balance_check(
-                name="soil_1",
-                how="cellwise",
-                influxes=[
-                    natural_available_water_infiltration[bioarea],
-                    capillary_rise_from_groundwater[bioarea],
-                    actual_irrigation_consumption[bioarea],
-                ],
-                outfluxes=[
-                    runoff[bioarea],
-                    interflow[bioarea],
-                    groundwater_recharge[bioarea],
-                    transpiration[bioarea],
-                    actual_bare_soil_evaporation[bioarea],
-                    open_water_evaporation[bioarea],
-                ],
-                prestorages=[
-                    w_pre[:, bioarea].sum(axis=0),
-                    topwater_pre[bioarea],
-                ],
-                poststorages=[
-                    self.HRU.var.w[:, bioarea].sum(axis=0),
-                    self.HRU.var.topwater[bioarea],
-                ],
-                tollerance=1e-6,
-            )
-
-            balance_check(
-                name="soil_2",
-                how="cellwise",
-                influxes=[
-                    natural_available_water_infiltration[bioarea],
-                    capillary_rise_from_groundwater[bioarea],
-                    actual_irrigation_consumption[bioarea],
-                ],
-                outfluxes=[
-                    runoff[bioarea],
-                    interflow[bioarea],
-                    groundwater_recharge[bioarea],
-                    transpiration[bioarea],
-                    actual_bare_soil_evaporation[bioarea],
-                    open_water_evaporation[bioarea],
-                ],
-                prestorages=[
-                    w_pre[:, bioarea].sum(axis=0),
-                    topwater_pre[bioarea],
-                ],
-                poststorages=[
-                    self.HRU.var.w[:, bioarea].sum(axis=0),
-                    self.HRU.var.topwater[bioarea],
-                ],
-                tollerance=1e-6,
-            )
-
-            # print(transpiration[self.plantFATE_forest_RUs])
-            # print(potential_transpiration[self.plantFATE_forest_RUs])
-            # print(self.var.w[0:len(self.var.w), self.plantFATE_forest_RUs] - self.wres[0:len(self.var.w), self.plantFATE_forest_RUs])
-            # print(self.var.w[0:len(self.var.w), self.plantFATE_forest_RUs])
-            # print(self.wres[0:len(self.wres), self.plantFATE_forest_RUs])
-            #
-            # if self.model.config["general"]["simulate_forest"]:
-            #     assert (
-            #         transpiration[self.plantFATE_forest_RUs]
-            #         <= potential_transpiration[self.plantFATE_forest_RUs] + 1e-7
-            #     ).all()
-            #
-            # assert (
-            #     transpiration[bioarea]
-            #     <= potential_transpiration[bioarea] + 1e-7
-            # ).all()
-            # assert (
-            #     actual_bare_soil_evaporation[bioarea]
-            #     <= potential_bare_soil_evaporation[bioarea] + 1e-7
-            # ).all()
+            if __debug__:
+                assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
+                assert (
+                    self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]
+                ).all()
+                assert (
+                    interflow == 0
+                ).all()  # interflow is not implemented (see above)
+                assert (
+                    self.HRU.var.topwater[
+                        self.HRU.var.land_use_type != PADDY_IRRIGATED
+                    ].sum()
+                    == 0
+                )
+                balance_check(
+                    name="soil_3",
+                    how="cellwise",
+                    influxes=[
+                        natural_available_water_infiltration,
+                        capillary_rise_from_groundwater,
+                        actual_irrigation_consumption,
+                    ],
+                    outfluxes=[
+                        runoff,
+                        interflow,
+                        groundwater_recharge,
+                        transpiration,
+                        actual_bare_soil_evaporation,
+                        open_water_evaporation,
+                    ],
+                    prestorages=[
+                        np.nansum(w_pre, axis=0),
+                        topwater_pre,
+                    ],
+                    poststorages=[
+                        np.nansum(self.HRU.var.w, axis=0),
+                        self.HRU.var.topwater,
+                    ],
+                    tollerance=1e-6,
+                    error_identifiers={
+                        "land_use_type": self.HRU.var.land_use_type,
+                    },
+                )
 
         timer.new_split("Finalizing")
         if self.model.timing:
