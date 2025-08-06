@@ -192,6 +192,9 @@ class Reporter:
             for module_name, configs in self.model.config["report"].items():
                 self.variables[module_name] = {}
                 for name, config in configs.items():
+                    assert isinstance(config, dict), (
+                        f"Configuration for {module_name}.{name} must be a dictionary, but is {type(config)}."
+                    )
                     self.variables[module_name][name] = self.create_variable(
                         config, module_name, name
                     )
