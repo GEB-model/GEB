@@ -698,25 +698,37 @@ class Hydrology:
         """
         folder = self.model.output_folder / "report" / run_name
 
-        def read_csv_with_date_index(folder: Path, module: str, name: str) -> pd.Series:
+        def read_csv_with_date_index(
+            folder: Path, module: str, name: str, skip_first_day: bool = True
+        ) -> pd.Series:
             """Read a CSV file with a date index.
 
             Args:
                 folder: Path to the folder containing the CSV file.
                 module: Name of the module (subfolder) containing the CSV file.
                 name: Name of the CSV file (without extension).
+                skip_first_day: Whether to skip the first day of the time series.
 
             Returns:
                 A pandas Series with the date index and the values from the CSV file.
 
             """
-            return pd.read_csv(
+            df = pd.read_csv(
                 (folder / module / name).with_suffix(".csv"),
                 index_col=0,
                 parse_dates=True,
             )[name]
 
-        storage = read_csv_with_date_index(folder, "hydrology", "_water_circle_storage")
+            if skip_first_day:
+                df = df.iloc[1:]
+
+            return df
+
+        # because storage is the storage at the end of the timestep, we need to calculate the change
+        # across the entire simulation period. For all other variables we do skip the first day.
+        storage = read_csv_with_date_index(
+            folder, "hydrology", "_water_circle_storage", skip_first_day=False
+        )
         storage_change = storage.iloc[-1] - storage.iloc[0]
 
         rain = read_csv_with_date_index(
