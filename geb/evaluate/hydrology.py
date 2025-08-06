@@ -1,7 +1,7 @@
 import base64
+import os
 from pathlib import Path
 from typing import Any
-import os
 
 import branca.colormap as cm
 import contextily as ctx
@@ -10,16 +10,16 @@ import geopandas as gpd
 import matplotlib.colors as mcolors
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
-from matplotlib.colors import LightSource
-from matplotlib_scalebar.scalebar import ScaleBar
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import xarray as xr
 import rioxarray as rxr
-from rasterio.crs import CRS
+import xarray as xr
+from matplotlib.colors import LightSource
+from matplotlib_scalebar.scalebar import ScaleBar
 from permetrics.regression import RegressionMetric
+from rasterio.crs import CRS
 from tqdm import tqdm
 
 from geb.workflows.io import open_zarr, to_zarr

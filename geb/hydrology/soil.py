@@ -1275,6 +1275,11 @@ class Soil(Module):
         self.HRU.var.ws: npt.NDArray[np.float32] = (
             thetas * self.HRU.var.soil_layer_height
         )
+        print("ws:")
+        print(self.HRU.var.ws.dtype)
+        print(self.HRU.var.ws.shape)
+
+        print(self.HRU.var.ws)
         self.HRU.var.wfc: npt.NDArray[np.float32] = (
             thetafc * self.HRU.var.soil_layer_height
         )
@@ -1318,6 +1323,10 @@ class Soil(Module):
             * self.model.config["parameters"]["ksat_multiplier"]
         )  # calibration parameter
         print("used ksat calibration parameter")
+        print(self.HRU.var.saturated_hydraulic_conductivity.dtype)
+        print(self.HRU.var.saturated_hydraulic_conductivity.shape)
+        print(self.HRU.var.saturated_hydraulic_conductivity)
+
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
         natural_crop_groups: npt.NDArray[np.float32] = self.hydrology.grid.load(

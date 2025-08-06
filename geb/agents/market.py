@@ -198,11 +198,11 @@ class Market(AgentBaseClass):
 
     @property
     def year_index(self) -> int:
-        print("time is:")
-        print(
-            self.model.current_time.year
-            - self.model.config["general"]["spinup_time"].year
-        )
+        # print("time is:")
+        # print(
+        #     self.model.current_time.year
+        #     - self.model.config["general"]["spinup_time"].year
+        # )
         return (
             self.model.current_time.year
             - self.model.config["general"]["spinup_time"].year

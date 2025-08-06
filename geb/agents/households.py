@@ -1244,7 +1244,7 @@ class Households(AgentBaseClass):
                 * self.var.sizes
                 * water_demand_multiplier_per_household
             )
-            print(self.var.water_demand_per_household_m3)
+            # print(self.var.water_demand_per_household_m3)
 
         if self.config["water_demand"]["customized_demand"].get("enabled", False):
             # Function to set a custom_value for household water demand. All households have the same demand.
