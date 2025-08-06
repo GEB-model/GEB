@@ -65,6 +65,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self.forcing = Forcing(self)
 
+        self.evaluator = Evaluate(self)
+
         # Empty list to hold plantFATE models. If forests are not used, this will be empty
         self.plantFATE = []
 
@@ -434,8 +436,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     def evaluate(self, *args, **kwargs) -> None:
         print("Evaluating model...")
-        self.evaluate = Evaluate(self)
-        self.evaluate.run(*args, **kwargs)
+        self.evaluator.run(*args, **kwargs)
 
     @property
     def current_day_of_year(self) -> int:
