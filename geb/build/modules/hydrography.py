@@ -584,6 +584,8 @@ class Hydrography:
                 command_areas["waterbody_id"].isin(reservoir_ids)
             ].reset_index(drop=True)
 
+            self.set_geoms(command_areas_dissolved, name="waterbodies/command_areas")
+
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
             self.set_grid(
