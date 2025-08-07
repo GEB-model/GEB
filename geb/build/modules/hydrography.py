@@ -850,10 +850,21 @@ class Hydrography:
         station_ids = stations["station_id"].values.astype(int)
         fp_coast_rp = self.data_catalog.get_source("COAST_RP").path
         coast_rp = pd.read_pickle(fp_coast_rp)
+
+        # remove stations that are not in coast_rp index
+        stations = stations[stations["station_id"].isin(coast_rp.index)].reset_index(
+            drop=True
+        )
+
         # Select stations within model bounds
+        station_ids = np.array(
+            [station for station in station_ids if station in coast_rp.index]
+        )
         coast_rp = coast_rp.loc[station_ids]
+
         # export
         coast_rp.to_pickle(f"{gtsm_folder}/coastal_return_periods.pkl")
+        stations.to_file(f"{gtsm_folder}/stations.geojson", driver="GeoJSON")
         self.logger.info(
             f"Coastal return period data exported to {gtsm_folder}/coastal_return_periods.pkl"
         )
