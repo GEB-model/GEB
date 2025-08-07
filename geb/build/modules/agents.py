@@ -1618,6 +1618,11 @@ class Agents:
                         raise ValueError("Weird")
                     # assert n_agents_allocated < len(GLOPOP_households_region)
             # iterate over unique housholds and extract the variables we want
+            if len(allocated_agents) == 0:
+                self.logger.warning(
+                    f"No households allocated for {GDL_code}, skipping region."
+                )
+                continue
             household_characteristics = {}
             household_characteristics["size"] = np.full(
                 n_households, -1, dtype=np.int32
