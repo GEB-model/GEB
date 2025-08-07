@@ -106,7 +106,8 @@ class SFINCS:
         return utm_crs
 
     def mirror_dataset_horizontal(self, ds, var_name="initial_soil_moisture"):
-        """
+        """Mirror an xarray Dataset horizontally.
+
         Mirrors an xarray Dataset across a horizontal line
         based on the bottomleft coordinate.
 
