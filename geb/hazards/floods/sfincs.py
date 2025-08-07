@@ -392,6 +392,13 @@ class SFINCS:
         """Merges the return period maps for riverine and coastal floods into a single dataset."""
 
         for return_period in self.config["return_periods"]:
+            if rp_maps_coastal is None:
+                riverine_da = rp_maps_riverine[return_period]
+                riverine_da.to_zarr(
+                    self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+                )
+                continue
+
             coastal_da = rp_maps_coastal[return_period]
             riverine_da = rp_maps_riverine[return_period]
 
