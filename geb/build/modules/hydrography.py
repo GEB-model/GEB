@@ -785,8 +785,16 @@ class Hydrography:
         fp_coast_hg = self.data_catalog.get_source("COAST_HG").path
         coast_hg = xr.open_dataset(fp_coast_hg)
         # Select stations within model bounds
-
-        min_lon, min_lat, max_lon, max_lat = self.bounds
+        # get model bounds
+        model_bounds = self.bounds
+        # apply small buffer to the bounds
+        model_bounds = (
+            model_bounds[0] - 0.1,  # min_lon
+            model_bounds[1] - 0.1,  # min_lat
+            model_bounds[2] + 0.1,  # max_lon
+            model_bounds[3] + 0.1,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # Apply the condition for bounding box
         subset = coast_hg.where(
