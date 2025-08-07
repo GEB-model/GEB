@@ -58,6 +58,23 @@ def KGE_calculation(s, o):
     return kge
 
 
+def NSE_calculation(s, o):
+    """Nash-Sutcliffe effiency (Nash and Sutcliffe, 1970).
+
+    Args:
+        s: simulated
+        o: observed
+
+    Returns:
+        NSE: Nash-Sutcliffe effiency.
+    """
+    numerator = ((o - s) ** 2).sum()
+    denominator = ((o - o.mean()) ** 2).sum()
+
+    nse = 1 - numerator / denominator
+    return nse
+
+
 def compute_score(sim, obs):
     diff = sum(abs(s - o) for s, o in zip(sim, obs))
     score = 1 - diff
@@ -754,6 +771,74 @@ def get_KGE_discharge(run_directory, individual, config, gauges, observed_stream
         myfile.write(str(individual.label) + "," + str(kge) + "\n")
 
     return kge
+
+
+def get_NSE_discharge(run_directory, individual, config, gauges, observed_streamflow):
+    def get_streamflows(gauge, observed_streamflow):
+        # Get the path of the simulated streamflow file
+        Qsim_tss = os.path.join(
+            run_directory,
+            config["calibration"]["scenario"],
+            f"{gauge[0]} {gauge[1]}.csv",
+        )
+        # os.path.join(run_directory, 'base/discharge.csv')
+
+        # Check if the simulated streamflow file exists
+        if not os.path.isfile(Qsim_tss):
+            print("run_id: " + str(individual.label) + " File: " + Qsim_tss)
+            raise Exception(
+                "No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!"
+            )
+
+        # Read the simulated streamflow data from the file
+        simulated_streamflow = pd.read_csv(
+            Qsim_tss, sep=",", parse_dates=True, index_col=0
+        )
+
+        # parse the dates in the index
+        # simulated_streamflow.index = pd.date_range(config['calibration']['start_time'] + timedelta(days=1), config['calibration']['end_time'])
+
+        simulated_streamflow_gauge = simulated_streamflow[" ".join(map(str, gauge))]
+        simulated_streamflow_gauge.name = "simulated"
+        observed_streamflow_gauge = observed_streamflow[gauge]
+        observed_streamflow_gauge.name = "observed"
+
+        # Combine the simulated and observed streamflow data
+        streamflows = pd.concat(
+            [simulated_streamflow_gauge, observed_streamflow_gauge],
+            join="inner",
+            axis=1,
+        )
+
+        # Add a small value to the simulated streamflow to avoid division by zero
+        streamflows["simulated"] += 0.0001
+        return streamflows
+
+    streamflows = [get_streamflows(gauge, observed_streamflow) for gauge in gauges]
+    streamflows = [streamflow for streamflow in streamflows if not streamflow.empty]
+    print(streamflows)
+    if config["calibration"]["monthly"] is True:
+        # Calculate the monthly mean of the streamflow data
+        streamflows = [streamflows.resample("M").mean() for streamflows in streamflows]
+
+    KGEs = []
+    for streamflow in streamflows:
+        streamflow = streamflow.dropna()  # If there are any NaNs values the KGE will become NaN, that's why we drop them before doing the calculation
+        KGEs.append(
+            NSE_calculation(s=streamflow["simulated"], o=streamflow["observed"])
+        )
+
+    assert KGEs  # Check if KGEs is not empty
+    nse = np.mean(KGEs)
+    print(
+        "run_id: " + str(individual.label) + ", NSE_discharge: " + "{0:.3f}".format(nse)
+    )
+    with open(
+        os.path.join(config["calibration"]["path"], "NSE_discharge_log.csv"), "a"
+    ) as myfile:
+        myfile.write(str(individual.label) + "," + str(nse) + "\n")
+
+    return nse
 
 
 def get_KGE_yield_ratio(run_directory, individual, config):
@@ -1560,6 +1645,12 @@ def run_model(individual, config, gauges, observed_streamflow):
         if score == "KGE_discharge":
             scores.append(
                 get_KGE_discharge(
+                    run_directory, individual, config, gauges, observed_streamflow
+                )
+            )
+        if score in config["calibration"]["calibration_targets"]:
+            scores.append(
+                get_NSE_discharge(
                     run_directory, individual, config, gauges, observed_streamflow
                 )
             )

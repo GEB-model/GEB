@@ -316,8 +316,6 @@ class SFINCS:
             self.max_water_storage_grid.raster.set_crs(
                 self.model.crs
             )  # for max water storage
-            # print("are there nans in the sfincs.py version?")
-            # print(self.max_water_storage_grid)
             soil_storage_capacity_grid.raster.set_crs(
                 self.model.crs
             )  # for the soil water storage capacity
@@ -505,10 +503,6 @@ class SFINCS:
         self.discharge_per_timestep.append(
             self.hydrology.grid.var.discharge_m3_s_per_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
-        # print("OG discharge grid:")
-        # print(self.hydrology.grid.var.discharge_m3_s_per_substep.dtype)
-        # print("discharge deque")
-        # print(self.discharge_per_timestep)
 
     def save_soil_moisture(self):  # is used in driver.py on every timestep
         # load and process initial soil moisture grid
@@ -520,17 +514,11 @@ class SFINCS:
 
     def save_max_soil_moisture(self):
         # smax
-        # print("saving smax")
         ws_copy = self.HRU.var.ws.copy()
         ws_copy[:, self.HRU.var.land_use_type == SEALED] = 0
         ws_copy[:, self.HRU.var.land_use_type == OPEN_WATER] = 0
-        # ws_copy = ws_copy.to_grid()
         self.max_water_storage_grid = ws_copy[:2].sum(axis=0)
-        # print("grid is:")
-        # print(self.max_water_storage_grid_og)
         self.max_water_storage_per_timestep.append(self.max_water_storage_grid)
-        # print("timeseries is:")
-        # print(self.max_water_storage_per_timestep)
 
     def save_soil_storage_capacity(self):
         self.soil_storage_capacity_grid = (
