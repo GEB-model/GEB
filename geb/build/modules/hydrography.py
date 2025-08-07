@@ -852,9 +852,9 @@ class Hydrography:
         coast_rp = pd.read_pickle(fp_coast_rp)
 
         # remove stations that are not in coast_rp index
-        stations = stations[stations["station_id"].isin(coast_rp.index)].reset_index(
-            drop=True
-        )
+        stations = stations[
+            stations["station_id"].astype(int).isin(coast_rp.index)
+        ].reset_index(drop=True)
 
         # Select stations within model bounds
         station_ids = np.array(
