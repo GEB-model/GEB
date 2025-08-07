@@ -102,13 +102,11 @@ class Households(AgentBaseClass):
             file_path = (
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
             )
-            flood_map = xr.open_dataarray(file_path, engine="zarr")
-            flood_maps[return_period] = flood_map.rio.write_crs(
-                flood_map.attrs["_CRS"]["wkt"]
-            )
-        flood_maps["crs"] = pyproj.CRS.from_user_input(
-            flood_maps[return_period]._CRS["wkt"]
-        )
+            flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
+            # flood_maps[return_period] = flood_map.rio.write_crs(
+            #     flood_map.attrs["_CRS"]["wkt"]
+            # )
+        flood_maps["crs"] = flood_maps[return_period].rio.crs
         flood_maps["gdal_geotransform"] = (
             flood_maps[return_period].rio.transform().to_gdal()
         )
