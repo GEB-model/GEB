@@ -22,6 +22,7 @@
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 
 from geb.hydrology.HRUs import load_grid
 from geb.module import Module
@@ -121,40 +122,24 @@ def estimate_outflow_height(lake_capacity, lake_factor, lake_area, avg_outflow):
 
 
 def get_lake_outflow(
-    dt,
-    storage,
-    lake_factor,
-    lake_area,
-    outflow_height,
+    dt: float,
+    storage: npt.NDArray[np.float32],
+    lake_factor: npt.NDArray[np.float32],
+    lake_area: npt.NDArray[np.float32],
+    outflow_height: npt.NDArray[np.float32],
 ):
     """Calculate outflow and storage for a lake using the Modified Puls method.
 
-    Parameters
-    ----------
-    dt : float
-        Time step in seconds
-    storage : float
-        Current storage in m3
-    inflow : float
-        Inflow to the lake in m3/s
-    inflow_prev : float
-        Inflow to the lake in the previous time step in m3/s
-    outflow_prev : float
-        Outflow from the lake in the previous time step in m3/s
-    lake_factor : float
-        Factor for the Modified Puls approach to calculate retention of the lake
-    lake_area : float
-        Area of the lake in m2
-    outflow_height : float
-        Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
+    Args:
+        dt: Time step in seconds
+        storage: Current storage in m3
+        lake_factor: Factor for the Modified Puls approach to calculate retention of the lake
+        lake_area: Area of the lake in m2
+        outflow_height: Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
 
     Returns:
-    -------
-    outflow : float
-        New outflow from the lake in m3/s
-    storage : float
-        New storage in m3
-
+        outflow_m3: Outflow in m3.
+        height_above_outflow: Height of the lake above the outflow in m.
     """
     height_above_outflow = get_lake_height_above_outflow(
         lake_storage=storage, lake_area=lake_area, outflow_height=outflow_height
@@ -227,7 +212,7 @@ class LakesReservoirs(Module):
         assert np.array_equal(self.var.water_body_data.index, waterbody_ids)
 
         self.var.water_body_type = self.var.water_body_data["waterbody_type"].values
-        self.var.waterBodyOrigID = self.var.water_body_data[
+        self.var.waterbody_ids_original = self.var.water_body_data[
             "original_waterbody_id"
         ].values
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake

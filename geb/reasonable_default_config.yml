@@ -132,6 +132,7 @@ agent_settings:
     NormalOutflowQ: 0.1
     max_reservoir_release_factor: 0.03380636312896216
     ruleset: no-adaptation
+    equal_abstraction: false
   sensitivity_analysis:
     risk_aversion_factor: 1
     discount_rate_factor: 1

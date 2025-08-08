@@ -1111,6 +1111,16 @@ class CropFarmers(AgentBaseClass):
         assert (available_groundwater_m3 >= 0).all()
         assert (available_reservoir_storage_m3 >= 0).all()
 
+        gross_irrigation_demand_m3_per_farmer = self.field_to_farmer(
+            gross_irrigation_demand_m3_per_field
+        )
+
+        maximum_abstraction_reservoir_m3_by_farmer = (
+            self.agents.reservoir_operators.get_maximum_abstraction_m3_by_farmer(
+                self.farmer_command_area, gross_irrigation_demand_m3_per_farmer
+            )
+        )
+
         if __debug__:
             irrigation_limit_pre = self.var.remaining_irrigation_limit_m3.copy()
             available_channel_storage_m3_pre = available_channel_storage_m3.copy()
@@ -1138,8 +1148,9 @@ class CropFarmers(AgentBaseClass):
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
+            maximum_abstraction_reservoir_m3_by_farmer=maximum_abstraction_reservoir_m3_by_farmer,
             groundwater_depth=groundwater_depth,
-            farmer_command_area=self.farmer_command_area,
+            command_area_by_farmer=self.farmer_command_area,
             return_fraction=self.model.config["agent_settings"]["farmers"][
                 "return_fraction"
             ],

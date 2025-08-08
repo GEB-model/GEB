@@ -272,6 +272,7 @@ def withdraw_reservoir(
     water_withdrawal_m: np.ndarray,
     remaining_irrigation_limit_m3: np.ndarray,
     reservoir_abstraction_m3_by_farmer: np.ndarray,
+    maximum_abstraction_reservoir_m3_field: np.float32,
     cell_area: np.ndarray,
 ):
     water_demand_cell_m3 = irrigation_water_demand_field_m * cell_area[field]
@@ -284,6 +285,7 @@ def withdraw_reservoir(
     reservoir_abstraction_m_cell_m3 = min(
         remaining_reservoir_m3,
         water_demand_cell_m3,
+        maximum_abstraction_reservoir_m3_field,
     )
     # ensure reservoir abstraction is non-negative
     reservoir_abstraction_m_cell_m3 = max(reservoir_abstraction_m_cell_m3, 0)
@@ -563,15 +565,13 @@ def abstract_water(
     available_groundwater_m3: np.ndarray,
     groundwater_depth: np.ndarray,
     available_reservoir_storage_m3: np.ndarray,
-    farmer_command_area: np.ndarray,
+    maximum_abstraction_reservoir_m3_by_farmer: npt.NDArray[np.float32],
+    command_area_by_farmer: np.ndarray,
     return_fraction: float,
     well_depth: float,
     remaining_irrigation_limit_m3: np.ndarray,
     gross_irrigation_demand_m3_per_field: np.ndarray,
 ):
-    for activated_farmer_index in range(activation_order.size):
-        farmer = activation_order[activated_farmer_index]
-        farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
     n_hydrological_response_units = cell_area.size
     water_withdrawal_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
     water_consumption_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
@@ -605,8 +605,22 @@ def abstract_water(
         if potential_irrigation_consumption_m3_farmer.sum() <= 0:
             continue
 
+        command_area_farmer = command_area_by_farmer[farmer]
+
+        if command_area_farmer == -1:  # -1 means no command area
+            pass
+        else:
+            maximum_abstraction_reservoir_m3_farmer = (
+                maximum_abstraction_reservoir_m3_by_farmer[farmer]
+            )
+            maximum_abstraction_reservoir_m3_by_field = (
+                maximum_abstraction_reservoir_m3_farmer
+                * potential_irrigation_consumption_m3_farmer
+                / potential_irrigation_consumption_m3_farmer.sum()
+            )
+
         # loop through all farmers fields and apply irrigation
-        for field in farmer_fields:
+        for field_index, field in enumerate(farmer_fields):
             grid_cell = HRU_to_grid[field]
             grid_cell_nearest = nearest_river_grid_cell[field]
             if crop_map[field] != -1:
@@ -617,10 +631,9 @@ def abstract_water(
 
                 if surface_irrigated[farmer]:
                     # command areas
-                    command_area = farmer_command_area[farmer]
-                    if command_area != -1:  # -1 means no command area
+                    if command_area_farmer != -1:  # -1 means no command area
                         irrigation_water_demand_field_m = withdraw_reservoir(
-                            command_area=command_area,
+                            command_area=command_area_farmer,
                             field=field,
                             farmer=farmer,
                             reservoir_abstraction_m3=reservoir_abstraction_m3,
@@ -629,6 +642,9 @@ def abstract_water(
                             water_withdrawal_m=water_withdrawal_m,
                             remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
                             reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+                            maximum_abstraction_reservoir_m3_field=maximum_abstraction_reservoir_m3_by_field[
+                                field_index
+                            ],
                             cell_area=cell_area,
                         )
                         assert water_withdrawal_m[field] >= 0

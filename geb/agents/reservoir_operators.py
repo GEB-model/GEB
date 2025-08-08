@@ -133,14 +133,48 @@ class ReservoirOperators(AgentBaseClass):
 
         return self.command_area_release_m3
 
-    def track_inflow(self, inflow_m3):
+    def get_maximum_abstraction_m3_by_farmer(
+        self,
+        farmer_command_areas: npt.NDArray[np.float32],
+        gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
+        """Get the maximum abstraction from reservoirs for each farmer.
+
+        If the configuration is set to equal abstraction, the maxmimum abstraction
+        per farmer is calculated based on the irrigation demand of the farmers.
+
+        Args:
+            farmer_command_areas: The command areas of the farmers in m2.
+            gross_irrigation_demand_m3_per_farmer: The gross irrigation demand per farmer in m3.
+
+        Returns:
+            The maximum abstraction from reservoirs for each farmer in m3.
+        """
+        if self.config["equal_abstraction"] is True:
+            command_area_mask = farmer_command_areas != -1
+            demand_per_command_area = np.bincount(
+                farmer_command_areas[command_area_mask],
+                weights=gross_irrigation_demand_m3_per_farmer[command_area_mask],
+            )
+            correction_factor = self.command_area_release_m3 / demand_per_command_area
+            correction_factor_per_farmer = correction_factor[farmer_command_areas]
+            correction_factor_per_farmer[~command_area_mask] = np.nan
+            return gross_irrigation_demand_m3_per_farmer * correction_factor_per_farmer
+        else:
+            return np.full_like(farmer_command_areas, np.inf, dtype=np.float32)
+
+    def track_inflow(self, inflow_m3: npt.NDArray[np.float32]) -> None:
+        """Track the inflow to the reservoirs. Is called from the routing module every time step.
+
+        Args:
+            inflow_m3: The inflow to the reservoirs in m3.
+        """
         if inflow_m3.size == 0:
             return np.zeros_like(inflow_m3), np.zeros_like(inflow_m3)
         # add the inflow to the multi_year_monthly_total_inflow, use the current month
         self.var.multi_year_monthly_total_inflow[:, self.current_month_index, 0] += (
             inflow_m3
         )
-        return None
 
     def release(
         self, daily_substeps: int, current_substep: int
@@ -515,3 +549,9 @@ class ReservoirOperators(AgentBaseClass):
     @property
     def current_month_index(self):
         return self.model.current_time.month - 1
+
+    @property
+    def waterbody_ids(self):
+        return self.model.hydrology.lakes_reservoirs.var.waterbody_ids_original[
+            self.model.hydrology.lakes_reservoirs.is_reservoir
+        ]
