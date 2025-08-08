@@ -670,19 +670,15 @@ class Hydrography:
                     drop=True,
                 )
                 # export the hydrograph timeseries for each station
-                for station in subset.stations.values:
-                    timeseries_data = (
-                        subset.sel(stations=station)
-                        .to_dataframe()
-                        .reset_index()[["time", "waterlevel"]]
-                    )
-                    timeseries_data.set_index("time", inplace=True)
+                timeseries_data = (
+                    subset.sel(stations=subset.stations.values)
+                    .to_dataframe()
+                    .reset_index()
+                )
+                timeseries_data = timeseries_data.pivot(
+                    index="time", columns="stations", values="waterlevel"
+                )
 
-                    if station not in output:
-                        output[station] = pd.DataFrame()
-                    output[station] = pd.concat(
-                        [output[station], timeseries_data], axis=0, ignore_index=False
-                    )
                 print(f"Processed GTSM data for {year}-{month:02d}")
         # now also prepare a DataFrame with the station ids and coordinates
         station_df = pd.DataFrame(
@@ -734,19 +730,15 @@ class Hydrography:
                     drop=True,
                 )
                 # export the hydrograph timeseries for each station
-                for station in subset.stations.values:
-                    timeseries_data = (
-                        subset.sel(stations=station)
-                        .to_dataframe()
-                        .reset_index()[["time", "surge"]]
-                    )
-                    timeseries_data.set_index("time", inplace=True)
-
-                    if station not in output:
-                        output[station] = pd.DataFrame()
-                    output[station] = pd.concat(
-                        [output[station], timeseries_data], axis=0, ignore_index=False
-                    )
+                # export the hydrograph timeseries for each station
+                timeseries_data = (
+                    subset.sel(stations=subset.stations.values)
+                    .to_dataframe()
+                    .reset_index()
+                )
+                timeseries_data = timeseries_data.pivot(
+                    index="time", columns="stations", values="waterlevel"
+                )
                 print(f"Processed GTSM data for {year}-{month:02d}")
         # now also prepare a DataFrame with the station ids and coordinates
         station_df = pd.DataFrame(
