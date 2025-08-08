@@ -1104,7 +1104,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def setup_forcing_era5(self):
+    def setup_forcing_ERA5(self):
         target = self.grid["mask"]
         target.raster.set_crs(4326)
 
@@ -1244,6 +1244,15 @@ class Forcing:
             self.logger.info("setting up wind...")
             self.setup_wind_isimip_30arcsec()
         elif resolution_arcsec == 1800:
+            assert model in (
+                "ipsl-cm6a-lr",
+                "gfdl-esm4",
+                "mpi-esm1-2-hr",
+                "mri-esm2-0",
+                "ukesm1-0-ll",
+            ), (
+                "Only ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0 and ukesm1-0-ll are supported for 1800 arcsec resolution"
+            )
             variables = [
                 "pr",
                 "rsds",
@@ -1264,15 +1273,15 @@ class Forcing:
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forcing(
         self,
-        resolution_arcsec: int | None = None,
         forcing: str = "ERA5",
+        resolution_arcsec: int | None = None,
         model: str | None = None,
     ):
         """Sets up the forcing data for GEB.
 
         Args:
-            resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
             forcing: The data source to use for the forcing data. Can be ERA5 or ISIMIP. Default is 'era5'.
+            resolution_arcsec: The resolution of the data in arcseconds. Only used for ISIMIP. Supported values are 30 and 1800.
             model: The name of the forcing data to use within the dataset. Only required for ISIMIP data.
                 For ISIMIP, this can be 'chelsa-w5e5' for 30 arcsec resolution
                 or 'ipsl-cm6a-lr', 'gfdl-esm4', 'mpi-esm1-2-hr', 'mri-esm2-0', or 'mri-esm2-0' for 1800 arcsec resolution.
@@ -1291,9 +1300,17 @@ class Forcing:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
         """
         if forcing == "ISIMIP":
+            assert resolution_arcsec is not None, (
+                "resolution_arcsec must be specified for ISIMIP forcing data"
+            )
+            assert model is not None, "model must be specified for ISIMIP forcing data"
             self.setup_forcing_ISIMIP(resolution_arcsec, model)
         elif forcing == "ERA5":
-            self.setup_forcing_era5()
+            assert resolution_arcsec is None, (
+                "resolution_arcsec must be None for ERA5 forcing data"
+            )
+            assert model is None, "model must be None for ERA5 forcing data"
+            self.setup_forcing_ERA5()
         elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
