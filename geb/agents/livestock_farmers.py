@@ -2,6 +2,7 @@
 import calendar
 
 import numpy as np
+import numpy.typing as npt
 
 from ..hydrology.landcover import GRASSLAND_LIKE
 from .general import AgentBaseClass, downscale_volume
@@ -42,11 +43,6 @@ class LiveStockFarmers(AgentBaseClass):
         self.var.current_efficiency = efficiency
 
     def update_water_demand(self):
-        """
-        Dynamic part of the water demand module - livestock
-        read monthly (or yearly) water demand from netcdf and transform (if necessary) to [m/day]
-
-        """
         days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
         # grassland/non-irrigated land that is not owned by a crop farmer
@@ -75,7 +71,7 @@ class LiveStockFarmers(AgentBaseClass):
             )
             ** 2
         )
-        water_consumption = (
+        water_consumption: npt.NDArray[np.float32] = (
             downscale_volume(
                 water_consumption.rio.transform().to_gdal(),
                 self.model.hydrology.grid.gt,

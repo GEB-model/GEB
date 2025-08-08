@@ -26,14 +26,16 @@ import platform
 from contextlib import contextmanager
 from pathlib import Path
 from time import time
+from typing import Callable
 
 import flopy
 import numpy as np
+import numpy.typing as npt
 from numba import njit
 from pyproj import CRS, Transformer
 from xmipy import XmiWrapper
 
-MODFLOW_VERSION = "6.6.2"
+MODFLOW_VERSION: str = "6.6.2"
 
 
 @contextmanager
@@ -147,21 +149,46 @@ def distribute_well_rate_per_layer(
 
 
 class ModFlowSimulation:
+    """Implements an instance of the MODFLOW model as well as methods to interact with it.
+
+    Args:
+        model: The GEB model instance.
+        topography: The topography or surface elevation of the model grid.
+        gt: The geotransform of the model grid (GDAL-style).
+        specific_storage: The specific storage of the model grid, in m-1.
+        specific_yield: The specific yield of the model grid, in m-1.
+        layer_boundary_elevation: The elevation of the layer boundaries, in m.
+        basin_mask: A boolean mask indicating the active cells in the model grid.
+        hydraulic_conductivity: The hydraulic conductivity of the model grid, in m/day.
+        heads: The initial heads of the model grid, in m.
+        heads_update_callback: A callback function to update the heads in the GEB model after each time step.
+        min_remaining_layer_storage_m: The minimum remaining layer storage in m, defaults to 0.1. More storage cannot be abstracted with wells.
+        verbose: Whether to print debug information, defaults to False.
+        never_load_from_disk: Whether to never load the model from disk, defaults to False. If set to False, the model input
+            will be loaded from disk if it exists and the input parameters have not changed.
+
+    Note:
+        Communication of fluxes should only be done in m3. This is because the calculation
+        of area in MODFLOW is slightly different from the area in GEB, which can lead to
+        discrepancies in the fluxes if they are communicated in meters. This is also
+        why all public methods of this class communicate in m3, and not in m.
+    """
+
     def __init__(
         self,
         model,
-        topography,
-        gt,
-        specific_storage,
-        specific_yield,
-        layer_boundary_elevation,
-        basin_mask,
-        hydraulic_conductivity,
-        heads,
-        heads_update_callback,
-        min_remaining_layer_storage_m=0.1,
-        verbose=False,
-        never_load_from_disk=False,
+        topography: npt.NDArray[np.float32],
+        gt: tuple[float, float, float, float, float, float],
+        specific_storage: npt.NDArray[np.float32],
+        specific_yield: npt.NDArray[np.float32],
+        layer_boundary_elevation: npt.NDArray[np.float32],
+        basin_mask: npt.NDArray[np.bool_],
+        hydraulic_conductivity: npt.NDArray[np.float32],
+        heads: npt.NDArray[np.float64],
+        heads_update_callback: Callable,
+        min_remaining_layer_storage_m: float = 0.1,
+        verbose: bool = False,
+        never_load_from_disk: bool = False,
     ):
         self.name = "MODEL"  # MODFLOW requires the name to be uppercase
         self.model = model
@@ -507,26 +534,20 @@ class ModFlowSimulation:
         else:
             return False
 
-    def bmi_return(self, success):
-        """
-        parse libmf6.so and libmf6.dll stdout file
-        """
-        fpth = os.path.join("mfsim.stdout")
-        with open(fpth) as f:
-            lines = f.readlines()
-        return success, lines
+    def bmi_return(self) -> list[str]:
+        """Parse libmf6.so and libmf6.dll stdout file."""
+        with open("mfsim.stdout") as f:
+            return f.readlines()
 
-    def load_bmi(self, heads):
-        """Load the Basic Model Interface"""
-        success = False
-
+    def load_bmi(self, heads: npt.NDArray[np.float64]):
+        """Load the Basic Model Interface."""
         # Current model version 6.5.0 from https://github.com/MODFLOW-USGS/modflow6/releases/tag/6.5.0
         if platform.system() == "Windows":
-            libary_name = "libmf6.dll"
+            libary_name: str = "libmf6.dll"
         elif platform.system() == "Linux":
-            libary_name = "libmf6.so"
+            libary_name: str = "libmf6.so"
         elif platform.system() == "Darwin":
-            libary_name = "libmf6.dylib"
+            libary_name: str = "libmf6.dylib"
         else:
             raise ValueError(f"Platform {platform.system()} not supported.")
 
@@ -534,8 +555,10 @@ class ModFlowSimulation:
             # XmiWrapper requires the real path (no symlinks etc.)
             # include the version in the folder name to allow updating the version
             # so that the user will automatically get the new version
-            library_folder = (Path(__file__).parent / "bin" / MODFLOW_VERSION).resolve()
-            library_path = library_folder / libary_name
+            library_folder: Path = (
+                self.model.bin_folder / "modflow" / MODFLOW_VERSION
+            ).resolve()
+            library_path: Path = library_folder / libary_name
 
             if not library_path.exists():
                 library_folder.mkdir(exist_ok=True, parents=True)
@@ -553,11 +576,11 @@ class ModFlowSimulation:
             except Exception as e:
                 print("Failed to load " + str(library_path))
                 print("with message: " + str(e))
-                self.bmi_return(success)
+                self.bmi_return()
                 raise
 
             # modflow requires the real path (no symlinks etc.)
-            config_file = os.path.realpath("mfsim.nam")
+            config_file: str = os.path.realpath("mfsim.nam")
             if not os.path.exists(config_file):
                 raise FileNotFoundError(
                     f"Config file {config_file} not found on disk. Did you create the model first (load_from_disk = False)?"
@@ -567,27 +590,29 @@ class ModFlowSimulation:
             try:
                 self.mf6.initialize(config_file)
             except:
-                self.bmi_return(success)
+                self.bmi_return()
                 raise
 
             if self.verbose:
                 print("MODFLOW model initialized")
 
-        self.end_time = self.mf6.get_end_time()
-        area_tag = self.mf6.get_var_address("AREA", self.name, "DIS")
-        area = self.mf6.get_value_ptr(area_tag).reshape(self.nlay, self.n_active_cells)
+        self.end_time: float = self.mf6.get_end_time()
+        area_tag: str = self.mf6.get_var_address("AREA", self.name, "DIS")
+        area: npt.NDArray[np.float64] = self.mf6.get_value_ptr(area_tag).reshape(
+            self.nlay, self.n_active_cells
+        )
 
         # ensure that the areas of all vertical cells are equal
         assert (np.diff(area, axis=0) == 0).all()
 
         # so we can use the area of the top layer
-        self.area = area[0].copy()
+        self.area: npt.NDArray[np.float32] = area[0].astype(np.float32)
 
         self.prepare_time_step()
 
         # because modflow rounds heads when they are written to file, we set the modflow heads
         # to the actual model heads to ensure that the model is in the same state as the modflow model
-        self.heads = heads
+        self.heads: npt.NDArray[np.float64] = heads
         assert not np.isnan(self.heads).any()
 
     @property
@@ -685,7 +710,7 @@ class ModFlowSimulation:
         return drainage
 
     @property
-    def drainage_m(self):
+    def _drainage_m(self):
         return self.drainage_m3 / self.area
 
     @property
@@ -693,19 +718,19 @@ class ModFlowSimulation:
         return self.mf6.get_var_address("RECHARGE", self.name, "RCH_0")
 
     @property
-    def recharge_m(self):
+    def _recharge_m(self):
         recharge = self.mf6.get_value_ptr(self.recharge_tag).copy()
         assert not np.isnan(recharge).any()
         return recharge
 
-    @property
-    def recharge_m3(self):
-        return self.recharge_m * self.area
-
-    @recharge_m.setter
+    @_recharge_m.setter
     def recharge_m(self, value):
         assert not np.isnan(value).any()
         self.mf6.get_value_ptr(self.recharge_tag)[:] = value
+
+    @property
+    def recharge_m3(self):
+        return self._recharge_m * self.area
 
     @property
     def max_iter(self):
@@ -716,12 +741,15 @@ class ModFlowSimulation:
         dt = self.mf6.get_time_step()
         self.mf6.prepare_time_step(dt)
 
-    def set_recharge_m(self, recharge):
-        """Set recharge, value in m/day"""
-        self.recharge_m = recharge
+    # def set_recharge_m(self, recharge):
+    #     """Set recharge, value in m/day."""
+    #     self.recharge_m = recharge
+
+    def set_recharge_m3(self, recharge):
+        self.recharge_m = recharge / self.area
 
     def set_groundwater_abstraction_m3(self, groundwater_abstraction):
-        """Set well rate, value in m3/day"""
+        """Set well rate, value in m3/day."""
         assert not np.isnan(groundwater_abstraction).any()
 
         assert (self.available_groundwater_m3 >= groundwater_abstraction).all(), (
@@ -805,7 +833,7 @@ class ModFlowSimulation:
                 "\tDrainage (mean)",
                 self.drainage_m3.mean(),
                 "m3",
-                self.drainage_m.mean(),
+                self._drainage_m.mean(),
                 "m",
             )
 

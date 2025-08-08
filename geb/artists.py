@@ -34,6 +34,7 @@ class Artists(honeybeesArtists):
             model: The GEB model.
             agents: The farmer class to plot.
             idx: The farmer index.
+            color: The color to use for the farmer. Defaults to red.
 
         Returns:
             portrayal: Portrayal of farmer.

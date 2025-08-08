@@ -133,14 +133,48 @@ class ReservoirOperators(AgentBaseClass):
 
         return self.command_area_release_m3
 
-    def track_inflow(self, inflow_m3):
+    def get_maximum_abstraction_m3_by_farmer(
+        self,
+        farmer_command_areas: npt.NDArray[np.float32],
+        gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
+        """Get the maximum abstraction from reservoirs for each farmer.
+
+        If the configuration is set to equal abstraction, the maxmimum abstraction
+        per farmer is calculated based on the irrigation demand of the farmers.
+
+        Args:
+            farmer_command_areas: The command areas of the farmers in m2.
+            gross_irrigation_demand_m3_per_farmer: The gross irrigation demand per farmer in m3.
+
+        Returns:
+            The maximum abstraction from reservoirs for each farmer in m3.
+        """
+        if self.config["equal_abstraction"] is True:
+            command_area_mask = farmer_command_areas != -1
+            demand_per_command_area = np.bincount(
+                farmer_command_areas[command_area_mask],
+                weights=gross_irrigation_demand_m3_per_farmer[command_area_mask],
+            )
+            correction_factor = self.command_area_release_m3 / demand_per_command_area
+            correction_factor_per_farmer = correction_factor[farmer_command_areas]
+            correction_factor_per_farmer[~command_area_mask] = np.nan
+            return gross_irrigation_demand_m3_per_farmer * correction_factor_per_farmer
+        else:
+            return np.full_like(farmer_command_areas, np.inf, dtype=np.float32)
+
+    def track_inflow(self, inflow_m3: npt.NDArray[np.float32]) -> None:
+        """Track the inflow to the reservoirs. Is called from the routing module every time step.
+
+        Args:
+            inflow_m3: The inflow to the reservoirs in m3.
+        """
         if inflow_m3.size == 0:
             return np.zeros_like(inflow_m3), np.zeros_like(inflow_m3)
         # add the inflow to the multi_year_monthly_total_inflow, use the current month
         self.var.multi_year_monthly_total_inflow[:, self.current_month_index, 0] += (
             inflow_m3
         )
-        return None
 
     def release(
         self, daily_substeps: int, current_substep: int
@@ -286,14 +320,7 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         daily_substeps,
     ):
-        """
-        Parameters
-        ----------
-
-        minimum_release_m3 : float
-            The minimum release from the reservoir. This is the environmental flow requirement
-            in m3/s. It is assumed that this is the same for all reservoirs.
-        """
+        """Adjusts the provisional reservoir release to ensure it meets environmental flow requirements, does not exceed the reservoir capacity, and maintains a minimum usable release."""
         # release is at least 10% of the mean monthly inflow (environmental flow)
         reservoir_release_m3 = np.maximum(
             provisional_reservoir_release_m3, environmental_flow_requirement_m3
@@ -351,9 +378,7 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         n_monthly_substeps,
     ):
-        """
-        https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py
-        """
+        """https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py."""
         # Based on Shin et al. (2019)
         # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
         M = 0.1
@@ -417,15 +442,15 @@ class ReservoirOperators(AgentBaseClass):
     def get_flood_control_reservoir_release(
         self, cpa, cond_ppose, qin, S_begin_yr, mtifl, alpha
     ):
-        """
-        Computes release from flood control reservoirs
+        """Computes release from flood control reservoirs.
+
         cpa = reservoir capacity                                    (m^3)
         cond_ppose = array containing irrigation reservoir cells
         based on selection mask
         qin = inflow                                                (m^3/s)
         Sini = initial storage                                      (m^3)
         mtifl = annual mean total annual inflow                     (m^3/s)
-        alpha = reservoir capacity reduction factor                 (dimensionless)
+        alpha = reservoir capacity reduction factor                 (dimensionless).
         """
         # flood Reservoirs
         # initialization
@@ -462,16 +487,6 @@ class ReservoirOperators(AgentBaseClass):
         temp4 = np.multiply((1 - temp1), qin_flood[cond2])
         Rflood_final[cond2] = temp3 + temp4
         return Rflood_final
-
-    def get_available_water_reservoir_command_areas(self, gross_irrigation_demand_m3):
-        # TODO: only farmers that use surface irrigation
-        command_areas = self.model.hydrology.HRU.var.reservoir_command_areas
-        irrigation_demand_per_command_area = np.bincount(
-            command_areas[command_areas != -1],
-            weights=gross_irrigation_demand_m3[command_areas != -1],
-        )
-        assert irrigation_demand_per_command_area.size == self.storage.size
-        return 0
 
     def step(self) -> None:
         # operational year should start after the end of the rainy season
@@ -534,3 +549,9 @@ class ReservoirOperators(AgentBaseClass):
     @property
     def current_month_index(self):
         return self.model.current_time.month - 1
+
+    @property
+    def waterbody_ids(self):
+        return self.model.hydrology.lakes_reservoirs.var.waterbody_ids_original[
+            self.model.hydrology.lakes_reservoirs.is_reservoir
+        ]

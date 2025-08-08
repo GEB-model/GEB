@@ -1,10 +1,10 @@
 import os
-import pathlib
+from pathlib import Path
 
-output_folder = pathlib.Path("tests/output")
+output_folder: Path = Path("tests/output")
 output_folder.mkdir(exist_ok=True)
 
-tmp_folder = pathlib.Path("tests/tmp")
+tmp_folder: Path = Path("tests/tmp")
 tmp_folder.mkdir(exist_ok=True)
 
-IN_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
+IN_GITHUB_ACTIONS: bool = os.getenv("GITHUB_ACTIONS") == "true"

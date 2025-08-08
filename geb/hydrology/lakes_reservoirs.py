@@ -22,8 +22,9 @@
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 
-from geb.HRUs import load_grid
+from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import balance_check
 
@@ -50,7 +51,7 @@ if SHAPE == "rectangular":
         return lake_factor * height_above_outflow**1.5
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """inverse function of estimate_lake_outflow"""
+        """Inverse function of estimate_lake_outflow."""
         return (outflow / lake_factor) ** (2 / 3)
 
 elif SHAPE == "parabola":
@@ -60,7 +61,7 @@ elif SHAPE == "parabola":
         return lake_factor * height_above_outflow**2
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """inverse function of estimate_lake_outflow"""
+        """Inverse function of estimate_lake_outflow."""
         return np.sqrt(outflow / lake_factor)
 
 else:
@@ -73,8 +74,7 @@ def get_lake_height_from_bottom(lake_storage, lake_area):
 
 
 def get_lake_storage_from_height_above_bottom(lake_height, lake_area):
-    """
-    Calculate the storage of a lake given its height above the bottom and area.
+    """Calculate the storage of a lake given its height above the bottom and area.
 
     Parameters
     ----------
@@ -83,7 +83,7 @@ def get_lake_storage_from_height_above_bottom(lake_height, lake_area):
     lake_area : float
         Area of the lake in m2
 
-    Returns
+    Returns:
     -------
     float
         Storage of the lake in m3
@@ -122,41 +122,24 @@ def estimate_outflow_height(lake_capacity, lake_factor, lake_area, avg_outflow):
 
 
 def get_lake_outflow(
-    dt,
-    storage,
-    lake_factor,
-    lake_area,
-    outflow_height,
+    dt: float,
+    storage: npt.NDArray[np.float32],
+    lake_factor: npt.NDArray[np.float32],
+    lake_area: npt.NDArray[np.float32],
+    outflow_height: npt.NDArray[np.float32],
 ):
-    """
-    Calculate outflow and storage for a lake using the Modified Puls method
+    """Calculate outflow and storage for a lake using the Modified Puls method.
 
-    Parameters
-    ----------
-    dt : float
-        Time step in seconds
-    storage : float
-        Current storage in m3
-    inflow : float
-        Inflow to the lake in m3/s
-    inflow_prev : float
-        Inflow to the lake in the previous time step in m3/s
-    outflow_prev : float
-        Outflow from the lake in the previous time step in m3/s
-    lake_factor : float
-        Factor for the Modified Puls approach to calculate retention of the lake
-    lake_area : float
-        Area of the lake in m2
-    outflow_height : float
-        Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
+    Args:
+        dt: Time step in seconds
+        storage: Current storage in m3
+        lake_factor: Factor for the Modified Puls approach to calculate retention of the lake
+        lake_area: Area of the lake in m2
+        outflow_height: Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
 
-    Returns
-    -------
-    outflow : float
-        New outflow from the lake in m3/s
-    storage : float
-        New storage in m3
-
+    Returns:
+        outflow_m3: Outflow in m3.
+        height_above_outflow: Height of the lake above the outflow in m.
     """
     height_above_outflow = get_lake_height_above_outflow(
         lake_storage=storage, lake_area=lake_area, outflow_height=outflow_height
@@ -174,6 +157,15 @@ def get_lake_outflow(
 
 
 class LakesReservoirs(Module):
+    """Implements all lakes and reservoir operations in the hydrological model.
+
+    For reservoir it gets the outflow from the reservoir operator agents.
+
+    Args:
+        model: The GEB model instance.
+        hydrology: The hydrology submodel instance.
+    """
+
     def __init__(self, model, hydrology):
         super().__init__(model)
         self.hydrology = hydrology
@@ -197,6 +189,9 @@ class LakesReservoirs(Module):
             self.map_water_bodies_IDs(waterBodyID_unmapped)
         )
 
+        # set discharge to NaN for all cells that are not part of a water body
+        self.grid.var.discharge_m3_s_substep[self.grid.var.waterBodyID != -1] = np.nan
+
         self.grid.var.waterbody_outflow_points = self.get_outflows(
             self.grid.var.waterBodyID
         )
@@ -217,7 +212,7 @@ class LakesReservoirs(Module):
         assert np.array_equal(self.var.water_body_data.index, waterbody_ids)
 
         self.var.water_body_type = self.var.water_body_data["waterbody_type"].values
-        self.var.waterBodyOrigID = self.var.water_body_data[
+        self.var.waterbody_ids_original = self.var.water_body_data[
             "original_waterbody_id"
         ].values
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
@@ -394,12 +389,15 @@ class LakesReservoirs(Module):
 
         return waterbody_outflow_points
 
-    def routing_lakes(self, routing_step_length_seconds):
-        """
-        Lake routine to calculate lake outflow
-        :param inflowC: inflow to lakes and reservoirs [m3]
-        :param NoRoutingExecuted: actual number of routing substep
-        :return: QLakeOutM3DtC - lake outflow in [m3] per subtime step
+    def routing_lakes(self, routing_step_length_seconds: int | float):
+        """Lake routine to calculate lake outflow.
+
+        Args:
+            routing_step_length_seconds: length of the routing step in seconds.
+
+        Returns:
+            lake_outflow_m3: Outflow from the lakes in m3 per routing step.
+
         """
         is_lake = self.is_lake
         # check if there are any lakes in the model
@@ -420,8 +418,7 @@ class LakesReservoirs(Module):
         return lake_outflow_m3
 
     def routing_reservoirs(self, n_routing_substeps, current_substep):
-        """
-        Routine to update reservoir volumes and calculate reservoir outflow
+        """Routine to update reservoir volumes and calculate reservoir outflow.
 
         Parameters
         ----------
@@ -430,7 +427,7 @@ class LakesReservoirs(Module):
         n_routing_substeps : int
             Number of routing substeps per time step
 
-        Returns
+        Returns:
         -------
         reservoir_release_m3 : np.ndarray
             Outflow from the reservoirs in m3 per routing substep
@@ -534,9 +531,7 @@ class LakesReservoirs(Module):
         return array
 
     def step(self):
-        """
-        Dynamic part set lakes and reservoirs for each year
-        """
+        """Dynamic part set lakes and reservoirs for each year."""
         # if first timestep, or beginning of new year
         if self.model.current_timestep == 1 or (
             self.model.current_time.month == 1 and self.model.current_time.day == 1

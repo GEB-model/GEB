@@ -7,14 +7,37 @@ from dateutil.relativedelta import relativedelta
 
 
 class DateIndex:
-    def __init__(self, dates):
+    def __init__(self, dates: list[date | datetime]) -> None:
+        """Create a DateIndex object that allows for fast lookup of dates.
+
+        This class takes a list of dates and creates an index that allows for fast lookup of the index of a date in the list.
+        It also extrapolates the last date to allow for future dates.
+
+        Args:
+            dates: a list of dates in datetime format. The dates should be sorted in ascending order.
+        """
         self.dates = np.array(dates)
 
         self.last_valid_date = self.dates[-1] + relativedelta(
             self.dates[-1], self.dates[-2]
         )  # extrapolate last date.
 
-    def get(self, date):
+    def get(self, date: date | datetime) -> int:
+        """Get the index of a date in the list of dates.
+
+        This method returns the index of the date in the list of dates. If the date is before the first date or after the last date, it raises a ValueError.
+        If the date is not in the list, it returns the index of the last date that is smaller than the given date.
+
+        Args:
+            date: a date in datetime format. The date should be larger than the first date and smaller than the last date.
+
+        Raises:
+            ValueError: If the date is before the first date or after the last date.
+            ValueError: If the date is not in the list and no extrapolation is possible.
+
+        Returns:
+            int: the index of the date in the list of dates. If the date is not in the list, it returns the index of the last date that is smaller than the given date.
+        """
         # find first date where date is larger or equal to date in self.dates
         if date < self.dates[0]:
             raise ValueError(f"Date {date} is before first valid date {self.dates[0]}")
@@ -23,9 +46,10 @@ class DateIndex:
                 f"Date {date} is after last valid date {self.last_valid_date}"
             )
 
-        return np.searchsorted(self.dates, date, side="right") - 1
+        return np.searchsorted(self.dates, date, side="right").item() - 1
 
     def __len__(self):
+        """Return the number of dates in the index."""
         return self.dates.size
 
 
@@ -38,7 +62,6 @@ def load_regional_crop_data_from_dict(
         date_index: Dictionary of states containing a dictionary of dates and their index in the 2D array.
         crop_prices: Dictionary of states containing a 2D array of crop prices. First index is for date, second index is for crop.
     """
-
     with open(model.files["dict"][name], "r") as f:
         timedata = json.load(f)
 

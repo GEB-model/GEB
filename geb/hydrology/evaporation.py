@@ -20,15 +20,31 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
+import numpy.typing as npt
 
 from geb.module import Module
 
 
+def get_CO2_induced_crop_factor_adustment(
+    CO2_concentration_ppm: float,
+) -> float:
+    """Calculate the CO2 induced crop factor adjustment.
+
+    For reference see:
+        Reference Manual, Chapter 3 – AquaCrop, Version 7.1
+        Eq. 3.10e/2
+
+    Args:
+        CO2_concentration_ppm: The CO2 concentration in ppm.
+    """
+    base_co2_concentration_ppm: float = 369.41
+    return 1.0 - 0.05 * (CO2_concentration_ppm - base_co2_concentration_ppm) / (
+        550 - base_co2_concentration_ppm
+    )
+
+
 class Evaporation(Module):
-    """
-    Evaporation module
-    Calculate potential evaporation and pot. transpiration
-    """
+    """Calculate potential evaporation and pot. transpiration."""
 
     def __init__(self, model, hydrology):
         super().__init__(model)
@@ -47,46 +63,61 @@ class Evaporation(Module):
     def spinup(self):
         pass
 
-    def step(self, ETRef, snow_melt):
+    def step(
+        self,
+        reference_evapotranspiration_grass: npt.NDArray[np.float32],
+        snow_melt: npt.NDArray[np.float32],
+        crop_factor: npt.NDArray[np.float32],
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
+        """Calculate potential transpiration, potential bare soil evaporation, potential evapotranspiration and corrects snow melt for evaporation.
+
+        Args:
+            reference_evapotranspiration_grass: Reference evapotranspiration [m]
+            snow_melt: Snow melt [m]
+            crop_factor: Crop factor for each land use type [dimensionless]
+
+        Returns:
+            Potential transpiration, potential bare soil evaporation,
+            potential evapotranspiration, remaining snow melt and snow evaporation.
         """
-        Dynamic part of the soil module
-
-        calculating potential Evaporation for each land cover class with kc factor
-        get crop coefficient, use potential ET, calculate potential bare soil evaporation and transpiration
-
-        :param coverType: Land cover type: forest, grassland  ...
-        :param No: number of land cover type: forest = 0, grassland = 1 ...
-        :return: potential evaporation from bare soil, potential transpiration
-        """
-
-        # get crop coefficient
-        # to get ETc from ET0 x kc factor  ((see http://www.fao.org/docrep/X0490E/x0490e04.htm#TopOfPage figure 4:)
-        # crop coefficient read for forest and grassland from file
-
         # calculate potential bare soil evaporation
-        potential_bare_soil_evaporation = (
-            self.hydrology.crop_factor_calibration_factor * 0.2 * ETRef
+        potential_bare_soil_evaporation: npt.NDArray[np.float32] = (
+            self.hydrology.crop_factor_calibration_factor
+            * 0.2
+            * reference_evapotranspiration_grass
         )
 
         # calculate snow evaporation
-        self.HRU.var.snowEvap = np.minimum(snow_melt, potential_bare_soil_evaporation)
-        snow_melt -= self.HRU.var.snowEvap
-        potential_bare_soil_evaporation = (
-            potential_bare_soil_evaporation - self.HRU.var.snowEvap
+        snow_sublimation: npt.NDArray[np.float32] = np.minimum(
+            snow_melt, potential_bare_soil_evaporation
+        )
+        snow_melt -= snow_sublimation
+        potential_bare_soil_evaporation: npt.NDArray[np.float32] = (
+            potential_bare_soil_evaporation - snow_sublimation
         )
 
-        # calculate potential ET
-        ##  self.HRU.var.potential_evapotranspiration total potential evapotranspiration for a reference crop for a land cover class [m]
-        potential_evapotranspiration = (
-            self.hydrology.crop_factor_calibration_factor * self.HRU.var.cropKC * ETRef
+        CO2_ppm: float = self.model.forcing.load("CO2")
+        CO2_induced_crop_factor_adustment: float = (
+            get_CO2_induced_crop_factor_adustment(CO2_ppm)
         )
 
-        ## potential_transpiration: Transpiration for each land cover class
-        potential_transpiration = np.maximum(
+        potential_evapotranspiration: npt.NDArray[np.float32] = (
+            self.hydrology.crop_factor_calibration_factor
+            * crop_factor
+            * reference_evapotranspiration_grass
+        ) * np.float32(CO2_induced_crop_factor_adustment)
+
+        potential_transpiration: npt.NDArray[np.float32] = np.maximum(
             0.0,
             potential_evapotranspiration
             - potential_bare_soil_evaporation
-            - self.HRU.var.snowEvap,
+            - snow_sublimation,
         )
 
         self.report(self, locals())
@@ -96,4 +127,5 @@ class Evaporation(Module):
             potential_bare_soil_evaporation,
             potential_evapotranspiration,
             snow_melt,
+            snow_sublimation,
         )

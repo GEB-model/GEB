@@ -19,6 +19,7 @@ from geb.agents.crop_farmers import (
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
+from geb.build.methods import build_method
 
 from .. import GEBModel
 from ..workflows.general import repeat_grid
@@ -187,18 +188,20 @@ class Survey:
 
     def sample(
         self,
-        n,
-        evidence=[],
-        evidence_columns=None,
-        method="rejection",
-        show_progress=True,
+        n: int,
+        evidence: list = [],
+        evidence_columns: list = None,
+        method: str = "rejection",
+        show_progress: str = True,
     ):
-        """
+        """Sample from the Bayesian network.
+
         Args:
-            n (int): number of samples to generate
-            evidence (list): list of evidence values (i.e., all samples will have these values ...)
-            evidence_columns (list): list of evidence column names (i.e., ... for these columns)
-            method (str): sampling method, only 'rejection' is implemented
+            n: number of samples to generate
+            evidence: list of evidence values (i.e., all samples will have these values ...)
+            evidence_columns: list of evidence column names (i.e., ... for these columns)
+            method: sampling method, only 'rejection' is implemented.
+            show_progress: whether to show progress bar
         """
         assert method == "rejection", "Only rejection sampling is implemented"
         if show_progress:
@@ -681,8 +684,8 @@ class fairSTREAMModel(GEBModel):
             gev_pr.sel(dparams="scale").astype(np.float32),
             name="climate/pr_gev_scale",
         )
-        pass
 
+    @build_method(depends_on=["setup_create_farms", "setup_regions_and_land_use"])
     def setup_farmer_crop_calendar(
         self,
         seasons,
@@ -1147,6 +1150,7 @@ class fairSTREAMModel(GEBModel):
             name="agents/farmers/crop_calendar_rotation_years",
         )
 
+    @build_method(depends_on=["setup_create_farms", "setup_cell_area"])
     def setup_farmer_characteristics(
         self,
         risk_aversion_mean,

@@ -2,15 +2,18 @@ import json
 import shutil
 from datetime import datetime
 from operator import attrgetter
+from typing import Callable
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from .HRUs import load_geom
+from .hydrology.HRUs import load_geom
 
 
 class DynamicArray:
+    """A dynamic array almost identical to a Numpy array, but that can grow and shrink in size."""
+
     __slots__: list = ["_data", "_n", "_extra_dims_names"]
 
     def __init__(
@@ -361,10 +364,38 @@ class DynamicArray:
 
 
 class Bucket:
-    def __init__(self):
-        pass
+    """A class to manage the storage of model data in a bucket.
+
+    Each bucket is associated with a specific part of the model, usually a Module.
+
+    Args:
+        validator: A function to validate values before setting them.
+            If provided, it should return True for valid values and False for invalid ones.
+            Defaults to None, meaning no validation is performed.
+
+    """
+
+    def __init__(self, validator: Callable | None = None):
+        self._validator = validator
+
+    def __iter__(self):
+        """Iterate over the items in the bucket."""
+        for name, value in self.__dict__.items():
+            if name == "_validator":
+                continue
+            yield name, value
 
     def __setattr__(self, name, value):
+        # If the name is 'validator', we allow setting it directly.
+        # i.e., we do not validate the validator itself.
+        if name == "_validator":
+            super().__setattr__(name, value)
+            return
+
+        if self._validator is not None:
+            if not self._validator(value):
+                raise ValueError(f"Value for {name} does not pass validation: {value}")
+
         assert isinstance(
             value,
             (
@@ -385,6 +416,9 @@ class Bucket:
     def save(self, path):
         path.mkdir(parents=True, exist_ok=True)
         for name, value in self.__dict__.items():
+            # do not save the validator itself
+            if name == "_validator":
+                continue
             if isinstance(value, DynamicArray):
                 value.save(path / name)
             elif isinstance(value, np.ndarray):
@@ -463,13 +497,18 @@ class Bucket:
 
 
 class Store:
+    """A class to manage the storage of model data in buckets.
+
+    This class is use to store and restore the model's state in a structured way.
+    """
+
     def __init__(self, model):
         self.model = model
         self.buckets = {}
 
-    def create_bucket(self, name):
+    def create_bucket(self, name, validator=None):
         assert name not in self.buckets
-        bucket = Bucket()
+        bucket = Bucket(validator=validator)
         self.buckets[name] = bucket
         return bucket
 
@@ -491,13 +530,20 @@ class Store:
             path = self.path
 
         for bucket_folder in path.iterdir():
+            # Mac OS X creates a .DS_Store file in directories, which we ignore
+            if bucket_folder.name == ".DS_Store":
+                continue
             bucket = Bucket().load(bucket_folder)
 
             self.buckets[bucket_folder.name] = bucket
 
             split_name = bucket_folder.name.split(".")
 
-            if not self.model.simulate_hydrology and split_name[0] == "hydrology":
+            if (
+                not self.model.simulate_hydrology
+                and (split_name[0] == "hydrology")
+                and not split_name[1] == "grid"
+            ):
                 continue
 
             if len(split_name) == 1:

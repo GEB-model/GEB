@@ -18,7 +18,7 @@ def reclassify(
         If lookup, it will use a lookup array for faster performance, but
         keys must be positive integers only and be limited in size.
 
-    Returns
+    Returns:
     -------
     xarray.DataArray or numpy.ndarray
         Reclassified array with the same dimensions and coordinates
