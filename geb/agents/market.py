@@ -3,6 +3,8 @@ import json
 
 import numpy as np
 import statsmodels.api as sm
+from numpy.linalg import LinAlgError
+import warnings
 
 from ..data import load_regional_crop_data_from_dict
 from ..store import DynamicArray
@@ -123,18 +125,27 @@ class Market(AgentBaseClass):
 
         print("Look into increasing yield and increasing price")
         for crop in range(self.var.production.shape[0]):
-            if production[crop].sum() == 0:
+            prod = production[crop]
+            if prod.sum() == 0:
                 continue
             # Defining the independent variables (add a constant term for the intercept)
-            X = sm.add_constant(np.log(production[crop]))
+            X = sm.add_constant(np.log(prod))
 
             # Defining the dependent variable
-            price = total_farmer_income[crop] / production[crop]
+            price = total_farmer_income[crop] / prod
 
             y = np.log(price)
 
             # Fitting the model
-            model = sm.OLS(y, X).fit()
+            try:
+                model = sm.OLS(y, X).fit()
+            except LinAlgError:  # SVD did not converge
+                warnings.warn(f"Crop {crop}: SVD did not converge – skipped")
+                continue
+            except ValueError as e:  # any other statsmodels problem
+                warnings.warn(f"Crop {crop}: {e} – skipped")
+                continue
+
             model_parameters = model.params
             # assert model_parameters[-1] < 0, "Price increase with decreasing yield"
             self.var.parameters[crop] = model_parameters
