@@ -13,6 +13,7 @@ def setup_donor_countries(
     Returns:
         A dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
     """
+    # load HDI index
     dev_index = self.data_catalog.get_dataframe(
         "UN_dev_index"
     )  # Human Development Index
@@ -21,11 +22,13 @@ def setup_donor_countries(
         dev_index.groupby("Code", as_index=False)["HDI"].mean().set_index("Code")
     )  # calculate mean HDI for each country
 
-    global_countries = self.geoms["global_countries"]
+    # find potential donors
+    global_countries = self.geoms[
+        "global_countries"
+    ]  # we need this to get the centroids of the countries geoms
     potential_donors = global_countries.loc[
         global_countries.index.isin(countries_with_data)
     ]
-
     potential_donors = potential_donors[
         potential_donors.index.isin(dev_index.index)
     ]  # delete potential donors that do not have HDI data
@@ -47,7 +50,7 @@ def setup_donor_countries(
     for country in countries_without_data:
         # calculate the HDI of the target country
         if country not in dev_index.index:  # if the country does not have HDI data
-            # take the closest country with HDI data
+            # take the closest country with HDI data (HDI donor)
             region_countries_geometries = global_countries.loc[
                 global_countries.index.isin(region_countries)
             ]
@@ -59,7 +62,7 @@ def setup_donor_countries(
             closest_country = region_countries_geometries.loc[distances.idxmin()].name
 
             self.logger.warning(
-                f"Country {country} does not have HDI data available, as it is not an official UN country. Filling it with the closest country with HDI data: {closest_country}."
+                f"Country {country} does not have HDI data available, as it is not an official UN country. Taking HDI from the closest country with HDI data: {closest_country}."
             )
             hdi = dev_index.loc[closest_country, "HDI"]
 
@@ -318,7 +321,7 @@ M49_to_ISO3 = {
     798: "TUV",
     800: "UGA",
     804: "UKR",
-    807: "North MacedoniaD",
+    807: "MKD",
     818: "EGY",
     826: "GBR",
     831: "GGY",
@@ -421,6 +424,7 @@ SUPERWELL_NAME_TO_ISO3 = {
     "Jordan": "JOR",
     "Kazakhstan": "KAZ",
     "Kenya": "KEN",
+    "Kosovo": "XKX",
     "Kuwait": "KWT",
     "Kyrgyzstan": "KGZ",
     "Laos": "LAO",
@@ -560,6 +564,7 @@ COUNTRY_NAME_TO_ISO3 = {
     "Jordan": "JOR",
     "Korea, Rep. of": "KOR",
     "Kyrgyzstan": "KGZ",
+    "Kosovo": "XKX",
     "Lao People's Democratic Republic": "LAO",
     "Latvia": "LVA",
     "Lebanon": "LBN",
@@ -1041,6 +1046,7 @@ AQUASTAT_NAME_TO_ISO3 = {
     "Kazakhstan": "KAZ",
     "Kenya": "KEN",
     "Kiribati": "KIR",
+    "Kosovo": "XKX",
     "Kuwait": "KWT",
     "Kyrgyzstan": "KGZ",
     "Lao People's Democratic Republic": "LAO",

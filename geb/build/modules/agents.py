@@ -381,6 +381,7 @@ class Agents:
         price_ratio_dict = {"time": years_price_ratio, "data": {}}  # price ratio
 
         lcu_filtered = filter_and_rename(LCU_per_USD, ["Country Name", "Country Code"])
+
         years_lcu = extract_years(lcu_filtered)
         lcu_dict = {"time": years_lcu, "data": {}}  # LCU per USD
 
@@ -486,6 +487,27 @@ class Agents:
             lcu_dict["data"][region_id] = process_rates(
                 lcu_filtered, years_lcu, region["ISO3"]
             )
+
+            if np.all(np.isnan(lcu_dict["data"][region_id])):
+                # check which countries are NOT fully nan
+                lcu_dict_filter_index = lcu_filtered.set_index("Country Code")
+                countries_with_lcu_data = (
+                    lcu_dict_filter_index[years_lcu]
+                    .dropna(axis=0, how="all")
+                    .index.unique()
+                    .tolist()
+                )
+                donor_countries = setup_donor_countries(self, countries_with_lcu_data)
+                donor_country = donor_countries.get(ISO3, None)
+                lcu_dict["data"][region_id] = process_rates(
+                    lcu_filtered,
+                    years_lcu,
+                    donor_country,
+                )
+
+                self.logger.info(
+                    f"Missing LCU (currency conversion) data for {ISO3}, using donor country {donor_country}"
+                )
 
         for d in (
             inflation_rates_dict,
@@ -1819,16 +1841,21 @@ class Agents:
         GLOBIOM_regions_region = GLOBIOM_regions[
             GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
         ]["Region37"].unique()
+
         ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
             GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
         ]["ISO3"]
 
-        donor_data = {}
+        self.logger.info(
+            f" missing ISO3 codes in GLOBIOM regions: {set(ISO3_codes_region) - set(ISO3_codes_GLOBIOM_region)}"
+        )
+
+        donor_data = {}  # determine the donors: donors are all the countries in the GLOBIOM regions that are within our model domain(self.geoms["regions"]). Therefore, this can be a region OUTSIDE of the model domain, but within a GLOBIOM region in the model domain.
         for ISO3 in ISO3_codes_GLOBIOM_region:
             region_risk_aversion_data = preferences_global[
                 preferences_global["ISO3"] == ISO3
             ]
-            if region_risk_aversion_data.empty:
+            if region_risk_aversion_data.empty:  # country NOT in preferences dataset
                 countries_with_preferences_data = (
                     preferences_global["ISO3"].unique().tolist()
                 )
@@ -1877,7 +1904,6 @@ class Agents:
         donor_data = donor_data.dropna(axis=1, how="all")
 
         unique_regions = self.geoms["regions"]
-
         data = self.donate_and_receive_crop_prices(
             donor_data, unique_regions, GLOBIOM_regions
         )
