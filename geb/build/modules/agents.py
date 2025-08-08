@@ -1041,6 +1041,9 @@ class Agents:
             assert not farm_sizes_per_region["ISO3"].isna().any(), (
                 f"Found {farm_sizes_per_region['ISO3'].isna().sum()} countries without ISO3 code"
             )
+
+            farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
+            farm_size_donor_country = setup_donor_countries(self, farm_countries_list)
         else:
             # load data source
             farm_sizes_per_region = pd.read_excel(
@@ -1054,9 +1057,6 @@ class Agents:
         all_agents = []
 
         self.logger.info(f"Starting processing of {len(regions_shapes)} regions")
-
-        farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
-        farm_size_donor_country = setup_donor_countries(self, farm_countries_list)
 
         for i, (_, region) in enumerate(regions_shapes.iterrows()):
             UID = region[region_id_column]
