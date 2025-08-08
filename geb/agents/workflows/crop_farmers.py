@@ -2,12 +2,13 @@ from typing import Union
 
 import numpy as np
 import numpy.typing as npt
+from numba import njit, prange
+
 from geb.hydrology.soil import (
     get_fraction_easily_available_soil_water,
     get_infiltration_capacity,
     get_root_ratios,
 )
-from numba import njit, prange
 
 
 @njit(cache=True, inline="always")
@@ -699,7 +700,7 @@ def abstract_water(
     )
 
 
-# @njit(cache=True)
+@njit(cache=True)
 def plant(
     n: int,
     day_index: int,
