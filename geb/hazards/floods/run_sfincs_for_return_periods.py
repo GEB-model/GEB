@@ -285,7 +285,7 @@ def run_sfincs_for_return_periods(
 
         if clean_working_dir:
             assert working_dir_return_period.exists()
-            # shutil.rmtree(working_dir_return_period, ignore_errors=True)
+            shutil.rmtree(working_dir_return_period, ignore_errors=True)
 
         rp_maps[return_period] = rp_map
 
