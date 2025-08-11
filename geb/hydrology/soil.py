@@ -599,16 +599,38 @@ def evapotranspirate(
     cache=True,
 )
 def get_soil_water_flow_parameters(
-    w,
-    wres,
-    ws,
-    lambda_,
-    saturated_hydraulic_conductivity,
-    bubbling_pressure_cm,
-):
+    w: npt.NDArray[np.float32],
+    wres: npt.NDArray[np.float32],
+    ws: npt.NDArray[np.float32],
+    lambda_: npt.NDArray[np.float32],
+    saturated_hydraulic_conductivity: npt.NDArray[np.float32],
+    bubbling_pressure_cm: npt.NDArray[np.float32],
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    """Calculate the soil water potential and unsaturated hydraulic conductivity for each soil layer.
+
+    Notes:
+        - psi is cutoff at MAX_SUCTION_METERS because the van Genuchten model predicts infinite suction
+        for very dry soils.
+
+    Args:
+        w: Soil water content in each layer in meters.
+        wres: Residual soil water content in each layer in meters.
+        ws: Saturated soil water content in each layer in meters.
+        lambda_: Van Genuchten parameter lambda for each layer.
+        saturated_hydraulic_conductivity: Saturated hydraulic conductivity for each layer in m/timestep
+        bubbling_pressure_cm: Bubbling pressure for each layer in cm.
+
+    Returns:
+        A tuple containing:
+            - psi: Soil water potential in each layer in meters (negative value for suction).
+            - unsaturated_hydraulic_conductivity: Unsaturated hydraulic conductivity in each layer in m/timestep.
+
+    """
     psi = np.empty_like(w)
     unsaturated_hydraulic_conductivity = np.empty_like(w)
 
+    # oven-dried soil has a suction of 1 GPa, which is about 100000 m water column
+    max_suction_meters = np.float32(1_000_000_000 / 1_000 / 9.81)
     for i in prange(w.shape[0]):
         # Compute unsaturated hydraulic conductivity and soil water potential. Here it is important that
         # some flow is always possible. Therefore we use a minimum effective saturation to ensure that
@@ -617,7 +639,7 @@ def get_soil_water_flow_parameters(
 
         # Compute effective saturation
         effective_saturation = (w[i] - wres[i]) / (ws[i] - wres[i])
-        effective_saturation = np.maximum(effective_saturation, np.float32(0.01))
+        effective_saturation = np.maximum(effective_saturation, np.float32(1e-9))
         effective_saturation = np.minimum(effective_saturation, np.float32(1))
 
         # Compute parameters n and m
@@ -643,6 +665,7 @@ def get_soil_water_flow_parameters(
         phi = (
             np.power(phi_power_term - np.float32(1), (np.float32(1) / n)) / alpha
         )  # Positive value
+        phi = np.minimum(phi, max_suction_meters)  # Limit to maximum suction
 
         # Soil water potential (negative value for suction)
         psi[i] = -phi
@@ -770,8 +793,8 @@ def vertical_water_transport(
         infiltration = min(
             potential_infiltration[i]
             * ~soil_is_frozen[i]
-            * ~(land_use_type[i] == SEALED)
-            * ~(land_use_type[i] == OPEN_WATER),
+            * ~(land_use_type[i] == SEALED)  # no infiltration on sealed areas
+            * ~(land_use_type[i] == OPEN_WATER),  # no infiltration on open water
             topwater[i],
         )
         remaining_infiltration = np.float32(infiltration)  # make a copy
@@ -984,6 +1007,8 @@ def thetar_brakensiek(
     Returns:
         residual water content [m3/m3].
     """
+    clay = np.clip(clay, 5, 60)
+    sand = np.clip(sand, 5, 70)
     return (
         np.float32(-0.0182482)
         + np.float32(0.00087269) * sand
@@ -1059,22 +1084,52 @@ def get_pore_size_index_brakensiek(sand, thetas, clay):
         pore size distribution index [-].
 
     """
+    clay = np.clip(clay, 5, 60)
+    sand = np.clip(sand, 5, 70)
     poresizeindex = np.exp(
         -0.7842831
         + 0.0177544 * sand
         - 1.062498 * thetas
-        - (5.304 * 10**-5) * (sand**2)
+        - 0.00005304 * (sand**2)
         - 0.00273493 * (clay**2)
         + 1.11134946 * (thetas**2)
         - 0.03088295 * sand * thetas
-        + (2.6587 * 10**-4) * (sand**2) * (thetas**2)
+        + 0.00026587 * (sand**2) * (thetas**2)
         - 0.00610522 * (clay**2) * (thetas**2)
-        - (2.35 * 10**-6) * (sand**2) * clay
+        - 0.00000235 * (sand**2) * clay
         + 0.00798746 * (clay**2) * thetas
         - 0.00674491 * (thetas**2) * clay
     )
 
     return poresizeindex
+
+
+def get_pore_size_index_wosten(
+    clay: npt.NDArray[np.float32],
+    silt: npt.NDArray[np.float32],
+    soil_organic_carbon: npt.NDArray[np.float32],
+    bulk_density: npt.NDArray[np.float32],
+    is_top_soil: npt.NDArray[np.bool_],
+) -> npt.NDArray[np.float32]:
+    return np.exp(
+        -25.23
+        - 0.02195 * clay
+        + 0.0074 * silt
+        - 0.1940 * soil_organic_carbon
+        + 45.5 * bulk_density
+        - 7.24 * bulk_density**2
+        + 0.0003658 * clay**2
+        + 0.002855 * soil_organic_carbon**2
+        - 12.81 * bulk_density**-1
+        - 0.1524 * silt**-1
+        - 0.01958 * soil_organic_carbon**-1
+        - 0.2876 * np.log(silt)
+        - 0.0709 * np.log(soil_organic_carbon)
+        - 44.6 * np.log(bulk_density)
+        - 0.02264 * bulk_density * clay
+        + 0.0896 * bulk_density * soil_organic_carbon
+        + 0.00718 * is_top_soil * clay
+    )
 
 
 def kv_brakensiek(
@@ -1097,6 +1152,8 @@ def kv_brakensiek(
     Returns:
         saturated hydraulic conductivity [m/day].
     """
+    clay = np.clip(clay, 5, 60)
+    sand = np.clip(sand, 5, 70)
     kv = np.exp(
         19.52348 * thetas
         - 8.96847
@@ -1258,7 +1315,7 @@ class Soil(Module):
         )
         is_top_soil[0:3] = True
 
-        thetas: npt.NDArray[np.float32] = thetas_toth(
+        thetas = thetas_toth(
             soil_organic_carbon=soil_organic_carbon,
             bulk_density=bulk_density,
             is_top_soil=is_top_soil,
@@ -1266,18 +1323,14 @@ class Soil(Module):
             silt=self.HRU.var.silt,
         )
 
-        thetar: npt.NDArray[np.float32] = thetar_brakensiek(
+        thetar = thetar_brakensiek(
             sand=self.HRU.var.sand, clay=self.HRU.var.clay, thetas=thetas
         )
-        self.HRU.var.bubbling_pressure_cm: npt.NDArray[np.float32] = (
-            get_bubbling_pressure(
-                clay=self.HRU.var.clay, sand=self.HRU.var.sand, thetas=thetas
-            )
+        self.HRU.var.bubbling_pressure_cm = get_bubbling_pressure(
+            clay=self.HRU.var.clay, sand=self.HRU.var.sand, thetas=thetas
         )
-        self.HRU.var.lambda_pore_size_distribution: npt.NDArray[np.float32] = (
-            get_pore_size_index_brakensiek(
-                sand=self.HRU.var.sand, thetas=thetas, clay=self.HRU.var.clay
-            )
+        self.HRU.var.lambda_pore_size_distribution = get_pore_size_index_brakensiek(
+            sand=self.HRU.var.sand, thetas=thetas, clay=self.HRU.var.clay
         )
 
         # θ saturation, field capacity, wilting point and residual moisture content
