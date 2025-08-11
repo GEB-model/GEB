@@ -1,6 +1,7 @@
 from typing import Union
 
 import numpy as np
+import numpy.typing as npt
 from numba import njit, prange
 
 from geb.hydrology.soil import (
