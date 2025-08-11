@@ -182,21 +182,17 @@ def run_sfincs_for_return_periods(
             outflow = gpd.read_file(Path(sf.root) / "gis/outflow_points.gpkg")
             # only one point location is expected
             assert len(outflow) == 1, "Only one outflow point is expected"
-            # import dem from input files folder
-            print("I am here =========>", model_root)
-            dem = fabdem_input
-            print(dem)
+            # sample from FabDEM DEM
             # change the crs of the outflow to the crs of the dem
-            outflow = outflow.to_crs(dem.rio.crs)  # type: ignore
-            assert outflow.crs == dem.rio.crs, (  # type: ignore
+            outflow = outflow.to_crs(fabdem_input.rio.crs)  # type: ignore
+            assert outflow.crs == fabdem_input.rio.crs, (  # type: ignore
                 "CRS of outflow and dem should be the same"
             )
             # Extract x and y coordinates from the outflow GeoDataFrame
             x, y = outflow.geometry.x.iloc[0], outflow.geometry.y.iloc[0]
 
             # Use .sel() to extract the elevation value
-            elevation = dem.sel(x=x, y=y, method="nearest").values.item()  # type: ignore
-            print("value of elevation============>:", elevation)
+            elevation = fabdem_input.sel(x=x, y=y, method="nearest").values.item()  # type: ignore
             # if value of elevation Nan or zero, take values from gebco
             if elevation is None or elevation == 0:
                 print(
