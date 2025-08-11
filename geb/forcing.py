@@ -134,7 +134,6 @@ class Forcing(Module):
         else:
             data = self[name].read_timestep(time)
         if __debug__ and not self.validators[name](data):
-            data = data.compute()
             raise ValueError(
                 f"Invalid data for {name} at time {time}. "
                 f"\tMin data value: {data.min()}"
