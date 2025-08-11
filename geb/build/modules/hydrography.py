@@ -648,6 +648,22 @@ class Hydrography:
         self.set_geoms(waterbodies, name="waterbodies/waterbody_data")
 
     @build_method
+    def setup_coastal_model_regions(self):
+        """Sets up the coastal model regions for the model.
+
+        This function subdivides the coastal geoms into smaller regions that are used to simulate coastal flooding.
+        """
+        self.logger.info("Setting up coastal model regions")
+        # load river basins and coastline data
+        basins = self.geoms["routing/subbasins"]
+        # get coastal basins
+        coastal_basins = basins[basins["is_coastal_basin"]]
+        coastal_basins.to_file("output/coastal_basins.geojson", driver="GeoJSON")
+
+        # TODO: Implement coastal model region setup
+        pass
+
+    @build_method
     def setup_gtsm_water_levels(self):
         """Sets up the GTSM hydrographs for the model."""
         self.logger.info("Setting up GTSM hydrographs")
@@ -677,7 +693,7 @@ class Hydrography:
                 )
                 timeseries_data = timeseries_data.pivot(
                     index="time", columns="stations", values="waterlevel"
-                )
+                )  # save as xarray using set_other
 
                 print(f"Processed GTSM data for {year}-{month:02d}")
         # now also prepare a DataFrame with the station ids and coordinates
@@ -702,7 +718,9 @@ class Hydrography:
             timeseries_data.to_pickle(
                 f"{target_folder}/gtsm_water_levels_{station}.pkl"
             )
-        gdf.to_file(f"{target_folder}/stations.geojson", driver="GeoJSON")
+        gdf.to_file(
+            f"{target_folder}/stations.geojson", driver="GeoJSON"
+        )  # self.set_geoms
         self.logger.info(
             f"GTSM hydrographs exported to {target_folder}/gtsm_water_levels"
         )

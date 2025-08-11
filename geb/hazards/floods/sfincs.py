@@ -9,9 +9,9 @@ import pandas as pd
 import rasterio
 import xarray as xr
 import zarr
-from shapely.geometry.point import Point
-from shapely.geometry import shape
 from rioxarray.merge import merge_arrays
+from shapely.geometry import shape
+from shapely.geometry.point import Point
 
 from ...hydrology.HRUs import load_geom, load_grid
 from ...workflows.io import open_zarr, to_zarr
@@ -301,35 +301,32 @@ class SFINCS:
 
     def build_coastal_boundary_mask(self):
         """Builds a mask to define the coastal boundaries for the SFINCS model."""
-        coastline = xr.load_dataset(
-            self.model.files["other"]["drainage/simulated_coastline"]
+        lecz = xr.load_dataset(
+            self.model.files["other"]["landsurface/low_elevation_coastal_zone"]
         )
 
         # Make sure it has a CRS
-        if coastline.rio.crs is None:
-            coastline = coastline.rio.write_crs(
+        if lecz.rio.crs is None:
+            lecz = lecz.rio.write_crs(
                 "EPSG:4326", inplace=False
             )  # check CRS for later applications
 
         # Extract binary mask values
-        coastline_data = coastline["simulated_coastline"].values.astype(np.uint8)
+        lecz_data = lecz["low_elevation_coastal_zone"].values.astype(np.uint8)
 
         # Get transform from raster metadata
-        transform = coastline.rio.transform()
+        transform = lecz.rio.transform()
 
         # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
-        shapes = rasterio.features.shapes(
-            coastline_data, mask=None, transform=transform
-        )
+        shapes = rasterio.features.shapes(lecz_data, mask=None, transform=transform)
 
         # Build GeoDataFrame from the shapes generator
         records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
 
         gdf = gpd.GeoDataFrame.from_records(records)
         gdf.set_geometry("geometry", inplace=True)
-        gdf = gdf.set_crs(coastline.rio.crs, inplace=True)
+        gdf = gdf.set_crs(lecz.rio.crs, inplace=True)
         gdf = gdf[gdf["value"] == 1]  # Keep only mask == 1
-
         return gdf
 
     def get_coastal_return_period_maps(self):
@@ -390,7 +387,6 @@ class SFINCS:
 
     def merge_return_period_maps(self, rp_maps_coastal, rp_maps_riverine):
         """Merges the return period maps for riverine and coastal floods into a single dataset."""
-
         for return_period in self.config["return_periods"]:
             if rp_maps_coastal is None:
                 riverine_da = rp_maps_riverine[return_period]
