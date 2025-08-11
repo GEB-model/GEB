@@ -5,7 +5,7 @@ import numpy as np
 import numpy.typing as npt
 import pyflwdir
 import xarray as xr
-from hydromt_sfincs import SfincsModel
+from hydromt_sfincs import SfincsModel, workflows
 
 from geb.hydrology.routing import get_river_width
 
@@ -161,13 +161,40 @@ def build_sfincs(
         river_len=0,
     )
 
-    # Setup river outflow points
-    sf.setup_river_outflow(
-        rivers=rivers,
-        keep_rivers_geom=True,
+    # # Setup river outflow points , this is updated to a better outflow boundary condition
+    # sf.setup_river_outflow(
+    #     rivers=rivers,
+    #     keep_rivers_geom=True,
+    #     river_upa=0,
+    #     river_len=0,
+    # )
+
+    # find outflow points and save for later use
+    outflow_points = workflows.river_source_points(
+        gdf_riv=rivers.to_crs(sf.crs),
+        gdf_mask=sf.region,
+        src_type="outflow",
+        buffer=sf.reggrid.dx,  # type: ignore
         river_upa=0,
         river_len=0,
     )
+    # give error if outflow greater than 1
+    if len(outflow_points) > 1:
+        raise ValueError(
+            "More than one outflow point found, outflow boundary condition will fail to setup"
+        )
+    elif len(outflow_points) == 0:
+        raise ValueError(
+            "No outflow point found, outflow boundary condition will fail to setup"
+        )
+    # print crs of outflow_points
+    assert outflow_points.crs == sf.crs, (
+        "CRS of outflow_points is not the same as the model crs"
+    )
+    # set crs before saving
+    outflow_points = outflow_points.set_crs(sf.crs)
+    # save to model root as a gpkg file
+    outflow_points.to_file(model_root / "gis/outflow_points.gpkg", driver="GPKG")
 
     river_representative_points = []
     for ID in rivers.index:

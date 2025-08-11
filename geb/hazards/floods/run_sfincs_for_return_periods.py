@@ -115,6 +115,8 @@ def run_sfincs_for_return_periods(
     export=True,
     export_dir=None,
     gpu=False,
+    fabdem_input=None,
+    gebco_input=None,
 ):
     if export_dir is None:
         export_dir: Path = model_root / "risk"
@@ -176,7 +178,73 @@ def run_sfincs_for_return_periods(
                 locations=inflow_nodes.to_crs(sf.crs),
                 timeseries=Q,
             )
+            # before changing root read outflow_points from model root gis folder
+            outflow = gpd.read_file(Path(sf.root) / "gis/outflow_points.gpkg")
+            # only one point location is expected
+            assert len(outflow) == 1, "Only one outflow point is expected"
+            # import dem from input files folder
+            print("I am here =========>", model_root)
+            dem = fabdem_input
+            print(dem)
+            # change the crs of the outflow to the crs of the dem
+            outflow = outflow.to_crs(dem.rio.crs)  # type: ignore
+            assert outflow.crs == dem.rio.crs, (  # type: ignore
+                "CRS of outflow and dem should be the same"
+            )
+            # Extract x and y coordinates from the outflow GeoDataFrame
+            x, y = outflow.geometry.x.iloc[0], outflow.geometry.y.iloc[0]
 
+            # Use .sel() to extract the elevation value
+            elevation = dem.sel(x=x, y=y, method="nearest").values.item()  # type: ignore
+            print("value of elevation============>:", elevation)
+            # if value of elevation Nan or zero, take values from gebco
+            if elevation is None or elevation == 0:
+                print(
+                    "Defaulting to gebco to setup outflow as fabdem has no value here"
+                )
+                outflow = outflow.to_crs(gebco_input.rio.crs)  # type: ignore
+                assert outflow.crs == gebco_input.rio.crs, (  # type: ignore
+                    "CRS of outflow and gebco should be the same"
+                )
+                # Extract x and y coordinates from the outflow GeoDataFrame
+                x, y = outflow.geometry.x.iloc[0], outflow.geometry.y.iloc[0]
+                # Use .sel() to extract the elevation value
+                elevation = gebco_input.sel(x=x, y=y, method="nearest").values.item()  # type: ignore
+            if elevation is None or elevation == 0:
+                assert False, (
+                    "Elevation should have positive value to set up outflow waterlevel boundary"
+                )
+
+            # Get the model's start and stop time using the get_model_time function
+            tstart, tstop = sf.get_model_time()
+
+            # Define the time range (e.g., 1 month of hourly data)
+            time_range = pd.date_range(start=tstart, end=tstop, freq="H")
+
+            # Create DataFrame with constant elevation value
+            elevation_time_series_constant = pd.DataFrame(
+                data={"water_level": elevation},  # Use extracted elevation value
+                index=time_range,
+            )
+
+            # Extract a unique index from the outflow point. Here, we use 1 as an example.
+            outflow_index = (
+                1  # This should be the index or a suitable ID of the outflow point
+            )
+            elevation_time_series_constant.columns = [
+                outflow_index
+            ]  # Use an integer as column name
+
+            # Ensure outflow has the correct index as well
+            outflow["index"] = (
+                outflow_index  # Set the matching index to outflow location
+            )
+
+            # Now set the water level forcing
+            sf.setup_waterlevel_forcing(
+                timeseries=elevation_time_series_constant,  # Constant time series
+                locations=outflow,  # Outflow point
+            )
             sf.set_root(simulation_root, mode="w+")
             sf._write_gis = False
 
@@ -191,7 +259,7 @@ def run_sfincs_for_return_periods(
 
             sf.write_forcing()
             sf.write_config()
-
+            sf.plot_forcing(fn_out="forcing.png")
             # only export if working dir is not cleaned afterwards anyway
             if not clean_working_dir:
                 sf.plot_basemap(fn_out="basemap.png")
@@ -217,7 +285,7 @@ def run_sfincs_for_return_periods(
 
         if clean_working_dir:
             assert working_dir_return_period.exists()
-            shutil.rmtree(working_dir_return_period, ignore_errors=True)
+            # shutil.rmtree(working_dir_return_period, ignore_errors=True)
 
         rp_maps[return_period] = rp_map
 
