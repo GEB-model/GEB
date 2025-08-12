@@ -596,12 +596,12 @@ def abstract_water(
     groundwater_abstraction_m3 = np.zeros_like(available_groundwater_m3)
     reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
 
-    for activated_farmer_index in range(activation_order.size):
-        farmer = activation_order[activated_farmer_index]
+    for farmer in activation_order:
         farmer_fields = get_farmer_HRUs(field_indices, field_indices_by_farmer, farmer)
         potential_irrigation_consumption_m3_farmer = (
             gross_irrigation_demand_m3_per_field[farmer_fields]
         )
+
         if potential_irrigation_consumption_m3_farmer.sum() <= 0:
             continue
 
@@ -628,7 +628,6 @@ def abstract_water(
                     gross_irrigation_demand_m3_per_field[field] / cell_area[field]
                 )
                 assert 1 >= irrigation_water_demand_field_m >= 0
-
                 if surface_irrigated[farmer]:
                     # command areas
                     if command_area_farmer != -1:  # -1 means no command area
@@ -768,39 +767,35 @@ def plant(
         "Farmers going out of business not implemented."
     )
 
-    plant: npt.NDArray[np.int32] = np.full_like(crop_map, -1, dtype=np.int32)
-    sell_land: npt.NDArray[bool] = np.zeros(n, dtype=np.bool_)
+    plant = np.full_like(crop_map, -1, dtype=np.int32)
+    sell_land = np.zeros(n, dtype=np.bool_)
 
-    planting_farmers_per_season: npt.NDArray[bool] = (
-        crop_calendar[:, :, 1] == day_index
-    ) & (
+    planting_farmers_per_season = (crop_calendar[:, :, 1] == day_index) & (
         crop_calendar[:, :, 3]
         == current_crop_calendar_rotation_year_index[:, np.newaxis]
     )
-    planting_farmers: npt.NDArray[np.int64] = planting_farmers_per_season.sum(axis=1)
+    planting_farmers = planting_farmers_per_season.sum(axis=1)
 
     assert planting_farmers.max() <= 1, "Multiple crops planted on the same day"
 
-    planting_farmers_idx: npt.NDArray[np.int64] = np.where(planting_farmers == 1)[0]
+    planting_farmers_idx = np.where(planting_farmers == 1)[0]
     if not planting_farmers_idx.size == 0:
-        crop_rotation: npt.NDArray[np.int64] = np.argmax(
+        crop_rotation = np.argmax(
             planting_farmers_per_season[planting_farmers_idx], axis=1
         )
 
         assert planting_farmers_idx.size == crop_rotation.size
 
         for i in range(planting_farmers_idx.size):
-            farmer_idx: np.int64 = planting_farmers_idx[i]
-            farmer_crop_rotation: np.int64 = crop_rotation[i]
+            farmer_idx = planting_farmers_idx[i]
+            farmer_crop_rotation = crop_rotation[i]
 
-            farmer_fields: npt.NDArray[np.int32] = get_farmer_HRUs(
+            farmer_fields = get_farmer_HRUs(
                 field_indices, field_indices_by_farmer, farmer_idx
             )
-            farmer_crop_data: npt.NDArray[np.int32] = crop_calendar[
-                farmer_idx, farmer_crop_rotation
-            ]
-            farmer_crop: np.int32 = farmer_crop_data[0]
-            field_harvest_age: np.int32 = farmer_crop_data[2]
+            farmer_crop_data = crop_calendar[farmer_idx, farmer_crop_rotation]
+            farmer_crop = farmer_crop_data[0]
+            field_harvest_age = farmer_crop_data[2]
 
             assert farmer_crop != -1
 
@@ -1009,7 +1004,7 @@ def gev_ppf_scalar(u, c, loc, scale):
 @njit(cache=True, parallel=True)
 def compute_premiums_and_best_contracts_numba(
     gev_params,
-    spei_hist,
+    values_history,
     losses,
     strike_vals,
     exit_vals,
@@ -1035,7 +1030,7 @@ def compute_premiums_and_best_contracts_numba(
     """
     np.random.seed(seed)
     n_agents = gev_params.shape[0]
-    n_years = spei_hist.shape[1]
+    n_years = values_history.shape[1]
     n_strikes = strike_vals.shape[0]
     n_exits = exit_vals.shape[0]
     n_rates = rate_vals.shape[0]
@@ -1048,7 +1043,6 @@ def compute_premiums_and_best_contracts_numba(
     best_prem_arr = np.empty(n_agents, dtype=np.float64)
 
     for agent_idx in prange(n_agents):
-        # Extract GEV parameters
         shape = -gev_params[agent_idx, 0]
         loc = gev_params[agent_idx, 1]
         scale = gev_params[agent_idx, 2]
@@ -1091,7 +1085,7 @@ def compute_premiums_and_best_contracts_numba(
                 sum_ratio_sq = 0.0
                 sum_ratio_loss = 0.0
                 for yr in range(n_years):
-                    shortfall = strike - spei_hist[agent_idx, yr]
+                    shortfall = strike - values_history[agent_idx, yr]
                     if shortfall <= 0.0:
                         ratio = 0.0
                     elif shortfall >= denom:

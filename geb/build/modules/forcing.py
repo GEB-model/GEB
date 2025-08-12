@@ -1991,7 +1991,6 @@ class Forcing:
 
                 # Group the data by year and find the maximum monthly sum for each year
                 SPEI_yearly_min = SPEI.groupby("time.year").min(dim="time", skipna=True)
-                SPEI_yearly_min = SPEI_yearly_min.dropna(dim="year")
                 SPEI_yearly_min = (
                     SPEI_yearly_min.rename({"year": "time"})
                     .chunk({"time": -1})

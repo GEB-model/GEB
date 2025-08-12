@@ -53,10 +53,10 @@ agent_settings:
   market:
     dynamic_market: false
     price_frequency: yearly
-  government:
-    irrigation_limit:
-      limit: 10000  # previous tried 1700
-      per: capita
+  # government:
+  #   irrigation_limit:
+  #     limit: 10000  # previous tried 1700
+  #     per: capita
   households:
     adapt: false
     warning_response: false
@@ -117,6 +117,10 @@ agent_settings:
       decisions:
         decision_horizon: 10
         expenditure_cap: 0.5
+      water_price:
+        water_costs_m3_reservoir: 0
+        water_costs_m3_groundwater: 0
+        water_costs_m3_channel: 0
       drought_risk_calculations:
         event_perception:
           drought_threshold: 5

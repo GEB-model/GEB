@@ -139,3 +139,4 @@ dmypy.json
 # Pyre type checker
 .pyre/
 GEB.code-workspace
+geb/bin/tbb/

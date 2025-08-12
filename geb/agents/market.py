@@ -3,6 +3,8 @@ import json
 
 import numpy as np
 import statsmodels.api as sm
+from numpy.linalg import LinAlgError
+import warnings
 
 from ..data import load_regional_crop_data_from_dict
 from ..store import DynamicArray
@@ -36,26 +38,29 @@ class Market(AgentBaseClass):
             self.model, "crops/crop_prices"
         )
 
+        if (
+            "calibration" in self.model.config
+            and "KGE_crops" in self.model.config["calibration"]["calibration_targets"]
+        ):
+            self.production_influence_calibration_factor = np.array(
+                [
+                    self.model.config["agent_settings"]["calibration_crops"][
+                        f"price_{i}"
+                    ]
+                    for i in range(self._crop_prices[1].shape[2])
+                ],
+                dtype=np.float32,
+            )
+        else:
+            self.production_influence_calibration_factor = np.ones(
+                self._crop_prices[1].shape[2], dtype=np.float32
+            )
+
     @property
     def name(self):
         return "agents.market"
 
     def spinup(self) -> None:
-        with open(self.model.files["dict"]["socioeconomics/inflation_rates"], "r") as f:
-            inflation = json.load(f)
-            inflation["time"] = [int(time) for time in inflation["time"]]
-            start_idx = inflation["time"].index(
-                self.model.config["general"]["spinup_time"].year
-            )
-            end_idx = inflation["time"].index(
-                self.model.config["general"]["end_time"].year
-            )
-            for region in inflation["data"]:
-                region_inflation = [1] + inflation["data"][region][
-                    start_idx + 1 : end_idx + 1
-                ]
-                self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
-
         n_crops = len(self.agents.crop_farmers.var.crop_ids.keys())
         n_years = (
             self.model.config["general"]["end_time"].year
@@ -78,12 +83,34 @@ class Market(AgentBaseClass):
             extra_dims_names=("years",),
         )
 
-    def estimate_price_model(self) -> None:
-        self.var.parameters = np.full((self.var.production.shape[0], 2), np.nan)
+        self.var.parameters = DynamicArray(
+            n=n_crops,
+            max_n=n_crops,
+            dtype=np.float32,
+            fill_value=np.nan,
+            extra_dims=(2,),
+            extra_dims_names=("params",),
+        )
 
+        with open(self.model.files["dict"]["socioeconomics/inflation_rates"], "r") as f:
+            inflation = json.load(f)
+            inflation["time"] = [int(time) for time in inflation["time"]]
+            start_idx = inflation["time"].index(
+                self.model.config["general"]["spinup_time"].year
+            )
+            end_idx = inflation["time"].index(
+                self.model.config["general"]["end_time"].year
+            )
+            for region in inflation["data"]:
+                region_inflation = [1] + inflation["data"][region][
+                    start_idx + 1 : end_idx + 1
+                ]
+                self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
+
+    def estimate_price_model(self) -> None:
         estimation_start_year = 1  # skip first year
         estimation_end_year = (
-            self.model.config["general"]["start_time"].year
+            self.model.current_time.year
             - self.model.config["general"]["spinup_time"].year
         )
 
@@ -98,18 +125,27 @@ class Market(AgentBaseClass):
 
         print("Look into increasing yield and increasing price")
         for crop in range(self.var.production.shape[0]):
-            if production[crop].sum() == 0:
+            prod = production[crop]
+            if prod.sum() == 0:
                 continue
             # Defining the independent variables (add a constant term for the intercept)
-            X = sm.add_constant(np.log(production[crop]))
+            X = sm.add_constant(np.log(prod))
 
             # Defining the dependent variable
-            price = total_farmer_income[crop] / production[crop]
+            price = total_farmer_income[crop] / prod
 
             y = np.log(price)
 
             # Fitting the model
-            model = sm.OLS(y, X).fit()
+            try:
+                model = sm.OLS(y, X).fit()
+            except LinAlgError:  # SVD did not converge
+                warnings.warn(f"Crop {crop}: SVD did not converge – skipped")
+                continue
+            except ValueError as e:  # any other statsmodels problem
+                warnings.warn(f"Crop {crop}: {e} – skipped")
+                continue
+
             model_parameters = model.params
             # assert model_parameters[-1] < 0, "Price increase with decreasing yield"
             self.var.parameters[crop] = model_parameters
@@ -130,11 +166,16 @@ class Market(AgentBaseClass):
             ]  # for now taking the previous year, should be updated
             price_pred = np.exp(
                 1 * self.var.parameters[:, 0]
-                + np.log(production) * self.var.parameters[:, 1]
+                + self.production_influence_calibration_factor
+                * np.log(production)
+                * self.var.parameters[:, 1]
             )
             price_pred_per_region[region_idx, :] = price_pred
 
-        assert np.all(price_pred_per_region > 0), "Negative prices predicted"
+        assert np.all(
+            price_pred_per_region[:, self.var.production[:, self.year_index - 1] > 0]
+            > 0
+        ), "Negative prices predicted"
 
         # TODO: This assumes that the inflation is the same for all regions (region_idx=0)
         return (
@@ -169,6 +210,23 @@ class Market(AgentBaseClass):
         if not self.model.simulate_hydrology:
             return
         self.track_production_and_price()
+        if (
+            # run price model at the end of the spinup
+            (self.model.current_time == self.model.end_time and self.model.in_spinup)
+            or
+            # and on 5-year anniversaries
+            (
+                not self.model.in_spinup
+                and (self.model.start_time.year - self.model.current_time.year) % 5 == 0
+                and (
+                    self.model.current_time.month == 1
+                    and self.model.current_time.day == 1
+                )
+                and (self.model.current_time.year - self.model.start_time.year) >= 5
+            )
+        ):
+            self.estimate_price_model()
+
         self.report(self, locals())
 
     @property
