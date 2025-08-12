@@ -161,14 +161,6 @@ def build_sfincs(
         river_len=0,
     )
 
-    # # Setup river outflow points , this is updated to a better outflow boundary condition
-    # sf.setup_river_outflow(
-    #     rivers=rivers,
-    #     keep_rivers_geom=True,
-    #     river_upa=0,
-    #     river_len=0,
-    # )
-
     # find outflow points and save for later use
     outflow_points = workflows.river_source_points(
         gdf_riv=rivers.to_crs(sf.crs),
