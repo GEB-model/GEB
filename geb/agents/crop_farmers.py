@@ -244,9 +244,6 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_well"]["maintenance_factor"]
 
-        self.var.insurance_duration = self.model.config["agent_settings"]["farmers"][
-            "expected_utility"
-        ]["insurance"]["duration"]
         self.var.p_droughts = np.array([100, 50, 25, 10, 5, 2, 1])
 
         # Set water costs
@@ -3484,7 +3481,9 @@ class CropFarmers(AgentBaseClass):
             - Possibly externalize hard-coded values.
         """
 
-        loan_duration = self.var.insurance_duration
+        loan_duration = self.var.insurance_duration = self.model.config[
+            "agent_settings"
+        ]["farmers"]["expected_utility"]["insurance"]["duration"]
         interest_rate = self.var.interest_rate.data
 
         # Determine the income of each farmer with or without insurance
@@ -3515,17 +3514,7 @@ class CropFarmers(AgentBaseClass):
             self.var.time_adapted[expired_adaptations, adaptation_type] = -1
 
             adapted = self.var.adaptations[:, adaptation_type] > 0
-
-            if len(adaptation_types) > 1:
-                # Define extra constraints -- cant adapt another insurance type while having one before
-                other_masks = [
-                    (self.var.adaptations[:, t] < 0)
-                    for t in adaptation_types
-                    if t != adaptation_type
-                ]
-                extra_constraint = np.logical_or.reduce(other_masks)
-            else:
-                extra_constraint = np.ones_like(adapted, dtype=bool)
+            extra_constraint = np.ones_like(adapted, dtype=bool)
 
             # Compute profits with index insurance
             annual_cost = annual_cost * (
