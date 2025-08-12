@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 import json
+import warnings
 
 import numpy as np
 import statsmodels.api as sm
 from numpy.linalg import LinAlgError
-import warnings
 
 from ..data import load_regional_crop_data_from_dict
 from ..store import DynamicArray

@@ -8,11 +8,11 @@ from typing import Tuple
 
 import numpy as np
 import numpy.typing as npt
-from numpy.lib.stride_tricks import sliding_window_view
 import pandas as pd
 from honeybees.library.neighbors import find_neighbors
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from numba import njit
+from numpy.lib.stride_tricks import sliding_window_view
 from scipy.optimize import curve_fit
 from scipy.stats import genextreme
 

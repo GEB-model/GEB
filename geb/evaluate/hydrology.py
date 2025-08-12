@@ -694,6 +694,7 @@ class Hydrology:
             run_name: Name of the run to evaluate.
             include_spinup: Whether to include the spinup run in the evaluation.
             spinup_name: Name of the spinup run to include in the evaluation.
+            export: Whether to export the water circle plot to a file.
             *args: ignored.
             **kwargs: ignored.
         """
