@@ -160,7 +160,7 @@ class WaterDemand(Module):
 
         gross_irrigation_demand_m3_per_water_body: npt.NDArray[np.float32] = (
             weighted_sum_per_reservoir(
-                self.model.agents.crop_farmers.farmer_command_area,
+                self.model.agents.crop_farmers.command_area,
                 gross_irrigation_demand_m3_per_farmer,
                 min_length=self.hydrology.lakes_reservoirs.n,
             )

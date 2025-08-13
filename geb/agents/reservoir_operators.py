@@ -57,10 +57,6 @@ class ReservoirOperators(AgentBaseClass):
             )
         )
 
-        self.var.dis_avg = DynamicArray(
-            self.var.active_reservoirs["average_discharge"].values
-        )
-
         # set the storage at the beginning of the year
         self.var.storage_year_start = self.storage.copy()
 
@@ -90,9 +86,13 @@ class ReservoirOperators(AgentBaseClass):
             :, np.newaxis
         ]
 
-        self.var.multi_year_monthly_total_irrigation = (
+        self.var.multi_year_monthly_total_irrigation_demand_m3 = (
             self.var.multi_year_monthly_total_inflow
         ) * 0.25
+
+        self.var.multi_year_monthly_usable_release_m3 = (
+            self.var.multi_year_monthly_total_inflow * 0.25
+        )
 
         self.var.hydrological_year_counter = (
             0  # Number of hydrological years for each reservoir
@@ -101,8 +101,8 @@ class ReservoirOperators(AgentBaseClass):
     def get_command_area_release(self, gross_irrigation_demand_m3):
         assert gross_irrigation_demand_m3.size == self.storage.size
 
-        # add the irrigation demand to the multi_year_monthly_total_irrigation, use the current month
-        self.var.multi_year_monthly_total_irrigation[
+        # add the irrigation demand to the multi_year_monthly_total_irrigation_demand_m3, use the current month
+        self.var.multi_year_monthly_total_irrigation_demand_m3[
             :, self.current_month_index, 0
         ] += gross_irrigation_demand_m3
 
@@ -213,6 +213,10 @@ class ReservoirOperators(AgentBaseClass):
             atol=1e-7,
         )
 
+        self.var.multi_year_monthly_usable_release_m3[
+            :, self.current_month_index, 0
+        ] += usable_release_m3
+
         return main_channel_release, command_area_release_substep
 
     def _get_release(
@@ -255,7 +259,7 @@ class ReservoirOperators(AgentBaseClass):
         )
 
         long_term_monthly_irrigation_demand_m3 = np.average(
-            self.var.multi_year_monthly_total_irrigation[
+            self.var.multi_year_monthly_total_irrigation_demand_m3[
                 ..., 1 : self.var.history_fill_index
             ],
             axis=(1, 2),
@@ -497,7 +501,8 @@ class ReservoirOperators(AgentBaseClass):
             # from external sources
             if self.var.hydrological_year_counter == 1:
                 self.var.multi_year_monthly_total_inflow[..., 1] = np.nan
-                self.var.multi_year_monthly_total_irrigation[..., 1] = np.nan
+                self.var.multi_year_monthly_total_irrigation_demand_m3[..., 1] = np.nan
+                self.var.multi_year_monthly_usable_release_m3[..., 1] = np.nan
 
             # in the first year, we don't want to save the data, because we don't have a full year yet
             # so no shifting should be done
@@ -506,13 +511,17 @@ class ReservoirOperators(AgentBaseClass):
                     self.var.multi_year_monthly_total_inflow[..., 0:-1]
                 )
 
-                self.var.multi_year_monthly_total_irrigation[..., 1:] = (
-                    self.var.multi_year_monthly_total_irrigation[..., 0:-1]
+                self.var.multi_year_monthly_total_irrigation_demand_m3[..., 1:] = (
+                    self.var.multi_year_monthly_total_irrigation_demand_m3[..., 0:-1]
+                )
+                self.var.multi_year_monthly_usable_release_m3[..., 1:] = (
+                    self.var.multi_year_monthly_usable_release_m3[..., 0:-1]
                 )
 
             # always reset the counters for the next year
             self.var.multi_year_monthly_total_inflow[..., 0] = 0
-            self.var.multi_year_monthly_total_irrigation[..., 0] = 0
+            self.var.multi_year_monthly_total_irrigation_demand_m3[..., 0] = 0
+            self.var.multi_year_monthly_usable_release_m3[..., 0] = 0
 
             self.var.hydrological_year_counter += 1
             self.var.storage_year_start = self.storage.copy()

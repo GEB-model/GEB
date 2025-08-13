@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import math
 import warnings
 from datetime import datetime
