@@ -619,7 +619,7 @@ class Households(AgentBaseClass):
 
         # Load households and postal codes
         households = self.var.household_points.copy()
-        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        PC4 = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
 
         for day in days:
             for range_id in range_ids:
@@ -677,9 +677,9 @@ class Households(AgentBaseClass):
 
     def infrastructure_warning_strategy(self, prob_threshold=0.6):
         # Load postal codes and substations
-        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        PC4 = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
         substations = gpd.read_parquet(
-            self.model.files["geoms"]["assets/energy_substations"]
+            self.model.files["geom"]["assets/energy_substations"]
         )
 
         # Get the forecast start date from the config
@@ -853,7 +853,7 @@ class Households(AgentBaseClass):
 
     def load_objects(self):
         # Load buildings
-        self.buildings = gpd.read_parquet(self.model.files["geoms"]["assets/buildings"])
+        self.buildings = gpd.read_parquet(self.model.files["geom"]["assets/buildings"])
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
@@ -863,12 +863,12 @@ class Households(AgentBaseClass):
         )
 
         # Load roads
-        self.roads = gpd.read_parquet(self.model.files["geoms"]["assets/roads"]).rename(
+        self.roads = gpd.read_parquet(self.model.files["geom"]["assets/roads"]).rename(
             columns={"highway": "object_type"}
         )
 
         # Load rail
-        self.rail = gpd.read_parquet(self.model.files["geoms"]["assets/rails"])
+        self.rail = gpd.read_parquet(self.model.files["geom"]["assets/rails"])
         self.rail["object_type"] = "rail"
 
     def load_max_damage_values(self):
