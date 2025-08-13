@@ -47,6 +47,7 @@ class SFINCS:
             self.hydrology = model.hydrology
             self.n_timesteps = n_timesteps
             self.discharge_per_timestep = deque(maxlen=self.n_timesteps)
+            self.discharge_per_step = deque(maxlen=self.n_timesteps)
             self.soil_moisture_per_timestep = deque(maxlen=self.n_timesteps)
             self.max_water_storage_per_timestep = deque(maxlen=self.n_timesteps)
             self.saturated_hydraulic_conductivity_per_timestep = deque(
@@ -500,10 +501,16 @@ class SFINCS:
         damages = self.model.agents.households.flood(flood_map=flood_map)
         return damages
 
-    def save_discharge(self):
+    def save_discharge_timestep(self):
         self.discharge_per_timestep.append(
             self.hydrology.grid.var.discharge_m3_s_per_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
+
+    def save_discharge_step(self):
+        self.discharge_per_step.append(
+            self.hydrology.grid.var.discharge_m3_s
+        )  # this is a deque, so it will automatically remove the oldest discharge
+        return self.discharge_per_step
 
     def save_soil_moisture(self):  # is used in driver.py on every timestep
         # load and process initial soil moisture grid

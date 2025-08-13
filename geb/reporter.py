@@ -413,7 +413,7 @@ class Reporter:
                     decompressed_array = self.decompress(config["varname"], value)
                     value = decompressed_array[int(args[0]), int(args[1])]
                 elif function == "sample_coord":
-                    print("into sample_coords")
+                    # print("into sample_coords")
                     if config["varname"].startswith("hydrology.grid"):
                         gt = self.model.hydrology.grid.gt
                         decompressed_array = self.hydrology.grid.decompress(value)
