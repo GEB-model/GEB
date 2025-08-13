@@ -9,7 +9,6 @@ import json
 import logging
 import math
 import os
-from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -560,7 +559,7 @@ class GEBModel(
         )
         self.other: DelayedReader = DelayedReader(reader=open_zarr)
 
-        self.files: defaultdict = defaultdict(dict)
+        self.files: dict = self.read_file_library()
 
     @build_method
     def setup_region(
@@ -1157,12 +1156,13 @@ class GEBModel(
 
         self.geom[name] = fp_with_root
 
-    def write_file_library(self, read_first: bool = True) -> None:
-        if read_first:
-            file_library: defaultdict = self.read_file_library()
-        else:
-            file_library: defaultdict = defaultdict(dict)
+    @property
+    def files_path(self) -> Path:
+        """Path to the files.json file that contains the file library."""
+        return Path(self.root, "files.json")
 
+    def write_file_library(self) -> None:
+        file_library: dict = self.read_file_library()
         # merge file library from disk with new files, prioritizing new files
         for type_name, type_files in self.files.items():
             if type_name not in file_library:
@@ -1170,13 +1170,22 @@ class GEBModel(
             else:
                 file_library[type_name].update(type_files)
 
-        with open(Path(self.root, "files.json"), "w") as f:
+        with open(self.files_path, "w") as f:
             json.dump(file_library, f, indent=4, cls=PathEncoder)
 
-    def read_file_library(self) -> defaultdict:
+    def read_file_library(self) -> dict:
         fp: Path = Path(self.root, "files.json")
         if not fp.exists():
-            return defaultdict(dict)  # return empty defaultdict if file does not exist
+            return {
+                "geom": {},
+                "array": {},
+                "table": {},
+                "dict": {},
+                "grid": {},
+                "subgrid": {},
+                "region_subgrid": {},
+                "other": {},
+            }
         else:
             with open(Path(self.root, "files.json"), "r") as f:
                 files: dict[str, dict[str, str]] = json.load(f)
@@ -1185,7 +1194,7 @@ class GEBModel(
             # we check if "geoms" is in the files and rename it to "geom"
             if "geoms" not in files:
                 files["geom"] = files.pop("geoms", {})
-        return defaultdict(dict, files)  # convert dict to defaultdict
+        return files
 
     def read_geom(self):
         for name, fn in self.files["geom"].items():
@@ -1228,8 +1237,6 @@ class GEBModel(
 
     def read(self):
         with suppress_logging_warning(self.logger):
-            self.files = self.read_file_library()
-
             self.read_geom()
             self.read_array()
             self.read_table()
@@ -1454,10 +1461,13 @@ class GEBModel(
         for method in methods:
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
+
+            # if the method is "setup_region", we start an entirely new model
+            # ant therefore delete the files save path
             if method == "setup_region":
-                self.write_file_library(read_first=False)
-            else:
-                self.write_file_library(read_first=True)
+                self.files_path.unlink(missing_ok=True)
+
+            self.write_file_library()
 
         self.logger.info("Finished!")
 
