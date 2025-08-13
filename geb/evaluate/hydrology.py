@@ -17,7 +17,8 @@ import plotly.graph_objects as go
 import rioxarray as rxr
 import xarray as xr
 from matplotlib.colors import LightSource
-from matplotlib_scalebar.scalebar import ScaleBar
+
+# from matplotlib_scalebar.scalebar import ScaleBar
 from permetrics.regression import RegressionMetric
 from rasterio.crs import CRS
 from tqdm import tqdm
@@ -1026,15 +1027,12 @@ class Hydrology:
             self.output_folder_evaluate / "water_circle.png", scale=5
         )
 
-    def evaluate_hydrodynamics(
-        self, run_name: str = "default", *args, **kwargs
-    ) -> None:
+    def evaluate_hydrodynamics(self, run_name: str = "default") -> None:
         """Method to plot the mean discharge from the GEB model.
 
         Args:
             run_name: Defaults to "default".
-            *args: ignored.
-            **kwargs: ignored.
+
         """
 
         def calculate_hit_rate(model, observations):
@@ -1181,10 +1179,10 @@ class Hydrology:
                     ax=ax, cmap=red_cmap, add_colorbar=False, add_labels=False
                 )
 
-                scalebar = ScaleBar(
-                    1, location="lower left", font_properties={"size": 12}
-                )
-                ax.add_artist(scalebar)
+                # scalebar = ScaleBar(
+                #     1, location="lower left", font_properties={"size": 12}
+                # )
+                # ax.add_artist(scalebar)
 
                 ax.set_aspect("equal")
                 ax.axis("off")
