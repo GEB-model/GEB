@@ -761,6 +761,12 @@ def update(*args, **kwargs):
     help="Include spinup in evaluation.",
 )
 @click.option(
+    "--include-yearly-plots",
+    is_flag=True,
+    default=False,
+    help="Create yearly plots in evaluation.",
+)
+@click.option(
     "--correct-q-obs",
     is_flag=True,
     default=False,
@@ -773,6 +779,7 @@ def evaluate(
     spinup_name,
     run_name,
     include_spinup,
+    include_yearly_plots,
     correct_q_obs,
     port,
     gui,
@@ -792,6 +799,7 @@ def evaluate(
             "spinup_name": spinup_name,
             "run_name": run_name,
             "include_spinup": include_spinup,
+            "include_yearly_plots": include_yearly_plots,
             "correct_Q_obs": correct_q_obs,
         },
         working_directory=working_directory,

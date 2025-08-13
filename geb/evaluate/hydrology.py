@@ -75,6 +75,7 @@ class Hydrology:
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
+        include_yearly_plots: bool = False,
         correct_Q_obs=False,
     ) -> None:
         """Method to evaluate the discharge grid from GEB against observations from the Q_obs database.
@@ -83,6 +84,7 @@ class Hydrology:
             spinup_name: Name of the spinup run to include in the evaluation.
             run_name: Name of the run to evaluate.
             include_spinup: Whether to include the spinup run in the evaluation.
+            include_yearly_plots: Whether to create plots for every year showing the evaluation
             correct_Q_obs: Whether to correct the Q_obs discharge timeseries for the difference in upstream area
                 between the Q_obs station and the discharge from GEB.
         """
@@ -137,7 +139,6 @@ class Hydrology:
         Q_obs = pd.read_parquet(
             self.model.files["table"]["discharge/Q_obs"]
         )  # load the Q_obs discharge data
-        print(Q_obs)
         region_shapefile = gpd.read_parquet(
             self.model.files["geoms"]["mask"]
         )  # load the region shapefile
@@ -303,87 +304,75 @@ class Hydrology:
                 plt.show()
                 plt.close()
 
-                # Making plot for just 1 year
-                years_to_plot = [
-                    2010,
-                    2011,
-                    2012,
-                    2013,
-                    2014,
-                    2015,
-                    2016,
-                    2017,
-                    2018,
-                    2019,
-                    2020,
-                    2021,
-                    2022,
-                ]
+                # Making yearly plots for every year in validation_df
+                # Get available years from validation_df (intersection of obs & sim time range)
+                if include_yearly_plots:
+                    years_to_plot = sorted(validation_df.index.year.unique())
 
-                for year in years_to_plot:
-                    # Filter data for the current year
-                    one_year_df = validation_df[validation_df.index.year == year]
+                    for year in years_to_plot:
+                        # Filter data for the current year
+                        one_year_df = validation_df[validation_df.index.year == year]
 
-                    # Skip if there's no data for the year
-                    if one_year_df.empty:
-                        print(f"No data available for year {year}, skipping.")
-                        continue
+                        # Skip if there's no data for the year
+                        if one_year_df.empty:
+                            print(f"No data available for year {year}, skipping.")
+                            continue
 
-                    # Create the plot
-                    fig, ax = plt.subplots(figsize=(7, 4))
-                    ax.plot(
-                        one_year_df.index,
-                        one_year_df["Q_sim"],
-                        label="GEB simulation",
-                    )
-                    ax.plot(
-                        one_year_df.index,
-                        one_year_df["Q_obs"],
-                        label="Q_obs observations",
-                    )
-                    ax.set_ylabel("Discharge [m3/s]")
-                    ax.set_xlabel("Time")
-                    ax.legend()
+                        # Create the plot
+                        fig, ax = plt.subplots(figsize=(7, 4))
+                        ax.plot(
+                            one_year_df.index,
+                            one_year_df["Q_sim"],
+                            label="GEB simulation",
+                        )
+                        ax.plot(
+                            one_year_df.index,
+                            one_year_df["Q_obs"],
+                            label="Q_obs observations",
+                        )
+                        ax.set_ylabel("Discharge [m3/s]")
+                        ax.set_xlabel("Time")
+                        ax.legend()
 
-                    ax.text(
-                        0.02,
-                        0.9,
-                        f"$R^2$={R:.2f}",
-                        transform=ax.transAxes,
-                        fontsize=12,
-                    )
-                    ax.text(
-                        0.02,
-                        0.85,
-                        f"KGE={KGE:.2f}",
-                        transform=ax.transAxes,
-                        fontsize=12,
-                    )
-                    ax.text(
-                        0.02,
-                        0.8,
-                        f"NSE={NSE:.2f}",
-                        transform=ax.transAxes,
-                        fontsize=12,
-                    )
-                    ax.text(
-                        0.02,
-                        0.75,
-                        f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
-                        transform=ax.transAxes,
-                        fontsize=12,
-                    )
+                        ax.text(
+                            0.02,
+                            0.9,
+                            f"$R^2$={R:.2f}",
+                            transform=ax.transAxes,
+                            fontsize=12,
+                        )
+                        ax.text(
+                            0.02,
+                            0.85,
+                            f"KGE={KGE:.2f}",
+                            transform=ax.transAxes,
+                            fontsize=12,
+                        )
+                        ax.text(
+                            0.02,
+                            0.8,
+                            f"NSE={NSE:.2f}",
+                            transform=ax.transAxes,
+                            fontsize=12,
+                        )
+                        ax.text(
+                            0.02,
+                            0.75,
+                            f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
+                            transform=ax.transAxes,
+                            fontsize=12,
+                        )
 
-                    plt.title(
-                        f"GEB discharge vs observations for {year} at station {Q_obs_station_name}"
-                    )
-                    plt.savefig(
-                        eval_plot_folder / f"timeseries_plot_{ID}_{year}.png",
-                        dpi=300,
-                        bbox_inches="tight",
-                    )
-                    plt.show()
-                    plt.close()
+                        plt.title(
+                            f"GEB discharge vs observations for {year} at station {Q_obs_station_name}"
+                        )
+                        plt.savefig(
+                            eval_plot_folder / f"timeseries_plot_{ID}_{year}.png",
+                            dpi=300,
+                            bbox_inches="tight",
+                        )
+                        plt.show()
+                        plt.close()
 
             plot_validation_graphs(ID)
 
@@ -1027,11 +1016,15 @@ class Hydrology:
             self.output_folder_evaluate / "water_circle.png", scale=5
         )
 
-    def evaluate_hydrodynamics(self, run_name: str = "default") -> None:
+    def evaluate_hydrodynamics(
+        self, run_name: str = "default", *args, **kwargs
+    ) -> None:
         """Method to plot the mean discharge from the GEB model.
 
         Args:
             run_name: Defaults to "default".
+            *args: ignored.
+            **kwargs: ignored.
 
         """
 
@@ -1097,17 +1090,26 @@ class Hydrology:
             # Step 3: Clip out region from observations
             obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
 
-            # Step 4: Clip using the extent of the observations
-            extra_clip_region = gpd.read_file(
-                "/scistor/ivm/vbl220/PhD/Geul_v1/Geul_FloodExtent_v1.shp"
-            ).set_crs(28992)  # TODO: make dynamic
-            extra_clip_region = extra_clip_region.to_crs(region.crs)
-            extra_clip_region_buffer = extra_clip_region.buffer(160)
-            sim_extra_clipped = sim_no_rivers.rio.clip(
-                extra_clip_region_buffer.geometry.values, extra_clip_region_buffer.crs
+            # Step 4: Optionally clip using extra validation region from config yml
+            extra_validation_path = self.config["floods"].get(
+                "extra_validation_region", None
             )
-            clipped_out = (sim_no_rivers > 0.15) & (sim_extra_clipped.isnull())
-            clipped_out_raster = sim_no_rivers.where(clipped_out)
+
+            if extra_validation_path and Path(extra_validation_path).exists():
+                extra_clip_region = gpd.read_file(extra_validation_path).set_crs(28992)
+                extra_clip_region = extra_clip_region.to_crs(region.crs)
+                extra_clip_region_buffer = extra_clip_region.buffer(160)
+
+                sim_extra_clipped = sim_no_rivers.rio.clip(
+                    extra_clip_region_buffer.geometry.values,
+                    extra_clip_region_buffer.crs,
+                )
+                clipped_out = (sim_no_rivers > 0.15) & (sim_extra_clipped.isnull())
+                clipped_out_raster = sim_no_rivers.where(clipped_out)
+            else:
+                # If no extra validation region, skip clipping
+                sim_extra_clipped = sim_no_rivers
+                clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
 
             # Step 5: Mask water depth values
             hmin = 0.15
@@ -1128,17 +1130,24 @@ class Hydrology:
                 calculate_critical_success_index(sim_final_computed, obs_final_computed)
                 * 100
             )
+
             flooded_pixels = float(sim_final_computed.sum().item())
-            flooded_area_km2 = flooded_pixels * (5 * 5) / 1_000_000
+
+            # Calculate resolution in meters from coordinate spacing
+            x_res = float(np.abs(flood_map.x[1] - flood_map.x[0]))
+            pixel_size = x_res  # meters
+            flooded_area_km2 = flooded_pixels * (pixel_size * pixel_size) / 1_000_000
 
             # Step 7: Save results to file and plot the results
-            elevation_data = rxr.open_rasterio(
-                "/scistor/ivm/vbl220/PhD/models/geul2/base/input/SFINCS/Filled_DEM_EPSG28992.tif"
-            ).sel(band=1)  # Make relative
-            ls = LightSource(azdeg=315, altdeg=45)
-            hillshade = ls.hillshade(
-                elevation_data.data.squeeze(), vert_exag=1, dx=1, dy=1
+            elevation_data = open_zarr(self.model.files["other"]["DEM/fabdem"])
+            elevation_data = elevation_data.rio.reproject_match(obs)
+
+            elevation_array = (
+                elevation_data.squeeze().astype("float32").compute().values
             )
+
+            ls = LightSource(azdeg=315, altdeg=45)
+            hillshade = ls.hillshade(elevation_array, vert_exag=1, dx=1, dy=1)
 
             if simulation_final.sum() > 0:
                 misses = (observation_final == 1) & (simulation_final == 0)
@@ -1178,11 +1187,6 @@ class Hydrology:
                 misses_masked.plot(
                     ax=ax, cmap=red_cmap, add_colorbar=False, add_labels=False
                 )
-
-                # scalebar = ScaleBar(
-                #     1, location="lower left", font_properties={"size": 12}
-                # )
-                # ax.add_artist(scalebar)
 
                 ax.set_aspect("equal")
                 ax.axis("off")
@@ -1247,7 +1251,7 @@ class Hydrology:
             )
 
             calculate_performance_metrics(
-                observation="/scistor/ivm/vbl220/PhD/geul_flood_extent_5m.tif",
+                observation=self.config["floods"]["event_observation_file"],
                 flood_map_path=flood_map_path,
             )
 
