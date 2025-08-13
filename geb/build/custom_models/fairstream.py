@@ -792,7 +792,7 @@ class fairSTREAMModel(GEBModel):
         #     (irrigation_source != irrigation_sources["no"]) * farm_sizes
         # ).sum()
 
-        regions = self.geoms["regions"]
+        regions = self.geom["regions"]
 
         irrigation_status_per_tehsil = pd.read_excel(irrigation_status_per_tehsil_fn)
         irrigation_status_per_tehsil["size_class"] = irrigation_status_per_tehsil[

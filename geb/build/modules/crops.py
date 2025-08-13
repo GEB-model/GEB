@@ -181,7 +181,7 @@ class Crops:
             ] = "EU_MidWest"
             assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
-            ISO3_codes_region = self.geoms["regions"]["ISO3"].unique()
+            ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
             GLOBIOM_regions_region = GLOBIOM_regions[
                 GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
             ]["Region37"].unique()
@@ -236,11 +236,11 @@ class Crops:
             duplicates = donor_data.index.duplicated(keep=False)
             if duplicates.any():
                 # Data is subnational
-                unique_regions = self.geoms["regions"]
+                unique_regions = self.geom["regions"]
             else:
                 # Data is national
                 unique_regions = (
-                    self.geoms["regions"].groupby("ISO3").first().reset_index()
+                    self.geom["regions"].groupby("ISO3").first().reset_index()
                 )
                 national_data = True
 
@@ -316,13 +316,13 @@ class Crops:
             if national_data:
                 unique_regions = data.index.get_level_values("region_id").unique()
                 iso3_codes = (
-                    self.geoms["regions"]
+                    self.geom["regions"]
                     .set_index("region_id")
                     .loc[unique_regions]["ISO3"]
                 )
                 iso3_to_representative_region_id = dict(zip(iso3_codes, unique_regions))
 
-            for _, region in self.geoms["regions"].iterrows():
+            for _, region in self.geom["regions"].iterrows():
                 region_dict = {}
                 region_id = region["region_id"]
                 region_iso3 = region["ISO3"]
@@ -419,7 +419,7 @@ class Crops:
             data = data.reindex(
                 index=pd.MultiIndex.from_product(
                     [
-                        self.geoms["regions"]["region_id"],
+                        self.geom["regions"]["region_id"],
                         data.index,
                     ],
                     names=["region_id", "date"],
@@ -427,9 +427,9 @@ class Crops:
                 level=1,
             )
 
-            data = self.assign_crop_price_inflation(data, self.geoms["regions"])
+            data = self.assign_crop_price_inflation(data, self.geom["regions"])
             data = self.inter_and_extrapolate_prices(
-                data, self.geoms["regions"], adjust_currency
+                data, self.geom["regions"], adjust_currency
             )
 
             data = {
@@ -439,7 +439,7 @@ class Crops:
                 ).index.tolist(),
                 "data": {
                     str(region_id): data.loc[region_id].to_dict(orient="list")
-                    for region_id in self.geoms["regions"]["region_id"]
+                    for region_id in self.geom["regions"]["region_id"]
                 },
             }
 

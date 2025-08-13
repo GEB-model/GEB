@@ -148,8 +148,8 @@ class Observations:
             "routing/upstream_area"
         ].compute()  # we need to use this one many times, so we compute it once
         upstream_area_subgrid = self.other["drainage/original_d8_upstream_area"]
-        rivers = self.geoms["routing/rivers"]
-        region_shapefile = self.geoms["mask"]
+        rivers = self.geom["routing/rivers"]
+        region_shapefile = self.geom["mask"]
         Q_obs = self.data_catalog.get_geodataset("GRDC")  # load the Q_obs dataset
 
         # create folders
@@ -554,7 +554,7 @@ class Observations:
             discharge_df, name="discharge/Q_obs"
         )  # save the discharge data as a table
 
-        self.set_geoms(
+        self.set_geom(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"
         )
 

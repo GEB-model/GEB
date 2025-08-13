@@ -301,14 +301,14 @@ class GroundWater:
 
         elif intial_heads_source == "Fan":
             # Load in the starting groundwater depth
-            region_continent = np.unique(self.geoms["regions"]["CONTINENT"])
+            region_continent = np.unique(self.geom["regions"]["CONTINENT"])
             assert (
                 np.size(region_continent) == 1
             )  # Transcontinental basins should not be possible
 
             if (
-                np.unique(self.geoms["regions"]["CONTINENT"])[0] == "Asia"
-                or np.unique(self.geoms["regions"]["CONTINENT"])[0] == "Europe"
+                np.unique(self.geom["regions"]["CONTINENT"])[0] == "Asia"
+                or np.unique(self.geom["regions"]["CONTINENT"])[0] == "Europe"
             ):
                 region_continent = "Eurasia"
             else:

@@ -552,7 +552,7 @@ class GEBModel(
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
-        self.geoms: DelayedReader = DelayedReader(reader=gpd.read_parquet)
+        self.geom: DelayedReader = DelayedReader(reader=gpd.read_parquet)
         self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
         self.array: DelayedReader = DelayedReader(zarr.load)
         self.dict: DelayedReader = DelayedReader(
@@ -625,7 +625,7 @@ class GEBModel(
         )
         self.set_routing_subbasins(river_graph, sink_subbasin_ids)
 
-        subbasins = self.geoms["routing/subbasins"]
+        subbasins = self.geom["routing/subbasins"]
         subbasins_without_outflow_basin = subbasins[
             ~subbasins["is_downstream_outflow_subbasin"]
         ]
@@ -924,7 +924,7 @@ class GEBModel(
             crs=4326,
         )
 
-        self.set_geoms(mask_geom, name="mask")
+        self.set_geom(mask_geom, name="mask")
 
         flow_raster_idxs_ds = self.full_like(
             self.grid["mask"],
@@ -1140,22 +1140,22 @@ class GEBModel(
 
         self.dict[name] = fp_with_root
 
-    def set_geoms(self, geoms, name, write=True):
+    def set_geom(self, geom, name, write=True):
         fp: Path = Path("geom") / (name + ".geoparquet")
         fp_with_root: Path = self.root / fp
         if write:
             self.logger.info(f"Writing file {fp}")
-            self.files["geoms"][name] = fp
+            self.files["geom"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
             # brotli is a bit slower but gives better compression,
             # gzip is faster to read. Higher compression levels
             # generally don't make it slower to read, therefore
             # we use the highest compression level for gzip
-            geoms.to_parquet(
+            geom.to_parquet(
                 fp_with_root, engine="pyarrow", compression="gzip", compression_level=9
             )
 
-        self.geoms[name] = fp_with_root
+        self.geom[name] = fp_with_root
 
     def write_file_library(self, read_first: bool = True) -> None:
         if read_first:
@@ -1180,11 +1180,16 @@ class GEBModel(
         else:
             with open(Path(self.root, "files.json"), "r") as f:
                 files: dict[str, dict[str, str]] = json.load(f)
+
+            # geoms was renamed to geom in the file library. To upgrade old models,
+            # we check if "geoms" is in the files and rename it to "geom"
+            if "geoms" not in files:
+                files["geom"] = files.pop("geoms", {})
         return defaultdict(dict, files)  # convert dict to defaultdict
 
-    def read_geoms(self):
-        for name, fn in self.files["geoms"].items():
-            self.geoms[name] = Path(self.root, fn)
+    def read_geom(self):
+        for name, fn in self.files["geom"].items():
+            self.geom[name] = Path(self.root, fn)
 
     def read_array(self):
         for name, fn in self.files["array"].items():
@@ -1225,7 +1230,7 @@ class GEBModel(
         with suppress_logging_warning(self.logger):
             self.files = self.read_file_library()
 
-            self.read_geoms()
+            self.read_geom()
             self.read_array()
             self.read_table()
             self.read_dict()
@@ -1383,7 +1388,7 @@ class GEBModel(
 
     @property
     def region(self):
-        return self.geoms["mask"]
+        return self.geom["mask"]
 
     @property
     def bounds(self):

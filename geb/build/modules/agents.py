@@ -90,7 +90,7 @@ class Agents:
         )
 
         municipal_water_withdrawal_m3_per_capita_per_day_multiplier = pd.DataFrame()
-        for _, region in self.geoms["regions"].iterrows():
+        for _, region in self.geom["regions"].iterrows():
             ISO3 = region["ISO3"]
             region_id = region["region_id"]
 
@@ -407,7 +407,7 @@ class Agents:
             convert_percent_to_ratio=True,
         )
 
-        for _, region in self.geoms["regions"].iterrows():
+        for _, region in self.geom["regions"].iterrows():
             region_id = str(region["region_id"])
             ISO3 = region["ISO3"]
 
@@ -676,7 +676,7 @@ class Agents:
         for price_type, initial_price in price_types.items():
             prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
 
-            for _, region in self.geoms["regions"].iterrows():
+            for _, region in self.geom["regions"].iterrows():
                 region_id = str(region["region_id"])
 
                 prices = pd.Series(index=range(start_year, end_year + 1))
@@ -720,7 +720,7 @@ class Agents:
             "data": {},
         }
 
-        for _, region in self.geoms["regions"].iterrows():
+        for _, region in self.geom["regions"].iterrows():
             region_id = str(region["region_id"])
             prices = pd.Series(index=range(start_year, end_year + 1))
             country = region["ISO3"]
@@ -865,7 +865,7 @@ class Agents:
         Finally, the method sets the array data for each column of the `farmers` DataFrame as agents data in the model
         with names of the form 'agents/farmers/{column}'.
         """
-        regions = self.geoms["regions"]
+        regions = self.geom["regions"]
         region_ids = self.region_subgrid["region_ids"]
         full_region_cultivated_land = self.region_subgrid[
             "landsurface/full_region_cultivated_land"
@@ -1015,7 +1015,7 @@ class Agents:
         region_ids = self.region_subgrid["region_ids"]
         cell_area = self.region_subgrid["cell_area"]
 
-        regions_shapes = self.geoms["regions"]
+        regions_shapes = self.geom["regions"]
         if data_source == "lowder":
             assert country_iso3_column in regions_shapes.columns, (
                 f"Region database must contain {country_iso3_column} column ({self.data_catalog['GADM_level1'].path})"
@@ -1813,7 +1813,7 @@ class Agents:
         )
         assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
-        ISO3_codes_region = self.geoms["regions"]["ISO3"].unique()
+        ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
         GLOBIOM_regions_region = GLOBIOM_regions[
             GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
         ]["Region37"].unique()
@@ -1874,7 +1874,7 @@ class Agents:
         # Drop crops with no data at all for these regions
         donor_data = donor_data.dropna(axis=1, how="all")
 
-        unique_regions = self.geoms["regions"]
+        unique_regions = self.geom["regions"]
 
         data = self.donate_and_receive_crop_prices(
             donor_data, unique_regions, GLOBIOM_regions
@@ -2253,4 +2253,4 @@ class Agents:
 
         for feature_type in feature_types:
             features = pd.concat(all_features[feature_type], ignore_index=True)
-            self.set_geoms(features, name=f"assets/{feature_type}")
+            self.set_geom(features, name=f"assets/{feature_type}")

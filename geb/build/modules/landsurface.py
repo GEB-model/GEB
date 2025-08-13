@@ -101,7 +101,7 @@ class LandSurface:
         assert isinstance(DEMs, list)
         # here we use the bounds of all subbasins, which may include downstream
         # subbasins that are not part of the study area
-        bounds = tuple(self.geoms["routing/subbasins"].total_bounds)
+        bounds = tuple(self.geom["routing/subbasins"].total_bounds)
 
         fabdem: xr.DataArray = xr.open_dataarray(
             self.data_catalog.get_source("fabdem").path
@@ -137,7 +137,7 @@ class LandSurface:
                         DEM_raster.x,
                         DEM_raster.y,
                         tuple(
-                            self.geoms["routing/subbasins"]
+                            self.geom["routing/subbasins"]
                             .to_crs(DEM_raster.rio.crs)
                             .total_bounds
                         ),
@@ -205,7 +205,7 @@ class LandSurface:
         )
         global_countries["geometry"] = global_countries.centroid
         global_countries = global_countries.set_index("ISO3")
-        self.set_geoms(global_countries, name="global_countries")
+        self.set_geom(global_countries, name="global_countries")
 
         assert np.unique(regions["region_id"]).shape[0] == regions.shape[0], (
             f"Region database must contain unique region IDs ({self.data_catalog[region_database].path})"
@@ -226,11 +226,11 @@ class LandSurface:
             f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
         )
 
-        self.set_geoms(regions, name="regions")
+        self.set_geom(regions, name="regions")
 
         resolution_x, resolution_y = self.subgrid["mask"].rio.resolution()
 
-        regions_bounds = self.geoms["regions"].total_bounds
+        regions_bounds = self.geom["regions"].total_bounds
         mask_bounds = self.grid["mask"].raster.bounds
 
         # The bounds should be set to a bit larger than the regions to avoid edge effects
@@ -253,7 +253,7 @@ class LandSurface:
         region_mask.attrs["_FillValue"] = None
         region_mask = self.set_region_subgrid(region_mask, name="mask")
 
-        bounds = self.geoms["regions"].total_bounds
+        bounds = self.geom["regions"].total_bounds
         land_use = (
             xr.open_dataarray(
                 self.data_catalog.get_source(land_cover).path,
@@ -274,7 +274,7 @@ class LandSurface:
         )
 
         region_ids = reprojected_land_use.raster.rasterize(
-            self.geoms["regions"],
+            self.geom["regions"],
             col_name="region_id",
             all_touched=True,
         )
@@ -364,7 +364,7 @@ class LandSurface:
         """
         self.logger.info("Setting up land use parameters")
 
-        bounds = self.geoms["routing/subbasins"].total_bounds
+        bounds = self.geom["routing/subbasins"].total_bounds
         buffer = 0.1
         landcover_classification = (
             xr.open_dataarray(
