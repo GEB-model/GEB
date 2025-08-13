@@ -4,6 +4,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import xarray as xr
+import xclim.indices as xci
 from pgmpy.estimators import BayesianEstimator, HillClimbSearch, K2Score
 from pgmpy.factors.discrete import State
 from pgmpy.models import BayesianNetwork
@@ -21,6 +23,7 @@ from geb.agents.crop_farmers import (
 )
 from geb.build.methods import build_method
 
+from ...workflows.io import open_zarr
 from .. import GEBModel
 from ..workflows.general import repeat_grid
 
@@ -654,12 +657,8 @@ class fairSTREAMModel(GEBModel):
         farm_size_m2 = farm_size_n_cells * mean_cell_size
         return farm_size_m2
 
+    @build_method(depends_on=["setup_forcing"])
     def setup_pr_GEV(self):
-        import xarray as xr
-        import xclim.indices as xci
-
-        from ...workflows.io import open_zarr
-
         pr: xr.DataArray = open_zarr(
             Path("input/other/climate/pr.zarr"),
         ) * (24 * 3600)
