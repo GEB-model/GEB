@@ -285,7 +285,7 @@ class LakesReservoirs(Module):
 
     def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
         water_body_data = gpd.read_parquet(
-            self.model.files["geoms"]["waterbodies/waterbody_data"],
+            self.model.files["geom"]["waterbodies/waterbody_data"],
         )
         # drop all data that is not in the original ids
         waterbody_original_ids_compressed = np.unique(waterbody_original_ids)

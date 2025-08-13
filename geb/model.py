@@ -54,11 +54,17 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         # make a deep copy to avoid issues when the model is initialized multiple times
         self.files = copy.deepcopy(files)
+        if "geoms" in self.files:
+            # geoms was renamed to geom in the file library. To upgrade old models,
+            # we check if "geoms" is in the files and rename it to "geom"
+            # this line can be removed in august 2026 (also in geb/build/__init__.py)
+            self.files["geom"] = self.files.pop("geoms")
+
         for data in self.files.values():
             for key, value in data.items():
                 data[key] = self.input_folder / value
 
-        self.mask = load_geom(self.files["geoms"]["mask"])
+        self.mask = load_geom(self.files["geom"]["mask"])
 
         self.store = Store(self)
         self.artists = Artists(self)
@@ -251,7 +257,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.in_spinup = in_spinup
         self.simulate_hydrology = simulate_hydrology
 
-        self.regions = load_geom(self.files["geoms"]["regions"])
+        self.regions = load_geom(self.files["geom"]["regions"])
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 

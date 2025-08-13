@@ -1192,6 +1192,7 @@ class GEBModel(
 
             # geoms was renamed to geom in the file library. To upgrade old models,
             # we check if "geoms" is in the files and rename it to "geom"
+            # this line can be removed in august 2026 (also in geb/model.py)
             if "geoms" not in files:
                 files["geom"] = files.pop("geoms", {})
         return files

@@ -79,7 +79,7 @@ class Hydrology:
                 between the Q_obs station and the discharge from GEB.
         """
         # check if setup_discharge_observations method has been executed
-        if not self.model.files["geoms"].get("discharge/discharge_snapped_locations"):
+        if not self.model.files["geom"].get("discharge/discharge_snapped_locations"):
             print(
                 "Discharge observations not set up, probably no stations present in the basin. Skipping discharge evaluation."
             )
@@ -124,17 +124,17 @@ class Hydrology:
 
         # load input data files
         snapped_locations = gpd.read_parquet(
-            self.model.files["geoms"]["discharge/discharge_snapped_locations"]
+            self.model.files["geom"]["discharge/discharge_snapped_locations"]
         )  # load the snapped locations of the Q_obs stations
         Q_obs = pd.read_parquet(
             self.model.files["table"]["discharge/Q_obs"]
         )  # load the Q_obs discharge data
 
         region_shapefile = gpd.read_parquet(
-            self.model.files["geoms"]["mask"]
+            self.model.files["geom"]["mask"]
         )  # load the region shapefile
         rivers = gpd.read_parquet(
-            self.model.files["geoms"]["routing/rivers"]
+            self.model.files["geom"]["routing/rivers"]
         )  # load the rivers shapefiles
 
         evaluation_per_station: list = []

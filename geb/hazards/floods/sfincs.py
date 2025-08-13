@@ -371,7 +371,7 @@ class SFINCS:
 
     @property
     def rivers(self):
-        return load_geom(self.model.files["geoms"]["routing/rivers"])
+        return load_geom(self.model.files["geom"]["routing/rivers"])
 
     @property
     def mannings(self):
@@ -420,7 +420,7 @@ class SFINCS:
         """
         crs: str = self.config["crs"]
         if crs == "auto":
-            crs: str = self.get_utm_zone(self.model.files["geoms"]["routing/subbasins"])
+            crs: str = self.get_utm_zone(self.model.files["geom"]["routing/subbasins"])
         return crs
 
     def get_build_parameters(self, model_root):
@@ -433,7 +433,7 @@ class SFINCS:
 
         return {
             "model_root": model_root,
-            "region": load_geom(self.model.files["geoms"]["routing/subbasins"]),
+            "region": load_geom(self.model.files["geom"]["routing/subbasins"]),
             "DEMs": DEM_config,
             "rivers": self.rivers,
             "discharge": self.discharge_spinup_ds,
