@@ -1176,7 +1176,7 @@ class CropFarmers(AgentBaseClass):
 
         maximum_abstraction_reservoir_m3_by_farmer = (
             self.agents.reservoir_operators.get_maximum_abstraction_m3_by_farmer(
-                self.farmer_command_area, gross_irrigation_demand_m3_per_farmer
+                self.command_area, gross_irrigation_demand_m3_per_farmer
             )
         )
 
