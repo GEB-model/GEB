@@ -131,6 +131,11 @@ class Households(AgentBaseClass):
                 windstorm_path / f"T{return_period}_crs28992.tif"
             )  # adjust to file name
             windstorm_map = xr.open_dataarray(file_path, engine="rasterio")
+            # print(
+            #    f"Return period {return_period}: shape={windstorm_map.shape},"
+            #    f"min={windstorm_map.min().values}, max={windstorm_map.max().values}"
+            # )
+            # print(windstorm_map.rio.crs)
 
             # Reproject to match flood map CRS if needed (check if this is necessary)
             if windstorm_map.rio.crs != self.flood_maps["crs"]:
@@ -143,7 +148,7 @@ class Households(AgentBaseClass):
             windstorm_maps[return_period].rio.transform().to_gdal()
         )
         self.windstorm_maps = windstorm_maps
-        print("Wind maps loaded for return periods:", self.windstorm_return_periods)
+        # print("Wind maps loaded for return periods:", self.windstorm_return_periods)
 
     def construct_income_distribution(self):
         # These settings are dummy data now. Should come from subnational datasets.
@@ -975,8 +980,8 @@ class Households(AgentBaseClass):
                 severity_column = df["severity"]
 
             df = df.rename(columns={"damage_ratio": road_type})
-            print(f"Loaded DataFrame shape: {df.shape}")
-            print(df.head())
+            # print(f"Loaded DataFrame shape: {df.shape}")
+            # print(df.head())
 
             road_curves.append(df[[road_type]])
 
@@ -1000,27 +1005,7 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "agriculture"}
         )
 
-        self.buildings_structure_curve = pd.read_parquet(
-            self.model.files["table"][
-                "damage_parameters/flood/buildings/structure/curve"
-            ]
-        )
-        self.buildings_structure_curve.set_index("severity", inplace=True)
-        self.buildings_structure_curve = self.buildings_structure_curve.rename(
-            columns={"damage_ratio": "building_unprotected"}
-        )
-
-        # create another column (curve) in the buildings structure curve for protected buildings
-        self.buildings_structure_curve["building_protected"] = (
-            self.buildings_structure_curve["building_unprotected"] * 0.85
-        )
-
-        # create another column (curve) in the buildings structure curve for flood-proofed buildings
-        self.buildings_structure_curve["building_flood_proofed"] = (
-            self.buildings_structure_curve["building_unprotected"] * 0.85
-        )
-        self.buildings_structure_curve["building_flood_proofed"].loc[0:1] = 0.0
-
+        c
         self.buildings_content_curve = pd.read_parquet(
             self.model.files["table"]["damage_parameters/flood/buildings/content/curve"]
         )
@@ -1077,16 +1062,16 @@ class Households(AgentBaseClass):
                 "damage_parameters/windstorm/buildings/residential/curve"
             ]
         )
+        # print(self.wind_buildings_structure_curve.head())
+        # print(self.wind_buildings_structure_curve.describe())
+
+        self.wind_buildings_structure_curve.set_index("severity", inplace=True)
+
         self.wind_buildings_structure_curve = (
             self.wind_buildings_structure_curve.rename(
                 columns={"damage_ratio": "building_unprotected"}
             )
         )
-
-        print("Curve exists:", hasattr(self, "wind_buildings_structure_curve"))
-        print("Type of curve_path:", type(self.wind_buildings_structure_curve))
-        print(f"Loaded DataFrame shape: {self.wind_buildings_structure_curve.shape}")
-        print(self.wind_buildings_structure_curve.head())
 
     def create_wind_damage_interpolators(self):
         # Create interpolators for windstorm damage curves.
@@ -1197,14 +1182,15 @@ class Households(AgentBaseClass):
 
         for i, return_period in enumerate(self.windstorm_return_periods):
             windstorm_map: xr.DataArray = self.windstorm_maps[return_period]
-            print(f"\nReturn period: {return_period}")
-
+            windstorm_map_filled = windstorm_map.fillna(0)
+            buildings_wind = buildings.copy()
+            buildings_wind["object_type"] = "building_unprotected"
             # Calculate damages to building structure (for now there is no adaptation)
             wind_damage_unprotected: pd.Series = VectorScanner(
-                feature_file=buildings.rename(
+                feature_file=buildings_wind.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
-                hazard_file=windstorm_map,
+                hazard_file=windstorm_map_filled,
                 curve_path=self.wind_buildings_structure_curve,
                 gridded=False,
             )
