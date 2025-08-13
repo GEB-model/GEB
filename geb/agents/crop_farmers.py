@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import calendar
 import copy
 import math
@@ -995,7 +994,7 @@ class CropFarmers(AgentBaseClass):
         return activation_order
 
     @property
-    def farmer_command_area(self):
+    def command_area(self):
         return farmer_command_area(
             self.var.n,
             self.var.field_indices,
@@ -1005,7 +1004,7 @@ class CropFarmers(AgentBaseClass):
 
     @property
     def is_in_command_area(self):
-        return self.farmer_command_area != -1
+        return self.command_area != -1
 
     def save_pr(self):
         pr = self.HRU.pr * (24 * 3600)  # mm / day
@@ -1210,7 +1209,7 @@ class CropFarmers(AgentBaseClass):
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             maximum_abstraction_reservoir_m3_by_farmer=maximum_abstraction_reservoir_m3_by_farmer,
             groundwater_depth=groundwater_depth,
-            command_area_by_farmer=self.farmer_command_area,
+            command_area_by_farmer=self.command_area,
             return_fraction=self.model.config["agent_settings"]["farmers"][
                 "return_fraction"
             ],
@@ -4638,7 +4637,7 @@ class CropFarmers(AgentBaseClass):
             # Create a DataFrame with command area and elevation
             df = pd.DataFrame(
                 {
-                    "command_area": self.farmer_command_area,
+                    "command_area": self.command_area,
                     "elevation": self.var.elevation,
                 }
             )
@@ -4660,7 +4659,7 @@ class CropFarmers(AgentBaseClass):
 
             self.var.farmer_base_class[:] = self.create_farmer_classes(
                 crop_calendar_group,
-                self.farmer_command_area,
+                self.command_area,
                 self.up_or_downstream,
             )
 

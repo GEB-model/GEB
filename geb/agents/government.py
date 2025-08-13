@@ -1,4 +1,5 @@
-# -*- coding: utf-8 -*-
+import numpy as np
+
 from .general import AgentBaseClass
 
 
@@ -57,9 +58,32 @@ class Government(AgentBaseClass):
                 self.agents.crop_farmers.field_size_per_farmer
                 * irrigation_limit["limit"]
             )
+        elif irrigation_limit["per"] == "command_area":
+            farmer_command_area = self.agents.crop_farmers.command_area
+            farmers_per_command_area = np.bincount(
+                farmer_command_area[farmer_command_area != -1]
+            )
+
+            # get yearly usable release m3. We do not use the current year, as it
+            # may not be complete yet, and we only use up to the history fill index
+            yearly_usable_release_m3_per_command_area = (
+                self.agents.reservoir_operators.yearly_usuable_release_m3
+            ).mean(axis=1)
+
+            irritation_limit_per_command_area = (
+                yearly_usable_release_m3_per_command_area / farmers_per_command_area
+            )
+            irrigation_limit_per_farmer = irritation_limit_per_command_area[
+                farmer_command_area
+            ]
+            irrigation_limit_per_farmer[farmer_command_area == -1] = np.nan
+
+            self.agents.crop_farmers.var.irrigation_limit_m3[:] = (
+                irrigation_limit_per_farmer
+            )
         else:
             raise NotImplementedError(
-                "Only 'capita' is implemented for irrigation limit"
+                "Only 'capita' and 'area' are implemented for irrigation limit"
             )
         if "min" in irrigation_limit:
             self.agents.crop_farmers.irrigation_limit_m3[

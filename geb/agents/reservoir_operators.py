@@ -564,3 +564,17 @@ class ReservoirOperators(AgentBaseClass):
         return self.model.hydrology.lakes_reservoirs.var.waterbody_ids_original[
             self.model.hydrology.lakes_reservoirs.is_reservoir
         ]
+
+    @property
+    def yearly_usuable_release_m3(self) -> npt.NDArray[np.float32]:
+        """Get the yearly usable release in m3.
+
+        We do not use the current year, as it may not be complete yet, and
+        we only use up to the history fill index, because earlier years are not
+        yet run and thus contain no data.
+        """
+        yearly_usable_release_m3 = self.agents.reservoir_operators.var.multi_year_monthly_usable_release_m3.sum(
+            axis=1
+        )[:, 1 : self.agents.reservoir_operators.var.history_fill_index]
+        assert not np.isnan(yearly_usable_release_m3).any()
+        return yearly_usable_release_m3
