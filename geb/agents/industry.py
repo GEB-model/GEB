@@ -42,8 +42,6 @@ class Industry(AgentBaseClass):
         self.var.current_efficiency = efficiency
 
     def update_water_demand(self):
-        print("Industry config:", self.config)
-
         if self.config.get("disable_water_demand", False):
             self.model.logger.info(
                 "[Industry] Water demand and efficiency set to 0 due to config setting."
@@ -87,8 +85,6 @@ class Industry(AgentBaseClass):
                 / self.HRU.var.cell_area
             )  # convert to m/day
 
-            print("Scaling water demand")
-            print(self.model.config["parameters"]["water_demand_multiplier"])
             water_demand = (
                 water_demand
                 * self.model.config["parameters"]["water_demand_multiplier"]

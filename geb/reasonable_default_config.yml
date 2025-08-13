@@ -165,6 +165,10 @@ parameters:
   lakeAFactor: 1
   manningsN: 1
   preferentialFlowConstant: 3.14300925049279
+  ksat_multiplier: 1.0
+  water_demand_multiplier: 1.0
+
+
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini

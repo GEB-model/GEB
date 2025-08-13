@@ -69,8 +69,7 @@ def update_sfincs_model_forcing(
                 "precipitation_grid should be a list or an xr.DataArray"
             )
             precipitation_grid: list[xr.DataArray] = [precipitation_grid]
-        # print("precip grid")
-        # print(sf.grid.crs)
+
         precipitation_grid: list[xr.DataArray] = [
             pr.raster.reproject_like(sf.grid) for pr in precipitation_grid
         ]
