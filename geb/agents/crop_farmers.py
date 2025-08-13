@@ -1072,8 +1072,21 @@ class CropFarmers(AgentBaseClass):
 
     def get_gross_irrigation_demand_m3(
         self, potential_evapotranspiration, available_infiltration
-    ) -> npt.NDArray[np.float32]:
-        gross_irrigation_demand_m3: npt.NDArray[np.float32] = (
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
+        """Calculates the gross irrigation demand in m3 for each farmer.
+
+        Args:
+            potential_evapotranspiration: potential evapotranspiration in m/day
+            available_infiltration: available infiltration from other sources in m/day
+
+        Returns:
+            gross_irrigation_demand_m3: gross irrigation demand in m3 for each farmer
+            gross_potential_irrigation_m3_limit_adjusted: adjusted gross potential irrigation in m3 limit for each farmer
+        """
+        gross_irrigation_demand_m3, gross_potential_irrigation_m3_limit_adjusted = (
             get_gross_irrigation_demand_m3(
                 day_index=self.model.current_day_of_year - 1,
                 n=self.var.n,
@@ -1113,7 +1126,7 @@ class CropFarmers(AgentBaseClass):
         assert (
             gross_irrigation_demand_m3 < self.model.hydrology.HRU.var.cell_area
         ).all()
-        return gross_irrigation_demand_m3
+        return gross_irrigation_demand_m3, gross_potential_irrigation_m3_limit_adjusted
 
     @property
     def surface_irrigated(self):
@@ -1136,6 +1149,7 @@ class CropFarmers(AgentBaseClass):
     def abstract_water(
         self,
         gross_irrigation_demand_m3_per_field: npt.NDArray[np.float32],
+        gross_irrigation_demand_m3_per_field_limit_adjusted: npt.NDArray[np.float32],
         available_channel_storage_m3: npt.NDArray[np.float32],
         available_groundwater_m3: npt.NDArray[np.float64],
         groundwater_depth: npt.NDArray[np.float64],
@@ -1155,6 +1169,7 @@ class CropFarmers(AgentBaseClass):
 
         Args:
             gross_irrigation_demand_m3_per_field: gross irrigation demand in m3 per field
+            gross_irrigation_demand_m3_per_field_limit_adjusted: adjusted gross irrigation demand in m3 per field
             available_channel_storage_m3: available channel storage in m3 per grid cell
             available_groundwater_m3: available groundwater storage in m3 per grid cell
             groundwater_depth: groundwater depth in meters per grid cell
@@ -1216,6 +1231,7 @@ class CropFarmers(AgentBaseClass):
             well_depth=self.var.well_depth.data,
             remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
+            gross_irrigation_demand_m3_per_field_limit_adjusted=gross_irrigation_demand_m3_per_field_limit_adjusted,
         )
 
         assert (water_withdrawal_m < 1).all()
