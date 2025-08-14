@@ -6,21 +6,27 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import rasterio
 import xarray as xr
 import zarr
+from rioxarray.merge import merge_arrays
+from shapely.geometry import shape
 from shapely.geometry.point import Point
 
-from ...hydrology.HRUs import load_geom
+from ...hydrology.HRUs import load_geom, load_grid
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
-from .build_model import build_sfincs
+from .build_model import build_sfincs, build_sfincs_coastal
 from .estimate_discharge_for_return_periods import estimate_discharge_for_return_periods
 from .postprocess_model import read_maximum_flood_depth
 from .run_sfincs_for_return_periods import (
     run_sfincs_for_return_periods,
+    run_sfincs_for_return_periods_coastal,
 )
 from .sfincs_utils import run_sfincs_simulation
-from .update_model_forcing import update_sfincs_model_forcing
+from .update_model_forcing import (
+    update_sfincs_model_forcing,
+)
 
 
 class SFINCS:
@@ -257,7 +263,94 @@ class SFINCS:
         damages = self.flood(flood_map=flood_map)
         return damages
 
-    def get_return_period_maps(self):
+    def build_mask_for_coastal_sfincs(self):
+        """Builds a mask to define the active cells and boundaries for the coastal SFINCS model."""
+        # Load the dataset (assumes NetCDF with CF conventions and georeferencing info)
+        mask = xr.load_dataset(self.model.files["other"]["drainage/mask"])
+
+        # Extract the mask variable
+        mask_var = mask["mask"]
+
+        # Make sure it has a CRS
+        if mask_var.rio.crs is None:
+            mask_var = mask_var.rio.write_crs(
+                "EPSG:4326", inplace=False
+            )  # or your known CRS
+
+        # Extract binary mask values
+        mask_data = mask_var.values.astype(np.uint8)
+
+        # Get transform from raster metadata
+        transform = mask_var.rio.transform()
+
+        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
+        shapes = rasterio.features.shapes(mask_data, mask=None, transform=transform)
+
+        # Build GeoDataFrame from the shapes generator
+        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
+
+        gdf = gpd.GeoDataFrame.from_records(records)
+        gdf.set_geometry("geometry", inplace=True)
+        gdf.crs = mask_var.rio.crs
+        # include a 1km buffer to the mask to include the coastal areas
+        # Keep only mask == 1
+        gdf = gdf[gdf["value"] == 1]
+        # gdf.geometry = gdf.geometry.buffer(0.00833)
+
+        return gdf
+
+    def build_coastal_boundary_mask(self):
+        """Builds a mask to define the coastal boundaries for the SFINCS model."""
+        lecz = xr.load_dataset(
+            self.model.files["other"]["landsurface/low_elevation_coastal_zone"]
+        )
+
+        # Make sure it has a CRS
+        if lecz.rio.crs is None:
+            lecz = lecz.rio.write_crs(
+                "EPSG:4326", inplace=False
+            )  # check CRS for later applications
+
+        # Extract binary mask values
+        lecz_data = lecz["low_elevation_coastal_zone"].values.astype(np.uint8)
+
+        # Get transform from raster metadata
+        transform = lecz.rio.transform()
+
+        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
+        shapes = rasterio.features.shapes(lecz_data, mask=None, transform=transform)
+
+        # Build GeoDataFrame from the shapes generator
+        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
+
+        gdf = gpd.GeoDataFrame.from_records(records)
+        gdf.set_geometry("geometry", inplace=True)
+        gdf = gdf.set_crs(lecz.rio.crs, inplace=True)
+        gdf = gdf[gdf["value"] == 1]  # Keep only mask == 1
+        return gdf
+
+    def get_coastal_return_period_maps(self):
+        coastal_mask = self.build_mask_for_coastal_sfincs()
+        boundary_mask = self.build_coastal_boundary_mask()
+        model_root: Path = self.sfincs_model_root("entire_region_coastal")
+        build_parameters = self.get_build_parameters(model_root)
+        build_parameters["region"] = coastal_mask
+        build_parameters["boundary_mask"] = boundary_mask
+        build_sfincs_coastal(
+            **build_parameters,
+        )
+
+        rp_maps_coastal = run_sfincs_for_return_periods_coastal(
+            model=self.model,
+            model_root=model_root,
+            gpu=self.config["SFINCS"]["gpu"],
+            export_dir=self.model.output_folder / "flood_maps",
+            clean_working_dir=True,
+            return_periods=self.config["return_periods"],
+        )
+        return rp_maps_coastal
+
+    def get_riverine_return_period_maps(self):
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
@@ -277,7 +370,7 @@ class SFINCS:
             return_periods=self.config["return_periods"],
         )
 
-        run_sfincs_for_return_periods(
+        rp_maps_riverine = run_sfincs_for_return_periods(
             model_root=model_root,
             return_periods=self.config["return_periods"],
             gpu=self.config["SFINCS"]["gpu"],
@@ -290,6 +383,62 @@ class SFINCS:
             self.model.reporter.variables["discharge_daily"] = zarr.ZipStore(
                 self.model.config["report_hydrology"]["discharge_daily"]["path"],
                 mode="a",
+            )
+        return rp_maps_riverine
+
+    def merge_return_period_maps(self, rp_maps_coastal, rp_maps_riverine):
+        """Merges the return period maps for riverine and coastal floods into a single dataset."""
+        for return_period in self.config["return_periods"]:
+            if rp_maps_coastal is None:
+                riverine_da = rp_maps_riverine[return_period]
+                riverine_da.to_zarr(
+                    self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+                )
+                continue
+
+            coastal_da = rp_maps_coastal[return_period]
+            riverine_da = rp_maps_riverine[return_period]
+
+            # --- 2. Get union bounds ---
+            riv_bounds = riverine_da.rio.bounds()  # (minx, miny, maxx, maxy)
+            coa_bounds = coastal_da.rio.bounds()
+
+            minx = min(riv_bounds[0], coa_bounds[0])
+            miny = min(riv_bounds[1], coa_bounds[1])
+            maxx = max(riv_bounds[2], coa_bounds[2])
+            maxy = max(riv_bounds[3], coa_bounds[3])
+
+            # --- 3. Pick resolution ---
+            # Use riverine resolution (y is negative if north-up, so take abs)
+            res_x, res_y = riverine_da.rio.resolution()
+            res_x = abs(res_x)
+            res_y = abs(res_y)
+
+            # --- 4. Build template coords ---
+            width = int(np.ceil((maxx - minx) / res_x))
+            height = int(np.ceil((maxy - miny) / res_y))
+
+            x_coords = minx + (np.arange(width) + 0.5) * res_x
+            y_coords = maxy - (np.arange(height) + 0.5) * res_y  # top→bottom
+
+            template = xr.DataArray(
+                np.full((height, width), np.nan, dtype=riverine_da.dtype),
+                coords={"y": y_coords, "x": x_coords},
+                dims=("y", "x"),
+            ).rio.write_crs(riverine_da.rio.crs)
+
+            # --- 5. Reproject both datasets to the template ---
+            riverine_reproj = riverine_da.rio.reproject_match(template)
+            coastal_reproj = coastal_da.rio.reproject_match(template)
+
+            # --- 6. Merge via maximum ---
+            rp_map = xr.concat([riverine_reproj, coastal_reproj], dim="stacked").max(
+                dim="stacked", skipna=True
+            )
+            rp_map.rio.write_crs(riverine_da.rio.crs)
+
+            rp_map.to_zarr(
+                self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
             )
 
     def run(self, event):

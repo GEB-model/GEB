@@ -102,13 +102,11 @@ class Households(AgentBaseClass):
             file_path = (
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
             )
-            flood_map = xr.open_dataarray(file_path, engine="zarr")
-            flood_maps[return_period] = flood_map.rio.write_crs(
-                flood_map.attrs["_CRS"]["wkt"]
-            )
-        flood_maps["crs"] = pyproj.CRS.from_user_input(
-            flood_maps[return_period]._CRS["wkt"]
-        )
+            flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
+            # flood_maps[return_period] = flood_map.rio.write_crs(
+            #     flood_map.attrs["_CRS"]["wkt"]
+            # )
+        flood_maps["crs"] = flood_maps[return_period].rio.crs
         flood_maps["gdal_geotransform"] = (
             flood_maps[return_period].rio.transform().to_gdal()
         )
@@ -222,7 +220,6 @@ class Households(AgentBaseClass):
 
     def update_building_adaptation_status(self, household_adapting):
         """Update the floodproofing status of buildings based on adapting households."""
-
         # Extract and clean OSM IDs from adapting households
         osm_ids = pd.DataFrame(
             np.unique(self.var.osm_id.data[household_adapting])
@@ -1036,7 +1033,10 @@ class Households(AgentBaseClass):
 
     def calculate_building_flood_damages(self):
         """This function calculates the flood damages for the households in the model.
-        It iterates over the return periods and calculates the damages for each household"""
+
+        It iterates over the return periods and calculates the damages for each household
+        based on the flood maps and the building footprints.
+        """
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
