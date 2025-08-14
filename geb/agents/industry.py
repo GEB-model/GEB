@@ -42,78 +42,95 @@ class Industry(AgentBaseClass):
         self.var.current_efficiency = efficiency
 
     def update_water_demand(self):
-        downscale_mask = self.model.hydrology.HRU.var.land_use_type != SEALED
-        days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
-
-        water_demand = (
-            self.model.industry_water_demand_ds.sel(
-                time=self.model.current_time, method="ffill", tolerance="366D"
-            ).industry_water_demand
-            * 1_000_000
-            / days_in_year
-        )
-        water_demand = (
-            water_demand.rio.write_crs(4326).rio.reproject(
-                4326,
-                shape=self.grid.shape,
-                transform=self.grid.transform,
+        if self.config.get("disable_water_demand", False):
+            self.model.logger.info(
+                "[Industry] Water demand and efficiency set to 0 due to config setting."
             )
-            / (water_demand.rio.transform().a / self.grid.transform.a) ** 2
-        )  # correct for change in cell size
-        water_demand = (
-            downscale_volume(
-                water_demand.rio.transform().to_gdal(),
-                self.grid.gt,
-                water_demand.values,
-                self.grid.mask,
-                self.model.hydrology.grid_to_HRU_uncompressed,
-                downscale_mask,
-                self.HRU.var.land_use_ratio,
+            zero_array = np.zeros(self.HRU.var.land_use_ratio.shape, dtype=float)
+            efficiency_grid = self.model.hydrology.to_grid(
+                HRU_data=zero_array, fn="max"
             )
-            / self.HRU.var.cell_area
-        )  # convert to m/day
+            self.var.last_water_demand_update = self.model.current_time
+            return zero_array, efficiency_grid
 
-        water_consumption = (
-            self.model.industry_water_consumption_ds.sel(
-                time=self.model.current_time, method="ffill"
-            ).industry_water_consumption
-            * 1_000_000
-            / days_in_year
-        )
-        water_consumption = (
-            water_consumption.rio.write_crs(4326).rio.reproject(
-                4326,
-                shape=self.grid.shape,
-                transform=self.grid.transform,
+        else:
+            downscale_mask = self.model.hydrology.HRU.var.land_use_type != SEALED
+            days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
+
+            water_demand = (
+                self.model.industry_water_demand_ds.sel(
+                    time=self.model.current_time, method="ffill", tolerance="366D"
+                ).industry_water_demand
+                * 1_000_000
+                / days_in_year
             )
-            / (water_consumption.rio.transform().a / self.grid.transform.a) ** 2
-        )
-        water_consumption = (
-            downscale_volume(
-                water_consumption.rio.transform().to_gdal(),
-                self.grid.gt,
-                water_consumption.values,
-                self.grid.mask,
-                self.model.hydrology.grid_to_HRU_uncompressed,
-                downscale_mask,
-                self.HRU.var.land_use_ratio,
+            water_demand = (
+                water_demand.rio.write_crs(4326).rio.reproject(
+                    4326,
+                    shape=self.grid.shape,
+                    transform=self.grid.transform,
+                )
+                / (water_demand.rio.transform().a / self.grid.transform.a) ** 2
+            )  # correct for change in cell size
+            water_demand = (
+                downscale_volume(
+                    water_demand.rio.transform().to_gdal(),
+                    self.grid.gt,
+                    water_demand.values,
+                    self.grid.mask,
+                    self.model.hydrology.grid_to_HRU_uncompressed,
+                    downscale_mask,
+                    self.HRU.var.land_use_ratio,
+                )
+                / self.HRU.var.cell_area
+            )  # convert to m/day
+
+            water_demand = (
+                water_demand
+                * self.model.config["parameters"]["water_demand_multiplier"]
             )
-            / self.HRU.var.cell_area
-        )  # convert to m/day
 
-        efficiency = np.divide(
-            water_consumption,
-            water_demand,
-            out=np.zeros_like(water_consumption, dtype=float),
-            where=water_demand != 0,
-        )
+            water_consumption = (
+                self.model.industry_water_consumption_ds.sel(
+                    time=self.model.current_time, method="ffill"
+                ).industry_water_consumption
+                * 1_000_000
+                / days_in_year
+            )
+            water_consumption = (
+                water_consumption.rio.write_crs(4326).rio.reproject(
+                    4326,
+                    shape=self.grid.shape,
+                    transform=self.grid.transform,
+                )
+                / (water_consumption.rio.transform().a / self.grid.transform.a) ** 2
+            )
+            water_consumption = (
+                downscale_volume(
+                    water_consumption.rio.transform().to_gdal(),
+                    self.grid.gt,
+                    water_consumption.values,
+                    self.grid.mask,
+                    self.model.hydrology.grid_to_HRU_uncompressed,
+                    downscale_mask,
+                    self.HRU.var.land_use_ratio,
+                )
+                / self.HRU.var.cell_area
+            )  # convert to m/day
 
-        efficiency = self.model.hydrology.to_grid(HRU_data=efficiency, fn="max")
+            efficiency = np.divide(
+                water_consumption,
+                water_demand,
+                out=np.zeros_like(water_consumption, dtype=float),
+                where=water_demand != 0,
+            )
 
-        assert (efficiency <= 1).all()
-        assert (efficiency >= 0).all()
-        self.var.last_water_demand_update = self.model.current_time
-        return water_demand, efficiency
+            efficiency = self.model.hydrology.to_grid(HRU_data=efficiency, fn="max")
+
+            assert (efficiency <= 1).all()
+            assert (efficiency >= 0).all()
+            self.var.last_water_demand_update = self.model.current_time
+            return water_demand, efficiency
 
     def water_demand(self):
         if (

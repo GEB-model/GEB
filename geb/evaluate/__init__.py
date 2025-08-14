@@ -19,6 +19,7 @@ class Evaluate(Hydrology):
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
+        include_yearly_plots: bool = False,
         correct_Q_obs: bool = False,
     ) -> None:
         """Run the evaluation methods.
@@ -29,6 +30,7 @@ class Evaluate(Hydrology):
             spinup_name: Name of the spinup run. Defaults to "spinup".
             run_name: Name of the run to evaluate. Defaults to "default".
             include_spinup: If True, includes the spinup run in the evaluation.
+            include_yearly_plots: If True, creates plots for every year showing the evaluation
             correct_Q_obs: If True, corrects the observed discharge values.
 
         Raises:
@@ -42,6 +44,7 @@ class Evaluate(Hydrology):
             methods: list = [
                 "plot_discharge",
                 "evaluate_discharge",
+                "evaluate_hydrodynamics",
             ]
         else:
             assert isinstance(methods, (list, tuple)), (
@@ -67,6 +70,7 @@ class Evaluate(Hydrology):
                 spinup_name=spinup_name,
                 run_name=run_name,
                 include_spinup=include_spinup,
+                include_yearly_plots=include_yearly_plots,
                 correct_Q_obs=correct_Q_obs,
             )  # this calls the method and executes them
 

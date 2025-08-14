@@ -182,6 +182,7 @@ def build_sfincs(
         river_width_alpha=river_width_alpha,
         river_width_beta=river_width_beta,
     )
+
     rivers = assign_return_periods(rivers, discharge_by_river, return_periods=[2])
 
     river_width_unknown_mask = rivers["width"].isnull()
@@ -198,6 +199,7 @@ def build_sfincs(
         parameters=depth_calculation_parameters,
         bankfull_column="Q_2",
     )
+
     rivers["manning"] = get_river_manning(rivers)
 
     export_rivers(model_root, rivers)

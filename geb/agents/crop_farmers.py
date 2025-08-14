@@ -611,6 +611,10 @@ class CropFarmers(AgentBaseClass):
             n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=0.50
         )
 
+        # self.var.irrigation_efficiency = DynamicArray(
+        #     n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=1.0
+        # )
+
         rng = np.random.default_rng(42)
         self.var.irrigation_efficiency[irrigation_mask] = rng.choice(
             [0.50, 0.90], size=irrigation_mask.sum(), p=[0.8, 0.2]
@@ -999,6 +1003,8 @@ class CropFarmers(AgentBaseClass):
                     - self.var.cumulative_water_deficit_previous_day
                 )
             )
+            # print(self.var.cumulative_water_deficit_m3[:, day_index])
+            # print(self.var.cumulative_water_deficit_m3[:, day_index - 1])
             assert (
                 self.var.cumulative_water_deficit_m3[:, day_index]
                 >= self.var.cumulative_water_deficit_m3[:, day_index - 1]

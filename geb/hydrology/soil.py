@@ -720,9 +720,12 @@ def vertical_water_transport(
             The direct runoff of water from the soil
         groundwater_recharge : np.ndarray
             The recharge of groundwater from the soil
+        infltration : np.ndarray
+            The infiltration of water in the soil
     """
     # Initialize variables
     direct_runoff = np.zeros_like(land_use_type, dtype=np.float32)
+    infiltration = np.zeros_like(land_use_type, dtype=np.float32)
 
     soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
     delta_z = (soil_layer_height[:-1, :] + soil_layer_height[1:, :]) / 2
@@ -741,11 +744,12 @@ def vertical_water_transport(
 
     for i in prange(land_use_type.size):
         # If the soil is frozen, no infiltration occurs
-        infiltration = min(
+        infiltration[i] = min(
             potential_infiltration[i] * ~soil_is_frozen[i],
             available_water_infiltration[i],
         )
-        remaining_infiltration = np.float32(infiltration)  # make a copy
+        remaining_infiltration = np.float32(infiltration[i])
+        # make a copy
         for layer in range(3):
             capacity = ws[layer, i] - w[layer, i]
             if remaining_infiltration > capacity:
@@ -757,16 +761,16 @@ def vertical_water_transport(
                 w[layer, i] = min(w[layer, i], ws[layer, i])
                 break
 
-        infiltration -= remaining_infiltration
+        infiltration[i] -= remaining_infiltration
 
         # Runoff and topwater update for paddy fields
         if land_use_type[i] == PADDY_IRRIGATED:
-            topwater[i] = max(np.float32(0), topwater[i] - infiltration)
+            topwater[i] = max(np.float32(0), topwater[i] - infiltration[i])
             direct_runoff[i] = max(0, topwater[i] - np.float32(0.05))
             topwater[i] = max(np.float32(0), topwater[i] - direct_runoff[i])
         else:
             direct_runoff[i] = max(
-                (available_water_infiltration[i] - infiltration),
+                (available_water_infiltration[i] - infiltration[i]),
                 np.float32(0),
             )
 
@@ -848,7 +852,7 @@ def vertical_water_transport(
             w[sink, i] = min(w[sink, i], ws[sink, i])
             w[source, i] = max(w[source, i], wres[source, i])
 
-    return direct_runoff, groundwater_recharge
+    return direct_runoff, groundwater_recharge, infiltration
 
 
 def thetas_toth(
@@ -1308,6 +1312,11 @@ class Soil(Module):
             organic_matter=soil_organic_carbon,
             is_topsoil=is_top_soil,
         )  # m/day
+
+        self.HRU.var.saturated_hydraulic_conductivity = (
+            self.HRU.var.saturated_hydraulic_conductivity
+            * self.model.config["parameters"]["ksat_multiplier"]
+        )  # calibration parameter
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
@@ -1903,6 +1912,8 @@ class Soil(Module):
         groundwater_recharge = np.zeros_like(
             self.HRU.var.land_use_type, dtype=np.float32
         )
+        infiltration = np.zeros_like(self.HRU.var.land_use_type, dtype=np.float32)
+
         #
         # print(self.HRU.var.w[:, self.plantFATE_forest_RUs])
         # print(self.HRU.var.ws[:, self.plantFATE_forest_RUs])
@@ -1915,6 +1926,7 @@ class Soil(Module):
             (
                 direct_runoff_substep,
                 groundwater_recharge_substep,
+                infiltration_substep,
             ) = vertical_water_transport(
                 available_water_infiltration / n_substeps,
                 capillary_rise_from_groundwater / n_substeps,
@@ -1933,6 +1945,7 @@ class Soil(Module):
 
             direct_runoff += direct_runoff_substep
             groundwater_recharge[bioarea] += groundwater_recharge_substep[bioarea]
+            infiltration += infiltration_substep
 
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()

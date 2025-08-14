@@ -58,6 +58,23 @@ def KGE_calculation(s, o):
     return kge
 
 
+def NSE_calculation(s, o):
+    """Nash-Sutcliffe effiency (Nash and Sutcliffe, 1970).
+
+    Args:
+        s: simulated
+        o: observed
+
+    Returns:
+        NSE: Nash-Sutcliffe effiency.
+    """
+    numerator = ((o - s) ** 2).sum()
+    denominator = ((o - o.mean()) ** 2).sum()
+
+    nse = 1 - numerator / denominator
+    return nse
+
+
 def compute_score(sim, obs):
     diff = sum(abs(s - o) for s, o in zip(sim, obs))
     score = 1 - diff
@@ -731,20 +748,20 @@ def get_KGE_discharge(run_directory, individual, config, gauges, observed_stream
 
     streamflows = [get_streamflows(gauge, observed_streamflow) for gauge in gauges]
     streamflows = [streamflow for streamflow in streamflows if not streamflow.empty]
+    print(streamflows)
     if config["calibration"]["monthly"] is True:
         # Calculate the monthly mean of the streamflow data
         streamflows = [streamflows.resample("M").mean() for streamflows in streamflows]
 
     KGEs = []
     for streamflow in streamflows:
-        # print(f"Processing: {streamflow}")
+        streamflow = streamflow.dropna()  # If there are any NaNs values the KGE will become NaN, that's why we drop them before doing the calculation
         KGEs.append(
             KGE_calculation(s=streamflow["simulated"], o=streamflow["observed"])
         )
 
     assert KGEs  # Check if KGEs is not empty
     kge = np.mean(KGEs)
-
     print(
         "run_id: " + str(individual.label) + ", KGE_discharge: " + "{0:.3f}".format(kge)
     )
@@ -754,6 +771,74 @@ def get_KGE_discharge(run_directory, individual, config, gauges, observed_stream
         myfile.write(str(individual.label) + "," + str(kge) + "\n")
 
     return kge
+
+
+def get_NSE_discharge(run_directory, individual, config, gauges, observed_streamflow):
+    def get_streamflows(gauge, observed_streamflow):
+        # Get the path of the simulated streamflow file
+        Qsim_tss = os.path.join(
+            run_directory,
+            config["calibration"]["scenario"],
+            f"{gauge[0]} {gauge[1]}.csv",
+        )
+        # os.path.join(run_directory, 'base/discharge.csv')
+
+        # Check if the simulated streamflow file exists
+        if not os.path.isfile(Qsim_tss):
+            print("run_id: " + str(individual.label) + " File: " + Qsim_tss)
+            raise Exception(
+                "No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!"
+            )
+
+        # Read the simulated streamflow data from the file
+        simulated_streamflow = pd.read_csv(
+            Qsim_tss, sep=",", parse_dates=True, index_col=0
+        )
+
+        # parse the dates in the index
+        # simulated_streamflow.index = pd.date_range(config['calibration']['start_time'] + timedelta(days=1), config['calibration']['end_time'])
+
+        simulated_streamflow_gauge = simulated_streamflow[" ".join(map(str, gauge))]
+        simulated_streamflow_gauge.name = "simulated"
+        observed_streamflow_gauge = observed_streamflow[gauge]
+        observed_streamflow_gauge.name = "observed"
+
+        # Combine the simulated and observed streamflow data
+        streamflows = pd.concat(
+            [simulated_streamflow_gauge, observed_streamflow_gauge],
+            join="inner",
+            axis=1,
+        )
+
+        # Add a small value to the simulated streamflow to avoid division by zero
+        streamflows["simulated"] += 0.0001
+        return streamflows
+
+    streamflows = [get_streamflows(gauge, observed_streamflow) for gauge in gauges]
+    streamflows = [streamflow for streamflow in streamflows if not streamflow.empty]
+    print(streamflows)
+    if config["calibration"]["monthly"] is True:
+        # Calculate the monthly mean of the streamflow data
+        streamflows = [streamflows.resample("M").mean() for streamflows in streamflows]
+
+    KGEs = []
+    for streamflow in streamflows:
+        streamflow = streamflow.dropna()  # If there are any NaNs values the KGE will become NaN, that's why we drop them before doing the calculation
+        KGEs.append(
+            NSE_calculation(s=streamflow["simulated"], o=streamflow["observed"])
+        )
+
+    assert KGEs  # Check if KGEs is not empty
+    nse = np.mean(KGEs)
+    print(
+        "run_id: " + str(individual.label) + ", NSE_discharge: " + "{0:.3f}".format(nse)
+    )
+    with open(
+        os.path.join(config["calibration"]["path"], "NSE_discharge_log.csv"), "a"
+    ) as myfile:
+        myfile.write(str(individual.label) + "," + str(nse) + "\n")
+
+    return nse
 
 
 def get_KGE_yield_ratio(run_directory, individual, config):
@@ -1407,10 +1492,10 @@ def run_model(individual, config, gauges, observed_streamflow):
                 # env["GFORTRAN_UNBUFFERED_ALL"] = "1"
                 # env["OMP_NUM_THREADS"] = "1"
 
-                conda_env_name = "geb_p2"
+                conda_env_name = "geb"
                 cli_py_path = os.path.join(os.environ.get("GEB_PACKAGE_DIR"), "cli.py")
                 conda_activate = os.path.join(
-                    "/scistor/ivm/mka483/miniconda3", "bin", "activate"
+                    "/scistor/ivm/vbl220/miniconda3", "bin", "activate"
                 )
 
                 # Construct the command
@@ -1563,6 +1648,12 @@ def run_model(individual, config, gauges, observed_streamflow):
                     run_directory, individual, config, gauges, observed_streamflow
                 )
             )
+        if score in config["calibration"]["calibration_targets"]:
+            scores.append(
+                get_NSE_discharge(
+                    run_directory, individual, config, gauges, observed_streamflow
+                )
+            )
         if score == "KGE_crops":
             scores.append(get_crops_KGE(run_directory, individual, config))
         if score == "KGE_irrigation_method":
@@ -1616,25 +1707,34 @@ def calibrate(config, working_directory):
         streamflow_data = pd.read_csv(
             streamflow_path, sep=",", parse_dates=False, index_col=None
         )
+        print(streamflow_data)
         df = streamflow_data.reset_index(drop=True)
-        df.columns = df.iloc[1]
-        df = df.drop([0, 1]).reset_index(drop=True)
+        # df.columns = df.iloc[1]
+        # df = df.drop([0, 1]).reset_index(drop=True)
+
         df["Date"] = pd.to_datetime(
             df["Date"], errors="coerce", infer_datetime_format=True
         )
         df = df.dropna(subset=["Date"])
-        df["Discharge (ML/Day)"] = pd.to_numeric(
-            df["Discharge (ML/Day)"], errors="coerce"
-        )
-        df = df.dropna(subset=["Discharge (ML/Day)"])
-        df = df[["Date", "Discharge (ML/Day)"]].rename(
-            columns={"Date": "date", "Discharge (ML/Day)": "flow"}
-        )
-        df["flow"] = df["flow"] * (1000.0 / 86400.0)  # ML/day to m³/s
-        df["date"] = df["date"].dt.strftime("%Y-%m-%d")
-        df = df.set_index(pd.to_datetime(df["date"]))
-        df.index.name = "time"
-        observed_streamflow[gauge] = df["flow"]
+        df["flow"] = pd.to_numeric(df["flow"], errors="coerce")
+        # df = df.dropna(subset=["Discharge (ML/Day)"])
+        df = df[["Date", "flow"]].rename(
+            columns={"Date": "date"}
+        )  # df["flow"] = df["flow"] * (1000.0 / 86400.0)  # ML/day to m³/s
+
+        # Make the discharge daily, used to be for every 15 min
+        df = df.set_index("date")
+
+        daily_df = df.resample("D").mean()
+        daily_df.index.name = "time"
+
+        # df["date"] = df["date"].dt.strftime("%Y-%m-%d")
+        # print(df)
+        # df = df.set_index(pd.to_datetime(df["date"]))
+        # print(df)
+        # df.index.name = "time"
+        # print(df)
+        observed_streamflow[gauge] = daily_df["flow"]
         observed_streamflow[gauge].name = "observed"
 
     # Create DEAP classes
@@ -1799,12 +1899,12 @@ def calibrate(config, working_directory):
                 population + offspring, select_best_n_individuals
             )
 
-        # Optionally retrain a water price model with the best run
-        best_ind = tools.selBest(pareto_front, k=1)[0]
-        runs_path = os.path.join(config["calibration"]["path"], "runs")
-        run_directory = os.path.join(runs_path, best_ind.label)
-        print("Best run for water price model:", best_ind.label)
-        determine_water_price_model(run_directory, config)
+        # # Optionally retrain a water price model with the best run
+        # best_ind = tools.selBest(pareto_front, k=1)[0]
+        # runs_path = os.path.join(config["calibration"]["path"], "runs")
+        # run_directory = os.path.join(runs_path, best_ind.label)
+        # print("Best run for water price model:", best_ind.label)
+        # determine_water_price_model(run_directory, config)
 
         history.update(population)
 
