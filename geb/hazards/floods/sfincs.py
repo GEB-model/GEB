@@ -341,6 +341,7 @@ class SFINCS:
         )
 
         rp_maps_coastal = run_sfincs_for_return_periods_coastal(
+            model=self.model,
             model_root=model_root,
             gpu=self.config["SFINCS"]["gpu"],
             export_dir=self.model.output_folder / "flood_maps",

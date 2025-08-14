@@ -669,11 +669,19 @@ class Hydrography:
         self.logger.info("Setting up GTSM hydrographs")
         time_chunks = -1
         temporal_range = np.arange(1979, 2018, 1, dtype=np.int32)
-        min_lon, min_lat, max_lon, max_lat = self.bounds
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
+
         gtsm_data_region = []
         stations_in_model_domain = np.array([])
         for year in temporal_range:
-            for month in np.arange(1, 12):
+            for month in np.arange(1, 13):
                 path_water_level = self.data_catalog.get_source("GTSM").path.format(
                     year, f"{month:02d}"
                 )
@@ -748,11 +756,19 @@ class Hydrography:
         self.logger.info("Setting up GTSM surge hydrographs")
         time_chunks = -1
         temporal_range = np.arange(1979, 2018, 1, dtype=np.int32)
-        min_lon, min_lat, max_lon, max_lat = self.bounds
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
+
         gtsm_data_region = []
         stations_in_model_domain = np.array([])
         for year in temporal_range:
-            for month in np.arange(1, 12):
+            for month in np.arange(1, 13):
                 path_water_level = self.data_catalog.get_source(
                     "GTSM_surge"
                 ).path.format(year, f"{month:02d}")
@@ -795,7 +811,7 @@ class Hydrography:
                 subset = subset.drop_vars(
                     ["station_x_coordinate", "station_y_coordinate"]
                 )
-                pd_subset = subset.waterlevel.to_pandas()
+                pd_subset = subset.surge.to_pandas()
                 gtsm_data_region.append(pd_subset)
                 print(f"Processed GTSM data for {year}-{month:02d}")
 
@@ -870,12 +886,14 @@ class Hydrography:
             f"Coastal hydrographs exported to {target_folder}/coastal_hydrographs"
         )
 
-    @build_method
+    @build_method(depends_on=["setup_gtsm_water_levels"])
     def setup_coast_rp(self):
         """Sets up the coastal return period data for the model."""
         self.logger.info("Setting up coastal return period data")
-        gtsm_folder = "input/other/gtsm"
-        stations = gpd.read_file(f"{gtsm_folder}/stations.geojson", driver="GeoJSON")
+        stations = gpd.read_parquet(
+            os.path.join("input", self.files["geoms"]["gtsm/stations"])
+        )
+
         station_ids = stations["station_id"].values.astype(int)
         fp_coast_rp = self.data_catalog.get_source("COAST_RP").path
         coast_rp = pd.read_pickle(fp_coast_rp)
@@ -885,15 +903,14 @@ class Hydrography:
             stations["station_id"].astype(int).isin(coast_rp.index)
         ].reset_index(drop=True)
 
-        # Select stations within model bounds
-        station_ids = np.array(
-            [station for station in station_ids if station in coast_rp.index]
-        )
-        coast_rp = coast_rp.loc[station_ids]
+        coast_rp = coast_rp.loc[stations["station_id"].astype(int)]
+        self.set_table(coast_rp, name="coast_rp")
+
+        # also set stations (only those that are in coast_rp)
+        self.set_geoms(stations, "gtsm/stations_coast_rp")
 
         # export
-        coast_rp.to_pickle(f"{gtsm_folder}/coastal_return_periods.pkl")
-        stations.to_file(f"{gtsm_folder}/stations.geojson", driver="GeoJSON")
-        self.logger.info(
-            f"Coastal return period data exported to {gtsm_folder}/coastal_return_periods.pkl"
-        )
+        # coast_rp.to_pickle(f"{gtsm_folder}/coastal_return_periods.pkl")
+        # self.logger.info(
+        #     f"Coastal return period data exported to {gtsm_folder}/coastal_return_periods.pkl"
+        # )

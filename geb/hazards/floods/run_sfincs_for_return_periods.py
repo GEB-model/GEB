@@ -110,6 +110,7 @@ def assign_calculation_group(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 def run_sfincs_for_return_periods_coastal(
+    model,
     model_root,
     gpu=True,
     return_periods=[2, 5, 10, 25, 50, 100, 250, 500, 1000],
@@ -138,6 +139,7 @@ def run_sfincs_for_return_periods_coastal(
         simulation_root.mkdir(parents=True, exist_ok=True)
 
         update_sfincs_model_forcing_coastal(
+            model_files=model.files,
             model_root=model_root,
             simulation_root=simulation_root,
             return_period=return_period,

@@ -25,6 +25,7 @@ def to_sfincs_datetime(dt: datetime) -> str:
 
 
 def update_sfincs_model_forcing_coastal(
+    model_files: dict,
     model_root: Path,
     simulation_root: Path,
     return_period: int,
@@ -39,11 +40,13 @@ def update_sfincs_model_forcing_coastal(
     #     "waterlevel"
     # ).compute()  # define water levels and stations in data_catalog.yml
 
-    locations = gpd.GeoDataFrame(
-        gpd.read_file(Path("input/other/gtsm/stations.geojson")).rename(
-            columns={"station_id": "stations"}
+    locations = (
+        gpd.GeoDataFrame(
+            gpd.read_parquet(model_files["geoms"]["gtsm/stations_coast_rp"])
         )
-    ).set_index("stations")
+        .rename(columns={"station_id": "stations"})
+        .set_index("stations")
+    )
     # convert index to int
     locations.index = locations.index.astype(int)
 
