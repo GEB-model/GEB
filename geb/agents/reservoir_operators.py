@@ -155,8 +155,15 @@ class ReservoirOperators(AgentBaseClass):
             demand_per_command_area = np.bincount(
                 farmer_command_areas[command_area_mask],
                 weights=gross_irrigation_demand_m3_per_farmer[command_area_mask],
+                minlength=self.model.hydrology.lakes_reservoirs.n,
             )
-            correction_factor = self.command_area_release_m3 / demand_per_command_area
+            command_area_release_m3 = np.full(
+                self.model.hydrology.lakes_reservoirs.n, np.nan, dtype=np.float32
+            )
+            command_area_release_m3[
+                self.model.hydrology.lakes_reservoirs.is_reservoir
+            ] = self.command_area_release_m3
+            correction_factor = command_area_release_m3 / demand_per_command_area
             correction_factor_per_farmer = correction_factor[farmer_command_areas]
             correction_factor_per_farmer[~command_area_mask] = np.nan
             return gross_irrigation_demand_m3_per_farmer * correction_factor_per_farmer

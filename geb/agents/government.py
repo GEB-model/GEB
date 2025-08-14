@@ -61,22 +61,34 @@ class Government(AgentBaseClass):
         elif irrigation_limit["per"] == "command_area":
             farmer_command_area = self.agents.crop_farmers.command_area
             farmers_per_command_area = np.bincount(
-                farmer_command_area[farmer_command_area != -1]
+                farmer_command_area[farmer_command_area != -1],
+                minlength=self.model.hydrology.lakes_reservoirs.n,
             )
 
             # get yearly usable release m3. We do not use the current year, as it
             # may not be complete yet, and we only use up to the history fill index
-            yearly_usable_release_m3_per_command_area = (
-                self.agents.reservoir_operators.yearly_usuable_release_m3
-            ).mean(axis=1)
+            yearly_usable_release_m3_per_command_area = np.full(
+                self.model.hydrology.lakes_reservoirs.n, np.nan, dtype=np.float32
+            )
+            yearly_usable_release_m3_per_command_area[
+                self.model.hydrology.lakes_reservoirs.is_reservoir
+            ] = (self.agents.reservoir_operators.yearly_usuable_release_m3).mean(axis=1)
 
             irritation_limit_per_command_area = (
                 yearly_usable_release_m3_per_command_area / farmers_per_command_area
             )
+
+            # give all farmers there unique irrigation limit
+            # all farmers without a command area get no irrigation limit (nan)
             irrigation_limit_per_farmer = irritation_limit_per_command_area[
                 farmer_command_area
             ]
             irrigation_limit_per_farmer[farmer_command_area == -1] = np.nan
+
+            # make sure all farmers in a command area have an irrigation limit
+            assert not np.isnan(
+                irrigation_limit_per_farmer[farmer_command_area != -1]
+            ).any()
 
             self.agents.crop_farmers.var.irrigation_limit_m3[:] = (
                 irrigation_limit_per_farmer
