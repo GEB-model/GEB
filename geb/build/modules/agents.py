@@ -30,9 +30,7 @@ from ..workflows.conversions import (
     setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
-from ..workflows.general import (
-    clip_with_grid,
-)
+from ..workflows.general import clip_with_grid, validate_farm_size_data
 from ..workflows.population import load_GLOPOP_S
 
 
@@ -1079,7 +1077,6 @@ class Agents:
 
         farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
         farm_size_donor_country = setup_donor_countries(self, farm_countries_list)
-
         for i, (_, region) in enumerate(regions_shapes.iterrows()):
             UID = region[region_id_column]
             if data_source == "lowder":
@@ -1207,18 +1204,41 @@ class Agents:
                             "Cannot calculate region_n_holdings: both datasets are zero or missing."
                         )
                 else:
-                    # Replace zeros and NaNs in both datasets to avoid division by zero
-                    region_n_holdings = region_n_holdings.fillna(1).replace(0, 1)
-                    agricultural_area_db_ha = agricultural_area_db_ha.fillna(1).replace(
-                        0, 1
+                    # if one of the datasets has amount of holdings but agricultural area is missing: calculate agricultural area by # holdings * average size
+                    agricultural_area_db_ha = agricultural_area_db_ha.fillna(
+                        average_sizes_series * region_n_holdings
                     )
+                    # if you have agri area but no holdings: calculate holdings by agri area / average size
+                    region_n_holdings = region_n_holdings.fillna(
+                        agricultural_area_db_ha / average_sizes_series
+                    )
+
+                # delete classes with no holdings
+                agricultural_area_db_ha = agricultural_area_db_ha[region_n_holdings > 0]
+                region_n_holdings = region_n_holdings[region_n_holdings > 0]
+
+                if ISO3 == "ROU":
+                    # Romania has an error in the farm size data source for class '100 - 200 Ha'
+                    agricultural_area_db_ha["100 - 200 Ha"] = (
+                        region_n_holdings["100 - 200 Ha"] * 150
+                    )  # 150 Ha
+                    self.logger.info(
+                        f"new agricultural area for Romania: {agricultural_area_db_ha['100 - 200 Ha']}"
+                    )
+                # Validate that holdings * average farm size approximately equals agricultural area
+                validate_farm_size_data(
+                    agricultural_area_db_ha,
+                    region_n_holdings,
+                    size_class_boundaries,
+                    ISO3,
+                )
 
                 # Calculate total agricultural area in square meters
                 agricultural_area_db = (
                     agricultural_area_db_ha * 10000
                 )  # Convert Ha to m^2
 
-                # Calculate region farm sizes
+                # Calculate region farm sizes (in m2)
                 region_farm_sizes = agricultural_area_db / region_n_holdings
 
             else:
@@ -1314,7 +1334,7 @@ class Agents:
                 offset = (
                     whole_cells_per_size_class[size_class]
                     - number_of_agents_size_class * mean_cells_per_agent
-                )
+                )  # high offset means that there are relatively too many agents for the available agricultural area derived from the land use map (total_cultivated_land_area_lu)
 
                 if (
                     number_of_agents_size_class * mean_cells_per_agent + offset
@@ -1339,6 +1359,7 @@ class Agents:
                     offset,
                     self.logger,
                 )
+
                 assert n_farms_size_class.sum() == number_of_agents_size_class
                 assert (farm_sizes_size_class >= 1).all()
                 assert (

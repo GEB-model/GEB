@@ -352,3 +352,57 @@ def resample_chunked(
     )
     da.rio.set_crs(source.rio.crs)
     return da
+
+
+def validate_farm_size_data(
+    agricultural_area_db_ha,
+    region_n_holdings,
+    size_class_boundaries,
+    ISO3,
+    tolerance=0.3,
+):
+    """Validate that agricultural area is consistent with farm size class boundaries.
+
+    Parameters
+    ----------
+    agricultural_area_db_ha : pd.Series
+        Agricultural area in hectares per size class
+    region_n_holdings : pd.Series
+        Number of holdings per size class
+    size_class_boundaries : dict
+        Dictionary mapping size class names to (min, max) boundaries in m²
+    region : pd.Series
+        Region information containing NAME_1 and ISO3
+    tolerance : float, optional
+        Tolerance for validation (default: 0.3 = 30%)
+
+    Raises:
+    ------
+    ValueError
+        If agricultural area falls outside expected range for any size class
+    """
+    for size_class in agricultural_area_db_ha.index:
+        actual_area = agricultural_area_db_ha[size_class]
+
+        # Get the size class boundaries for validation
+        min_size_ha, max_size_ha = size_class_boundaries[size_class]
+        # Convert from m² to ha
+        min_size_ha = min_size_ha / 10000
+        max_size_ha = max_size_ha / 10000 if max_size_ha != np.inf else np.inf
+
+        # Calculate expected area range based on class boundaries
+        min_expected_area = region_n_holdings[size_class] * min_size_ha
+        max_expected_area = region_n_holdings[size_class] * max_size_ha
+
+        # Check if actual area falls within reasonable bounds
+        if not (
+            min_expected_area * (1 - tolerance)
+            <= actual_area
+            <= max_expected_area * (1 + tolerance)
+        ):
+            raise ValueError(
+                f"Incorrect farm size data for region {ISO3}. "
+                f"Size class {size_class}: agricultural area ({actual_area:.1f} ha) outside expected range "
+                f"[{min_expected_area * (1 - tolerance):.1f}, {max_expected_area * (1 + tolerance):.1f}] ha "
+                f" Check the farm size data and correct the data, Tim can help."
+            )
