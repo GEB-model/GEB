@@ -1269,59 +1269,62 @@ class Hydrology:
 
         """
         #  create folders
-        eval_plot_folder: Path = Path(self.output_folder_evaluate) / "floods" / "plots"
-
-        eval_plot_folder.mkdir(parents=True, exist_ok=True)
-
-        GEB_discharge = open_zarr(
-            self.model.output_folder
-            / "report"
-            / run_name
-            / "hydrology.routing"
-            / "discharge_daily.zarr"
-        )
-
-        # check if run file exists, if not, raise an error
-        if not (self.model.output_folder / "report" / run_name).exists():
-            raise FileNotFoundError(
-                f"Run folder '{run_name}' does not exist in the report directory. Did you run the model?"
+        if self.config["hazards"]["floods"]["detect_from_discharge"]:
+            eval_plot_folder: Path = (
+                Path(self.output_folder_evaluate) / "floods" / "plots"
             )
 
-        # Get the discharge from the user-defined threshold location
-        x, y = self.config["hazards"]["floods"]["threshold_location"]
-        GEB_discharge_station = GEB_discharge.sel(x=x, y=y, method="nearest")
-        threshold = self.config["hazards"]["floods"]["discharge_threshold"]
+            eval_plot_folder.mkdir(parents=True, exist_ok=True)
 
-        # Loop over events
-        for event in self.config["hazards"]["floods"]["events"]:
-            # Convert to datetime if strings
-            start_time = event["start_time"]
-            end_time = event["end_time"]
-            # if isinstance(start_time, str):
-            #     start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-            # if isinstance(end_time, str):
-            #     end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
-
-            # Select discharge for the event window
-            sel_data = GEB_discharge_station.sel(time=slice(start_time, end_time))
-
-            # Plot
-            fig, ax = plt.subplots(figsize=(10, 5))
-            sel_data.plot(ax=ax, label="Discharge")
-            ax.axhline(threshold, color="red", linestyle="--", label="Threshold")
-
-            ax.set_title(
-                f"Flood Event {start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')}"
+            GEB_discharge = open_zarr(
+                self.model.output_folder
+                / "report"
+                / run_name
+                / "hydrology.routing"
+                / "discharge_daily.zarr"
             )
-            ax.set_xlabel("Time")
-            ax.set_ylabel("Discharge (m³/s)")
-            ax.legend()
-            ax.grid(True, linestyle="--", alpha=0.5)
 
-            # Save plot
-            plot_filename = f"{start_time.strftime('%Y%m%dT%H%M%S')} - {end_time.strftime('%Y%m%dT%H%M%S')}.png"
-            plt.tight_layout()
-            plt.savefig(eval_plot_folder / plot_filename, dpi=300)
-            plt.close(fig)
+            # check if run file exists, if not, raise an error
+            if not (self.model.output_folder / "report" / run_name).exists():
+                raise FileNotFoundError(
+                    f"Run folder '{run_name}' does not exist in the report directory. Did you run the model?"
+                )
 
-        print(f"Flood discharge plots saved in: {eval_plot_folder}")
+            # Get the discharge from the user-defined threshold location
+            x, y = self.config["hazards"]["floods"]["threshold_location"]
+            GEB_discharge_station = GEB_discharge.sel(x=x, y=y, method="nearest")
+            threshold = self.config["hazards"]["floods"]["discharge_threshold"]
+
+            # Loop over events
+            for event in self.config["hazards"]["floods"]["events"]:
+                # Convert to datetime if strings
+                start_time = event["start_time"]
+                end_time = event["end_time"]
+                # if isinstance(start_time, str):
+                #     start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+                # if isinstance(end_time, str):
+                #     end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
+
+                # Select discharge for the event window
+                sel_data = GEB_discharge_station.sel(time=slice(start_time, end_time))
+
+                # Plot
+                fig, ax = plt.subplots(figsize=(10, 5))
+                sel_data.plot(ax=ax, label="Discharge")
+                ax.axhline(threshold, color="red", linestyle="--", label="Threshold")
+
+                ax.set_title(
+                    f"Flood Event {start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')}"
+                )
+                ax.set_xlabel("Time")
+                ax.set_ylabel("Discharge (m³/s)")
+                ax.legend()
+                ax.grid(True, linestyle="--", alpha=0.5)
+
+                # Save plot
+                plot_filename = f"{start_time.strftime('%Y%m%dT%H%M%S')} - {end_time.strftime('%Y%m%dT%H%M%S')}.png"
+                plt.tight_layout()
+                plt.savefig(eval_plot_folder / plot_filename, dpi=300)
+                plt.close(fig)
+
+            print(f"Flood discharge plots saved in: {eval_plot_folder}")
