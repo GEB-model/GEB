@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 from pathlib import Path
@@ -115,8 +116,6 @@ def run_sfincs_for_return_periods(
     export=True,
     export_dir=None,
     gpu=False,
-    fabdem_input=None,
-    gebco_input=None,
 ):
     if export_dir is None:
         export_dir: Path = model_root / "risk"
@@ -182,30 +181,12 @@ def run_sfincs_for_return_periods(
             outflow = gpd.read_file(Path(sf.root) / "gis/outflow_points.gpkg")
             # only one point location is expected
             assert len(outflow) == 1, "Only one outflow point is expected"
-            # sample from FabDEM DEM
-            # change the crs of the outflow to the crs of the dem
-            outflow = outflow.to_crs(fabdem_input.rio.crs)  # type: ignore
-            assert outflow.crs == fabdem_input.rio.crs, (  # type: ignore
-                "CRS of outflow and dem should be the same"
-            )
-            # Extract x and y coordinates from the outflow GeoDataFrame
-            x, y = outflow.geometry.x.iloc[0], outflow.geometry.y.iloc[0]
+            # before changing root read dem value from gis folder from .json file
+            dem_json_path = model_root / "gis" / "outflow_elevation.json"
+            with open(dem_json_path, "r") as f:
+                dem_values = json.load(f)
+            elevation = dem_values.get("outflow_elevation", None)
 
-            # Use .sel() to extract the elevation value
-            elevation = fabdem_input.sel(x=x, y=y, method="nearest").values.item()  # type: ignore
-            # if value of elevation Nan or zero, take values from gebco
-            if elevation is None or elevation == 0:
-                print(
-                    "Defaulting to gebco to setup outflow as fabdem has no value here"
-                )
-                outflow = outflow.to_crs(gebco_input.rio.crs)  # type: ignore
-                assert outflow.crs == gebco_input.rio.crs, (  # type: ignore
-                    "CRS of outflow and gebco should be the same"
-                )
-                # Extract x and y coordinates from the outflow GeoDataFrame
-                x, y = outflow.geometry.x.iloc[0], outflow.geometry.y.iloc[0]
-                # Use .sel() to extract the elevation value
-                elevation = gebco_input.sel(x=x, y=y, method="nearest").values.item()  # type: ignore
             if elevation is None or elevation == 0:
                 assert False, (
                     "Elevation should have positive value to set up outflow waterlevel boundary"

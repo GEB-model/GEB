@@ -1,3 +1,4 @@
+import json
 import logging
 
 import geopandas as gpd
@@ -187,6 +188,25 @@ def build_sfincs(
     outflow_points = outflow_points.set_crs(sf.crs)
     # save to model root as a gpkg file
     outflow_points.to_file(model_root / "gis/outflow_points.gpkg", driver="GPKG")
+    # Get the single outflow point coordinates
+    x_coord = outflow_points.geometry.x.iloc[0]
+    y_coord = outflow_points.geometry.y.iloc[0]
+    assert sf.grid.dep.rio.crs == outflow_points.crs, (  # type: ignore
+        "CRS of sf.grid.dep is not the same as the outflow_points crs"
+    )
+    # Sample from sf.grid.dep (which is the DEM DataArray)
+    elevation_value = sf.grid.dep.sel(  # type: ignore
+        x=x_coord, y=y_coord, method="nearest"
+    ).values.item()
+
+    # Optional: sanity check
+    if elevation_value is None or elevation_value <= 0:
+        raise ValueError(f"Invalid outflow elevation ({elevation_value}), must be > 0")
+
+    # Save elevation value to a file in model_root/gis
+    outflow_elev_path = model_root / "gis" / "outflow_elevation.json"
+    with open(outflow_elev_path, "w") as f:
+        json.dump({"outflow_elevation": elevation_value}, f)
 
     river_representative_points = []
     for ID in rivers.index:

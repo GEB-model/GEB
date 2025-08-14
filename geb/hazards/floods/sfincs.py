@@ -283,12 +283,6 @@ class SFINCS:
             gpu=self.config["SFINCS"]["gpu"],
             export_dir=self.model.output_folder / "flood_maps",
             clean_working_dir=True,
-            fabdem_input=open_zarr(
-                self.model.files["other"]["DEM/fabdem"],
-            ),
-            gebco_input=open_zarr(
-                self.model.files["other"]["DEM/gebco"],
-            ),
         )
 
         if hasattr(self.model, "reporter"):
