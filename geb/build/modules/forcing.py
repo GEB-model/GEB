@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import tempfile
 import time
 import zipfile
@@ -118,60 +119,81 @@ def download_ERA5(
     output_fn = folder / f"{variable}.zarr"
     if output_fn.exists():
         da: xr.DataArray = open_zarr(output_fn)
-    else:
-        folder.mkdir(parents=True, exist_ok=True)
-        da: xr.DataArray = xr.open_dataset(
-            "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
-            storage_options={"client_kwargs": {"trust_env": True}},
-            chunks={},
-            engine="zarr",
-        )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
 
-        da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
-
-        buffer: float = 0.5
-
-        # Check if region crosses the meridian (longitude=0)
-        # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
-        if bounds[0] < 0 and bounds[2] > 0:
-            # Need to handle the split across the meridian
-            # Get western hemisphere part (longitude < 0)
-            west_da: xr.DataArray = da.sel(
-                time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-                x=slice(((bounds[0] - buffer) + 360) % 360, 360),
+        # check if entire time range is available. If available, return the cached data
+        # otherwise, slice the data to the requested time range and return it
+        if start_date >= pd.to_datetime(
+            da.time[0].values
+        ) and end_date <= pd.to_datetime(da.time[-1].values):
+            logger.debug(
+                f"Using cached ERA5 {variable} data from {output_fn} for time range {start_date} to {end_date}"
             )
-            # Get eastern hemisphere part (longitude > 0)
-            east_da: xr.DataArray = da.sel(
-                time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-                x=slice(0, ((bounds[2] + buffer) + 360) % 360),
-            )
-            # Combine the two parts
-            da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
-        else:
-            # Regular case - doesn't cross meridian
             da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-                x=slice(
-                    ((bounds[0] - buffer) + 360) % 360,
-                    ((bounds[2] + buffer) + 360) % 360,
-                ),
+                y=slice(bounds[3], bounds[1]),
+                x=slice(bounds[0], bounds[2]),
             )
+            return da
+        else:
+            # remove the existing zarr folder
+            logger.debug(
+                f"Removing existing zarr folder {output_fn} as it does not contain the requested time range"
+            )
+            shutil.rmtree(output_fn)
 
-        # Reorder x to be between -180 and 180 degrees
-        da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
+    folder.mkdir(parents=True, exist_ok=True)
+    da: xr.DataArray = xr.open_dataset(
+        "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        storage_options={"client_kwargs": {"trust_env": True}},
+        chunks={},
+        engine="zarr",
+    )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
 
-        logger.info(f"Downloading ERA5 {variable} to {output_fn}")
-        da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
-        da: xr.DataArray = da.raster.mask_nodata()
-        da: xr.DataArray = to_zarr(
-            da,
-            output_fn,
-            time_chunksize=get_chunk_size(da, target=1e7),
-            crs=4326,
+    da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
+
+    buffer: float = 0.5
+
+    # Check if region crosses the meridian (longitude=0)
+    # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
+    if bounds[0] < 0 and bounds[2] > 0:
+        # Need to handle the split across the meridian
+        # Get western hemisphere part (longitude < 0)
+        west_da: xr.DataArray = da.sel(
+            time=slice(start_date, end_date),
+            y=slice(bounds[3] + buffer, bounds[1] - buffer),
+            x=slice(((bounds[0] - buffer) + 360) % 360, 360),
         )
+        # Get eastern hemisphere part (longitude > 0)
+        east_da: xr.DataArray = da.sel(
+            time=slice(start_date, end_date),
+            y=slice(bounds[3] + buffer, bounds[1] - buffer),
+            x=slice(0, ((bounds[2] + buffer) + 360) % 360),
+        )
+        # Combine the two parts
+        da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
+    else:
+        # Regular case - doesn't cross meridian
+        da: xr.DataArray = da.sel(
+            time=slice(start_date, end_date),
+            y=slice(bounds[3] + buffer, bounds[1] - buffer),
+            x=slice(
+                ((bounds[0] - buffer) + 360) % 360,
+                ((bounds[2] + buffer) + 360) % 360,
+            ),
+        )
+
+    # Reorder x to be between -180 and 180 degrees
+    da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
+
+    logger.info(f"Downloading ERA5 {variable} to {output_fn}")
+    da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
+    da: xr.DataArray = da.raster.mask_nodata()
+    da: xr.DataArray = to_zarr(
+        da,
+        output_fn,
+        time_chunksize=get_chunk_size(da, target=1e7),
+        crs=4326,
+    )
     return da
 
 
@@ -223,7 +245,7 @@ def process_ERA5(
     else:
         raise NotImplementedError
 
-    da: xr.DataArray = da.rio.set_crs(4326)
+    da: xr.DataArray = da.rio.write_crs(4326)
     da.raster.set_crs(4326)
     da: xr.DataArray = interpolate_na_along_time_dim(da)
 
