@@ -96,12 +96,29 @@ class HazardDriver:
                                     "start_time": start_time,
                                     "end_time": end_time,
                                 }
-                                self.config["hazards"]["floods"]["events"].append(
-                                    new_event
+                                # Check if event already exists (exact match on start and end)
+                                existing_events = self.config["hazards"]["floods"].get(
+                                    "events", []
                                 )
-                                config_path = Path.cwd() / "model.yml"
-                                with open(config_path, "w") as f:
-                                    yaml.safe_dump(self.config, f, sort_keys=False)
+                                event_exists = any(
+                                    e["start_time"] == new_event["start_time"]
+                                    and e["end_time"] == new_event["end_time"]
+                                    for e in existing_events
+                                )
+
+                                if not event_exists:
+                                    self.config["hazards"]["floods"]["events"].append(
+                                        new_event
+                                    )
+                                    config_path = Path.cwd() / "model.yml"
+                                    with open(config_path, "w") as f:
+                                        yaml.safe_dump(self.config, f, sort_keys=False)
+                                    print("Flood event saved to config.")
+                                else:
+                                    print(
+                                        "Flood event already in config, skipping save."
+                                    )
+
                                 self.next_detection_time = (
                                     self.current_time + timedelta(days=5)
                                 )
