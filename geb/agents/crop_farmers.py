@@ -290,6 +290,13 @@ class CropFarmers(AgentBaseClass):
         self.HRU.var.potential_evapotranspiration_crop_life = self.HRU.full_compressed(
             0, dtype=np.float32
         )
+        self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage = np.zeros(
+            (6, self.HRU.var.actual_evapotranspiration_crop_life.size), dtype=np.float32
+        )
+        self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage = np.zeros(
+            (6, self.HRU.var.potential_evapotranspiration_crop_life.size),
+            dtype=np.float32,
+        )
         self.HRU.var.crop_map = np.full_like(self.HRU.var.land_owners, -1)
         self.HRU.var.crop_age_days_map = np.full_like(self.HRU.var.land_owners, -1)
         self.HRU.var.crop_harvest_age_days = np.full_like(self.HRU.var.land_owners, -1)
@@ -410,6 +417,7 @@ class CropFarmers(AgentBaseClass):
             max_n=self.var.max_n,
             extra_dims_names=("adaptation_type",),
         )
+        self.var.adaptations[:, WELL_ADAPTATION] = -1
 
         # the time each agent has been paying off their loan
         # 0 = no cost adaptation, 1 = well, 2 = irr efficiency, 3 = irr. field expansion  -1 if they do not have adaptations
@@ -1185,13 +1193,13 @@ class CropFarmers(AgentBaseClass):
         assert (available_groundwater_m3 >= 0).all()
         assert (available_reservoir_storage_m3 >= 0).all()
 
-        gross_irrigation_demand_m3_per_farmer = self.field_to_farmer(
-            gross_irrigation_demand_m3_per_field
+        gross_irrigation_demand_m3_per_farmer_limit_adjusted = self.field_to_farmer(
+            gross_irrigation_demand_m3_per_field_limit_adjusted
         )
 
         maximum_abstraction_reservoir_m3_by_farmer = (
             self.agents.reservoir_operators.get_maximum_abstraction_m3_by_farmer(
-                self.command_area, gross_irrigation_demand_m3_per_farmer
+                self.command_area, gross_irrigation_demand_m3_per_farmer_limit_adjusted
             )
         )
 
@@ -1335,28 +1343,74 @@ class CropFarmers(AgentBaseClass):
     @staticmethod
     @njit(cache=True)
     def get_yield_ratio_numba_GAEZ(
-        crop_map: np.ndarray, evap_ratios: np.ndarray, KyT
-    ) -> float:
+        crop_map: np.ndarray,
+        evaporation_ratio: np.ndarray,
+        evaporation_ratio_per_crop_stage: npt.NDArray[np.float32],
+        KyT: npt.NDArray[np.float32],
+        Ky1: npt.NDArray[np.float32],
+        Ky2a: npt.NDArray[np.float32],
+        Ky2b: npt.NDArray[np.float32],
+        Ky3a: npt.NDArray[np.float32],
+        Ky3b: npt.NDArray[np.float32],
+        Ky4: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
         """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031.
 
         Args:
             crop_map: array of currently harvested crops.
             evap_ratios: ratio of actual to potential evapotranspiration of harvested crops.
             KyT: Water stress reduction factor from GAEZ.
+            Ky1: Water stress reduction factor for crop stage 1 from GAEZ.
+            Ky2a: Water stress reduction factor for crop stage 2a from GAEZ.
+            Ky2b: Water stress reduction factor for crop stage 2b from GAEZ.
+            Ky3a: Water stress reduction factor for crop stage 3a from GAEZ.
+            Ky3b: Water stress reduction factor for crop stage 3b from GAEZ.
+            Ky4: Water stress reduction factor for crop stage 4 from GAEZ.
 
         Returns:
             yield_ratios: yield ratio (as ratio of maximum obtainable yield) per harvested crop.
         """
-        yield_ratios = np.full(evap_ratios.size, -1, dtype=np.float32)
+        yield_ratios = np.full(evaporation_ratio.size, -1, dtype=np.float32)
 
-        assert crop_map.size == evap_ratios.size
+        assert crop_map.size == evaporation_ratio.size
 
-        for i in range(evap_ratios.size):
-            evap_ratio = evap_ratios[i]
+        for i in range(evaporation_ratio.size):
+            evap_ratio = evaporation_ratio[i]
             crop = crop_map[i]
-            yield_ratios[i] = max(
-                1 - KyT[crop] * (1 - evap_ratio), 0
-            )  # Yield ratio is never lower than 0.
+            yield_ratio_crop = 1 - KyT[crop] * (1 - evap_ratio)
+
+            if not np.isnan(evaporation_ratio_per_crop_stage[0, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky1[crop] * (1 - evaporation_ratio_per_crop_stage[0, i]),
+                )
+            if not np.isnan(evaporation_ratio_per_crop_stage[1, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky2a[crop] * (1 - evaporation_ratio_per_crop_stage[1, i]),
+                )
+            if not np.isnan(evaporation_ratio_per_crop_stage[2, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky2b[crop] * (1 - evaporation_ratio_per_crop_stage[2, i]),
+                )
+            if not np.isnan(evaporation_ratio_per_crop_stage[3, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky3a[crop] * (1 - evaporation_ratio_per_crop_stage[3, i]),
+                )
+            if not np.isnan(evaporation_ratio_per_crop_stage[4, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky3b[crop] * (1 - evaporation_ratio_per_crop_stage[4, i]),
+                )
+            if not np.isnan(evaporation_ratio_per_crop_stage[5, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky4[crop] * (1 - evaporation_ratio_per_crop_stage[5, i]),
+                )
+
+            yield_ratios[i] = np.maximum(yield_ratio_crop, 0)
 
         return yield_ratios
 
@@ -1369,7 +1423,7 @@ class CropFarmers(AgentBaseClass):
         beta: np.ndarray,
         P0: np.ndarray,
         P1: np.ndarray,
-    ) -> float:
+    ) -> npt.NDArray[np.float32]:
         """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031.
 
         Args:
@@ -1411,8 +1465,10 @@ class CropFarmers(AgentBaseClass):
     def get_yield_ratio(
         self,
         harvest: np.ndarray,
-        actual_transpiration: np.ndarray,
-        potential_transpiration: np.ndarray,
+        actual_transpiration: npt.NDArray[np.float32],
+        potential_transpiration: npt.NDArray[np.float32],
+        actual_transpiration_per_crop_stage: npt.NDArray[np.float32],
+        potential_transpiration_per_crop_stage: npt.NDArray[np.float32],
         crop_map: np.ndarray,
     ) -> np.ndarray:
         """Gets yield ratio for each crop given the ratio between actual and potential evapostranspiration during growth.
@@ -1425,17 +1481,26 @@ class CropFarmers(AgentBaseClass):
 
         Returns:
             yield_ratio: Map of yield ratio.
-
-        TODO: Implement GAEZ crop stage function
         """
         if self.var.crop_data_type == "GAEZ":
-            yield_ratio = self.get_yield_ratio_numba_GAEZ(
+            yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_GAEZ(
                 crop_map[harvest],
-                actual_transpiration[harvest] / potential_transpiration[harvest],
-                self.var.crop_data["KyT"].values,
+                evaporation_ratio=actual_transpiration[harvest]
+                / potential_transpiration[harvest],
+                evaporation_ratio_per_crop_stage=actual_transpiration_per_crop_stage[
+                    :, harvest
+                ]
+                / potential_transpiration_per_crop_stage[:, harvest],
+                KyT=self.var.crop_data["KyT"].values,
+                Ky1=self.var.crop_data["Ky1"].values,
+                Ky2a=self.var.crop_data["Ky2a"].values,
+                Ky2b=self.var.crop_data["Ky2b"].values,
+                Ky3a=self.var.crop_data["Ky3a"].values,
+                Ky3b=self.var.crop_data["Ky3b"].values,
+                Ky4=self.var.crop_data["Ky4"].values,
             )
         elif self.var.crop_data_type == "MIRCA2000":
-            yield_ratio = self.get_yield_ratio_numba_MIRCA2000(
+            yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_MIRCA2000(
                 crop_map[harvest],
                 actual_transpiration[harvest] / potential_transpiration[harvest],
                 self.var.crop_data["a"].values,
@@ -1561,6 +1626,8 @@ class CropFarmers(AgentBaseClass):
                 harvest,
                 self.HRU.var.actual_evapotranspiration_crop_life,
                 self.HRU.var.potential_evapotranspiration_crop_life,
+                self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage,
+                self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage,
                 self.HRU.var.crop_map,
             )
             assert (yield_ratio_per_field >= 0).all()

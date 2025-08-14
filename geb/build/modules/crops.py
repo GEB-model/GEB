@@ -50,14 +50,14 @@ class Crops:
                 crop_values["l_dev"] = crop_values["d2a"] + crop_values["d2b"]
                 crop_values["l_mid"] = crop_values["d3a"] + crop_values["d3b"]
                 crop_values["l_late"] = crop_values["d4"]
-                del crop_values["d1"]
-                del crop_values["d2a"]
-                del crop_values["d2b"]
-                del crop_values["d3a"]
-                del crop_values["d3b"]
-                del crop_values["d4"]
 
                 assert "KyT" in crop_values
+                assert "Ky1" in crop_values
+                assert "Ky2a" in crop_values
+                assert "Ky2b" in crop_values
+                assert "Ky3a" in crop_values
+                assert "Ky3b" in crop_values
+                assert "Ky4" in crop_values
 
             elif type == "MIRCA2000":
                 assert "a" in crop_values
