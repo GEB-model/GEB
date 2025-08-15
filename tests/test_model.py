@@ -248,6 +248,10 @@ def test_alter():
 
         run_args = DEFAULT_RUN_ARGS.copy()
         run_args["working_directory"] = args["working_directory"]
+        run_args["config"] = parse_config(run_args["config"])
+        run_args["config"]["general"]["start_time"] = run_args["config"]["general"][
+            "spinup_time"
+        ] + timedelta(days=370)  # run just over a year more is not needed
 
         run_model_with_method(method="spinup", **run_args)
 
@@ -280,6 +284,9 @@ def test_land_use_change():
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(args["config"])
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
+            days=370
+        )
         args["config"] = config
 
         geb = run_model_with_method(method=None, close_after_run=False, **args)
