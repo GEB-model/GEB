@@ -2077,10 +2077,10 @@ class Forcing:
                 elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
             ),
         )
-        elevation = elevation.drop("band")
+        elevation = elevation.drop_vars("band")
         elevation = xr.where(elevation == -9999, 0, elevation)
         elevation.attrs["_FillValue"] = np.nan
-        target = forcing_grid.isel(time=0).drop("time")
+        target = forcing_grid.isel(time=0).drop_vars("time")
 
         elevation_forcing = resample_like(elevation, target, method="bilinear")
         elevation_forcing = elevation_forcing.chunk({"x": -1, "y": -1})
