@@ -45,7 +45,7 @@ def read_maximum_flood_depth(model_root: Path, simulation_root: Path) -> xr.Data
         zsmax=zsmax,
         dep=dep,
         hmin=hmin,
-        reproj_method="bilinear",
+        reproj_method="bilinear",  # maybe use "nearest" for coastal
     )
 
     return hmax
