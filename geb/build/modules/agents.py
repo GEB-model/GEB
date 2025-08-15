@@ -1595,7 +1595,20 @@ class Agents:
             self.logger.warning("GDL region has a 'NA', these rows will be deleted.")
             GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
 
-        GDL_region_per_farmer = gpd.sjoin_nearest(locations, GDL_regions, how="left")
+        # assign GDL region to each farmer based on their location. This is a heavy operation, so we include a progress bar to monitor progress.
+        self.logger.info("Assigning GDL region to each farmer based on their location.")
+        chunk_size = 5000
+        n_farmers = len(locations)
+        chunks = []
+
+        self.logger.info(f"Processing {n_farmers} farmers in chunks of {chunk_size}")
+
+        for i in tqdm(range(0, n_farmers, chunk_size), desc="Processing farmer chunks"):
+            chunk_locations = locations.iloc[i : i + chunk_size]
+            chunk_result = gpd.sjoin_nearest(chunk_locations, GDL_regions, how="left")
+            chunks.append(chunk_result)
+
+        GDL_region_per_farmer = pd.concat(chunks, ignore_index=True)
 
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
