@@ -117,6 +117,8 @@ def download_ERA5(
     """
     output_fn = folder / f"{variable}.zarr"
     if output_fn.exists():
+        # print("outputfn exists. its here:")
+        # print(output_fn)
         da: xr.DataArray = open_zarr(output_fn)
     else:
         folder.mkdir(parents=True, exist_ok=True)
@@ -203,6 +205,9 @@ def process_ERA5(
     Returns:
         xr.DataArray: Processed ERA5 data as an xarray DataArray.
     """
+    # print(f"for download - start time: {start_date}")
+    # print(f"for download - end time: {end_date}")
+
     da: xr.DataArray = download_ERA5(
         folder, variable, start_date, end_date, bounds, logger
     )
@@ -1103,11 +1108,12 @@ class Forcing:
         )
         self.plot_forcing(da, name)
         return da
-
+    
+    # @build_method(depends_on=["set_time_range"])
     def setup_forcing_era5(self):
         target = self.grid["mask"]
         target.raster.set_crs(4326)
-
+        # print(f"starting date is: {self.start_date}")
         download_args: dict[str, Any] = {
             "folder": self.preprocessing_dir / "climate" / "ERA5",
             "start_date": self.start_date
