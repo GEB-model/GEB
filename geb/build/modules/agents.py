@@ -925,26 +925,6 @@ class Agents:
         self.set_array(farmers.index.values, name="agents/farmers/id")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
-    def setup_farmers_from_csv(self, path=None):
-        """Sets up the farmers data for GEB from a CSV file.
-
-        Parameters
-        ----------
-        path : str
-            The path to the CSV file containing the farmer data.
-
-        Notes:
-        -----
-        This method sets up the farmers data for GEB from a CSV file. It first reads the farmer data from
-        the CSV file using the `pandas.read_csv` method.
-
-        See the `setup_farmers` method for more information on how the farmer data is set up in the model.
-        """
-        if path is None:
-            path = self.preprocessing_dir / "agents" / "farmers" / "farmers.csv"
-        farmers = pd.read_csv(path, index_col=0)
-        self.setup_farmers(farmers)
-
     @build_method(depends_on=["setup_regions_and_land_use", "setup_cell_area"])
     def setup_create_farms(
         self,
