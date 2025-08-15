@@ -2063,7 +2063,7 @@ class Forcing:
                 and np.array_equal(forcing_grid.x.values, elevation_forcing.x.values)
                 and np.array_equal(forcing_grid.y.values, elevation_forcing.y.values)
             ):
-                self.logger.info("Using cached elevation data")
+                self.logger.debug("Using cached elevation data")
                 return elevation_forcing, elevation_grid
             else:
                 self.logger.warning(
