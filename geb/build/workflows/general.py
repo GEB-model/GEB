@@ -355,31 +355,23 @@ def resample_chunked(
 
 
 def validate_farm_size_data(
-    agricultural_area_db_ha,
-    region_n_holdings,
-    size_class_boundaries,
-    ISO3,
-    tolerance=0.3,
-):
+    agricultural_area_db_ha: pd.Series,
+    region_n_holdings: pd.Series,
+    size_class_boundaries: dict,
+    ISO3: str,
+    tolerance: float = 0.3,
+) -> None:
     """Validate that agricultural area is consistent with farm size class boundaries.
 
-    Parameters
-    ----------
-    agricultural_area_db_ha : pd.Series
-        Agricultural area in hectares per size class
-    region_n_holdings : pd.Series
-        Number of holdings per size class
-    size_class_boundaries : dict
-        Dictionary mapping size class names to (min, max) boundaries in m²
-    region : pd.Series
-        Region information containing NAME_1 and ISO3
-    tolerance : float, optional
-        Tolerance for validation (default: 0.3 = 30%)
+    Args:
+        agricultural_area_db_ha: Agricultural area in hectares per size class.
+        region_n_holdings: Number of holdings per size class.
+        size_class_boundaries: Dictionary mapping size class names to (min, max) boundaries in m².
+        ISO3: ISO3 country code for the region.
+        tolerance: Tolerance for validation (default: 0.3 = 30%).
 
     Raises:
-    ------
-    ValueError
-        If agricultural area falls outside expected range for any size class
+        ValueError: If agricultural area falls outside expected range for any size class.
     """
     for size_class in agricultural_area_db_ha.index:
         actual_area = agricultural_area_db_ha[size_class]

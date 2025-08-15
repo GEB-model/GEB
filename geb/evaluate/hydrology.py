@@ -721,6 +721,9 @@ class Hydrology:
                     color_upstream = colormap_upstream(
                         float(row["Q_obs_to_GEB_upstream_area_ratio"])
                     )
+                    if np.isnan(color_upstream):
+                        # do not add to map if color is NaN
+                        continue
 
                     popup_upstream = folium.Popup(popup_html, max_width=400)
                     folium.CircleMarker(

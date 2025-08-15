@@ -23,7 +23,9 @@ def setup_donor_countries(
     )  # calculate mean HDI for each country
 
     # find potential donors
-    global_countries = self.geom["global_countries"] # we need this to get the centroids of the countries geoms
+    global_countries = self.geom[
+        "global_countries"
+    ]  # we need this to get the centroids of the countries geoms
     potential_donors = global_countries.loc[
         global_countries.index.isin(countries_with_data)
     ]

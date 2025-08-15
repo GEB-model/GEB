@@ -463,35 +463,41 @@ class Crops:
         return data
 
     def donate_and_receive_crop_prices(
-        self, donor_data, recipient_regions, GLOBIOM_regions
-    ):
-        """Gets crop prices from other to fill missing data.
+        self,
+        donor_data: pd.DataFrame,
+        recipient_regions: pd.DataFrame,
+        GLOBIOM_regions: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Gets crop prices from other regions to fill missing data.
 
-        If there are multiple countries in one selected basin, where one country has prices for a certain crop, but the other does not,
-        this gives issues. This function adjusts crop data for those countries by filling in missing values using data from nearby regions
-        and PPP conversion rates. In case crop data is missing for a country, and is also not in countries in the same GLOBIOM dataset, it uses the prices for that crop from the country in the model region with least nan values.
+        If there are multiple countries in one selected basin, where one country has prices for a certain crop,
+        but the other does not, this gives issues. This function adjusts crop data for those countries by
+        filling in missing values using data from nearby regions and PPP conversion rates. In case crop data
+        is missing for a country, and is also not in countries in the same GLOBIOM dataset, it uses the prices
+        for that crop from the country in the model region with least nan values.
 
-        Parameters
-        ----------
-        data : DataFrame
-            A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'. The DataFrame
-            contains crop prices for different regions.
+        Args:
+            donor_data: A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'.
+                The DataFrame contains crop prices for different regions.
+            recipient_regions: DataFrame containing recipient region information with 'region_id' and 'ISO3' columns.
+            GLOBIOM_regions: DataFrame containing GLOBIOM region mapping with 'ISO3' and 'Region37' columns.
 
         Returns:
-        -------
-        DataFrame
             The updated DataFrame with missing crop data filled in using PPP conversion rates from nearby regions.
 
         Notes:
-        -----
-        The function performs the following steps:
-        1. Identifies columns where all values are NaN for each country and stores this information.
-        2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
-        3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
-        4. Drops the 'ISO3' column before returning the updated DataFrame.
+            The function performs the following steps:
+            1. Identifies columns where all values are NaN for each country and stores this information.
+            2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
+            3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
+            4. Drops the 'ISO3' column before returning the updated DataFrame.
 
-        Note: some countries without data are also not in the GLOBIOM dataset (e.g Liechtenstein (LIE)). For these countries, we cannot assess which donor we should take, and the country_data will be empty for these countries. Therefore, we first estimate the most similar country based on the setup_donor_countries function.
-        The ISO3 of these countries will be replaced by the ISO3 of the donor. However, the region_id will remain the same, so that only the data is used from the donor, but still the original region is used.
+            Some countries without data are also not in the GLOBIOM dataset (e.g Liechtenstein (LIE)).
+            For these countries, we cannot assess which donor we should take, and the country_data will be
+            empty for these countries. Therefore, we first estimate the most similar country based on the
+            setup_donor_countries function. The ISO3 of these countries will be replaced by the ISO3 of the donor.
+            However, the region_id will remain the same, so that only the data is used from the donor,
+            but still the original region is used.
         """
         # create a copy of the data to avoid using data that was adjusted in this function
         data_out = None
