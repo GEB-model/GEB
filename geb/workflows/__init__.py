@@ -34,14 +34,15 @@ class TimingModule:
 
 
 def balance_check(
-    name,
-    how="cellwise",
-    influxes=[],
-    outfluxes=[],
-    prestorages=[],
-    poststorages=[],
-    tollerance=1e-10,
-    raise_on_error=False,
+    name: str,
+    how: str = "cellwise",
+    influxes: list = [],
+    outfluxes: list = [],
+    prestorages: list = [],
+    poststorages: list = [],
+    tollerance: float = 1e-10,
+    error_identifiers: dict = {},
+    raise_on_error: bool = False,
 ):
     income = 0
     out = 0
@@ -73,7 +74,13 @@ def balance_check(
         if balance.size == 0:
             return True
         elif np.abs(balance).max() > tollerance:
-            text = f"{balance[np.abs(balance).argmax()]} > tollerance {tollerance}, max imbalance at index {np.abs(balance).argmax()}"
+            index = np.abs(balance).argmax()
+            text = f"{balance[np.abs(balance).argmax()]} > tollerance {tollerance}, max imbalance at index {index}."
+
+            if error_identifiers:
+                text += " Error identifiers: " + ", ".join(
+                    f"{key}={value[index]}" for key, value in error_identifiers.items()
+                )
             if name:
                 print(name, text)
             else:
@@ -85,6 +92,9 @@ def balance_check(
             return True
 
     elif how == "sum":
+        assert not error_identifiers, (
+            "Error identifiers not supported for 'sum' method."
+        )
         for fluxIn in influxes:
             income += fluxIn.sum()
         for fluxOut in outfluxes:

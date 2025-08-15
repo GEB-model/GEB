@@ -89,7 +89,7 @@ class Hydrology:
                 between the Q_obs station and the discharge from GEB.
         """
         # check if setup_discharge_observations method has been executed
-        if not self.model.files["geoms"].get("discharge/discharge_snapped_locations"):
+        if not self.model.files["geom"].get("discharge/discharge_snapped_locations"):
             print(
                 "Discharge observations not set up, probably no stations present in the basin. Skipping discharge evaluation."
             )
@@ -134,16 +134,16 @@ class Hydrology:
 
         # load input data files
         snapped_locations = gpd.read_parquet(
-            self.model.files["geoms"]["discharge/discharge_snapped_locations"]
+            self.model.files["geom"]["discharge/discharge_snapped_locations"]
         )  # load the snapped locations of the Q_obs stations
         Q_obs = pd.read_parquet(
             self.model.files["table"]["discharge/Q_obs"]
         )  # load the Q_obs discharge data
         region_shapefile = gpd.read_parquet(
-            self.model.files["geoms"]["mask"]
+            self.model.files["geom"]["mask"]
         )  # load the region shapefile
         rivers = gpd.read_parquet(
-            self.model.files["geoms"]["routing/rivers"]
+            self.model.files["geom"]["routing/rivers"]
         )  # load the rivers shapefiles
 
         evaluation_per_station: list = []
@@ -761,6 +761,7 @@ class Hydrology:
         include_spinup: bool,
         spinup_name: str,
         *args,
+        export=True,
         **kwargs,
     ) -> None:
         """Create a water circle plot for the GEB model.
@@ -772,82 +773,87 @@ class Hydrology:
             run_name: Name of the run to evaluate.
             include_spinup: Whether to include the spinup run in the evaluation.
             spinup_name: Name of the spinup run to include in the evaluation.
+            export: Whether to export the water circle plot to a file.
             *args: ignored.
             **kwargs: ignored.
         """
         folder = self.model.output_folder / "report" / run_name
 
-        storage = pd.read_csv(folder / "hydrology" / "storage.csv")
-        storage_change = storage.iloc[-1]["storage"] - storage.iloc[0]["storage"]
+        def read_csv_with_date_index(
+            folder: Path, module: str, name: str, skip_first_day: bool = True
+        ) -> pd.Series:
+            """Read a CSV file with a date index.
 
-        rain = pd.read_csv(
-            folder / "hydrology.snowfrost" / "rain.csv",
-            index_col=0,
-            parse_dates=True,
-        )["rain"].sum()
-        snow = pd.read_csv(
-            folder / "hydrology.snowfrost" / "snow.csv",
-            index_col=0,
-            parse_dates=True,
-        )["snow"].sum()
+            Args:
+                folder: Path to the folder containing the CSV file.
+                module: Name of the module (subfolder) containing the CSV file.
+                name: Name of the CSV file (without extension).
+                skip_first_day: Whether to skip the first day of the time series.
 
-        domestic_water_loss = pd.read_csv(
-            folder / "hydrology.water_demand" / "domestic water loss.csv",
-            index_col=0,
-            parse_dates=True,
-        )["domestic water loss"].sum()
-        industry_water_loss = pd.read_csv(
-            folder / "hydrology.water_demand" / "industry water loss.csv",
-            index_col=0,
-            parse_dates=True,
-        )["industry water loss"].sum()
-        livestock_water_loss = pd.read_csv(
-            folder / "hydrology.water_demand" / "livestock water loss.csv",
-            index_col=0,
-            parse_dates=True,
-        )["livestock water loss"].sum()
+            Returns:
+                A pandas Series with the date index and the values from the CSV file.
 
-        river_outflow = pd.read_csv(
-            folder / "hydrology.routing" / "river outflow.csv",
-            index_col=0,
-            parse_dates=True,
-        )["river outflow"].sum()
+            """
+            df = pd.read_csv(
+                (folder / module / name).with_suffix(".csv"),
+                index_col=0,
+                parse_dates=True,
+            )[name]
 
-        transpiration = pd.read_csv(
-            folder / "hydrology.landcover" / "transpiration.csv",
-            index_col=0,
-            parse_dates=True,
-        )["transpiration"].sum()
-        bare_soil_evaporation = pd.read_csv(
-            folder / "hydrology.landcover" / "bare soil evaporation.csv",
-            index_col=0,
-            parse_dates=True,
-        )["bare soil evaporation"].sum()
-        direct_evaporation = pd.read_csv(
-            folder / "hydrology.landcover" / "direct evaporation.csv",
-            index_col=0,
-            parse_dates=True,
-        )["direct evaporation"].sum()
-        interception_evaporation = pd.read_csv(
-            folder / "hydrology.landcover" / "interception evaporation.csv",
-            index_col=0,
-            parse_dates=True,
-        )["interception evaporation"].sum()
-        snow_sublimation = pd.read_csv(
-            folder / "hydrology.landcover" / "snow sublimation.csv",
-            index_col=0,
-            parse_dates=True,
-        )["snow sublimation"].sum()
-        river_evaporation = pd.read_csv(
-            folder / "hydrology.routing" / "river evaporation.csv",
-            index_col=0,
-            parse_dates=True,
-        )["river evaporation"].sum()
-        waterbody_evaporation = pd.read_csv(
-            folder / "hydrology.routing" / "waterbody evaporation.csv",
-            index_col=0,
-            parse_dates=True,
-        )["waterbody evaporation"].sum()
+            if skip_first_day:
+                df = df.iloc[1:]
+
+            return df
+
+        # because storage is the storage at the end of the timestep, we need to calculate the change
+        # across the entire simulation period. For all other variables we do skip the first day.
+        storage = read_csv_with_date_index(
+            folder, "hydrology", "_water_circle_storage", skip_first_day=False
+        )
+        storage_change = storage.iloc[-1] - storage.iloc[0]
+
+        rain = read_csv_with_date_index(
+            folder, "hydrology.snowfrost", "_water_circle_rain"
+        ).sum()
+        snow = read_csv_with_date_index(
+            folder, "hydrology.snowfrost", "_water_circle_snow"
+        ).sum()
+
+        domestic_water_loss = read_csv_with_date_index(
+            folder, "hydrology.water_demand", "_water_circle_domestic_water_loss"
+        ).sum()
+        industry_water_loss = read_csv_with_date_index(
+            folder, "hydrology.water_demand", "_water_circle_industry_water_loss"
+        ).sum()
+        livestock_water_loss = read_csv_with_date_index(
+            folder, "hydrology.water_demand", "_water_circle_livestock_water_loss"
+        ).sum()
+
+        river_outflow = read_csv_with_date_index(
+            folder, "hydrology.routing", "_water_circle_river_outflow"
+        ).sum()
+
+        transpiration = read_csv_with_date_index(
+            folder, "hydrology.landcover", "_water_circle_transpiration"
+        ).sum()
+        bare_soil_evaporation = read_csv_with_date_index(
+            folder, "hydrology.landcover", "_water_circle_bare_soil_evaporation"
+        ).sum()
+        direct_evaporation = read_csv_with_date_index(
+            folder, "hydrology.landcover", "_water_circle_direct_evaporation"
+        ).sum()
+        interception_evaporation = read_csv_with_date_index(
+            folder, "hydrology.landcover", "_water_circle_interception_evaporation"
+        ).sum()
+        snow_sublimation = read_csv_with_date_index(
+            folder, "hydrology.landcover", "_water_circle_snow_sublimation"
+        ).sum()
+        river_evaporation = read_csv_with_date_index(
+            folder, "hydrology.routing", "_water_circle_river_evaporation"
+        ).sum()
+        waterbody_evaporation = read_csv_with_date_index(
+            folder, "hydrology.routing", "_water_circle_waterbody_evaporation"
+        ).sum()
 
         hierarchy: dict[str, Any] = {
             "in": {
@@ -871,7 +877,7 @@ class Hydrology:
                 },
                 "river outflow": river_outflow,
             },
-            "storage change": storage_change,
+            "storage change": abs(storage_change),
         }
 
         # the size of a section is the sum of the flows in that section
@@ -967,15 +973,10 @@ class Hydrology:
             columns=["root_section", "parent", "flow", "value", "color"],
         )
 
-        root_section_totals = water_circle_df.groupby("root_section").sum("value")
-
-        if (
-            root_section_totals.loc["out", "value"]
-            > root_section_totals.loc["in", "value"]
-        ):
-            category_order = ["storage change", "in", "out"]
-        else:
+        if storage_change > 0:
             category_order = ["in", "out", "storage change"]
+        else:
+            category_order = ["storage change", "in", "out"]
 
         water_circle_df["root_section"] = pd.Categorical(
             water_circle_df["root_section"],
@@ -1012,9 +1013,12 @@ class Hydrology:
             ),
         )
 
-        water_circle.write_image(
-            self.output_folder_evaluate / "water_circle.png", scale=5
-        )
+        if export:
+            water_circle.write_image(
+                self.output_folder_evaluate / "water_circle.png", scale=5
+            )
+
+        return water_circle
 
     def evaluate_hydrodynamics(
         self, run_name: str = "default", *args, **kwargs

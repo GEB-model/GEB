@@ -182,6 +182,7 @@ def test_accuflux(ldd, mask, Q_initial):
         actual_evaporation_m3,
         over_abstraction_m3,
         waterbody_storage_m3,
+        waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
         sideflow,
@@ -201,6 +202,7 @@ def test_accuflux(ldd, mask, Q_initial):
             ]
         )[mask]
     ).all()
+    assert (waterbody_inflow_m3 == 0).all()
     assert outflow_at_pits_m3 == 2
     assert waterbody_storage_m3.size == 0
 
@@ -230,6 +232,7 @@ def test_accuflux_with_longer_dt(ldd, mask, Q_initial):
         actual_evaporation_m3,
         over_abstraction_m3,
         waterbody_storage_m3,
+        waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
         sideflow,
@@ -249,6 +252,7 @@ def test_accuflux_with_longer_dt(ldd, mask, Q_initial):
             ]
         )[mask]
     ).all()
+    assert (waterbody_inflow_m3 == 0).all()
     assert outflow_at_pits_m3 == 30
     assert waterbody_storage_m3.size == 0
 
@@ -277,6 +281,7 @@ def test_accuflux_with_sideflow(mask, ldd, Q_initial):
         actual_evaporation_m3,
         over_abstraction_m3,
         waterbody_storage_m3,
+        waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
         sideflow,
@@ -298,6 +303,7 @@ def test_accuflux_with_sideflow(mask, ldd, Q_initial):
     ).all()
     assert outflow_at_pits_m3 == 3  # 2 + 1 from the sideflow
     assert waterbody_storage_m3.size == 0
+    assert (waterbody_inflow_m3 == 0).all()
 
     assert (
         Q_initial[mask].sum() + sideflow.sum() - outflow_at_pits_m3
@@ -352,6 +358,7 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
         actual_evaporation_m3,
         over_abstraction_m3,
         waterbody_storage_m3,
+        waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
         sideflow,
@@ -372,8 +379,12 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
         )[mask],
     )
     assert outflow_at_pits_m3 == 2
+    assert (
+        waterbody_inflow_m3[0] == 4
+    )  # 2 from upstream reservoir, 1 from both other river inflows
+    assert waterbody_inflow_m3[1] == 0  # 2 no upstream cells
 
-    assert waterbody_storage_m3[0] == 7  # 10 - 7 + 2 + 1
+    assert waterbody_storage_m3[0] == 7  # 10 - 7 + 2 + 1 + 1
     assert waterbody_storage_m3[1] == 3  # 5 - 2
     assert (
         np.nansum(Q_initial[mask])

@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """Calibration tool for Hydrological models.
 
 Uses a distributed evolutionary algorithms in python DEAP library

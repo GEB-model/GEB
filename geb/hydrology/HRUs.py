@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import math
 import warnings
 from datetime import datetime
@@ -484,6 +483,18 @@ class Grid(BaseVariables):
     @property
     def gev_scale(self):
         return load_grid(self.model.files["grid"]["climate/gev_scale"])
+
+    @property
+    def pr_gev_c(self):
+        return load_grid(self.model.files["grid"]["climate/pr_gev_c"])
+
+    @property
+    def pr_gev_loc(self):
+        return load_grid(self.model.files["grid"]["climate/pr_gev_loc"])
+
+    @property
+    def pr_gev_scale(self):
+        return load_grid(self.model.files["grid"]["climate/pr_gev_scale"])
 
 
 class HRUs(BaseVariables):
