@@ -59,6 +59,7 @@ def get_crop_kc_and_root_depths(
     kc_crop_stage,
     rooth_depths,
     init_root_depth=0.2,
+    get_crop_sub_stage=False,
 ):
     kc = np.full_like(crop_map, np.nan, dtype=np.float32)
     root_depth = np.full_like(crop_map, np.nan, dtype=np.float32)
@@ -95,21 +96,23 @@ def get_crop_kc_and_root_depths(
                 + age_days * rooth_depths[crop, irrigated_fields[i]] / harvest_day
             )
 
-            d1, d2a, d2b, d3a, d3b, d4 = crop_sub_stage_lengths[crop]
-            assert d1 + d2a + d2b + d3a + d3b + d4 == 100
-            if crop_progress <= d1:
-                crop_sub_stage[i] = 0
-            elif crop_progress <= d1 + d2a:
-                crop_sub_stage[i] = 1
-            elif crop_progress <= d1 + d2a + d2b:
-                crop_sub_stage[i] = 2
-            elif crop_progress <= d1 + d2a + d2b + d3a:
-                crop_sub_stage[i] = 3
-            elif crop_progress <= d1 + d2a + d2b + d3a + d3b:
-                crop_sub_stage[i] = 4
-            else:
-                assert crop_progress <= d1 + d2a + d2b + d3a + d3b + d4
-                crop_sub_stage[i] = 5
+            if get_crop_sub_stage:
+                d1, d2a, d2b, d3a, d3b, d4 = crop_sub_stage_lengths[crop]
+                assert d1 + d2a + d2b + d3a + d3b + d4 == 100
+
+                if crop_progress <= d1:
+                    crop_sub_stage[i] = 0
+                elif crop_progress <= d1 + d2a:
+                    crop_sub_stage[i] = 1
+                elif crop_progress <= d1 + d2a + d2b:
+                    crop_sub_stage[i] = 2
+                elif crop_progress <= d1 + d2a + d2b + d3a:
+                    crop_sub_stage[i] = 3
+                elif crop_progress <= d1 + d2a + d2b + d3a + d3b:
+                    crop_sub_stage[i] = 4
+                else:
+                    assert crop_progress <= d1 + d2a + d2b + d3a + d3b + d4
+                    crop_sub_stage[i] = 5
 
     return kc, root_depth, crop_sub_stage
 
@@ -164,16 +167,25 @@ class LandCover(Module):
                 self.model.agents.crop_farmers.var.crop_data["l_late"],
             ]
         )
-        crop_sub_stage_lengths = np.column_stack(
-            [
-                self.model.agents.crop_farmers.var.crop_data["d1"],
-                self.model.agents.crop_farmers.var.crop_data["d2a"],
-                self.model.agents.crop_farmers.var.crop_data["d2b"],
-                self.model.agents.crop_farmers.var.crop_data["d3a"],
-                self.model.agents.crop_farmers.var.crop_data["d3b"],
-                self.model.agents.crop_farmers.var.crop_data["d4"],
-            ]
-        )
+
+        get_crop_sub_stage = self.model.agents.crop_farmers.var.crop_data_type == "GAEZ"
+        if get_crop_sub_stage:
+            crop_sub_stage_lengths = np.column_stack(
+                [
+                    self.model.agents.crop_farmers.var.crop_data["d1"],
+                    self.model.agents.crop_farmers.var.crop_data["d2a"],
+                    self.model.agents.crop_farmers.var.crop_data["d2b"],
+                    self.model.agents.crop_farmers.var.crop_data["d3a"],
+                    self.model.agents.crop_farmers.var.crop_data["d3b"],
+                    self.model.agents.crop_farmers.var.crop_data["d4"],
+                ]
+            )
+        else:
+            crop_sub_stage_lengths = np.full(
+                (self.model.agents.crop_farmers.var.crop_data.shape[0], 6),
+                np.nan,
+                dtype=np.float32,
+            )
 
         crop_factors = np.column_stack(
             [
@@ -201,6 +213,7 @@ class LandCover(Module):
                 kc_crop_stage=crop_factors,
                 rooth_depths=root_depths,
                 init_root_depth=0.01,
+                get_crop_sub_stage=get_crop_sub_stage,
             )
         )
 
