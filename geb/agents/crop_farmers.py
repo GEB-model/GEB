@@ -1523,8 +1523,6 @@ class CropFarmers(AgentBaseClass):
                 self.var.crop_data["P0"].values,
                 self.var.crop_data["P1"].values,
             )
-            if np.any(yield_ratio == 0):
-                pass
         else:
             raise ValueError(
                 f"Unknown crop data type: {self.var.crop_data_type}, must be 'GAEZ' or 'MIRCA2000'"
