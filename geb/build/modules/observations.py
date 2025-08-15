@@ -88,7 +88,12 @@ def plot_snapping(
     # Select the upstream area within the extent of the plot
     upstream_area_within_extent = upstream_area.isel(
         get_window(
-            upstream_area.x, upstream_area.y, bounds=(xmin, ymin, xmax, ymax), buffer=1
+            upstream_area.x,
+            upstream_area.y,
+            bounds=(xmin, ymin, xmax, ymax),
+            buffer=1,
+            raise_on_buffer_out_of_bounds=False,
+            raise_on_out_of_bounds=False,
         )
     )
 
