@@ -1,16 +1,97 @@
-# -*- coding: utf-8 -*-
 import datetime
 import re
 import shutil
 from operator import attrgetter
 from typing import Any, Union
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import zarr
 from honeybees.library.raster import coord_to_pixel
 
 from geb.store import DynamicArray
+from geb.workflows.methods import multi_level_merge
+
+WATER_CIRCLE_REPORT_CONFIG = {
+    "hydrology": {
+        "_water_circle_storage": {
+            "varname": ".current_storage",
+            "type": "scalar",
+        },
+        "_water_circle_routing_loss": {
+            "varname": ".routing_loss_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.snowfrost": {
+        "_water_circle_rain": {
+            "varname": ".rain",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_snow": {
+            "varname": ".snow",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+    },
+    "hydrology.routing": {
+        "_water_circle_river_evaporation": {
+            "varname": ".total_evaporation_in_rivers_m3",
+            "type": "scalar",
+        },
+        "_water_circle_waterbody_evaporation": {
+            "varname": ".total_waterbody_evaporation_m3",
+            "type": "scalar",
+        },
+        "_water_circle_river_outflow": {
+            "varname": ".total_outflow_at_pits_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.water_demand": {
+        "_water_circle_domestic_water_loss": {
+            "varname": ".domestic_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_circle_industry_water_loss": {
+            "varname": ".industry_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_circle_livestock_water_loss": {
+            "varname": ".livestock_water_loss_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.landcover": {
+        "_water_circle_transpiration": {
+            "varname": ".actual_transpiration",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_bare_soil_evaporation": {
+            "varname": ".actual_bare_soil_evaporation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_direct_evaporation": {
+            "varname": ".open_water_evaporation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_interception_evaporation": {
+            "varname": ".interception_evaporation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_snow_sublimation": {
+            "varname": ".snow_sublimation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+    },
+}
 
 
 def create_time_array(
@@ -85,12 +166,45 @@ class Reporter:
             and "report" in self.model.config
             and self.model.config["report"]
         ):
-            self.activated = True
+            self.activated: bool = True
 
-            to_delete = []
-            for module_name, configs in self.model.config["report"].items():
+            report_config: dict[str, Any] = self.model.config["report"]
+
+            to_delete: list[str] = []
+            for module_name, module_values in list(report_config.items()):
                 if module_name.startswith("_"):
-                    # skip internal modules
+                    if module_name == "_discharge_stations":
+                        if module_values is True:
+                            stations = gpd.read_parquet(
+                                self.model.files["geom"][
+                                    "discharge/discharge_snapped_locations"
+                                ]
+                            )
+                            station_reporters = {}
+                            for station_ID, station_info in stations.iterrows():
+                                xy_grid = station_info["snapped_grid_pixel_xy"]
+                                station_reporters[
+                                    f"discharge_daily_m3_s_{station_ID}"
+                                ] = {
+                                    "varname": f"grid.var.discharge_m3_s",
+                                    "type": "grid",
+                                    "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
+                                }
+                            report_config = multi_level_merge(
+                                report_config,
+                                {"hydrology.routing": station_reporters},
+                            )
+                    elif module_name == "_water_circle":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                WATER_CIRCLE_REPORT_CONFIG,
+                            )
+                    else:
+                        raise ValueError(
+                            f"Module {module_name} is not a valid module for reporting."
+                        )
+
                     to_delete.append(module_name)
 
             for module_name in to_delete:
@@ -99,6 +213,9 @@ class Reporter:
             for module_name, configs in self.model.config["report"].items():
                 self.variables[module_name] = {}
                 for name, config in configs.items():
+                    assert isinstance(config, dict), (
+                        f"Configuration for {module_name}.{name} must be a dictionary, but is {type(config)}."
+                    )
                     self.variables[module_name][name] = self.create_variable(
                         config, module_name, name
                     )
@@ -409,21 +526,25 @@ class Reporter:
                     value = np.sum(value)
                 elif function == "nansum":
                     value = np.nansum(value)
-                elif function == "sample":
-                    decompressed_array = self.decompress(config["varname"], value)
-                    value = decompressed_array[int(args[0]), int(args[1])]
-                elif function == "sample_coord":
-                    print("into sample_coords")
-                    if config["varname"].startswith("hydrology.grid"):
+                elif function == "sample_xy":
+                    if config["type"] == "grid":
+                        decompressed_array = self.hydrology.grid.decompress(value)
+                    elif config["type"] == "HRU":
+                        decompressed_array = self.hydrology.HRU.decompress(value)
+                    else:
+                        raise ValueError(f"Unknown varname type {config['varname']}")
+                    value = decompressed_array[int(args[1]), int(args[0])]
+                elif function == "sample_lonlat":
+                    if config["type"] == "grid":
                         gt = self.model.hydrology.grid.gt
                         decompressed_array = self.hydrology.grid.decompress(value)
-                    elif config["varname"].startswith("hydrology.HRU"):
+                    elif config["type"] == "HRU":
                         gt = self.hydrology.HRU.gt
                         decompressed_array = self.hydrology.HRU.decompress(value)
                     else:
-                        raise ValueError("Unknown varname type")
+                        raise ValueError(f"Unknown varname type {config['varname']}")
 
-                    px, py = coord_to_pixel((float(args[1]), float(args[0])), gt)
+                    px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
 
                     try:
                         value = decompressed_array[py, px]
@@ -478,6 +599,8 @@ class Reporter:
                         fill_value = np.nan
                     elif dtype in (int, np.int32, np.int64):
                         fill_value = -1
+                    elif dtype == bool:
+                        fill_value = False
                     else:
                         raise ValueError(
                             f"Value {dtype} of type {type(dtype)} not recognized."

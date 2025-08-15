@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import re
 from operator import attrgetter
 from typing import Union

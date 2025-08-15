@@ -155,28 +155,6 @@ def test_forcing():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_alter():
-    with WorkingDirectory(working_directory):
-        args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
-        args["build_config"] = {
-            "set_ssp": {"ssp": "ssp1"},
-            "setup_CO2_concentration": {},
-        }
-        args["working_directory"] = Path("alter")
-
-        args["from_model"] = ".."
-
-        args["working_directory"].mkdir(parents=True, exist_ok=True)
-
-        alter_fn(**args)
-
-        run_args = DEFAULT_RUN_ARGS.copy()
-        run_args["working_directory"] = args["working_directory"]
-
-        run_model_with_method(method="spinup", **run_args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_update_with_file():
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
@@ -234,93 +212,11 @@ def test_run():
         args["config"] = parse_config(args["config"])
         args["config"]["report"].update(
             {
-                "hydrology": {
-                    "storage": {
-                        "varname": ".current_storage",
-                        "type": "scalar",
-                    },
-                    "routing loss": {
-                        "varname": ".routing_loss_m3",
-                        "type": "scalar",
-                    },
-                }
+                "_water_circle": True,
             }
         )
-        args["config"]["report"].update(
-            {
-                "hydrology.snowfrost": {
-                    "rain": {
-                        "varname": ".rain",
-                        "type": "HRU",
-                        "function": "weightedsum",
-                    },
-                    "snow": {
-                        "varname": ".snow",
-                        "type": "HRU",
-                        "function": "weightedsum",
-                    },
-                }
-            }
-        )
-        args["config"]["report"].update(
-            {
-                "hydrology.routing": {
-                    "river evaporation": {
-                        "varname": ".total_evaporation_in_rivers_m3",
-                        "type": "scalar",
-                    },
-                    "waterbody evaporation": {
-                        "varname": ".total_waterbody_evaporation_m3",
-                        "type": "scalar",
-                    },
-                    "river outflow": {
-                        "varname": ".total_outflow_at_pits_m3",
-                        "type": "scalar",
-                    },
-                }
-            }
-        )
-        args["config"]["report"]["hydrology.water_demand"] = {
-            "domestic water loss": {
-                "varname": ".domestic_water_loss_m3",
-                "type": "scalar",
-            },
-            "industry water loss": {
-                "varname": ".industry_water_loss_m3",
-                "type": "scalar",
-            },
-            "livestock water loss": {
-                "varname": ".livestock_water_loss_m3",
-                "type": "scalar",
-            },
-        }
-        args["config"]["report"]["hydrology.landcover"] = {
-            "transpiration": {
-                "varname": ".actual_transpiration",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "bare soil evaporation": {
-                "varname": ".actual_bare_soil_evaporation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "direct evaporation": {
-                "varname": ".open_water_evaporation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "interception evaporation": {
-                "varname": ".interception_evaporation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "snow sublimation": {
-                "varname": ".snow_sublimation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-        }
+        args["config"]["hazards"]["floods"]["simulate"] = True
+
         run_model_with_method(method="run", **args)
 
     if os.getenv("GEB_TEST_GPU", "no") == "yes":
@@ -332,6 +228,32 @@ def test_run():
             run_model_with_method(method="run", **args)
 
     # TODO: Add similarity check for the output of the CPU and GPU runs
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_alter():
+    with WorkingDirectory(working_directory):
+        args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
+        args["build_config"] = {
+            "set_ssp": {"ssp": "ssp1"},
+            "setup_CO2_concentration": {},
+        }
+        args["working_directory"] = Path("alter")
+
+        args["from_model"] = ".."
+
+        args["working_directory"].mkdir(parents=True, exist_ok=True)
+
+        alter_fn(**args)
+
+        run_args = DEFAULT_RUN_ARGS.copy()
+        run_args["working_directory"] = args["working_directory"]
+        run_args["config"] = parse_config(run_args["config"])
+        run_args["config"]["general"]["start_time"] = run_args["config"]["general"][
+            "spinup_time"
+        ] + timedelta(days=370)  # run just over a year more is not needed
+
+        run_model_with_method(method="spinup", **run_args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -348,7 +270,12 @@ def test_evaluate_water_circle():
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_evaluate():
     with WorkingDirectory(working_directory):
-        run_model_with_method(method="evaluate", **DEFAULT_RUN_ARGS)
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "methods": ["plot_discharge", "evaluate_discharge"],
+        }
+        args["method_args"] = method_args
+        run_model_with_method(method="evaluate", **args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -357,6 +284,9 @@ def test_land_use_change():
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(args["config"])
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
+            days=370
+        )
         args["config"] = config
 
         geb = run_model_with_method(method=None, close_after_run=False, **args)

@@ -22,7 +22,7 @@ general:
     subbasin: 23011134
 hazards:
   floods:
-    simulate: true
+    simulate: false
     resolution: 100
     nr_subgrid_pixels: 4
     flood_risk: false

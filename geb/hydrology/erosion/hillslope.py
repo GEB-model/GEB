@@ -27,18 +27,12 @@ from geb.module import Module
 def get_kinetic_energy_direct_throughfall(direct_throughfall, precipitation_intensity):
     """Calculate the kinetic energy of rainfall.
 
-    Parameters
-    ----------
-    direct_throughfall : np.array
-        Direct throughfall [mm]
-    precipitation_intensity : np.array
-        Precipitation intensity [?]
+    Args:
+        direct_throughfall: Direct throughfall [mm]
+        precipitation_intensity: Precipitation intensity [?]
 
     Returns:
-    -------
-    kinetic_energy : np.array
         Kinetic energy of rainfall [J m-2]
-
     """
     kinetic_energy = (
         direct_throughfall
@@ -54,17 +48,12 @@ def get_kinetic_energy_direct_throughfall(direct_throughfall, precipitation_inte
 def get_kinetic_energy_leaf_drainage(leaf_drainage, plant_height):
     """Calculate the kinetic energy of leaf drainage.
 
-    Parameters
-    ----------
-    leaf_drainage : np.array
-        Leaf drainage [mm/day]
-    plant_height : np.array
-        Plant height [m]
+    Args:
+        leaf_drainage: Leaf drainage [mm/day]
+        plant_height: Plant height [m]
 
     Returns:
-    -------
-    kinetic_energy : np.array
-        Kinetic energy of leaf drainage [J m-2]
+        kinetic_energy: Kinetic energy of leaf drainage [J m-2]
     """
     return np.where(
         plant_height >= 0.15, leaf_drainage * (15.8 * plant_height**0.5 - 5.87), 0
@@ -96,24 +85,20 @@ def get_detachment_from_flow(
     )
 
 
-def get_particle_fall_velocity(particle_diameter, rho_s, rho, eta, g=9.81):
+def get_particle_fall_velocity(
+    particle_diameter, rho_s: float, rho: float, eta: float, g: float = 9.81
+):
     """See https://doi.org/10.1002/esp.1530 equation 31.
 
-    Parameters
-    ----------
-    particle_diameter : float
-        Particle diameter [m]
-    rho_s : float
-        Sediment density [kg m−3]
-    rho : float
-        Flow density [kg m−3]
-    eta : float
-        Fluid viscosity [kg m−1 s−1]
+    Args:
+        particle_diameter: Particle diameter [m]
+        rho_s: Sediment density [kg m−3]
+        rho: Flow density [kg m−3]
+        eta: Fluid viscosity [kg m−1 s−1]
+        g: Gravitational acceleration [m/s²], default is 9.81 m/s²
 
     Returns:
-    -------
-    np.array
-
+        Particle fall velocity [m/s]
     """
     return (1 / 18 * (particle_diameter**2) * (rho_s - rho) * g) / eta
 
@@ -123,25 +108,22 @@ def get_particle_fall_number(
 ):
     """See https://doi.org/10.1002/esp.1530 equations 28-30.
 
-    Parameters
-    ----------
-    particle_diameter : float
-        Particle diameter [m]
-    velocity : np.array
-        Flow velocity [m/s]
-    water_depth : np.array
-        Water depth [m]
-    rho_s : float
-        Sediment density [kg m−3]
-    rho : float
-        Flow density [kg m−3]
-    eta : float
-        Fluid viscosity [kg m−1 s−1]
+    Notes:
+        It seems that the cell_length should not be used like this. Have a good look
+        at this before using this in production.
+
+    Args:
+        particle_diameter: Particle diameter [m]
+        velocity: Flow velocity [m/s]
+        water_depth: Water depth [m]
+        rho_s: Sediment density [kg m−3]
+        rho: Flow density [kg m−3]
+        eta: Fluid viscosity [kg m−1 s−1]
+        slope: Slope in m/m
+        cell_length: Length of the cell [m]
 
     Returns:
-    -------
-    np.array
-
+        Particle fall number [dimensionless]
     """
     particle_fall_velocity = get_particle_fall_velocity(
         particle_diameter, rho_s, rho, eta

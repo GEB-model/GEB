@@ -29,15 +29,7 @@ from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
 from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 from geb.workflows.io import WorkingDirectory
-
-
-def multi_level_merge(dict1, dict2):
-    for key, value in dict2.items():
-        if key in dict1 and isinstance(dict1[key], dict) and isinstance(value, dict):
-            multi_level_merge(dict1[key], value)
-        else:
-            dict1[key] = value
-    return dict1
+from geb.workflows.methods import multi_level_merge
 
 
 class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
@@ -750,7 +742,9 @@ def update(*args, **kwargs):
 @cli.command()
 @click_run_options()
 @click.option(
-    "--methods", default=None, help="Comma-seperated list of methods to evaluate."
+    "--methods",
+    default="plot_discharge,evaluate_discharge",
+    help="Comma-seperated list of methods to evaluate. Currently supported methods: 'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.",
 )
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
@@ -774,10 +768,10 @@ def update(*args, **kwargs):
 )
 def evaluate(
     working_directory,
-    config,
-    methods: list | None,
-    spinup_name,
-    run_name,
+    config: dict | str,
+    methods: str,
+    spinup_name: str,
+    run_name: str,
     include_spinup,
     include_yearly_plots,
     correct_q_obs,
@@ -789,13 +783,16 @@ def evaluate(
     timing,
 ) -> None:
     # If no methods are provided, pass None to run_model_with_method
-    methods: list | None = None if not methods else methods.split(",")
+    methods_list: list[str] = methods.split(",")
+    methods_list: list[str] = [
+        method.replace("-", "_").strip() for method in methods_list
+    ]
     spinup_name: str
     run_name: str
     run_model_with_method(
         method="evaluate",
         method_args={
-            "methods": methods,
+            "methods": methods_list,
             "spinup_name": spinup_name,
             "run_name": run_name,
             "include_spinup": include_spinup,

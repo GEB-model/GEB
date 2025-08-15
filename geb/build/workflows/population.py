@@ -53,11 +53,15 @@ def load_GLOPOP_S(data_catalog, GDL_region):
             with gzip.open(file, "rb") as f:
                 GLOPOP_S_region = np.frombuffer(f.read(), dtype=np.int32)
 
-    n_people = GLOPOP_S_region.size // len(GLOPOP_S_attribute_names)
+    n_attr = len(GLOPOP_S_attribute_names)
+    total = GLOPOP_S_region.size
+    n_people = total // n_attr
+
+    # Drop extra values to make sure length is exact multiple of n_attr
+    trimmed_GLOPOP = GLOPOP_S_region[: n_people * n_attr]
+
     GLOPOP_S_region = pd.DataFrame(
-        np.reshape(
-            GLOPOP_S_region, (len(GLOPOP_S_attribute_names), n_people)
-        ).transpose(),
+        np.reshape(trimmed_GLOPOP, (n_attr, n_people)).transpose(),
         columns=GLOPOP_S_attribute_names,
     )
 

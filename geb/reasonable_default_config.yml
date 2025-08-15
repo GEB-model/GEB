@@ -53,13 +53,11 @@ agent_settings:
   market:
     dynamic_market: false
     price_frequency: yearly
-  government:
-    irrigation_limit:
-      limit: 10000  # previous tried 1700
-      per: capita
   households:
     adapt: false
     warning_response: false
+    water_demand:
+      method: default
     expected_utility:
       flood_risk_calculations:
         risk_perception:
@@ -85,9 +83,11 @@ agent_settings:
       insurance:
         duration: 2
         personal_insurance: 
-          ruleset: base
+          ruleset: no-adaptation
         index_insurance: 
-          ruleset: base
+          ruleset: no-adaptation
+        pr_insurance:
+          ruleset: no-adaptation
       crop_switching: 
         ruleset: no-adaptation
       adaptation_sprinkler:
@@ -117,6 +117,10 @@ agent_settings:
       decisions:
         decision_horizon: 10
         expenditure_cap: 0.5
+      water_price:
+        water_costs_m3_reservoir: 0
+        water_costs_m3_groundwater: 0
+        water_costs_m3_channel: 0
       drought_risk_calculations:
         event_perception:
           drought_threshold: 5
@@ -132,6 +136,7 @@ agent_settings:
     NormalOutflowQ: 0.1
     max_reservoir_release_factor: 0.03380636312896216
     ruleset: no-adaptation
+    equal_abstraction: false
   sensitivity_analysis:
     risk_aversion_factor: 1
     discount_rate_factor: 1
@@ -150,7 +155,8 @@ draw:
       draw_every_nth: 1
 
 report:
-  _water_cirle: true
+  _water_circle: false
+  _discharge_stations: true
   hydrology.routing:
     discharge_daily:
       varname: grid.var.discharge_m3_s

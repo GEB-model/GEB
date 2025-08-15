@@ -185,7 +185,6 @@ class Hydrography:
         The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
         `set_grid()` method.
         """
-        self.logger.info("Setting up Manning's coefficient")
         a = (2 * self.grid["cell_area"]) / self.grid["routing/upstream_area"]
         a = xr.where(a < 1, a, 1, keep_attrs=True)
         b = self.grid["routing/outflow_elevation"] / 2000
@@ -222,7 +221,7 @@ class Hydrography:
             lambda row: len(list(river_graph.neighbors(row.name))) == 0, axis=1
         )
 
-        self.set_geoms(subbasins, name="routing/subbasins")
+        self.set_geom(subbasins, name="routing/subbasins")
 
     @build_method
     def setup_hydrography(self):
@@ -348,7 +347,7 @@ class Hydrography:
         )
 
         # river width
-        subbasin_ids: list[int] = self.geoms["routing/subbasins"].index.tolist()
+        subbasin_ids: list[int] = self.geom["routing/subbasins"].index.tolist()
 
         self.logger.info("Retrieving river data")
         rivers: gpd.GeoDataFrame = get_rivers(self.data_catalog, subbasin_ids)
@@ -360,7 +359,7 @@ class Hydrography:
         ]
 
         rivers: gpd.GeoDataFrame = rivers.join(
-            self.geoms["routing/subbasins"][
+            self.geom["routing/subbasins"][
                 ["is_downstream_outflow_subbasin", "associated_upstream_basins"]
             ],
             how="left",
@@ -443,7 +442,7 @@ class Hydrography:
         # ensure that all rivers with a SWORD ID have a width
         assert (~np.isnan(rivers["width"][(SWORD_reach_IDs != -1).any(axis=0)])).all()
 
-        self.set_geoms(rivers, name="routing/rivers")
+        self.set_geom(rivers, name="routing/rivers")
 
         river_with_mapper: dict[int, float] = rivers["width"].to_dict()
         river_width_data: npt.NDArray[np.float32] = np.vectorize(
@@ -481,7 +480,6 @@ class Hydrography:
 
         The resulting waterbody data is set as a table in the model with the name 'waterbodies/waterbody_data'.
         """
-        self.logger.info("Setting up waterbodies")
         dtypes = {
             "waterbody_id": np.int32,
             "waterbody_type": np.int32,
@@ -586,6 +584,8 @@ class Hydrography:
                 command_areas["waterbody_id"].isin(reservoir_ids)
             ].reset_index(drop=True)
 
+            self.set_geom(command_areas_dissolved, name="waterbodies/command_areas")
+
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
             self.set_grid(
@@ -645,7 +645,7 @@ class Hydrography:
             "average_discharge is required"
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
-        self.set_geoms(waterbodies, name="waterbodies/waterbody_data")
+        self.set_geom(waterbodies, name="waterbodies/waterbody_data")
 
     @build_method
     def setup_coastal_model_regions(self):
