@@ -2033,7 +2033,7 @@ class Forcing:
                 )
 
     def get_elevation_forcing_and_grid(
-        self, grid: xr.DataArray, forcing_grid: xr.DataArray, forcing_name
+        self, grid: xr.DataArray, forcing_grid: xr.DataArray, forcing_name: str
     ) -> tuple[xr.DataArray, xr.DataArray]:
         """Gets elevation maps for both the normal grid (target of resampling) and the forcing grid.
 
@@ -2057,39 +2057,52 @@ class Forcing:
             elevation_forcing = open_zarr(elevation_forcing_fp)
             elevation_grid = open_zarr(elevation_grid_fp)
 
-        else:
-            elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
-            elevation = elevation.isel(
-                band=0,
-                **get_window(
-                    elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
-                ),
-            )
-            elevation = elevation.drop("band")
-            elevation = xr.where(elevation == -9999, 0, elevation)
-            elevation.attrs["_FillValue"] = np.nan
-            target = forcing_grid.isel(time=0).drop("time")
+            if (
+                np.array_equal(grid.x.values, elevation_grid.x.values)
+                and np.array_equal(grid.y.values, elevation_grid.y.values)
+                and np.array_equal(forcing_grid.x.values, elevation_forcing.x.values)
+                and np.array_equal(forcing_grid.y.values, elevation_forcing.y.values)
+            ):
+                self.logger.info("Using cached elevation data")
+                return elevation_forcing, elevation_grid
+            else:
+                self.logger.warning(
+                    "Cached elevation data does not match the grid, recalculating elevation data"
+                )
+                shutil.rmtree(elevation_forcing_fp)
+                shutil.rmtree(elevation_grid_fp)
 
-            elevation_forcing = resample_like(elevation, target, method="bilinear")
-
-            elevation_forcing = to_zarr(
-                elevation_forcing,
-                elevation_forcing_fp,
-                crs=4326,
-            )
-
-            elevation_grid = resample_like(elevation, grid, method="bilinear")
-
-            elevation_grid = to_zarr(
-                elevation_grid,
-                elevation_grid_fp,
-                crs=4326,
-            )
-
-            print("done")
-        return elevation_forcing.chunk({"x": -1, "y": -1}), elevation_grid.chunk(
-            {"x": -1, "y": -1}
+        elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
+        elevation = elevation.isel(
+            band=0,
+            **get_window(
+                elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
+            ),
         )
+        elevation = elevation.drop("band")
+        elevation = xr.where(elevation == -9999, 0, elevation)
+        elevation.attrs["_FillValue"] = np.nan
+        target = forcing_grid.isel(time=0).drop("time")
+
+        elevation_forcing = resample_like(elevation, target, method="bilinear")
+        elevation_forcing = elevation_forcing.chunk({"x": -1, "y": -1})
+
+        elevation_forcing = to_zarr(
+            elevation_forcing,
+            elevation_forcing_fp,
+            crs=4326,
+        )
+
+        elevation_grid = resample_like(elevation, grid, method="bilinear")
+        elevation_grid = elevation_grid.chunk({"x": -1, "y": -1})
+
+        elevation_grid = to_zarr(
+            elevation_grid,
+            elevation_grid_fp,
+            crs=4326,
+        )
+
+        return elevation_forcing, elevation_grid
 
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_CO2_concentration(self) -> None:
