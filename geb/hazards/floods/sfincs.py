@@ -14,8 +14,8 @@ from rioxarray.merge import merge_arrays
 from shapely.geometry import shape
 from shapely.geometry.point import Point
 
-from ...hydrology.landcover import OPEN_WATER, SEALED
 from ...hydrology.HRUs import load_geom, load_grid
+from ...hydrology.landcover import OPEN_WATER, SEALED
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .build_model import build_sfincs, build_sfincs_coastal
