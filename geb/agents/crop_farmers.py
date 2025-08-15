@@ -1128,6 +1128,7 @@ class CropFarmers(AgentBaseClass):
                 minimum_effective_root_depth=np.float32(
                     self.model.hydrology.soil.var.minimum_effective_root_depth
                 ),
+                irrigation_limit_reset_day_index=np.int32(0),
             )
         )
 
@@ -1358,7 +1359,8 @@ class CropFarmers(AgentBaseClass):
 
         Args:
             crop_map: array of currently harvested crops.
-            evap_ratios: ratio of actual to potential evapotranspiration of harvested crops.
+            evaporation_ratio: ratio of actual to potential evapotranspiration of harvested crops.
+            evaporation_ratio_per_crop_stage: ratio of actual to potential evapotranspiration per crop stage.
             KyT: Water stress reduction factor from GAEZ.
             Ky1: Water stress reduction factor for crop stage 1 from GAEZ.
             Ky2a: Water stress reduction factor for crop stage 2a from GAEZ.
@@ -1477,6 +1479,8 @@ class CropFarmers(AgentBaseClass):
             harvest: Map of crops that are harvested.
             actual_transpiration: Actual evapotranspiration during crop growth period.
             potential_transpiration: Potential evapotranspiration during crop growth period.
+            actual_transpiration_per_crop_stage: Actual evapotranspiration per crop stage.
+            potential_transpiration_per_crop_stage: Potential evapotranspiration per crop stage.
             crop_map: Subarray of type of crop grown.
 
         Returns:

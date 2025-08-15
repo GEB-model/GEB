@@ -120,7 +120,7 @@ def get_future_deficit(
     crop_calendar: np.ndarray,
     crop_rotation_year_index: np.ndarray,
     potential_irrigation_consumption_farmer_m3: float,
-    reset_day_index=0,
+    reset_day_index: int,
 ):
     """Get the future water deficit for a farmer.
 
@@ -138,7 +138,7 @@ def get_future_deficit(
         reset_day_index: Day index to reset the water year (0-indexed; Jan 1 == 0). Default is 0. Deficit
             is calculated up to this day. For example, when the reset day index is 364, the
             deficit is calculated up to Dec 31. When the reset day index is 0, the deficit is
-            calculated up to Jan 1. Default is 0.
+            calculated up to Jan 1.
 
     Returns:
         Future water deficit in m3 for the farmer in the growing season.
@@ -193,6 +193,7 @@ def adjust_irrigation_to_limit(
     crop_rotation_year_index: np.ndarray,
     farmer_gross_irrigation_m3: float,
     irrigation_efficiency_farmer: float,
+    reset_day_index: int,
 ) -> float:
     if remaining_irrigation_limit_m3[farmer] < np.float32(0):
         return np.float32(0)
@@ -209,6 +210,7 @@ def adjust_irrigation_to_limit(
             crop_calendar=crop_calendar,
             crop_rotation_year_index=crop_rotation_year_index,
             potential_irrigation_consumption_farmer_m3=potential_irrigation_consumption_farmer_m3,
+            reset_day_index=reset_day_index,
         )
         effective_remaining_irrigation_limit_m3 = (
             remaining_irrigation_limit_m3[farmer] * irrigation_efficiency_farmer
@@ -477,6 +479,7 @@ def get_gross_irrigation_demand_m3(
     current_crop_calendar_rotation_year_index: npt.NDArray[np.int32],
     max_paddy_water_level: npt.NDArray[np.float32],
     minimum_effective_root_depth: np.float32,
+    irrigation_limit_reset_day_index: np.int32,
 ) -> tuple[
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
@@ -551,6 +554,7 @@ def get_gross_irrigation_demand_m3(
                     crop_rotation_year_index=current_crop_calendar_rotation_year_index,
                     farmer_gross_irrigation_m3=farmer_gross_irrigation_m3,
                     irrigation_efficiency_farmer=irrigation_efficiency_farmer,
+                    reset_day_index=irrigation_limit_reset_day_index,
                 )
                 assert 0 <= irrigation_correction_factor <= 1
 
