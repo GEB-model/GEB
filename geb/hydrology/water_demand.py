@@ -153,7 +153,6 @@ class WaterDemand(Module):
             available_infiltration=self.HRU.var.natural_available_water_infiltration,
         )
 
-        print("perhaps use non-adjusted gross_potential_irrigation_m3_per_field?")
         gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32] = (
             self.model.agents.crop_farmers.field_to_farmer(
                 gross_potential_irrigation_m3_per_field_limit_adjusted
