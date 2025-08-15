@@ -130,8 +130,6 @@ def download_ERA5(
             )
             da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3], bounds[1]),
-                x=slice(bounds[0], bounds[2]),
             )
             return da
         else:
