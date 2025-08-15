@@ -29,6 +29,9 @@ class ReservoirOperators(AgentBaseClass):
             else {}
         )
         self.environmental_flow_requirement = 0.0
+        self.water_conveyance_efficiency = (
+            0.3  # 70% of the water is lost in the conveyance system
+        )
 
         if self.model.in_spinup:
             self.spinup()
@@ -90,7 +93,7 @@ class ReservoirOperators(AgentBaseClass):
             self.var.multi_year_monthly_total_inflow
         ) * 0.25
 
-        self.var.multi_year_monthly_usable_release_m3 = (
+        self.var.multi_year_monthly_usable_command_area_release_m3 = (
             self.var.multi_year_monthly_total_inflow * 0.25
         )
 
@@ -120,8 +123,15 @@ class ReservoirOperators(AgentBaseClass):
         self.command_area_release_m3 = np.minimum(
             usable_release_m3, gross_irrigation_demand_m3
         )
+        self.usable_command_area_release_m3 = (
+            self.command_area_release_m3 * self.water_conveyance_efficiency
+        )
         self.remaining_command_area_release = self.command_area_release_m3.copy()
         self.gross_irrigation_demand_m3 = gross_irrigation_demand_m3
+
+        self.var.multi_year_monthly_usable_command_area_release_m3[
+            :, self.current_month_index, 0
+        ] += self.usable_command_area_release_m3
 
         # print(
         #     "fullfillment",
@@ -131,7 +141,7 @@ class ReservoirOperators(AgentBaseClass):
         #     ),
         # )
 
-        return self.command_area_release_m3
+        return self.usable_command_area_release_m3
 
     def get_maximum_abstraction_m3_by_farmer(
         self,
@@ -219,10 +229,6 @@ class ReservoirOperators(AgentBaseClass):
             usable_release_m3 + environmental_release_m3,
             atol=1e-7,
         )
-
-        self.var.multi_year_monthly_usable_release_m3[
-            :, self.current_month_index, 0
-        ] += usable_release_m3
 
         return main_channel_release, command_area_release_substep
 
@@ -509,7 +515,9 @@ class ReservoirOperators(AgentBaseClass):
             if self.var.hydrological_year_counter == 1:
                 self.var.multi_year_monthly_total_inflow[..., 1] = np.nan
                 self.var.multi_year_monthly_total_irrigation_demand_m3[..., 1] = np.nan
-                self.var.multi_year_monthly_usable_release_m3[..., 1] = np.nan
+                self.var.multi_year_monthly_usable_command_area_release_m3[..., 1] = (
+                    np.nan
+                )
 
             # in the first year, we don't want to save the data, because we don't have a full year yet
             # so no shifting should be done
@@ -521,14 +529,16 @@ class ReservoirOperators(AgentBaseClass):
                 self.var.multi_year_monthly_total_irrigation_demand_m3[..., 1:] = (
                     self.var.multi_year_monthly_total_irrigation_demand_m3[..., 0:-1]
                 )
-                self.var.multi_year_monthly_usable_release_m3[..., 1:] = (
-                    self.var.multi_year_monthly_usable_release_m3[..., 0:-1]
+                self.var.multi_year_monthly_usable_command_area_release_m3[..., 1:] = (
+                    self.var.multi_year_monthly_usable_command_area_release_m3[
+                        ..., 0:-1
+                    ]
                 )
 
             # always reset the counters for the next year
             self.var.multi_year_monthly_total_inflow[..., 0] = 0
             self.var.multi_year_monthly_total_irrigation_demand_m3[..., 0] = 0
-            self.var.multi_year_monthly_usable_release_m3[..., 0] = 0
+            self.var.multi_year_monthly_usable_command_area_release_m3[..., 0] = 0
 
             self.var.hydrological_year_counter += 1
             self.var.storage_year_start = self.storage.copy()
@@ -580,7 +590,7 @@ class ReservoirOperators(AgentBaseClass):
         we only use up to the history fill index, because earlier years are not
         yet run and thus contain no data.
         """
-        yearly_usable_release_m3 = self.agents.reservoir_operators.var.multi_year_monthly_usable_release_m3.sum(
+        yearly_usable_release_m3 = self.agents.reservoir_operators.var.multi_year_monthly_usable_command_area_release_m3.sum(
             axis=1
         )[:, 1 : self.agents.reservoir_operators.var.history_fill_index]
         assert not np.isnan(yearly_usable_release_m3).any()
