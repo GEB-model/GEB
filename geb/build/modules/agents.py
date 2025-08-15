@@ -30,9 +30,7 @@ from ..workflows.conversions import (
     setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
-from ..workflows.general import (
-    clip_with_grid,
-)
+from ..workflows.general import clip_with_grid, validate_farm_size_data
 from ..workflows.population import load_GLOPOP_S
 
 
@@ -376,6 +374,7 @@ class Agents:
         price_ratio_dict = {"time": years_price_ratio, "data": {}}  # price ratio
 
         lcu_filtered = filter_and_rename(LCU_per_USD, ["Country Name", "Country Code"])
+
         years_lcu = extract_years(lcu_filtered)
         lcu_dict = {"time": years_lcu, "data": {}}  # LCU per USD
 
@@ -481,6 +480,27 @@ class Agents:
             lcu_dict["data"][region_id] = process_rates(
                 lcu_filtered, years_lcu, region["ISO3"]
             )
+
+            if np.all(np.isnan(lcu_dict["data"][region_id])):
+                # check which countries are NOT fully nan
+                lcu_dict_filter_index = lcu_filtered.set_index("Country Code")
+                countries_with_lcu_data = (
+                    lcu_dict_filter_index[years_lcu]
+                    .dropna(axis=0, how="all")
+                    .index.unique()
+                    .tolist()
+                )
+                donor_countries = setup_donor_countries(self, countries_with_lcu_data)
+                donor_country = donor_countries.get(ISO3, None)
+                lcu_dict["data"][region_id] = process_rates(
+                    lcu_filtered,
+                    years_lcu,
+                    donor_country,
+                )
+
+                self.logger.info(
+                    f"Missing LCU (currency conversion) data for {ISO3}, using donor country {donor_country}"
+                )
 
         for d in (
             inflation_rates_dict,
@@ -1129,18 +1149,41 @@ class Agents:
                             "Cannot calculate region_n_holdings: both datasets are zero or missing."
                         )
                 else:
-                    # Replace zeros and NaNs in both datasets to avoid division by zero
-                    region_n_holdings = region_n_holdings.fillna(1).replace(0, 1)
-                    agricultural_area_db_ha = agricultural_area_db_ha.fillna(1).replace(
-                        0, 1
+                    # if one of the datasets has amount of holdings but agricultural area is missing: calculate agricultural area by # holdings * average size
+                    agricultural_area_db_ha = agricultural_area_db_ha.fillna(
+                        average_sizes_series * region_n_holdings
                     )
+                    # if you have agri area but no holdings: calculate holdings by agri area / average size
+                    region_n_holdings = region_n_holdings.fillna(
+                        agricultural_area_db_ha / average_sizes_series
+                    )
+
+                # delete classes with no holdings
+                agricultural_area_db_ha = agricultural_area_db_ha[region_n_holdings > 0]
+                region_n_holdings = region_n_holdings[region_n_holdings > 0]
+
+                if ISO3 == "ROU":
+                    # Romania has an error in the farm size data source for class '100 - 200 Ha'
+                    agricultural_area_db_ha["100 - 200 Ha"] = (
+                        region_n_holdings["100 - 200 Ha"] * 150
+                    )  # 150 Ha
+                    self.logger.info(
+                        f"new agricultural area for Romania: {agricultural_area_db_ha['100 - 200 Ha']}"
+                    )
+                # Validate that holdings * average farm size approximately equals agricultural area
+                validate_farm_size_data(
+                    agricultural_area_db_ha,
+                    region_n_holdings,
+                    size_class_boundaries,
+                    ISO3,
+                )
 
                 # Calculate total agricultural area in square meters
                 agricultural_area_db = (
                     agricultural_area_db_ha * 10000
                 )  # Convert Ha to m^2
 
-                # Calculate region farm sizes
+                # Calculate region farm sizes (in m2)
                 region_farm_sizes = agricultural_area_db / region_n_holdings
 
             else:
@@ -1236,7 +1279,7 @@ class Agents:
                 offset = (
                     whole_cells_per_size_class[size_class]
                     - number_of_agents_size_class * mean_cells_per_agent
-                )
+                )  # high offset means that there are relatively too many agents for the available agricultural area derived from the land use map (total_cultivated_land_area_lu)
 
                 if (
                     number_of_agents_size_class * mean_cells_per_agent + offset
@@ -1261,6 +1304,7 @@ class Agents:
                     offset,
                     self.logger,
                 )
+
                 assert n_farms_size_class.sum() == number_of_agents_size_class
                 assert (farm_sizes_size_class >= 1).all()
                 assert (
@@ -1496,7 +1540,20 @@ class Agents:
             self.logger.warning("GDL region has a 'NA', these rows will be deleted.")
             GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
 
-        GDL_region_per_farmer = gpd.sjoin_nearest(locations, GDL_regions, how="left")
+        # assign GDL region to each farmer based on their location. This is a heavy operation, so we include a progress bar to monitor progress.
+        self.logger.info("Assigning GDL region to each farmer based on their location.")
+        chunk_size = 5000
+        n_farmers = len(locations)
+        chunks = []
+
+        self.logger.info(f"Processing {n_farmers} farmers in chunks of {chunk_size}")
+
+        for i in tqdm(range(0, n_farmers, chunk_size), desc="Processing farmer chunks"):
+            chunk_locations = locations.iloc[i : i + chunk_size]
+            chunk_result = gpd.sjoin_nearest(chunk_locations, GDL_regions, how="left")
+            chunks.append(chunk_result)
+
+        GDL_region_per_farmer = pd.concat(chunks, ignore_index=True)
 
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
@@ -1761,16 +1818,21 @@ class Agents:
         GLOBIOM_regions_region = GLOBIOM_regions[
             GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
         ]["Region37"].unique()
+
         ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
             GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
         ]["ISO3"]
 
-        donor_data = {}
+        self.logger.info(
+            f" missing ISO3 codes in GLOBIOM regions: {set(ISO3_codes_region) - set(ISO3_codes_GLOBIOM_region)}"
+        )
+
+        donor_data = {}  # determine the donors: donors are all the countries in the GLOBIOM regions that are within our model domain(self.geoms["regions"]). Therefore, this can be a region OUTSIDE of the model domain, but within a GLOBIOM region in the model domain.
         for ISO3 in ISO3_codes_GLOBIOM_region:
             region_risk_aversion_data = preferences_global[
                 preferences_global["ISO3"] == ISO3
             ]
-            if region_risk_aversion_data.empty:
+            if region_risk_aversion_data.empty:  # country NOT in preferences dataset
                 countries_with_preferences_data = (
                     preferences_global["ISO3"].unique().tolist()
                 )
