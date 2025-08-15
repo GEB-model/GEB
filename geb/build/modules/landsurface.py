@@ -5,6 +5,9 @@ import xarray as xr
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
+from ..workflows.conversions import (
+    COUNTRY_NAME_TO_ISO3,
+)
 from ..workflows.general import (
     bounds_are_within,
     calculate_cell_area,
@@ -202,7 +205,17 @@ class LandSurface:
             columns={"GID_0": "ISO3"}
         )
         global_countries["geometry"] = global_countries.centroid
+        global_countries["ISO3"] = global_countries["ISO3"].replace(
+            {"XKO": "XKX"}
+        )  # XKO is a deprecated code for Kosovo, XKX is the new code
         global_countries = global_countries.set_index("ISO3")
+
+        # Renaming XKO to XKX
+        global_countries = global_countries.rename(columns={"XKO": "XKX"})
+        self.logger.info(
+            f"Renamed XKO to XKX in global countries: {global_countries.columns}"
+        )
+
         self.set_geom(global_countries, name="global_countries")
 
         assert np.unique(regions["region_id"]).shape[0] == regions.shape[0], (
@@ -218,11 +231,18 @@ class LandSurface:
             i: region_id for region_id, i in enumerate(regions["region_id"])
         }
         regions["region_id"] = regions["region_id"].map(region_id_mapping)
+
         self.set_dict(region_id_mapping, name="region_id_mapping")
 
         assert "ISO3" in regions.columns, (
             f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
         )
+
+        regions.replace(
+            {"ISO3": {"XKO": "XKX"}}, inplace=True
+        )  # XKO is a deprecated code for Kosovo, XKX is the new code
+
+        self.logger.info(f"Renamed XKO to XKX in regions: {regions.columns}")
 
         self.set_geom(regions, name="regions")
 
