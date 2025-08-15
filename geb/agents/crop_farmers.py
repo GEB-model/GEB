@@ -417,7 +417,6 @@ class CropFarmers(AgentBaseClass):
             max_n=self.var.max_n,
             extra_dims_names=("adaptation_type",),
         )
-        self.var.adaptations[:, WELL_ADAPTATION] = -1
 
         # the time each agent has been paying off their loan
         # 0 = no cost adaptation, 1 = well, 2 = irr efficiency, 3 = irr. field expansion  -1 if they do not have adaptations
