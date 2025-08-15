@@ -499,8 +499,8 @@ class Observations:
                     "Q_obs_station_coords": Q_obs_station_coords,
                     "closest_point_coords": closest_point_coords,
                     "subgrid_pixel_coords": subgrid_pixel_coords,
-                    "grid_pixel_coords": grid_pixel_coords,
-                    "closest_tuple": closest_tuple,
+                    "snapped_grid_pixel_lonlat": grid_pixel_coords,
+                    "snapped_grid_pixel_xy": closest_tuple,
                     "GEB_upstream_area_from_subgrid": float(
                         GEB_upstream_area_from_subgrid
                     ),
@@ -538,10 +538,10 @@ class Observations:
         discharge_snapping_gdf = gpd.GeoDataFrame(
             discharge_snapping_df,
             geometry=gpd.points_from_xy(
-                discharge_snapping_df["grid_pixel_coords"].apply(
+                discharge_snapping_df["snapped_grid_pixel_lonlat"].apply(
                     lambda coord: coord[0]
                 ),
-                discharge_snapping_df["grid_pixel_coords"].apply(
+                discharge_snapping_df["snapped_grid_pixel_lonlat"].apply(
                     lambda coord: coord[1]
                 ),
             ),

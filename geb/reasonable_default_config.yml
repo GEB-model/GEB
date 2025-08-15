@@ -156,6 +156,7 @@ draw:
 
 report:
   _water_circle: false
+  _discharge_stations: true
   hydrology.routing:
     discharge_daily:
       varname: grid.var.discharge_m3_s
