@@ -6,7 +6,14 @@ import numpy as np
 import pytest
 
 import geb.hydrology.soil
+from geb.hydrology.landcover import (
+    NON_PADDY_IRRIGATED,
+    OPEN_WATER,
+    PADDY_IRRIGATED,
+    SEALED,
+)
 from geb.hydrology.soil import (
+    add_water_to_topwater_and_evaporate_open_water,
     get_critical_soil_moisture_content,
     get_fraction_easily_available_soil_water,
     get_infiltration_capacity,
@@ -690,6 +697,74 @@ def plot_soil_layers(ax, soil_thickness, w, wres, ws, fluxes=None):
     ax.invert_yaxis()
 
 
+def test_add_water_to_topwater_and_evaporate_open_water():
+    topwater = np.array([0.05, 0.0, 0.0, 0.0], dtype=np.float32)
+    topwater_pre = topwater.copy()
+    natural_available_water_infiltration = np.array(
+        [0.01, 0.01, 0.01, 0.01], dtype=np.float32
+    )
+    actual_irrigation_consumption = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    land_use_type = np.array(
+        [PADDY_IRRIGATED, NON_PADDY_IRRIGATED, SEALED, OPEN_WATER], dtype=np.int32
+    )
+    reference_evapatotranspiration_water = np.array(
+        [
+            0.025,
+            0.025,
+            0.025,
+            0.025,
+        ],
+        dtype=np.float32,
+    )
+
+    open_water_evaporation = add_water_to_topwater_and_evaporate_open_water(
+        natural_available_water_infiltration=natural_available_water_infiltration,
+        actual_irrigation_consumption=actual_irrigation_consumption,
+        land_use_type=land_use_type,
+        reference_evapotranspiration_water=reference_evapatotranspiration_water,
+        topwater=topwater,
+    )
+    assert (open_water_evaporation >= 0.0).all()
+    assert (topwater >= 0.0).all()
+
+    np.testing.assert_array_almost_equal(
+        topwater_pre
+        + natural_available_water_infiltration
+        + actual_irrigation_consumption,
+        topwater + open_water_evaporation,
+    )
+
+    topwater = topwater_pre.copy()
+
+    reference_evapatotranspiration_water = np.array(
+        [
+            1,
+            1,
+            1,
+            1,
+        ],
+        dtype=np.float32,
+    )
+
+    open_water_evaporation = add_water_to_topwater_and_evaporate_open_water(
+        natural_available_water_infiltration=natural_available_water_infiltration,
+        actual_irrigation_consumption=actual_irrigation_consumption,
+        land_use_type=land_use_type,
+        reference_evapotranspiration_water=reference_evapatotranspiration_water,
+        topwater=topwater,
+    )
+
+    np.testing.assert_array_almost_equal(
+        topwater_pre
+        + natural_available_water_infiltration
+        + actual_irrigation_consumption,
+        topwater + open_water_evaporation,
+    )
+
+    assert (open_water_evaporation >= 0.0).all()
+    assert (topwater >= 0.0).all()
+
+
 @pytest.mark.parametrize("capillary_rise_from_groundwater", [0.0, 0.01])
 def test_vertical_water_transport(capillary_rise_from_groundwater):
     ncols = 11
@@ -700,13 +775,10 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
     # soil_thickness = np.array([[0.4, 0.4, 0.4, 0.4, 0.4, 0.4]])
     soil_layer_height = np.vstack([soil_layer_height] * ncols).T
 
-    available_water_infiltration = np.full(ncols, 0.005, dtype=np.float32)
-    land_use_type = np.full_like(available_water_infiltration, 0.1, dtype=np.int32)
-    frost_index = np.full_like(
-        available_water_infiltration, -9999, dtype=np.float32
-    )  # no frost
-    arno_beta = np.full_like(available_water_infiltration, 0.5, dtype=np.float32)
-    topwater = np.zeros_like(available_water_infiltration)
+    topwater = np.full(ncols, 0.005, dtype=np.float32)
+    land_use_type = np.full_like(topwater, 0.1, dtype=np.int32)
+    frost_index = np.full_like(topwater, -9999, dtype=np.float32)  # no frost
+    arno_beta = np.full_like(topwater, 0.5, dtype=np.float32)
 
     geb.hydrology.soil.N_SOIL_LAYERS = soil_layer_height.shape[0]
     geb.hydrology.soil.FROST_INDEX_THRESHOLD = 0
@@ -751,11 +823,8 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     plot_soil_layers(axes[0], soil_layer_height, w, wres, ws)
 
-    direct_runoff, groundwater_recharge = vertical_water_transport(
-        available_water_infiltration=available_water_infiltration,
-        capillary_rise_from_groundwater=np.full_like(
-            available_water_infiltration, capillary_rise_from_groundwater
-        ),
+    direct_runoff, groundwater_recharge, infiltration = vertical_water_transport(
+        capillary_rise_from_groundwater=np.zeros_like(topwater),
         ws=ws,
         wres=wres,
         saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
@@ -776,12 +845,37 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     plot_soil_layers(axes[1], soil_layer_height, w, wres, ws)
 
-    available_water_infiltration.fill(0)
+    topwater.fill(0)
     for _ in range(1000):
-        direct_runoff, groundwater_recharge = vertical_water_transport(
-            available_water_infiltration=available_water_infiltration,
+        direct_runoff, groundwater_recharge, infiltration = vertical_water_transport(
             capillary_rise_from_groundwater=np.full_like(
-                available_water_infiltration, capillary_rise_from_groundwater
+                topwater, capillary_rise_from_groundwater
+            ),
+            ws=ws,
+            wres=wres,
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+            lambda_=lambda_,
+            bubbling_pressure_cm=bubbling_pressure_cm,
+            land_use_type=land_use_type,
+            frost_index=frost_index,
+            arno_beta=arno_beta,
+            w=w,
+            topwater=topwater,
+            soil_layer_height=soil_layer_height,
+        )
+
+    # with open(output_folder_soil / "vertical_water_transport_compiled.txt", "w") as f:
+    #     f.write(
+    #         vertical_water_transport.inspect_asm(vertical_water_transport.signatures[0])
+    #     )
+
+    plot_soil_layers(axes[1], soil_layer_height, w, wres, ws)
+
+    topwater.fill(0)
+    for _ in range(1000):
+        direct_runoff, groundwater_recharge, infiltration = vertical_water_transport(
+            capillary_rise_from_groundwater=np.full_like(
+                topwater, capillary_rise_from_groundwater
             ),
             ws=ws,
             wres=wres,

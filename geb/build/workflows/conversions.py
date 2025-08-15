@@ -23,9 +23,7 @@ def setup_donor_countries(
     )  # calculate mean HDI for each country
 
     # find potential donors
-    global_countries = self.geoms[
-        "global_countries"
-    ]  # we need this to get the centroids of the countries geoms
+    global_countries = self.geom["global_countries"] # we need this to get the centroids of the countries geoms
     potential_donors = global_countries.loc[
         global_countries.index.isin(countries_with_data)
     ]
@@ -40,7 +38,7 @@ def setup_donor_countries(
         # if GLOBIOM regions are provided, use the globiom regions
         region_countries = alternative_countries.copy()
     else:
-        region_countries = self.geoms["regions"]["ISO3"].unique().tolist()
+        region_countries = self.geom["regions"]["ISO3"].unique().tolist()
 
     # find countries in model domain that do not have data
     countries_without_data = list(set(region_countries) - set(countries_with_data))

@@ -145,22 +145,23 @@ class WaterDemand(Module):
         )
         timer.new_split("Livestock")
 
-        gross_irrigation_demand_m3_per_field: npt.NDArray[np.float32] = (
-            self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
-                potential_evapotranspiration=potential_evapotranspiration,
-                available_infiltration=self.HRU.var.natural_available_water_infiltration,
-            )
+        (
+            gross_irrigation_demand_m3_per_field,
+            gross_potential_irrigation_m3_per_field_limit_adjusted,
+        ) = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
+            potential_evapotranspiration=potential_evapotranspiration,
+            available_infiltration=self.HRU.var.natural_available_water_infiltration,
         )
 
         gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32] = (
             self.model.agents.crop_farmers.field_to_farmer(
-                gross_irrigation_demand_m3_per_field
+                gross_potential_irrigation_m3_per_field_limit_adjusted
             )
         )
 
         gross_irrigation_demand_m3_per_water_body: npt.NDArray[np.float32] = (
             weighted_sum_per_reservoir(
-                self.model.agents.crop_farmers.farmer_command_area,
+                self.model.agents.crop_farmers.command_area,
                 gross_irrigation_demand_m3_per_farmer,
                 min_length=self.hydrology.lakes_reservoirs.n,
             )
@@ -201,7 +202,6 @@ class WaterDemand(Module):
         assert (domestic_water_efficiency_per_household == 1).all()
         domestic_water_efficiency = 1
 
-        # water withdrawal
         # 1. domestic (surface + ground)
         self.hydrology.grid.domestic_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, domestic_water_demand_m3
@@ -278,6 +278,7 @@ class WaterDemand(Module):
             groundwater_abstraction_m3_farmers,
         ) = self.model.agents.crop_farmers.abstract_water(
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
+            gross_irrigation_demand_m3_per_field_limit_adjusted=gross_potential_irrigation_m3_per_field_limit_adjusted,
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
             groundwater_depth=self.hydrology.groundwater.modflow.groundwater_depth,
