@@ -816,15 +816,11 @@ def vertical_water_transport(
         topwater[i] -= infiltration_cell
         infiltration[i] = infiltration_cell
 
-        assert topwater[i] >= 0
-
         direct_runoff[i] = max(
             0, topwater[i] - np.float32(0.05) * (land_use_type[i] == PADDY_IRRIGATED)
         )
 
         topwater[i] = topwater[i] - direct_runoff[i]
-
-        assert topwater[i] >= 0
 
     psi, unsaturated_hydraulic_conductivity = get_soil_water_flow_parameters(
         w.ravel(),
@@ -1829,6 +1825,9 @@ class Soil(Module):
         groundwater_recharge = np.zeros_like(
             self.HRU.var.land_use_type, dtype=np.float32
         )
+        infiltration = np.zeros_like(
+            self.HRU.var.land_use_type, dtype=np.float32
+        )  # not used, but useful for exporting
 
         n_substeps = 3
         for _ in range(n_substeps):
@@ -1855,6 +1854,7 @@ class Soil(Module):
             (
                 direct_runoff_substep,
                 groundwater_recharge_substep,
+                infiltration_substep,
             ) = vertical_water_transport(
                 capillary_rise_from_groundwater / n_substeps,
                 self.HRU.var.ws,
@@ -1872,6 +1872,7 @@ class Soil(Module):
 
             direct_runoff += direct_runoff_substep
             groundwater_recharge[bioarea] += groundwater_recharge_substep[bioarea]
+            infiltration += infiltration_substep
 
         assert not np.isnan(open_water_evaporation).any()
         assert not np.isnan(self.HRU.var.topwater).any()
