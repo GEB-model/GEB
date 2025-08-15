@@ -571,20 +571,23 @@ class Crops:
 
         return data_out
 
-    def assign_crop_price_inflation(self, costs, unique_regions):
+    def assign_crop_price_inflation(
+        self, costs: pd.DataFrame, unique_regions: pd.DataFrame
+    ) -> pd.DataFrame:
         """Determines the price inflation of all crops in the region and adds a column that describes this inflation.
 
         If there is no data for a certain year, the inflation rate is taken from the socioeconomics data.
 
-        Parameters
-        ----------
-        costs : DataFrame
-            A DataFrame containing the cost data for different regions. The DataFrame should be indexed by region IDs.
+        Args:
+            costs: A DataFrame containing crop prices for different regions. The DataFrame should be indexed by region IDs.
+            unique_regions: A DataFrame containing unique regions with their IDs and other attributes.
 
         Returns:
-        -------
-        DataFrame
             The updated DataFrame with a new column 'changes' that contains the average price changes for each region.
+
+        To Do:
+            Is it possible to use the regions from the costs DataFrame instead of the unique_regions DataFrame?
+
         """
         costs["_crop_price_inflation"] = np.nan
         costs["_crop_price_LCU_USD"] = np.nan
@@ -635,26 +638,26 @@ class Crops:
     def inter_and_extrapolate_prices(self, data, unique_regions, adjust_currency=False):
         """Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
 
-        Parameters
-        ----------
-        data : DataFrame
-            A DataFrame containing crop price data for different regions. The DataFrame should be indexed by region IDs
+        Args:
+            data: A DataFrame containing crop price data for different regions. The DataFrame should be indexed by region IDs
             and have columns corresponding to different crops.
+            unique_regions: A DataFrame containing unique regions with their IDs and other attributes.
+            adjust_currency: If True, adjusts the crop prices based on currency conversion rates.
 
         Returns:
-        -------
-        DataFrame
-            The updated DataFrame with interpolated and extrapolated crop prices. Columns for 'others perennial' and 'others annual'
-            crops are also added.
+            Updated DataFrame with interpolated and extrapolated crop prices. Columns for 'others perennial' and 'others annual'
+                crops are also added.
 
         Notes:
-        -----
-        The function performs the following steps:
-        1. Extracts crop names from the internal crop data dictionary.
-        2. Defines additional crops that fall under 'others perennial' and 'others annual' categories.
-        3. Processes the data to compute average prices for these additional crops.
-        4. Filters and updates the original data with the computed averages.
-        5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
+            The function performs the following steps:
+                1. Extracts crop names from the internal crop data dictionary.
+                2. Defines additional crops that fall under 'others perennial' and 'others annual' categories.
+                3. Processes the data to compute average prices for these additional crops.
+                4. Filters and updates the original data with the computed averages.
+                5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
+
+        To Do:
+            Ensure adjust_currency is better explained and used correctly.
         """
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
         for _, region in unique_regions.iterrows():
