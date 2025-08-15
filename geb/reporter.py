@@ -569,6 +569,8 @@ class Reporter:
                         fill_value = np.nan
                     elif dtype in (int, np.int32, np.int64):
                         fill_value = -1
+                    elif dtype == bool:
+                        fill_value = False
                     else:
                         raise ValueError(
                             f"Value {dtype} of type {type(dtype)} not recognized."
