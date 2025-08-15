@@ -60,6 +60,8 @@ agent_settings:
   households:
     adapt: false
     warning_response: false
+    water_demand:
+      method: default
     expected_utility:
       flood_risk_calculations:
         risk_perception:

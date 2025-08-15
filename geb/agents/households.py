@@ -1223,7 +1223,7 @@ class Households(AgentBaseClass):
         This function uses a multiplier to calculate the water demand for
         for each region with respect to the base year.
         """
-        if self.config["water_demand"]["default_method"]:
+        if self.config["water_demand"]["method"] == "default":
             # the water demand multiplier is a function of the year and region
             water_demand_multiplier_per_region = self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
                 self.model.current_time.year
@@ -1244,13 +1244,15 @@ class Households(AgentBaseClass):
                 * self.var.sizes
                 * water_demand_multiplier_per_household
             )
-            # print(self.var.water_demand_per_household_m3)
-
-        if self.config["water_demand"]["customized_demand"].get("enabled", False):
+        elif self.config["water_demand"]["method"] == "custom_value":
             # Function to set a custom_value for household water demand. All households have the same demand.
-            custom_value = self.config["water_demand"]["customized_demand"]["value"]
+            custom_value = self.config["water_demand"]["custom_value"]["value"]
             self.var.water_demand_per_household_m3 = np.full(
                 self.var.region_id.shape, custom_value, dtype=float
+            )
+        else:
+            raise ValueError(
+                "Invalid water demand method. Choose 'default' or 'customized_demand'."
             )
 
         return (
