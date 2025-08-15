@@ -1108,7 +1108,7 @@ class Forcing:
         )
         self.plot_forcing(da, name)
         return da
-    
+
     # @build_method(depends_on=["set_time_range"])
     def setup_forcing_era5(self):
         target = self.grid["mask"]
