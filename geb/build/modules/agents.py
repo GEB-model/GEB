@@ -762,23 +762,16 @@ class Agents:
     ):
         """Sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year.
 
-        Parameters
-        ----------
-        drip_irrigation_price : float
-            The price of a drip_irrigation in the reference year.
+        Args:
+            drip_irrigation_price: The price of a drip_irrigation in the reference year.
 
-        reference_year : int
-            The reference year for the drip_irrigation prices and upkeep prices.
-        start_year : int
-            The start year for the drip_irrigation prices and upkeep prices.
-        end_year : int
-            The end year for the drip_irrigation prices and upkeep prices.
+            reference_year: The reference year for the drip_irrigation prices and upkeep prices.
+            start_year: The start year for the drip_irrigation prices and upkeep prices.
+            end_year: The end year for the drip_irrigation prices and upkeep prices.
 
         Notes:
-        -----
-        The drip_irrigation prices are calculated by applying the inflation rates to the reference year prices. The
-        resulting prices are stored in the dictionaries with the region ID as the key.
-
+            The drip_irrigation prices are calculated by applying the inflation rates to the reference year prices. The
+            resulting prices are stored in the dictionaries with the region ID as the key.
         """
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
