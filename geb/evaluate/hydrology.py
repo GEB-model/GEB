@@ -156,7 +156,7 @@ class Hydrology:
             discharge_Q_obs_df.name = "Q"
             # extract the properties from the snapping dataframe
             Q_obs_station_name = snapped_locations.loc[ID].Q_obs_station_name
-            snapped_xy_coords = snapped_locations.loc[ID].closest_tuple
+            snapped_xy_coords = snapped_locations.loc[ID].snapped_grid_pixel_xy
             Q_obs_station_coords = snapped_locations.loc[ID].Q_obs_station_coords
             Q_obs_to_GEB_upstream_area_ratio = snapped_locations.loc[
                 ID
