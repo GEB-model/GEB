@@ -3747,7 +3747,11 @@ class CropFarmers(AgentBaseClass):
         # Increase intention factor if someone in network has adaptation
         intention_factor_adjusted = self.var.intention_factor.copy()
 
-        if adaptation_type in (4, 5, 6):
+        if adaptation_type in (
+            PERSONAL_INSURANCE_ADAPTATION,
+            INDEX_INSURANCE_ADAPTATION,
+            PR_INSURANCE_ADAPTATION,
+        ):
             social_network_payout = self.var.payout_mask[
                 self.var.social_network, adaptation_type
             ]
