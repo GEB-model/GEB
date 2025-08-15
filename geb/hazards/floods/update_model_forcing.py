@@ -180,7 +180,7 @@ def update_sfincs_model_forcing(
 
         discharge_forcing_points = discharge_forcing_points.to_crs(
             sf.crs
-        )  # <--------------------------------------------------Use For setting up Discharge forcing
+        )  # used for setting up discharge forcing
         discharge_forcing_points.to_file(
             model_root / "inflow_points.gpkg", driver="GPKG"
         )
