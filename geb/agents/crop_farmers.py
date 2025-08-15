@@ -2311,8 +2311,6 @@ class CropFarmers(AgentBaseClass):
             season_pr_per_farmer
         )
 
-        pass
-
     def save_yearly_spei(self):
         assert self.model.current_time.month == 1
 
