@@ -1224,48 +1224,75 @@ class Hydrology:
             Q_all_df = pd.concat([Q_all_df, merged_station_df], axis=1)
 
         # === Inputs ===
-        # river_outflow = load_csv(folder / "hydrology.routing" / "river outflow.csv", "river_outflow")
-        rain = load_csv(folder / "hydrology.interception" / "rain.csv", "rain")
+        # river_outflow = load_csv(
+        #     folder / "hydrology.routing" / "river outflow.csv", "river_outflow"
+        # )
+        # rain = load_csv(folder / "hydrology.interception" / "rain.csv", "rain")
         # snow = load_csv(folder / "hydrology.snowfrost" / "snow.csv", "snowfall")
 
-        # === Evaporation losses ===
-        # transpiration = load_csv(folder / "hydrology.soil" / "transpiration.csv", "transpiration")
-        # bare_soil_evaporation = load_csv(folder / "hydrology.soil" / "bare soil evaporation.csv", "bare_soil_evap")
-        # direct_evaporation = load_csv(folder / "hydrology.landcover" / "direct evaporation.csv", "direct_evap")
-        # interception_evaporation = load_csv(folder / "hydrology.landcover" / "interception evaporation.csv", "interception_evap")
-        # snow_sublimation = load_csv(folder / "hydrology.landcover" / "snow sublimation.csv", "snow_sublimation")
-        # river_evaporation = load_csv(folder / "hydrology.routing" / "river evaporation.csv", "river_evap")
-        # waterbody_evaporation = load_csv(folder / "hydrology.routing" / "waterbody evaporation.csv", "waterbody_evap")
+        # # === Evaporation losses ===
+        # transpiration = load_csv(
+        #     folder / "hydrology.soil" / "transpiration.csv", "transpiration"
+        # )
+        # bare_soil_evaporation = load_csv(
+        #     folder / "hydrology.landcover" / "bare soil evaporation.csv",
+        #     "bare_soil_evap",
+        # )
+        # direct_evaporation = load_csv(
+        #     folder / "hydrology.landcover" / "direct evaporation.csv", "direct_evap"
+        # )
+        # interception_evaporation = load_csv(
+        #     folder / "hydrology.landcover" / "interception evaporation.csv",
+        #     "interception_evap",
+        # )
+        # snow_sublimation = load_csv(
+        #     folder / "hydrology.landcover" / "snow sublimation.csv", "snow_sublimation"
+        # )
+        # river_evaporation = load_csv(
+        #     folder / "hydrology.routing" / "river evaporation.csv", "river_evap"
+        # )
+        # waterbody_evaporation = load_csv(
+        #     folder / "hydrology.routing" / "waterbody evaporation.csv", "waterbody_evap"
+        # )
 
         # # === Human water losses ===
-        # domestic_water_loss = load_csv(folder / "hydrology.water_demand" / "domestic water loss.csv", "domestic_water_loss")
-        # industry_water_loss = load_csv(folder / "hydrology.water_demand" / "industry water loss.csv", "industry_water_loss")
-        # livestock_water_loss = load_csv(folder / "hydrology.water_demand" / "livestock water loss.csv", "livestock_water_loss")
+        # domestic_water_loss = load_csv(
+        #     folder / "hydrology.water_demand" / "domestic water loss.csv",
+        #     "domestic_water_loss",
+        # )
+        # industry_water_loss = load_csv(
+        #     folder / "hydrology.water_demand" / "industry water loss.csv",
+        #     "industry_water_loss",
+        # )
+        # livestock_water_loss = load_csv(
+        #     folder / "hydrology.water_demand" / "livestock water loss.csv",
+        #     "livestock_water_loss",
+        # )
 
-        # === Fluxes ===
-        infiltration = load_csv(
-            folder / "hydrology.soil" / "infiltration.csv", "infiltration"
-        )
-        groundwater_recharge = load_csv(
-            folder / "hydrology.soil" / "groundwater_recharge.csv", "gw_recharge"
-        )
-        runoff = load_csv(folder / "hydrology.soil" / "runoff.csv", "runoff")
-        throughfall = load_csv(
-            folder / "hydrology.interception" / "throughfall.csv", "throughfall"
-        )
+        # # === Fluxes ===
+        # infiltration = load_csv(
+        #     folder / "hydrology.soil" / "infiltration.csv", "infiltration"
+        # )
+        # groundwater_recharge = load_csv(
+        #     folder / "hydrology.soil" / "groundwater_recharge.csv", "gw_recharge"
+        # )
+        # runoff = load_csv(folder / "hydrology.soil" / "runoff.csv", "runoff")
+        # throughfall = load_csv(
+        #     folder / "hydrology.interception" / "throughfall.csv", "throughfall"
+        # )
 
-        # === Storage ===
-        gw_content = load_csv(
-            folder / "hydrology.groundwater" / "groundwater_content_mean.csv",
-            "gw_content",
-        )
+        # # === Storage ===
+        # gw_content = load_csv(
+        #     folder / "hydrology.groundwater" / "groundwater_content_mean.csv",
+        #     "gw_content",
+        # )
 
         # === Merge all in column order ===
         all_df = pd.concat(
             [
                 Q_all_df,
                 # river_outflow,
-                rain,
+                # rain,
                 # snow,
                 # transpiration,
                 # bare_soil_evaporation,
@@ -1277,11 +1304,11 @@ class Hydrology:
                 # domestic_water_loss,
                 # industry_water_loss,
                 # livestock_water_loss,
-                infiltration,
-                groundwater_recharge,
-                runoff,
-                throughfall,
-                gw_content,
+                # infiltration,
+                # groundwater_recharge,
+                # runoff,
+                # throughfall,
+                # gw_content,
             ],
             axis=1,
         )

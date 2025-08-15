@@ -44,7 +44,7 @@ class Evaluate(Hydrology):
             methods: list = [
                 "plot_discharge",
                 "evaluate_discharge",
-                # "water_circle",
+                "water_circle",
                 "water_balance",
                 "evaluate_hydrodynamics",
                 "plot_discharge_floods",

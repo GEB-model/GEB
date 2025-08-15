@@ -64,6 +64,7 @@ agent_settings:
       flood_risk_calculations:
         risk_perception:
           base: 1.6
+
           coef: -2.5
           max: 10
           min: 0.01
@@ -167,8 +168,7 @@ parameters:
   preferentialFlowConstant: 3.14300925049279
   ksat_multiplier: 1.0
   water_demand_multiplier: 1.0
-
-
+  crop_calibration_factor: 1.0
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini
