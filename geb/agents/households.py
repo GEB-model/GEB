@@ -1056,7 +1056,7 @@ class Households(AgentBaseClass):
                 hazard_file=flood_map,
                 curve_path=self.buildings_structure_curve,
                 gridded=False,
-                disable_progress=False,
+                disable_progress=True,
             )
             total_damage_structure = damage_unprotected["damage"].sum()
             print(
@@ -1076,7 +1076,7 @@ class Households(AgentBaseClass):
                 hazard_file=flood_map,
                 curve_path=self.buildings_structure_curve,
                 gridded=False,
-                disable_progress=False,
+                disable_progress=True,
             )
             total_damage_structure = damage_flood_proofed["damage"].sum()
             print(
