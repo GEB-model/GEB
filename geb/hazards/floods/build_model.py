@@ -1,3 +1,4 @@
+import json
 import logging
 
 import geopandas as gpd
@@ -5,7 +6,7 @@ import numpy as np
 import numpy.typing as npt
 import pyflwdir
 import xarray as xr
-from hydromt_sfincs import SfincsModel
+from hydromt_sfincs import SfincsModel, workflows
 
 from geb.hydrology.routing import get_river_width
 
@@ -315,13 +316,51 @@ def build_sfincs(
         river_len=0,
     )
 
-    # Setup river outflow points
-    sf.setup_river_outflow(
-        rivers=rivers,
-        keep_rivers_geom=True,
+    # find outflow points and save for later use
+    outflow_points = workflows.river_source_points(
+        gdf_riv=rivers.to_crs(sf.crs),
+        gdf_mask=sf.region,
+        src_type="outflow",
+        buffer=sf.reggrid.dx,  # type: ignore
         river_upa=0,
         river_len=0,
     )
+    # give error if outflow greater than 1
+    if len(outflow_points) > 1:
+        raise ValueError(
+            "More than one outflow point found, outflow boundary condition will fail to setup"
+        )
+    elif len(outflow_points) == 0:
+        raise ValueError(
+            "No outflow point found, outflow boundary condition will fail to setup"
+        )
+    # print crs of outflow_points
+    assert outflow_points.crs == sf.crs, (
+        "CRS of outflow_points is not the same as the model crs"
+    )
+    # set crs before saving
+    outflow_points = outflow_points.set_crs(sf.crs)
+    # save to model root as a gpkg file
+    outflow_points.to_file(model_root / "gis/outflow_points.gpkg", driver="GPKG")
+    # Get the single outflow point coordinates
+    x_coord = outflow_points.geometry.x.iloc[0]
+    y_coord = outflow_points.geometry.y.iloc[0]
+    assert sf.grid.dep.rio.crs == outflow_points.crs, (  # type: ignore
+        "CRS of sf.grid.dep is not the same as the outflow_points crs"
+    )
+    # Sample from sf.grid.dep (which is the DEM DataArray)
+    elevation_value = sf.grid.dep.sel(  # type: ignore
+        x=x_coord, y=y_coord, method="nearest"
+    ).values.item()
+
+    # Optional: sanity check
+    if elevation_value is None or elevation_value <= 0:
+        raise ValueError(f"Invalid outflow elevation ({elevation_value}), must be > 0")
+
+    # Save elevation value to a file in model_root/gis
+    outflow_elev_path = model_root / "gis" / "outflow_elevation.json"
+    with open(outflow_elev_path, "w") as f:
+        json.dump({"outflow_elevation": elevation_value}, f)
 
     river_representative_points = []
     for ID in rivers.index:
@@ -336,6 +375,7 @@ def build_sfincs(
         river_width_alpha=river_width_alpha,
         river_width_beta=river_width_beta,
     )
+
     rivers = assign_return_periods(rivers, discharge_by_river, return_periods=[2])
 
     river_width_unknown_mask = rivers["width"].isnull()
@@ -352,6 +392,7 @@ def build_sfincs(
         parameters=depth_calculation_parameters,
         bankfull_column="Q_2",
     )
+
     rivers["manning"] = get_river_manning(rivers)
 
     export_rivers(model_root, rivers)

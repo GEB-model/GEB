@@ -1265,31 +1265,38 @@ class Households(AgentBaseClass):
         This function uses a multiplier to calculate the water demand for
         for each region with respect to the base year.
         """
-        # the water demand multiplier is a function of the year and region
-        water_demand_multiplier_per_region = (
-            self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
+        if self.config["water_demand"]["default_method"]:
+            # the water demand multiplier is a function of the year and region
+            water_demand_multiplier_per_region = self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
                 self.model.current_time.year
             ]
-        )
-        assert (
-            water_demand_multiplier_per_region.index
-            == np.arange(len(water_demand_multiplier_per_region))
-        ).all()
-        water_demand_multiplier_per_household = (
-            water_demand_multiplier_per_region.values[self.var.region_id]
-        )
+            assert (
+                water_demand_multiplier_per_region.index
+                == np.arange(len(water_demand_multiplier_per_region))
+            ).all()
+            water_demand_multiplier_per_household = (
+                water_demand_multiplier_per_region.values[self.var.region_id]
+            )
 
-        # water demand is the per capita water demand in the household,
-        # multiplied by the size of the household and the water demand multiplier
-        # per region and year, relative to the baseline.
-        water_demand_per_household_m3 = (
-            self.var.municipal_water_demand_per_capita_m3_baseline
-            * self.var.sizes
-            * water_demand_multiplier_per_household
-        )
+            # water demand is the per capita water demand in the household,
+            # multiplied by the size of the household and the water demand multiplier
+            # per region and year, relative to the baseline.
+            self.var.water_demand_per_household_m3 = (
+                self.var.municipal_water_demand_per_capita_m3_baseline
+                * self.var.sizes
+                * water_demand_multiplier_per_household
+            )
+            # print(self.var.water_demand_per_household_m3)
+
+        if self.config["water_demand"]["customized_demand"].get("enabled", False):
+            # Function to set a custom_value for household water demand. All households have the same demand.
+            custom_value = self.config["water_demand"]["customized_demand"]["value"]
+            self.var.water_demand_per_household_m3 = np.full(
+                self.var.region_id.shape, custom_value, dtype=float
+            )
 
         return (
-            water_demand_per_household_m3,
+            self.var.water_demand_per_household_m3,
             self.var.water_efficiency_per_household,
             self.var.locations.data,
         )
