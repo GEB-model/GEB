@@ -34,8 +34,6 @@ class GroundWater:
             intial_heads_source: The initial heads dataset to use, options are GLOBGM and Fan. Default is 'GLOBGM'.
             force_one_layer: If True, the model will be forced to use only one layer. Default is True.
         """
-        self.logger.info("Setting up MODFLOW")
-
         aquifer_top_elevation = self.grid["landsurface/elevation"].raster.mask_nodata()
         aquifer_top_elevation.raster.set_crs(4326)
         aquifer_top_elevation = self.set_grid(

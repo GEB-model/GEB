@@ -64,8 +64,6 @@ class Agents:
 
             The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
         """
-        self.logger.info("Setting up municipal water demands")
-
         start_model_time = self.start_date.year
         end_model_time = self.end_date.year
 
@@ -346,8 +344,6 @@ class Agents:
             The resulting lending rates and inflation rates data are set as forcing data in the model with names of the form
             'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
         """
-        self.logger.info("Setting up economic data")
-
         # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
         inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
         inflation_rates_country_index = inflation_rates.set_index("Country Code")

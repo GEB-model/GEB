@@ -478,7 +478,6 @@ class Hydrography:
 
         The resulting waterbody data is set as a table in the model with the name 'waterbodies/waterbody_data'.
         """
-        self.logger.info("Setting up waterbodies")
         dtypes = {
             "waterbody_id": np.int32,
             "waterbody_type": np.int32,

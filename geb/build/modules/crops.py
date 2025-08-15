@@ -723,7 +723,6 @@ class Crops:
             The dictionary should have a 'time' key with a list of time steps, and a 'crops' key with a dictionary of crop
             IDs and their cultivation costs. If .
         """
-        self.logger.info("Preparing cultivation costs")
         cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
             translate_crop_names=translate_crop_names,
@@ -755,7 +754,6 @@ class Crops:
             The dictionary should have a 'time' key with a list of time steps, and a 'crops' key with a dictionary of crop
             IDs and their prices.
         """
-        self.logger.info("Preparing crop prices")
         crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,

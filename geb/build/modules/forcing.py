@@ -1884,8 +1884,6 @@ class Forcing:
             calibration_period_end: The end time of the SPEI data in ISO 8601 format (YYYY-MM-DD). Endtime is exclusive.
             window_months: The window size in months for the SPEI calculation. Default is 12 months.
         """
-        self.logger.info("setting up SPEI...")
-
         assert window_months <= 12, (
             "window_months must be less than or equal to 12 (otherwise we run out of climate data)"
         )

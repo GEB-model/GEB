@@ -191,7 +191,6 @@ class LandSurface:
         The resulting grids are set as attributes of the model with names of the form '{grid_name}' or
         'landsurface/{grid_name}'.
         """
-        self.logger.info("Preparing regions and land use data.")
         regions = self.data_catalog.get_geodataframe(
             region_database,
             geom=self.region,
