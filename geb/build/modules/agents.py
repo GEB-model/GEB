@@ -1340,8 +1340,8 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.setup_farmers(farmers)
 
-    @build_method(depends_on=["setup_regions_and_land_use"])
     def setup_buildings(self):
+        output = {}
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4", geom=self.region, variables=["GDLcode", "iso_code"]
         )
@@ -1351,7 +1351,11 @@ class Agents:
         buildings = gpd.read_parquet(f"{self.root}/{fp_buildings}")[
             ["osm_id", "osm_way_id", "geometry"]
         ]
-
+        # replace None with -1
+        buildings["osm_id"] = buildings["osm_id"].replace({None: -1}).astype(np.int64)
+        buildings["osm_way_id"] = (
+            buildings["osm_way_id"].replace({None: -1}).astype(np.int64)
+        )
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
         buildings["lon"] = centroids.x
@@ -1381,8 +1385,8 @@ class Agents:
             buildings_gdl = buildings_gdl[buildings_gdl["grid_idx"] != 0]
 
             gdl_name = GDL_region["GDLcode"]
-            os.makedirs("preprocessing/buildings", exist_ok=True)
-            buildings_gdl.to_csv(f"preprocessing/buildings/buildings_{gdl_name}.csv")
+            output[gdl_name] = buildings_gdl
+        return output
 
     @build_method
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
@@ -1420,7 +1424,7 @@ class Agents:
 
         allocated_agents = pd.DataFrame()
         households_not_allocated = 0
-
+        all_buildings_model_region = self.setup_buildings()
         # iterate over regions and sample agents from GLOPOP-S
         for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
             GDL_code = GDL_region["GDLcode"]
@@ -1435,9 +1439,7 @@ class Agents:
                 continue
 
             # load building database with grid idx
-            ghs_obat_buildings = pd.read_csv(
-                f"preprocessing/buildings/buildings_{GDL_code}.csv"
-            )
+            buildings = all_buildings_model_region[GDL_code]
 
             GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
                 self.data_catalog, GDL_code
@@ -1500,9 +1502,7 @@ class Agents:
                     agents_in_grid_cell = GLOPOP_S_region[
                         GLOPOP_S_region["GRID_CELL"] == grid_cell
                     ]
-                    buildings_grid_cell = ghs_obat_buildings[
-                        ghs_obat_buildings["grid_idx"] == grid_cell
-                    ]
+                    buildings_grid_cell = buildings[buildings["grid_idx"] == grid_cell]
                     n_agents_in_cell = len(agents_in_grid_cell)
                     n_buildings_in_cell = len(buildings_grid_cell)
 
@@ -1670,6 +1670,14 @@ class Agents:
             for column, data in household_characteristics.items():
                 # only keep households with region
                 household_characteristics[column] = data[households_with_region]
+                # assert that there in no None in arrays
+                if np.sum(household_characteristics[column] == None) > 0:
+                    self.logger.warning(
+                        f"Found {np.sum(household_characteristics[column] == None)} None values in {column} for {GDL_code}"
+                    )
+                    household_characteristics[column][
+                        household_characteristics[column] == None
+                    ] = -1
 
             # ensure that all households have a region assigned
             assert not (household_characteristics["region_id"] == -1).any()
