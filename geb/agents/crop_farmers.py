@@ -791,16 +791,9 @@ class CropFarmers(AgentBaseClass):
         )
 
         if (
-            self.config["expected_utility"]["insurance"]["personal_insurance"][
-                "ruleset"
-            ]
-            != "no-adaptation"
-            or self.config["expected_utility"]["insurance"]["index_insurance"][
-                "ruleset"
-            ]
-            != "no-adaptation"
-            or self.config["expected_utility"]["insurance"]["pr_insurance"]["ruleset"]
-            != "no-adaptation"
+            self.personal_insurance_adaptation_active
+            or self.index_insurance_adaptation_active
+            or self.pr_insurance_adaptation_active
         ):
             for i, varname in enumerate(["pr_gev_c", "pr_gev_loc", "pr_gev_scale"]):
                 GEV_pr_grid = getattr(self.grid, varname)
