@@ -1017,7 +1017,7 @@ class Hydrology:
         )
 
     def water_balance(self, run_name: str = "default", *args, **kwargs) -> None:
-        """Function to export several files showing the statistics for the water balance of the model
+        """Function to export several files showing the statistics for the water balance of the model.
 
         Args:
             run_name: Defaults tp "default".

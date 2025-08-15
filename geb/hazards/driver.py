@@ -40,7 +40,7 @@ class HazardDriver:
                 self.sfincs.save_max_soil_moisture()
                 self.sfincs.save_soil_storage_capacity()
                 self.sfincs.save_ksat()
-                if not self.spinup: # Dont detect floods within spinup 
+                if not self.spinup:  # Dont detect floods within spinup
                     if self.config["hazards"]["floods"]["detect_from_discharge"]:
                         if (
                             self.next_detection_time
@@ -97,9 +97,9 @@ class HazardDriver:
                                         "end_time": end_time,
                                     }
                                     # Check if event already exists (exact match on start and end)
-                                    existing_events = self.config["hazards"]["floods"].get(
-                                        "events", []
-                                    )
+                                    existing_events = self.config["hazards"][
+                                        "floods"
+                                    ].get("events", [])
                                     event_exists = any(
                                         e["start_time"] == new_event["start_time"]
                                         and e["end_time"] == new_event["end_time"]
@@ -107,12 +107,14 @@ class HazardDriver:
                                     )
 
                                     if not event_exists:
-                                        self.config["hazards"]["floods"]["events"].append(
-                                            new_event
-                                        )
+                                        self.config["hazards"]["floods"][
+                                            "events"
+                                        ].append(new_event)
                                         config_path = Path.cwd() / "model.yml"
                                         with open(config_path, "w") as f:
-                                            yaml.safe_dump(self.config, f, sort_keys=False)
+                                            yaml.safe_dump(
+                                                self.config, f, sort_keys=False
+                                            )
                                         print("Flood event saved to config.")
                                     else:
                                         print(
