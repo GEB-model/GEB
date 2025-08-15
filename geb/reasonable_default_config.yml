@@ -68,7 +68,7 @@ agent_settings:
           max: 10
           min: 0.01
   farmers:
-    ruleset: base
+    ruleset:  
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
@@ -172,6 +172,10 @@ parameters:
   lakeAFactor: 1
   manningsN: 1
   preferentialFlowConstant: 3.14300925049279
+  ksat_multiplier: 1.0
+  water_demand_multiplier: 1.0
+
+
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini

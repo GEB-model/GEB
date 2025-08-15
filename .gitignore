@@ -15,6 +15,9 @@ examples/*/*
 !examples/*/model.yml
 !examples/*/update.yml
 
+#ignore folder
+model
+ssh_script
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -138,5 +141,3 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-GEB.code-workspace
-geb/bin/tbb/

@@ -241,7 +241,6 @@ class Observations:
                     Q_station, station_coords = process_station_data(
                         Q_station, dt_format="%Y-%m-%d %H:%M:%S", startrow=3
                     )
-
                     # Check for missing or invalid dates
                     if Q_station.index.isnull().any():
                         raise ValueError(
@@ -261,6 +260,7 @@ class Observations:
                             ]
                         )  # get the id of the station in the Q_obs dataset
                         Q_obs_merged = Q_obs.copy()
+
         else:
             Q_obs_merged = Q_obs.copy()
 

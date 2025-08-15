@@ -353,6 +353,13 @@ class Grid(BaseVariables):
             outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
             output_shape = (array.shape[0], *output_shape)
         outmap[..., ~self.mask_flat] = array
+        # print("Compressed input shape:", array.shape)
+        # print("mask_flat size:", self.mask_flat.size)
+        # print("Active cells (False in mask_flat):", (~self.mask_flat).sum())
+        # print(
+        #     "Does compressed length match active cells?:",
+        #     array.size == (~self.mask_flat).sum(),
+        # )
         return outmap.reshape(output_shape)
 
     def plot(self, array: np.ndarray) -> None:
@@ -779,12 +786,12 @@ class HRUs(BaseVariables):
             outarray: Decompressed HRU_array.
         """
         if np.issubdtype(HRU_array.dtype, np.integer):
-            nanvalue: Literal[-1] = -1
+            nanvalue = -1
         elif np.issubdtype(HRU_array.dtype, bool):
-            nanvalue: Literal[False] = False
+            nanvalue = False
         else:
-            nanvalue: int | float = np.nan
-        outarray: np.ndarray = HRU_array[self.var.unmerged_HRU_indices]
+            nanvalue = np.nan
+        outarray = HRU_array[self.var.unmerged_HRU_indices]
         outarray[self.mask] = nanvalue
         return outarray
 

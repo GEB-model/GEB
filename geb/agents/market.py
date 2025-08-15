@@ -64,7 +64,7 @@ class Market(AgentBaseClass):
         n_years = (
             self.model.config["general"]["end_time"].year
             - self.model.config["general"]["spinup_time"].year
-        ) + 1
+        ) + 20
         self.var.production = DynamicArray(
             n=n_crops,
             max_n=n_crops,
@@ -176,6 +176,9 @@ class Market(AgentBaseClass):
             > 0
         ), "Negative prices predicted"
 
+        print("DEBUG year_index:", self.year_index)
+        print("DEBUG inflation length:", len(self.var.cumulative_inflation_per_region))
+
         # TODO: This assumes that the inflation is the same for all regions (region_idx=0)
         return (
             price_pred_per_region
@@ -252,6 +255,11 @@ class Market(AgentBaseClass):
 
     @property
     def year_index(self) -> int:
+        # print("time is:")
+        # print(
+        #     self.model.current_time.year
+        #     - self.model.config["general"]["spinup_time"].year
+        # )
         return (
             self.model.current_time.year
             - self.model.config["general"]["spinup_time"].year

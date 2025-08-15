@@ -12,7 +12,7 @@ class HazardDriver:
 
     def __init__(self):
         if self.config["hazards"]["floods"]["simulate"]:
-            # exract the longest flood event in days
+            # extract the longest flood event in days
             flood_events = self.config["hazards"]["floods"]["events"]
             flood_event_lengths = [
                 event["end_time"] - event["start_time"] for event in flood_events
@@ -29,6 +29,10 @@ class HazardDriver:
         if self.config["hazards"]["floods"]["simulate"]:
             if self.simulate_hydrology:
                 self.sfincs.save_discharge()
+                self.sfincs.save_soil_moisture()
+                self.sfincs.save_max_soil_moisture()
+                self.sfincs.save_soil_storage_capacity()
+                self.sfincs.save_ksat()
 
             for event in self.config["hazards"]["floods"]["events"]:
                 assert isinstance(event["start_time"], datetime), (
