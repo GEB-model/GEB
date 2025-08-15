@@ -1,0 +1,200 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Contribution Guide &mdash; GEB  documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=5dd5ad26" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="_static/jquery.js?v=5be48651"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=27b9c81c"></script>
+      <script src="_static/doctools.js?v=695de88e"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="copyright" title="Copyright" href="copyright.html" />
+    <link rel="next" title="Updates" href="updates.html" />
+    <link rel="prev" title="Authors" href="authors_page.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            GEB
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="overview_and_installation.html">Overview and installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="creating_a_model.html">Creating a model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="running.html">Running the model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="visualisation.html">Visualisation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="calibration.html">Calibration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="ODD/ODD.html">ODD protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="agents/__init__.html">Agents</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agents/households.html">Households</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agents/crop_farmers.html">Crop farmers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agents/reservoir_operators.html">Reservoir operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agents/government.html">Government</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="model.html">Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="report.html">Report</a></li>
+<li class="toctree-l1"><a class="reference internal" href="HRUs.html">Farm-level HRUs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="artists.html">Artists</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">About</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="authors_page.html">Authors</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Contribution guide</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#general-recommendations">General Recommendations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#feature-development">Feature Development</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#bugs">Bugs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#testing">Testing</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#coding-practices">Coding Practices</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="updates.html">Updates</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">GEB</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Contribution Guide</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/contribution_guide.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="contribution-guide">
+<h1>Contribution Guide<a class="headerlink" href="#contribution-guide" title="Link to this heading"></a></h1>
+<section id="general-recommendations">
+<h2>General Recommendations<a class="headerlink" href="#general-recommendations" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>It is RECOMMENDED to turn on notifications of GitHub issues to remain aware of current issues and suggested solutions. You can do so using the “watch” feature on the GEB GitHub page.</p></li>
+<li><p>You MUST use descriptive commit messages for every commit (e.g., no “some fixes”, “progress”, etc.).</p></li>
+<li><p>It is RECOMMENDED to keep up-to-date with the main branch by frequently (at least once a week) pulling updates from the main. This will reduce the number of merge conflicts and avoid work duplication.</p></li>
+<li><p>You MUST use descriptive branch names, and include your name or your sub-project if multiple people work on the same topic.</p></li>
+</ul>
+</section>
+<section id="feature-development">
+<h2>Feature Development<a class="headerlink" href="#feature-development" title="Link to this heading"></a></h2>
+<p>The main version of GEB is always on the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch. This branch SHOULD be stable, and we aim for it to be free of bugs
+(acknowledging that this is an almost impossible aim). New features are developed in other branches.</p>
+<ul class="simple">
+<li><p>It is RECOMMENDED to create a GitHub issue with the features that you are working on and to communicate this to other developers
+working on similar topics, so that everyone is aware of ongoing work.</p></li>
+<li><p>It is RECOMMENDED to limit the number of features in a single branch. If possible, break your feature into several sub-features.</p></li>
+<li><p>When the (sub-)features are complete, the branch MUST be merged into <code class="docutils literal notranslate"><span class="pre">main</span></code> using a pull request on GitHub.</p></li>
+<li><p>It is RECOMMENDED to get feedback on the code from one of the main developers. You can use the reviewer mechanism on the pull request page.</p></li>
+</ul>
+</section>
+<section id="bugs">
+<h2>Bugs<a class="headerlink" href="#bugs" title="Link to this heading"></a></h2>
+<p>We use GitHub issues for tracking bugs.</p>
+<ul class="simple">
+<li><p>When you find a bug that affects <code class="docutils literal notranslate"><span class="pre">main</span></code>, you MUST create a new issue describing the bug.</p></li>
+<li><p>When fixing the bug:
+- The fix MUST be reported on the issue page.
+- The issue MUST link to the fix.</p></li>
+<li><p>It is RECOMMENDED to create the fix in a dedicated bug-fix branch created from <code class="docutils literal notranslate"><span class="pre">main</span></code> (i.e., not from your working branch). Then, merge the bug-fix branch into your own branch as needed, and separately request a merge of the bug-fix branch back into <code class="docutils literal notranslate"><span class="pre">main</span></code>.</p></li>
+<li><p>Alternatively, you can make a fix directly in your working branch and create a commit that fixes the bug, and only the bug. Then, use git cherry-pick to apply the fix to the <code class="docutils literal notranslate"><span class="pre">main</span></code> branch.</p></li>
+<li><p>It is also RECOMMENDED to communicate the bug to developers who may be affected.</p></li>
+</ul>
+</section>
+<section id="testing">
+<h2>Testing<a class="headerlink" href="#testing" title="Link to this heading"></a></h2>
+<p>We use <code class="docutils literal notranslate"><span class="pre">pytest</span></code> for automated testing of the GEB model.</p>
+<ul class="simple">
+<li><p>It is RECOMMENDED to write tests for your code.</p></li>
+<li><p>Tests are automatically run on GitHub when any branch is pushed.</p></li>
+</ul>
+</section>
+<section id="coding-practices">
+<h2>Coding Practices<a class="headerlink" href="#coding-practices" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>All variable names MUST be clear. Prefer long and descriptive names over short, unclear ones.</p></li>
+<li><p>Code comments are RECOMMENDED, focusing on <em>why</em> something is done, rather than <em>what</em> is done. The <em>what</em> should ideally be
+evident from the variable naming and structure.</p></li>
+<li><p>Units MUST be in SI units, or have the unit appended to the variable name. If SI units cannot be used (e.g., when coupling
+with other models), units should be converted immediately on import or export.</p></li>
+<li><p>Monetary units MUST be nominal USD (face value) for the respective years.</p></li>
+<li><p>It is RECOMMENDED to use <code class="docutils literal notranslate"><span class="pre">assert</span></code> statements in the model to ensure correct behaviour.</p></li>
+<li><p>When there is an error, the model SHOULD fail. Do not catch exceptions and replace with dummy data.</p></li>
+<li><p>All code MUST be formatted using <code class="docutils literal notranslate"><span class="pre">ruff</span> <span class="pre">format</span></code> and <code class="docutils literal notranslate"><span class="pre">ruff</span> <span class="pre">check</span></code>. Imports MUST be ordered using <code class="docutils literal notranslate"><span class="pre">isort</span></code> (included in <code class="docutils literal notranslate"><span class="pre">ruff</span></code>). It is RECOMMENDED to install the ruff plugin and set ruff as the default formatter in Visual Studio Code. Also turn on “format on paste” and “format on save”. <code class="docutils literal notranslate"><span class="pre">ruff</span> <span class="pre">format</span></code> and <code class="docutils literal notranslate"><span class="pre">ruff</span> <span class="pre">check</span></code> are automatically executed when pushing to GitHub.</p></li>
+</ul>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="authors_page.html" class="btn btn-neutral float-left" title="Authors" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="updates.html" class="btn btn-neutral float-right" title="Updates" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; <a href="copyright.html">Copyright</a> 2023, VU-IVM and IIASA.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

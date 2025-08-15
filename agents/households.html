@@ -1,0 +1,250 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Households &mdash; GEB  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=5dd5ad26" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5be48651"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=27b9c81c"></script>
+      <script src="../_static/doctools.js?v=695de88e"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="copyright" title="Copyright" href="../copyright.html" />
+    <link rel="next" title="Farmers" href="crop_farmers.html" />
+    <link rel="prev" title="Agents" href="__init__.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            GEB
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../overview_and_installation.html">Overview and installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../configuration.html">Configuration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../creating_a_model.html">Creating a model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../running.html">Running the model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../visualisation.html">Visualisation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../calibration.html">Calibration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ODD/ODD.html">ODD protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="__init__.html">Agents</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Households</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#geb.agents.households.Households"><code class="docutils literal notranslate"><span class="pre">Households</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.households.Households.assign_household_attributes"><code class="docutils literal notranslate"><span class="pre">Households.assign_household_attributes()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.households.Households.change_household_locations"><code class="docutils literal notranslate"><span class="pre">Households.change_household_locations()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.households.Households.create_damage_probability_maps"><code class="docutils literal notranslate"><span class="pre">Households.create_damage_probability_maps()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.households.Households.decide_household_strategy"><code class="docutils literal notranslate"><span class="pre">Households.decide_household_strategy()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.households.Households.flood"><code class="docutils literal notranslate"><span class="pre">Households.flood()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.households.Households.get_flood_risk_information_damage_scanner"><code class="docutils literal notranslate"><span class="pre">Households.get_flood_risk_information_damage_scanner()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.households.Households.load_flood_maps"><code class="docutils literal notranslate"><span class="pre">Households.load_flood_maps()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.households.Households.warning_communication"><code class="docutils literal notranslate"><span class="pre">Households.warning_communication()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.households.Households.water_demand"><code class="docutils literal notranslate"><span class="pre">Households.water_demand()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#geb.agents.households.from_landuse_raster_to_polygon"><code class="docutils literal notranslate"><span class="pre">from_landuse_raster_to_polygon()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="crop_farmers.html">Crop farmers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reservoir_operators.html">Reservoir operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="government.html">Government</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../model.html">Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../report.html">Report</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../HRUs.html">Farm-level HRUs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../artists.html">Artists</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">About</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../authors_page.html">Authors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contribution_guide.html">Contribution guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../updates.html">Updates</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">GEB</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Households</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/agents/households.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-geb.agents.households">
+<span id="households"></span><h1>Households<a class="headerlink" href="#module-geb.agents.households" title="Link to this heading"></a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="geb.agents.households.Households">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">Households</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">agents</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reduncancy</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#Households"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.Households" title="Link to this definition"></a></dt>
+<dd><dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.households.Households.assign_household_attributes">
+<span class="sig-name descname"><span class="pre">assign_household_attributes</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#Households.assign_household_attributes"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.Households.assign_household_attributes" title="Link to this definition"></a></dt>
+<dd><p>Household locations are already sampled from population map in GEBModel.setup_population().</p>
+<p>These are loaded in the spinup() method.
+Here we assign additional attributes (dummy data) to the households that are used in the decision module.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.households.Households.change_household_locations">
+<span class="sig-name descname"><span class="pre">change_household_locations</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#Households.change_household_locations"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.Households.change_household_locations" title="Link to this definition"></a></dt>
+<dd><p>Change the location of the household points to the centroid of the buildings.</p>
+<p>Also, it associates the household points with their postal codes.
+This is done to get the correct geometry for the warning function</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.households.Households.create_damage_probability_maps">
+<span class="sig-name descname"><span class="pre">create_damage_probability_maps</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#Households.create_damage_probability_maps"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.Households.create_damage_probability_maps" title="Link to this definition"></a></dt>
+<dd><p>Creates an object-based (buildings) probability map based on the ensemble of damage maps.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.households.Households.decide_household_strategy">
+<span class="sig-name descname"><span class="pre">decide_household_strategy</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#Households.decide_household_strategy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.Households.decide_household_strategy" title="Link to this definition"></a></dt>
+<dd><p>This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.households.Households.flood">
+<span class="sig-name descname"><span class="pre">flood</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">flood_map</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#Households.flood"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.Households.flood" title="Link to this definition"></a></dt>
+<dd><p>This function computes the damages for the assets and land use types in the model.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>flood_map</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataArray</span></code></span>) – The flood map containing water levels for the flood event.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">float</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.households.Households.get_flood_risk_information_damage_scanner">
+<span class="sig-name descname"><span class="pre">get_flood_risk_information_damage_scanner</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#Households.get_flood_risk_information_damage_scanner"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.Households.get_flood_risk_information_damage_scanner" title="Link to this definition"></a></dt>
+<dd><p>Initiate flood risk information for each household.</p>
+<p>This information is used in the decision module.
+For now also only dummy data is created.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.households.Households.load_flood_maps">
+<span class="sig-name descname"><span class="pre">load_flood_maps</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#Households.load_flood_maps"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.Households.load_flood_maps" title="Link to this definition"></a></dt>
+<dd><p>Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.households.Households.warning_communication">
+<span class="sig-name descname"><span class="pre">warning_communication</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">target_households</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#Households.warning_communication"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.Households.warning_communication" title="Link to this definition"></a></dt>
+<dd><p>Communicates the warning to households based on the communication efficiency.</p>
+<p>changes risk perception –&gt; to be moved to the update risk perception function;
+and return the number of households that were warned</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.households.Households.water_demand">
+<span class="sig-name descname"><span class="pre">water_demand</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#Households.water_demand"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.Households.water_demand" title="Link to this definition"></a></dt>
+<dd><p>Calculate the water demand per household in m3 per day.</p>
+<p>This function uses a multiplier to calculate the water demand for
+for each region with respect to the base year.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="geb.agents.households.from_landuse_raster_to_polygon">
+<span class="sig-name descname"><span class="pre">from_landuse_raster_to_polygon</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mask</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transform</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">crs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/households.html#from_landuse_raster_to_polygon"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.households.from_landuse_raster_to_polygon" title="Link to this definition"></a></dt>
+<dd><p>Convert raster data into separate GeoDataFrames for specified land use values.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>mask</strong> – A 2D numpy array representing the land use raster, where each unique value corresponds to a different land use type.</p></li>
+<li><p><strong>transform</strong> – A rasterio Affine transform object that defines the spatial reference of the raster.</p></li>
+<li><p><strong>crs</strong> – The coordinate reference system (CRS) to use for the resulting GeoDataFrame.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>A GeoDataFrame containing polygons for the specified land use values.</strong></p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">GeoDataFrame</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="__init__.html" class="btn btn-neutral float-left" title="Agents" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="crop_farmers.html" class="btn btn-neutral float-right" title="Farmers" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; <a href="../copyright.html">Copyright</a> 2023, VU-IVM and IIASA.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
