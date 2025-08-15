@@ -578,8 +578,6 @@ class Agents:
         The resulting well prices and upkeep prices data are set as dictionary with names of the form
         'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
-        self.logger.info("Setting up well prices by reference year")
-
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())
@@ -656,8 +654,6 @@ class Agents:
         The resulting well prices and upkeep prices data are set as dictionary with names of the form
         'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
-        self.logger.info("Setting up well prices by reference year")
-
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
         price_ratio = self.dict["socioeconomics/price_ratio"]
@@ -789,8 +785,6 @@ class Agents:
         resulting prices are stored in the dictionaries with the region ID as the key.
 
         """
-        self.logger.info("Setting up well prices by reference year")
-
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())

@@ -38,7 +38,6 @@ class LandSurface:
             function, and correcting for the subgrid factor. Thus, every subgrid cell within a grid cell has the same value.
             The resulting subgrid cell area map is then set as the `cell_area` attribute of the subgrid.
         """
-        self.logger.info("Preparing cell area map.")
         mask = self.grid["mask"]
 
         cell_area = self.full_like(
@@ -362,8 +361,6 @@ class LandSurface:
         data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
         where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
         """
-        self.logger.info("Setting up land use parameters")
-
         bounds = self.geom["routing/subbasins"].total_bounds
         buffer = 0.1
         landcover_classification = (
@@ -475,7 +472,6 @@ class LandSurface:
         form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
         with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
         """
-        self.logger.info("Setting up soil parameters")
         ds = load_soilgrids(self.data_catalog, self.subgrid, self.region)
 
         self.set_subgrid(ds["silt"], name="soil/silt")

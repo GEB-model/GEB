@@ -192,9 +192,10 @@ class Crops:
             missing_regions_in_GLOBIOM = set(ISO3_codes_region) - set(
                 ISO3_codes_GLOBIOM_region
             )
-            self.logger.info(
-                f"Regions in the model not present in GLOBIOM: {missing_regions_in_GLOBIOM}"
-            )
+            if len(missing_regions_in_GLOBIOM) > 0:
+                self.logger.info(
+                    f"Regions in the model not present in GLOBIOM: {list(missing_regions_in_GLOBIOM)}"
+                )
             for region in missing_regions_in_GLOBIOM:
                 if not crop_data[crop_data["ISO3"] == region].empty:
                     raise ValueError(

@@ -183,7 +183,6 @@ class Hydrography:
         The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
         `set_grid()` method.
         """
-        self.logger.info("Setting up Manning's coefficient")
         a = (2 * self.grid["cell_area"]) / self.grid["routing/upstream_area"]
         a = xr.where(a < 1, a, 1, keep_attrs=True)
         b = self.grid["routing/outflow_elevation"] / 2000
