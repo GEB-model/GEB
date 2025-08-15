@@ -29,9 +29,7 @@ class ReservoirOperators(AgentBaseClass):
             else {}
         )
         self.environmental_flow_requirement = 0.0
-        self.water_conveyance_efficiency = (
-            0.3  # 70% of the water is lost in the conveyance system
-        )
+        self.water_conveyance_efficiency = 1.0
 
         if self.model.in_spinup:
             self.spinup()
