@@ -160,9 +160,6 @@ class CropFarmers(AgentBaseClass):
 
         self.adjust_cultivation_costs()
 
-        if self.model.in_spinup:
-            self.spinup()
-
         # ruleset variables
         self.wells_adaptation_active = (
             not self.config["expected_utility"]["adaptation_well"]["ruleset"]
@@ -195,6 +192,9 @@ class CropFarmers(AgentBaseClass):
         self.microcredit_adaptation_active = (
             not self.config["microcredit"]["ruleset"] == "no-adaptation"
         )
+
+        if self.model.in_spinup:
+            self.spinup()
 
     @property
     def name(self):
