@@ -331,35 +331,32 @@ class LandSurface:
     ) -> None:
         """Sets up the land use parameters for the model.
 
-        Parameters
-        ----------
-        interpolation_method : str, optional
-            The interpolation method to use when interpolating the land use parameters. Default is 'nearest'.
+        Args:
+            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021_v200'.
 
         Notes:
-        -----
-        This method sets up the land use parameters for the model by retrieving land use data from the CWATM dataset and
-        interpolating the data to the model grid. It first retrieves the land use dataset from the `data_catalog`, and
-        then retrieves the maximum root depth and root fraction data for each land use type. It then
-        interpolates the data to the model grid using the specified interpolation method and sets the resulting grids as
-        attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}', where
-        {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
-        the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.).
+            This method sets up the land use parameters for the model by retrieving land use data from the CWATM dataset and
+            interpolating the data to the model grid. It first retrieves the land use dataset from the `data_catalog`, and
+            then retrieves the maximum root depth and root fraction data for each land use type. It then
+            interpolates the data to the model grid using the specified interpolation method and sets the resulting grids as
+            attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}', where
+            {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
+            the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.).
 
-        Additionally, this method sets up the crop coefficient and interception capacity data for each land use type by
-        retrieving the corresponding data from the land use dataset and interpolating it to the model grid. The crop
-        coefficient data is set as attributes of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
-        where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
-        data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
-        where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
+            Additionally, this method sets up the crop coefficient and interception capacity data for each land use type by
+            retrieving the corresponding data from the land use dataset and interpolating it to the model grid. The crop
+            coefficient data is set as attributes of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
+            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
+            data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
+            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
 
-        The resulting land use parameters are set as attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}',
-        where {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
-        the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.). The crop coefficient data is set as attributes
-        of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
-        where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
-        data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
-        where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
+            The resulting land use parameters are set as attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}',
+            where {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
+            the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.). The crop coefficient data is set as attributes
+            of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
+            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
+            data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
+            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
         """
         bounds = self.geom["routing/subbasins"].total_bounds
         buffer = 0.1

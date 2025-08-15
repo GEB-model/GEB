@@ -1059,7 +1059,6 @@ class fairSTREAMModel(GEBModel):
         size_mid = n_sizes // 2
         sugarcane_id = crop_name_to_ID["Sugarcane"]
 
-        # ---- main loop ----------------------------------------------------------
         for idx in range(n_farmers):
             farmer_crop_calendar = crop_calendar_per_farmer[idx]
 
@@ -1100,7 +1099,7 @@ class fairSTREAMModel(GEBModel):
                 np.random.choice(crop_data.index, p=crop_data / crop_data.sum())
             ]
 
-            # ---------- choose rotation ----------
+            # choose rotation
             if farmer_main_crop_id == sugarcane_id:
                 crop_per_season = np.array([-1, -1, sugarcane_id])
             else:
@@ -1125,7 +1124,7 @@ class fairSTREAMModel(GEBModel):
                 if not hit_found:
                     crop_per_season = np.array([farmer_main_crop_id, -1, -1])
 
-            # ---------- write rotation to farmer calendar ----------
+            # write rotation to farmer calendar
             for season_idx, season_crop in enumerate(crop_per_season):
                 if season_crop == -1:
                     continue

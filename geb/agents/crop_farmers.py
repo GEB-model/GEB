@@ -509,6 +509,12 @@ class CropFarmers(AgentBaseClass):
         self.var.remaining_irrigation_limit_m3 = DynamicArray(
             n=self.var.n, max_n=self.var.max_n, fill_value=np.nan, dtype=np.float32
         )
+        self.var.irrigation_limit_reset_day_index = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.int32,
+            fill_value=0,  # reset on day 0
+        )
 
         self.var.yield_ratios_drought_event = DynamicArray(
             n=self.var.n,
@@ -1117,6 +1123,7 @@ class CropFarmers(AgentBaseClass):
                 arno_beta=self.HRU.var.arno_beta,
                 saturated_hydraulic_conductivity=self.HRU.var.saturated_hydraulic_conductivity,
                 remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
+                irrigation_limit_reset_day_index=self.var.irrigation_limit_reset_day_index.data,
                 cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
                 crop_calendar=self.var.crop_calendar.data,
                 crop_group_numbers=self.var.crop_data[
@@ -1128,7 +1135,6 @@ class CropFarmers(AgentBaseClass):
                 minimum_effective_root_depth=np.float32(
                     self.model.hydrology.soil.var.minimum_effective_root_depth
                 ),
-                irrigation_limit_reset_day_index=np.int32(0),
             )
         )
 

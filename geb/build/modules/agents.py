@@ -335,17 +335,16 @@ class Agents:
         """Sets up the economic data for GEB.
 
         Notes:
-        -----
-        This method sets up the lending rates and inflation rates data for GEB. It first retrieves the
-        lending rates and inflation rates data from the World Bank dataset using the `get_geodataframe` method of the
-        `data_catalog` object. It then creates dictionaries to store the data for each region, with the years as the time
-        dimension and the lending rates or inflation rates as the data dimension.
+            This method sets up the lending rates and inflation rates data for GEB. It first retrieves the
+            lending rates and inflation rates data from the World Bank dataset using the `get_geodataframe` method of the
+            `data_catalog` object. It then creates dictionaries to store the data for each region, with the years as the time
+            dimension and the lending rates or inflation rates as the data dimension.
 
-        The lending rates and inflation rates data are converted from percentage to rate by dividing by 100 and adding 1.
-        The data is then stored in the dictionaries with the region ID as the key.
+            The lending rates and inflation rates data are converted from percentage to rate by dividing by 100 and adding 1.
+            The data is then stored in the dictionaries with the region ID as the key.
 
-        The resulting lending rates and inflation rates data are set as forcing data in the model with names of the form
-        'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
+            The resulting lending rates and inflation rates data are set as forcing data in the model with names of the form
+            'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
         """
         self.logger.info("Setting up economic data")
 

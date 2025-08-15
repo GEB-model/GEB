@@ -191,17 +191,34 @@ def adjust_irrigation_to_limit(
     cumulative_water_deficit_m3: np.ndarray,
     crop_calendar: np.ndarray,
     crop_rotation_year_index: np.ndarray,
-    farmer_gross_irrigation_m3: float,
+    farmer_gross_irrigation_demand_m3: float,
     irrigation_efficiency_farmer: float,
-    reset_day_index: int,
+    reset_day_index: np.int32,
 ) -> float:
+    """Adjusts the irrigation to the remaining irrigation limit for a farmer.
+
+    Args:
+        farmer: Index of the farmer.
+        day_index: Current day index (0-indexed).
+        remaining_irrigation_limit_m3: Remaining irrigation limit in m3 for each farmer.
+        cumulative_water_deficit_m3: Cumulative water deficit in m3 for each day of the year for each farmer.
+        crop_calendar: Crop calendar for each farmer. Each row is a farmer, and each column is a crop.
+        crop_rotation_year_index: Crop rotation year index for each farmer. Used to select the correct crop calendar.
+        farmer_gross_irrigation_demand_m3: Gross irrigation demand in m3 for the farmer on the current day.
+        irrigation_efficiency_farmer: Irrigation efficiency for the farmer.
+        reset_day_index: Day to reset the irrigation year, effectively the end of the decision period.
+
+    Returns:
+        irrigation_correction_factor: The ratio of the remaining irrigation limit to the future water deficit.
+        If the remaining irrigation limit is less than 0, returns 0.
+    """
     if remaining_irrigation_limit_m3[farmer] < np.float32(0):
         return np.float32(0)
     # calculate future water deficit, but also include today's irrigation consumption
     # Check whether a full year has passed
     if np.all(~np.isnan(cumulative_water_deficit_m3[farmer])):
         potential_irrigation_consumption_farmer_m3 = (
-            farmer_gross_irrigation_m3 * irrigation_efficiency_farmer
+            farmer_gross_irrigation_demand_m3 * irrigation_efficiency_farmer
         )
         future_water_deficit = get_future_deficit(
             farmer=farmer,
@@ -216,16 +233,16 @@ def adjust_irrigation_to_limit(
             remaining_irrigation_limit_m3[farmer] * irrigation_efficiency_farmer
         )
 
-        limit_to_deficit_ratio = (
+        irrigation_correction_factor = (
             effective_remaining_irrigation_limit_m3 / future_water_deficit
         )
         # limit the ratio to 1 if the deficit is smaller than the limit
-        limit_to_deficit_ratio = min(limit_to_deficit_ratio, 1)
+        irrigation_correction_factor = min(irrigation_correction_factor, 1)
     else:
-        limit_to_deficit_ratio = np.float32(1)
+        irrigation_correction_factor = np.float32(1)
 
     assert future_water_deficit > np.float32(0)
-    return limit_to_deficit_ratio
+    return irrigation_correction_factor
 
 
 @njit(cache=True)
@@ -472,6 +489,7 @@ def get_gross_irrigation_demand_m3(
     arno_beta: npt.NDArray[np.float32],
     saturated_hydraulic_conductivity: npt.NDArray[np.float32],
     remaining_irrigation_limit_m3: npt.NDArray[np.float32],
+    irrigation_limit_reset_day_index: npt.NDArray[np.int32],
     cumulative_water_deficit_m3: npt.NDArray[np.float32],
     crop_calendar: npt.NDArray[np.int32],
     crop_group_numbers: npt.NDArray[np.float32],
@@ -479,7 +497,6 @@ def get_gross_irrigation_demand_m3(
     current_crop_calendar_rotation_year_index: npt.NDArray[np.int32],
     max_paddy_water_level: npt.NDArray[np.float32],
     minimum_effective_root_depth: np.float32,
-    irrigation_limit_reset_day_index: np.int32,
 ) -> tuple[
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
@@ -541,10 +558,10 @@ def get_gross_irrigation_demand_m3(
         # If the potential irrigation consumption is larger than 0, the farmer needs to abstract water
         # if there is no irrigation limit, no need to adjust the irrigation
         if not np.isnan(remaining_irrigation_limit_m3[farmer]):
-            farmer_gross_irrigation_m3: np.float32 = gross_potential_irrigation_m3[
-                farmer_fields
-            ].sum()
-            if farmer_gross_irrigation_m3 > 0.0:
+            farmer_gross_irrigation_demand_m3: np.float32 = (
+                gross_potential_irrigation_m3[farmer_fields].sum()
+            )
+            if farmer_gross_irrigation_demand_m3 > 0.0:
                 irrigation_correction_factor: float = adjust_irrigation_to_limit(
                     farmer=farmer,
                     day_index=day_index,
@@ -552,9 +569,9 @@ def get_gross_irrigation_demand_m3(
                     cumulative_water_deficit_m3=cumulative_water_deficit_m3,
                     crop_calendar=crop_calendar,
                     crop_rotation_year_index=current_crop_calendar_rotation_year_index,
-                    farmer_gross_irrigation_m3=farmer_gross_irrigation_m3,
+                    farmer_gross_irrigation_demand_m3=farmer_gross_irrigation_demand_m3,
                     irrigation_efficiency_farmer=irrigation_efficiency_farmer,
-                    reset_day_index=irrigation_limit_reset_day_index,
+                    reset_day_index=irrigation_limit_reset_day_index[farmer],
                 )
                 assert 0 <= irrigation_correction_factor <= 1
 
