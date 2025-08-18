@@ -114,9 +114,12 @@ class Households(AgentBaseClass):
 
     def construct_income_distribution(self):
         # These settings are dummy data now. Should come from subnational datasets.
-        average_household_income = 38_500
-        mean_to_median_inc_ratio = 1.3
-        median_income = average_household_income / mean_to_median_inc_ratio
+        distibution_parameters = load_table(
+            self.model.files["table"]["income/distribution_parameters"]
+        )
+        country = self.model.regions["ISO3"].values[0]
+        average_household_income = distibution_parameters[country]["MEAN"]
+        median_income = distibution_parameters[country]["MEDIAN"]
 
         # construct lognormal income distribution
         mu = np.log(median_income)
@@ -770,9 +773,9 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data + 10,
+            risk_perception=self.var.risk_perception.data + 1,
             expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data * 0,
+            adaptation_costs=self.var.adaptation_costs.data,
             time_adapted=self.var.time_adapted.data,
             loan_duration=20,
             p_floods=1 / self.return_periods,
@@ -789,7 +792,7 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data + 10,
+            risk_perception=self.var.risk_perception.data + 1,
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,

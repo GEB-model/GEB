@@ -362,7 +362,15 @@ UN_dev_index:
   data_type: DataFrame
   driver_kwargs:
     index_col: 'Year'
-
+oecd_idd:
+  meta:
+    category: economics
+    source_author: OECD
+    source_url: https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov
+  path:
+    socioeconomic/OECD/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0+.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR..csv
+  driver: csv
+  data_type: DataFrame
 wb_inflation_rate:
   meta:
     category: economics

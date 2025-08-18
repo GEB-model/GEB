@@ -327,6 +327,46 @@ class Agents:
             "ssp2",
         )
 
+    @build_method
+    def setup_income_distribution_parameters(self):
+        """Sets up the income distributions for GEB.
+
+        This function used WID data on income distributions to generate income distribution profiles for each region.
+        """
+        income_distribution_parameters = {}
+        path = self.data_catalog.get_source(
+            "oecd_idd"
+        ).path  # in future maybe replace this with an API request
+        oecd_idd = pd.read_csv(path)
+
+        # clean data
+        cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
+        oecd_idd = oecd_idd[cols_to_keep]
+        # only done to check countries in region, could probably be done more efficiently
+        countries = self.data_catalog.get_geodataframe(
+            "GADM_level0",
+            geom=self.region,
+        )
+        for country in countries["GID_0"]:
+            income_distribution_parameters[country] = {}
+            oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
+            # take the most recent year
+            most_recent_year = oecd_widd_country[
+                oecd_widd_country["TIME_PERIOD"]
+                == np.max(oecd_widd_country["TIME_PERIOD"])
+            ]
+            income_distribution_parameters[country]["MEAN"] = most_recent_year[
+                most_recent_year["STATISTICAL_OPERATION"] == "MEAN"
+            ]["OBS_VALUE"].iloc[0]
+            income_distribution_parameters[country]["MEDIAN"] = most_recent_year[
+                most_recent_year["STATISTICAL_OPERATION"] == "MEDIAN"
+            ]["OBS_VALUE"].iloc[0]
+        # store to model table
+        income_distribution_parameters_pd = pd.DataFrame(income_distribution_parameters)
+        self.set_table(
+            income_distribution_parameters_pd, "income/distribution_parameters"
+        )
+
     @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
     def setup_economic_data(self):
         """Sets up the economic data for GEB.
