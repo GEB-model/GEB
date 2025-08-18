@@ -1036,41 +1036,45 @@ class Households(AgentBaseClass):
 
             # Calculate damages to building structure (unprotected buildings)
             damage_unprotected: pd.Series = VectorScanner(
-                feature_file=buildings.rename(
+                features=buildings.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
-                hazard_file=flood_map,
-                curve_path=self.buildings_structure_curve,
-                gridded=False,
+                hazard=flood_map,
+                vulnerability_curves=self.buildings_structure_curve,
                 disable_progress=True,
             )
-            total_damage_structure = damage_unprotected["damage"].sum()
+            total_damage_structure = damage_unprotected.sum()
             print(
                 f"damages to building unprotected structure rp{return_period} are: {round(total_damage_structure / 1e6, 2)} M€"
             )
 
             # Save the damages to the dataframe
-            damage_unprotected = damage_unprotected[["osm_id", "osm_way_id", "damage"]]
+            buildings_with_damages = buildings[["osm_id", "osm_way_id"]]
+            buildings_with_damages["damage"] = damage_unprotected
+            # damage_unprotected = damage_unprotected[["osm_id", "osm_way_id", "damage"]]
 
             # Calculate damages to building structure (floodproofed buildings)
             buildings_floodproofed = buildings.copy()
             buildings_floodproofed["object_type"] = "building_flood_proofed"
             damage_flood_proofed: pd.Series = VectorScanner(
-                feature_file=buildings_floodproofed.rename(
+                features=buildings_floodproofed.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
-                hazard_file=flood_map,
-                curve_path=self.buildings_structure_curve,
-                gridded=False,
+                hazard=flood_map,
+                vulnerability_curves=self.buildings_structure_curve,
                 disable_progress=True,
             )
-            total_damage_structure = damage_flood_proofed["damage"].sum()
+            total_damage_structure = damage_flood_proofed.sum()
             print(
                 f"damages to building flood-proofed structure rp{return_period} are: {round(total_damage_structure / 1e6, 2)} M€"
             )
 
+            # Save the damages to the dataframe
+            buildings_with_damages_floodproofed = buildings[["osm_id", "osm_way_id"]]
+            buildings_with_damages_floodproofed["damage"] = damage_flood_proofed
+
             # add damages to agents (unprotected buildings)
-            for _, row in damage_unprotected.iterrows():
+            for _, row in buildings_with_damages.iterrows():
                 damage = row["damage"]
                 if row["osm_id"] is not None:
                     osm_id = int(row["osm_id"])
@@ -1084,7 +1088,7 @@ class Households(AgentBaseClass):
                     damages_do_not_adapt[i, idx_agents_in_building_way] = damage
 
             # add damages to agents (flood-proofed buildings)
-            for _, row in damage_flood_proofed.iterrows():
+            for _, row in buildings_with_damages_floodproofed.iterrows():
                 damage = row["damage"]
                 if row["osm_id"] is not None:
                     osm_id = int(row["osm_id"])
@@ -1157,7 +1161,6 @@ class Households(AgentBaseClass):
             features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),
             hazard=flood_map,
             vulnerability_curves=self.var.buildings_structure_curve,
-
         )
 
         total_damage_structure = damages_buildings_structure.sum()
