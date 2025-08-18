@@ -23,7 +23,7 @@ jobs:
           path: pr-branch
 
       - name: Install Ruff
-        uses: chartboost/ruff-action@v1
+        uses: astral-sh/ruff-action@v3
 
       - name: Get baseline error count from main branch
         id: ruff_main
