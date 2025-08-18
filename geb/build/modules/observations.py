@@ -1,3 +1,4 @@
+import io
 import os
 import tempfile
 import zipfile
@@ -160,14 +161,23 @@ class Observations:
         if str(Q_obs_source.path).endswith(".zip"):
             # Handle zip file containing single .nc file
             with zipfile.ZipFile(Q_obs_source.path, "r") as zip_file:
+                self.logger.info(
+                    f"Loading global GRDC discharge observations : {Q_obs_source.path}"
+                )
                 # Get the .nc file from the zip
                 nc_filename = [f for f in zip_file.namelist() if f.endswith(".nc")][0]
-                # Read directly from zip file
+                # Read file content into memory
                 with zip_file.open(nc_filename) as file:
-                    Q_obs = xr.open_dataset(file)
+                    file_content = file.read()
+
+            # Open dataset from memory buffer
+            Q_obs = xr.open_dataset(io.BytesIO(file_content), engine="h5netcdf")
+
+            # rename geo_x and geo_y to x and y
+            Q_obs = Q_obs.rename({"geo_x": "x", "geo_y": "y"})
         else:
             # Fallback to original method if not a zip file
-            Q_obs = self.data_catalog.get_geodataset("GRDC")
+            Q_obs = self.data_catalog.get_geodataset("GRDC")  # is already renamed
 
         # create folders
         snapping_discharge_folder = (
@@ -310,15 +320,14 @@ class Observations:
             Q_obs_merged, region_shapefile
         )  # filter Q_obs stations based on the region shapefile
 
-        # convert all the -999 values to NaN
-        Q_obs_clipped = Q_obs_clipped.where(Q_obs_clipped != -999, np.nan)
-
         if len(Q_obs_clipped.id) == 0:
             # exit function/method
             self.logger.warning(
                 "No discharge stations found in the region. Skipping discharge observations setup."
             )
             return
+        # convert all the -999 values to NaN
+        Q_obs_clipped = Q_obs_clipped.where(Q_obs_clipped != -999, np.nan)
 
         # check if there are any NaN values in the Q_obs dataset
         discharge_df = Q_obs_clipped.runoff_mean.to_dataframe().reset_index()

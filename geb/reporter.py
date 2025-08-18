@@ -168,6 +168,10 @@ class Reporter:
         ):
             self.activated: bool = True
 
+            if "discharge/discharge_snapped_locations" not in self.model.files["geom"]:
+                if "_discharge_stations" in self.model.config["report"]:
+                    del self.model.config["report"]["_discharge_stations"]
+
             report_config: dict[str, Any] = self.model.config["report"]
 
             to_delete: list[str] = []
@@ -180,6 +184,7 @@ class Reporter:
                                     "discharge/discharge_snapped_locations"
                                 ]
                             )
+
                             station_reporters = {}
                             for station_ID, station_info in stations.iterrows():
                                 xy_grid = station_info["snapped_grid_pixel_xy"]

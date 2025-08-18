@@ -178,7 +178,7 @@ class Hydrology:
 
                 # extract the properties from the snapping dataframe
                 Q_obs_station_name = snapped_locations.loc[ID].Q_obs_station_name
-                snapped_xy_coords = snapped_locations.loc[ID].closest_tuple
+                snapped_xy_coords = snapped_locations.loc[ID].snapped_grid_pixel_xy
                 Q_obs_station_coords = snapped_locations.loc[ID].Q_obs_station_coords
                 Q_obs_to_GEB_upstream_area_ratio = snapped_locations.loc[
                     ID
@@ -430,7 +430,7 @@ class Hydrology:
             evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
             evaluation_df.to_excel(
                 eval_result_folder / "evaluation_metrics.xlsx",
-                index=False,
+                index=True,
             )
 
         # Save evaluation metrics as as excel and parquet file
@@ -733,7 +733,7 @@ class Hydrology:
                     color_upstream = colormap_upstream(
                         float(row["Q_obs_to_GEB_upstream_area_ratio"])
                     )
-                    if np.isnan(color_upstream):
+                    if not isinstance(color_upstream, (str)) or color_upstream == "nan":
                         # do not add to map if color is NaN
                         continue
 
