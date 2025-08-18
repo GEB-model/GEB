@@ -2130,17 +2130,18 @@ class Agents:
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
     @build_method(depends_on=[])
-    def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
+    def setup_assets(
+        self,
+        feature_types: str | list[str],
+        source: str = "geofabrik",
+        use_cache: bool = True,
+    ) -> None:
         """Get assets from OpenStreetMap (OSM) data.
 
-        Parameters
-        ----------
-        feature_types : str or list of str
-            The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
-        source : str, optional
-            The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
-        overwrite : bool, optional
-            Whether to overwrite existing files. Default is False.
+        Args:
+            feature_types: The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
+            source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
+            use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
         """
         if isinstance(feature_types, str):
             feature_types = [feature_types]
@@ -2153,7 +2154,7 @@ class Agents:
             fetch_and_save(
                 "https://download.geofabrik.de/index-v1.json",
                 index_file,
-                overwrite=overwrite,
+                overwrite=not use_cache,
             )
 
             index = gpd.read_file(index_file)
@@ -2202,7 +2203,7 @@ class Agents:
         all_features = {}
         for url in tqdm(urls):
             filepath = OSM_data_dir / url.split("/")[-1]
-            fetch_and_save(url, filepath, overwrite=overwrite)
+            fetch_and_save(url, filepath, overwrite=not use_cache)
             for feature_type in feature_types:
                 if feature_type not in all_features:
                     all_features[feature_type] = []
