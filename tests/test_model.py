@@ -70,9 +70,9 @@ def test_init():
             overwrite=True,
         )
 
-        assert (working_directory / "model.yml").exists()
-        assert (working_directory / "build.yml").exists()
-        assert (working_directory / "update.yml").exists()
+        assert Path("model.yml").exists()
+        assert Path("build.yml").exists()
+        assert Path("update.yml").exists()
 
         assert pytest.raises(
             FileExistsError,
