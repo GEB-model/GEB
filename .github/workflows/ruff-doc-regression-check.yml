@@ -1,0 +1,61 @@
+name: Ruff Error Count Check
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  check-ruff-errors:
+    runs-on: ubuntu-latest
+    env:
+        RULES: ANN001,ANN002,ANN003,ANN201,ANN202,ANN204,ANN205,ANN206,D,DOC
+    steps:
+      - name: Checkout main branch for baseline
+        uses: actions/checkout@v3
+        with:
+          ref: main
+          path: main-branch
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          path: pr-branch
+
+      - name: Install Ruff
+        uses: astral-sh/ruff-action@v3
+
+      - name: Get baseline error count from main branch
+        id: ruff_main
+        run: |
+          cd main-branch
+          RUFF_OUTPUT=$(ruff check --preview --statistics --select $RULES  --output-format full . || true)
+          ERROR_COUNT=$(echo "$RUFF_OUTPUT" | grep -o -E 'Found [0-9]+ error' | grep -o -E '[0-9]+')
+          if [ -z "$ERROR_COUNT" ]; then
+            ERROR_COUNT=0
+          fi
+          echo "error_count=$ERROR_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Get new error count from PR branch
+        id: ruff_pr
+        run: |
+          cd pr-branch
+          RUFF_OUTPUT=$(ruff check --preview --statistics --select $RULES  --output-format full . || true)
+          ERROR_COUNT=$(echo "$RUFF_OUTPUT" | grep -o -E 'Found [0-9]+ error' | grep -o -E '[0-9]+')
+          if [ -z "$ERROR_COUNT" ]; then
+            ERROR_COUNT=0
+          fi
+          echo "error_count=$ERROR_COUNT" >> $GITHUB_OUTPUT
+
+      - name: Compare error counts and fail if new errors are introduced
+        run: |
+          BASELINE_ERRORS=${{ steps.ruff_main.outputs.error_count }}
+          NEW_ERRORS=${{ steps.ruff_pr.outputs.error_count }}
+          echo "Baseline errors (on main): $BASELINE_ERRORS"
+          echo "New errors (on PR branch): $NEW_ERRORS"
+          if [[ "$NEW_ERRORS" -gt "$BASELINE_ERRORS" ]]; then
+            echo "::error::New errors were introduced. Please fix them before merging."
+            exit 1
+          else
+            echo "No new errors introduced. Great work! 🎉"
+          fi

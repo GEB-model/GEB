@@ -1,6 +1,7 @@
 import json
 from collections import deque
 from pathlib import Path
+from typing import Any
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -160,7 +161,7 @@ class SFINCS:
         ):
             build_parameters["simulate_coastal_floods"] = True
 
-        model_root = self.sfincs_model_root(event_name)
+        model_root: Path = self.sfincs_model_root(event_name)
 
         if (
             self.config["force_overwrite"]
@@ -676,8 +677,7 @@ class SFINCS:
         )
         self.soil_storage_capacity_per_timestep.append(self.soil_storage_capacity_grid)
 
-    def save_ksat(self):
-        # ksat
+    def save_saturated_hydraulic_conductivity(self):
         saturated_hydraulic_conductivity_copy = (
             self.HRU.var.saturated_hydraulic_conductivity.copy()
         )
@@ -699,7 +699,8 @@ class SFINCS:
         )
 
     @property
-    def discharge_spinup_ds(self):
+    def discharge_spinup_ds(self) -> xr.DataArray:
+        """Open the discharge datasets from the model output folder."""
         da: xr.DataArray = open_zarr(
             self.model.output_folder
             / "report"
@@ -722,10 +723,16 @@ class SFINCS:
 
     @property
     def rivers(self):
+        """Load the river geometry from the model files.
+
+        Returns:
+            A GeoDataFrame containing the river geometry.
+        """
         return load_geom(self.model.files["geom"]["routing/rivers"])
 
     @property
-    def mannings(self):
+    def mannings(self) -> xr.DataArray:
+        """Get the Manning's n values for the land cover types."""
         mannings = reclassify(
             self.land_cover,
             self.land_cover_mannings_rougness_classification.set_index(
@@ -737,10 +744,20 @@ class SFINCS:
 
     @property
     def land_cover(self) -> xr.DataArray:
+        """Get the land cover classification for the model.
+
+        Returns:
+            An xarray DataArray containing the land cover classification.
+        """
         return open_zarr(self.model.files["other"]["landcover/classification"])
 
     @property
     def land_cover_mannings_rougness_classification(self) -> pd.DataFrame:
+        """Get the land cover classification table for Manning's roughness.
+
+        Returns:
+            A DataFrame containing the land cover classification for Manning's roughness.
+        """
         return pd.DataFrame(
             data=[
                 [10, "Tree cover", 10, 0.12],
@@ -774,7 +791,15 @@ class SFINCS:
             crs: str = self.get_utm_zone(self.model.files["geom"]["routing/subbasins"])
         return crs
 
-    def get_build_parameters(self, model_root):
+    def get_build_parameters(self, model_root: Path) -> dict[str, Any]:
+        """Get the parameters needed to build the SFINCS model.
+
+        Args:
+            model_root: The root directory for the SFINCS model.
+
+        Returns:
+            A dictionary containing the parameters needed to build the SFINCS model.
+        """
         with open(self.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
             DEM_config = json.load(f)
         for entry in DEM_config:

@@ -166,37 +166,32 @@ class LandSurface:
     @build_method(depends_on=[])
     def setup_regions_and_land_use(
         self,
-        region_database="GADM_level1",
-        unique_region_id="GID_1",
-        ISO3_column="GID_0",
-        land_cover="esa_worldcover_2021_v200",
-    ):
+        region_database: str = "GADM_level1",
+        unique_region_id: str = "GID_1",
+        ISO3_column: str = "GID_0",
+        land_cover: str = "esa_worldcover_2021_v200",
+    ) -> None:
         """Sets up the (administrative) regions and land use data for GEB.
 
         The regions can be used for multiple purposes, for example for creating the
         agents in the model, assigning unique crop prices and other economic variables
         per region and for aggregating the results.
 
-        Parameters
-        ----------
-        region_database : str, optional
-            The name of the region database to use. Default is 'GADM_level1'.
-        unique_region_id : str, optional
-            The name of the column in the region database that contains the unique region ID. Default is 'UID',
-            which is the unique identifier for the GADM database.
+        Args:
+            region_database: The name of the region database to use. Default is 'GADM_level1'.
+            unique_region_id: The name of a column in the region database that contains a unique region ID. Default is 'UID',
+                which is the unique identifier for the GADM database.
+            ISO3_column: The name of a column in the region database that contains the ISO3 code for the region. Default is 'ISO3'.
+            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021_v200'.
 
         Notes:
-        -----
-        This method sets up the regions and land use data for GEB. It first retrieves the region data from
-        the specified region database and sets it as a geometry in the model. It then pads the subgrid to cover the entire
-        region and retrieves the land use data from the ESA WorldCover dataset. The land use data is reprojected to the
-        padded subgrid and the region ID is rasterized onto the subgrid. The cell area for each region is calculated and
-        set as a grid in the model. The MERIT dataset is used to identify rivers, which are set as a grid in the model. The
-        land use data is reclassified into five classes and set as a grid in the model. Finally, the cultivated land is
-        identified and set as a grid in the model.
-
-        The resulting grids are set as attributes of the model with names of the form '{grid_name}' or
-        'landsurface/{grid_name}'.
+            This method sets up the regions and land use data for GEB. It first retrieves the region data from
+            the specified region database and sets it as a geometry in the model. It then pads the subgrid to cover the entire
+            region and retrieves the land use data from the ESA WorldCover dataset. The land use data is reprojected to the
+            padded subgrid and the region ID is rasterized onto the subgrid. The cell area for each region is calculated and
+            set as a grid in the model. The MERIT dataset is used to identify rivers, which are set as a grid in the model. The
+            land use data is reclassified into five classes and set as a grid in the model. Finally, the cultivated land is
+            identified and set as a grid in the model.
         """
         regions = self.data_catalog.get_geodataframe(
             region_database,
@@ -473,24 +468,20 @@ class LandSurface:
     def setup_soil_parameters(self) -> None:
         """Sets up the soil parameters for the model.
 
-        Parameters
-        ----------
-
         Notes:
-        -----
-        This method sets up the soil parameters for the model by retrieving soil data from the CWATM dataset and interpolating
-        the data to the model grid. It first retrieves the soil dataset from the `data_catalog`, and
-        then retrieves the soil parameters and storage depth data for each soil layer. It then interpolates the data to the
-        model grid using the specified interpolation method and sets the resulting grids as attributes of the model.
+            This method sets up the soil parameters for the model by retrieving soil data from the CWATM dataset and interpolating
+            the data to the model grid. It first retrieves the soil dataset from the `data_catalog`, and
+            then retrieves the soil parameters and storage depth data for each soil layer. It then interpolates the data to the
+            model grid using the specified interpolation method and sets the resulting grids as attributes of the model.
 
-        Additionally, this method sets up the percolation impeded and crop group data by retrieving the corresponding data
-        from the soil dataset and interpolating it to the model grid.
+            Additionally, this method sets up the percolation impeded and crop group data by retrieving the corresponding data
+            from the soil dataset and interpolating it to the model grid.
 
-        The resulting soil parameters are set as attributes of the model with names of the form 'soil/{parameter}{soil_layer}',
-        where {parameter} is the name of the soil parameter (e.g. 'alpha', 'ksat', etc.) and {soil_layer} is the index of the
-        soil layer (1-3; 1 is the top layer). The storage depth data is set as attributes of the model with names of the
-        form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
-        with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
+            The resulting soil parameters are set as attributes of the model with names of the form 'soil/{parameter}{soil_layer}',
+            where {parameter} is the name of the soil parameter (e.g. 'alpha', 'ksat', etc.) and {soil_layer} is the index of the
+            soil layer (1-3; 1 is the top layer). The storage depth data is set as attributes of the model with names of the
+            form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
+            with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
         """
         ds = load_soilgrids(self.data_catalog, self.subgrid, self.region)
 
