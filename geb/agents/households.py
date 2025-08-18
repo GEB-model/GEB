@@ -105,8 +105,8 @@ class Households(AgentBaseClass):
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
             )
             flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
-            # flood_maps[return_period] = flood_map.rio.write_crs(
-            #     flood_map.attrs["_CRS"]["wkt"]
+            # flood_maps[return_period] = flood_maps.rio.write_crs(
+            # flood_map.attrs["_CRS"]["wkt"]
             # )
         flood_maps["crs"] = flood_maps[return_period].rio.crs
         flood_maps["gdal_geotransform"] = (
@@ -125,7 +125,7 @@ class Households(AgentBaseClass):
         windstorm_path = self.model.output_folder / "wind_maps"
         for return_period in self.windstorm_return_periods:
             file_path = (
-                windstorm_path / f"T{return_period}_crs28992.tif"
+                windstorm_path / f"return_level_rp{return_period}.tif"
             )  # adjust to file name
             windstorm_map = xr.open_dataarray(file_path, engine="rasterio")
             # print(
@@ -238,7 +238,7 @@ class Households(AgentBaseClass):
         self.buildings.loc[buildings_mask, "flooded"] = True
         self.buildings["flooded"].fillna(False, inplace=True)
 
-    def update_building_adaptation_status(self, household_adapting):
+    def update_building_adaptation_status(self, household_adapting, strategy_column):
         """Update the floodproofing status of buildings based on adapting households."""
         # Extract and clean OSM IDs from adapting households
         osm_ids = pd.DataFrame(
@@ -1305,6 +1305,7 @@ class Households(AgentBaseClass):
                 hazard_file=windstorm_map_filled,
                 curve_path=self.wind_buildings_structure_curve,
                 gridded=False,
+                disable_progress=True,
             )
             w_total_unprotected = wind_damage_unprotected["damage"].sum()
             print(
@@ -1326,6 +1327,7 @@ class Households(AgentBaseClass):
                 hazard_file=windstorm_map,
                 curve_path=self.wind_buildings_structure_curve,
                 gridded=False,
+                disable_progress=True,
             )
             total_shutters = wind_damage_shutters["damage"].sum()
             print(
@@ -1342,6 +1344,7 @@ class Households(AgentBaseClass):
                 hazard_file=windstorm_map,
                 curve_path=self.wind_buildings_structure_curve,
                 gridded=False,
+                disable_progress=True,
             )
             total_strengthened = wind_damage_strengthened["damage"].sum()
             print(
