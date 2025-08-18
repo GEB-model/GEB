@@ -1,25 +1,3 @@
-# --------------------------------------------------------------------------------
-# This file contains code that has been adapted from an original source available
-# in a public repository under the GNU General Public License. The original code
-# has been modified to fit the specific needs of this project.
-#
-# Original source repository: https://github.com/iiasa/CWatM
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-# --------------------------------------------------------------------------------
-
-
 import numpy as np
 import numpy.typing as npt
 import pyflwdir
@@ -371,6 +349,7 @@ class KinematicWave(Router):
     @staticmethod
     @njit(cache=True)
     def _step(
+        dt: float | int,
         Qold,
         sideflow_m3,
         evaporation_m3,
@@ -383,18 +362,34 @@ class KinematicWave(Router):
         river_alpha,
         river_beta,
         river_length,
-        dt,
     ) -> tuple[
         npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]
     ]:
         """Kinematic wave routing.
 
-        Parameters
-        ----------
-        dt: float
-            Time step, must be > 0
-        river_length: np.ndarray
-            Array of floats containing the channel length, must be > 0
+        Args:
+            dt: Time step, must be > 0
+            Qold: Old discharge array, which is a 1D array with dicharge for each grid cell in the river network.
+            sideflow_m3: Sideflow in m3 for each grid cell in the river network.
+            evaporation_m3: Evaporation in m3 for each grid cell in the river network.
+            waterbody_storage_m3: Storage of each waterbody in m3.
+            outflow_per_waterbody_m3: Outflow of each waterbody in m3.
+            upstream_matrix_from_up_to_downstream: Upstream matrix from the river network, which is a 2D array. For each
+                cell (first dimension) in the river network, it contains the indices of the upstream cells (second dimension).
+                -1 indicates no upstream cell. There should never be any upstream cells after the first -1. The node associated with
+                the row is specified by idxs_up_to_downstream.
+            idxs_up_to_downstream: Indices of the cells in the river network, associated with the upstream_matrix_from_up_to_downstream.
+            is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
+            waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell. -1 indicates no waterbody.
+            river_alpha: The alpha parameter for the kinematic wave equation, which is a 1D array with the same shape as the grid.
+            river_beta: The beta parameter for the kinematic wave equation, which is a float.
+            river_length: Array of floats containing the channel length, must be > 0
+
+        Returns:
+            Qnew: New discharge array, which is a 1D array with discharge for each grid cell in the river network.
+            actual_evaporation_m3: Actual evaporation in m3 for each grid cell in the river network.
+            over_abstraction_m3: Over abstraction in m3 for each grid cell in the river network.
+            waterbody_inflow_m3: Inflow to each waterbody in m3.
         """
         Qnew: npt.NDArray[np.float32] = np.full_like(Qold, np.nan, dtype=np.float32)
         actual_evaporation_m3: npt.NDArray[np.float32] = np.zeros_like(
@@ -483,6 +478,7 @@ class KinematicWave(Router):
         outflow_per_waterbody_m3,
     ):
         Q, actual_evaporation_m3, over_abstraction_m3, waterbody_inflow_m3 = self._step(
+            dt=self.dt,
             Qold=self.Q_prev,
             sideflow_m3=sideflow_m3,
             evaporation_m3=evaporation_m3,
@@ -495,7 +491,6 @@ class KinematicWave(Router):
             river_alpha=self.river_alpha,
             river_beta=self.river_beta,
             river_length=self.river_length,
-            dt=self.dt,
         )
 
         self.Q_prev = Q
@@ -570,6 +565,29 @@ class Accuflux(Router):
         is_waterbody_outflow,
         waterbody_id,
     ):
+        """Accuflux routing.
+
+        Args:
+            dt: Time step, must be > 0
+            Qold: Old discharge array, which is a 1D array with dicharge for each grid cell in the river network.
+            sideflow_m3: Sideflow in m3 for each grid cell in the river network.
+            evaporation_m3: Evaporation in m3 for each grid cell in the river network.
+            waterbody_storage_m3: Storage of each waterbody in m3.
+            outflow_per_waterbody_m3: Outflow of each waterbody in m3.
+            upstream_matrix_from_up_to_downstream: Upstream matrix from the river network, which is a 2D array. For each
+                cell (first dimension) in the river network, it contains the indices of the upstream cells (second dimension).
+                -1 indicates no upstream cell. There should never be any upstream cells after the first -1. The node associated with
+                the row is specified by idxs_up_to_downstream.
+            idxs_up_to_downstream: Indices of the cells in the river network, associated with the upstream_matrix_from_up_to_downstream.
+            is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
+            waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell. -1 indicates no waterbody.
+
+        Returns:
+            Qnew: New discharge array, which is a 1D array with discharge for each grid cell in the river network.
+            actual_evaporation_m3: Actual evaporation in m3 for each grid cell in the river network.
+            over_abstraction_m3: Over abstraction in m3 for each grid cell in the river network.
+            waterbody_inflow_m3: Inflow to each waterbody in m3.
+        """
         Qold += sideflow_m3 / dt
 
         evaporation_m3_s: npt.NDArray[np.float32] = evaporation_m3 / dt
