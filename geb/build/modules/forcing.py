@@ -1143,6 +1143,7 @@ class Forcing:
             "tp",  # total_precipitation
             **download_args,
         )
+
         elevation_forcing, elevation_target = self.get_elevation_forcing_and_grid(
             self.grid["mask"], pr_hourly, forcing_name="ERA5"
         )
@@ -1195,6 +1196,23 @@ class Forcing:
 
         assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
         relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
+
+        original_crs = (
+            relative_humidity.rio.crs if hasattr(relative_humidity, "rio") else None
+        )
+
+        # convert values between 100 and 101 to 100, leave others unchanged
+        relative_humidity = xr.where(
+            (relative_humidity > 100) & (relative_humidity <= 101),
+            100,
+            relative_humidity,
+            keep_attrs=True,
+        )
+        if original_crs is not None and (
+            not hasattr(relative_humidity, "rio") or relative_humidity.rio.crs is None
+        ):
+            relative_humidity = relative_humidity.rio.write_crs(original_crs)
+
         self.set_hurs(relative_humidity)
 
         hourly_rsds = process_ERA5(

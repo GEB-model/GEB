@@ -154,6 +154,20 @@ class Hydrology:
             discharge_Q_obs_df = Q_obs[ID]
             discharge_Q_obs_df.columns = ["Q"]
             discharge_Q_obs_df.name = "Q"
+
+            # check if there is data in the model time period
+            start_date = GEB_discharge.time.min().values
+            end_date = GEB_discharge.time.max().values
+            data_check = discharge_Q_obs_df[
+                (discharge_Q_obs_df.index >= start_date)
+                & (discharge_Q_obs_df.index <= end_date)
+            ].dropna()  # filter the dataframe to the model time period
+            if len(data_check) < 365:
+                print(
+                    f"Station {ID} has only {len(data_check)} days of data, less than 1 year. Skipping."
+                )
+                continue
+
             # extract the properties from the snapping dataframe
             Q_obs_station_name = snapped_locations.loc[ID].Q_obs_station_name
             snapped_xy_coords = snapped_locations.loc[ID].snapped_grid_pixel_xy
@@ -168,6 +182,13 @@ class Hydrology:
                 GEB_discharge_station = GEB_discharge.isel(
                     x=snapped_xy_coords[0], y=snapped_xy_coords[1]
                 )  # select the pixel in the grid that corresponds to the selected hydrography_xy value
+
+                if np.isnan(GEB_discharge_station.values).all():
+                    print(
+                        f"WARNING: Station {ID} has only NaN values in the GEB discharge simulation. Skipping."
+                    )
+                    return pd.DataFrame()
+
                 # rename xarray dataarray to Q
                 GEB_discharge_station.name = "Q"
                 discharge_sim_station_df = GEB_discharge_station.to_dataframe()
@@ -194,6 +215,10 @@ class Hydrology:
                 return validation_df
 
             validation_df = create_validation_df()
+
+            # Check if validation_df is empty (station was skipped due to all NaN values)
+            if validation_df.empty:
+                continue
 
             def calculate_validation_metrics():
                 """Calculate the validation metrics for the current station."""
@@ -696,6 +721,9 @@ class Hydrology:
                     color_upstream = colormap_upstream(
                         float(row["Q_obs_to_GEB_upstream_area_ratio"])
                     )
+                    if np.isnan(color_upstream):
+                        # do not add to map if color is NaN
+                        continue
 
                     popup_upstream = folium.Popup(popup_html, max_width=400)
                     folium.CircleMarker(
