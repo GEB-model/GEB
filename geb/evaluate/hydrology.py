@@ -149,277 +149,289 @@ class Hydrology:
         evaluation_per_station: list = []
 
         # start validation loop over Q_obs stations
-        for ID in tqdm(Q_obs.columns):
-            # create a discharge timeseries dataframe
-            discharge_Q_obs_df = Q_obs[ID]
-            discharge_Q_obs_df.columns = ["Q"]
-            discharge_Q_obs_df.name = "Q"
-
-            # check if there is data in the model time period
-            start_date = GEB_discharge.time.min().values
-            end_date = GEB_discharge.time.max().values
-            data_check = discharge_Q_obs_df[
-                (discharge_Q_obs_df.index >= start_date)
-                & (discharge_Q_obs_df.index <= end_date)
-            ].dropna()  # filter the dataframe to the model time period
-            if len(data_check) < 365:
-                print(
-                    f"Station {ID} has only {len(data_check)} days of data, less than 1 year. Skipping."
-                )
-                continue
-
-            # extract the properties from the snapping dataframe
-            Q_obs_station_name = snapped_locations.loc[ID].Q_obs_station_name
-            snapped_xy_coords = snapped_locations.loc[ID].snapped_grid_pixel_xy
-            Q_obs_station_coords = snapped_locations.loc[ID].Q_obs_station_coords
-            Q_obs_to_GEB_upstream_area_ratio = snapped_locations.loc[
-                ID
-            ].Q_obs_to_GEB_upstream_area_ratio
-
-            def create_validation_df():
-                """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station."""
-                # select data closest to meerssen point
-                GEB_discharge_station = GEB_discharge.isel(
-                    x=snapped_xy_coords[0], y=snapped_xy_coords[1]
-                )  # select the pixel in the grid that corresponds to the selected hydrography_xy value
-
-                if np.isnan(GEB_discharge_station.values).all():
-                    print(
-                        f"WARNING: Station {ID} has only NaN values in the GEB discharge simulation. Skipping."
-                    )
-                    return pd.DataFrame()
-
-                # rename xarray dataarray to Q
-                GEB_discharge_station.name = "Q"
-                discharge_sim_station_df = GEB_discharge_station.to_dataframe()
-                discharge_sim_station_df = discharge_sim_station_df["Q"]
-                discharge_sim_station_df.index.name = "time"  # rename index to time
-
-                # merge to one df but keep only the rows where both have data
-                validation_df = pd.merge(
-                    discharge_Q_obs_df,
-                    discharge_sim_station_df,
-                    left_index=True,
-                    right_index=True,
-                    how="inner",
-                    suffixes=("_obs", "_sim"),
-                )  # merge the two dataframes on the index (time)
-
-                validation_df.dropna(how="any", inplace=True)  # drop rows with nans
-
-                if correct_Q_obs:
-                    """ correct the Q_obs values for the difference in upstream area between subgrid and grid """
-                    validation_df["Q_obs"] = (
-                        validation_df["Q_obs"] * Q_obs_to_GEB_upstream_area_ratio
-                    )  # correct the Q_obs values for the difference in upstream area between subgrid and grid
-                return validation_df
-
-            validation_df = create_validation_df()
-
-            # Check if validation_df is empty (station was skipped due to all NaN values)
-            if validation_df.empty:
-                continue
-
-            def calculate_validation_metrics():
-                """Calculate the validation metrics for the current station."""
-                # calculate kupta coefficient
-                y_true = validation_df["Q_obs"].values
-                y_pred = validation_df["Q_sim"].values
-                evaluator = RegressionMetric(y_true, y_pred)  # from permetrics package
-
-                KGE = (
-                    evaluator.kling_gupta_efficiency()
-                )  # https://hess.copernicus.org/articles/23/4323/2019/
-                NSE = evaluator.nash_sutcliffe_efficiency()  # https://hess.copernicus.org/articles/27/1827/2023/hess-27-1827-2023.pdf
-                R = evaluator.pearson_correlation_coefficient()
-
-                return KGE, NSE, R
-
-            KGE, NSE, R = calculate_validation_metrics()
-
-            def plot_validation_graphs(ID):
-                """Plot the validation results for the current station."""
-                # scatter plot
-                fig, ax = plt.subplots()
-                ax.scatter(validation_df["Q_obs"], validation_df["Q_sim"])
-                ax.set_xlabel(
-                    "Q_obs Discharge observations [m3/s] (%s)" % Q_obs_station_name
-                )
-                ax.set_ylabel("GEB discharge simulation [m3/s]")
-                ax.set_title("GEB vs observations (discharge)")
-                m, b = np.polyfit(validation_df["Q_obs"], validation_df["Q_sim"], 1)
-                ax.plot(
-                    validation_df["Q_obs"],
-                    m * validation_df["Q_obs"] + b,
-                    color="red",
-                )
-                ax.text(0.02, 0.9, f"$R$ = {R:.2f}", transform=ax.transAxes)
-                ax.text(0.02, 0.85, f"KGE = {KGE:.2f}", transform=ax.transAxes)
-                ax.text(0.02, 0.8, f"NSE = {NSE:.2f}", transform=ax.transAxes)
-                ax.text(
-                    0.02,
-                    0.75,
-                    f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
-                    transform=ax.transAxes,
-                )
-
-                plt.savefig(
-                    eval_plot_folder / f"scatter_plot_{ID}.png",
-                    dpi=300,
-                    bbox_inches="tight",
-                )
-
-                plt.show()
-                plt.close()
-
-                # timeseries plot
-                fig, ax = plt.subplots(figsize=(7, 4))
-                ax.plot(
-                    validation_df.index,
-                    validation_df["Q_sim"],
-                    label="GEB simulation",
-                    linewidth=0.5,
-                )
-                ax.plot(
-                    validation_df.index,
-                    validation_df["Q_obs"],
-                    label="Q_obs observations",
-                    linewidth=0.5,
-                )
-                ax.set_ylabel("Discharge [m3/s]")
-                ax.set_xlabel("Time")
-                ax.set_ylim(0, None)
-                ax.legend()
-
-                ax.text(
-                    0.02, 0.9, f"$R^2$={R:.2f}", transform=ax.transAxes, fontsize=12
-                )
-                ax.text(
-                    0.02,
-                    0.85,
-                    f"KGE={KGE:.2f}",
-                    transform=ax.transAxes,
-                    fontsize=12,
-                )
-                ax.text(
-                    0.02, 0.8, f"NSE={NSE:.2f}", transform=ax.transAxes, fontsize=12
-                )
-                ax.text(
-                    0.02,
-                    0.75,
-                    f"Mean={validation_df['Q_sim'].mean():.2f}",
-                    transform=ax.transAxes,
-                    fontsize=12,
-                )
-                ax.text(
-                    0.02,
-                    0.70,
-                    f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
-                    transform=ax.transAxes,
-                    fontsize=12,
-                )
-                plt.title(
-                    f"GEB discharge vs observations for station {Q_obs_station_name}"
-                )
-                plt.savefig(
-                    eval_plot_folder / f"timeseries_plot_{ID}.png",
-                    dpi=300,
-                    bbox_inches="tight",
-                )
-                plt.show()
-                plt.close()
-
-                # Making yearly plots for every year in validation_df
-                # Get available years from validation_df (intersection of obs & sim time range)
-                if include_yearly_plots:
-                    years_to_plot = sorted(validation_df.index.year.unique())
-
-                    for year in years_to_plot:
-                        # Filter data for the current year
-                        one_year_df = validation_df[validation_df.index.year == year]
-
-                        # Skip if there's no data for the year
-                        if one_year_df.empty:
-                            print(f"No data available for year {year}, skipping.")
-                            continue
-
-                        # Create the plot
-                        fig, ax = plt.subplots(figsize=(7, 4))
-                        ax.plot(
-                            one_year_df.index,
-                            one_year_df["Q_sim"],
-                            label="GEB simulation",
-                        )
-                        ax.plot(
-                            one_year_df.index,
-                            one_year_df["Q_obs"],
-                            label="Q_obs observations",
-                        )
-                        ax.set_ylabel("Discharge [m3/s]")
-                        ax.set_xlabel("Time")
-                        ax.legend()
-
-                        ax.text(
-                            0.02,
-                            0.9,
-                            f"$R^2$={R:.2f}",
-                            transform=ax.transAxes,
-                            fontsize=12,
-                        )
-                        ax.text(
-                            0.02,
-                            0.85,
-                            f"KGE={KGE:.2f}",
-                            transform=ax.transAxes,
-                            fontsize=12,
-                        )
-                        ax.text(
-                            0.02,
-                            0.8,
-                            f"NSE={NSE:.2f}",
-                            transform=ax.transAxes,
-                            fontsize=12,
-                        )
-                        ax.text(
-                            0.02,
-                            0.75,
-                            f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
-                            transform=ax.transAxes,
-                            fontsize=12,
-                        )
-
-                        plt.title(
-                            f"GEB discharge vs observations for {year} at station {Q_obs_station_name}"
-                        )
-                        plt.savefig(
-                            eval_plot_folder / f"timeseries_plot_{ID}_{year}.png",
-                            dpi=300,
-                            bbox_inches="tight",
-                        )
-                        plt.show()
-                        plt.close()
-
-            plot_validation_graphs(ID)
-
-            # attach to the evaluation dataframe
-            evaluation_per_station.append(
-                {
-                    "station_ID": ID,
-                    "station_name": Q_obs_station_name,
-                    "x": Q_obs_station_coords[0],
-                    "y": Q_obs_station_coords[1],
-                    "Q_obs_to_GEB_upstream_area_ratio": Q_obs_to_GEB_upstream_area_ratio,
-                    "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
-                    "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
-                    "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
-                }
+        if eval_result_folder.joinpath("evaluation_metrics.xlsx").exists():
+            print("evaluation already executed, skipping.")
+            evaluation_df = pd.read_excel(
+                eval_result_folder.joinpath("evaluation_metrics.xlsx")
             )
+        else:
+            print("Starting discharge evaluation...")
 
-        evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
-        evaluation_df.to_excel(
-            eval_result_folder / "evaluation_metrics.xlsx",
-            index=False,
-        )
+            for ID in tqdm(Q_obs.columns):
+                # create a discharge timeseries dataframe
+                discharge_Q_obs_df = Q_obs[ID]
+                discharge_Q_obs_df.columns = ["Q"]
+                discharge_Q_obs_df.name = "Q"
+
+                # check if there is data in the model time period
+                start_date = GEB_discharge.time.min().values
+                end_date = GEB_discharge.time.max().values
+                data_check = discharge_Q_obs_df[
+                    (discharge_Q_obs_df.index >= start_date)
+                    & (discharge_Q_obs_df.index <= end_date)
+                ].dropna()  # filter the dataframe to the model time period
+                if len(data_check) < 365:
+                    print(
+                        f"Station {ID} has only {len(data_check)} days of data, less than 1 year. Skipping."
+                    )
+                    continue
+
+                # extract the properties from the snapping dataframe
+                Q_obs_station_name = snapped_locations.loc[ID].Q_obs_station_name
+                snapped_xy_coords = snapped_locations.loc[ID].closest_tuple
+                Q_obs_station_coords = snapped_locations.loc[ID].Q_obs_station_coords
+                Q_obs_to_GEB_upstream_area_ratio = snapped_locations.loc[
+                    ID
+                ].Q_obs_to_GEB_upstream_area_ratio
+
+                def create_validation_df():
+                    """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station."""
+                    # select data closest to meerssen point
+                    GEB_discharge_station = GEB_discharge.isel(
+                        x=snapped_xy_coords[0], y=snapped_xy_coords[1]
+                    )  # select the pixel in the grid that corresponds to the selected hydrography_xy value
+
+                    if np.isnan(GEB_discharge_station.values).all():
+                        print(
+                            f"WARNING: Station {ID} has only NaN values in the GEB discharge simulation. Skipping."
+                        )
+                        return pd.DataFrame()
+
+                    # rename xarray dataarray to Q
+                    GEB_discharge_station.name = "Q"
+                    discharge_sim_station_df = GEB_discharge_station.to_dataframe()
+                    discharge_sim_station_df = discharge_sim_station_df["Q"]
+                    discharge_sim_station_df.index.name = "time"  # rename index to time
+
+                    # merge to one df but keep only the rows where both have data
+                    validation_df = pd.merge(
+                        discharge_Q_obs_df,
+                        discharge_sim_station_df,
+                        left_index=True,
+                        right_index=True,
+                        how="inner",
+                        suffixes=("_obs", "_sim"),
+                    )  # merge the two dataframes on the index (time)
+
+                    validation_df.dropna(how="any", inplace=True)  # drop rows with nans
+
+                    if correct_Q_obs:
+                        """ correct the Q_obs values for the difference in upstream area between subgrid and grid """
+                        validation_df["Q_obs"] = (
+                            validation_df["Q_obs"] * Q_obs_to_GEB_upstream_area_ratio
+                        )  # correct the Q_obs values for the difference in upstream area between subgrid and grid
+                    return validation_df
+
+                validation_df = create_validation_df()
+
+                # Check if validation_df is empty (station was skipped due to all NaN values)
+                if validation_df.empty:
+                    continue
+
+                def calculate_validation_metrics():
+                    """Calculate the validation metrics for the current station."""
+                    # calculate kupta coefficient
+                    y_true = validation_df["Q_obs"].values
+                    y_pred = validation_df["Q_sim"].values
+                    evaluator = RegressionMetric(
+                        y_true, y_pred
+                    )  # from permetrics package
+
+                    KGE = (
+                        evaluator.kling_gupta_efficiency()
+                    )  # https://hess.copernicus.org/articles/23/4323/2019/
+                    NSE = evaluator.nash_sutcliffe_efficiency()  # https://hess.copernicus.org/articles/27/1827/2023/hess-27-1827-2023.pdf
+                    R = evaluator.pearson_correlation_coefficient()
+
+                    return KGE, NSE, R
+
+                KGE, NSE, R = calculate_validation_metrics()
+
+                def plot_validation_graphs(ID):
+                    """Plot the validation results for the current station."""
+                    # scatter plot
+                    fig, ax = plt.subplots()
+                    ax.scatter(validation_df["Q_obs"], validation_df["Q_sim"])
+                    ax.set_xlabel(
+                        "Q_obs Discharge observations [m3/s] (%s)" % Q_obs_station_name
+                    )
+                    ax.set_ylabel("GEB discharge simulation [m3/s]")
+                    ax.set_title("GEB vs observations (discharge)")
+                    m, b = np.polyfit(validation_df["Q_obs"], validation_df["Q_sim"], 1)
+                    ax.plot(
+                        validation_df["Q_obs"],
+                        m * validation_df["Q_obs"] + b,
+                        color="red",
+                    )
+                    ax.text(0.02, 0.9, f"$R$ = {R:.2f}", transform=ax.transAxes)
+                    ax.text(0.02, 0.85, f"KGE = {KGE:.2f}", transform=ax.transAxes)
+                    ax.text(0.02, 0.8, f"NSE = {NSE:.2f}", transform=ax.transAxes)
+                    ax.text(
+                        0.02,
+                        0.75,
+                        f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
+                        transform=ax.transAxes,
+                    )
+
+                    plt.savefig(
+                        eval_plot_folder / f"scatter_plot_{ID}.png",
+                        dpi=300,
+                        bbox_inches="tight",
+                    )
+
+                    plt.show()
+                    plt.close()
+
+                    # timeseries plot
+                    fig, ax = plt.subplots(figsize=(7, 4))
+                    ax.plot(
+                        validation_df.index,
+                        validation_df["Q_sim"],
+                        label="GEB simulation",
+                        linewidth=0.5,
+                    )
+                    ax.plot(
+                        validation_df.index,
+                        validation_df["Q_obs"],
+                        label="Q_obs observations",
+                        linewidth=0.5,
+                    )
+                    ax.set_ylabel("Discharge [m3/s]")
+                    ax.set_xlabel("Time")
+                    ax.set_ylim(0, None)
+                    ax.legend()
+
+                    ax.text(
+                        0.02, 0.9, f"$R^2$={R:.2f}", transform=ax.transAxes, fontsize=12
+                    )
+                    ax.text(
+                        0.02,
+                        0.85,
+                        f"KGE={KGE:.2f}",
+                        transform=ax.transAxes,
+                        fontsize=12,
+                    )
+                    ax.text(
+                        0.02, 0.8, f"NSE={NSE:.2f}", transform=ax.transAxes, fontsize=12
+                    )
+                    ax.text(
+                        0.02,
+                        0.75,
+                        f"Mean={validation_df['Q_sim'].mean():.2f}",
+                        transform=ax.transAxes,
+                        fontsize=12,
+                    )
+                    ax.text(
+                        0.02,
+                        0.70,
+                        f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
+                        transform=ax.transAxes,
+                        fontsize=12,
+                    )
+                    plt.title(
+                        f"GEB discharge vs observations for station {Q_obs_station_name}"
+                    )
+                    plt.savefig(
+                        eval_plot_folder / f"timeseries_plot_{ID}.png",
+                        dpi=300,
+                        bbox_inches="tight",
+                    )
+                    plt.show()
+                    plt.close()
+
+                    # Making yearly plots for every year in validation_df
+                    # Get available years from validation_df (intersection of obs & sim time range)
+                    if include_yearly_plots:
+                        years_to_plot = sorted(validation_df.index.year.unique())
+
+                        for year in years_to_plot:
+                            # Filter data for the current year
+                            one_year_df = validation_df[
+                                validation_df.index.year == year
+                            ]
+
+                            # Skip if there's no data for the year
+                            if one_year_df.empty:
+                                print(f"No data available for year {year}, skipping.")
+                                continue
+
+                            # Create the plot
+                            fig, ax = plt.subplots(figsize=(7, 4))
+                            ax.plot(
+                                one_year_df.index,
+                                one_year_df["Q_sim"],
+                                label="GEB simulation",
+                            )
+                            ax.plot(
+                                one_year_df.index,
+                                one_year_df["Q_obs"],
+                                label="Q_obs observations",
+                            )
+                            ax.set_ylabel("Discharge [m3/s]")
+                            ax.set_xlabel("Time")
+                            ax.legend()
+
+                            ax.text(
+                                0.02,
+                                0.9,
+                                f"$R^2$={R:.2f}",
+                                transform=ax.transAxes,
+                                fontsize=12,
+                            )
+                            ax.text(
+                                0.02,
+                                0.85,
+                                f"KGE={KGE:.2f}",
+                                transform=ax.transAxes,
+                                fontsize=12,
+                            )
+                            ax.text(
+                                0.02,
+                                0.8,
+                                f"NSE={NSE:.2f}",
+                                transform=ax.transAxes,
+                                fontsize=12,
+                            )
+                            ax.text(
+                                0.02,
+                                0.75,
+                                f"Q_obs to GEB upstream area ratio: {Q_obs_to_GEB_upstream_area_ratio:.2f}",
+                                transform=ax.transAxes,
+                                fontsize=12,
+                            )
+
+                            plt.title(
+                                f"GEB discharge vs observations for {year} at station {Q_obs_station_name}"
+                            )
+                            plt.savefig(
+                                eval_plot_folder / f"timeseries_plot_{ID}_{year}.png",
+                                dpi=300,
+                                bbox_inches="tight",
+                            )
+                            plt.show()
+                            plt.close()
+
+                plot_validation_graphs(ID)
+
+                # attach to the evaluation dataframe
+                evaluation_per_station.append(
+                    {
+                        "station_ID": ID,
+                        "station_name": Q_obs_station_name,
+                        "x": Q_obs_station_coords[0],
+                        "y": Q_obs_station_coords[1],
+                        "Q_obs_to_GEB_upstream_area_ratio": Q_obs_to_GEB_upstream_area_ratio,
+                        "KGE": KGE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/KGE.html
+                        "NSE": NSE,  # https://permetrics.readthedocs.io/en/latest/pages/regression/NSE.html # ranges from -inf to 1.0, where 1.0 is a perfect fit. Values less than 0.36 are considered unsatisfactory, while values between 0.36 to 0.75 are classified as good, and values greater than 0.75 are regarded as very good.
+                        "R": R,  # https://permetrics.readthedocs.io/en/latest/pages/regression/R.html
+                    }
+                )
+
+            evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
+            evaluation_df.to_excel(
+                eval_result_folder / "evaluation_metrics.xlsx",
+                index=False,
+            )
 
         # Save evaluation metrics as as excel and parquet file
         evaluation_gdf = gpd.GeoDataFrame(

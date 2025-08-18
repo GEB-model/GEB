@@ -1,4 +1,6 @@
 import os
+import tempfile
+import zipfile
 from pathlib import Path
 
 import cartopy.crs as ccrs
@@ -151,7 +153,21 @@ class Observations:
         upstream_area_subgrid = self.other["drainage/original_d8_upstream_area"]
         rivers = self.geom["routing/rivers"]
         region_shapefile = self.geom["mask"]
-        Q_obs = self.data_catalog.get_geodataset("GRDC")  # load the Q_obs dataset
+
+        # Load Q_obs dataset
+        Q_obs_source = self.data_catalog.get_source("GRDC")
+
+        if str(Q_obs_source.path).endswith(".zip"):
+            # Handle zip file containing single .nc file
+            with zipfile.ZipFile(Q_obs_source.path, "r") as zip_file:
+                # Get the .nc file from the zip
+                nc_filename = [f for f in zip_file.namelist() if f.endswith(".nc")][0]
+                # Read directly from zip file
+                with zip_file.open(nc_filename) as file:
+                    Q_obs = xr.open_dataset(file)
+        else:
+            # Fallback to original method if not a zip file
+            Q_obs = self.data_catalog.get_geodataset("GRDC")
 
         # create folders
         snapping_discharge_folder = (
