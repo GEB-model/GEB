@@ -5,6 +5,9 @@ import xarray as xr
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
+from ..workflows.conversions import (
+    COUNTRY_NAME_TO_ISO3,
+)
 from ..workflows.general import (
     bounds_are_within,
     calculate_cell_area,
@@ -38,7 +41,6 @@ class LandSurface:
             function, and correcting for the subgrid factor. Thus, every subgrid cell within a grid cell has the same value.
             The resulting subgrid cell area map is then set as the `cell_area` attribute of the subgrid.
         """
-        self.logger.info("Preparing cell area map.")
         mask = self.grid["mask"]
 
         cell_area = self.full_like(
@@ -101,7 +103,7 @@ class LandSurface:
         assert isinstance(DEMs, list)
         # here we use the bounds of all subbasins, which may include downstream
         # subbasins that are not part of the study area
-        bounds = tuple(self.geoms["routing/subbasins"].total_bounds)
+        bounds = tuple(self.geom["routing/subbasins"].total_bounds)
 
         fabdem: xr.DataArray = xr.open_dataarray(
             self.data_catalog.get_source("fabdem").path
@@ -137,7 +139,7 @@ class LandSurface:
                         DEM_raster.x,
                         DEM_raster.y,
                         tuple(
-                            self.geoms["routing/subbasins"]
+                            self.geom["routing/subbasins"]
                             .to_crs(DEM_raster.rio.crs)
                             .total_bounds
                         ),
@@ -154,7 +156,11 @@ class LandSurface:
                 byteshuffle=True,
             )
             DEM["path"] = f"DEM/{DEM['name']}"
-
+        lecz = DEM_raster < 10
+        lecz.values = lecz.values.astype(np.float32)
+        self.set_other(
+            lecz, name="landsurface/low_elevation_coastal_zone"
+        )  # Maybe remove this
         self.set_dict(DEMs, name="hydrodynamics/DEM_config")
 
     @build_method(depends_on=[])
@@ -192,7 +198,6 @@ class LandSurface:
         The resulting grids are set as attributes of the model with names of the form '{grid_name}' or
         'landsurface/{grid_name}'.
         """
-        self.logger.info("Preparing regions and land use data.")
         regions = self.data_catalog.get_geodataframe(
             region_database,
             geom=self.region,
@@ -204,8 +209,18 @@ class LandSurface:
             columns={"GID_0": "ISO3"}
         )
         global_countries["geometry"] = global_countries.centroid
+        global_countries["ISO3"] = global_countries["ISO3"].replace(
+            {"XKO": "XKX"}
+        )  # XKO is a deprecated code for Kosovo, XKX is the new code
         global_countries = global_countries.set_index("ISO3")
-        self.set_geoms(global_countries, name="global_countries")
+
+        # Renaming XKO to XKX
+        global_countries = global_countries.rename(columns={"XKO": "XKX"})
+        self.logger.info(
+            f"Renamed XKO to XKX in global countries: {global_countries.columns}"
+        )
+
+        self.set_geom(global_countries, name="global_countries")
 
         assert np.unique(regions["region_id"]).shape[0] == regions.shape[0], (
             f"Region database must contain unique region IDs ({self.data_catalog[region_database].path})"
@@ -220,17 +235,24 @@ class LandSurface:
             i: region_id for region_id, i in enumerate(regions["region_id"])
         }
         regions["region_id"] = regions["region_id"].map(region_id_mapping)
+
         self.set_dict(region_id_mapping, name="region_id_mapping")
 
         assert "ISO3" in regions.columns, (
             f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
         )
 
-        self.set_geoms(regions, name="regions")
+        regions.replace(
+            {"ISO3": {"XKO": "XKX"}}, inplace=True
+        )  # XKO is a deprecated code for Kosovo, XKX is the new code
+
+        self.logger.info(f"Renamed XKO to XKX in regions: {regions.columns}")
+
+        self.set_geom(regions, name="regions")
 
         resolution_x, resolution_y = self.subgrid["mask"].rio.resolution()
 
-        regions_bounds = self.geoms["regions"].total_bounds
+        regions_bounds = self.geom["regions"].total_bounds
         mask_bounds = self.grid["mask"].raster.bounds
 
         # The bounds should be set to a bit larger than the regions to avoid edge effects
@@ -253,7 +275,7 @@ class LandSurface:
         region_mask.attrs["_FillValue"] = None
         region_mask = self.set_region_subgrid(region_mask, name="mask")
 
-        bounds = self.geoms["regions"].total_bounds
+        bounds = self.geom["regions"].total_bounds
         land_use = (
             xr.open_dataarray(
                 self.data_catalog.get_source(land_cover).path,
@@ -274,7 +296,7 @@ class LandSurface:
         )
 
         region_ids = reprojected_land_use.raster.rasterize(
-            self.geoms["regions"],
+            self.geom["regions"],
             col_name="region_id",
             all_touched=True,
         )
@@ -332,39 +354,34 @@ class LandSurface:
     ) -> None:
         """Sets up the land use parameters for the model.
 
-        Parameters
-        ----------
-        interpolation_method : str, optional
-            The interpolation method to use when interpolating the land use parameters. Default is 'nearest'.
+        Args:
+            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021_v200'.
 
         Notes:
-        -----
-        This method sets up the land use parameters for the model by retrieving land use data from the CWATM dataset and
-        interpolating the data to the model grid. It first retrieves the land use dataset from the `data_catalog`, and
-        then retrieves the maximum root depth and root fraction data for each land use type. It then
-        interpolates the data to the model grid using the specified interpolation method and sets the resulting grids as
-        attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}', where
-        {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
-        the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.).
+            This method sets up the land use parameters for the model by retrieving land use data from the CWATM dataset and
+            interpolating the data to the model grid. It first retrieves the land use dataset from the `data_catalog`, and
+            then retrieves the maximum root depth and root fraction data for each land use type. It then
+            interpolates the data to the model grid using the specified interpolation method and sets the resulting grids as
+            attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}', where
+            {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
+            the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.).
 
-        Additionally, this method sets up the crop coefficient and interception capacity data for each land use type by
-        retrieving the corresponding data from the land use dataset and interpolating it to the model grid. The crop
-        coefficient data is set as attributes of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
-        where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
-        data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
-        where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
+            Additionally, this method sets up the crop coefficient and interception capacity data for each land use type by
+            retrieving the corresponding data from the land use dataset and interpolating it to the model grid. The crop
+            coefficient data is set as attributes of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
+            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
+            data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
+            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
 
-        The resulting land use parameters are set as attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}',
-        where {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
-        the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.). The crop coefficient data is set as attributes
-        of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
-        where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
-        data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
-        where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
+            The resulting land use parameters are set as attributes of the model with names of the form 'landcover/{land_use_type}/{parameter}_{land_use_type}',
+            where {land_use_type} is the name of the land use type (e.g. 'forest', 'grassland', etc.) and {parameter} is the name of
+            the land use parameter (e.g. 'maxRootDepth', 'rootFraction1', etc.). The crop coefficient data is set as attributes
+            of the model with names of the form 'landcover/{land_use_type}/cropCoefficient{land_use_type_netcdf_name}_10days',
+            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset. The interception capacity
+            data is set as attributes of the model with names of the form 'landcover/{land_use_type}/interceptCap{land_use_type_netcdf_name}_10days',
+            where {land_use_type_netcdf_name} is the name of the land use type in the CWATM dataset.
         """
-        self.logger.info("Setting up land use parameters")
-
-        bounds = self.geoms["routing/subbasins"].total_bounds
+        bounds = self.geom["routing/subbasins"].total_bounds
         buffer = 0.1
         landcover_classification = (
             xr.open_dataarray(
@@ -475,7 +492,6 @@ class LandSurface:
         form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
         with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
         """
-        self.logger.info("Setting up soil parameters")
         ds = load_soilgrids(self.data_catalog, self.subgrid, self.region)
 
         self.set_subgrid(ds["silt"], name="soil/silt")

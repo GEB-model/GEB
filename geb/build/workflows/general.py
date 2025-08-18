@@ -9,7 +9,7 @@ import xarray
 import xarray as xr
 import xarray_regrid
 from affine import Affine
-from pyresample import geometry
+from pyresample.geometry import AreaDefinition
 from pyresample.gradient import (
     block_bilinear_interpolator,
     block_nn_interpolator,
@@ -256,7 +256,7 @@ def resample_like(
     return dst
 
 
-def get_area_definition(da: xr.DataArray) -> geometry.AreaDefinition:
+def get_area_definition(da: xr.DataArray) -> AreaDefinition:
     """Get the pyresample area definition from an xarray DataArray.
 
     This is a requirement for the resampling functions in pyresample.
@@ -267,7 +267,7 @@ def get_area_definition(da: xr.DataArray) -> geometry.AreaDefinition:
     Returns:
         A pyresample AreaDefinition object.
     """
-    return geometry.AreaDefinition(
+    return AreaDefinition(
         area_id="",
         description="",
         proj_id="",
@@ -319,8 +319,8 @@ def resample_chunked(
 
     assert target.dims == ("y", "x")
 
-    source_geo: geometry.AreaDefinition = get_area_definition(source)
-    target_geo: geometry.AreaDefinition = get_area_definition(target)
+    source_geo: AreaDefinition = get_area_definition(source)
+    target_geo: AreaDefinition = get_area_definition(target)
 
     indices: dask.Array = resample_blocks(
         gradient_resampler_indices_block,
@@ -352,3 +352,49 @@ def resample_chunked(
     )
     da.rio.set_crs(source.rio.crs)
     return da
+
+
+def validate_farm_size_data(
+    agricultural_area_db_ha: pd.Series,
+    region_n_holdings: pd.Series,
+    size_class_boundaries: dict,
+    ISO3: str,
+    tolerance: float = 0.3,
+) -> None:
+    """Validate that agricultural area is consistent with farm size class boundaries.
+
+    Args:
+        agricultural_area_db_ha: Agricultural area in hectares per size class.
+        region_n_holdings: Number of holdings per size class.
+        size_class_boundaries: Dictionary mapping size class names to (min, max) boundaries in m².
+        ISO3: ISO3 country code for the region.
+        tolerance: Tolerance for validation (default: 0.3 = 30%).
+
+    Raises:
+        ValueError: If agricultural area falls outside expected range for any size class.
+    """
+    for size_class in agricultural_area_db_ha.index:
+        actual_area = agricultural_area_db_ha[size_class]
+
+        # Get the size class boundaries for validation
+        min_size_ha, max_size_ha = size_class_boundaries[size_class]
+        # Convert from m² to ha
+        min_size_ha = min_size_ha / 10000
+        max_size_ha = max_size_ha / 10000 if max_size_ha != np.inf else np.inf
+
+        # Calculate expected area range based on class boundaries
+        min_expected_area = region_n_holdings[size_class] * min_size_ha
+        max_expected_area = region_n_holdings[size_class] * max_size_ha
+
+        # Check if actual area falls within reasonable bounds
+        if not (
+            min_expected_area * (1 - tolerance)
+            <= actual_area
+            <= max_expected_area * (1 + tolerance)
+        ):
+            raise ValueError(
+                f"Incorrect farm size data for region {ISO3}. "
+                f"Size class {size_class}: agricultural area ({actual_area:.1f} ha) outside expected range "
+                f"[{min_expected_area * (1 - tolerance):.1f}, {max_expected_area * (1 + tolerance):.1f}] ha "
+                f" Check the farm size data and correct the data, Tim can help."
+            )

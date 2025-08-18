@@ -14,6 +14,9 @@ from honeybees.model import Model as ABM_Model
 from geb.agents import Agents
 from geb.artists import Artists
 from geb.hazards.driver import HazardDriver
+from geb.hazards.floods.construct_storm_surge_hydrographs import (
+    generate_storm_surge_hydrographs,
+)
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
@@ -54,16 +57,24 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         # make a deep copy to avoid issues when the model is initialized multiple times
         self.files = copy.deepcopy(files)
+        if "geoms" in self.files:
+            # geoms was renamed to geom in the file library. To upgrade old models,
+            # we check if "geoms" is in the files and rename it to "geom"
+            # this line can be removed in august 2026 (also in geb/build/__init__.py)
+            self.files["geom"] = self.files.pop("geoms")
+
         for data in self.files.values():
             for key, value in data.items():
                 data[key] = self.input_folder / value
 
-        self.mask = load_geom(self.files["geoms"]["mask"])
+        self.mask = load_geom(self.files["geom"]["mask"])
 
         self.store = Store(self)
         self.artists = Artists(self)
 
         self.forcing = Forcing(self)
+
+        self.evaluator = Evaluate(self)
 
         # Empty list to hold plantFATE models. If forests are not used, this will be empty
         self.plantFATE = []
@@ -249,7 +260,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.in_spinup = in_spinup
         self.simulate_hydrology = simulate_hydrology
 
-        self.regions = load_geom(self.files["geoms"]["regions"])
+        self.regions = load_geom(self.files["geom"]["regions"])
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
@@ -438,12 +449,19 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )
 
         HazardDriver.initialize(self, longest_flood_event=30)
-        self.sfincs.get_return_period_maps()
+        # ugly switch to determine whether model has coastal basins
+        subbasins = load_geom(self.model.files["geoms"]["routing/subbasins"])
+        if subbasins["is_coastal_basin"].any():
+            generate_storm_surge_hydrographs(self)
+            rp_maps_coastal = self.sfincs.get_coastal_return_period_maps()
+        else:
+            rp_maps_coastal = None
+        rp_maps_riverine = self.sfincs.get_riverine_return_period_maps()
+        self.sfincs.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
 
     def evaluate(self, *args, **kwargs) -> None:
         print("Evaluating model...")
-        self.evaluate = Evaluate(self)
-        self.evaluate.run(*args, **kwargs)
+        self.evaluator.run(*args, **kwargs)
 
     @property
     def current_day_of_year(self) -> int:

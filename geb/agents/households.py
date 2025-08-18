@@ -9,7 +9,6 @@ import pyproj
 import rasterio
 import xarray as xr
 from damagescanner.vector import VectorScanner
-from honeybees.library.raster import sample_from_map
 from rasterio.features import shapes
 from rasterstats import point_query, zonal_stats
 from scipy import interpolate
@@ -105,13 +104,11 @@ class Households(AgentBaseClass):
             file_path = (
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
             )
-            flood_map = xr.open_dataarray(file_path, engine="zarr")
-            flood_maps[return_period] = flood_map.rio.write_crs(
-                flood_map.attrs["_CRS"]["wkt"]
-            )
-        flood_maps["crs"] = pyproj.CRS.from_user_input(
-            flood_maps[return_period]._CRS["wkt"]
-        )
+            flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
+            # flood_maps[return_period] = flood_map.rio.write_crs(
+            #     flood_map.attrs["_CRS"]["wkt"]
+            # )
+        flood_maps["crs"] = flood_maps[return_period].rio.crs
         flood_maps["gdal_geotransform"] = (
             flood_maps[return_period].rio.transform().to_gdal()
         )
@@ -152,9 +149,12 @@ class Households(AgentBaseClass):
 
     def construct_income_distribution(self):
         # These settings are dummy data now. Should come from subnational datasets.
-        average_household_income = 38_500
-        mean_to_median_inc_ratio = 1.3
-        median_income = average_household_income / mean_to_median_inc_ratio
+        distibution_parameters = load_table(
+            self.model.files["table"]["income/distribution_parameters"]
+        )
+        country = self.model.regions["ISO3"].values[0]
+        average_household_income = distibution_parameters[country]["MEAN"]
+        median_income = distibution_parameters[country]["MEDIAN"]
 
         # construct lognormal income distribution
         mu = np.log(median_income)
@@ -172,31 +172,13 @@ class Households(AgentBaseClass):
         )
         self.var.wealth_index = DynamicArray(wealth_index, max_n=self.max_n)
 
-        # convert wealth index to income percentile
-        income_percentiles = np.full(self.n, -1, np.int32)
-        wealth_index_to_income_percentile = {
-            1: (1, 19),
-            2: (20, 39),
-            3: (40, 59),
-            4: (60, 79),
-            5: (80, 100),
-        }
-
-        for index in wealth_index_to_income_percentile:
-            min_perc, max_perc = wealth_index_to_income_percentile[index]
-            # get indices of agents with wealth index
-            idx = np.where(self.var.wealth_index.data == index)[0]
-            # get random income percentile for agents with wealth index
-            income_percentile = np.random.randint(min_perc, max_perc + 1, len(idx))
-            # assign income percentile to agents with wealth index
-            income_percentiles[idx] = income_percentile
-        assert (income_percentiles == -1).sum() == 0, (
-            "Not all agents have an income percentile"
+        income_percentiles = load_array(
+            self.model.files["array"]["agents/households/income_percentile"]
         )
         self.var.income_percentile = DynamicArray(income_percentiles, max_n=self.max_n)
 
         # assign household disposable income based on income percentile households
-        income = np.percentile(self.var.income_distribution, income_percentiles)
+        income = load_array(self.model.files["array"]["agents/households/disp_income"])
         self.var.income = DynamicArray(income, max_n=self.max_n)
 
         # assign wealth based on income (dummy data, there are ratios available in literature)
@@ -256,36 +238,7 @@ class Households(AgentBaseClass):
         self.buildings.loc[buildings_mask, "flooded"] = True
         self.buildings["flooded"].fillna(False, inplace=True)
 
-    # def update_building_adaptation_status(self, household_adapting):
-    #     """Update the floodproofing status of buildings based on adapting households."""
-    #     # Extract and clean OSM IDs from adapting households
-    #     osm_ids = pd.DataFrame(
-    #         np.unique(self.var.osm_id.data[household_adapting])
-    #     ).dropna()
-    #     osm_ids = osm_ids.astype(int).astype(str)
-    #     osm_ids["flood_proofed"] = True
-    #     osm_ids = osm_ids.set_index(0)
-
-    #     # Extract and clean OSM way IDs from adapting households
-    #     osm_way_ids = pd.DataFrame(
-    #         np.unique(self.var.osm_way_id.data[household_adapting])
-    #     ).dropna()
-    #     osm_way_ids = osm_way_ids.astype(int).astype(str)
-    #     osm_way_ids["flood_proofed"] = True
-    #     osm_way_ids = osm_way_ids.set_index(0)
-
-    #     # Add/Update the flood_proofed status in buildings based on OSM way IDs
-    #     self.buildings["flood_proofed"] = (
-    #         self.buildings["osm_way_id"].astype(str).map(osm_way_ids["flood_proofed"])
-    #     )
-    #     self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(
-    #         self.buildings["osm_id"].astype(str).map(osm_ids["flood_proofed"])
-    #     )
-
-    #     # Replace NaNs with False (i.e., buildings not in the adapting households list)
-    #     self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(False)
-
-    def update_building_adaptation_status(self, household_adapting, strategy_column):
+    def update_building_adaptation_status(self, household_adapting):
         """Update the floodproofing status of buildings based on adapting households."""
         # Extract and clean OSM IDs from adapting households
         osm_ids = pd.DataFrame(
@@ -666,7 +619,7 @@ class Households(AgentBaseClass):
 
         # Load households and postal codes
         households = self.var.household_points.copy()
-        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        PC4 = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
 
         for day in days:
             for range_id in range_ids:
@@ -724,9 +677,9 @@ class Households(AgentBaseClass):
 
     def infrastructure_warning_strategy(self, prob_threshold=0.6):
         # Load postal codes and substations
-        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        PC4 = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
         substations = gpd.read_parquet(
-            self.model.files["geoms"]["assets/energy_substations"]
+            self.model.files["geom"]["assets/energy_substations"]
         )
 
         # Get the forecast start date from the config
@@ -861,12 +814,31 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data + 10,
+            risk_perception=self.var.risk_perception.data + 1,
             expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data * 0,
+            adaptation_costs=self.var.adaptation_costs.data,
             time_adapted=self.var.time_adapted.data,
             loan_duration=20,
             p_floods=1 / self.return_periods,
+            T=35,
+            r=0.03,
+            sigma=1,
+        )
+
+        EU_adapt_shutters = self.decision_module.calcEU_shutters(
+            geom_id="NoID",
+            n_agents=self.n,
+            wealth=self.var.wealth.data,
+            income=self.var.income.data,
+            expendature_cap=1,
+            amenity_value=self.var.amenity_value.data,
+            amenity_weight=1,
+            risk_perception=self.var.risk_perception.data + 10,
+            expected_damages_adapt=w_damages_shutters,
+            adaptation_costs=self.var.adaptation_costs_shutters * 0,
+            time_adapted=self.var.time_adapted_shutters.data,
+            loan_duration=0,
+            p_windstorm=1 / self.windstorm_return_periods,
             T=35,
             r=0.03,
             sigma=1,
@@ -899,7 +871,7 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data + 10,
+            risk_perception=self.var.risk_perception.data + 1,
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
@@ -949,7 +921,7 @@ class Households(AgentBaseClass):
 
     def load_objects(self):
         # Load buildings
-        self.buildings = gpd.read_parquet(self.model.files["geoms"]["assets/buildings"])
+        self.buildings = gpd.read_parquet(self.model.files["geom"]["assets/buildings"])
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
@@ -959,12 +931,12 @@ class Households(AgentBaseClass):
         )
 
         # Load roads
-        self.roads = gpd.read_parquet(self.model.files["geoms"]["assets/roads"]).rename(
+        self.roads = gpd.read_parquet(self.model.files["geom"]["assets/roads"]).rename(
             columns={"highway": "object_type"}
         )
 
         # Load rail
-        self.rail = gpd.read_parquet(self.model.files["geoms"]["assets/rails"])
+        self.rail = gpd.read_parquet(self.model.files["geom"]["assets/rails"])
         self.rail["object_type"] = "rail"
 
         # Export buildings as GeoPackage to models/geul/base
@@ -1220,6 +1192,7 @@ class Households(AgentBaseClass):
         """This function calculates the flood damages for the households in the model.
 
         It iterates over the return periods and calculates the damages for each household
+        based on the flood maps and the building footprints.
         """
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
@@ -1240,6 +1213,7 @@ class Households(AgentBaseClass):
                 hazard_file=flood_map,
                 curve_path=self.buildings_structure_curve,
                 gridded=False,
+                disable_progress=True,
             )
             total_damage_structure = damage_unprotected["damage"].sum()
             print(
@@ -1259,6 +1233,7 @@ class Households(AgentBaseClass):
                 hazard_file=flood_map,
                 curve_path=self.buildings_structure_curve,
                 gridded=False,
+                disable_progress=True,
             )
             total_damage_structure = damage_flood_proofed["damage"].sum()
             print(
@@ -1566,31 +1541,40 @@ class Households(AgentBaseClass):
         This function uses a multiplier to calculate the water demand for
         for each region with respect to the base year.
         """
-        # the water demand multiplier is a function of the year and region
-        water_demand_multiplier_per_region = (
-            self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
+        if self.config["water_demand"]["method"] == "default":
+            # the water demand multiplier is a function of the year and region
+            water_demand_multiplier_per_region = self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
                 self.model.current_time.year
             ]
-        )
-        assert (
-            water_demand_multiplier_per_region.index
-            == np.arange(len(water_demand_multiplier_per_region))
-        ).all()
-        water_demand_multiplier_per_household = (
-            water_demand_multiplier_per_region.values[self.var.region_id]
-        )
+            assert (
+                water_demand_multiplier_per_region.index
+                == np.arange(len(water_demand_multiplier_per_region))
+            ).all()
+            water_demand_multiplier_per_household = (
+                water_demand_multiplier_per_region.values[self.var.region_id]
+            )
 
-        # water demand is the per capita water demand in the household,
-        # multiplied by the size of the household and the water demand multiplier
-        # per region and year, relative to the baseline.
-        water_demand_per_household_m3 = (
-            self.var.municipal_water_demand_per_capita_m3_baseline
-            * self.var.sizes
-            * water_demand_multiplier_per_household
-        )
+            # water demand is the per capita water demand in the household,
+            # multiplied by the size of the household and the water demand multiplier
+            # per region and year, relative to the baseline.
+            self.var.water_demand_per_household_m3 = (
+                self.var.municipal_water_demand_per_capita_m3_baseline
+                * self.var.sizes
+                * water_demand_multiplier_per_household
+            )
+        elif self.config["water_demand"]["method"] == "custom_value":
+            # Function to set a custom_value for household water demand. All households have the same demand.
+            custom_value = self.config["water_demand"]["custom_value"]["value"]
+            self.var.water_demand_per_household_m3 = np.full(
+                self.var.region_id.shape, custom_value, dtype=float
+            )
+        else:
+            raise ValueError(
+                "Invalid water demand method. Choose 'default' or 'customized_demand'."
+            )
 
         return (
-            water_demand_per_household_m3,
+            self.var.water_demand_per_household_m3,
             self.var.water_efficiency_per_household,
             self.var.locations.data,
         )
