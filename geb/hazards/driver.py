@@ -32,7 +32,7 @@ class HazardDriver:
                 self.sfincs.save_soil_moisture()
                 self.sfincs.save_max_soil_moisture()
                 self.sfincs.save_soil_storage_capacity()
-                self.sfincs.save_ksat()
+                self.sfincs.save_saturated_hydraulic_conductivity()
 
             for event in self.config["hazards"]["floods"]["events"]:
                 assert isinstance(event["start_time"], datetime), (

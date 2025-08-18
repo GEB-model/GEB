@@ -1,25 +1,3 @@
-# --------------------------------------------------------------------------------
-# This file contains code that has been adapted from an original source available
-# in a public repository under the GNU General Public License. The original code
-# has been modified to fit the specific needs of this project.
-#
-# Original source repository: https://github.com/iiasa/CWatM
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-# --------------------------------------------------------------------------------
-
-
 import platform
 from pathlib import Path
 
@@ -461,46 +439,70 @@ def get_transpiration_factor_per_layer(
 
 @njit(cache=True, parallel=True)
 def evapotranspirate(
-    wwp,
-    wfc,
-    wres,
-    soil_layer_height,
-    land_use_type,
-    root_depth,
-    crop_map,
-    natural_crop_groups,
-    potential_transpiration,
-    potential_bare_soil_evaporation,
-    potential_evapotranspiration,
-    frost_index,
-    crop_group_number_per_group,
-    w,
-    topwater,
-    open_water_evaporation,
+    wwp: npt.NDArray[np.float32],
+    wfc: npt.NDArray[np.float32],
+    wres: npt.NDArray[np.float32],
+    soil_layer_height: npt.NDArray[np.float32],
+    land_use_type: npt.NDArray[np.int32],
+    root_depth: npt.NDArray[np.float32],
+    crop_map: npt.NDArray[np.int32],
+    natural_crop_groups: npt.NDArray[np.float32],
+    potential_transpiration: npt.NDArray[np.float32],
+    potential_bare_soil_evaporation: npt.NDArray[np.float32],
+    potential_evapotranspiration: npt.NDArray[np.float32],
+    frost_index: npt.NDArray[np.float32],
+    crop_group_number_per_group: npt.NDArray[np.float32],
+    w: npt.NDArray[np.float32],
+    topwater: npt.NDArray[np.float32],
+    open_water_evaporation: npt.NDArray[np.float32],
     minimum_effective_root_depth: float,
-    mask_transpiration,
-    mask_soil_evaporation,
-):
+    mask_transpiration: npt.NDArray[np.bool_],
+    mask_soil_evaporation: npt.NDArray[np.bool_],
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
     """Evapotranspiration calculation for the soil module.
 
-    Parameters
-    ----------
-    mask_transpiration : np.ndarray
-        A mask indicating which pixels are valid for transpiration calculation. This is
-        useful when transpiration is calculated by an external module.
-    mask_soil_evaporation : np.ndarray
-        A mask indicating which pixels are valid for evapotranspiration calculation.
-    """
-    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
+    Args:
+        wwp: Residual soil water content in each layer in meters.
+        wfc: Field capacity in each layer in meters.
+        wres: Residual soil water content in each layer in meters.
+        soil_layer_height: Height of each soil layer in meters.
+        land_use_type: Land use type of the hydrological response unit.
+        root_depth: The root depth in meters.
+        crop_map: Crop map indicating the crop type for each hydrological response unit. -1 indicates no crop.
+        natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
+        potential_transpiration: Potential transpiration in meters.
+        potential_bare_soil_evaporation: Potential bare soil evaporation in meters.
+        potential_evapotranspiration: Potential evapotranspiration in meters.
+        frost_index: Frost index indicating whether the soil is frozen.
+        crop_group_number_per_group: Crop group numbers for each crop type.
+        w: Soil water content in each layer in meters.
+        topwater: Topwater in meters, which is the water available for evaporation and transpiration for paddy irrigated fields.
+        open_water_evaporation: Open water evaporation in meters, which is the water evaporated
+            from open water areas.
+        minimum_effective_root_depth: Minimum effective root depth in meters, used to ensure that the
+            effective root depth is not less than this value. Crops can extract water up to this depth.
+        mask_transpiration: A mask indicating which pixels are valid for transpiration calculation.
+        mask_soil_evaporation: A mask indicating which pixels are valid for evapotranspration calculation.
 
-    transpiration = np.zeros_like(land_use_type, dtype=np.float32)
-    actual_bare_soil_evaporation = np.zeros_like(land_use_type, dtype=np.float32)
+    Returns:
+        A tuple containing:
+            - transpiration: The actual transpiration in meters for each hydrological response unit.
+            - actual_bare_soil_evaporation: The actual bare soil evaporation in meters for each hydrological response unit.
+    """
+    soil_is_frozen: npt.NDArray[np.bool_] = frost_index > FROST_INDEX_THRESHOLD
+
+    transpiration: npt.NDArray[np.float32] = np.zeros_like(
+        land_use_type, dtype=np.float32
+    )
+    actual_bare_soil_evaporation: npt.NDArray[np.float32] = np.zeros_like(
+        land_use_type, dtype=np.float32
+    )
 
     for i in prange(land_use_type.size):
         if mask_transpiration[i]:
-            remaining_potential_transpiration = potential_transpiration[i]
+            remaining_potential_transpiration: np.float32 = potential_transpiration[i]
             if land_use_type[i] == PADDY_IRRIGATED:
-                transpiration_from_topwater = min(
+                transpiration_from_topwater: np.float32 = min(
                     topwater[i], remaining_potential_transpiration
                 )
                 remaining_potential_transpiration -= transpiration_from_topwater
@@ -510,35 +512,39 @@ def evapotranspirate(
             if not soil_is_frozen[i]:
                 # get group group numbers for natural areas
                 if land_use_type[i] == FOREST or land_use_type[i] == GRASSLAND_LIKE:
-                    crop_group_number = natural_crop_groups[i]
+                    crop_group_number: np.float32 = natural_crop_groups[i]
                 else:  #
-                    crop_group_number = crop_group_number_per_group[crop_map[i]]
+                    crop_group_number: np.float32 = crop_group_number_per_group[
+                        crop_map[i]
+                    ]
 
                 # vegetation-specific factor for easily available soil water
-                fraction_easily_available_soil_water = (
+                fraction_easily_available_soil_water: np.float32 = (
                     get_fraction_easily_available_soil_water(
                         crop_group_number, potential_evapotranspiration[i]
                     )
                 )
 
-                effective_root_depth = np.maximum(
+                effective_root_depth: np.float32 = np.maximum(
                     np.float32(minimum_effective_root_depth), root_depth[i]
                 )
                 fraction_easily_available_soil_water = np.float32(
                     fraction_easily_available_soil_water
                 )
 
-                transpiration_factor_per_layer = get_transpiration_factor_per_layer(
-                    soil_layer_height[:, i],
-                    effective_root_depth,
-                    w[:, i],
-                    wfc[:, i],
-                    wwp[:, i],
-                    fraction_easily_available_soil_water,
+                transpiration_factor_per_layer: npt.NDArray[np.float32] = (
+                    get_transpiration_factor_per_layer(
+                        soil_layer_height[:, i],
+                        effective_root_depth,
+                        w[:, i],
+                        wfc[:, i],
+                        wwp[:, i],
+                        fraction_easily_available_soil_water,
+                    )
                 )
 
                 for layer in range(N_SOIL_LAYERS):
-                    transpiration_layer = (
+                    transpiration_layer: np.float32 = (
                         remaining_potential_transpiration
                         * transpiration_factor_per_layer[layer]
                     )

@@ -619,10 +619,8 @@ def KGE_region_diversion(run_directory, individual, config):
     df_simulated = pd.concat(dfs_simulated, axis=1)
     df_simulated_yearly = df_simulated.resample("A-JUN").sum() / 1_000_000
 
-    # ---------------------------------------------------------
     # Load observed data; treat the 'Date' as YYYY-07-01
     # so it aligns with the July–June year used above.
-    # ---------------------------------------------------------
     annual_diversions_fp = Path("calibration_data/water_use/mdb_annual_diversions.xlsx")
     annual_diversions_df = pd.read_excel(annual_diversions_fp)
 
@@ -657,9 +655,7 @@ def KGE_region_diversion(run_directory, individual, config):
     # so the index labels match df_simulated_yearly's A-JUN endings.
     diversions_observed_yearly = diversions_observed_df.resample("A-JUN").sum()
 
-    # ---------------------------------------------------------
     # Combine VIC
-    # ---------------------------------------------------------
     df_combined_vic = pd.concat(
         [
             df_simulated_yearly["allocation_vic"],
@@ -671,9 +667,7 @@ def KGE_region_diversion(run_directory, individual, config):
     df_combined_vic.columns = ["simulated", "observed"]
     df_combined_vic["simulated"] += 0.0001
 
-    # ---------------------------------------------------------
     # Combine NSW
-    # ---------------------------------------------------------
     df_combined_nsw = pd.concat(
         [
             df_simulated_yearly["allocation_nsw"],
@@ -685,9 +679,7 @@ def KGE_region_diversion(run_directory, individual, config):
     df_combined_nsw.columns = ["simulated", "observed"]
     df_combined_nsw["simulated"] += 0.0001
 
-    # ---------------------------------------------------------
     # Compute KGE
-    # ---------------------------------------------------------
     kge_vic = KGE_calculation(df_combined_vic["simulated"], df_combined_vic["observed"])
     kge_nsw = KGE_calculation(df_combined_nsw["simulated"], df_combined_nsw["observed"])
     kge = (kge_vic + kge_nsw) / 2.0

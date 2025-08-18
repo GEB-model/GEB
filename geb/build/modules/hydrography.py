@@ -171,17 +171,16 @@ class Hydrography:
         """Sets up the Manning's coefficient for the model.
 
         Notes:
-        -----
-        This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
-        and topography of the grid. It first calculates the upstream area of each cell in the grid using the
-        `routing/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
+            This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
+            and topography of the grid. It first calculates the upstream area of each cell in the grid using the
+            `routing/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
 
-            C = 0.025 + 0.015 * (2 * A / U) + 0.030 * (Z / 2000)
+                C = 0.025 + 0.015 * (2 * A / U) + 0.030 * (Z / 2000)
 
-        where C is the Manning's coefficient, A is the cell area, U is the upstream area, and Z is the elevation of the cell.
+            where C is the Manning's coefficient, A is the cell area, U is the upstream area, and Z is the elevation of the cell.
 
-        The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
-        `set_grid()` method.
+            The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
+            `set_grid()` method.
         """
         a = (2 * self.grid["cell_area"]) / self.grid["routing/upstream_area"]
         a = xr.where(a < 1, a, 1, keep_attrs=True)
@@ -461,22 +460,23 @@ class Hydrography:
     ):
         """Sets up the waterbodies for GEB.
 
+        Args:
+            command_areas: The path to the command areas data in the data catalog. If None, command areas are not set up.
+            custom_reservoir_capacity: The path to the custom reservoir capacity data in the data catalog.
+                If None, the default reservoir capacity is used. The data should be a DataFrame with
+                'waterbody_id' as the index and 'volume_total' as the column for the reservoir capacity.
+
         Notes:
-        -----
-        This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
-        specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
-        grid and the subgrid using the `rasterize` method of the `raster` object. The resulting grids are set as attributes
-        of the model with names of the form 'waterbodies/{grid_name}'.
+            This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
+            specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
+            grid and the subgrid using the `rasterize` method of the `raster` object. The resulting grids are set as attributes
+            of the model with names of the form 'waterbodies/{grid_name}'.
 
-        The method also retrieves the reservoir command area data from the data catalog and calculates the area of each
-        command area that falls within the model region. The `waterbody_id` key is used to do the matching between these
-        databases. The relative area of each command area within the model region is calculated and set as a column in
-        the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
-        with any custom reservoir capacity data from the data catalog.
-
-        TODO: Make the reservoir command area data optional.
-
-        The resulting waterbody data is set as a table in the model with the name 'waterbodies/waterbody_data'.
+            The method also retrieves the reservoir command area data from the data catalog and calculates the area of each
+            command area that falls within the model region. The `waterbody_id` key is used to do the matching between these
+            databases. The relative area of each command area within the model region is calculated and set as a column in
+            the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
+            with any custom reservoir capacity data from the data catalog.
         """
         dtypes = {
             "waterbody_id": np.int32,
