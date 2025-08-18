@@ -142,7 +142,7 @@ def update_sfincs_model_forcing(
             river_inflow_points = sf.forcing["dis"].vector.to_gdf()
             river_inflow_points = river_inflow_points.to_crs(
                 4326
-            )  # <------Change crs to 4326 before sampling uparea
+            )  # Change crs to 4326 before sampling uparea
             uparea_sfincs = sf.data_catalog.get_rasterdataset(
                 "merit_hydro",
                 bbox=sf.mask.raster.transform_bounds(4326),
@@ -157,7 +157,7 @@ def update_sfincs_model_forcing(
             )
             river_inflow_points = river_inflow_points.to_crs(
                 sf.crs
-            )  # <------Change crs back to sf.crs
+            )  # Change crs back to sf.crs
             # Concatenate the two DataFrames
             assert river_inflow_points.crs == head_water_points.crs, (
                 "CRS mismatch between river_inflow_points and head_water_points"
