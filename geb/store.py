@@ -3,7 +3,7 @@ import shutil
 from datetime import datetime
 from operator import attrgetter
 from typing import Callable
-
+from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -413,7 +413,7 @@ class Bucket:
         )
         super().__setattr__(name, value)
 
-    def save(self, path):
+    def save(self, path: Path):
         path.mkdir(parents=True, exist_ok=True)
         for name, value in self.__dict__.items():
             # do not save the validator itself

@@ -1,3 +1,5 @@
+"""Provides functions for raster processing."""
+
 import numpy as np
 import xarray as xr
 
@@ -16,6 +18,11 @@ def reclassify(
 
     Returns:
         Reclassified array with the same dimensions and coordinates
+
+    Raises:
+        ValueError: If the method is not 'dict' or 'lookup', or if keys in the
+            remap_dict are negative when using the lookup method.
+        TypeError: If the input data_array is not an xarray DataArray or numpy ndarray.
     """
     # create numpy array from dictionary values to get the dtype of the output
     values = np.array(list(remap_dict.values()))

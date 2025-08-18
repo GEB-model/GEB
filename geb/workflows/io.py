@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import os
 import shutil
 import tempfile
@@ -26,10 +27,26 @@ all_async_readers: list = []
 
 
 def load_table(fp: Path | str) -> pd.DataFrame:
+    """Load a table from a file. Should read the format used by the GEB model.
+
+    Args:
+        fp: The path to the file to load.
+
+    Returns:
+        A pandas DataFrame containing the data from the file.
+    """
     return pd.read_parquet(fp, engine="pyarrow")
 
 
 def load_array(fp: Path) -> np.ndarray:
+    """Load an array from a file. Should read the format used by the GEB model.
+
+    Args:
+        fp: The path to the file to load.
+
+    Returns:
+        A numpy array containing the data from the file.
+    """
     if fp.suffix == ".npz":
         return np.load(fp)["data"]
     elif fp.suffix == ".zarr":
@@ -103,6 +120,19 @@ def calculate_scaling(
 
 
 def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
+    """Open a zarr file and return an xarray DataArray.
+
+    The CRS is read from the _CRS attribute and written to the DataArray.
+
+    Only one data variable is supported in the zarr file to avoid confusion.
+    When the datatype is boolean, the _FillValue attribute is set to None
+
+    Args:
+        zarr_folder: The path to the zarr folder.
+
+    Returns:
+        An xarray DataArray containing the data from the zarr file.
+    """
     # it is rather odd, but in some cases using mask_and_scale=False is necessary
     # or dtypes start changing, seemingly randomly
     # consolidated metadata is off-spec for zarr, therefore we set it to False
@@ -123,6 +153,17 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
 
 
 def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
+    """Convert a CRS object to WKT format.
+
+    Args:
+        crs_obj: The CRS object to convert. Can be an EPSG code, a Pyproj CRS object, or a Rasterio CRS object.
+
+    Returns:
+        The WKT representation of the CRS object.
+
+    Raises:
+        TypeError: If the CRS object is not of a supported type.
+    """
     if isinstance(crs_obj, int):  # EPSG code
         return CRS.from_epsg(crs_obj).to_wkt()
     elif isinstance(crs_obj, CRS):  # Pyproj CRS
@@ -489,16 +530,44 @@ class AsyncGriddedForcingReader:
         data = self.var[index, :]
         return data
 
-    async def load_await(self, index):
+    async def _load_await(self, index):
         return await self.loop.run_in_executor(self.executor, lambda: self.load(index))
 
-    async def preload_next(self, index):
-        # Preload the next timestep asynchronously
+    async def _preload_next(self, index: int) -> np.ndarray | None:
+        """Preload the next timestep asynchronously.
+
+        Args:
+            index: The index of the current timestep. Must be a positive integer
+                and less than the total number of timesteps.
+
+        Returns:
+            The data for the next timestep as a numpy array, or None if there is no next timestep.
+
+        Raises:
+            ValueError: If the index is out of bounds for the time size.
+        """
         if index + 1 < self.time_size:
             return await self.load_await(index + 1)
-        return None
+        elif index + 1 == self.time_size:
+            # If we are at the last timestep, preload None to indicate no more data
+            return None
+        else:
+            raise ValueError(
+                f"Index {index + 1} is out of bounds for the time size {self.time_size}"
+            )
 
-    async def read_timestep_async(self, index):
+    async def read_timestep_async(self, index: int) -> np.ndarray:
+        """Read a data for the given index asynchronously.
+
+        Already preloads the next timestep for faster sequential access.
+
+        Args:
+            index: The index of the timestep to read. Must be a positive integer
+                and less than the total number of timesteps.
+
+        Returns:
+            The data for the given index as a numpy array.
+        """
         assert index < self.time_size, "Index out of bounds."
         assert index >= 0, "Index out of bounds."
         # Check if the requested data is already preloaded, if so, just return that data
@@ -509,15 +578,23 @@ class AsyncGriddedForcingReader:
             data = await self.preloaded_data_future
         # Load the requested data if not preloaded
         else:
-            data = await self.load_await(index)
+            data = await self._load_await(index)
 
         # Initiate preloading the next timestep, do not await here, this returns a future
-        self.preloaded_data_future = asyncio.create_task(self.preload_next(index))
+        self.preloaded_data_future = asyncio.create_task(self._preload_next(index))
         self.current_index = index
         self.current_data = data
         return data
 
-    def get_index(self, date):
+    def get_index(self, date: datetime.datetime) -> int:
+        """Get the index of the given date in the datetime index, which maps to the index of the data.
+
+        Args:
+            date: The date to get the index for. Must be a datetime object.
+
+        Returns:
+            The index of the date in the datetime index.
+        """
         # convert datetime object to dtype of time coordinate. There is a very high probability
         # that the dataset is the same as the previous one or the next one in line,
         # so we can just check the current index and the next one. Only if those do not match
@@ -534,7 +611,18 @@ class AsyncGriddedForcingReader:
             )
             return indices.argmax()
 
-    def read_timestep(self, date, asynchronous=False):
+    def read_timestep(
+        self, date: datetime.datetime, asynchronous: bool = False
+    ) -> np.ndarray:
+        """Read a data for the given date.
+
+        Args:
+            date: The date to read the data for.
+            asynchronous: Whether to read the data asynchronously. Default is False.
+
+        Returns:
+            The data for the given date as a numpy array.
+        """
         if asynchronous:
             index = self.get_index(date)
             fn = self.read_timestep_async(index)
@@ -545,7 +633,8 @@ class AsyncGriddedForcingReader:
             data = self.load(index)
             return data
 
-    def close(self):
+    def close(self) -> None:
+        """Close the reader and clean up resources."""
         # cancel the preloading of the next timestep
         if self.preloaded_data_future is not None:
             self.preloaded_data_future.cancel()
@@ -563,7 +652,7 @@ class WorkingDirectory:
             # Code executed here will have the new directory as the CWD
     """
 
-    def __init__(self, new_path):
+    def __init__(self, new_path: Path) -> None:
         """Initializes the context manager with the path to change to.
 
         Args:
@@ -572,7 +661,13 @@ class WorkingDirectory:
         self._new_path = new_path
         self._original_path = None  # To store the original path
 
-    def __enter__(self):
+    def __enter__(self) -> "WorkingDirectory":
+        """Changes the current working directory to the new path and saves the original path.
+
+        Returns:
+            self: Returns the instance of the context manager.
+
+        """
         # Store the current working directory
         self._original_path = os.getcwd()
 
@@ -582,7 +677,14 @@ class WorkingDirectory:
         # Return self (optional, but common)
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Restores the original working directory when exiting the context.
+
+        Args:
+            exc_type: The exception type, if any.
+            exc_val: The exception value, if any.
+            exc_tb: The traceback object, if any.
+        """
         # Change back to the original directory
         os.chdir(self._original_path)
 
@@ -610,8 +712,9 @@ def fetch_and_save(
 
     Returns:
         Returns True if the file was downloaded successfully and saved to the specified path.
-        Raises an exception if all attempts to download the file fail.
 
+    Raises:
+        requests.RequestException: If the request fails after all retries.
     """
     if not overwrite and file_path.exists():
         return True
@@ -658,4 +761,4 @@ def fetch_and_save(
             time.sleep(delay)
 
     # If all attempts fail, raise an exception
-    raise Exception("All attempts to download the file have failed.")
+    raise requests.RequestException("All attempts to download the file have failed.")
