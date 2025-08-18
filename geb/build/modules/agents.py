@@ -334,6 +334,7 @@ class Agents:
         This function used WID data on income distributions to generate income distribution profiles for each region.
         """
         income_distribution_parameters = {}
+        income_distributions = {}
         path = self.data_catalog.get_source(
             "oecd_idd"
         ).path  # in future maybe replace this with an API request
@@ -349,6 +350,7 @@ class Agents:
         )
         for country in countries["GID_0"]:
             income_distribution_parameters[country] = {}
+            income_distributions[country] = {}
             oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
             # take the most recent year
             most_recent_year = oecd_widd_country[
@@ -361,11 +363,27 @@ class Agents:
             income_distribution_parameters[country]["MEDIAN"] = most_recent_year[
                 most_recent_year["STATISTICAL_OPERATION"] == "MEDIAN"
             ]["OBS_VALUE"].iloc[0]
+
+            # now also create national income distribution
+            mu = np.log(income_distribution_parameters[country]["MEDIAN"])
+            sd = np.sqrt(
+                2
+                * np.log(
+                    income_distribution_parameters[country]["MEAN"]
+                    / income_distribution_parameters[country]["MEDIAN"]
+                )
+            )
+            income_distribution = np.sort(
+                np.random.lognormal(mu, sd, 15_000).astype(np.int32)
+            )
+            income_distributions[country] = income_distribution
         # store to model table
         income_distribution_parameters_pd = pd.DataFrame(income_distribution_parameters)
+        income_distributions_pd = pd.DataFrame(income_distributions)
         self.set_table(
             income_distribution_parameters_pd, "income/distribution_parameters"
         )
+        self.set_table(income_distributions_pd, "income/national_distribution")
 
     @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
     def setup_economic_data(self):
@@ -1420,7 +1438,7 @@ class Agents:
         )
         GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
 
-        fp_buildings = self.files["geoms"]["assets/buildings"]
+        fp_buildings = self.files["geom"]["assets/buildings"]
         buildings = gpd.read_parquet(f"{self.root}/{fp_buildings}")[
             ["osm_id", "osm_way_id", "geometry"]
         ]
@@ -1483,6 +1501,15 @@ class Agents:
         }
         region_results = {}
 
+        # create income percentile based on wealth index mapping
+        wealth_index_to_income_percentile = {
+            1: (1, 19),
+            2: (20, 39),
+            3: (40, 59),
+            4: (60, 79),
+            5: (80, 100),
+        }
+
         # get age class to age (head of household) mapping
         age_class_to_age = {
             1: (0, 4),
@@ -1510,6 +1537,13 @@ class Agents:
                     f"Skipping setting up household characteristics for {GDL_region['GDLcode']}"
                 )
                 continue
+
+            # load table with income distribution data
+            national_income_distribution = pd.read_parquet(
+                "input" / self.files["table"]["income/national_distribution"]
+            )
+
+            # construct national income distribution
 
             # load building database with grid idx
             buildings = all_buildings_model_region[GDL_code]
@@ -1546,6 +1580,33 @@ class Agents:
             # create column WEALTH_INDEX (GLOPOP-S contains either INCOME or WEALTH data, depending on the region. Therefor we combine these.)
             GLOPOP_S_region["wealth_index"] = (
                 GLOPOP_S_region["WEALTH"] + GLOPOP_S_region["INCOME"] + 1
+            )
+
+            # sample income percentile
+            GLOPOP_S_region["income_percentile"] = np.uint16(np.iinfo(np.uint16).max)
+            for wealth_index in wealth_index_to_income_percentile:
+                percentile_range = wealth_index_to_income_percentile[wealth_index]
+
+                GLOPOP_S_region.loc[
+                    GLOPOP_S_region["wealth_index"] == wealth_index,
+                    "income_percentile",
+                ] = np.random.randint(
+                    percentile_range[0],
+                    percentile_range[1],
+                    size=len(
+                        GLOPOP_S_region.loc[
+                            GLOPOP_S_region["wealth_index"] == wealth_index
+                        ]
+                    ),
+                ).astype(np.uint16)
+            assert not (
+                GLOPOP_S_region["income_percentile"] == np.iinfo(np.uint16).max
+            ).any()
+
+            # sample income from national distribution
+            GLOPOP_S_region["disp_income"] = np.percentile(
+                np.array(national_income_distribution[GDL_code[:3]]),
+                np.array(GLOPOP_S_region["income_percentile"]),
             )
 
             # calculate age:
@@ -1714,6 +1775,8 @@ class Agents:
                 "rural",
                 "osm_id",
                 "osm_way_id",
+                "disp_income",
+                "income_percentile",
                 # "building_id"
             ):
                 household_characteristics[column] = np.array(allocated_agents[column])

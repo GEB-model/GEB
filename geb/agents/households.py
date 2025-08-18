@@ -137,31 +137,13 @@ class Households(AgentBaseClass):
         )
         self.var.wealth_index = DynamicArray(wealth_index, max_n=self.max_n)
 
-        # convert wealth index to income percentile
-        income_percentiles = np.full(self.n, -1, np.int32)
-        wealth_index_to_income_percentile = {
-            1: (1, 19),
-            2: (20, 39),
-            3: (40, 59),
-            4: (60, 79),
-            5: (80, 100),
-        }
-
-        for index in wealth_index_to_income_percentile:
-            min_perc, max_perc = wealth_index_to_income_percentile[index]
-            # get indices of agents with wealth index
-            idx = np.where(self.var.wealth_index.data == index)[0]
-            # get random income percentile for agents with wealth index
-            income_percentile = np.random.randint(min_perc, max_perc + 1, len(idx))
-            # assign income percentile to agents with wealth index
-            income_percentiles[idx] = income_percentile
-        assert (income_percentiles == -1).sum() == 0, (
-            "Not all agents have an income percentile"
+        income_percentiles = load_array(
+            self.model.files["array"]["agents/households/income_percentile"]
         )
         self.var.income_percentile = DynamicArray(income_percentiles, max_n=self.max_n)
 
         # assign household disposable income based on income percentile households
-        income = np.percentile(self.var.income_distribution, income_percentiles)
+        income = load_array(self.model.files["array"]["agents/households/disp_income"])
         self.var.income = DynamicArray(income, max_n=self.max_n)
 
         # assign wealth based on income (dummy data, there are ratios available in literature)
