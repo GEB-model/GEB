@@ -20,6 +20,7 @@ def VectorScanner(
         hazard: DataArray representing the hazard data.
         vulnerability_curves: DataFrame containing vulnerability curves for different object types. For each 'object_type', there should be a corresponding curve.
             The index is used to map the severity (hazard level) to the damage ratio.
+        disable_progress: If True, disables the progress bar during processing.
 
     Returns:
        Series containing the computed damages for each feature.

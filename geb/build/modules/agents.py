@@ -331,7 +331,11 @@ class Agents:
     def setup_income_distribution_parameters(self):
         """Sets up the income distributions for GEB.
 
-        This function used WID data on income distributions to generate income distribution profiles for each region.
+        Notes:
+            This function used WID data on income distributions to generate income distribution profiles for each region.
+            It retrieves the OECD income distribution data, processes it to extract mean and median income values for each country,
+            and generates synthetic income distributions based on these parameters assuming a log-normal distribution. The resulting
+            distributions are set as tables (be mindful for models outside of the EU that we do not yet account for currencies).
         """
         income_distribution_parameters = {}
         income_distributions = {}
