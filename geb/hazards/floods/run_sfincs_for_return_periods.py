@@ -111,14 +111,31 @@ def assign_calculation_group(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 def run_sfincs_for_return_periods_coastal(
-    model,
-    model_root,
-    gpu=True,
-    return_periods=[2, 5, 10, 25, 50, 100, 250, 500, 1000],
-    export_dir=None,
-    clean_working_dir=True,
-    export=True,
-):
+    model: SfincsModel,
+    model_root: Path,
+    gpu: bool = True,
+    return_periods: list[int] = [2, 5, 10, 25, 50, 100, 250, 500, 1000],
+    export_dir: Path | None = None,
+    clean_working_dir: bool = True,
+    export: bool = True,
+) -> dict[int, xr.DataArray]:
+    """Run SFINCS for coastal return periods.
+
+    Notes:
+        Updates the forcing of the build coastal sfincs model with storm surge hydrographs
+
+    Args:
+        model: The SFINCS model to run.
+        model_root: The root directory of the SFINCS model.
+        gpu: Whether to use GPU acceleration.
+        return_periods: List of return periods to simulate.
+        export_dir: Directory to export results.
+        clean_working_dir: Whether to clean the working directory before simulation.
+        export: Whether to export results.
+
+    Returns:
+       Dictionary containing the maximum flood depth for each return period.
+    """
     if export_dir is None:
         export_dir: Path = model_root / "risk"
 
