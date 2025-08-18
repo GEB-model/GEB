@@ -8,7 +8,7 @@ def VectorScanner(
     features: gpd.GeoDataFrame,
     hazard: xr.DataArray,
     vulnerability_curves: pd.DataFrame,
-    disable_progress=False,
+    disable_progress: bool = False,
 ) -> pd.Series:
     """VectorScanner function to compute damages based on features, hazard, and vulnerability curves.
 
