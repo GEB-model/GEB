@@ -1,83 +1,61 @@
 name: Ruff Error Count Check
 
 on:
-    pull_request:
-        branches:
-            - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-    check-ruff-errors:
-        runs-on: ubuntu-latest
-        env:
-            RULES: ANN001,ANN002,ANN003,ANN201,ANN202,ANN204,ANN205,ANN206,D,DOC
-        steps:
-            - name: Checkout main branch for baseline
-              uses: actions/checkout@v3
-              with:
-                ref: main
-                path: main-branch
+  check-ruff-errors:
+    runs-on: ubuntu-latest
+    env:
+        RULES: ANN001,ANN002,ANN003,ANN201,ANN202,ANN204,ANN205,ANN206,D,DOC
+    steps:
+      - name: Checkout main branch for baseline
+        uses: actions/checkout@v3
+        with:
+          ref: main
+          path: main-branch
 
-            - name: Checkout PR branch
-              uses: actions/checkout@v4
-              with:
-                path: pr-branch
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          path: pr-branch
 
-            - name: Install Ruff
-              uses: astral-sh/ruff-action@v3
+      - name: Install Ruff
+        uses: astral-sh/ruff-action@v3
 
-            - name: Get baseline error counts from main branch
-              id: ruff_main
-              run: |
-                    cd main-branch
-                    declare -A BASELINE_ERRORS
-                    for RULE in $(echo "$RULES" | tr "," "\n"); do
-                        RUFF_OUTPUT=$(ruff check --preview --statistics --select "$RULE" --output-format full . || true)
-                        ERROR_COUNT=$(echo "$RUFF_OUTPUT" | grep -o -E 'Found [0-9]+ error' | grep -o -E '[0-9]+')
-                        if [ -z "$ERROR_COUNT" ]; then
-                            ERROR_COUNT=0
-                        fi
-                        BASELINE_ERRORS[$RULE]=$ERROR_COUNT
-                        echo "baseline_$RULE=$ERROR_COUNT" >> $GITHUB_OUTPUT
-                    done
+      - name: Get baseline error count from main branch
+        id: ruff_main
+        run: |
+          cd main-branch
+          RUFF_OUTPUT=$(ruff check --preview --statistics --select $RULES  --output-format full . || true)
+          ERROR_COUNT=$(echo "$RUFF_OUTPUT" | grep -o -E 'Found [0-9]+ error' | grep -o -E '[0-9]+')
+          if [ -z "$ERROR_COUNT" ]; then
+            ERROR_COUNT=0
+          fi
+          echo "error_count=$ERROR_COUNT" >> $GITHUB_OUTPUT
 
-            - name: Get new error counts from PR branch
-              id: ruff_pr
-              run: |
-                    cd pr-branch
-                    declare -A PR_ERRORS
-                    for RULE in $(echo "$RULES" | tr "," "\n"); do
-                        RUFF_OUTPUT=$(ruff check --preview --statistics --select "$RULE" --output-format full . || true)
-                        ERROR_COUNT=$(echo "$RUFF_OUTPUT" | grep -o -E 'Found [0-9]+ error' | grep -o -E '[0-9]+')
-                        if [ -z "$ERROR_COUNT" ]; then
-                            ERROR_COUNT=0
-                        fi
-                        PR_ERRORS[$RULE]=$ERROR_COUNT
-                        echo "pr_$RULE=$ERROR_COUNT" >> $GITHUB_OUTPUT
-                    done
+      - name: Get new error count from PR branch
+        id: ruff_pr
+        run: |
+          cd pr-branch
+          RUFF_OUTPUT=$(ruff check --preview --statistics --select $RULES  --output-format full . || true)
+          ERROR_COUNT=$(echo "$RUFF_OUTPUT" | grep -o -E 'Found [0-9]+ error' | grep -o -E '[0-9]+')
+          if [ -z "$ERROR_COUNT" ]; then
+            ERROR_COUNT=0
+          fi
+          echo "error_count=$ERROR_COUNT" >> $GITHUB_OUTPUT
 
-            - name: Compare error counts and fail if new errors are introduced
-              run: |
-                    NEW_ERRORS_INTRODUCED=false
-                    for RULE in $(echo "$RULES" | tr "," "\n"); do
-                        BASELINE_ERRORS=${{ steps.ruff_main.outputs.baseline_ANN001 }}
-                        NEW_ERRORS=${{ steps.ruff_pr.outputs.pr_ANN001 }}
-                        
-                        BASELINE_VARIABLE="baseline_$RULE"
-                        PR_VARIABLE="pr_$RULE"
-
-                        BASELINE_ERRORS=${{ steps.ruff_main.outputs[$((string(format('{0}', baseline_$RULE))))] }}
-                        NEW_ERRORS=${{ steps.ruff_pr.outputs[$((string(format('{0}', pr_$RULE))))] }}
-
-                        echo "Rule: $RULE"
-                        echo "Baseline errors (on main): $BASELINE_ERRORS"
-                        echo "New errors (on PR branch): $NEW_ERRORS"
-                        if [[ "$NEW_ERRORS" -gt "$BASELINE_ERRORS" ]]; then
-                            echo "::error::New errors for rule $RULE were introduced. Please fix them before merging."
-                            NEW_ERRORS_INTRODUCED=true
-                        fi
-                    done
-                    if $NEW_ERRORS_INTRODUCED; then
-                        exit 1
-                    else
-                        echo "No new errors introduced. Great work! 🎉"
-                    fi
+      - name: Compare error counts and fail if new errors are introduced
+        run: |
+          BASELINE_ERRORS=${{ steps.ruff_main.outputs.error_count }}
+          NEW_ERRORS=${{ steps.ruff_pr.outputs.error_count }}
+          echo "Baseline errors (on main): $BASELINE_ERRORS"
+          echo "New errors (on PR branch): $NEW_ERRORS"
+          if [[ "$NEW_ERRORS" -gt "$BASELINE_ERRORS" ]]; then
+            echo "::error::New errors were introduced. Please fix them before merging."
+            exit 1
+          else
+            echo "No new errors introduced. Great work! 🎉"
+          fi
