@@ -114,9 +114,12 @@ class Households(AgentBaseClass):
 
     def construct_income_distribution(self):
         # These settings are dummy data now. Should come from subnational datasets.
-        average_household_income = 38_500
-        mean_to_median_inc_ratio = 1.3
-        median_income = average_household_income / mean_to_median_inc_ratio
+        distibution_parameters = load_table(
+            self.model.files["table"]["income/distribution_parameters"]
+        )
+        country = self.model.regions["ISO3"].values[0]
+        average_household_income = distibution_parameters[country]["MEAN"]
+        median_income = distibution_parameters[country]["MEDIAN"]
 
         # construct lognormal income distribution
         mu = np.log(median_income)
@@ -134,31 +137,13 @@ class Households(AgentBaseClass):
         )
         self.var.wealth_index = DynamicArray(wealth_index, max_n=self.max_n)
 
-        # convert wealth index to income percentile
-        income_percentiles = np.full(self.n, -1, np.int32)
-        wealth_index_to_income_percentile = {
-            1: (1, 19),
-            2: (20, 39),
-            3: (40, 59),
-            4: (60, 79),
-            5: (80, 100),
-        }
-
-        for index in wealth_index_to_income_percentile:
-            min_perc, max_perc = wealth_index_to_income_percentile[index]
-            # get indices of agents with wealth index
-            idx = np.where(self.var.wealth_index.data == index)[0]
-            # get random income percentile for agents with wealth index
-            income_percentile = np.random.randint(min_perc, max_perc + 1, len(idx))
-            # assign income percentile to agents with wealth index
-            income_percentiles[idx] = income_percentile
-        assert (income_percentiles == -1).sum() == 0, (
-            "Not all agents have an income percentile"
+        income_percentiles = load_array(
+            self.model.files["array"]["agents/households/income_percentile"]
         )
         self.var.income_percentile = DynamicArray(income_percentiles, max_n=self.max_n)
 
         # assign household disposable income based on income percentile households
-        income = np.percentile(self.var.income_distribution, income_percentiles)
+        income = load_array(self.model.files["array"]["agents/households/disp_income"])
         self.var.income = DynamicArray(income, max_n=self.max_n)
 
         # assign wealth based on income (dummy data, there are ratios available in literature)
@@ -770,9 +755,9 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data + 10,
+            risk_perception=self.var.risk_perception.data + 1,
             expected_damages_adapt=damages_adapt,
-            adaptation_costs=self.var.adaptation_costs.data * 0,
+            adaptation_costs=self.var.adaptation_costs.data,
             time_adapted=self.var.time_adapted.data,
             loan_duration=20,
             p_floods=1 / self.return_periods,
@@ -789,7 +774,7 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data + 10,
+            risk_perception=self.var.risk_perception.data + 1,
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,
