@@ -42,7 +42,7 @@ def update_sfincs_model_forcing_coastal(
 
     locations = (
         gpd.GeoDataFrame(
-            gpd.read_parquet(model_files["geoms"]["gtsm/stations_coast_rp"])
+            gpd.read_parquet(model_files["geom"]["gtsm/stations_coast_rp"])
         )
         .rename(columns={"station_id": "stations"})
         .set_index("stations")

@@ -3,7 +3,6 @@ import os
 import warnings
 from datetime import datetime, timedelta
 
-import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -15,10 +14,10 @@ from ...workflows.io import load_table
 warnings.filterwarnings("ignore")
 
 
-def generate_storm_surge_hydrographs(model, make_plot=True):
+def generate_storm_surge_hydrographs(model, make_plot=False):
     gtsm_folder = model.input_folder / "other" / "gtsm"
     # read geojson file to get station ids
-    station_ids = load_geom(model.files["geoms"]["gtsm/stations_coast_rp"])
+    station_ids = load_geom(model.files["geom"]["gtsm/stations_coast_rp"])
     os.makedirs("plot/gtsm", exist_ok=True)
     percentile = 0.99
     offset = 0
