@@ -9,7 +9,6 @@ import pyproj
 import rasterio
 import xarray as xr
 from honeybees.library.raster import sample_from_map
-
 from rasterio.features import shapes
 from rasterstats import point_query, zonal_stats
 from scipy import interpolate
