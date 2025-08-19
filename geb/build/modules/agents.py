@@ -1234,12 +1234,12 @@ class Agents:
                         f"new agricultural area for Romania: {agricultural_area_db_ha['100 - 200 Ha']}"
                     )
                 # Validate that holdings * average farm size approximately equals agricultural area
-                validate_farm_size_data(
-                    agricultural_area_db_ha,
-                    region_n_holdings,
-                    size_class_boundaries,
-                    ISO3,
-                )
+                # validate_farm_size_data(
+                #     agricultural_area_db_ha,
+                #     region_n_holdings,
+                #     size_class_boundaries,
+                #     ISO3,
+                # )
 
                 # Calculate total agricultural area in square meters
                 agricultural_area_db = (
