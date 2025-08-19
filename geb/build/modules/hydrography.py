@@ -804,7 +804,7 @@ class Hydrography:
 
     @build_method
     def setup_gtsm_station_data(self):
-        subbasins = gpd.read_parquet("input/" + self.files["geom"]["routing/subbasins"])
+        subbasins = gpd.read_parquet("input" / self.files["geom"]["routing/subbasins"])
         if not subbasins["is_coastal_basin"].any():
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
