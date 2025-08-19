@@ -47,7 +47,7 @@ def update_sfincs_model_forcing_coastal(
     locations.index = locations.index.astype(int)
     timeseries = pd.read_csv(
         Path(
-            f"input/other/gtsm/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
+            f"output/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
         ),
         index_col=0,
     )

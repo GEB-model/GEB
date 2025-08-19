@@ -15,7 +15,6 @@ warnings.filterwarnings("ignore")
 
 
 def generate_storm_surge_hydrographs(model, make_plot=False):
-    gtsm_folder = model.input_folder / "other" / "gtsm"
     # read geojson file to get station ids
     station_ids = load_geom(model.files["geom"]["gtsm/stations_coast_rp"])
     os.makedirs("plot/gtsm", exist_ok=True)
@@ -58,7 +57,7 @@ def generate_storm_surge_hydrographs(model, make_plot=False):
             )
 
     # save storm tide hydrograph (normal tide)
-    export_folder = gtsm_folder / "hydrographs"
+    export_folder = model.output_folder / "hydrographs"
     os.makedirs(export_folder, exist_ok=True)
     export = {}
     for station, rp in df_event.items():
