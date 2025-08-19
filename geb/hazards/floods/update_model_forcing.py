@@ -67,7 +67,6 @@ def update_sfincs_model_forcing_coastal(
 
     # Align timeseries columns with locations index
     timeseries.columns = locations.index
-    # timeseries *= 100  # convert from m to cm
     timeseries = timeseries.iloc[300:-300]  # trim the first and last 300 rows
 
     sf.setup_config(
@@ -75,10 +74,8 @@ def update_sfincs_model_forcing_coastal(
         tstart=to_sfincs_datetime(timeseries.index[0]),
         tstop=to_sfincs_datetime(timeseries.index[-1]),
     )
-    # sf.config["dtmaxout"] = len(timeseries) * 10
-
+    # set forcing and configure model
     sf.setup_waterlevel_forcing(timeseries=timeseries, locations=locations)
-    # configure_sfincs_model(sf, model_root, simulation_root)
     configure_sfincs_model(sf, model_root, simulation_root)
 
 
