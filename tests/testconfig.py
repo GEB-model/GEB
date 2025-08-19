@@ -16,5 +16,6 @@ output_folder.mkdir(exist_ok=True)
 tmp_folder: Path = GEB_TEST_DIR / "tmp"
 tmp_folder.mkdir(exist_ok=True)
 
+
 # This flag is used to turn on or off test cases in the Github Actions environment.
 IN_GITHUB_ACTIONS: bool = os.getenv("GITHUB_ACTIONS") == "true"

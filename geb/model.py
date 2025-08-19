@@ -14,6 +14,9 @@ from honeybees.model import Model as ABM_Model
 from geb.agents import Agents
 from geb.artists import Artists
 from geb.hazards.driver import HazardDriver
+from geb.hazards.floods.construct_storm_surge_hydrographs import (
+    generate_storm_surge_hydrographs,
+)
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
@@ -438,7 +441,15 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )
 
         HazardDriver.initialize(self, longest_flood_event=30)
-        self.sfincs.get_return_period_maps()
+        # ugly switch to determine whether model has coastal basins
+        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        if subbasins["is_coastal_basin"].any():
+            generate_storm_surge_hydrographs(self)
+            rp_maps_coastal = self.sfincs.get_coastal_return_period_maps()
+        else:
+            rp_maps_coastal = None
+        rp_maps_riverine = self.sfincs.get_riverine_return_period_maps()
+        self.sfincs.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
 
     def evaluate(self, *args, **kwargs) -> None:
         print("Evaluating model...")

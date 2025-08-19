@@ -6,6 +6,17 @@ import pandas as pd
 import rioxarray
 
 
+def load_GHS_OBAT(data_catalog, iso3):
+    GHS_OBAT = data_catalog.get_source("GHS_OBAT")
+    data = pd.read_csv(GHS_OBAT.path.format(iso3=iso3))[
+        ["id", "lon", "lat", "height", "use", "area"]
+    ]
+    # only use residential (for now)
+    data = data[data["use"] == 1]
+
+    return data
+
+
 def load_GLOPOP_S(data_catalog, GDL_region):
     # Load GLOPOP-S data. This is a binary file and has no proper loading in hydromt. So we use the data catalog to get the path and format the path with the regions and load it with NumPy
     GLOPOP_S_attribute_names = [

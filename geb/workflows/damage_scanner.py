@@ -5,7 +5,10 @@ from damagescanner.vector import VectorScanner as VectorScannerDS
 
 
 def VectorScanner(
-    features: gpd.GeoDataFrame, hazard: xr.DataArray, vulnerability_curves: pd.DataFrame
+    features: gpd.GeoDataFrame,
+    hazard: xr.DataArray,
+    vulnerability_curves: pd.DataFrame,
+    disable_progress: bool = False,
 ) -> pd.Series:
     """VectorScanner function to compute damages based on features, hazard, and vulnerability curves.
 
@@ -17,6 +20,7 @@ def VectorScanner(
         hazard: DataArray representing the hazard data.
         vulnerability_curves: DataFrame containing vulnerability curves for different object types. For each 'object_type', there should be a corresponding curve.
             The index is used to map the severity (hazard level) to the damage ratio.
+        disable_progress: If True, disables the progress bar during processing.
 
     Returns:
        Series containing the computed damages for each feature.
@@ -35,4 +39,5 @@ def VectorScanner(
         hazard_file=hazard,
         curve_path=vulnerability_curves,
         gridded=False,
+        disable_progress=disable_progress,
     )["damage"]

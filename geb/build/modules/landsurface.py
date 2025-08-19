@@ -156,7 +156,11 @@ class LandSurface:
                 byteshuffle=True,
             )
             DEM["path"] = f"DEM/{DEM['name']}"
-
+        lecz = DEM_raster < 10
+        lecz.values = lecz.values.astype(np.float32)
+        self.set_other(
+            lecz, name="landsurface/low_elevation_coastal_zone"
+        )  # Maybe remove this
         self.set_dict(DEMs, name="hydrodynamics/DEM_config")
 
     @build_method(depends_on=[])

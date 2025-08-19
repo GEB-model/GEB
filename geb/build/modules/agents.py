@@ -1,5 +1,6 @@
 import json
 import math
+import os
 from datetime import datetime
 
 import geopandas as gpd
@@ -325,6 +326,68 @@ class Agents:
             "livestock_water_consumption",
             "ssp2",
         )
+
+    @build_method
+    def setup_income_distribution_parameters(self):
+        """Sets up the income distributions for GEB.
+
+        Notes:
+            This function used WID data on income distributions to generate income distribution profiles for each region.
+            It retrieves the OECD income distribution data, processes it to extract mean and median income values for each country,
+            and generates synthetic income distributions based on these parameters assuming a log-normal distribution. The resulting
+            distributions are set as tables (be mindful for models outside of the EU that we do not yet account for currencies).
+        """
+        income_distribution_parameters = {}
+        income_distributions = {}
+        path = self.data_catalog.get_source(
+            "oecd_idd"
+        ).path  # in future maybe replace this with an API request
+        oecd_idd = pd.read_csv(path)
+
+        # clean data
+        cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
+        oecd_idd = oecd_idd[cols_to_keep]
+        # only done to check countries in region, could probably be done more efficiently
+        countries = self.data_catalog.get_geodataframe(
+            "GADM_level0",
+            geom=self.region,
+        )
+        for country in countries["GID_0"]:
+            income_distribution_parameters[country] = {}
+            income_distributions[country] = {}
+            oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
+            # take the most recent year
+            most_recent_year = oecd_widd_country[
+                oecd_widd_country["TIME_PERIOD"]
+                == np.max(oecd_widd_country["TIME_PERIOD"])
+            ]
+            income_distribution_parameters[country]["MEAN"] = most_recent_year[
+                most_recent_year["STATISTICAL_OPERATION"] == "MEAN"
+            ]["OBS_VALUE"].iloc[0]
+            income_distribution_parameters[country]["MEDIAN"] = most_recent_year[
+                most_recent_year["STATISTICAL_OPERATION"] == "MEDIAN"
+            ]["OBS_VALUE"].iloc[0]
+
+            # now also create national income distribution
+            mu = np.log(income_distribution_parameters[country]["MEDIAN"])
+            sd = np.sqrt(
+                2
+                * np.log(
+                    income_distribution_parameters[country]["MEAN"]
+                    / income_distribution_parameters[country]["MEDIAN"]
+                )
+            )
+            income_distribution = np.sort(
+                np.random.lognormal(mu, sd, 15_000).astype(np.int32)
+            )
+            income_distributions[country] = income_distribution
+        # store to model table
+        income_distribution_parameters_pd = pd.DataFrame(income_distribution_parameters)
+        income_distributions_pd = pd.DataFrame(income_distributions)
+        self.set_table(
+            income_distribution_parameters_pd, "income/distribution_parameters"
+        )
+        self.set_table(income_distributions_pd, "income/national_distribution")
 
     @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
     def setup_economic_data(self):
@@ -1327,8 +1390,59 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
-    @build_method(depends_on=["setup_regions_and_land_use"])
+    def setup_buildings(self):
+        output = {}
+        GDL_regions = self.data_catalog.get_geodataframe(
+            "GDL_regions_v4", geom=self.region, variables=["GDLcode", "iso_code"]
+        )
+        GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
+
+        fp_buildings = self.files["geom"]["assets/buildings"]
+        buildings = gpd.read_parquet(f"{self.root}/{fp_buildings}")[
+            ["osm_id", "osm_way_id", "geometry"]
+        ]
+        # replace None with -1
+        buildings["osm_id"] = buildings["osm_id"].replace({None: -1}).astype(np.int64)
+        buildings["osm_way_id"] = (
+            buildings["osm_way_id"].replace({None: -1}).astype(np.int64)
+        )
+        # Vectorized centroid extraction
+        centroids = buildings.geometry.centroid
+        buildings["lon"] = centroids.x
+        buildings["lat"] = centroids.y
+
+        for _, GDL_region in GDL_regions.iterrows():
+            _, GLOPOP_GRID_region = load_GLOPOP_S(
+                self.data_catalog, GDL_region["GDLcode"]
+            )
+            GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
+
+            # subset buildings to those within the GLOPOP_GRID_region
+            buildings_gdl = buildings.cx[
+                GLOPOP_GRID_region.x.min() : GLOPOP_GRID_region.x.max(),
+                GLOPOP_GRID_region.y.min() : GLOPOP_GRID_region.y.max(),
+            ]
+
+            # Vectorized assignment of grid cells
+            cells = GLOPOP_GRID_region.sel(
+                x=xr.DataArray(buildings_gdl["lon"].values, dims="points"),
+                y=xr.DataArray(buildings_gdl["lat"].values, dims="points"),
+                method="nearest",
+            )
+
+            buildings_gdl["grid_idx"] = cells.values[0]
+            # drop buildings without grid_idx
+            buildings_gdl = buildings_gdl[buildings_gdl["grid_idx"] != 0]
+
+            gdl_name = GDL_region["GDLcode"]
+            output[gdl_name] = buildings_gdl
+        return output
+
+    @build_method
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
+        # setup buildings in region for household allocation
+        all_buildings_model_region = self.setup_buildings()
+
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4",
@@ -1349,6 +1463,15 @@ class Agents:
         }
         region_results = {}
 
+        # create income percentile based on wealth index mapping
+        wealth_index_to_income_percentile = {
+            1: (1, 19),
+            2: (20, 39),
+            3: (40, 59),
+            4: (60, 79),
+            5: (80, 100),
+        }
+
         # get age class to age (head of household) mapping
         age_class_to_age = {
             1: (0, 4),
@@ -1361,6 +1484,8 @@ class Agents:
             8: (66, maximum_age + 1),
         }
 
+        allocated_agents = pd.DataFrame()
+        households_not_allocated = 0
         # iterate over regions and sample agents from GLOPOP-S
         for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
             GDL_code = GDL_region["GDLcode"]
@@ -1373,6 +1498,16 @@ class Agents:
                     f"Skipping setting up household characteristics for {GDL_region['GDLcode']}"
                 )
                 continue
+
+            # load table with income distribution data
+            national_income_distribution = pd.read_parquet(
+                "input" / self.files["table"]["income/national_distribution"]
+            )
+
+            # construct national income distribution
+
+            # load building database with grid idx
+            buildings = all_buildings_model_region[GDL_code]
 
             GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
                 self.data_catalog, GDL_code
@@ -1408,6 +1543,33 @@ class Agents:
                 GLOPOP_S_region["WEALTH"] + GLOPOP_S_region["INCOME"] + 1
             )
 
+            # sample income percentile
+            GLOPOP_S_region["income_percentile"] = np.uint16(np.iinfo(np.uint16).max)
+            for wealth_index in wealth_index_to_income_percentile:
+                percentile_range = wealth_index_to_income_percentile[wealth_index]
+
+                GLOPOP_S_region.loc[
+                    GLOPOP_S_region["wealth_index"] == wealth_index,
+                    "income_percentile",
+                ] = np.random.randint(
+                    percentile_range[0],
+                    percentile_range[1],
+                    size=len(
+                        GLOPOP_S_region.loc[
+                            GLOPOP_S_region["wealth_index"] == wealth_index
+                        ]
+                    ),
+                ).astype(np.uint16)
+            assert not (
+                GLOPOP_S_region["income_percentile"] == np.iinfo(np.uint16).max
+            ).any()
+
+            # sample income from national distribution
+            GLOPOP_S_region["disp_income"] = np.percentile(
+                np.array(national_income_distribution[GDL_code[:3]]),
+                np.array(GLOPOP_S_region["income_percentile"]),
+            )
+
             # calculate age:
             GLOPOP_S_region["age_household_head"] = np.uint16(np.iinfo(np.uint16).max)
             for age_class in age_class_to_age:
@@ -1427,8 +1589,136 @@ class Agents:
             # create all households
             GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])
             n_households = GLOPOP_households_region.size
+            grid_cells_GLOPOP_region = np.array(GLOPOP_S_region["GRID_CELL"])
+            n_agents_allocated = 0
+            # for grid_cell in unique_grid_cells:
+            for grid_cell in unique_grid_cells:
+                if grid_cell in grid_cells_GLOPOP_region:
+                    agents_in_grid_cell = GLOPOP_S_region[
+                        GLOPOP_S_region["GRID_CELL"] == grid_cell
+                    ]
+                    buildings_grid_cell = buildings[buildings["grid_idx"] == grid_cell]
+                    n_agents_in_cell = len(agents_in_grid_cell)
+                    n_buildings_in_cell = len(buildings_grid_cell)
 
+                    # if there are less households in the grid than buildings,
+                    # we assure that each building gets at least one household. To do this, sample households
+                    # without replacement from the grid cell and allocate them to buildings.
+                    if n_agents_in_cell < n_buildings_in_cell:
+                        upsampled_agents_in_cell = agents_in_grid_cell.sample(
+                            n_buildings_in_cell,
+                            replace=True,
+                        )
+                        agents_in_grid_cell = upsampled_agents_in_cell
+
+                        building_id = np.random.choice(
+                            np.arange(n_buildings_in_cell),
+                            n_buildings_in_cell,
+                            replace=False,
+                        )
+                        agents_allocated_to_building = agents_in_grid_cell
+                        lat_agents = np.array(buildings_grid_cell["lat"])[building_id]
+                        lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
+                        agents_allocated_to_building["coord_Y"] = lat_agents
+                        agents_allocated_to_building["coord_X"] = lon_agents
+                        agents_allocated_to_building["osm_id"] = np.array(
+                            buildings_grid_cell["osm_id"]
+                        )[building_id]
+                        agents_allocated_to_building["osm_way_id"] = np.array(
+                            buildings_grid_cell["osm_way_id"]
+                        )[building_id]
+
+                        allocated_agents = pd.concat(
+                            [allocated_agents, agents_allocated_to_building]
+                        )
+                        n_agents_allocated += len(agents_allocated_to_building)
+                    # if there are more households than buildings, allocate households to buildings
+                    elif (
+                        n_agents_in_cell >= n_buildings_in_cell
+                        and n_buildings_in_cell > 0
+                    ):
+                        # first put a household in each building
+                        households_to_put_in_building = np.random.choice(
+                            np.arange(n_buildings_in_cell),
+                            n_buildings_in_cell,
+                            replace=False,
+                        )
+                        building_id = np.random.choice(
+                            np.arange(n_buildings_in_cell),
+                            n_buildings_in_cell,
+                            replace=False,
+                        )
+                        agents_allocated_to_building = agents_in_grid_cell.iloc[
+                            households_to_put_in_building
+                        ]
+                        lat_agents = np.array(buildings_grid_cell["lat"])[building_id]
+                        lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
+                        agents_allocated_to_building["coord_Y"] = lat_agents
+                        agents_allocated_to_building["coord_X"] = lon_agents
+                        agents_allocated_to_building["osm_id"] = np.array(
+                            buildings_grid_cell["osm_id"]
+                        )[building_id]
+                        agents_allocated_to_building["osm_way_id"] = np.array(
+                            buildings_grid_cell["osm_way_id"]
+                        )[building_id]
+
+                        allocated_agents = pd.concat(
+                            [allocated_agents, agents_allocated_to_building]
+                        )
+                        assert len(agents_allocated_to_building) == n_buildings_in_cell
+                        n_agents_allocated += len(agents_allocated_to_building)
+
+                        # now allocate the rest of the households to buildings
+                        indices_to_allocate = np.setdiff1d(
+                            np.arange(n_agents_in_cell),
+                            households_to_put_in_building,
+                        )
+                        if len(indices_to_allocate) > 0:
+                            building_id = np.random.choice(
+                                np.arange(n_buildings_in_cell),
+                                len(indices_to_allocate),
+                                replace=True,
+                            )
+                            agents_allocated_to_building = agents_in_grid_cell.iloc[
+                                indices_to_allocate
+                            ]
+                            lat_agents = np.array(buildings_grid_cell["lat"])[
+                                building_id
+                            ]
+                            lon_agents = np.array(buildings_grid_cell["lon"])[
+                                building_id
+                            ]
+                            agents_allocated_to_building["coord_Y"] = lat_agents
+                            agents_allocated_to_building["coord_X"] = lon_agents
+                            agents_allocated_to_building["osm_id"] = np.array(
+                                buildings_grid_cell["osm_id"]
+                            )[building_id]
+                            agents_allocated_to_building["osm_way_id"] = np.array(
+                                buildings_grid_cell["osm_way_id"]
+                            )[building_id]
+
+                            allocated_agents = pd.concat(
+                                [allocated_agents, agents_allocated_to_building]
+                            )
+                            n_agents_allocated += len(agents_allocated_to_building)
+                        else:
+                            agents_allocated_to_building = pd.DataFrame()
+                            n_agents_allocated += len(agents_allocated_to_building)
+                            households_not_allocated += n_agents_in_cell
+
+                    elif n_buildings_in_cell == 0:
+                        agents_allocated_to_building = pd.DataFrame()
+                        n_agents_allocated += len(agents_allocated_to_building)
+                        households_not_allocated += n_agents_in_cell
+                    else:
+                        raise ValueError("Weird")
+                    # assert n_agents_allocated < len(GLOPOP_households_region)
             # iterate over unique housholds and extract the variables we want
+            if len(allocated_agents) == 0:
+                self.logger.warning(
+                    f"No households allocated for {GDL_code}, skipping region."
+                )
+                continue
             household_characteristics = {}
             household_characteristics["size"] = np.full(
                 n_households, -1, dtype=np.int32
@@ -1444,23 +1734,22 @@ class Agents:
                 "education_level",
                 "wealth_index",
                 "rural",
+                "osm_id",
+                "osm_way_id",
+                "disp_income",
+                "income_percentile",
+                # "building_id"
             ):
-                household_characteristics[column] = np.array(GLOPOP_S_region[column])
+                household_characteristics[column] = np.array(allocated_agents[column])
 
-            household_characteristics["size"] = np.array(GLOPOP_S_region["HHSIZE"])
+            household_characteristics["size"] = np.array(allocated_agents["HHSIZE"])
+
             # now find location of household
             # get x and y from df
-
-            res_x, res_y = GLOPOP_GRID_region.rio.resolution()
-            n = len(GLOPOP_S_region)
             x_y = np.stack(
                 [
-                    GLOPOP_S_region["coord_X"].astype(np.float32)
-                    + (np.random.random(n).astype(np.float32) * abs(res_x))
-                    - 0.5 * res_x,
-                    GLOPOP_S_region["coord_Y"].astype(np.float32)
-                    + (np.random.random(n).astype(np.float32) * abs(res_y))
-                    - 0.5 * res_y,
+                    allocated_agents["coord_X"].astype(np.float32),
+                    allocated_agents["coord_Y"].astype(np.float32),
                 ],
                 axis=1,
             )
@@ -1478,6 +1767,14 @@ class Agents:
             for column, data in household_characteristics.items():
                 # only keep households with region
                 household_characteristics[column] = data[households_with_region]
+                # assert that there in no None in arrays
+                if np.sum(household_characteristics[column] == None) > 0:
+                    self.logger.warning(
+                        f"Found {np.sum(household_characteristics[column] == None)} None values in {column} for {GDL_code}"
+                    )
+                    household_characteristics[column][
+                        household_characteristics[column] == None
+                    ] = -1
 
             # ensure that all households have a region assigned
             assert not (household_characteristics["region_id"] == -1).any()
