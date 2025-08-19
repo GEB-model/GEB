@@ -1555,19 +1555,24 @@ class CropFarmers(AgentBaseClass):
         by_field[self.HRU.var.land_owners == -1] = nodata
         return by_field
 
-    def decompress(self, array):
-        if np.issubdtype(array.dtype, np.floating):
-            nofieldvalue = np.nan
-        else:
-            nofieldvalue = -1
-        by_field = self.farmer_to_field(array, nodata=nofieldvalue)
-        return self.HRU.decompress(by_field)
+    def decompress(self, array: npt.NDArray[np.floating]) -> npt.NDArray[np.floating]:
+        """Decompresses the array from farmer level to field level.
 
-    @property
-    def mask(self):
-        mask = self.HRU.mask.copy()
-        mask[self.decompress(self.HRU.var.land_owners) == -1] = True
-        return mask
+        Args:
+            array: Data per farmer.
+
+        Returns:
+            Data but now per field. All fields owned by each farmer are set to the same value.
+                All fields that are not owned by a farmer are set to -1 or np.nan, depending on the data type.
+        """
+        if np.issubdtype(array.dtype, np.floating):
+            nofieldvalue: int | float = np.nan
+        else:
+            nofieldvalue: int | float = -1
+        by_field: npt.NDArray[np.floating] = self.farmer_to_field(
+            array, nodata=nofieldvalue
+        )
+        return self.HRU.decompress(by_field)
 
     @staticmethod
     @njit(cache=True)

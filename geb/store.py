@@ -2,8 +2,9 @@ import json
 import shutil
 from datetime import datetime
 from operator import attrgetter
-from typing import Callable
 from pathlib import Path
+from typing import Callable
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -290,24 +291,59 @@ class DynamicArray:
         return self._perform_operation(other, "__floordiv__", inplace=True)
 
     def __mod__(self, other):
+        """Modulo operation.
+
+        Args:
+            other: The value to perform the modulo operation with.
+
+        Returns:
+            A new DynamicArray with the result of the modulo operation.
+        """
         return self._perform_operation(other, "__mod__")
 
     def __rmod__(self, other):
+        """Right modulo operation.
+
+        Args:
+            other: The value to perform the right modulo operation with.
+
+        Returns:
+            A new DynamicArray with the result of the right modulo operation.
+        """
         return self._perform_operation(other, "__rmod__")
 
     def __imod__(self, other):
+        """In-place modulo operation.
+
+        Args:
+            other: The value to perform the in-place modulo operation with.
+
+        Returns:
+            The DynamicArray itself after performing the in-place operation.
+        """
         return self._perform_operation(other, "__mod__", inplace=True)
 
     def __pow__(self, other):
+        """Exponentiation operation.
+
+        Args:
+            other: The value to perform the exponentiation operation with.
+
+        Returns:
+            A new DynamicArray with the result of the exponentiation operation.
+        """
         return self._perform_operation(other, "__pow__")
 
     def __rpow__(self, other):
+        """Right exponentiation operation."""
         return self._perform_operation(other, "__rpow__")
 
     def __ipow__(self, other):
+        """In-place exponentiation operation."""
         return self._perform_operation(other, "__pow__", inplace=True)
 
     def _compare(self, value: object, operation: str) -> bool:
+        """Compare the data with another value using the specified operation."""
         if isinstance(value, DynamicArray):
             return self.__class__(
                 getattr(self.data, operation)(value.data), max_n=self._data.shape[0]
