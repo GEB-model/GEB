@@ -1440,6 +1440,9 @@ class Agents:
 
     @build_method
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
+        # setup buildings in region for household allocation
+        all_buildings_model_region = self.setup_buildings()
+
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4",
@@ -1483,7 +1486,6 @@ class Agents:
 
         allocated_agents = pd.DataFrame()
         households_not_allocated = 0
-        all_buildings_model_region = self.setup_buildings()
         # iterate over regions and sample agents from GLOPOP-S
         for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
             GDL_code = GDL_region["GDLcode"]

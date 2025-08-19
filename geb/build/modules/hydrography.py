@@ -750,7 +750,6 @@ class Hydrography:
         self.set_geoms(stations, name="gtsm/stations")
         self.logger.info("GTSM station waterlevels and geometries set")
 
-    @build_method(depends_on=["setup_gtsm_water_levels"])
     def setup_gtsm_surge_levels(self):
         """Sets up the GTSM surge hydrographs for the model."""
         self.logger.info("Setting up GTSM surge hydrographs")
@@ -820,73 +819,6 @@ class Hydrography:
         self.set_table(gtsm_data_region_pd, name="gtsm/surge")
         self.logger.info("GTSM station waterlevels and geometries set")
 
-    @build_method
-    def setup_coastal_hydrograph(self):
-        """Sets up the coastal hydrographs for the model using only the 100-year return period from Dullaarts database.
-
-        This is done for rps [2, 5, 10, 20, 50, 100, 250, 500, 1000],
-        other rps are not available.
-        """
-        fp_coast_hg = self.data_catalog.get_source("COAST_HG").path
-        coast_hg = xr.open_dataset(fp_coast_hg)
-        # Select stations within model bounds
-        # get model bounds
-        model_bounds = self.bounds
-        # apply small buffer to the bounds
-        model_bounds = (
-            model_bounds[0] - 0.1,  # min_lon
-            model_bounds[1] - 0.1,  # min_lat
-            model_bounds[2] + 0.1,  # max_lon
-            model_bounds[3] + 0.1,  # max_lat
-        )
-        min_lon, min_lat, max_lon, max_lat = model_bounds
-
-        # Apply the condition for bounding box
-        subset = coast_hg.where(
-            (coast_hg.station_x_coordinate >= min_lon)
-            & (coast_hg.station_x_coordinate <= max_lon)
-            & (coast_hg.station_y_coordinate >= min_lat)
-            & (coast_hg.station_y_coordinate <= max_lat),
-            drop=True,
-        )
-
-        # export the hydrograph timeseries for each station
-        timeseries_data = (
-            subset.to_dataframe()
-            .reset_index()[["time", "station_id", "hydrograph_spring_tide_signal"]]
-            .pivot(
-                index="time",
-                columns="station_id",
-                values="hydrograph_spring_tide_signal",
-            )
-        )
-
-        # now also prepare a DataFrame with the station ids and coordinates
-        station_df = pd.DataFrame(
-            {
-                "station_id": subset.station_id.values.astype(str),
-                "longitude": subset.station_x_coordinate.values,
-                "latitude": subset.station_y_coordinate.values,
-            }
-        )
-        gdf = gpd.GeoDataFrame(
-            station_df,
-            geometry=[
-                Point(xy) for xy in zip(station_df.longitude, station_df.latitude)
-            ],
-            crs="EPSG:4326",
-        )
-
-        # export all files
-        target_folder = "input/other/coastal_hydrographs"
-        os.makedirs(target_folder, exist_ok=True)
-        timeseries_data.to_csv(f"{target_folder}/coastal_hydrographs.csv")
-        gdf.to_file(f"{target_folder}/stations.geojson", driver="GeoJSON")
-        self.logger.info(
-            f"Coastal hydrographs exported to {target_folder}/coastal_hydrographs"
-        )
-
-    @build_method(depends_on=["setup_gtsm_water_levels"])
     def setup_coast_rp(self):
         """Sets up the coastal return period data for the model."""
         self.logger.info("Setting up coastal return period data")
@@ -894,7 +826,6 @@ class Hydrography:
             os.path.join("input", self.files["geoms"]["gtsm/stations"])
         )
 
-        station_ids = stations["station_id"].values.astype(int)
         fp_coast_rp = self.data_catalog.get_source("COAST_RP").path
         coast_rp = pd.read_pickle(fp_coast_rp)
 
@@ -909,8 +840,13 @@ class Hydrography:
         # also set stations (only those that are in coast_rp)
         self.set_geoms(stations, "gtsm/stations_coast_rp")
 
-        # export
-        # coast_rp.to_pickle(f"{gtsm_folder}/coastal_return_periods.pkl")
-        # self.logger.info(
-        #     f"Coastal return period data exported to {gtsm_folder}/coastal_return_periods.pkl"
-        # )
+    @build_method
+    def setup_gtsm_station_data(self):
+        subbasins = gpd.read_parquet("input/" + self.files["geom"]["routing/subbasins"])
+        if not subbasins["is_coastal_basin"].any():
+            self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
+            return
+        # Continue with GTSM hydrographs setup
+        self.setup_gtsm_water_levels()
+        self.setup_gtsm_surge_levels()
+        self.setup_coast_rp()
