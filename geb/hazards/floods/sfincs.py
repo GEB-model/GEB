@@ -598,7 +598,8 @@ class SFINCS:
             rp_map.rio.write_crs(riverine_da.rio.crs)
 
             rp_map.to_zarr(
-                self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+                self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
+                mode="w",
             )
 
     def run(self, event):
