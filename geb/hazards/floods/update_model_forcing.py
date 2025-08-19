@@ -35,10 +35,6 @@ def update_sfincs_model_forcing_coastal(
 
     # read model
     sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
-    # update mode time based on event tstart and tend from event dict
-    # waterlevel = sf.data_catalog.get_dataset(
-    #     "waterlevel"
-    # ).compute()  # define water levels and stations in data_catalog.yml
 
     locations = (
         gpd.GeoDataFrame(
@@ -49,25 +45,6 @@ def update_sfincs_model_forcing_coastal(
     )
     # convert index to int
     locations.index = locations.index.astype(int)
-
-    # sf.setup_config(
-    #     tref=to_sfincs_datetime(event["start_time"]),
-    #     tstart=to_sfincs_datetime(event["start_time"]),
-    #     tstop=to_sfincs_datetime(event["end_time"]),
-    # )
-
-    # locations = gpd.GeoDataFrame(
-    #     index=waterlevel.stations,
-    #     geometry=gpd.points_from_xy(
-    #         waterlevel.station_x_coordinate, waterlevel.station_y_coordinate
-    #     ),
-    #     crs=4326,
-    # )
-
-    # timeseries = pd.DataFrame(
-    #     index=waterlevel.time, columns=waterlevel.stations, data=waterlevel.data
-    # )
-
     timeseries = pd.read_csv(
         Path(
             f"input/other/gtsm/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
@@ -79,8 +56,7 @@ def update_sfincs_model_forcing_coastal(
     timeseries.columns = timeseries.columns.astype(int)
     assert timeseries.columns.equals(locations.index)
 
-    # locations = locations.reset_index(names="stations")
-    # locations.index = locations.index + 1  # for hydromt/SFINCS index should start at 1
+    # Align timeseries columns with locations index
     timeseries.columns = locations.index
     # timeseries *= 100  # convert from m to cm
     timeseries = timeseries.iloc[300:-300]  # trim the first and last 300 rows
@@ -94,22 +70,7 @@ def update_sfincs_model_forcing_coastal(
 
     sf.setup_waterlevel_forcing(timeseries=timeseries, locations=locations)
     # configure_sfincs_model(sf, model_root, simulation_root)
-    # write settings to model directory
-    sf.setup_config(
-        alpha=0.5
-    )  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
-    sf.setup_config(tspinup=86400)  # spinup time in seconds
-    sf.setup_config(dtout=900)  # output time step in seconds
-    # change root to the output and write
-    # sf.set_root(simulation_root, mode="w+") # write to base model for now
-    sf._write_gis = True
-    sf.set_root(simulation_root, mode="w+")  # write to base model for now
-    sf.write_grid()
-    sf.write_forcing()
-    sf.write_config()
-    sf.plot_basemap(fn_out="src_points_check.png")
-    sf.plot_basemap(variable="msk", fn_out="mask.png")
-    sf.plot_forcing(fn_out="forcing.png")
+    configure_sfincs_model(sf, model_root, simulation_root)
 
 
 def update_sfincs_model_forcing(
