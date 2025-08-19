@@ -30,9 +30,18 @@ def update_sfincs_model_forcing_coastal(
     simulation_root: Path,
     return_period: int,
 ):
-    # update waterlevel boundary conditions for coastal flooding here. setup_waterlevel_forcing()
-    # setup curve number infiltration with recovery based on global CN dataset (optional)
+    """Update the SFINCS model forcing for coastal flooding.
 
+    Notes:
+        This function now only updates forcing with storm surge hydrographs. Compound flooding is not yet considered
+
+    Args:
+        model_files: Dictionary containing model file paths.
+        model_root: Path to the model root directory.
+        simulation_root: Path to the simulation root directory.
+        return_period: Return period for the simulation.
+
+    """
     # read model
     sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
 
