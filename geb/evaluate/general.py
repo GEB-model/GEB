@@ -234,6 +234,7 @@ HOUSE_MAX_VIEW: int | None = None  # (NEW) optional cap per frame (None = no cap
 HOUSE_TILE_SIZE_DEG: float = (
     0.01  # (NEW) tile size in degrees for viewport pre-filter (lon/lat)
 )
+HOUSE_COORD_DECIMALS: int = 5  # (NEW) lon/lat decimal places retained (degrees)
 
 
 def _extract_polygons_from_gdf(
@@ -320,17 +321,65 @@ def _extract_polygons_from_gdf(
     return extracted
 
 
+def _quantize_polygons(
+    polygons: list[dict[str, object]], decimals: int
+) -> list[dict[str, object]]:
+    """Quantize (round) polygon exterior coordinates to reduce GeoJSON size.
+
+    Rounds longitude / latitude (degrees) to a fixed number of decimal places to
+    shrink the serialized GeoJSON payload with negligible visual impact.
+
+    Notes:
+        - Only exterior rings are present (holes were ignored upstream).
+        - Input list is not mutated; a new list of dicts is returned.
+        - Precision of 5 decimals ~ 1.1 m at equator; adjust via HOUSE_COORD_DECIMALS.
+
+    Args:
+        polygons (list[dict[str, object]]): Polygon dicts each containing:
+            'lon' (list[float]): Longitudes (degrees).
+            'lat' (list[float]): Latitudes (degrees).
+            'bbox' (tuple[float,float,float,float]): (min_lon,max_lon,min_lat,max_lat) (degrees).
+            'hue_seed' (float): Stable color seed in [0,1).
+        decimals (int): Number of decimal places to retain (>=0) (dimensionless).
+
+    Returns:
+        list[dict[str, object]]: New polygon dicts with rounded lon/lat (degrees).
+
+    Raises:
+        ValueError: If decimals < 0.
+    """
+    if decimals < 0:
+        raise ValueError("decimals must be >= 0 for coordinate quantization.")
+    quantized: list[dict[str, object]] = []
+    for poly in polygons:
+        lon_list: list[float] = poly["lon"]  # type: ignore
+        lat_list: list[float] = poly["lat"]  # type: ignore
+        q_lon: list[float] = [round(v, decimals) for v in lon_list]
+        q_lat: list[float] = [round(v, decimals) for v in lat_list]
+        quantized.append(
+            {
+                "lon": q_lon,
+                "lat": q_lat,
+                "bbox": poly["bbox"],
+                "hue_seed": poly["hue_seed"],
+            }
+        )
+    return quantized
+
+
 # Build full polygon list once (no downsampling; max_features=None)
 _HOUSE_POLYGONS: list[dict[str, object]] = _extract_polygons_from_gdf(
     houses,
     ANIM_EXTENT,
     max_features=None,  # (CHANGED) include all available houses
 )
+# (NEW) Apply coordinate quantization prior to GeoJSON assembly
+_HOUSE_POLYGONS = _quantize_polygons(_HOUSE_POLYGONS, HOUSE_COORD_DECIMALS)
 N_HOUSES: int = len(_HOUSE_POLYGONS)
 
 
 def _build_houses_geojson_with_ids(
-    polygons: list[dict[str, object]],
+    polygons: list[dict, object],
 ) -> tuple[dict, list[int], list[float], list[list[float]]]:
     """Assemble GeoJSON + parallel arrays (ids, hue seeds, bboxes).
 
@@ -639,11 +688,71 @@ def create_dash_app() -> Dash:
     # Clientside callback: swaps background frame + updates houses z colors.
     client_js = f"""
     function(variable, n_intervals, animData, currentFig){{
+        const tStart = performance.now();
+        let tPrev = tStart;
+        function logStep(label){{
+            const now = performance.now();
+            console.log('[anim]', label, (now - tPrev).toFixed(1) + 'ms', 'total', (now - tStart).toFixed(1) + 'ms');
+            tPrev = now;
+        }}
+
+        // Ensure a one–time Mapbox watcher that records the true map bounds after any move/zoom.
+        function ensureBoundsWatcher(){{
+            const gd = document.getElementById('dashboard-graph');
+            if(!gd || gd._boundsWatcherAdded) return;
+            const pollLimit = 40;
+            let attempts = 0;
+            function tryAttach(){{
+                attempts++;
+                // Plotly stores the Mapbox map instance internally.
+                const mb = gd._fullLayout && gd._fullLayout.mapbox && gd._fullLayout.mapbox._subplot && gd._fullLayout.mapbox._subplot.map;
+                if(mb){{
+                    const update = () => {{
+                        try {{
+                            const b = mb.getBounds();
+                            const c = mb.getCenter();
+                            window._mapboxViewport = {{
+                                lonMin: b.getWest(),
+                                lonMax: b.getEast(),
+                                latMin: b.getSouth(),
+                                latMax: b.getNorth(),
+                                zoom: mb.getZoom(),
+                                centerLon: c.lng,
+                                centerLat: c.lat
+                            }};
+                        }} catch(e) {{
+                            // swallow; will retry on next event
+                        }}
+                    }};
+                    // Update aggressively on move for responsiveness; moveend/zoomend finalize.
+                    mb.on('move', update);
+                    mb.on('moveend', update);
+                    mb.on('zoomend', update);
+                    update();
+                    gd._boundsWatcherAdded = true;
+                    console.log('[anim] bounds watcher attached');
+                }} else if(attempts < pollLimit) {{
+                    setTimeout(tryAttach, 100);
+                }}
+            }}
+            tryAttach();
+        }}
+        ensureBoundsWatcher();
+
         if(!animData || !variable) return window.dash_clientside.no_update;
         const frames = animData.frames;
         if(!frames || !frames.length) return window.dash_clientside.no_update;
         const base = animData.baseFigures?.[variable];
         if(!base) return window.dash_clientside.no_update;
+
+        if(!window._houseDashCache) window._houseDashCache = {{
+            lastVar: null,
+            viewportKey: null,
+            indices: null,
+            geojson: null,
+            unfiltered: false
+        }};
+        const cache = window._houseDashCache;
 
         const idx = n_intervals % frames.length;
         const phase = idx / frames.length;
@@ -661,10 +770,12 @@ def create_dash_app() -> Dash:
             const m = currentFig.layout.title.text.match(/Environmental Dashboard \\(([^)]+)\\)/);
             if(m) currentVar = m[1];
         }}
-        let fig = (currentVar === variable && currentFig)
-            ? JSON.parse(JSON.stringify(currentFig))
-            : JSON.parse(JSON.stringify(base));
 
+        const reuse = (currentVar === variable) && !!currentFig;
+        let fig = reuse ? currentFig : JSON.parse(JSON.stringify(base));
+        logStep('figure prepared (reuse=' + reuse + ')');
+
+        // Background frame
         if(!fig.layout) fig.layout = {{}};
         if(!fig.layout.mapbox) fig.layout.mapbox = {{}};
         if(!fig.layout.mapbox.layers) fig.layout.mapbox.layers = [];
@@ -683,102 +794,171 @@ def create_dash_app() -> Dash:
         }} else {{
             fig.layout.mapbox.layers[0].source = frames[idx];
         }}
+        logStep('background frame updated');
 
         const zFull = seeds.map(s => (s + phase * factor) % 1.0);
+        logStep('full color array computed');
 
-        // Viewport approximation
-        let centerLon = fig.layout.mapbox.center?.lon;
-        let centerLat = fig.layout.mapbox.center?.lat;
-        let zoom = fig.layout.mapbox.zoom;
-        if(centerLon == null || centerLat == null || zoom == null){{
-            centerLon = {(MAP_EXTENT["lon_min"] + MAP_EXTENT["lon_max"]) / 2};
-            centerLat = {(MAP_EXTENT["lat_min"] + MAP_EXTENT["lat_max"]) / 2};
-            zoom = 6;
+        let centerLon, centerLat, zoom;
+        let viewLonMin, viewLonMax, viewLatMin, viewLatMax;
+        const stored = window._mapboxViewport;
+        if(stored && Number.isFinite(stored.lonMin) && Number.isFinite(stored.lonMax)){{
+            centerLon = stored.centerLon;
+            centerLat = stored.centerLat;
+            zoom = stored.zoom;
+            viewLonMin = stored.lonMin;
+            viewLonMax = stored.lonMax;
+            viewLatMin = stored.latMin;
+            viewLatMax = stored.latMax;
+
+            // Expand by marginFactor proportionally to current span.
+            const lonSpanBase = viewLonMax - viewLonMin;
+            const latSpanBase = viewLatMax - viewLatMin;
+            const expandLon = lonSpanBase * marginFactor;
+            const expandLat = latSpanBase * marginFactor;
+            viewLonMin -= expandLon;
+            viewLonMax += expandLon;
+            viewLatMin -= expandLat;
+            viewLatMax += expandLat;
+        }} else {{
+            // Fallback heuristic (center + zoom -> approximate square)
+            centerLon = fig.layout.mapbox.center?.lon;
+            centerLat = fig.layout.mapbox.center?.lat;
+            zoom = fig.layout.mapbox.zoom;
+            if(centerLon == null || centerLat == null || zoom == null){{
+                centerLon = {(MAP_EXTENT["lon_min"] + MAP_EXTENT["lon_max"]) / 2};
+                centerLat = {(MAP_EXTENT["lat_min"] + MAP_EXTENT["lat_max"]) / 2};
+                zoom = 6;
+            }}
+            const lonSpanRaw = 360 / Math.pow(2, zoom);
+            let lonSpan = lonSpanRaw * (1 + marginFactor) * 1.05;
+            let latSpan = lonSpan;
+            viewLonMin = centerLon - lonSpan/2;
+            viewLonMax = centerLon + lonSpan/2;
+            viewLatMin = centerLat - latSpan/2;
+            viewLatMax = centerLat + latSpan/2;
         }}
-        const lonSpanRaw = 360 / Math.pow(2, zoom);
-        let lonSpan = lonSpanRaw * (1 + marginFactor);
-        let latSpan = lonSpan;
-        const viewLonMin = centerLon - lonSpan/2;
-        const viewLonMax = centerLon + lonSpan/2;
-        const viewLatMin = centerLat - latSpan/2;
-        const viewLatMax = centerLat + latSpan/2;
 
-        let indices = [];
+        // Tile-size padding so edge-aligned features are not missed
+        if(animData.tileMeta){{
+            const padDeg = Math.max(animData.tileMeta.tileSizeLon, animData.tileMeta.tileSizeLat) * 0.75;
+            viewLonMin -= padDeg;
+            viewLonMax += padDeg;
+            viewLatMin -= padDeg;
+            viewLatMax += padDeg;
+        }} else {{
+            const padDeg = 0.01;
+            viewLonMin -= padDeg;
+            viewLonMax += padDeg;
+            viewLatMin -= padDeg;
+            viewLatMax += padDeg;
+        }}
+        logStep('viewport resolved (precise=' + (!!stored) + ')');
+
+        if(cache.lastVar !== variable){{
+            cache.viewportKey = null;
+            cache.indices = null;
+            cache.geojson = null;
+            cache.unfiltered = false;
+            cache.lastVar = variable;
+        }}
+
+        let indices;
+        let rebuilt = false;
         if(doFilter && tileMeta && tileBuckets){{
-            // Tile-based coarse filter
-            const tLonSize = tileMeta.tileSizeLon;
-            const tLatSize = tileMeta.tileSizeLat;
-            const baseLon = tileMeta.lonMin;
-            const baseLat = tileMeta.latMin;
-            const nLon = tileMeta.nLon;
-            const nLat = tileMeta.nLat;
-
-            const iMin = Math.max(0, Math.floor((viewLonMin - baseLon)/tLonSize));
-            const iMax = Math.min(nLon-1, Math.floor((viewLonMax - baseLon)/tLonSize));
-            const jMin = Math.max(0, Math.floor((viewLatMin - baseLat)/tLatSize));
-            const jMax = Math.min(nLat-1, Math.floor((viewLatMax - baseLat)/tLatSize));
-
-            const seen = new Set();
-            for(let i=iMin; i<=iMax; i++) {{
-                for(let j=jMin; j<=jMax; j++) {{
-                    const key = i + "_" + j;
-                    const bucket = tileBuckets[key];
+            // Use actual bounds in key (quantize to reduce churn)
+            const q = (v)=> v.toFixed(4);
+            const viewportKey = [q(viewLonMin), q(viewLonMax), q(viewLatMin), q(viewLatMax)].join('|');
+            if(cache.viewportKey !== viewportKey || !cache.indices){{
+                const tLonSize = tileMeta.tileSizeLon;
+                const tLatSize = tileMeta.tileSizeLat;
+                const baseLon = tileMeta.lonMin;
+                const baseLat = tileMeta.latMin;
+                const nLon = tileMeta.nLon;
+                const nLat = tileMeta.nLat;
+                const eps = 1e-9;
+                const iMin = Math.max(0, Math.floor((viewLonMin - baseLon - eps)/tLonSize));
+                const iMax = Math.min(nLon-1, Math.floor((viewLonMax - baseLon + eps)/tLonSize));
+                const jMin = Math.max(0, Math.floor((viewLatMin - baseLat - eps)/tLatSize));
+                const jMax = Math.min(nLat-1, Math.floor((viewLatMax - baseLat + eps)/tLatSize));
+                const seen = new Set();
+                for(let i=iMin;i<=iMax;i++) for(let j=jMin;j<=jMax;j++) {{
+                    const bucket = tileBuckets[i + "_" + j];
                     if(!bucket) continue;
                     for(const h of bucket) seen.add(h);
                 }}
-            }}
-            // Optional fine bbox refinement to drop houses partially outside
-            for(const h of seen){{
-                const bb = bboxes[h];
-                if(!bb) continue;
-                if(!(bb[1] < viewLonMin || bb[0] > viewLonMax || bb[3] < viewLatMin || bb[2] > viewLatMax)){{
-                    indices.push(h);
+                const next = [];
+                for(const h of seen){{
+                    const bb = bboxes[h];
+                    if(!bb) continue;
+                    if(!(bb[1] < viewLonMin || bb[0] > viewLonMax || bb[3] < viewLatMin || bb[2] > viewLatMax)){{
+                        next.push(h);
+                    }}
                 }}
+                if(maxView !== null && next.length > maxView) next.length = maxView;
+                indices = next.sort((a,b)=>a-b);
+                const fullFeatures = animData.housesGeoJSON?.features || [];
+                const features = indices.map(i => fullFeatures[i]).filter(Boolean);
+                cache.geojson = {{type: 'FeatureCollection', features}};
+                cache.indices = indices;
+                cache.viewportKey = viewportKey;
+                cache.unfiltered = false;
+                rebuilt = true;
+                logStep('filtering + geojson rebuild');
+            }} else {{
+                indices = cache.indices;
+                logStep('filtering skipped (viewport key match)');
             }}
         }} else {{
-            indices = seeds.map((_,i)=>i);
+            if(!cache.unfiltered || !cache.geojson){{
+                const fullFeatures = animData.housesGeoJSON?.features || [];
+                cache.geojson = {{type: 'FeatureCollection', features: fullFeatures}};
+                cache.indices = seeds.map((_,i)=>i);
+                cache.unfiltered = true;
+                rebuilt = true;
+                logStep('unfiltered geojson build');
+            }} else {{
+                logStep('unfiltered geojson reuse');
+            }}
+            indices = cache.indices;
         }}
 
-        if(maxView !== null && indices.length > maxView){{
-            indices = indices.slice(0, maxView);
-        }}
-
-        const fullFeatures = animData.housesGeoJSON?.features || [];
-        const features = indices.map(i => fullFeatures[i]).filter(Boolean);
-        const filteredGeoJSON = {{type: "FeatureCollection", features}};
-        const locs = indices;
-        const z = indices.map(i => zFull[i]);
+        const zSubset = indices.map(i => zFull[i]);  // (same logic both paths)
+        if(rebuilt) logStep('z subset (after rebuild)'); else logStep('z subset (reuse path)');
 
         let houseTrace = null;
         for(const t of (fig.data || [])){{
-            if(t.type === "choroplethmapbox" && t.name === "Houses"){{
-                houseTrace = t; break;
-            }}
+            if(t.type === 'choroplethmapbox' && t.name === 'Houses'){{ houseTrace = t; break; }}
         }}
         if(!houseTrace){{
             if(!fig.data) fig.data = [];
             fig.data.push({{
-                type: "choroplethmapbox",
-                name: "Houses",
-                geojson: filteredGeoJSON,
-                locations: locs,
-                featureidkey: "properties._hid",
-                z: z,
+                type: 'choroplethmapbox',
+                name: 'Houses',
+                geojson: cache.geojson,
+                locations: indices,
+                featureidkey: 'properties._hid',
+                z: zSubset,
                 zmin: 0.0,
                 zmax: 1.0,
-                colorscale: "Turbo",
+                colorscale: 'Turbo',
                 showscale: false,
-                marker: {{line: {{width: 0.2, color: "black"}}}},
-                hoverinfo: "skip",
+                marker: {{line: {{width: 0.2, color: 'black'}}}},
+                hoverinfo: 'skip',
                 showlegend: false
             }});
+            logStep('created house trace');
         }} else {{
-            houseTrace.geojson = filteredGeoJSON;
-            houseTrace.locations = locs;
-            houseTrace.z = z;
+            if(rebuilt){{
+                houseTrace.geojson = cache.geojson;
+                houseTrace.locations = indices;
+            }}
+            houseTrace.z = zSubset;
+            logStep(rebuilt ? 'updated house trace (geojson+z)' : 'updated house trace (z only)');
         }}
 
-        return fig;
+        logStep('callback complete');
+        return reuse ? {{...fig}} : fig;
     }}
     """
     app.clientside_callback(
