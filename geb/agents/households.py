@@ -1147,7 +1147,7 @@ class Households(AgentBaseClass):
         damages_buildings_content = VectorScanner(
             features=buildings_centroid,
             hazard=flood_map,
-            vulnerability_curves=self.var.buildings_content_curve,
+            vulnerability_curves=self.buildings_content_curve,
         )
 
         total_damages_content = damages_buildings_content.sum()
@@ -1160,7 +1160,7 @@ class Households(AgentBaseClass):
         damages_buildings_structure: pd.Series = VectorScanner(
             features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),
             hazard=flood_map,
-            vulnerability_curves=self.var.buildings_structure_curve,
+            vulnerability_curves=self.buildings_structure_curve,
         )
 
         total_damage_structure = damages_buildings_structure.sum()
