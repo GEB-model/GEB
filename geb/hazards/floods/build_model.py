@@ -1,11 +1,13 @@
+import json
 import logging
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pyflwdir
 import xarray as xr
-from hydromt_sfincs import SfincsModel
+from hydromt_sfincs import SfincsModel, workflows
 
 from geb.hydrology.routing import get_river_width
 
@@ -88,54 +90,57 @@ def do_mask_flood_plains(sf):
 
 
 def build_sfincs(
-    model_root,
-    DEMs,
-    region,
-    rivers,
-    discharge,
+    model_root: Path,
+    DEMs: list[dict[str, str]],
+    region: gpd.GeoDataFrame,
+    rivers: gpd.GeoDataFrame,
+    discharge: xr.DataArray,
     waterbody_ids: npt.NDArray[np.int32],
     river_width_alpha: npt.NDArray[np.float32],
     river_width_beta: npt.NDArray[np.float32],
-    mannings,
-    resolution,
-    nr_subgrid_pixels,
-    crs,
-    depth_calculation_method,
-    depth_calculation_parameters,
-    derive_river_method=None,
-    mask_flood_plains=False,
-):
-    """Build a SFINCS model for a given basin_id and configuration file.
+    mannings: xr.DataArray,
+    resolution: float | int,
+    nr_subgrid_pixels: int,
+    crs: str,
+    depth_calculation_method: str,
+    depth_calculation_parameters: dict[str, float | int] | None = None,
+    mask_flood_plains: bool = False,
+) -> None:
+    """Build a SFINCS model.
 
-    Parameters
-    ----------
-    basin_id : int or None
-        The Pfafstetter ID of the basin to build the model for.
-    config_fn : str
-        The path to the configuration file.
-    model_root : str
-        The path to the model root directory.
-    depth_calculation : str
-        The method to use for calculating river depth. Can be 'manning' or 'power_law'
-    unsnapped_method : str
-        The method to use for setting up the unsnapped points. Can be 'outflow' or 'nearest'
-    derive_river_method : str
-        The method to use for setting up the river segments. Can be 'default' or 'detailed'
-    upstream_area_threshold : float
-        If using the detailed method, set the minimum upstream area size for something to be considered a river. Standard 1 km2
+    Notes:
+        mask_flood_plains is currently quite unstable and should be used with caution. Sometimes it leads
+        to wrong regions being masked, which can lead to errors in the model.
+
+    Args:
+        model_root: The path to the model root directory.
+        DEMs: List of DEM datasets to use for the model. Should be a list of dictionaries with 'path' and 'name' keys.
+        region: A GeoDataFrame defining the region of interest.
+        rivers: A GeoDataFrame containing river segments.
+        discharge: An xarray DataArray containing discharge values for the rivers in m^3/s.
+        waterbody_ids: An numpy array of waterbody IDs specifying lakes and reservoirs. Should have same x and y dimensions as the discharge.
+        river_width_alpha: An numpy array of river width alpha parameters. Used for calculating river width.
+        river_width_beta: An numpy array of river width beta parameters. Used for calculating river width
+        mannings: A xarray DataArray of Manning's n values for the rivers.
+        resolution: The resolution of the requested SFINCS model grid in meters.
+        nr_subgrid_pixels: The number of subgrid pixels to use for the SFINCS model. Must be an even number.
+        crs: The coordinate reference system to use for the model.
+        depth_calculation_method: The method to use for calculating river depth. Can be 'manning' or 'power_law'.
+        depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
+            depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
+        mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
     """
-    assert "width" in rivers.columns, "Width must be provided in rivers"
+    assert nr_subgrid_pixels % 2 == 0, "nr_subgrid_pixels must be an even number"
+    assert nr_subgrid_pixels > 0, "nr_subgrid_pixels must be a positive number"
+    assert resolution > 0, "Resolution must be a positive number"
 
-    assert not (derive_river_method and rivers), (
-        "Specify either derive_river_method or rivers, not both"
-    )
     assert depth_calculation_method in [
         "manning",
         "power_law",
     ], "Method should be 'manning' or 'power_law'"
 
     # build base model
-    sf = SfincsModel(root=model_root, mode="w+", logger=get_logger())
+    sf = SfincsModel(root=str(model_root), mode="w+", logger=get_logger())
 
     sf.setup_grid_from_region({"geom": region}, res=resolution, crs=crs, rotated=False)
 
@@ -161,13 +166,51 @@ def build_sfincs(
         river_len=0,
     )
 
-    # Setup river outflow points
-    sf.setup_river_outflow(
-        rivers=rivers,
-        keep_rivers_geom=True,
+    # find outflow points and save for later use
+    outflow_points = workflows.river_source_points(
+        gdf_riv=rivers.to_crs(sf.crs),
+        gdf_mask=sf.region,
+        src_type="outflow",
+        buffer=sf.reggrid.dx,  # type: ignore
         river_upa=0,
         river_len=0,
     )
+    # give error if outflow greater than 1
+    if len(outflow_points) > 1:
+        raise ValueError(
+            "More than one outflow point found, outflow boundary condition will fail to setup"
+        )
+    elif len(outflow_points) == 0:
+        raise ValueError(
+            "No outflow point found, outflow boundary condition will fail to setup"
+        )
+    # print crs of outflow_points
+    assert outflow_points.crs == sf.crs, (
+        "CRS of outflow_points is not the same as the model crs"
+    )
+    # set crs before saving
+    outflow_points = outflow_points.set_crs(sf.crs)
+    # save to model root as a gpkg file
+    outflow_points.to_file(model_root / "gis/outflow_points.gpkg", driver="GPKG")
+    # Get the single outflow point coordinates
+    x_coord = outflow_points.geometry.x.iloc[0]
+    y_coord = outflow_points.geometry.y.iloc[0]
+    assert sf.grid.dep.rio.crs == outflow_points.crs, (  # type: ignore
+        "CRS of sf.grid.dep is not the same as the outflow_points crs"
+    )
+    # Sample from sf.grid.dep (which is the DEM DataArray)
+    elevation_value = sf.grid.dep.sel(  # type: ignore
+        x=x_coord, y=y_coord, method="nearest"
+    ).values.item()
+
+    # Optional: sanity check
+    if elevation_value is None or elevation_value <= 0:
+        raise ValueError(f"Invalid outflow elevation ({elevation_value}), must be > 0")
+
+    # Save elevation value to a file in model_root/gis
+    outflow_elev_path = model_root / "gis" / "outflow_elevation.json"
+    with open(outflow_elev_path, "w") as f:
+        json.dump({"outflow_elevation": elevation_value}, f)
 
     river_representative_points = []
     for ID in rivers.index:
@@ -182,6 +225,7 @@ def build_sfincs(
         river_width_alpha=river_width_alpha,
         river_width_beta=river_width_beta,
     )
+
     rivers = assign_return_periods(rivers, discharge_by_river, return_periods=[2])
 
     river_width_unknown_mask = rivers["width"].isnull()
@@ -198,6 +242,7 @@ def build_sfincs(
         parameters=depth_calculation_parameters,
         bankfull_column="Q_2",
     )
+
     rivers["manning"] = get_river_manning(rivers)
 
     export_rivers(model_root, rivers)

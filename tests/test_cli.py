@@ -28,6 +28,5 @@ def test_cli():
         "multirun",
         "share",
         "evaluate",
-        "init",
     ):
         assert runner.invoke(cli, [cmd, "--help"]).exit_code == 0

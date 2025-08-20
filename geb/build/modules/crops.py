@@ -50,14 +50,14 @@ class Crops:
                 crop_values["l_dev"] = crop_values["d2a"] + crop_values["d2b"]
                 crop_values["l_mid"] = crop_values["d3a"] + crop_values["d3b"]
                 crop_values["l_late"] = crop_values["d4"]
-                del crop_values["d1"]
-                del crop_values["d2a"]
-                del crop_values["d2b"]
-                del crop_values["d3a"]
-                del crop_values["d3b"]
-                del crop_values["d4"]
 
                 assert "KyT" in crop_values
+                assert "Ky1" in crop_values
+                assert "Ky2a" in crop_values
+                assert "Ky2b" in crop_values
+                assert "Ky3a" in crop_values
+                assert "Ky3b" in crop_values
+                assert "Ky4" in crop_values
 
             elif type == "MIRCA2000":
                 assert "a" in crop_values
@@ -119,6 +119,7 @@ class Crops:
                 ),
                 "type": "MIRCA2000",
             }
+
         self.set_dict(crop_data, name="crops/crop_data")
 
     def process_crop_data(
@@ -181,7 +182,7 @@ class Crops:
             ] = "EU_MidWest"
             assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
-            ISO3_codes_region = self.geoms["regions"]["ISO3"].unique()
+            ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
             GLOBIOM_regions_region = GLOBIOM_regions[
                 GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
             ]["Region37"].unique()
@@ -192,9 +193,10 @@ class Crops:
             missing_regions_in_GLOBIOM = set(ISO3_codes_region) - set(
                 ISO3_codes_GLOBIOM_region
             )
-            self.logger.info(
-                f"Regions in the model not present in GLOBIOM: {missing_regions_in_GLOBIOM}"
-            )
+            if len(missing_regions_in_GLOBIOM) > 0:
+                self.logger.info(
+                    f"Regions in the model not present in GLOBIOM: {list(missing_regions_in_GLOBIOM)}"
+                )
             for region in missing_regions_in_GLOBIOM:
                 if not crop_data[crop_data["ISO3"] == region].empty:
                     raise ValueError(
@@ -236,13 +238,18 @@ class Crops:
             duplicates = donor_data.index.duplicated(keep=False)
             if duplicates.any():
                 # Data is subnational
-                unique_regions = self.geoms["regions"]
+                unique_regions = self.geom["regions"]
             else:
                 # Data is national
                 unique_regions = (
-                    self.geoms["regions"].groupby("ISO3").first().reset_index()
+                    self.geom["regions"].groupby("ISO3").first().reset_index()
                 )
                 national_data = True
+
+            # filter for model start and end year (important to do this before donation)
+            donor_data = donor_data.loc[
+                (slice(None), slice(self.start_date.year, self.end_date.year)), :
+            ]
 
             data = self.donate_and_receive_crop_prices(
                 donor_data, unique_regions, GLOBIOM_regions
@@ -316,13 +323,13 @@ class Crops:
             if national_data:
                 unique_regions = data.index.get_level_values("region_id").unique()
                 iso3_codes = (
-                    self.geoms["regions"]
+                    self.geom["regions"]
                     .set_index("region_id")
                     .loc[unique_regions]["ISO3"]
                 )
                 iso3_to_representative_region_id = dict(zip(iso3_codes, unique_regions))
 
-            for _, region in self.geoms["regions"].iterrows():
+            for _, region in self.geom["regions"].iterrows():
                 region_dict = {}
                 region_id = region["region_id"]
                 region_iso3 = region["ISO3"]
@@ -364,7 +371,7 @@ class Crops:
                     if crop_name in region_data.columns:
                         # raise an error if the crop is in the crop calendar and has NaN values
                         if (
-                            crop_id in crops_in_region
+                            float(crop_id) in crops_in_region
                             and np.isnan(region_data[crop_name]).any()
                         ):
                             raise ValueError(
@@ -419,7 +426,7 @@ class Crops:
             data = data.reindex(
                 index=pd.MultiIndex.from_product(
                     [
-                        self.geoms["regions"]["region_id"],
+                        self.geom["regions"]["region_id"],
                         data.index,
                     ],
                     names=["region_id", "date"],
@@ -427,9 +434,9 @@ class Crops:
                 level=1,
             )
 
-            data = self.assign_crop_price_inflation(data, self.geoms["regions"])
+            data = self.assign_crop_price_inflation(data, self.geom["regions"])
             data = self.inter_and_extrapolate_prices(
-                data, self.geoms["regions"], adjust_currency
+                data, self.geom["regions"], adjust_currency
             )
 
             data = {
@@ -439,7 +446,7 @@ class Crops:
                 ).index.tolist(),
                 "data": {
                     str(region_id): data.loc[region_id].to_dict(orient="list")
-                    for region_id in self.geoms["regions"]["region_id"]
+                    for region_id in self.geom["regions"]["region_id"]
                 },
             }
 
@@ -456,35 +463,41 @@ class Crops:
         return data
 
     def donate_and_receive_crop_prices(
-        self, donor_data, recipient_regions, GLOBIOM_regions
-    ):
-        """Gets crop prices from other to fill missing data.
+        self,
+        donor_data: pd.DataFrame,
+        recipient_regions: pd.DataFrame,
+        GLOBIOM_regions: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Gets crop prices from other regions to fill missing data.
 
-        If there are multiple countries in one selected basin, where one country has prices for a certain crop, but the other does not,
-        this gives issues. This function adjusts crop data for those countries by filling in missing values using data from nearby regions
-        and PPP conversion rates.
+        If there are multiple countries in one selected basin, where one country has prices for a certain crop,
+        but the other does not, this gives issues. This function adjusts crop data for those countries by
+        filling in missing values using data from nearby regions and PPP conversion rates. In case crop data
+        is missing for a country, and is also not in countries in the same GLOBIOM dataset, it uses the prices
+        for that crop from the country in the model region with least nan values.
 
-        Parameters
-        ----------
-        data : DataFrame
-            A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'. The DataFrame
-            contains crop prices for different regions.
+        Args:
+            donor_data: A DataFrame containing crop data with a 'ISO3' column and indexed by 'region_id'.
+                The DataFrame contains crop prices for different regions.
+            recipient_regions: DataFrame containing recipient region information with 'region_id' and 'ISO3' columns.
+            GLOBIOM_regions: DataFrame containing GLOBIOM region mapping with 'ISO3' and 'Region37' columns.
 
         Returns:
-        -------
-        DataFrame
             The updated DataFrame with missing crop data filled in using PPP conversion rates from nearby regions.
 
         Notes:
-        -----
-        The function performs the following steps:
-        1. Identifies columns where all values are NaN for each country and stores this information.
-        2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
-        3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
-        4. Drops the 'ISO3' column before returning the updated DataFrame.
+            The function performs the following steps:
+            1. Identifies columns where all values are NaN for each country and stores this information.
+            2. For each country and column with missing values, finds a country/region within that study area that has data for that column.
+            3. Uses PPP conversion rates to adjust and fill in missing values for regions without data.
+            4. Drops the 'ISO3' column before returning the updated DataFrame.
 
-        Note: some countries without data are also not in the GLOBIOM dataset (e.g Liechtenstein (LIE)). For these countries, we cannot assess which donor we should take, and the country_data will be empty for these countries. Therefore, we first estimate the most similar country based on the setup_donor_countries function.
-        The ISO3 of these countries will be replaced by the ISO3 of the donor. However, the region_id will remain the same, so that only the data is used from the donor, but still the original region is used.
+            Some countries without data are also not in the GLOBIOM dataset (e.g Liechtenstein (LIE)).
+            For these countries, we cannot assess which donor we should take, and the country_data will be
+            empty for these countries. Therefore, we first estimate the most similar country based on the
+            setup_donor_countries function. The ISO3 of these countries will be replaced by the ISO3 of the donor.
+            However, the region_id will remain the same, so that only the data is used from the donor,
+            but still the original region is used.
         """
         # create a copy of the data to avoid using data that was adjusted in this function
         data_out = None
@@ -497,17 +510,19 @@ class Crops:
             # Filter the data for the current country
             country_data = donor_data[donor_data["ISO3"] == ISO3]
 
-            if country_data.empty:
+            if country_data.empty:  # happens if country is not in GLOBIOM regions dataset (e.g. Kosovo). Fill these countries using data from a country that is in the GLOBIOM regions dataset, using the regular donor countries setup.
                 countries_with_donor_data = donor_data.ISO3.unique().tolist()
                 donor_countries = setup_donor_countries(self, countries_with_donor_data)
                 ISO3 = donor_countries.get(ISO3, None)
                 self.logger.info(
-                    f"Missing donor data for {region['ISO3']}, using donor country {ISO3}"
+                    f"Missing price donor data for {region['ISO3']}, using donor country {ISO3}. This country is NOT in the GLOBIOM regions dataset"
                 )
                 assert ISO3 is not None, (
                     f"Could not find a donor country for {region['ISO3']}. Please check the donor countries setup."
                 )
+
                 country_data = donor_data[donor_data["ISO3"] == ISO3]
+
                 assert not country_data.empty, (
                     f"Donor country {ISO3} has no data for {region['ISO3']}. Please check the donor countries setup."
                 )
@@ -516,6 +531,11 @@ class Crops:
             GLOBIOM_region = GLOBIOM_regions.loc[
                 GLOBIOM_regions["ISO3"] == ISO3, "Region37"
             ].item()
+
+            assert len(GLOBIOM_region) > 0, (
+                f"GLOBIOM region for {ISO3} is empty. Please check the GLOBIOM regions setup."
+            )
+
             GLOBIOM_region_countries = GLOBIOM_regions.loc[
                 GLOBIOM_regions["Region37"] == GLOBIOM_region, "ISO3"
             ]
@@ -526,14 +546,25 @@ class Crops:
                         donor_data["ISO3"].isin(GLOBIOM_region_countries), column
                     ]
 
-                    # get the country with the least non-NaN values
+                    # Check if data is available within the GLOBIOM region
                     non_na_values = donor_data_region.groupby("ISO3").count()
 
-                    if non_na_values.max() == 0:
-                        continue
+                    if (
+                        non_na_values.max() > 0
+                    ):  # if there is at least one non-NaN value
+                        donor_country = non_na_values.idxmax()
+                        donor_data_country = donor_data_region[donor_country]
 
-                    donor_country = non_na_values.idxmax()
-                    donor_data_country = donor_data_region[donor_country]
+                    else:
+                        # if no data is available, take the country with most non-nan values
+                        donor_data_crop = donor_data[column]
+                        donor_data_crop = donor_data_crop.reset_index()
+                        donor_data_crop = donor_data_crop.set_index("year")
+                        amount_of_non_na = donor_data_crop.groupby("ISO3").count()
+                        donor_country = amount_of_non_na[column].idxmax()
+                        donor_data_country = donor_data_crop.loc[
+                            donor_data_crop["ISO3"] == donor_country, column
+                        ]
 
                     new_data = pd.DataFrame(
                         donor_data_country.values,
@@ -547,6 +578,7 @@ class Crops:
                         data_out = new_data.copy()
                     else:
                         data_out = data_out.combine_first(new_data)
+
                 else:
                     new_data = pd.DataFrame(
                         country_data[column].values,
@@ -570,20 +602,23 @@ class Crops:
 
         return data_out
 
-    def assign_crop_price_inflation(self, costs, unique_regions):
+    def assign_crop_price_inflation(
+        self, costs: pd.DataFrame, unique_regions: pd.DataFrame
+    ) -> pd.DataFrame:
         """Determines the price inflation of all crops in the region and adds a column that describes this inflation.
 
         If there is no data for a certain year, the inflation rate is taken from the socioeconomics data.
 
-        Parameters
-        ----------
-        costs : DataFrame
-            A DataFrame containing the cost data for different regions. The DataFrame should be indexed by region IDs.
+        Args:
+            costs: A DataFrame containing crop prices for different regions. The DataFrame should be indexed by region IDs.
+            unique_regions: A DataFrame containing unique regions with their IDs and other attributes.
 
         Returns:
-        -------
-        DataFrame
             The updated DataFrame with a new column 'changes' that contains the average price changes for each region.
+
+        To Do:
+            Is it possible to use the regions from the costs DataFrame instead of the unique_regions DataFrame?
+
         """
         costs["_crop_price_inflation"] = np.nan
         costs["_crop_price_LCU_USD"] = np.nan
@@ -634,26 +669,26 @@ class Crops:
     def inter_and_extrapolate_prices(self, data, unique_regions, adjust_currency=False):
         """Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
 
-        Parameters
-        ----------
-        data : DataFrame
-            A DataFrame containing crop price data for different regions. The DataFrame should be indexed by region IDs
+        Args:
+            data: A DataFrame containing crop price data for different regions. The DataFrame should be indexed by region IDs
             and have columns corresponding to different crops.
+            unique_regions: A DataFrame containing unique regions with their IDs and other attributes.
+            adjust_currency: If True, adjusts the crop prices based on currency conversion rates.
 
         Returns:
-        -------
-        DataFrame
-            The updated DataFrame with interpolated and extrapolated crop prices. Columns for 'others perennial' and 'others annual'
-            crops are also added.
+            Updated DataFrame with interpolated and extrapolated crop prices. Columns for 'others perennial' and 'others annual'
+                crops are also added.
 
         Notes:
-        -----
-        The function performs the following steps:
-        1. Extracts crop names from the internal crop data dictionary.
-        2. Defines additional crops that fall under 'others perennial' and 'others annual' categories.
-        3. Processes the data to compute average prices for these additional crops.
-        4. Filters and updates the original data with the computed averages.
-        5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
+            The function performs the following steps:
+                1. Extracts crop names from the internal crop data dictionary.
+                2. Defines additional crops that fall under 'others perennial' and 'others annual' categories.
+                3. Processes the data to compute average prices for these additional crops.
+                4. Filters and updates the original data with the computed averages.
+                5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
+
+        To Do:
+            Ensure adjust_currency is better explained and used correctly.
         """
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
         for _, region in unique_regions.iterrows():
@@ -661,6 +696,7 @@ class Crops:
             region_data = data.loc[region_id]
 
             n = len(region_data)
+
             for crop in region_data.columns:
                 if crop == "_crop_price_inflation":
                     continue
@@ -694,7 +730,7 @@ class Crops:
                         )
                         for i, change in zip(range(j, k), scaled_crop_price_inflation):
                             crop_data[i] = crop_data[i - 1] * change
-                if adjust_currency:
+                if adjust_currency and not crop == "_crop_price_LCU_USD":
                     conversion_data = region_data["_crop_price_LCU_USD"].to_numpy()
                     data.loc[region_id, crop] = crop_data / conversion_data
                 else:
@@ -722,7 +758,6 @@ class Crops:
             The dictionary should have a 'time' key with a list of time steps, and a 'crops' key with a dictionary of crop
             IDs and their cultivation costs. If .
         """
-        self.logger.info("Preparing cultivation costs")
         cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
             translate_crop_names=translate_crop_names,
@@ -754,7 +789,6 @@ class Crops:
             The dictionary should have a 'time' key with a list of time steps, and a 'crops' key with a dictionary of crop
             IDs and their prices.
         """
-        self.logger.info("Preparing crop prices")
         crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,

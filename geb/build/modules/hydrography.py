@@ -171,19 +171,17 @@ class Hydrography:
         """Sets up the Manning's coefficient for the model.
 
         Notes:
-        -----
-        This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
-        and topography of the grid. It first calculates the upstream area of each cell in the grid using the
-        `routing/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
+            This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
+            and topography of the grid. It first calculates the upstream area of each cell in the grid using the
+            `routing/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
 
-            C = 0.025 + 0.015 * (2 * A / U) + 0.030 * (Z / 2000)
+                C = 0.025 + 0.015 * (2 * A / U) + 0.030 * (Z / 2000)
 
-        where C is the Manning's coefficient, A is the cell area, U is the upstream area, and Z is the elevation of the cell.
+            where C is the Manning's coefficient, A is the cell area, U is the upstream area, and Z is the elevation of the cell.
 
-        The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
-        `set_grid()` method.
+            The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
+            `set_grid()` method.
         """
-        self.logger.info("Setting up Manning's coefficient")
         a = (2 * self.grid["cell_area"]) / self.grid["routing/upstream_area"]
         a = xr.where(a < 1, a, 1, keep_attrs=True)
         b = self.grid["routing/outflow_elevation"] / 2000
@@ -220,7 +218,7 @@ class Hydrography:
             lambda row: len(list(river_graph.neighbors(row.name))) == 0, axis=1
         )
 
-        self.set_geoms(subbasins, name="routing/subbasins")
+        self.set_geom(subbasins, name="routing/subbasins")
 
     @build_method
     def setup_hydrography(self):
@@ -346,7 +344,7 @@ class Hydrography:
         )
 
         # river width
-        subbasin_ids: list[int] = self.geoms["routing/subbasins"].index.tolist()
+        subbasin_ids: list[int] = self.geom["routing/subbasins"].index.tolist()
 
         self.logger.info("Retrieving river data")
         rivers: gpd.GeoDataFrame = get_rivers(self.data_catalog, subbasin_ids)
@@ -358,7 +356,7 @@ class Hydrography:
         ]
 
         rivers: gpd.GeoDataFrame = rivers.join(
-            self.geoms["routing/subbasins"][
+            self.geom["routing/subbasins"][
                 ["is_downstream_outflow_subbasin", "associated_upstream_basins"]
             ],
             how="left",
@@ -441,7 +439,7 @@ class Hydrography:
         # ensure that all rivers with a SWORD ID have a width
         assert (~np.isnan(rivers["width"][(SWORD_reach_IDs != -1).any(axis=0)])).all()
 
-        self.set_geoms(rivers, name="routing/rivers")
+        self.set_geom(rivers, name="routing/rivers")
 
         river_with_mapper: dict[int, float] = rivers["width"].to_dict()
         river_width_data: npt.NDArray[np.float32] = np.vectorize(
@@ -462,24 +460,24 @@ class Hydrography:
     ):
         """Sets up the waterbodies for GEB.
 
+        Args:
+            command_areas: The path to the command areas data in the data catalog. If None, command areas are not set up.
+            custom_reservoir_capacity: The path to the custom reservoir capacity data in the data catalog.
+                If None, the default reservoir capacity is used. The data should be a DataFrame with
+                'waterbody_id' as the index and 'volume_total' as the column for the reservoir capacity.
+
         Notes:
-        -----
-        This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
-        specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
-        grid and the subgrid using the `rasterize` method of the `raster` object. The resulting grids are set as attributes
-        of the model with names of the form 'waterbodies/{grid_name}'.
+            This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
+            specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
+            grid and the subgrid using the `rasterize` method of the `raster` object. The resulting grids are set as attributes
+            of the model with names of the form 'waterbodies/{grid_name}'.
 
-        The method also retrieves the reservoir command area data from the data catalog and calculates the area of each
-        command area that falls within the model region. The `waterbody_id` key is used to do the matching between these
-        databases. The relative area of each command area within the model region is calculated and set as a column in
-        the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
-        with any custom reservoir capacity data from the data catalog.
-
-        TODO: Make the reservoir command area data optional.
-
-        The resulting waterbody data is set as a table in the model with the name 'waterbodies/waterbody_data'.
+            The method also retrieves the reservoir command area data from the data catalog and calculates the area of each
+            command area that falls within the model region. The `waterbody_id` key is used to do the matching between these
+            databases. The relative area of each command area within the model region is calculated and set as a column in
+            the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
+            with any custom reservoir capacity data from the data catalog.
         """
-        self.logger.info("Setting up waterbodies")
         dtypes = {
             "waterbody_id": np.int32,
             "waterbody_type": np.int32,
@@ -584,6 +582,8 @@ class Hydrography:
                 command_areas["waterbody_id"].isin(reservoir_ids)
             ].reset_index(drop=True)
 
+            self.set_geom(command_areas_dissolved, name="waterbodies/command_areas")
+
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
             self.set_grid(
@@ -643,4 +643,4 @@ class Hydrography:
             "average_discharge is required"
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
-        self.set_geoms(waterbodies, name="waterbodies/waterbody_data")
+        self.set_geom(waterbodies, name="waterbodies/waterbody_data")

@@ -29,6 +29,9 @@ def update_sfincs_model_forcing(
     simulation_root,
     event,
     discharge_grid,
+    soil_water_capacity_grid,  # seff
+    max_water_storage_grid,  # smax
+    saturated_hydraulic_conductivity_grid,  # ks
     uparea_discharge_grid,
     forcing_method,
     precipitation_grid=None,
@@ -139,7 +142,7 @@ def update_sfincs_model_forcing(
             river_inflow_points = sf.forcing["dis"].vector.to_gdf()
             river_inflow_points = river_inflow_points.to_crs(
                 4326
-            )  # <------Change crs to 4326 before sampling uparea
+            )  # Change crs to 4326 before sampling uparea
             uparea_sfincs = sf.data_catalog.get_rasterdataset(
                 "merit_hydro",
                 bbox=sf.mask.raster.transform_bounds(4326),
@@ -154,7 +157,7 @@ def update_sfincs_model_forcing(
             )
             river_inflow_points = river_inflow_points.to_crs(
                 sf.crs
-            )  # <------Change crs back to sf.crs
+            )  # Change crs back to sf.crs
             # Concatenate the two DataFrames
             assert river_inflow_points.crs == head_water_points.crs, (
                 "CRS mismatch between river_inflow_points and head_water_points"
@@ -177,7 +180,7 @@ def update_sfincs_model_forcing(
 
         discharge_forcing_points = discharge_forcing_points.to_crs(
             sf.crs
-        )  # <--------------------------------------------------Use For setting up Discharge forcing
+        )  # used for setting up discharge forcing
         discharge_forcing_points.to_file(
             model_root / "inflow_points.gpkg", driver="GPKG"
         )
@@ -190,7 +193,30 @@ def update_sfincs_model_forcing(
             "dis" in sf.forcing
         ):  # if no inflow points (headwater catchment) don't set discharge forcing
             sf.setup_discharge_forcing()
-        # curve number infiltration based on global CN dataset
+
+        # CODE FOR INFILTRATION WITH RECOVERY
+        # smax
+        smax = max_water_storage_grid.raster.reproject_like(sf.grid, method="average")
+        smax = smax.rename_vars({"max_water_storage": "smax"})
+        smax.attrs.update(**sf._ATTRS.get("smax", {}))
+        sf.set_grid(smax, name="smax")
+        sf.set_config("smaxfile", "sfincs.smax")
+
+        # seff
+        seff = soil_water_capacity_grid.raster.reproject_like(sf.grid, method="average")
+        seff = seff.rename_vars({"soil_storage_capacity": "seff"})
+        seff.attrs.update(**sf._ATTRS.get("seff", {}))
+        sf.set_grid(seff, name="seff")
+        sf.set_config("sefffile", "sfincs.seff")
+
+        # ks
+        ks = saturated_hydraulic_conductivity_grid.raster.reproject_like(
+            sf.grid, method="average"
+        )
+        ks = ks.rename_vars({"saturated_hydraulic_conductivity": "ks"})
+        ks.attrs.update(**sf._ATTRS.get("ks", {}))
+        sf.set_grid(ks, name="ks")
+        sf.set_config("ksfile", "sfincs.ks")
 
     else:
         raise ValueError(

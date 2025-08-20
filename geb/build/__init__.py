@@ -9,7 +9,6 @@ import json
 import logging
 import math
 import os
-from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -552,7 +551,7 @@ class GEBModel(
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
-        self.geoms: DelayedReader = DelayedReader(reader=gpd.read_parquet)
+        self.geom: DelayedReader = DelayedReader(reader=gpd.read_parquet)
         self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
         self.array: DelayedReader = DelayedReader(zarr.load)
         self.dict: DelayedReader = DelayedReader(
@@ -560,7 +559,7 @@ class GEBModel(
         )
         self.other: DelayedReader = DelayedReader(reader=open_zarr)
 
-        self.files: defaultdict = defaultdict(dict)
+        self.files: dict = self.read_file_library()
 
     @build_method
     def setup_region(
@@ -625,7 +624,7 @@ class GEBModel(
         )
         self.set_routing_subbasins(river_graph, sink_subbasin_ids)
 
-        subbasins = self.geoms["routing/subbasins"]
+        subbasins = self.geom["routing/subbasins"]
         subbasins_without_outflow_basin = subbasins[
             ~subbasins["is_downstream_outflow_subbasin"]
         ]
@@ -924,7 +923,7 @@ class GEBModel(
             crs=4326,
         )
 
-        self.set_geoms(mask_geom, name="mask")
+        self.set_geom(mask_geom, name="mask")
 
         flow_raster_idxs_ds = self.full_like(
             self.grid["mask"],
@@ -1140,29 +1139,30 @@ class GEBModel(
 
         self.dict[name] = fp_with_root
 
-    def set_geoms(self, geoms, name, write=True):
+    def set_geom(self, geom, name, write=True):
         fp: Path = Path("geom") / (name + ".geoparquet")
         fp_with_root: Path = self.root / fp
         if write:
             self.logger.info(f"Writing file {fp}")
-            self.files["geoms"][name] = fp
+            self.files["geom"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
             # brotli is a bit slower but gives better compression,
             # gzip is faster to read. Higher compression levels
             # generally don't make it slower to read, therefore
             # we use the highest compression level for gzip
-            geoms.to_parquet(
+            geom.to_parquet(
                 fp_with_root, engine="pyarrow", compression="gzip", compression_level=9
             )
 
-        self.geoms[name] = fp_with_root
+        self.geom[name] = fp_with_root
 
-    def write_file_library(self, read_first: bool = True) -> None:
-        if read_first:
-            file_library: defaultdict = self.read_file_library()
-        else:
-            file_library: defaultdict = defaultdict(dict)
+    @property
+    def files_path(self) -> Path:
+        """Path to the files.json file that contains the file library."""
+        return Path(self.root, "files.json")
 
+    def write_file_library(self) -> None:
+        file_library: dict = self.read_file_library()
         # merge file library from disk with new files, prioritizing new files
         for type_name, type_files in self.files.items():
             if type_name not in file_library:
@@ -1170,21 +1170,36 @@ class GEBModel(
             else:
                 file_library[type_name].update(type_files)
 
-        with open(Path(self.root, "files.json"), "w") as f:
+        with open(self.files_path, "w") as f:
             json.dump(file_library, f, indent=4, cls=PathEncoder)
 
-    def read_file_library(self) -> defaultdict:
+    def read_file_library(self) -> dict:
         fp: Path = Path(self.root, "files.json")
         if not fp.exists():
-            return defaultdict(dict)  # return empty defaultdict if file does not exist
+            return {
+                "geom": {},
+                "array": {},
+                "table": {},
+                "dict": {},
+                "grid": {},
+                "subgrid": {},
+                "region_subgrid": {},
+                "other": {},
+            }
         else:
             with open(Path(self.root, "files.json"), "r") as f:
                 files: dict[str, dict[str, str]] = json.load(f)
-        return defaultdict(dict, files)  # convert dict to defaultdict
 
-    def read_geoms(self):
-        for name, fn in self.files["geoms"].items():
-            self.geoms[name] = Path(self.root, fn)
+            # geoms was renamed to geom in the file library. To upgrade old models,
+            # we check if "geoms" is in the files and rename it to "geom"
+            # this line can be removed in august 2026 (also in geb/model.py)
+            if "geoms" in files:
+                files["geom"] = files.pop("geoms", {})
+        return files
+
+    def read_geom(self):
+        for name, fn in self.files["geom"].items():
+            self.geom[name] = Path(self.root, fn)
 
     def read_array(self):
         for name, fn in self.files["array"].items():
@@ -1223,9 +1238,7 @@ class GEBModel(
 
     def read(self):
         with suppress_logging_warning(self.logger):
-            self.files = self.read_file_library()
-
-            self.read_geoms()
+            self.read_geom()
             self.read_array()
             self.read_table()
             self.read_dict()
@@ -1383,7 +1396,7 @@ class GEBModel(
 
     @property
     def region(self):
-        return self.geoms["mask"]
+        return self.geom["mask"]
 
     @property
     def bounds(self):
@@ -1449,10 +1462,13 @@ class GEBModel(
         for method in methods:
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
+
+            # if the method is "setup_region", we start an entirely new model
+            # ant therefore delete the files save path
             if method == "setup_region":
-                self.write_file_library(read_first=False)
-            else:
-                self.write_file_library(read_first=True)
+                self.files_path.unlink(missing_ok=True)
+
+            self.write_file_library()
 
         self.logger.info("Finished!")
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from geb.module import Module
 from geb.workflows import TimingModule
 
