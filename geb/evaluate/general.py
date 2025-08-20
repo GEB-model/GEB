@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """Generates a dashboard.
 
 Creates an interactive Plotly dashboard with a Scattermapbox layer of sample
@@ -13,73 +12,20 @@ while the map displays the full Netherlands extent via MAP_EXTENT.
 Both are configurable module-level dictionaries.
 """
 
-import base64
 import os
 import random
-from datetime import datetime, timedelta
-from io import BytesIO
 from pathlib import Path
-from typing import Dict, List, Sequence
 
 import geopandas as gpd
 import hydromt_sfincs
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
-import rioxarray  # noqa: F401
-import xarray as xr
 from dash import Dash, Input, Output, State, dcc, html
 from dotenv import load_dotenv
 from PIL import Image
 from shapely.geometry import MultiPolygon, Polygon, box
 
 load_dotenv()
-
-random.seed(42)
-sites: list[dict[str, str | float]] = [
-    {"site_id": "A01", "name": "Alpha", "lat": 52.37, "lon": 4.90},
-    {"site_id": "B02", "name": "Bravo", "lat": 51.92, "lon": 4.48},
-    {"site_id": "C03", "name": "Charlie", "lat": 50.85, "lon": 4.35},
-    {"site_id": "D04", "name": "Delta", "lat": 53.22, "lon": 6.56},
-]
-variables: list[str] = ["houses"]
-n_days: int = 30
-base_date = datetime.utcnow().date()
-dates: list[datetime.date] = [base_date - timedelta(days=i) for i in range(n_days)][
-    ::-1
-]
-
-records: list[dict[str, object]] = []
-for variable_name in variables:
-    for site in sites:
-        level: float = random.uniform(10, 100)
-        for current_date in dates:
-            level += random.uniform(-5, 5)
-            if variable_name == "nitrate":
-                value = max(0.0, level / 10 + random.uniform(-0.5, 0.5))
-            elif variable_name == "temperature":
-                idx: int = dates.index(current_date)
-                value = (
-                    10 + 10 * np.sin((idx / n_days) * 2 * np.pi) + random.uniform(-1, 1)
-                )
-            else:
-                value = max(0.0, level + random.uniform(-10, 10))
-            records.append(
-                {
-                    "site_id": site["site_id"],
-                    "site_name": site["name"],
-                    "lat": site["lat"],
-                    "lon": site["lon"],
-                    "variable": variable_name,
-                    "date": current_date,
-                    "value": float(value),
-                }
-            )
-df: pd.DataFrame = pd.DataFrame(records)
-latest_date = df["date"].max()
-latest: pd.DataFrame = df[df["date"] == latest_date]
-default_var: str = "houses"
-
 
 MODEL_FOLDER = Path("tests/tmp/model")
 houses = gpd.read_parquet(
@@ -196,16 +142,7 @@ def _compute_initial_zoom(
 _INITIAL_CENTER_LON: float = (REGION_EXTENT["lon_min"] + REGION_EXTENT["lon_max"]) / 2
 _INITIAL_CENTER_LAT: float = (REGION_EXTENT["lat_min"] + REGION_EXTENT["lat_max"]) / 2
 _INITIAL_ZOOM: float = _compute_initial_zoom(**REGION_EXTENT)
-# ------------------------------------------------------------------
-# Map / animation configuration (all preloaded)  (REPLACED BBOX_* constants)
-# ------------------------------------------------------------------
-# Overall map extent (approx Netherlands)
-MAP_EXTENT: dict[str, float] = {
-    "lon_min": 3.0,
-    "lon_max": 7.5,
-    "lat_min": 50.5,
-    "lat_max": 53.7,
-}
+
 # Animation (image layer) georeferenced extent (Zuid-Limburg focus)
 ANIM_EXTENT: dict[str, float] = {
     "lon_min": 5.55,
@@ -244,7 +181,6 @@ def _validate_extent(ext: dict[str, float], name: str) -> None:
         raise ValueError(f"{name} bounds invalid (min must be < max): {ext}.")
 
 
-_validate_extent(MAP_EXTENT, "MAP_EXTENT")
 _validate_extent(ANIM_EXTENT, "ANIM_EXTENT")
 
 # Assets directory used for Dash static files. Use working-dir assets so Dash will serve files at /assets.
@@ -675,102 +611,6 @@ house_tile_meta, house_tile_buckets = _build_house_tiles(
 )
 
 
-# ------------------------------------------------------------------
-# Build a cache of complete figures (variable x frame)
-# ------------------------------------------------------------------
-# (REPLACED) Use region-derived center/zoom
-# _CENTER_LON / _CENTER_LAT no longer used below.
-_FIGURE_CACHE: Dict[str, List[dict]] = {v: [] for v in variables}
-for v in variables:
-    for f_idx in range(_ANIM_FRAME_COUNT):
-        fig = go.Figure()
-        # No site/environmental traces added; houses are handled client-side as choroplethmapbox
-        # (NEW) region boundary trace
-        fig.add_trace(
-            go.Scattermapbox(
-                lon=REGION_OUTLINE_LON,
-                lat=REGION_OUTLINE_LAT,
-                mode="lines",
-                line=dict(color="black", width=2),
-                name="Region",
-                hoverinfo="skip",
-                showlegend=False,
-            )
-        )
-        # Make figure responsive so it fills the Graph container (which will be fullscreen).
-        # Use zero margins to eliminate whitespace around the map.
-        fig.update_layout(
-            autosize=True,
-            margin=dict(l=0, r=0, t=0, b=0),
-            template="plotly_white",
-            dragmode="zoom",
-            uirevision="map",
-            mapbox=dict(
-                accesstoken=MAPBOX_TOKEN,
-                style="light",
-                center=dict(lat=_INITIAL_CENTER_LAT, lon=_INITIAL_CENTER_LON),
-                zoom=_INITIAL_ZOOM,
-                layers=(
-                    [
-                        dict(
-                            below="",
-                            source=_ANIM_FRAMES[f_idx],
-                            sourcetype="image",
-                            coordinates=[
-                                [ANIM_EXTENT["lon_min"], ANIM_EXTENT["lat_max"]],
-                                [ANIM_EXTENT["lon_max"], ANIM_EXTENT["lat_max"]],
-                                [ANIM_EXTENT["lon_max"], ANIM_EXTENT["lat_min"]],
-                                [ANIM_EXTENT["lon_min"], ANIM_EXTENT["lat_min"]],
-                            ],
-                        )
-                    ]
-                ),
-            ),
-            # Remove footer annotation so it doesn't consume layout space.
-            annotations=[],
-        )
-        _FIGURE_CACHE[v].append(fig.to_dict())
-
-
-# Build lightweight base figures (first frame only) for clientside animation.
-_BASE_FIGS: Dict[str, dict] = {v: _FIGURE_CACHE[v][0] for v in variables}
-
-
-# ------------------------------------------------------------------
-# Public assembly function (returns cloned cached figure)
-# ------------------------------------------------------------------
-def assemble_figure(variable: str, frame_index: int | None = None) -> go.Figure:
-    """Return a cached figure for the given variable/frame without recomputation."""
-    if variable not in _FIGURE_CACHE:
-        raise ValueError(f"Variable '{variable}' not in cache.")
-    if frame_index is None:
-        frame_index = 0
-    if frame_index < 0 or frame_index >= _ANIM_FRAME_COUNT:
-        raise ValueError(
-            f"frame_index {frame_index} out of range 0..{_ANIM_FRAME_COUNT - 1}"
-        )
-    return go.Figure(_FIGURE_CACHE[variable][frame_index])
-
-
-def build_dashboard_figure(
-    selected_var: str,
-    allowed_vars: Sequence[str] | None = None,
-    n_time_steps: int = 0,
-) -> go.Figure:
-    """Backward-compatible builder (ignores n_time_steps, uses frame 0)."""
-    vars_list: list[str] = (
-        list(allowed_vars) if allowed_vars is not None else list(variables)
-    )
-    if not vars_list:
-        raise ValueError("allowed_vars is empty; at least one variable is required.")
-    if selected_var not in vars_list:
-        raise ValueError(f"Selected variable '{selected_var}' not in {vars_list}")
-    return assemble_figure(selected_var, frame_index=0)
-
-
-# ------------------------------------------------------------------
-# Dash app (callback only swaps cached figure; no processing)
-# ------------------------------------------------------------------
 def create_dash_app() -> Dash:
     """Create Dash app with clientside color animation for a single houses trace.
 
@@ -782,6 +622,69 @@ def create_dash_app() -> Dash:
     # Ensure Dash is configured to serve the same assets directory where frames were written.
     app = Dash(__name__, assets_folder=str(ASSETS_DIR))
     # Fullscreen root container; remove maxWidth wrapper so map can use entire viewport.
+    # Build initial map figure containing the houses (serialized for dcc.Store).
+    # Use a small static z array derived from hue seeds so initial render shows colors.
+    default_var: str = "Houses"
+    initial_z: list[float] = [float(s) for s in house_hue_seeds]
+
+    # Create the choroplethmapbox trace for all houses (GeoJSON held in memory).
+    house_trace = go.Choroplethmapbox(
+        name="Houses",
+        geojson=houses_geojson,
+        locations=house_ids,
+        featureidkey="properties._hid",
+        z=initial_z,
+        zmin=0.0,
+        zmax=1.0,
+        colorscale="Turbo",
+        showscale=False,
+        marker={"line": {"width": 0.2, "color": "black"}},
+        hoverinfo="skip",
+        showlegend=False,
+    )
+
+    # Add initial raster layer (first frame) if available and flood extent known.
+    mapbox_layers: list[dict] = []
+    try:
+        if _ANIM_FRAME_COUNT > 0 and _FLOOD_MAP_EXTENT:
+            fe = _FLOOD_MAP_EXTENT
+            coords = [
+                [fe["lon_min"], fe["lat_max"]],
+                [fe["lon_max"], fe["lat_max"]],
+                [fe["lon_max"], fe["lat_min"]],
+                [fe["lon_min"], fe["lat_min"]],
+            ]
+            # Only include the minimal valid keys for an image source. Avoid 'type'/'paint' which Mapbox rejects.
+            mapbox_layers.append(
+                {
+                    "sourcetype": "image",
+                    "source": _ANIM_FRAMES[0],
+                    "coordinates": coords,
+                }
+            )
+    except Exception:
+        # Non-fatal: continue without raster layer if extent/frame info missing.
+        mapbox_layers = []
+
+    # Assemble figure with initial center / zoom computed from region extent.
+    fig = go.Figure(
+        data=[house_trace],
+        layout=go.Layout(
+            title=f"Environmental Dashboard ({default_var})",
+            mapbox={
+                "style": "light",
+                "accesstoken": MAPBOX_TOKEN,
+                "center": {"lon": _INITIAL_CENTER_LON, "lat": _INITIAL_CENTER_LAT},
+                "zoom": _INITIAL_ZOOM,
+                "layers": mapbox_layers,
+            },
+            margin={"l": 0, "r": 0, "t": 30, "b": 0},
+        ),
+    )
+
+    # Ensure figure is JSON-serializable for storage (Plotly dict).
+    fig_dict = fig.to_dict()
+
     app.layout = html.Div(
         style={
             "fontFamily": "Arial, sans-serif",
@@ -792,10 +695,10 @@ def create_dash_app() -> Dash:
             "overflow": "hidden",  # avoid scrollbars from children
         },
         children=[
-            # Header removed so the map occupies the entire screen.
+            # Fullscreen Graph showing the map with houses.
             dcc.Graph(
                 id="dashboard-graph",
-                figure=assemble_figure(default_var, frame_index=0),
+                figure=fig_dict,
                 style={
                     "height": "100vh",
                     "width": "100vw",
@@ -808,8 +711,11 @@ def create_dash_app() -> Dash:
             dcc.Store(
                 id="dash-anim-data",
                 data={
-                    "baseFigures": _BASE_FIGS,
+                    # animation frames (relative /assets/ URLs)
                     "frames": _ANIM_FRAMES,
+                    # baseFigures keyed by variable name for clientside reuse
+                    "baseFigures": {default_var: fig_dict},
+                    # houses meta used by clientside filtering/animation
                     "houseSeeds": house_hue_seeds,
                     "houseIds": house_ids,
                     "housesGeoJSON": houses_geojson,
@@ -936,14 +842,11 @@ def create_dash_app() -> Dash:
                 [floodExt.lon_max, floodExt.lat_min],
                 [floodExt.lon_min, floodExt.lat_min]
             ];
+            // Minimal image layer object; omit Mapbox-specific paint/type keys that Plotly/Mapbox will reject.
             layerConfig = {{
                 sourcetype: "image",
-                type: "raster",
                 source: frames[idx],
-                coordinates: coordinates,
-                paint: {{
-                    "raster-resampling": "nearest"
-                }},
+                coordinates: coordinates
             }}
             
             if(!fig.layout.mapbox.layers.length){{
@@ -989,8 +892,8 @@ def create_dash_app() -> Dash:
             centerLat = fig.layout.mapbox.center?.lat;
             zoom = fig.layout.mapbox.zoom;
             if(centerLon == null || centerLat == null || zoom == null){{
-                centerLon = {(MAP_EXTENT["lon_min"] + MAP_EXTENT["lon_max"]) / 2};
-                centerLat = {(MAP_EXTENT["lat_min"] + MAP_EXTENT["lat_max"]) / 2};
+                centerLon = {(ANIM_EXTENT["lon_min"] + ANIM_EXTENT["lon_max"]) / 2};
+                centerLat = {(ANIM_EXTENT["lat_min"] + ANIM_EXTENT["lat_max"]) / 2};
                 zoom = 6;
             }}
             const lonSpanRaw = 360 / Math.pow(2, zoom);
