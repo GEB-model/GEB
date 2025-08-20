@@ -168,10 +168,6 @@ class Reporter:
         ):
             self.activated: bool = True
 
-            if "discharge/discharge_snapped_locations" not in self.model.files["geom"]:
-                if "_discharge_stations" in self.model.config["report"]:
-                    del self.model.config["report"]["_discharge_stations"]
-
             report_config: dict[str, Any] = self.model.config["report"]
 
             to_delete: list[str] = []
