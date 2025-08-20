@@ -1438,7 +1438,7 @@ class Agents:
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method
+    @build_method(depends_on="setup_assets")
     def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
         # setup buildings in region for household allocation
         all_buildings_model_region = self.setup_buildings()
