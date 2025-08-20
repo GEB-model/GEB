@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""generate_dashboard.py
+"""Generates a dashboard.
 
 Creates an interactive Plotly dashboard with a Scattermapbox layer of sample
 locations for several environmental variables over an animated background
@@ -18,9 +18,11 @@ import os
 import random
 from datetime import datetime, timedelta
 from io import BytesIO
+from pathlib import Path
 from typing import Dict, List, Sequence
 
 import geopandas as gpd
+import hydromt_sfincs
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -34,7 +36,8 @@ from shapely.geometry import MultiPolygon, Polygon, box  # (NEW) geometry helper
 # ------------------------------------------------------------------
 # Raster (flood) rendering toggle
 # ------------------------------------------------------------------
-RASTER_ENABLED: bool = False  # (NEW) set False to disable flood raster overlay
+RASTER_ENABLED: bool = True  # (NEW) set False to disable flood raster overlay
+RASTER_CRS = "EPSG:4326"  # (NEW) target CRS for flood raster rendering
 
 load_dotenv()
 
@@ -86,7 +89,6 @@ latest_date = df["date"].max()
 latest: pd.DataFrame = df[df["date"] == latest_date]
 default_var: str = "houses"
 
-from pathlib import Path
 
 MODEL_FOLDER = Path("tests/tmp/model")
 houses = gpd.read_parquet(
@@ -285,67 +287,23 @@ def _load_flood_raster_frames(
         FileNotFoundError: If the NetCDF file does not exist.
         ValueError: If no suitable 2D variable is found or data is empty/invalid.
     """
-    if not nc_path.exists():
-        raise FileNotFoundError(f"Flood NetCDF not found at {nc_path}")
-    ds = xr.open_dataset(nc_path)
+    mod: hydromt_sfincs.SfincsModel = hydromt_sfincs.SfincsModel(
+        MODEL_FOLDER
+        / "simulation_root"
+        / "default"
+        / "SFINCS"
+        / "run"
+        / "simulations"
+        / "20210712T090000 - 20210720T090000",
+        mode="r",
+    )
+    flood_depth_per_timestep = mod.results["zsmax"]
+    elevation = mod.grid["dep"]
 
-    # Pick first variable with >=2 spatial dims.
-    data_var_name: str | None = None
-    for name, da in ds.data_vars.items():
-        if da.ndim >= 2:
-            data_var_name = name
-            break
-    if data_var_name is None:
-        raise ValueError(
-            "No data variable with at least 2 dimensions found in flood.nc."
-        )
-    da = ds[data_var_name]
+    reprojected_elevation = elevation.rio.reproject(4326)
 
-    # Identify time dimension if present.
-    time_dim: str | None = None
-    for cand in ("time", "t", "Time"):
-        if cand in da.dims:
-            time_dim = cand
-            break
-
-    # Ensure CRS; attempt to use rioxarray's .rio extension.
-    if not hasattr(da, "rio"):
-        raise ValueError(
-            "DataArray lacks rioxarray .rio accessor; ensure rioxarray installed."
-        )
-    try:
-        if da.rio.crs is None:
-            # Attempt to read CRS from dataset-level attributes if missing.
-            crs_attr = ds.attrs.get("crs") or ds.attrs.get("CRS") or None
-            if crs_attr:
-                # rioxarray can sometimes parse WKT / EPSG strings directly.
-                da = da.rio.write_crs(crs_attr)
-            else:
-                # Assume already lat/lon if coordinates named lat/lon.
-                if not (
-                    ("lat" in da.coords and "lon" in da.coords)
-                    or ("latitude" in da.coords and "longitude" in da.coords)
-                ):
-                    raise ValueError(
-                        "Cannot determine CRS for flood dataset and lat/lon coords not found."
-                    )
-        if da.rio.crs and str(da.rio.crs).lower() not in ("epsg:4326", "crs:84"):
-            da = da.rio.reproject(target_crs)
-    except Exception as exc:
-        raise ValueError(f"Failed to reproject flood raster: {exc}") from exc
-
-    # After reprojection, spatial dims typically ('y','x'); rename for clarity.
-    # We only need coordinate arrays to derive extent.
-    spatial_dims = [d for d in da.dims if d not in (time_dim,)]
-    if len(spatial_dims) < 2:
-        raise ValueError(
-            "Reprojected flood raster does not retain two spatial dimensions."
-        )
-    y_dim, x_dim = spatial_dims[-2], spatial_dims[-1]
-    xs = da.coords[x_dim].values
-    ys = da.coords[y_dim].values
-    if xs.size == 0 or ys.size == 0:
-        raise ValueError("Flood raster spatial coordinates are empty.")
+    xs = reprojected_elevation.x.values
+    ys = reprojected_elevation.y.values
     lon_min = float(np.min(xs))
     lon_max = float(np.max(xs))
     lat_min = float(np.min(ys))
@@ -374,31 +332,25 @@ def _load_flood_raster_frames(
         return (255, int(255 * (1 - t)), 0)
 
     frames: list[str] = []
-    time_slices = da.coords[time_dim].values if time_dim else [None]
+    time_slices = flood_depth_per_timestep.timemax.values
 
-    # Compute global vmin/vmax ignoring NaNs across all time (efficient sample).
-    if time_dim:
-        sample = da.isel({time_dim: slice(0, min(5, da.sizes[time_dim]))}).values
-        vmin = float(np.nanpercentile(sample, 2))
-        vmax = float(np.nanpercentile(sample, 98))
-    else:
-        arr_all = da.values
-        vmin = float(np.nanpercentile(arr_all, 2))
-        vmax = float(np.nanpercentile(arr_all, 98))
-    if not np.isfinite(vmin) or not np.isfinite(vmax):
-        raise ValueError(
-            "Flood raster contains no finite values to derive color scaling."
-        )
-    if vmax <= vmin:
-        vmax = vmin + 1e-6  # avoid division by zero
+    vmin = 0
+    vmax = (
+        flood_depth_per_timestep.max().compute().item()
+    )  # Get maximum value across all time slices
 
     # Convert each slice to RGBA PNG.
-    for t_val in time_slices:
-        if time_dim:
-            slice_da = da.sel({time_dim: t_val})
-        else:
-            slice_da = da
-        data = slice_da.values.astype("float32")
+    for time in time_slices[:10]:
+        flood_depth = flood_depth_per_timestep.sel(timemax=time)
+
+        downscaled_flood_map = hydromt_sfincs.utils.downscale_floodmap(
+            zsmax=flood_depth,
+            dep=elevation,
+            hmin=0.05,
+            reproj_method="bilinear",
+        ).rio.reproject(4326)
+
+        data = downscaled_flood_map.values.astype("float32")
         # Normalize
         norm = (data - vmin) / (vmax - vmin)
         h, w = norm.shape[-2], norm.shape[-1]
@@ -466,7 +418,7 @@ def _generate_placeholder_frames(
 
 
 # Load frames conditionally
-FLOOD_NC_PATH = Path("flood.nc")
+FLOOD_NC_PATH = MODEL_FOLDER / "output" / "flood_maps" / "flood_depth_over_time.nc"
 if RASTER_ENABLED:
     _ANIM_FRAMES, ANIM_EXTENT = _load_flood_raster_frames(FLOOD_NC_PATH)
 else:
