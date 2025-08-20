@@ -27,23 +27,14 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import rioxarray  # noqa: F401
-import xarray as xr  # (NEW) read NetCDF flood data
+import xarray as xr
 from dash import Dash, Input, Output, State, dcc, html
 from dotenv import load_dotenv
 from PIL import Image
-from shapely.geometry import MultiPolygon, Polygon, box  # (NEW) geometry helpers
-
-# ------------------------------------------------------------------
-# Raster (flood) rendering toggle
-# ------------------------------------------------------------------
-RASTER_ENABLED: bool = True  # (NEW) set False to disable flood raster overlay
-RASTER_CRS = "EPSG:4326"  # (NEW) target CRS for flood raster rendering
+from shapely.geometry import MultiPolygon, Polygon, box
 
 load_dotenv()
 
-# ------------------------------------------------------------------
-# Data generation (example only) – precomputed once
-# ------------------------------------------------------------------
 random.seed(42)
 sites: list[dict[str, str | float]] = [
     {"site_id": "A01", "name": "Alpha", "lat": 52.37, "lon": 4.90},
@@ -256,91 +247,77 @@ def _validate_extent(ext: dict[str, float], name: str) -> None:
 _validate_extent(MAP_EXTENT, "MAP_EXTENT")
 _validate_extent(ANIM_EXTENT, "ANIM_EXTENT")
 
+# Assets directory used for Dash static files. Use working-dir assets so Dash will serve files at /assets.
+ASSETS_DIR: Path = Path.cwd() / "assets"
+
 
 # ------------------------------------------------------------------
 # Flood raster loading (replaces synthetic animation frame generation)
 # ------------------------------------------------------------------
 # (Wrap existing loader usage in conditional; keep function for potential later use.)
 def _load_flood_raster_frames(
-    nc_path: Path,
-    target_crs: str = "EPSG:4326",
+    simulation_root: Path,
+    target_crs: str = "EPSG:3857",
     cmap: str | None = None,
+    assets_root: Path | None = None,
 ) -> tuple[list[str], dict[str, float]]:
-    """Load a flood raster NetCDF and convert (optionally time-varying) slices to PNG data URIs.
+    """Load flood raster NetCDF and save PNG/WebP frames to Dash assets, returning URLs.
 
-    The first 2D (or 3D with time) data variable is used. If the raster is not already
-    in the target CRS (default EPSG:4326), it is reprojected with rioxarray. Alpha
-    transparency is applied for NaNs (and optionally non-positive values).
+    Notes:
+        - Frames are written to <assets_root>/frames/frame_XXXX.(png|webp).
+        - Returning URLs reduces JSON payload size; the browser can cache/stream images.
+        - If assets_root is None it defaults to the module-level ASSETS_DIR so Dash (which is
+          configured to serve ASSETS_DIR) can find the files.
 
     Args:
-        nc_path (Path): Path to NetCDF file "flood.nc".
-        target_crs (str): Desired CRS for Mapbox (default EPSG:4326).
-        cmap (str | None): Matplotlib-style colormap name. If None, a simple
-            blue->cyan->yellow->red gradient is synthesized.
+        simulation_root (Path): Path to SFINCS simulation run directory.
+        target_crs (str): Desired CRS for Mapbox (default EPSG:3857).
+        cmap (str | None): Matplotlib-style colormap name (unused currently).
+        assets_root (Path | None): Root assets folder where 'frames/' will be created.
+                                   If None, defaults to ASSETS_DIR.
 
     Returns:
         tuple:
-            list[str]: PNG data URIs (one per time slice; single if no time).
-            dict[str,float]: Derived geographic extent (lon_min, lon_max, lat_min, lat_max) in degrees.
+            list[str]: Relative URLs to saved image files (one per time slice).
+            dict[str,float]: Geographic extent (lon_min, lon_max, lat_min, lat_max) in degrees.
 
     Raises:
-        FileNotFoundError: If the NetCDF file does not exist.
+        FileNotFoundError: If simulation files missing.
         ValueError: If no suitable 2D variable is found or data is empty/invalid.
     """
+    # Use the shared ASSETS_DIR so Dash serves the written frames at /assets/...
+    if assets_root is None:
+        assets_root = ASSETS_DIR
+    frames_dir = assets_root / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
     mod: hydromt_sfincs.SfincsModel = hydromt_sfincs.SfincsModel(
-        MODEL_FOLDER
-        / "simulation_root"
-        / "default"
-        / "SFINCS"
-        / "run"
-        / "simulations"
-        / "20210712T090000 - 20210720T090000",
+        simulation_root,
         mode="r",
     )
     flood_depth_per_timestep = mod.results["zsmax"]
     elevation = mod.grid["dep"]
 
-    reprojected_elevation = elevation.rio.reproject(4326)
-
-    xs = reprojected_elevation.x.values
-    ys = reprojected_elevation.y.values
-    lon_min = float(np.min(xs))
-    lon_max = float(np.max(xs))
-    lat_min = float(np.min(ys))
-    lat_max = float(np.max(ys))
-    extent = {
-        "lon_min": lon_min,
-        "lon_max": lon_max,
-        "lat_min": lat_min,
-        "lat_max": lat_max,
-    }
-
-    # Prepare simple gradient colormap if matplotlib not desired.
     def _simple_rgba(norm_val: float) -> tuple[int, int, int]:
-        # 0 -> blue, 0.33 -> cyan, 0.66 -> yellow, 1 -> red
         v = max(0.0, min(1.0, norm_val))
         if v < 0.33:
-            # blue (0,0,255) -> cyan (0,255,255)
             t = v / 0.33
             return (0, int(255 * t), 255)
         if v < 0.66:
-            # cyan -> yellow (255,255,0)
             t = (v - 0.33) / 0.33
             return (int(255 * t), 255, int(255 * (1 - t)))
-        # yellow -> red (255,0,0)
         t = (v - 0.66) / 0.34
         return (255, int(255 * (1 - t)), 0)
 
-    frames: list[str] = []
+    frames_urls: list[str] = []
     time_slices = flood_depth_per_timestep.timemax.values
 
     vmin = 0
-    vmax = (
-        flood_depth_per_timestep.max().compute().item()
-    )  # Get maximum value across all time slices
+    vmax = flood_depth_per_timestep.max().compute().item()
 
-    # Convert each slice to RGBA PNG.
-    for time in time_slices[:10]:
+    # Convert each slice to RGBA and save to disk. Limit to first 10 for safety (as before).
+    saved_extent = None
+    for idx, time in enumerate(time_slices):
         flood_depth = flood_depth_per_timestep.sel(timemax=time)
 
         downscaled_flood_map = hydromt_sfincs.utils.downscale_floodmap(
@@ -348,24 +325,21 @@ def _load_flood_raster_frames(
             dep=elevation,
             hmin=0.05,
             reproj_method="bilinear",
-        ).rio.reproject(4326)
+        ).rio.reproject(target_crs)
 
         data = downscaled_flood_map.values.astype("float32")
-        # Normalize
         norm = (data - vmin) / (vmax - vmin)
         h, w = norm.shape[-2], norm.shape[-1]
         rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        # Mask of valid cells
         mask = np.isfinite(norm)
         valid_vals = norm[mask]
-        # Assign colors
+
         if valid_vals.size:
             flat_norm = valid_vals
-            # Vectorized color mapping
-            # Build arrays per channel
             r_arr = np.empty_like(flat_norm)
             g_arr = np.empty_like(flat_norm)
             b_arr = np.empty_like(flat_norm)
+            # Map colors for valid pixels
             for i, nv in enumerate(flat_norm):
                 r, g, b = _simple_rgba(float(nv))
                 r_arr[i] = r
@@ -375,68 +349,60 @@ def _load_flood_raster_frames(
             rgba[..., 1][mask] = g_arr
             rgba[..., 2][mask] = b_arr
             rgba[..., 3][mask] = 200  # semi-opaque
-        # Transparent where invalid
+
         img = Image.fromarray(rgba, mode="RGBA")
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-        frames.append(
-            f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
-        )
 
-    return frames, extent
+        # Try WebP for smaller files if supported, fallback to PNG.
+        use_webp = True
+        filename = f"frame_{idx:04d}.webp"
+        file_path = frames_dir / filename
+        try:
+            if use_webp:
+                img.save(file_path, format="WEBP", quality=80)
+            else:
+                raise OSError("force PNG path")
+        except Exception:
+            filename = f"frame_{idx:04d}.png"
+            file_path = frames_dir / filename
+            img.save(file_path, format="PNG")
 
+        # Dash serves assets at /assets/..., so construct that relative URL.
+        frames_urls.append(f"/assets/frames/{filename}")
 
-def _generate_placeholder_frames(
-    n_frames: int, width: int = 2, height: int = 2
-) -> list[str]:
-    """Generate transparent placeholder PNG data URIs.
+        # Record extent using the last processed downscaled map (reproject to EPSG:4326).
+        saved_extent = downscaled_flood_map.rio.reproject("EPSG:4326").rio.bounds()
 
-    Args:
-        n_frames (int): Number of frames to create (dimensionless).
-        width (int): Pixel width of each transparent image (pixels).
-        height (int): Pixel height of each transparent image (pixels).
+    if saved_extent is None:
+        raise ValueError("No frames were produced for flood animation.")
 
-    Returns:
-        list[str]: Data URIs (PNG) fully transparent.
+    minx, miny, maxx, maxy = saved_extent
+    extent = {
+        "lon_min": float(minx),
+        "lon_max": float(maxx),
+        "lat_min": float(miny),
+        "lat_max": float(maxy),
+    }
 
-    Raises:
-        ValueError: If n_frames < 1 or width/height <= 0.
-    """
-    if n_frames < 1:
-        raise ValueError("n_frames must be >= 1 for placeholder frames.")
-    if width <= 0 or height <= 0:
-        raise ValueError("width/height must be positive for placeholder frames.")
-    frames: list[str] = []
-    for _ in range(n_frames):
-        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-        frames.append(
-            f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
-        )
-    return frames
+    return frames_urls, extent
 
 
-# Load frames conditionally
-FLOOD_NC_PATH = MODEL_FOLDER / "output" / "flood_maps" / "flood_depth_over_time.nc"
-if RASTER_ENABLED:
-    _ANIM_FRAMES, ANIM_EXTENT = _load_flood_raster_frames(FLOOD_NC_PATH)
-else:
-    # Use pre-declared ANIM_EXTENT constant (already defined above) and placeholders
-    _ANIM_FRAMES = _generate_placeholder_frames(ANIM_N_FRAMES)
+# Use the same ASSETS_DIR when writing frames so Dash can serve them from the configured assets folder.
+_ANIM_FRAMES, _FLOOD_MAP_EXTENT = _load_flood_raster_frames(
+    MODEL_FOLDER
+    / "simulation_root"
+    / "default"
+    / "SFINCS"
+    / "run"
+    / "simulations"
+    / "20210712T090000 - 20210720T090000",
+    assets_root=ASSETS_DIR,
+)
 _ANIM_FRAME_COUNT: int = len(_ANIM_FRAMES)
 if _ANIM_FRAME_COUNT == 0:
     raise ValueError(
         "No animation frames available (raster disabled & placeholder failed)."
     )
 
-
-# ------------------------------------------------------------------
-# (REVISED) Animated house polygon configuration (now NO limiting)
-# ------------------------------------------------------------------
-HOUSE_MAX_FEATURES: int | None = (
-    None  # (CHANGED) None => do not downsample; include all houses
-)
 HOUSE_RANDOM_SEED: int = 999  # retained (unused when no sampling)
 HOUSE_VIEW_MARGIN_FACTOR: float = 0.12
 HOUSE_COLOR_SAT: float = 0.65
@@ -584,9 +550,7 @@ def _quantize_polygons(
 _HOUSE_POLYGONS: list[dict[str, object]] = _extract_polygons_from_gdf(
     houses,
     ANIM_EXTENT,
-    max_features=None,  # (CHANGED) include all available houses
 )
-# (NEW) Apply coordinate quantization prior to GeoJSON assembly
 _HOUSE_POLYGONS = _quantize_polygons(_HOUSE_POLYGONS, HOUSE_COORD_DECIMALS)
 N_HOUSES: int = len(_HOUSE_POLYGONS)
 
@@ -760,8 +724,6 @@ for v in variables:
                             ],
                         )
                     ]
-                    if RASTER_ENABLED
-                    else []
                 ),
             ),
             # Remove footer annotation so it doesn't consume layout space.
@@ -817,7 +779,8 @@ def create_dash_app() -> Dash:
         - Background animation swaps Mapbox image layer source.
         - Per-frame house colors computed clientside from hue seeds (no large caches).
     """
-    app = Dash(__name__)
+    # Ensure Dash is configured to serve the same assets directory where frames were written.
+    app = Dash(__name__, assets_folder=str(ASSETS_DIR))
     # Fullscreen root container; remove maxWidth wrapper so map can use entire viewport.
     app.layout = html.Div(
         style={
@@ -857,8 +820,8 @@ def create_dash_app() -> Dash:
                     "viewMarginFactor": HOUSE_VIEW_MARGIN_FACTOR,
                     "tileMeta": house_tile_meta,
                     "tileBuckets": house_tile_buckets,
-                    "floodExtent": ANIM_EXTENT,
-                    "rasterEnabled": RASTER_ENABLED,  # (NEW) expose toggle to client
+                    "floodExtent": _FLOOD_MAP_EXTENT,
+                    "rasterEnabled": True,
                 },
             ),
         ],
@@ -967,26 +930,26 @@ def create_dash_app() -> Dash:
         if(rasterEnabled){{
             const floodExt = animData.floodExtent;
             if(!floodExt) return window.dash_clientside.no_update;
+            const coordinates = [
+                [floodExt.lon_min, floodExt.lat_max],
+                [floodExt.lon_max, floodExt.lat_max],
+                [floodExt.lon_max, floodExt.lat_min],
+                [floodExt.lon_min, floodExt.lat_min]
+            ];
+            layerConfig = {{
+                sourcetype: "image",
+                type: "raster",
+                source: frames[idx],
+                coordinates: coordinates,
+                paint: {{
+                    "raster-resampling": "nearest"
+                }},
+            }}
+            
             if(!fig.layout.mapbox.layers.length){{
-                fig.layout.mapbox.layers.push({{
-                    below: "",
-                    sourcetype: "image",
-                    source: frames[idx],
-                    coordinates: [
-                        [floodExt.lon_min, floodExt.lat_max],
-                        [floodExt.lon_max, floodExt.lat_max],
-                        [floodExt.lon_max, floodExt.lat_min],
-                        [floodExt.lon_min, floodExt.lat_min]
-                    ]
-                }});
+                fig.layout.mapbox.layers.push(layerConfig);
             }} else {{
-                fig.layout.mapbox.layers[0].source = frames[idx];
-                fig.layout.mapbox.layers[0].coordinates = [
-                    [floodExt.lon_min, floodExt.lat_max],
-                    [floodExt.lon_max, floodExt.lat_max],
-                    [floodExt.lon_max, floodExt.lat_min],
-                    [floodExt.lon_min, floodExt.lat_min]
-                ];
+                fig.layout.mapbox.layers[0] = layerConfig;
             }}
         }} else {{
             // Remove any existing raster layer to avoid stale imagery
@@ -1174,4 +1137,4 @@ def create_dash_app() -> Dash:
 # Clean single entry point (removed obsolete legacy block that followed previously).
 if __name__ == "__main__":
     dash_app = create_dash_app()
-    dash_app.run(debug=False, host="0.0.0.0", port=8050)
+    dash_app.run(debug=True, host="0.0.0.0", port=8050)
