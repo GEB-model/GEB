@@ -24,10 +24,17 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import rioxarray  # noqa: F401
+import xarray as xr  # (NEW) read NetCDF flood data
 from dash import Dash, Input, Output, State, dcc, html
 from dotenv import load_dotenv
-from PIL import Image, ImageDraw
+from PIL import Image
 from shapely.geometry import MultiPolygon, Polygon, box  # (NEW) geometry helpers
+
+# ------------------------------------------------------------------
+# Raster (flood) rendering toggle
+# ------------------------------------------------------------------
+RASTER_ENABLED: bool = False  # (NEW) set False to disable flood raster overlay
 
 load_dotenv()
 
@@ -41,7 +48,7 @@ sites: list[dict[str, str | float]] = [
     {"site_id": "C03", "name": "Charlie", "lat": 50.85, "lon": 4.35},
     {"site_id": "D04", "name": "Delta", "lat": 53.22, "lon": 6.56},
 ]
-variables: list[str] = ["flow", "nitrate", "temperature"]
+variables: list[str] = ["houses"]
 n_days: int = 30
 base_date = datetime.utcnow().date()
 dates: list[datetime.date] = [base_date - timedelta(days=i) for i in range(n_days)][
@@ -77,7 +84,7 @@ for variable_name in variables:
 df: pd.DataFrame = pd.DataFrame(records)
 latest_date = df["date"].max()
 latest: pd.DataFrame = df[df["date"] == latest_date]
-default_var: str = variables[0]
+default_var: str = "houses"
 
 from pathlib import Path
 
@@ -85,7 +92,117 @@ MODEL_FOLDER = Path("tests/tmp/model")
 houses = gpd.read_parquet(
     MODEL_FOLDER / "input" / "geom" / "assets" / "buildings.geoparquet"
 )
+region = gpd.read_parquet(
+    MODEL_FOLDER / "input" / "geom" / "mask.geoparquet"
+)  # (NEW) region geometry for viewport filtering
 
+
+# (NEW) Normalize region CRS to EPSG:4326 and derive outline + initial viewport
+def _build_region_outline(gdf: gpd.GeoDataFrame) -> tuple[list[float], list[float]]:
+    """Extract region exterior boundaries as a single polyline with None separators.
+
+    Notes:
+        - All geometries are reprojected to EPSG:4326 (degrees) if needed.
+        - Only exterior rings are included (holes skipped) for a clean boundary.
+        - Multiple polygons / multipolygons are concatenated with None sentinels
+          so Plotly renders separated line segments.
+
+    Args:
+        gdf (gpd.GeoDataFrame): Region geometry GeoDataFrame (any polygonal CRS).
+
+    Returns:
+        tuple:
+            list[float]: Longitudes (degrees) with None separators.
+            list[float]: Latitudes (degrees) with None separators.
+
+    Raises:
+        ValueError: If GeoDataFrame empty or contains no polygonal geometries.
+    """
+    if gdf.empty:
+        raise ValueError("Region GeoDataFrame is empty; cannot derive outline.")
+    if gdf.crs is None:
+        raise ValueError("Region GeoDataFrame has no CRS; cannot reproject.")
+    if gdf.crs.to_string().lower() not in ("epsg:4326", "crs:84"):
+        gdf = gdf.to_crs(epsg=4326)
+    lons: list[float] = []
+    lats: list[float] = []
+    for geom in gdf.geometry:
+        if geom is None or geom.is_empty:
+            continue
+        polys: list[Polygon] = []
+        if isinstance(geom, Polygon):
+            polys.append(geom)
+        elif isinstance(geom, MultiPolygon):
+            polys.extend(list(geom.geoms))
+        for poly in polys:
+            xs, ys = poly.exterior.xy
+            # Append ring
+            for x, y in zip(xs, ys):
+                lons.append(float(x))
+                lats.append(float(y))
+            # Separator for next ring
+            lons.append(None)  # type: ignore
+            lats.append(None)  # type: ignore
+    if not lons:
+        raise ValueError("No polygonal exterior coordinates found for region outline.")
+    # Drop trailing None to avoid an empty segment
+    if lons[-1] is None:
+        lons.pop()
+        lats.pop()
+    return lons, lats
+
+
+# (NEW) Compute region-based initial viewport
+_region_4326 = (
+    region.to_crs(epsg=4326)
+    if region.crs and region.crs.to_string().lower() not in ("epsg:4326", "crs:84")
+    else region
+)
+minx, miny, maxx, maxy = _region_4326.total_bounds
+REGION_EXTENT: dict[str, float] = {
+    "lon_min": float(minx),
+    "lon_max": float(maxx),
+    "lat_min": float(miny),
+    "lat_max": float(maxy),
+}
+REGION_OUTLINE_LON, REGION_OUTLINE_LAT = _build_region_outline(_region_4326)
+
+
+def _compute_initial_zoom(
+    lon_min: float,
+    lon_max: float,
+    lat_min: float,
+    lat_max: float,
+    pad_factor: float = 1.05,
+) -> float:
+    """Approximate a Mapbox zoom level to fit provided bounds.
+
+    Args:
+        lon_min (float): Western longitude (degrees).
+        lon_max (float): Eastern longitude (degrees).
+        lat_min (float): Southern latitude (degrees).
+        lat_max (float): Northern latitude (degrees).
+        pad_factor (float): Multiplicative padding (>1 expands view) (dimensionless).
+
+    Returns:
+        float: Approximate zoom (dimensionless).
+
+    Raises:
+        ValueError: If bounds invalid.
+    """
+    if not (lon_min < lon_max and lat_min < lat_max):
+        raise ValueError("Invalid bounds for zoom computation.")
+    lon_span: float = (lon_max - lon_min) * pad_factor
+    if lon_span <= 0:
+        return 6.0
+    # degrees per 512 tile at zoom z = 360 / 2^z => z = log2(360 / span)
+    zoom_est: float = np.log2(360.0 / lon_span)
+    return float(max(2.0, min(12.0, zoom_est)))
+
+
+_INITIAL_CENTER_LON: float = (REGION_EXTENT["lon_min"] + REGION_EXTENT["lon_max"]) / 2
+_INITIAL_CENTER_LAT: float = (REGION_EXTENT["lat_min"] + REGION_EXTENT["lat_max"]) / 2
+_INITIAL_ZOOM: float = _compute_initial_zoom(**REGION_EXTENT)
 # ------------------------------------------------------------------
 # Map / animation configuration (all preloaded)  (REPLACED BBOX_* constants)
 # ------------------------------------------------------------------
@@ -139,83 +256,227 @@ _validate_extent(ANIM_EXTENT, "ANIM_EXTENT")
 
 
 # ------------------------------------------------------------------
-# Frame generation helpers (unchanged logic, executed once)
+# Flood raster loading (replaces synthetic animation frame generation)
 # ------------------------------------------------------------------
-def _generate_animation_frames(
-    n_frames: int,
-    width_px: int,
-    height_px: int,
-    n_particles: int,
-    seed: int | None = None,
-) -> list[Image.Image]:
-    """Generate individual RGBA frames (not a single GIF) for map animation."""
+# (Wrap existing loader usage in conditional; keep function for potential later use.)
+def _load_flood_raster_frames(
+    nc_path: Path,
+    target_crs: str = "EPSG:4326",
+    cmap: str | None = None,
+) -> tuple[list[str], dict[str, float]]:
+    """Load a flood raster NetCDF and convert (optionally time-varying) slices to PNG data URIs.
+
+    The first 2D (or 3D with time) data variable is used. If the raster is not already
+    in the target CRS (default EPSG:4326), it is reprojected with rioxarray. Alpha
+    transparency is applied for NaNs (and optionally non-positive values).
+
+    Args:
+        nc_path (Path): Path to NetCDF file "flood.nc".
+        target_crs (str): Desired CRS for Mapbox (default EPSG:4326).
+        cmap (str | None): Matplotlib-style colormap name. If None, a simple
+            blue->cyan->yellow->red gradient is synthesized.
+
+    Returns:
+        tuple:
+            list[str]: PNG data URIs (one per time slice; single if no time).
+            dict[str,float]: Derived geographic extent (lon_min, lon_max, lat_min, lat_max) in degrees.
+
+    Raises:
+        FileNotFoundError: If the NetCDF file does not exist.
+        ValueError: If no suitable 2D variable is found or data is empty/invalid.
+    """
+    if not nc_path.exists():
+        raise FileNotFoundError(f"Flood NetCDF not found at {nc_path}")
+    ds = xr.open_dataset(nc_path)
+
+    # Pick first variable with >=2 spatial dims.
+    data_var_name: str | None = None
+    for name, da in ds.data_vars.items():
+        if da.ndim >= 2:
+            data_var_name = name
+            break
+    if data_var_name is None:
+        raise ValueError(
+            "No data variable with at least 2 dimensions found in flood.nc."
+        )
+    da = ds[data_var_name]
+
+    # Identify time dimension if present.
+    time_dim: str | None = None
+    for cand in ("time", "t", "Time"):
+        if cand in da.dims:
+            time_dim = cand
+            break
+
+    # Ensure CRS; attempt to use rioxarray's .rio extension.
+    if not hasattr(da, "rio"):
+        raise ValueError(
+            "DataArray lacks rioxarray .rio accessor; ensure rioxarray installed."
+        )
+    try:
+        if da.rio.crs is None:
+            # Attempt to read CRS from dataset-level attributes if missing.
+            crs_attr = ds.attrs.get("crs") or ds.attrs.get("CRS") or None
+            if crs_attr:
+                # rioxarray can sometimes parse WKT / EPSG strings directly.
+                da = da.rio.write_crs(crs_attr)
+            else:
+                # Assume already lat/lon if coordinates named lat/lon.
+                if not (
+                    ("lat" in da.coords and "lon" in da.coords)
+                    or ("latitude" in da.coords and "longitude" in da.coords)
+                ):
+                    raise ValueError(
+                        "Cannot determine CRS for flood dataset and lat/lon coords not found."
+                    )
+        if da.rio.crs and str(da.rio.crs).lower() not in ("epsg:4326", "crs:84"):
+            da = da.rio.reproject(target_crs)
+    except Exception as exc:
+        raise ValueError(f"Failed to reproject flood raster: {exc}") from exc
+
+    # After reprojection, spatial dims typically ('y','x'); rename for clarity.
+    # We only need coordinate arrays to derive extent.
+    spatial_dims = [d for d in da.dims if d not in (time_dim,)]
+    if len(spatial_dims) < 2:
+        raise ValueError(
+            "Reprojected flood raster does not retain two spatial dimensions."
+        )
+    y_dim, x_dim = spatial_dims[-2], spatial_dims[-1]
+    xs = da.coords[x_dim].values
+    ys = da.coords[y_dim].values
+    if xs.size == 0 or ys.size == 0:
+        raise ValueError("Flood raster spatial coordinates are empty.")
+    lon_min = float(np.min(xs))
+    lon_max = float(np.max(xs))
+    lat_min = float(np.min(ys))
+    lat_max = float(np.max(ys))
+    extent = {
+        "lon_min": lon_min,
+        "lon_max": lon_max,
+        "lat_min": lat_min,
+        "lat_max": lat_max,
+    }
+
+    # Prepare simple gradient colormap if matplotlib not desired.
+    def _simple_rgba(norm_val: float) -> tuple[int, int, int]:
+        # 0 -> blue, 0.33 -> cyan, 0.66 -> yellow, 1 -> red
+        v = max(0.0, min(1.0, norm_val))
+        if v < 0.33:
+            # blue (0,0,255) -> cyan (0,255,255)
+            t = v / 0.33
+            return (0, int(255 * t), 255)
+        if v < 0.66:
+            # cyan -> yellow (255,255,0)
+            t = (v - 0.33) / 0.33
+            return (int(255 * t), 255, int(255 * (1 - t)))
+        # yellow -> red (255,0,0)
+        t = (v - 0.66) / 0.34
+        return (255, int(255 * (1 - t)), 0)
+
+    frames: list[str] = []
+    time_slices = da.coords[time_dim].values if time_dim else [None]
+
+    # Compute global vmin/vmax ignoring NaNs across all time (efficient sample).
+    if time_dim:
+        sample = da.isel({time_dim: slice(0, min(5, da.sizes[time_dim]))}).values
+        vmin = float(np.nanpercentile(sample, 2))
+        vmax = float(np.nanpercentile(sample, 98))
+    else:
+        arr_all = da.values
+        vmin = float(np.nanpercentile(arr_all, 2))
+        vmax = float(np.nanpercentile(arr_all, 98))
+    if not np.isfinite(vmin) or not np.isfinite(vmax):
+        raise ValueError(
+            "Flood raster contains no finite values to derive color scaling."
+        )
+    if vmax <= vmin:
+        vmax = vmin + 1e-6  # avoid division by zero
+
+    # Convert each slice to RGBA PNG.
+    for t_val in time_slices:
+        if time_dim:
+            slice_da = da.sel({time_dim: t_val})
+        else:
+            slice_da = da
+        data = slice_da.values.astype("float32")
+        # Normalize
+        norm = (data - vmin) / (vmax - vmin)
+        h, w = norm.shape[-2], norm.shape[-1]
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        # Mask of valid cells
+        mask = np.isfinite(norm)
+        valid_vals = norm[mask]
+        # Assign colors
+        if valid_vals.size:
+            flat_norm = valid_vals
+            # Vectorized color mapping
+            # Build arrays per channel
+            r_arr = np.empty_like(flat_norm)
+            g_arr = np.empty_like(flat_norm)
+            b_arr = np.empty_like(flat_norm)
+            for i, nv in enumerate(flat_norm):
+                r, g, b = _simple_rgba(float(nv))
+                r_arr[i] = r
+                g_arr[i] = g
+                b_arr[i] = b
+            rgba[..., 0][mask] = r_arr
+            rgba[..., 1][mask] = g_arr
+            rgba[..., 2][mask] = b_arr
+            rgba[..., 3][mask] = 200  # semi-opaque
+        # Transparent where invalid
+        img = Image.fromarray(rgba, mode="RGBA")
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        frames.append(
+            f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+        )
+
+    return frames, extent
+
+
+def _generate_placeholder_frames(
+    n_frames: int, width: int = 2, height: int = 2
+) -> list[str]:
+    """Generate transparent placeholder PNG data URIs.
+
+    Args:
+        n_frames (int): Number of frames to create (dimensionless).
+        width (int): Pixel width of each transparent image (pixels).
+        height (int): Pixel height of each transparent image (pixels).
+
+    Returns:
+        list[str]: Data URIs (PNG) fully transparent.
+
+    Raises:
+        ValueError: If n_frames < 1 or width/height <= 0.
+    """
     if n_frames < 1:
-        raise ValueError("n_frames must be >= 1.")
-    if width_px <= 0 or height_px <= 0:
-        raise ValueError("width_px and height_px must be > 0.")
-    if n_particles < 1:
-        raise ValueError("n_particles must be >= 1.")
-    if seed is not None:
-        random.seed(seed)
-    particles: list[dict[str, float]] = [
-        {
-            "x": random.uniform(0, width_px),
-            "y": random.uniform(0, height_px),
-            "vx": random.uniform(-2.2, 2.2),
-            "vy": random.uniform(-2.2, 2.2),
-            "r": random.uniform(7, 16),
-        }
-        for _ in range(n_particles)
-    ]
-    frames: list[Image.Image] = []
-    for f_idx in range(n_frames):
-        phase: float = f_idx / max(1, n_frames - 1)
-        img = Image.new("RGBA", (width_px, height_px), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        for p in particles:
-            p["x"] += p["vx"]
-            p["y"] += p["vy"]
-            if p["x"] < 0 or p["x"] > width_px:
-                p["vx"] *= -1
-                p["x"] = max(0, min(width_px, p["x"]))
-            if p["y"] < 0 or p["y"] > height_px:
-                p["vy"] *= -1
-                p["y"] = max(0, min(height_px, p["y"]))
-            hue: float = (phase + (p["x"] / width_px) * 0.3) % 1.0
-            r_col: int = int(120 + 110 * hue)
-            g_col: int = int(60 + 150 * (1 - hue))
-            b_col: int = int(200 * (0.4 + 0.6 * (1 - abs(0.5 - hue))))
-            alpha: int = 135
-            x0: float = p["x"] - p["r"]
-            y0: float = p["y"] - p["r"]
-            x1: float = p["x"] + p["r"]
-            y1: float = p["y"] + p["r"]
-            draw.ellipse((x0, y0, x1, y1), fill=(r_col, g_col, b_col, alpha))
-        frames.append(img)
+        raise ValueError("n_frames must be >= 1 for placeholder frames.")
+    if width <= 0 or height <= 0:
+        raise ValueError("width/height must be positive for placeholder frames.")
+    frames: list[str] = []
+    for _ in range(n_frames):
+        img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        frames.append(
+            f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+        )
     return frames
 
 
-def _encode_frames_to_data_uri(frames: list[Image.Image]) -> list[str]:
-    """Convert frames to PNG data URIs for embedding as Mapbox image sources."""
-    data_uris: list[str] = []
-    for frame in frames:
-        buffer = BytesIO()
-        frame.save(buffer, format="PNG")
-        encoded: str = base64.b64encode(buffer.getvalue()).decode("ascii")
-        data_uris.append(f"data:image/png;base64,{encoded}")
-    return data_uris
-
-
-_ANIM_FRAMES: list[str] = _encode_frames_to_data_uri(
-    _generate_animation_frames(
-        n_frames=ANIM_N_FRAMES,
-        width_px=ANIM_FRAME_WIDTH_PX,
-        height_px=ANIM_FRAME_HEIGHT_PX,
-        n_particles=ANIM_PARTICLES,
-        seed=ANIM_SEED,
-    )
-)
+# Load frames conditionally
+FLOOD_NC_PATH = Path("flood.nc")
+if RASTER_ENABLED:
+    _ANIM_FRAMES, ANIM_EXTENT = _load_flood_raster_frames(FLOOD_NC_PATH)
+else:
+    # Use pre-declared ANIM_EXTENT constant (already defined above) and placeholders
+    _ANIM_FRAMES = _generate_placeholder_frames(ANIM_N_FRAMES)
 _ANIM_FRAME_COUNT: int = len(_ANIM_FRAMES)
+if _ANIM_FRAME_COUNT == 0:
+    raise ValueError(
+        "No animation frames available (raster disabled & placeholder failed)."
+    )
 
 
 # ------------------------------------------------------------------
@@ -343,7 +604,7 @@ def _quantize_polygons(
         decimals (int): Number of decimal places to retain (>=0) (dimensionless).
 
     Returns:
-        list[dict[str, object]]: New polygon dicts with rounded lon/lat (degrees).
+        list[dict, object]: New polygon dicts with rounded lon/lat (degrees).
 
     Raises:
         ValueError: If decimals < 0.
@@ -499,90 +760,60 @@ house_tile_meta, house_tile_buckets = _build_house_tiles(
 
 
 # ------------------------------------------------------------------
-# Precompute per-variable site traces (Scattermapbox) once
+# Build a cache of complete figures (variable x frame)
 # ------------------------------------------------------------------
-def _build_site_trace(variable: str) -> go.Scattermapbox:
-    """Create a single Scattermapbox trace for the latest snapshot of a variable."""
-    if variable not in variables:
-        raise ValueError(f"Variable '{variable}' not in {variables}")
-    subset: pd.DataFrame = latest[latest["variable"] == variable]
-    if subset.empty:
-        raise ValueError(f"No latest data for variable '{variable}'.")
-    return go.Scattermapbox(
-        lat=subset["lat"],
-        lon=subset["lon"],
-        text=[
-            f"{row.site_name}<br>{variable}: {row.value:,.2f}"
-            for row in subset.itertuples()
-        ],
-        hoverinfo="text",
-        mode="markers",
-        marker=dict(
-            size=14,
-            color=subset["value"],
-            colorscale="Viridis",
-            cmin=float(subset["value"].min()),
-            cmax=float(subset["value"].max()),
-            showscale=True,
-        ),
-        name="Sites",
-        customdata=subset["site_id"],
-    )
-
-
-_SITE_TRACE_JSON: Dict[str, dict] = {
-    v: _build_site_trace(v).to_plotly_json() for v in variables
-}
-
-# ------------------------------------------------------------------
-# Build a cache of complete figures (variable x frame) (UPDATED to use MAP_EXTENT & ANIM_EXTENT)
-# ------------------------------------------------------------------
-_CENTER_LON: float = (MAP_EXTENT["lon_min"] + MAP_EXTENT["lon_max"]) / 2
-_CENTER_LAT: float = (MAP_EXTENT["lat_min"] + MAP_EXTENT["lat_max"]) / 2
-
+# (REPLACED) Use region-derived center/zoom
+# _CENTER_LON / _CENTER_LAT no longer used below.
 _FIGURE_CACHE: Dict[str, List[dict]] = {v: [] for v in variables}
 for v in variables:
     for f_idx in range(_ANIM_FRAME_COUNT):
         fig = go.Figure()
-        fig.add_trace(go.Scattermapbox(**_SITE_TRACE_JSON[v]))
-        # (REMOVED) house traces here for performance; added per viewport in callback
+        # No site/environmental traces added; houses are handled client-side as choroplethmapbox
+        # (NEW) region boundary trace
+        fig.add_trace(
+            go.Scattermapbox(
+                lon=REGION_OUTLINE_LON,
+                lat=REGION_OUTLINE_LAT,
+                mode="lines",
+                line=dict(color="black", width=2),
+                name="Region",
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+        # Make figure responsive so it fills the Graph container (which will be fullscreen).
+        # Use zero margins to eliminate whitespace around the map.
         fig.update_layout(
-            title=f"Environmental Dashboard ({v})",
-            height=600,
-            margin=dict(l=40, r=40, t=80, b=40),
+            autosize=True,
+            margin=dict(l=0, r=0, t=0, b=0),
             template="plotly_white",
             dragmode="zoom",
             uirevision="map",
             mapbox=dict(
                 accesstoken=MAPBOX_TOKEN,
                 style="light",
-                center=dict(lat=_CENTER_LAT, lon=_CENTER_LON),
-                zoom=6.0,
-                layers=[
-                    dict(
-                        below="",
-                        source=_ANIM_FRAMES[f_idx],
-                        sourcetype="image",
-                        coordinates=[
-                            [ANIM_EXTENT["lon_min"], ANIM_EXTENT["lat_max"]],
-                            [ANIM_EXTENT["lon_max"], ANIM_EXTENT["lat_max"]],
-                            [ANIM_EXTENT["lon_max"], ANIM_EXTENT["lat_min"]],
-                            [ANIM_EXTENT["lon_min"], ANIM_EXTENT["lat_min"]],
-                        ],
-                    )
-                ],
+                center=dict(lat=_INITIAL_CENTER_LAT, lon=_INITIAL_CENTER_LON),
+                zoom=_INITIAL_ZOOM,
+                layers=(
+                    [
+                        dict(
+                            below="",
+                            source=_ANIM_FRAMES[f_idx],
+                            sourcetype="image",
+                            coordinates=[
+                                [ANIM_EXTENT["lon_min"], ANIM_EXTENT["lat_max"]],
+                                [ANIM_EXTENT["lon_max"], ANIM_EXTENT["lat_max"]],
+                                [ANIM_EXTENT["lon_max"], ANIM_EXTENT["lat_min"]],
+                                [ANIM_EXTENT["lon_min"], ANIM_EXTENT["lat_min"]],
+                            ],
+                        )
+                    ]
+                    if RASTER_ENABLED
+                    else []
+                ),
             ),
-            annotations=[
-                dict(
-                    text="Background overlay + viewport-filtered animated houses.",
-                    showarrow=False,
-                    xref="paper",
-                    yref="paper",
-                    x=0,
-                    y=-0.1,
-                    font=dict(size=12, color="gray"),
-                )
-            ],
+            # Remove footer annotation so it doesn't consume layout space.
+            annotations=[],
         )
         _FIGURE_CACHE[v].append(fig.to_dict())
 
@@ -635,33 +866,27 @@ def create_dash_app() -> Dash:
         - Per-frame house colors computed clientside from hue seeds (no large caches).
     """
     app = Dash(__name__)
+    # Fullscreen root container; remove maxWidth wrapper so map can use entire viewport.
     app.layout = html.Div(
         style={
             "fontFamily": "Arial, sans-serif",
-            "maxWidth": "1100px",
-            "margin": "0 auto",
+            "height": "100vh",
+            "width": "100vw",
+            "margin": "0",
+            "padding": "0",
+            "overflow": "hidden",  # avoid scrollbars from children
         },
         children=[
-            html.H2("Environmental Dashboard (Animated Houses via JS)"),
-            html.Div(
-                style={"display": "flex", "gap": "1rem", "alignItems": "center"},
-                children=[
-                    html.Label("Variable:", htmlFor="variable-dropdown"),
-                    dcc.Dropdown(
-                        id="variable-dropdown",
-                        options=[
-                            {"label": v.capitalize(), "value": v} for v in variables
-                        ],
-                        value=default_var,
-                        clearable=False,
-                        style={"width": "250px"},
-                    ),
-                ],
-            ),
+            # Header removed so the map occupies the entire screen.
             dcc.Graph(
                 id="dashboard-graph",
                 figure=assemble_figure(default_var, frame_index=0),
-                style={"height": "650px"},
+                style={
+                    "height": "100vh",
+                    "width": "100vw",
+                    "margin": "0",
+                    "padding": "0",
+                },
                 config=GRAPH_CONFIG,
             ),
             dcc.Interval(id="anim-interval", interval=ANIM_INTERVAL_MS, n_intervals=0),
@@ -678,8 +903,10 @@ def create_dash_app() -> Dash:
                     "viewFilter": HOUSE_VIEW_FILTER,
                     "maxView": HOUSE_MAX_VIEW,
                     "viewMarginFactor": HOUSE_VIEW_MARGIN_FACTOR,
-                    "tileMeta": house_tile_meta,  # (NEW) tile metadata
-                    "tileBuckets": house_tile_buckets,  # (NEW) tile -> indices
+                    "tileMeta": house_tile_meta,
+                    "tileBuckets": house_tile_buckets,
+                    "floodExtent": ANIM_EXTENT,
+                    "rasterEnabled": RASTER_ENABLED,  # (NEW) expose toggle to client
                 },
             ),
         ],
@@ -687,14 +914,16 @@ def create_dash_app() -> Dash:
 
     # Clientside callback: swaps background frame + updates houses z colors.
     client_js = f"""
-    function(variable, n_intervals, animData, currentFig){{
-        const tStart = performance.now();
-        let tPrev = tStart;
-        function logStep(label){{
-            const now = performance.now();
-            console.log('[anim]', label, (now - tPrev).toFixed(1) + 'ms', 'total', (now - tStart).toFixed(1) + 'ms');
-            tPrev = now;
-        }}
+    function(n_intervals, animData, currentFig){{
+        // Single-mode app: variable fixed to default_var
+        const variable = "{default_var}";
+         const tStart = performance.now();
+         let tPrev = tStart;
+         function logStep(label){{
+             const now = performance.now();
+             console.log('[anim]', label, (now - tPrev).toFixed(1) + 'ms', 'total', (now - tStart).toFixed(1) + 'ms');
+             tPrev = now;
+         }}
 
         // Ensure a one–time Mapbox watcher that records the true map bounds after any move/zoom.
         function ensureBoundsWatcher(){{
@@ -739,7 +968,10 @@ def create_dash_app() -> Dash:
         }}
         ensureBoundsWatcher();
 
-        if(!animData || !variable) return window.dash_clientside.no_update;
+        if(!animData) return window.dash_clientside.no_update;
+        const rasterEnabled = !!animData.rasterEnabled;
+
+        // frames still needed for phase timing; ensure non-empty
         const frames = animData.frames;
         if(!frames || !frames.length) return window.dash_clientside.no_update;
         const base = animData.baseFigures?.[variable];
@@ -775,24 +1007,40 @@ def create_dash_app() -> Dash:
         let fig = reuse ? currentFig : JSON.parse(JSON.stringify(base));
         logStep('figure prepared (reuse=' + reuse + ')');
 
-        // Background frame
+        // Background frame (only when raster enabled)
         if(!fig.layout) fig.layout = {{}};
         if(!fig.layout.mapbox) fig.layout.mapbox = {{}};
         if(!fig.layout.mapbox.layers) fig.layout.mapbox.layers = [];
-        if(!fig.layout.mapbox.layers.length){{
-            fig.layout.mapbox.layers.push({{
-                below: "",
-                sourcetype: "image",
-                source: frames[idx],
-                coordinates: [
-                    [{ANIM_EXTENT["lon_min"]}, {ANIM_EXTENT["lat_max"]}],
-                    [{ANIM_EXTENT["lon_max"]}, {ANIM_EXTENT["lat_max"]}],
-                    [{ANIM_EXTENT["lon_max"]}, {ANIM_EXTENT["lat_min"]}],
-                    [{ANIM_EXTENT["lon_min"]}, {ANIM_EXTENT["lat_min"]}]
-                ]
-            }});
+
+        if(rasterEnabled){{
+            const floodExt = animData.floodExtent;
+            if(!floodExt) return window.dash_clientside.no_update;
+            if(!fig.layout.mapbox.layers.length){{
+                fig.layout.mapbox.layers.push({{
+                    below: "",
+                    sourcetype: "image",
+                    source: frames[idx],
+                    coordinates: [
+                        [floodExt.lon_min, floodExt.lat_max],
+                        [floodExt.lon_max, floodExt.lat_max],
+                        [floodExt.lon_max, floodExt.lat_min],
+                        [floodExt.lon_min, floodExt.lat_min]
+                    ]
+                }});
+            }} else {{
+                fig.layout.mapbox.layers[0].source = frames[idx];
+                fig.layout.mapbox.layers[0].coordinates = [
+                    [floodExt.lon_min, floodExt.lat_max],
+                    [floodExt.lon_max, floodExt.lat_max],
+                    [floodExt.lon_max, floodExt.lat_min],
+                    [floodExt.lon_min, floodExt.lat_min]
+                ];
+            }}
         }} else {{
-            fig.layout.mapbox.layers[0].source = frames[idx];
+            // Remove any existing raster layer to avoid stale imagery
+            if(fig.layout.mapbox.layers.length) {{
+                fig.layout.mapbox.layers = [];
+            }}
         }}
         logStep('background frame updated');
 
@@ -964,7 +1212,6 @@ def create_dash_app() -> Dash:
     app.clientside_callback(
         client_js,
         Output("dashboard-graph", "figure"),
-        Input("variable-dropdown", "value"),
         Input("anim-interval", "n_intervals"),
         State("dash-anim-data", "data"),
         State("dashboard-graph", "figure"),
