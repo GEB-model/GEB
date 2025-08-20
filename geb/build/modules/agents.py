@@ -1245,7 +1245,6 @@ class Agents:
                     ISO3,
                 )
 
-
                 # Calculate total agricultural area in square meters
                 agricultural_area_db = (
                     agricultural_area_db_ha * 10000
