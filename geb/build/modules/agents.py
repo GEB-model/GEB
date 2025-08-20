@@ -1237,12 +1237,14 @@ class Agents:
                     return agricultural_area_db_ha
 
                 # Validate that holdings * average farm size approximately equals agricultural area
+
                 correct_farm_size_data(
                     agricultural_area_db_ha,
                     region_n_holdings,
                     size_class_boundaries,
                     ISO3,
                 )
+
 
                 # Calculate total agricultural area in square meters
                 agricultural_area_db = (
