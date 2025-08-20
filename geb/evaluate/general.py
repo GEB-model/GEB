@@ -27,13 +27,16 @@ from shapely.geometry import MultiPolygon, Polygon, box
 
 load_dotenv()
 
-MODEL_FOLDER = Path("tests/tmp/model")
+MODEL_FOLDER = Path("tests/tmp/model").absolute()
+WEB_ROOT = MODEL_FOLDER / "web"  # Root for web assets
+
+os.chdir(WEB_ROOT)
+ASSETS_DIR = Path("assets").resolve()  # Directory for Dash static files
+
 houses = gpd.read_parquet(
     MODEL_FOLDER / "input" / "geom" / "assets" / "buildings.geoparquet"
-)
-region = gpd.read_parquet(
-    MODEL_FOLDER / "input" / "geom" / "mask.geoparquet"
-)  # (NEW) region geometry for viewport filtering
+).head()
+region = gpd.read_parquet(MODEL_FOLDER / "input" / "geom" / "mask.geoparquet")
 
 
 # (NEW) Normalize region CRS to EPSG:4326 and derive outline + initial viewport
@@ -183,9 +186,6 @@ def _validate_extent(ext: dict[str, float], name: str) -> None:
 
 _validate_extent(ANIM_EXTENT, "ANIM_EXTENT")
 
-# Assets directory used for Dash static files. Use working-dir assets so Dash will serve files at /assets.
-ASSETS_DIR: Path = Path.cwd() / "assets"
-
 
 # ------------------------------------------------------------------
 # Flood raster loading (replaces synthetic animation frame generation)
@@ -231,7 +231,7 @@ def _load_flood_raster_frames(
         simulation_root,
         mode="r",
     )
-    flood_depth_per_timestep = mod.results["zsmax"]
+    flood_depth_per_timestep = mod.results["zs"]
     elevation = mod.grid["dep"]
 
     def _simple_rgba(norm_val: float) -> tuple[int, int, int]:
@@ -246,15 +246,15 @@ def _load_flood_raster_frames(
         return (255, int(255 * (1 - t)), 0)
 
     frames_urls: list[str] = []
-    time_slices = flood_depth_per_timestep.timemax.values
+    time_slices = flood_depth_per_timestep.time.values
 
     vmin = 0
-    vmax = flood_depth_per_timestep.max().compute().item()
+    vmax = 3
 
     # Convert each slice to RGBA and save to disk. Limit to first 10 for safety (as before).
     saved_extent = None
-    for idx, time in enumerate(time_slices):
-        flood_depth = flood_depth_per_timestep.sel(timemax=time)
+    for idx, time in enumerate(time_slices[100:110]):
+        flood_depth = flood_depth_per_timestep.sel(time=time)
 
         downscaled_flood_map = hydromt_sfincs.utils.downscale_floodmap(
             zsmax=flood_depth,
@@ -284,23 +284,13 @@ def _load_flood_raster_frames(
             rgba[..., 0][mask] = r_arr
             rgba[..., 1][mask] = g_arr
             rgba[..., 2][mask] = b_arr
-            rgba[..., 3][mask] = 200  # semi-opaque
+            rgba[..., 3][mask] = 255
 
         img = Image.fromarray(rgba, mode="RGBA")
 
-        # Try WebP for smaller files if supported, fallback to PNG.
-        use_webp = True
         filename = f"frame_{idx:04d}.webp"
         file_path = frames_dir / filename
-        try:
-            if use_webp:
-                img.save(file_path, format="WEBP", quality=80)
-            else:
-                raise OSError("force PNG path")
-        except Exception:
-            filename = f"frame_{idx:04d}.png"
-            file_path = frames_dir / filename
-            img.save(file_path, format="PNG")
+        img.save(file_path, format="WEBP", quality=80)
 
         # Dash serves assets at /assets/..., so construct that relative URL.
         frames_urls.append(f"/assets/frames/{filename}")
@@ -654,7 +644,6 @@ def create_dash_app() -> Dash:
                 [fe["lon_max"], fe["lat_min"]],
                 [fe["lon_min"], fe["lat_min"]],
             ]
-            # Only include the minimal valid keys for an image source. Avoid 'type'/'paint' which Mapbox rejects.
             mapbox_layers.append(
                 {
                     "sourcetype": "image",
@@ -834,26 +823,11 @@ def create_dash_app() -> Dash:
         if(!fig.layout.mapbox.layers) fig.layout.mapbox.layers = [];
 
         if(rasterEnabled){{
-            const floodExt = animData.floodExtent;
-            if(!floodExt) return window.dash_clientside.no_update;
-            const coordinates = [
-                [floodExt.lon_min, floodExt.lat_max],
-                [floodExt.lon_max, floodExt.lat_max],
-                [floodExt.lon_max, floodExt.lat_min],
-                [floodExt.lon_min, floodExt.lat_min]
-            ];
-            // Minimal image layer object; omit Mapbox-specific paint/type keys that Plotly/Mapbox will reject.
-            layerConfig = {{
-                sourcetype: "image",
-                source: frames[idx],
-                coordinates: coordinates
-            }}
-            
-            if(!fig.layout.mapbox.layers.length){{
-                fig.layout.mapbox.layers.push(layerConfig);
-            }} else {{
-                fig.layout.mapbox.layers[0] = layerConfig;
-            }}
+            const layer = fig.layout.mapbox.layers[0];
+            layer.source = frames[idx];
+            layer.paint = {{
+                "raster-opacity": 0.5,
+            }};
         }} else {{
             // Remove any existing raster layer to avoid stale imagery
             if(fig.layout.mapbox.layers.length) {{
@@ -1040,4 +1014,4 @@ def create_dash_app() -> Dash:
 # Clean single entry point (removed obsolete legacy block that followed previously).
 if __name__ == "__main__":
     dash_app = create_dash_app()
-    dash_app.run(debug=True, host="0.0.0.0", port=8050)
+    dash_app.run(debug=False, host="0.0.0.0", port=8050)
