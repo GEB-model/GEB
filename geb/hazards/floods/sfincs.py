@@ -463,7 +463,7 @@ class SFINCS:
 
         return gdf
 
-    def build_coastal_boundary_mask(self):
+    def build_coastal_boundary_mask(self) -> gpd.GeoDataFrame:
         """Builds a mask to define the coastal boundaries for the SFINCS model.
 
         Returns:
@@ -519,7 +519,8 @@ class SFINCS:
         )
         return rp_maps_coastal
 
-    def get_riverine_return_period_maps(self):
+    def get_riverine_return_period_maps(self) -> dict[int, xr.DataArray]:
+        """This function models riverine flooding for the return periods specified in the model config."""
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
@@ -559,7 +560,7 @@ class SFINCS:
         self,
         rp_maps_coastal: dict[int, xr.DataArray],
         rp_maps_riverine: dict[int, xr.DataArray],
-    ):
+    ) -> None:
         """Merges the return period maps for riverine and coastal floods into a single dataset.
 
         Args:

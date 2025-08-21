@@ -107,7 +107,7 @@ def build_sfincs_coastal(
     depth_calculation_parameters: dict[str, float],
     derive_river_method: str | None = None,
     mask_flood_plains: bool = False,
-):
+) -> None:
     """Build a coastal SFINCS model.
 
     Args:
