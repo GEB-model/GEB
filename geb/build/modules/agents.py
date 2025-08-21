@@ -1439,7 +1439,9 @@ class Agents:
         return output
 
     @build_method(depends_on="setup_assets")
-    def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
+    def setup_household_characteristics(
+        self, maximum_age: int = 85, skip_countries_ISO3: list = []
+    ):
         # setup buildings in region for household allocation
         all_buildings_model_region = self.setup_buildings()
 

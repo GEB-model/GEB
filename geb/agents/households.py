@@ -152,7 +152,11 @@ class Households(AgentBaseClass):
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
     def update_building_attributes(self):
-        """Update building attributes based on household data."""
+        """Update building attributes based on household data.
+
+        Returns:
+            None
+        """
         # Start by computing occupancy from the var.osm_id and var.osm_way_id arrays
         osm_id_series = pd.Series(self.var.osm_id.data)
         osm_way_id_series = pd.Series(self.var.osm_way_id.data)
@@ -206,7 +210,11 @@ class Households(AgentBaseClass):
         self.buildings["flooded"].fillna(False, inplace=True)
 
     def update_building_adaptation_status(self, household_adapting: np.ndarray):
-        """Update the floodproofing status of buildings based on adapting households."""
+        """Update the floodproofing status of buildings based on adapting households.
+
+        Returns:
+            None
+        """
         # Extract and clean OSM IDs from adapting households
         osm_ids = pd.DataFrame(
             np.unique(self.var.osm_id.data[household_adapting])
@@ -239,6 +247,9 @@ class Households(AgentBaseClass):
 
         These are loaded in the spinup() method.
         Here we assign additional attributes (dummy data) to the households that are used in the decision module.
+
+        Returns:
+            None
         """
         # load household locations
         locations = load_array(self.model.files["array"]["agents/households/location"])
@@ -365,6 +376,11 @@ class Households(AgentBaseClass):
         )
 
     def update_risk_perceptions(self):
+        """Update the risk perceptions of households based on the latest flood data.
+
+        Returns:
+            None
+        """
         # update timer
         self.var.years_since_last_flood.data += 1
 
