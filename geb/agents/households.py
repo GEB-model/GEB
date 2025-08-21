@@ -6,10 +6,8 @@ from typing import Tuple
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import pyproj
 import rasterio
 import xarray as xr
-from honeybees.library.raster import sample_from_map
 from rasterio.features import shapes
 from rasterstats import point_query, zonal_stats
 from scipy import interpolate
@@ -20,7 +18,7 @@ from ..hydrology.landcover import (
 )
 from ..store import DynamicArray
 from ..workflows.damage_scanner import VectorScanner
-from ..workflows.io import load_array, load_table
+from ..workflows.io import load_array, load_table, open_zarr
 from .decision_module_flood import DecisionModule
 from .general import AgentBaseClass
 
@@ -79,21 +77,7 @@ class Households(AgentBaseClass):
     def name(self):
         return "agents.households"
 
-    def reproject_locations_to_floodmap_crs(self) -> None:
-        locations = self.var.locations.copy()
-        self.var.household_points = self.var.household_points.to_crs(
-            self.flood_maps["crs"]
-        )
-
-        transformer = pyproj.Transformer.from_crs(
-            self.model.crs, self.flood_maps["crs"], always_xy=True
-        )
-        locations[:, 0], locations[:, 1] = transformer.transform(
-            self.var.locations[:, 0], self.var.locations[:, 1]
-        )
-        self.var.locations_reprojected_to_flood_map = locations
-
-    def load_flood_maps(self):
+    def load_flood_maps(self) -> None:
         """Load flood maps for different return periods. This might be quite ineffecient for RAM, but faster then loading them each timestep for now."""
         self.return_periods = np.array(
             self.model.config["hazards"]["floods"]["return_periods"]
@@ -104,17 +88,11 @@ class Households(AgentBaseClass):
             file_path = (
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
             )
-            flood_maps[return_period] = xr.open_dataarray(file_path, engine="zarr")
-            # flood_maps[return_period] = flood_map.rio.write_crs(
-            #     flood_map.attrs["_CRS"]["wkt"]
-            # )
-        flood_maps["crs"] = flood_maps[return_period].rio.crs
-        flood_maps["gdal_geotransform"] = (
-            flood_maps[return_period].rio.transform().to_gdal()
-        )
+            flood_maps[return_period] = open_zarr(file_path)
         self.flood_maps = flood_maps
 
     def construct_income_distribution(self) -> None:
+        """Construct a lognormal income distribution for the region."""
         # These values only work for a single country now. Should come from subnational datasets.
         distribution_parameters = load_table(
             self.model.files["table"]["income/distribution_parameters"]
@@ -1032,7 +1010,7 @@ class Households(AgentBaseClass):
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
-            self.flood_maps["crs"]
+            self.flood_maps[self.return_periods[0]].rio.crs
         )
         # subset building to those exposed to flooding
         buildings = buildings[buildings["flooded"]]
