@@ -114,14 +114,14 @@ class Households(AgentBaseClass):
         )
         self.flood_maps = flood_maps
 
-    def construct_income_distribution(self):
-        # These settings are dummy data now. Should come from subnational datasets.
-        distibution_parameters = load_table(
+    def construct_income_distribution(self) -> None:
+        # These values only work for a single country now. Should come from subnational datasets.
+        distribution_parameters = load_table(
             self.model.files["table"]["income/distribution_parameters"]
         )
         country = self.model.regions["ISO3"].values[0]
-        average_household_income = distibution_parameters[country]["MEAN"]
-        median_income = distibution_parameters[country]["MEDIAN"]
+        average_household_income = distribution_parameters[country]["MEAN"]
+        median_income = distribution_parameters[country]["MEDIAN"]
 
         # construct lognormal income distribution
         mu = np.log(median_income)
@@ -742,10 +742,10 @@ class Households(AgentBaseClass):
 
         return n_warned_households
 
-    def decide_household_strategy(self):
+    def decide_household_strategy(self) -> None:
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
         # update risk perceptions
-        # self.update_risk_perceptions()
+        self.update_risk_perceptions()
 
         # calculate damages for adapting and not adapting households based on building footprints
         damages_do_not_adapt, damages_adapt = self.calculate_building_flood_damages()
@@ -759,7 +759,7 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data + 1,
+            risk_perception=self.var.risk_perception.data,
             expected_damages_adapt=damages_adapt,
             adaptation_costs=self.var.adaptation_costs.data,
             time_adapted=self.var.time_adapted.data,
@@ -778,7 +778,7 @@ class Households(AgentBaseClass):
             expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
-            risk_perception=self.var.risk_perception.data + 1,
+            risk_perception=self.var.risk_perception.data,
             expected_damages=damages_do_not_adapt,
             adapted=self.var.adapted.data,
             p_floods=1 / self.return_periods,

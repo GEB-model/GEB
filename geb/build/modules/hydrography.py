@@ -803,7 +803,8 @@ class Hydrography:
         self.set_geom(stations, "gtsm/stations_coast_rp")
 
     @build_method
-    def setup_gtsm_station_data(self):
+    def setup_gtsm_station_data(self) -> None:
+        """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
         subbasins = gpd.read_parquet("input" / self.files["geom"]["routing/subbasins"])
         if not subbasins["is_coastal_basin"].any():
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")

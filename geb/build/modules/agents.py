@@ -328,7 +328,7 @@ class Agents:
         )
 
     @build_method
-    def setup_income_distribution_parameters(self):
+    def setup_income_distribution_parameters(self) -> None:
         """Sets up the income distributions for GEB.
 
         Notes:
