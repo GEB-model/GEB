@@ -65,79 +65,122 @@ jobs:
           cat changed_python_files.txt || true
           echo "files_exist=$([ "$file_count" -gt 0 ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
 
-      - name: Run ruff on main (capture full output + per-rule stats)
+      - name: Run ruff on main (capture per-file, per-rule stats)
         id: ruff_main
         run: |
           set -o pipefail
           cd main-branch
-          # Run ruff, capture full output to file and compute per-rule stats (RULE COUNT)
-          ruff check --preview --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_main_full.txt || true
-          # extract lines like: "<count> <RULE>  <message>" -> produce "RULE COUNT"
-          awk '/^[[:space:]]*[0-9]+[[:space:]]+[A-Z0-9_]+/ {print $2" "$1}' ruff_main_full.txt > ruff_main_stats.txt || true
-          # expose paths as step outputs for later steps
-          echo "full_file=main-branch/ruff_main_full.txt" >> $GITHUB_OUTPUT
-          echo "stats_file=main-branch/ruff_main_stats.txt" >> $GITHUB_OUTPUT
+          # Run ruff with full output to get file-level details
+          ruff check --preview --select "${RULES}" --output-format full . 2>&1 | tee ruff_main_full.txt || true
+          
+          # Extract per-file, per-rule counts: "FILE:LINE:COL: RULE message" -> "FILE RULE 1"
+          # Then aggregate by FILE and RULE
+          awk -F: '/^[^:]+:[0-9]+:[0-9]+: [A-Z0-9_]+/ {
+            gsub(/^[ \t]+|[ \t]+$/, "", $4); 
+            split($4, parts, " "); 
+            rule = parts[1]; 
+            print $1" "rule" 1"
+          }' ruff_main_full.txt | awk '{
+            key = $1" "$2; 
+            count[key] += $3
+          } END {
+            for (k in count) print k" "count[k]
+          }' > ruff_main_file_rule_stats.txt || true
+          
+          echo "main_file_rule_stats=main-branch/ruff_main_file_rule_stats.txt" >> $GITHUB_OUTPUT
 
-      - name: Run ruff on PR (capture full output + per-rule stats)
+      - name: Run ruff on PR (capture per-file, per-rule stats)
         id: ruff_pr
         run: |
           set -o pipefail
           cd pr-branch
-          ruff check --preview --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_pr_full.txt || true
-          awk '/^[[:space:]]*[0-9]+[[:space:]]+[A-Z0-9_]+/ {print $2" "$1}' ruff_pr_full.txt > ruff_pr_stats.txt || true
-          echo "full_file=pr-branch/ruff_pr_full.txt" >> $GITHUB_OUTPUT
-          echo "stats_file=pr-branch/ruff_pr_stats.txt" >> $GITHUB_OUTPUT
+          ruff check --preview --select "${RULES}" --output-format full . 2>&1 | tee ruff_pr_full.txt || true
+          
+          # Extract per-file, per-rule counts
+          awk -F: '/^[^:]+:[0-9]+:[0-9]+: [A-Z0-9_]+/ {
+            gsub(/^[ \t]+|[ \t]+$/, "", $4); 
+            split($4, parts, " "); 
+            rule = parts[1]; 
+            print $1" "rule" 1"
+          }' ruff_pr_full.txt | awk '{
+            key = $1" "$2; 
+            count[key] += $3
+          } END {
+            for (k in count) print k" "count[k]
+          }' > ruff_pr_file_rule_stats.txt || true
+          
+          echo "pr_file_rule_stats=pr-branch/ruff_pr_file_rule_stats.txt" >> $GITHUB_OUTPUT
 
-      - name: Compare per-rule counts and print full PR errors for regressed rules
+      - name: Identify files with new errors per rule and display only those
         run: |
-          MAIN_STATS="main-branch/ruff_main_stats.txt"
-          PR_STATS="pr-branch/ruff_pr_stats.txt"
-          PR_FULL="pr-branch/ruff_pr_full.txt"
+          MAIN_FILE_RULE_STATS="main-branch/ruff_main_file_rule_stats.txt"
+          PR_FILE_RULE_STATS="pr-branch/ruff_pr_file_rule_stats.txt"
           CHANGED_FILES="changed_python_files.txt"
 
-          # Ensure files exist to avoid errors
-          [ -f "$MAIN_STATS" ] || touch "$MAIN_STATS"
-          [ -f "$PR_STATS" ] || touch "$PR_STATS"
-          [ -f "$PR_FULL" ] || touch "$PR_FULL"
+          # Ensure files exist
+          [ -f "$MAIN_FILE_RULE_STATS" ] || touch "$MAIN_FILE_RULE_STATS"
+          [ -f "$PR_FILE_RULE_STATS" ] || touch "$PR_FILE_RULE_STATS"
 
-          # Build union of rules seen in either run
-          (cat "$MAIN_STATS" 2>/dev/null || true; cat "$PR_STATS" 2>/dev/null || true) | awk '{print $1}' | sort | uniq > all_rules.txt || true
+          # Get all unique file-rule combinations from PR
+          awk '{print $1" "$2}' "$PR_FILE_RULE_STATS" | sort | uniq > pr_file_rules.txt || true
 
           regressions=0
-          while read -r rule; do
-            [ -z "$rule" ] && continue
-            base=$(awk -v r="$rule" '$1==r{print $2}' "$MAIN_STATS" | head -n1 || true)
-            pr=$(awk -v r="$rule" '$1==r{print $2}' "$PR_STATS" | head -n1 || true)
-            base=${base:-0}
-            pr=${pr:-0}
-            if [ "$pr" -gt "$base" ]; then
+          regressed_rules=""
+          
+          # Check each file-rule combination for regressions
+          while IFS= read -r file_rule; do
+            [ -z "$file_rule" ] && continue
+            
+            file=$(echo "$file_rule" | awk '{print $1}')
+            rule=$(echo "$file_rule" | awk '{print $2}')
+            
+            # Get counts for this file-rule combination
+            main_count=$(awk -v fr="$file_rule" '$1" "$2==fr{print $3}' "$MAIN_FILE_RULE_STATS" | head -n1 || true)
+            pr_count=$(awk -v fr="$file_rule" '$1" "$2==fr{print $3}' "$PR_FILE_RULE_STATS" | head -n1 || true)
+            
+            main_count=${main_count:-0}
+            pr_count=${pr_count:-0}
+            
+            if [ "$pr_count" -gt "$main_count" ]; then
               regressions=$((regressions+1))
-              echo "------------------------------------------------------------"
-              echo "Regression detected for rule: $rule (main branch: $base -> pull request: $pr)"
-              echo "More info: https://docs.astral.sh/ruff/rules/$rule"
-              echo "Full PR error lines for rule $rule:"
               
-              # Check if we have valid changed files to examine
-              if [ -s "$CHANGED_FILES" ]; then
-                echo "Checking only changed Python files:"
-                # Convert relative paths to full paths in pr-branch directory
-                while IFS= read -r file; do
-                  [ -n "$file" ] && [ -f "pr-branch/$file" ] && echo "pr-branch/$file"
-                done < "$CHANGED_FILES" | xargs -r ruff check --preview --select "$rule" --output-format full || true
-              else
-                echo "No valid changed Python files found, checking all files:"
+              # Track this rule as having regressions
+              if ! echo "$regressed_rules" | grep -q "$rule"; then
+                regressed_rules="$regressed_rules $rule"
+              fi
+              
+              echo "------------------------------------------------------------"
+              echo "New errors in file: $file"
+              echo "Rule: $rule (main branch: $main_count -> pull request: $pr_count)"
+              echo "More info: https://docs.astral.sh/ruff/rules/$rule"
+              echo ""
+              echo "Errors in this file for rule $rule:"
+              
+              # Show errors only for this specific file and rule
+              if [ -f "pr-branch/$file" ]; then
                 cd pr-branch
-                ruff check --preview --select "$rule" --output-format full . || true
+                ruff check --preview --select "$rule" --output-format full "$file" || true
+                cd ..
+              else
+                echo "File not found: pr-branch/$file"
               fi
               echo ""
             fi
-          done < all_rules.txt
+          done < pr_file_rules.txt
 
+          # Summary of regressed rules
           if [ "$regressions" -gt 0 ]; then
-            echo "::error::New per-rule regressions introduced: $regressions"
+            echo "============================== SUMMARY =============================="
+            echo "Rules with new errors introduced:"
+            for rule in $regressed_rules; do
+              echo "  - $rule: https://docs.astral.sh/ruff/rules/$rule"
+            done
+            echo ""
+            echo "Total file-rule combinations with new errors: $regressions"
+            echo "::error::New per-file regressions introduced: $regressions"
             exit 1
           else
-            echo "No new per-rule regressions introduced."
+            echo "No new per-file, per-rule regressions introduced."
           fi
 
       - name: Final message

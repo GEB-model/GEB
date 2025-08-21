@@ -22,6 +22,9 @@ class DateIndex:
             self.dates[-1], self.dates[-2]
         )  # extrapolate last date.
 
+    def test_funciton(self, arg1, arg2):
+        return arg1 + arg2
+
     def get(self, date: date | datetime) -> int:
         """Get the index of a date in the list of dates.
 
