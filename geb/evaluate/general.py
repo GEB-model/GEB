@@ -35,11 +35,10 @@ ASSETS_DIR = Path("assets").resolve()  # Directory for Dash static files
 
 houses = gpd.read_parquet(
     MODEL_FOLDER / "input" / "geom" / "assets" / "buildings.geoparquet"
-).head()
+)
 region = gpd.read_parquet(MODEL_FOLDER / "input" / "geom" / "mask.geoparquet")
 
 
-# (NEW) Normalize region CRS to EPSG:4326 and derive outline + initial viewport
 def _build_region_outline(gdf: gpd.GeoDataFrame) -> tuple[list[float], list[float]]:
     """Extract region exterior boundaries as a single polyline with None separators.
 
