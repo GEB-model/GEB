@@ -133,6 +133,7 @@ class Households(AgentBaseClass):
         self.var.income_distribution = income_distribution_region
 
     def assign_household_wealth_and_income(self) -> None:
+        """Assign household wealth and income attributes based on GLOPOP-S and OECD data."""
         # initiate array with wealth indices
         wealth_index = load_array(
             self.model.files["array"]["agents/households/wealth_index"]

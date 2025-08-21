@@ -498,6 +498,7 @@ class SFINCS:
         return gdf
 
     def get_coastal_return_period_maps(self):
+        """This function models coastal flooding for the return periods specified in the model config."""
         coastal_mask = self.build_mask_for_coastal_sfincs()
         boundary_mask = self.build_coastal_boundary_mask()
         model_root: Path = self.sfincs_model_root("entire_region_coastal")
