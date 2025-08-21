@@ -1017,11 +1017,14 @@ class Households(AgentBaseClass):
         self.construct_income_distribution()
         self.assign_household_attributes()
 
-    def calculate_building_flood_damages(self):
+    def calculate_building_flood_damages(self) -> Tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
         It iterates over the return periods and calculates the damages for each household
         based on the flood maps and the building footprints.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
         """
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)

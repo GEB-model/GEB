@@ -423,8 +423,12 @@ class SFINCS:
         damages = self.flood(flood_map=flood_map)
         return damages
 
-    def build_mask_for_coastal_sfincs(self):
-        """Builds a mask to define the active cells and boundaries for the coastal SFINCS model."""
+    def build_mask_for_coastal_sfincs(self) -> gpd.GeoDataFrame:
+        """Builds a mask to define the active cells and boundaries for the coastal SFINCS model.
+
+        Returns:
+            GeoDataFrame: A GeoDataFrame containing the coastal mask.
+        """
         # Load the dataset (assumes NetCDF with CF conventions and georeferencing info)
         mask = xr.load_dataset(self.model.files["other"]["drainage/mask"])
 
