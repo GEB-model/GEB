@@ -863,14 +863,12 @@ class Hydrology:
         run_name: str = "default",
         include_spinup: bool = False,
         spinup_name: str = "spinup",
-        *args,
         export: bool = True,
-        **kwargs,
     ) -> None:
         """Create skill score boxplot graphs for hydrological model evaluation metrics.
 
-        Generates boxplot visualizations of discharge evaluation metrics (KGE, NSE, R) 
-        from previously calculated station evaluations. Creates publication-ready plots
+        Generates boxplot visualizations of discharge evaluation metrics (KGE, NSE, R)
+        from previously calculated station evaluations. Creates a plot
         showing the distribution of performance metrics across all gauging stations.
 
         Notes:
@@ -884,14 +882,10 @@ class Hydrology:
                 (currently not used in this method).
             spinup_name: Name of the spinup run (currently not used in this method).
             export: Whether to save the skill score graphs to PNG files.
-            *args: Additional positional arguments (ignored).
-            **kwargs: Additional keyword arguments (ignored).
+
 
         Returns:
             None. Displays plots and optionally saves them to the evaluation directory.
-
-        Raises:
-            FileNotFoundError: If the evaluation_metrics.xlsx file does not exist.
         """
         eval_result_folder = (
             Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
