@@ -74,10 +74,11 @@ jobs:
             if [ "$pr" -gt "$base" ]; then
               regressions=$((regressions+1))
               echo "------------------------------------------------------------"
-              echo "Regression detected for rule: $rule (main: $base -> pr: $pr)"
+              echo "Regression detected for rule: $rule (main branch: $base -> pull request: $pr)"
+              echo "More info: https://astral.sh/ruff/latest/rules/$rule"
               echo "Full PR error lines for rule $rule:"
-              # Print full lines from PR that reference the rule code
-              grep -F "$rule" "$PR_FULL" || echo "(no matching lines found in PR full output for $rule)"
+                cd pr-branch
+                ruff check --preview --select "$rule" --output-format full . || true
               echo ""
             fi
           done < all_rules.txt
