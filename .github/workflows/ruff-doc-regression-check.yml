@@ -76,7 +76,7 @@ jobs:
               regressions=$((regressions+1))
               echo "------------------------------------------------------------"
               echo "Regression detected for rule: $rule (main branch: $base -> pull request: $pr)"
-              echo "More info: https://astral.sh/ruff/latest/rules/$rule"
+              echo "More info: https://docs.astral.sh/ruff/rules/$rule"
               echo "Full PR error lines for rule $rule:"
                 cd pr-branch
                 ruff check --preview --select "$rule" --output-format full . || true
