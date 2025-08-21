@@ -883,9 +883,6 @@ class Hydrology:
                 (currently not used in this method).
             spinup_name: Name of the spinup run (currently not used in this method).
             export: Whether to save the skill score graphs to PNG files.
-
-        Raises:
-            FileNotFoundError: If the evaluation_metrics.xlsx file does not exist.
         """
         eval_result_folder = (
             Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
