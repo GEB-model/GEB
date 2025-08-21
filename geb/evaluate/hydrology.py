@@ -33,12 +33,24 @@ class Hydrology:
         pass
 
     def plot_discharge(self, run_name: str = "default", *args, **kwargs) -> None:
-        """Method to plot the mean discharge from the GEB model.
+        """Plot the mean discharge from the GEB model as a spatial map.
+
+        Creates a spatial visualization of mean discharge values over time from the GEB model
+        simulation results. The plot is saved as both a zarr file and PNG image for analysis.
+
+        Notes:
+            The discharge data must exist in the report directory structure. If the discharge
+            file is not found, a FileNotFoundError will be raised. The mean is calculated
+            across the entire simulation time period.
 
         Args:
-            run_name: Defaults to "default".
-            *args: ignored.
-            **kwargs: ignored.
+            run_name: Name of the simulation run to plot. Must correspond to an existing
+                run directory in the model output folder.
+            *args: Additional positional arguments (ignored).
+            **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            None. Saves output files to the evaluation directory.
         """
         # check if discharge file exists
         if not (
@@ -89,15 +101,28 @@ class Hydrology:
         include_yearly_plots: bool = False,
         correct_Q_obs=False,
     ) -> None:
-        """Method to evaluate the discharge grid from GEB against observations from the Q_obs database.
+        """Evaluate the discharge grid from GEB against observations from the Q_obs database.
+
+        Compares simulated discharge from the GEB model with observed discharge data from
+        gauging stations. Calculates performance metrics (KGE, NSE, R) and creates
+        evaluation plots and interactive maps for analysis.
+
+        Notes:
+            The discharge simulation files must exist in the report directory structure.
+            If no discharge stations are found in the basin, empty evaluation datasets
+            are created. The evaluation can be skipped if results already exist.
 
         Args:
             spinup_name: Name of the spinup run to include in the evaluation.
-            run_name: Name of the run to evaluate.
+            run_name: Name of the simulation run to evaluate. Must correspond to an
+                existing run directory in the model output folder.
             include_spinup: Whether to include the spinup run in the evaluation.
-            include_yearly_plots: Whether to create plots for every year showing the evaluation
-            correct_Q_obs: Whether to correct the Q_obs discharge timeseries for the difference in upstream area
-                between the Q_obs station and the discharge from GEB.
+            include_yearly_plots: Whether to create plots for every year showing the evaluation.
+            correct_Q_obs: Whether to correct the Q_obs discharge timeseries for the difference
+                in upstream area between the Q_obs station and the discharge from GEB.
+
+        Returns:
+            None. Saves evaluation results, plots, and interactive maps to the evaluation directory.
         """
         #  create folders
         eval_plot_folder: Path = (
@@ -842,15 +867,31 @@ class Hydrology:
         export: bool = True,
         **kwargs,
     ) -> None:
-        """Create skill score graphs for the GEB model.
+        """Create skill score boxplot graphs for hydrological model evaluation metrics.
+
+        Generates boxplot visualizations of discharge evaluation metrics (KGE, NSE, R) 
+        from previously calculated station evaluations. Creates publication-ready plots
+        showing the distribution of performance metrics across all gauging stations.
+
+        Notes:
+            Requires evaluation metrics to exist from a previous `evaluate_discharge` run.
+            If no discharge stations are found for evaluation, the method will skip
+            graph creation and return early.
 
         Args:
-            run_name: Name of the run to evaluate.
-            include_spinup: Whether to include the spinup run in the evaluation.
-            spinup_name: Name of the spinup run to include in the evaluation.
-            export: Whether to export the skill score graphs to a file.
-            *args: ignored.
-            **kwargs: ignored.
+            run_name: Name of the simulation run to evaluate (used in file paths).
+            include_spinup: Whether the spinup run was included in the evaluation
+                (currently not used in this method).
+            spinup_name: Name of the spinup run (currently not used in this method).
+            export: Whether to save the skill score graphs to PNG files.
+            *args: Additional positional arguments (ignored).
+            **kwargs: Additional keyword arguments (ignored).
+
+        Returns:
+            None. Displays plots and optionally saves them to the evaluation directory.
+
+        Raises:
+            FileNotFoundError: If the evaluation_metrics.xlsx file does not exist.
         """
         eval_result_folder = (
             Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
