@@ -324,14 +324,16 @@ def test_run_yearly():
         config = parse_config(working_directory / args["config"])
         config["general"]["start_time"] = date(2000, 1, 1)
         config["general"]["end_time"] = date(2049, 12, 31)
+        config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
+
         args["config"] = config
         args["config"]["report"] = {}
-        assert pytest.raises(
+
+        with pytest.raises(
             AssertionError,
-            run_model_with_method,
-            method="run_yearly",
-            **args,
-        )
+            match="Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config.",
+        ):
+            run_model_with_method(method="run_yearly", **args)
 
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
 
