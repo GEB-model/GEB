@@ -783,7 +783,7 @@ class CropFarmers(AgentBaseClass):
                 GEV_pr_grid, self.var.locations.data, self.grid.gt
             )
 
-        assert not np.all(np.isnan(self.var.GEV_parameters))
+        assert not np.all(np.isnan(self.var.GEV_pr_parameters))
         self.var.risk_perc_min = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -4777,7 +4777,7 @@ class CropFarmers(AgentBaseClass):
                     )
                     timer.new_split("index insurance")
                 if self.pr_insurance_adaptation_active:
-                    gev_params = self.var.GEV_parameters.data
+                    gev_params = self.var.GEV_pr_parameters.data
                     strike_vals = np.round(np.arange(1500, 300, -100), 2)
                     low, high, N = 0, 800, 10
                     u = np.linspace(0, 1, N)  # linear grid on [0,1]

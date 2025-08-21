@@ -83,11 +83,13 @@ agent_settings:
       size: 10 # nr of neighbors
     expected_utility:
       insurance:
-        duration: 2
+        duration: 1
         personal_insurance: 
-          ruleset: base
+          ruleset: no-adaptation
         index_insurance: 
-          ruleset: base
+          ruleset: no-adaptation
+        pr_insurance: 
+          ruleset: no-adaptation
       crop_switching: 
         ruleset: no-adaptation
       adaptation_sprinkler:
