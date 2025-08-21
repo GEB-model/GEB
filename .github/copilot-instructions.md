@@ -25,7 +25,7 @@ These instructions translate the project's Pull Request checklist into explicit 
 
 ## Docstring template (Google style)
 
-Use this template for new functions and substantial edits:
+Use this template for new functions and substantial edits (do not include types in the docstring, as they are already in the function signature):
 
 """
 Short one-line description of the function.
@@ -36,11 +36,11 @@ Notes:
     Important notes about the function's behavior, assumptions, or edge cases.
 
 Args:
-	param_name (float): Description of param_name (meters). Explain units here.
-	other_param (Optional[int]): Description. State any valid ranges.
+	param_name: Description of param_name (meters). Explain units here.
+	other_param: Description. State any valid ranges.
 
 Returns:
-	float: Description of the return value (m).
+	Description of the return value (m).
 
 Raises:
 	ValueError: If input is invalid.
