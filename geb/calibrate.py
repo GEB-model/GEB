@@ -39,6 +39,10 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold
 
 
+def test_function(arg1, arg2):
+    return arg1 + arg2
+
+
 def KGE_calculation(s, o):
     """Kling Gupta Efficiency (Kling et al., 2012, http://dx.doi.org/10.1016/j.jhydrol.2012.01.011).
 
