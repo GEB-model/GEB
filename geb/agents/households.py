@@ -204,7 +204,7 @@ class Households(AgentBaseClass):
         self.buildings.loc[buildings_mask, "flooded"] = True
         self.buildings["flooded"].fillna(False, inplace=True)
 
-    def update_building_adaptation_status(self, household_adapting):
+    def update_building_adaptation_status(self, household_adapting: np.ndarray):
         """Update the floodproofing status of buildings based on adapting households."""
         # Extract and clean OSM IDs from adapting households
         osm_ids = pd.DataFrame(

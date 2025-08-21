@@ -460,7 +460,11 @@ class SFINCS:
         return gdf
 
     def build_coastal_boundary_mask(self):
-        """Builds a mask to define the coastal boundaries for the SFINCS model."""
+        """Builds a mask to define the coastal boundaries for the SFINCS model.
+
+        Returns:
+            GeoDataFrame: A GeoDataFrame containing the coastal boundary mask.
+        """
         lecz = xr.load_dataset(
             self.model.files["other"]["landsurface/low_elevation_coastal_zone"]
         )
