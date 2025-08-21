@@ -53,13 +53,11 @@ agent_settings:
   market:
     dynamic_market: false
     price_frequency: yearly
-  # government:
-  #   irrigation_limit:
-  #     limit: 10000  # previous tried 1700
-  #     per: capita
   households:
     adapt: false
     warning_response: false
+    water_demand:
+      method: default
     expected_utility:
       flood_risk_calculations:
         risk_perception:
@@ -68,7 +66,7 @@ agent_settings:
           max: 10
           min: 0.01
   farmers:
-    ruleset: base
+    ruleset:  
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
@@ -88,7 +86,7 @@ agent_settings:
           ruleset: no-adaptation
         index_insurance: 
           ruleset: no-adaptation
-        pr_insurance: 
+        pr_insurance:
           ruleset: no-adaptation
       crop_switching: 
         ruleset: no-adaptation
@@ -158,6 +156,7 @@ draw:
 
 report:
   _water_circle: false
+  _discharge_stations: true
   hydrology.routing:
     discharge_daily:
       varname: grid.var.discharge_m3_s
@@ -172,6 +171,10 @@ parameters:
   lakeAFactor: 1
   manningsN: 1
   preferentialFlowConstant: 3.14300925049279
+  ksat_multiplier: 1.0
+  water_demand_multiplier: 1.0
+
+
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini

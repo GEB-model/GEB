@@ -823,7 +823,7 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     plot_soil_layers(axes[0], soil_layer_height, w, wres, ws)
 
-    direct_runoff, groundwater_recharge = vertical_water_transport(
+    direct_runoff, groundwater_recharge, infiltration = vertical_water_transport(
         capillary_rise_from_groundwater=np.zeros_like(topwater),
         ws=ws,
         wres=wres,
@@ -847,7 +847,33 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     topwater.fill(0)
     for _ in range(1000):
-        direct_runoff, groundwater_recharge = vertical_water_transport(
+        direct_runoff, groundwater_recharge, infiltration = vertical_water_transport(
+            capillary_rise_from_groundwater=np.full_like(
+                topwater, capillary_rise_from_groundwater
+            ),
+            ws=ws,
+            wres=wres,
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+            lambda_=lambda_,
+            bubbling_pressure_cm=bubbling_pressure_cm,
+            land_use_type=land_use_type,
+            frost_index=frost_index,
+            arno_beta=arno_beta,
+            w=w,
+            topwater=topwater,
+            soil_layer_height=soil_layer_height,
+        )
+
+    # with open(output_folder_soil / "vertical_water_transport_compiled.txt", "w") as f:
+    #     f.write(
+    #         vertical_water_transport.inspect_asm(vertical_water_transport.signatures[0])
+    #     )
+
+    plot_soil_layers(axes[1], soil_layer_height, w, wres, ws)
+
+    topwater.fill(0)
+    for _ in range(1000):
+        direct_runoff, groundwater_recharge, infiltration = vertical_water_transport(
             capillary_rise_from_groundwater=np.full_like(
                 topwater, capillary_rise_from_groundwater
             ),

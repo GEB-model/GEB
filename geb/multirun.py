@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """Sensitivity analysis for the GEB model."""
 
 import multiprocessing

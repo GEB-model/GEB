@@ -4,6 +4,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import xarray as xr
+import xclim.indices as xci
 from pgmpy.estimators import BayesianEstimator, HillClimbSearch, K2Score
 from pgmpy.factors.discrete import State
 from pgmpy.models import BayesianNetwork
@@ -13,14 +15,15 @@ from scipy.stats import chi2_contingency, norm
 from geb.agents.crop_farmers import (
     FIELD_EXPANSION_ADAPTATION,
     INDEX_INSURANCE_ADAPTATION,
-    PR_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
     PERSONAL_INSURANCE_ADAPTATION,
+    PR_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
 
+from ...workflows.io import open_zarr
 from .. import GEBModel
 from ..workflows.general import repeat_grid
 
@@ -654,11 +657,8 @@ class fairSTREAMModel(GEBModel):
         farm_size_m2 = farm_size_n_cells * mean_cell_size
         return farm_size_m2
 
+    @build_method(depends_on=["setup_forcing"])
     def setup_pr_GEV(self):
-        import xclim.indices as xci
-        import xarray as xr
-        from ...workflows.io import open_zarr
-
         pr: xr.DataArray = open_zarr(
             Path("input/other/climate/pr.zarr"),
         ) * (24 * 3600)
@@ -792,7 +792,7 @@ class fairSTREAMModel(GEBModel):
         #     (irrigation_source != irrigation_sources["no"]) * farm_sizes
         # ).sum()
 
-        regions = self.geoms["regions"]
+        regions = self.geom["regions"]
 
         irrigation_status_per_tehsil = pd.read_excel(irrigation_status_per_tehsil_fn)
         irrigation_status_per_tehsil["size_class"] = irrigation_status_per_tehsil[
@@ -1059,7 +1059,6 @@ class fairSTREAMModel(GEBModel):
         size_mid = n_sizes // 2
         sugarcane_id = crop_name_to_ID["Sugarcane"]
 
-        # ---- main loop ----------------------------------------------------------
         for idx in range(n_farmers):
             farmer_crop_calendar = crop_calendar_per_farmer[idx]
 
@@ -1100,7 +1099,7 @@ class fairSTREAMModel(GEBModel):
                 np.random.choice(crop_data.index, p=crop_data / crop_data.sum())
             ]
 
-            # ---------- choose rotation ----------
+            # choose rotation
             if farmer_main_crop_id == sugarcane_id:
                 crop_per_season = np.array([-1, -1, sugarcane_id])
             else:
@@ -1125,7 +1124,7 @@ class fairSTREAMModel(GEBModel):
                 if not hit_found:
                     crop_per_season = np.array([farmer_main_crop_id, -1, -1])
 
-            # ---------- write rotation to farmer calendar ----------
+            # write rotation to farmer calendar
             for season_idx, season_crop in enumerate(crop_per_season):
                 if season_crop == -1:
                     continue

@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 import datetime
 import re
 import shutil
 from operator import attrgetter
 from typing import Any, Union
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import zarr
@@ -173,7 +173,28 @@ class Reporter:
             to_delete: list[str] = []
             for module_name, module_values in list(report_config.items()):
                 if module_name.startswith("_"):
-                    if module_name == "_water_circle":
+                    if module_name == "_discharge_stations":
+                        if module_values is True:
+                            stations = gpd.read_parquet(
+                                self.model.files["geom"][
+                                    "discharge/discharge_snapped_locations"
+                                ]
+                            )
+                            station_reporters = {}
+                            for station_ID, station_info in stations.iterrows():
+                                xy_grid = station_info["snapped_grid_pixel_xy"]
+                                station_reporters[
+                                    f"discharge_daily_m3_s_{station_ID}"
+                                ] = {
+                                    "varname": f"grid.var.discharge_m3_s",
+                                    "type": "grid",
+                                    "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
+                                }
+                            report_config = multi_level_merge(
+                                report_config,
+                                {"hydrology.routing": station_reporters},
+                            )
+                    elif module_name == "_water_circle":
                         if module_values is True:
                             report_config = multi_level_merge(
                                 report_config,
@@ -505,18 +526,26 @@ class Reporter:
                     value = np.sum(value)
                 elif function == "nansum":
                     value = np.nansum(value)
-                elif function == "sample":
-                    decompressed_array = self.decompress(config["varname"], value)
-                    value = decompressed_array[int(args[0]), int(args[1])]
-                elif function == "sample_coord":
-                    if config["varname"].startswith("hydrology.grid"):
-                        gt = self.model.hydrology.grid.gt
-                    elif config["varname"].startswith("hydrology.HRU"):
-                        gt = self.hydrology.HRU.gt
+                elif function == "sample_xy":
+                    if config["type"] == "grid":
+                        decompressed_array = self.hydrology.grid.decompress(value)
+                    elif config["type"] == "HRU":
+                        decompressed_array = self.hydrology.HRU.decompress(value)
                     else:
-                        raise ValueError
-                    px, py = coord_to_pixel((float(args[1]), float(args[0])), gt)
-                    decompressed_array = self.decompress(config["varname"], value)
+                        raise ValueError(f"Unknown varname type {config['varname']}")
+                    value = decompressed_array[int(args[1]), int(args[0])]
+                elif function == "sample_lonlat":
+                    if config["type"] == "grid":
+                        gt = self.model.hydrology.grid.gt
+                        decompressed_array = self.hydrology.grid.decompress(value)
+                    elif config["type"] == "HRU":
+                        gt = self.hydrology.HRU.gt
+                        decompressed_array = self.hydrology.HRU.decompress(value)
+                    else:
+                        raise ValueError(f"Unknown varname type {config['varname']}")
+
+                    px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
+
                     try:
                         value = decompressed_array[py, px]
                     except IndexError:
@@ -570,6 +599,8 @@ class Reporter:
                         fill_value = np.nan
                     elif dtype in (int, np.int32, np.int64):
                         fill_value = -1
+                    elif dtype == bool:
+                        fill_value = False
                     else:
                         raise ValueError(
                             f"Value {dtype} of type {type(dtype)} not recognized."

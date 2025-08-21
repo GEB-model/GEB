@@ -155,28 +155,6 @@ def test_forcing():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_alter():
-    with WorkingDirectory(working_directory):
-        args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
-        args["build_config"] = {
-            "set_ssp": {"ssp": "ssp1"},
-            "setup_CO2_concentration": {},
-        }
-        args["working_directory"] = Path("alter")
-
-        args["from_model"] = ".."
-
-        args["working_directory"].mkdir(parents=True, exist_ok=True)
-
-        alter_fn(**args)
-
-        run_args = DEFAULT_RUN_ARGS.copy()
-        run_args["working_directory"] = args["working_directory"]
-
-        run_model_with_method(method="spinup", **run_args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_update_with_file():
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
@@ -237,6 +215,7 @@ def test_run():
                 "_water_circle": True,
             }
         )
+        args["config"]["hazards"]["floods"]["simulate"] = True
 
         run_model_with_method(method="run", **args)
 
@@ -249,6 +228,32 @@ def test_run():
             run_model_with_method(method="run", **args)
 
     # TODO: Add similarity check for the output of the CPU and GPU runs
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_alter():
+    with WorkingDirectory(working_directory):
+        args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
+        args["build_config"] = {
+            "set_ssp": {"ssp": "ssp1"},
+            "setup_CO2_concentration": {},
+        }
+        args["working_directory"] = Path("alter")
+
+        args["from_model"] = ".."
+
+        args["working_directory"].mkdir(parents=True, exist_ok=True)
+
+        alter_fn(**args)
+
+        run_args = DEFAULT_RUN_ARGS.copy()
+        run_args["working_directory"] = args["working_directory"]
+        run_args["config"] = parse_config(run_args["config"])
+        run_args["config"]["general"]["start_time"] = run_args["config"]["general"][
+            "spinup_time"
+        ] + timedelta(days=370)  # run just over a year more is not needed
+
+        run_model_with_method(method="spinup", **run_args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -279,6 +284,9 @@ def test_land_use_change():
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(args["config"])
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
+            days=370
+        )
         args["config"] = config
 
         geb = run_model_with_method(method=None, close_after_run=False, **args)
@@ -316,14 +324,16 @@ def test_run_yearly():
         config = parse_config(working_directory / args["config"])
         config["general"]["start_time"] = date(2000, 1, 1)
         config["general"]["end_time"] = date(2049, 12, 31)
+        config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
+
         args["config"] = config
         args["config"]["report"] = {}
-        assert pytest.raises(
+
+        with pytest.raises(
             AssertionError,
-            run_model_with_method,
-            method="run_yearly",
-            **args,
-        )
+            match="Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config.",
+        ):
+            run_model_with_method(method="run_yearly", **args)
 
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
 

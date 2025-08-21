@@ -73,19 +73,16 @@ def get_lake_height_from_bottom(lake_storage, lake_area):
     return height_from_bottom
 
 
-def get_lake_storage_from_height_above_bottom(lake_height, lake_area):
+def get_lake_storage_from_height_above_bottom(
+    lake_height: npt.NDArray[np.float32], lake_area: npt.NDArray[np.float32]
+) -> npt.NDArray[np.float32]:
     """Calculate the storage of a lake given its height above the bottom and area.
 
-    Parameters
-    ----------
-    lake_height : float
-        Height of the lake above the bottom in m
-    lake_area : float
-        Area of the lake in m2
+    Args:
+        lake_height: Height of the lake above the bottom in m
+        lake_area: Area of the lake in m2
 
     Returns:
-    -------
-    float
         Storage of the lake in m3
     """
     return lake_height * lake_area
@@ -285,7 +282,7 @@ class LakesReservoirs(Module):
 
     def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
         water_body_data = gpd.read_parquet(
-            self.model.files["geoms"]["waterbodies/waterbody_data"],
+            self.model.files["geom"]["waterbodies/waterbody_data"],
         )
         # drop all data that is not in the original ids
         waterbody_original_ids_compressed = np.unique(waterbody_original_ids)
@@ -417,20 +414,18 @@ class LakesReservoirs(Module):
 
         return lake_outflow_m3
 
-    def routing_reservoirs(self, n_routing_substeps, current_substep):
+    def routing_reservoirs(
+        self, n_routing_substeps: int, current_substep: int
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
         """Routine to update reservoir volumes and calculate reservoir outflow.
 
-        Parameters
-        ----------
-        inflow_m3 : np.ndarray
-            Inflow to the reservoirs in m3 per routing substep
-        n_routing_substeps : int
-            Number of routing substeps per time step
+        Args:
+            n_routing_substeps: Number of routing substeps per time step
+            current_substep: Current substep in the routing process
 
         Returns:
-        -------
-        reservoir_release_m3 : np.ndarray
-            Outflow from the reservoirs in m3 per routing substep
+            main_channel_release_m3: Outflow from the main channel in m3 per routing step.
+            command_area_release_m3: Outflow from the command area in m3 per routing step
         """
         main_channel_release_m3, command_area_release_m3 = (
             self.model.agents.reservoir_operators.release(

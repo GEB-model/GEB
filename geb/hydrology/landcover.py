@@ -54,13 +54,16 @@ def get_crop_kc_and_root_depths(
     crop_age_days_map,
     crop_harvest_age_days,
     irrigated_fields,
-    crop_stage_data,
+    crop_stage_lenghts,
+    crop_sub_stage_lengths,
     kc_crop_stage,
     rooth_depths,
     init_root_depth=0.2,
+    get_crop_sub_stage=False,
 ):
     kc = np.full_like(crop_map, np.nan, dtype=np.float32)
     root_depth = np.full_like(crop_map, np.nan, dtype=np.float32)
+    crop_sub_stage = np.full_like(crop_map, -1, dtype=np.int8)
     irrigated_fields = irrigated_fields.astype(
         np.int8
     )  # change dtype to int, so that we can use the boolean array as index
@@ -73,18 +76,18 @@ def get_crop_kc_and_root_depths(
             assert harvest_day > 0
             crop_progress = age_days * 100 // harvest_day  # for to be integer
             assert crop_progress <= 100
-            d1, d2, d3, d4 = crop_stage_data[crop]
+            l1, l2, l3, l4 = crop_stage_lenghts[crop]
             kc1, kc2, kc3 = kc_crop_stage[crop]
-            assert d1 + d2 + d3 + d4 == 100
-            if crop_progress <= d1:
+            assert l1 + l2 + l3 + l4 == 100
+            if crop_progress <= l1:
                 field_kc = kc1
-            elif crop_progress <= d1 + d2:
-                field_kc = kc1 + (crop_progress - d1) * (kc2 - kc1) / d2
-            elif crop_progress <= d1 + d2 + d3:
+            elif crop_progress <= l1 + l2:
+                field_kc = kc1 + (crop_progress - l1) * (kc2 - kc1) / l2
+            elif crop_progress <= l1 + l2 + l3:
                 field_kc = kc2
             else:
-                assert crop_progress <= d1 + d2 + d3 + d4
-                field_kc = kc2 + (crop_progress - (d1 + d2 + d3)) * (kc3 - kc2) / d4
+                assert crop_progress <= l1 + l2 + l3 + l4
+                field_kc = kc2 + (crop_progress - (l1 + l2 + l3)) * (kc3 - kc2) / l4
             assert not np.isnan(field_kc)
             kc[i] = field_kc
 
@@ -93,7 +96,25 @@ def get_crop_kc_and_root_depths(
                 + age_days * rooth_depths[crop, irrigated_fields[i]] / harvest_day
             )
 
-    return kc, root_depth
+            if get_crop_sub_stage:
+                d1, d2a, d2b, d3a, d3b, d4 = crop_sub_stage_lengths[crop]
+                assert d1 + d2a + d2b + d3a + d3b + d4 == 100
+
+                if crop_progress <= d1:
+                    crop_sub_stage[i] = 0
+                elif crop_progress <= d1 + d2a:
+                    crop_sub_stage[i] = 1
+                elif crop_progress <= d1 + d2a + d2b:
+                    crop_sub_stage[i] = 2
+                elif crop_progress <= d1 + d2a + d2b + d3a:
+                    crop_sub_stage[i] = 3
+                elif crop_progress <= d1 + d2a + d2b + d3a + d3b:
+                    crop_sub_stage[i] = 4
+                else:
+                    assert crop_progress <= d1 + d2a + d2b + d3a + d3b + d4
+                    crop_sub_stage[i] = 5
+
+    return kc, root_depth, crop_sub_stage
 
 
 class LandCover(Module):
@@ -147,6 +168,25 @@ class LandCover(Module):
             ]
         )
 
+        get_crop_sub_stage = self.model.agents.crop_farmers.var.crop_data_type == "GAEZ"
+        if get_crop_sub_stage:
+            crop_sub_stage_lengths = np.column_stack(
+                [
+                    self.model.agents.crop_farmers.var.crop_data["d1"],
+                    self.model.agents.crop_farmers.var.crop_data["d2a"],
+                    self.model.agents.crop_farmers.var.crop_data["d2b"],
+                    self.model.agents.crop_farmers.var.crop_data["d3a"],
+                    self.model.agents.crop_farmers.var.crop_data["d3b"],
+                    self.model.agents.crop_farmers.var.crop_data["d4"],
+                ]
+            )
+        else:
+            crop_sub_stage_lengths = np.full(
+                (self.model.agents.crop_farmers.var.crop_data.shape[0], 6),
+                np.nan,
+                dtype=np.float32,
+            )
+
         crop_factors = np.column_stack(
             [
                 self.model.agents.crop_farmers.var.crop_data["kc_initial"],
@@ -162,15 +202,19 @@ class LandCover(Module):
             ]
         )
 
-        crop_factor, self.HRU.var.root_depth = get_crop_kc_and_root_depths(
-            self.HRU.var.crop_map,
-            self.HRU.var.crop_age_days_map,
-            self.HRU.var.crop_harvest_age_days,
-            irrigated_fields=self.model.agents.crop_farmers.irrigated_fields,
-            crop_stage_data=crop_stage_lenghts,
-            kc_crop_stage=crop_factors,
-            rooth_depths=root_depths,
-            init_root_depth=0.01,
+        crop_factor, self.HRU.var.root_depth, crop_sub_stage = (
+            get_crop_kc_and_root_depths(
+                self.HRU.var.crop_map,
+                self.HRU.var.crop_age_days_map,
+                self.HRU.var.crop_harvest_age_days,
+                irrigated_fields=self.model.agents.crop_farmers.irrigated_fields,
+                crop_stage_lenghts=crop_stage_lenghts,
+                crop_sub_stage_lengths=crop_sub_stage_lengths,
+                kc_crop_stage=crop_factors,
+                rooth_depths=root_depths,
+                init_root_depth=0.01,
+                get_crop_sub_stage=get_crop_sub_stage,
+            )
         )
 
         self.HRU.var.root_depth[self.HRU.var.land_use_type == FOREST] = 2.0  # forest
@@ -266,15 +310,20 @@ class LandCover(Module):
             + irrigation_loss_to_evaporation_m
         )
 
-        self.HRU.var.actual_evapotranspiration_crop_life[
-            self.HRU.var.crop_map != -1
-        ] += np.minimum(
-            self.HRU.var.actual_evapotranspiration[self.HRU.var.crop_map != -1],
-            potential_evapotranspiration[self.HRU.var.crop_map != -1],
+        growing_crop_mask = self.HRU.var.crop_map != -1
+
+        self.HRU.var.actual_evapotranspiration_crop_life[growing_crop_mask] += (
+            actual_transpiration[growing_crop_mask]
         )
-        self.HRU.var.potential_evapotranspiration_crop_life[
-            self.HRU.var.crop_map != -1
-        ] += potential_evapotranspiration[self.HRU.var.crop_map != -1]
+        self.HRU.var.potential_evapotranspiration_crop_life[growing_crop_mask] += (
+            potential_transpiration_minus_interception_evaporation[growing_crop_mask]
+        )
+        self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage[
+            crop_sub_stage[growing_crop_mask], growing_crop_mask
+        ] += actual_transpiration[growing_crop_mask]
+        self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage[
+            crop_sub_stage[growing_crop_mask], growing_crop_mask
+        ] += potential_transpiration_minus_interception_evaporation[growing_crop_mask]
 
         assert not np.isnan(self.HRU.var.actual_evapotranspiration).any()
         assert not (runoff < 0).any()

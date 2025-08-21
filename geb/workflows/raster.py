@@ -7,20 +7,14 @@ def reclassify(
 ) -> xr.DataArray | np.ndarray:
     """Reclassify values in an xarray DataArray using a dictionary.
 
-    Parameters
-    ----------
-    data_array : xarray.DataArray
-        The input data array to be reclassified
-    remap_dict : dict
-        Dictionary mapping old values to new values
-    method : str
-        The method to use for reclassification. Dict or lookup.
-        If lookup, it will use a lookup array for faster performance, but
-        keys must be positive integers only and be limited in size.
+    Args:
+        data_array: The input data array to be reclassified
+        remap_dict: Dictionary mapping old values to new values
+        method: The method to use for reclassification. Dict or lookup.
+            If lookup, it will use a lookup array for faster performance, but
+            keys must be positive integers only and be limited in size.
 
     Returns:
-    -------
-    xarray.DataArray or numpy.ndarray
         Reclassified array with the same dimensions and coordinates
     """
     # create numpy array from dictionary values to get the dtype of the output

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import calendar
 import copy
 import math
@@ -8,11 +7,11 @@ from typing import Tuple
 
 import numpy as np
 import numpy.typing as npt
-from numpy.lib.stride_tricks import sliding_window_view
 import pandas as pd
 from honeybees.library.neighbors import find_neighbors
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from numba import njit
+from numpy.lib.stride_tricks import sliding_window_view
 from scipy.optimize import curve_fit
 from scipy.stats import genextreme
 
@@ -161,9 +160,6 @@ class CropFarmers(AgentBaseClass):
 
         self.adjust_cultivation_costs()
 
-        if self.model.in_spinup:
-            self.spinup()
-
         # ruleset variables
         self.wells_adaptation_active = (
             not self.config["expected_utility"]["adaptation_well"]["ruleset"]
@@ -196,6 +192,9 @@ class CropFarmers(AgentBaseClass):
         self.microcredit_adaptation_active = (
             not self.config["microcredit"]["ruleset"] == "no-adaptation"
         )
+
+        if self.model.in_spinup:
+            self.spinup()
 
     @property
     def name(self):
@@ -290,6 +289,13 @@ class CropFarmers(AgentBaseClass):
         )
         self.HRU.var.potential_evapotranspiration_crop_life = self.HRU.full_compressed(
             0, dtype=np.float32
+        )
+        self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage = np.zeros(
+            (6, self.HRU.var.actual_evapotranspiration_crop_life.size), dtype=np.float32
+        )
+        self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage = np.zeros(
+            (6, self.HRU.var.potential_evapotranspiration_crop_life.size),
+            dtype=np.float32,
         )
         self.HRU.var.crop_map = np.full_like(self.HRU.var.land_owners, -1)
         self.HRU.var.crop_age_days_map = np.full_like(self.HRU.var.land_owners, -1)
@@ -502,6 +508,12 @@ class CropFarmers(AgentBaseClass):
         self.var.remaining_irrigation_limit_m3 = DynamicArray(
             n=self.var.n, max_n=self.var.max_n, fill_value=np.nan, dtype=np.float32
         )
+        self.var.irrigation_limit_reset_day_index = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.int32,
+            fill_value=0,  # reset on day 0
+        )
 
         self.var.yield_ratios_drought_event = DynamicArray(
             n=self.var.n,
@@ -627,6 +639,10 @@ class CropFarmers(AgentBaseClass):
         self.var.irrigation_efficiency = DynamicArray(
             n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=0.50
         )
+
+        # self.var.irrigation_efficiency = DynamicArray(
+        #     n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=1.0
+        # )
 
         rng = np.random.default_rng(42)
         self.var.irrigation_efficiency[irrigation_mask] = rng.choice(
@@ -777,11 +793,16 @@ class CropFarmers(AgentBaseClass):
             fill_value=np.nan,
         )
 
-        for i, varname in enumerate(["pr_gev_c", "pr_gev_loc", "pr_gev_scale"]):
-            GEV_pr_grid = getattr(self.grid, varname)
-            self.var.GEV_pr_parameters[:, i] = sample_from_map(
-                GEV_pr_grid, self.var.locations.data, self.grid.gt
-            )
+        if (
+            self.personal_insurance_adaptation_active
+            or self.index_insurance_adaptation_active
+            or self.pr_insurance_adaptation_active
+        ):
+            for i, varname in enumerate(["pr_gev_c", "pr_gev_loc", "pr_gev_scale"]):
+                GEV_pr_grid = getattr(self.grid, varname)
+                self.var.GEV_pr_parameters[:, i] = sample_from_map(
+                    GEV_pr_grid, self.var.locations.data, self.grid.gt
+                )
 
         assert not np.all(np.isnan(self.var.GEV_pr_parameters))
         self.var.risk_perc_min = DynamicArray(
@@ -995,7 +1016,7 @@ class CropFarmers(AgentBaseClass):
         return activation_order
 
     @property
-    def farmer_command_area(self):
+    def command_area(self):
         return farmer_command_area(
             self.var.n,
             self.var.field_indices,
@@ -1005,7 +1026,7 @@ class CropFarmers(AgentBaseClass):
 
     @property
     def is_in_command_area(self):
-        return self.farmer_command_area != -1
+        return self.command_area != -1
 
     def save_pr(self):
         pr = self.HRU.pr * (24 * 3600)  # mm / day
@@ -1059,6 +1080,8 @@ class CropFarmers(AgentBaseClass):
                     - self.var.cumulative_water_deficit_previous_day
                 )
             )
+            # print(self.var.cumulative_water_deficit_m3[:, day_index])
+            # print(self.var.cumulative_water_deficit_m3[:, day_index - 1])
             assert (
                 self.var.cumulative_water_deficit_m3[:, day_index]
                 >= self.var.cumulative_water_deficit_m3[:, day_index - 1]
@@ -1073,8 +1096,21 @@ class CropFarmers(AgentBaseClass):
 
     def get_gross_irrigation_demand_m3(
         self, potential_evapotranspiration, available_infiltration
-    ) -> npt.NDArray[np.float32]:
-        gross_irrigation_demand_m3: npt.NDArray[np.float32] = (
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
+        """Calculates the gross irrigation demand in m3 for each farmer.
+
+        Args:
+            potential_evapotranspiration: potential evapotranspiration in m/day
+            available_infiltration: available infiltration from other sources in m/day
+
+        Returns:
+            gross_irrigation_demand_m3: gross irrigation demand in m3 for each farmer
+            gross_potential_irrigation_m3_limit_adjusted: adjusted gross potential irrigation in m3 limit for each farmer
+        """
+        gross_irrigation_demand_m3, gross_potential_irrigation_m3_limit_adjusted = (
             get_gross_irrigation_demand_m3(
                 day_index=self.model.current_day_of_year - 1,
                 n=self.var.n,
@@ -1097,6 +1133,7 @@ class CropFarmers(AgentBaseClass):
                 arno_beta=self.HRU.var.arno_beta,
                 saturated_hydraulic_conductivity=self.HRU.var.saturated_hydraulic_conductivity,
                 remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
+                irrigation_limit_reset_day_index=self.var.irrigation_limit_reset_day_index.data,
                 cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
                 crop_calendar=self.var.crop_calendar.data,
                 crop_group_numbers=self.var.crop_data[
@@ -1114,7 +1151,7 @@ class CropFarmers(AgentBaseClass):
         assert (
             gross_irrigation_demand_m3 < self.model.hydrology.HRU.var.cell_area
         ).all()
-        return gross_irrigation_demand_m3
+        return gross_irrigation_demand_m3, gross_potential_irrigation_m3_limit_adjusted
 
     @property
     def surface_irrigated(self):
@@ -1137,6 +1174,7 @@ class CropFarmers(AgentBaseClass):
     def abstract_water(
         self,
         gross_irrigation_demand_m3_per_field: npt.NDArray[np.float32],
+        gross_irrigation_demand_m3_per_field_limit_adjusted: npt.NDArray[np.float32],
         available_channel_storage_m3: npt.NDArray[np.float32],
         available_groundwater_m3: npt.NDArray[np.float64],
         groundwater_depth: npt.NDArray[np.float64],
@@ -1156,6 +1194,7 @@ class CropFarmers(AgentBaseClass):
 
         Args:
             gross_irrigation_demand_m3_per_field: gross irrigation demand in m3 per field
+            gross_irrigation_demand_m3_per_field_limit_adjusted: adjusted gross irrigation demand in m3 per field
             available_channel_storage_m3: available channel storage in m3 per grid cell
             available_groundwater_m3: available groundwater storage in m3 per grid cell
             groundwater_depth: groundwater depth in meters per grid cell
@@ -1171,13 +1210,13 @@ class CropFarmers(AgentBaseClass):
         assert (available_groundwater_m3 >= 0).all()
         assert (available_reservoir_storage_m3 >= 0).all()
 
-        gross_irrigation_demand_m3_per_farmer = self.field_to_farmer(
-            gross_irrigation_demand_m3_per_field
+        gross_irrigation_demand_m3_per_farmer_limit_adjusted = self.field_to_farmer(
+            gross_irrigation_demand_m3_per_field_limit_adjusted
         )
 
         maximum_abstraction_reservoir_m3_by_farmer = (
             self.agents.reservoir_operators.get_maximum_abstraction_m3_by_farmer(
-                self.farmer_command_area, gross_irrigation_demand_m3_per_farmer
+                self.command_area, gross_irrigation_demand_m3_per_farmer_limit_adjusted
             )
         )
 
@@ -1210,13 +1249,14 @@ class CropFarmers(AgentBaseClass):
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             maximum_abstraction_reservoir_m3_by_farmer=maximum_abstraction_reservoir_m3_by_farmer,
             groundwater_depth=groundwater_depth,
-            command_area_by_farmer=self.farmer_command_area,
+            command_area_by_farmer=self.command_area,
             return_fraction=self.model.config["agent_settings"]["farmers"][
                 "return_fraction"
             ],
             well_depth=self.var.well_depth.data,
             remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
+            gross_irrigation_demand_m3_per_field_limit_adjusted=gross_irrigation_demand_m3_per_field_limit_adjusted,
         )
 
         assert (water_withdrawal_m < 1).all()
@@ -1320,28 +1360,75 @@ class CropFarmers(AgentBaseClass):
     @staticmethod
     @njit(cache=True)
     def get_yield_ratio_numba_GAEZ(
-        crop_map: np.ndarray, evap_ratios: np.ndarray, KyT
-    ) -> float:
+        crop_map: np.ndarray,
+        evaporation_ratio: np.ndarray,
+        evaporation_ratio_per_crop_stage: npt.NDArray[np.float32],
+        KyT: npt.NDArray[np.float32],
+        Ky1: npt.NDArray[np.float32],
+        Ky2a: npt.NDArray[np.float32],
+        Ky2b: npt.NDArray[np.float32],
+        Ky3a: npt.NDArray[np.float32],
+        Ky3b: npt.NDArray[np.float32],
+        Ky4: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
         """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031.
 
         Args:
             crop_map: array of currently harvested crops.
-            evap_ratios: ratio of actual to potential evapotranspiration of harvested crops.
+            evaporation_ratio: ratio of actual to potential evapotranspiration of harvested crops.
+            evaporation_ratio_per_crop_stage: ratio of actual to potential evapotranspiration per crop stage.
             KyT: Water stress reduction factor from GAEZ.
+            Ky1: Water stress reduction factor for crop stage 1 from GAEZ.
+            Ky2a: Water stress reduction factor for crop stage 2a from GAEZ.
+            Ky2b: Water stress reduction factor for crop stage 2b from GAEZ.
+            Ky3a: Water stress reduction factor for crop stage 3a from GAEZ.
+            Ky3b: Water stress reduction factor for crop stage 3b from GAEZ.
+            Ky4: Water stress reduction factor for crop stage 4 from GAEZ.
 
         Returns:
             yield_ratios: yield ratio (as ratio of maximum obtainable yield) per harvested crop.
         """
-        yield_ratios = np.full(evap_ratios.size, -1, dtype=np.float32)
+        yield_ratios = np.full(evaporation_ratio.size, -1, dtype=np.float32)
 
-        assert crop_map.size == evap_ratios.size
+        assert crop_map.size == evaporation_ratio.size
 
-        for i in range(evap_ratios.size):
-            evap_ratio = evap_ratios[i]
+        for i in range(evaporation_ratio.size):
+            evap_ratio = evaporation_ratio[i]
             crop = crop_map[i]
-            yield_ratios[i] = max(
-                1 - KyT[crop] * (1 - evap_ratio), 0
-            )  # Yield ratio is never lower than 0.
+            yield_ratio_crop = 1 - KyT[crop] * (1 - evap_ratio)
+
+            if not np.isnan(evaporation_ratio_per_crop_stage[0, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky1[crop] * (1 - evaporation_ratio_per_crop_stage[0, i]),
+                )
+            if not np.isnan(evaporation_ratio_per_crop_stage[1, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky2a[crop] * (1 - evaporation_ratio_per_crop_stage[1, i]),
+                )
+            if not np.isnan(evaporation_ratio_per_crop_stage[2, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky2b[crop] * (1 - evaporation_ratio_per_crop_stage[2, i]),
+                )
+            if not np.isnan(evaporation_ratio_per_crop_stage[3, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky3a[crop] * (1 - evaporation_ratio_per_crop_stage[3, i]),
+                )
+            if not np.isnan(evaporation_ratio_per_crop_stage[4, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky3b[crop] * (1 - evaporation_ratio_per_crop_stage[4, i]),
+                )
+            if not np.isnan(evaporation_ratio_per_crop_stage[5, i]):
+                yield_ratio_crop = np.minimum(
+                    yield_ratio_crop,
+                    1 - Ky4[crop] * (1 - evaporation_ratio_per_crop_stage[5, i]),
+                )
+
+            yield_ratios[i] = np.maximum(yield_ratio_crop, 0)
 
         return yield_ratios
 
@@ -1354,7 +1441,7 @@ class CropFarmers(AgentBaseClass):
         beta: np.ndarray,
         P0: np.ndarray,
         P1: np.ndarray,
-    ) -> float:
+    ) -> npt.NDArray[np.float32]:
         """Calculate yield ratio based on https://doi.org/10.1016/j.jhydrol.2009.07.031.
 
         Args:
@@ -1396,8 +1483,10 @@ class CropFarmers(AgentBaseClass):
     def get_yield_ratio(
         self,
         harvest: np.ndarray,
-        actual_transpiration: np.ndarray,
-        potential_transpiration: np.ndarray,
+        actual_transpiration: npt.NDArray[np.float32],
+        potential_transpiration: npt.NDArray[np.float32],
+        actual_transpiration_per_crop_stage: npt.NDArray[np.float32],
+        potential_transpiration_per_crop_stage: npt.NDArray[np.float32],
         crop_map: np.ndarray,
     ) -> np.ndarray:
         """Gets yield ratio for each crop given the ratio between actual and potential evapostranspiration during growth.
@@ -1406,21 +1495,32 @@ class CropFarmers(AgentBaseClass):
             harvest: Map of crops that are harvested.
             actual_transpiration: Actual evapotranspiration during crop growth period.
             potential_transpiration: Potential evapotranspiration during crop growth period.
+            actual_transpiration_per_crop_stage: Actual evapotranspiration per crop stage.
+            potential_transpiration_per_crop_stage: Potential evapotranspiration per crop stage.
             crop_map: Subarray of type of crop grown.
 
         Returns:
             yield_ratio: Map of yield ratio.
-
-        TODO: Implement GAEZ crop stage function
         """
         if self.var.crop_data_type == "GAEZ":
-            yield_ratio = self.get_yield_ratio_numba_GAEZ(
+            yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_GAEZ(
                 crop_map[harvest],
-                actual_transpiration[harvest] / potential_transpiration[harvest],
-                self.var.crop_data["KyT"].values,
+                evaporation_ratio=actual_transpiration[harvest]
+                / potential_transpiration[harvest],
+                evaporation_ratio_per_crop_stage=actual_transpiration_per_crop_stage[
+                    :, harvest
+                ]
+                / potential_transpiration_per_crop_stage[:, harvest],
+                KyT=self.var.crop_data["KyT"].values,
+                Ky1=self.var.crop_data["Ky1"].values,
+                Ky2a=self.var.crop_data["Ky2a"].values,
+                Ky2b=self.var.crop_data["Ky2b"].values,
+                Ky3a=self.var.crop_data["Ky3a"].values,
+                Ky3b=self.var.crop_data["Ky3b"].values,
+                Ky4=self.var.crop_data["Ky4"].values,
             )
         elif self.var.crop_data_type == "MIRCA2000":
-            yield_ratio = self.get_yield_ratio_numba_MIRCA2000(
+            yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_MIRCA2000(
                 crop_map[harvest],
                 actual_transpiration[harvest] / potential_transpiration[harvest],
                 self.var.crop_data["a"].values,
@@ -1428,8 +1528,6 @@ class CropFarmers(AgentBaseClass):
                 self.var.crop_data["P0"].values,
                 self.var.crop_data["P1"].values,
             )
-            if np.any(yield_ratio == 0):
-                pass
         else:
             raise ValueError(
                 f"Unknown crop data type: {self.var.crop_data_type}, must be 'GAEZ' or 'MIRCA2000'"
@@ -1546,6 +1644,8 @@ class CropFarmers(AgentBaseClass):
                 harvest,
                 self.HRU.var.actual_evapotranspiration_crop_life,
                 self.HRU.var.potential_evapotranspiration_crop_life,
+                self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage,
+                self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage,
                 self.HRU.var.crop_map,
             )
             assert (yield_ratio_per_field >= 0).all()
@@ -2210,8 +2310,6 @@ class CropFarmers(AgentBaseClass):
         self.var.cumulative_pr_during_growing_season[harvesting_farmers] += (
             season_pr_per_farmer
         )
-
-        pass
 
     def save_yearly_spei(self):
         assert self.model.current_time.month == 1
@@ -3649,7 +3747,11 @@ class CropFarmers(AgentBaseClass):
         # Increase intention factor if someone in network has adaptation
         intention_factor_adjusted = self.var.intention_factor.copy()
 
-        if adaptation_type in (4, 5, 6):
+        if adaptation_type in (
+            PERSONAL_INSURANCE_ADAPTATION,
+            INDEX_INSURANCE_ADAPTATION,
+            PR_INSURANCE_ADAPTATION,
+        ):
             social_network_payout = self.var.payout_mask[
                 self.var.social_network, adaptation_type
             ]
@@ -4638,7 +4740,7 @@ class CropFarmers(AgentBaseClass):
             # Create a DataFrame with command area and elevation
             df = pd.DataFrame(
                 {
-                    "command_area": self.farmer_command_area,
+                    "command_area": self.command_area,
                     "elevation": self.var.elevation,
                 }
             )
@@ -4660,7 +4762,7 @@ class CropFarmers(AgentBaseClass):
 
             self.var.farmer_base_class[:] = self.create_farmer_classes(
                 crop_calendar_group,
-                self.farmer_command_area,
+                self.command_area,
                 self.up_or_downstream,
             )
 

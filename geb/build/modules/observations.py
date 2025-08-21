@@ -88,7 +88,12 @@ def plot_snapping(
     # Select the upstream area within the extent of the plot
     upstream_area_within_extent = upstream_area.isel(
         get_window(
-            upstream_area.x, upstream_area.y, bounds=(xmin, ymin, xmax, ymax), buffer=1
+            upstream_area.x,
+            upstream_area.y,
+            bounds=(xmin, ymin, xmax, ymax),
+            buffer=1,
+            raise_on_buffer_out_of_bounds=False,
+            raise_on_out_of_bounds=False,
         )
     )
 
@@ -134,22 +139,18 @@ class Observations:
         It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
         Additional stations can be added as csv files in the custom_stations folder in the GEB data catalog.
 
-        Parameters
-        ----------
-        max_uparea_difference_ratio : float, optional
-            The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area. Default is 0.3 (30%).
-        max_spatial_difference_degrees : float, optional
-            The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment. Default is 0.1 degrees.
-        custom_river_stations : str, optional
-            Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
+        Args:
+            max_uparea_difference_ratio: The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area. Default is 0.3 (30%).
+            max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment. Default is 0.1 degrees.
+            custom_river_stations: Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
         """
         # load data
         upstream_area = self.grid[
             "routing/upstream_area"
         ].compute()  # we need to use this one many times, so we compute it once
         upstream_area_subgrid = self.other["drainage/original_d8_upstream_area"]
-        rivers = self.geoms["routing/rivers"]
-        region_shapefile = self.geoms["mask"]
+        rivers = self.geom["routing/rivers"]
+        region_shapefile = self.geom["mask"]
         Q_obs = self.data_catalog.get_geodataset("GRDC")  # load the Q_obs dataset
 
         # create folders
@@ -240,7 +241,6 @@ class Observations:
                     Q_station, station_coords = process_station_data(
                         Q_station, dt_format="%Y-%m-%d %H:%M:%S", startrow=3
                     )
-
                     # Check for missing or invalid dates
                     if Q_station.index.isnull().any():
                         raise ValueError(
@@ -260,6 +260,7 @@ class Observations:
                             ]
                         )  # get the id of the station in the Q_obs dataset
                         Q_obs_merged = Q_obs.copy()
+
         else:
             Q_obs_merged = Q_obs.copy()
 
@@ -498,8 +499,8 @@ class Observations:
                     "Q_obs_station_coords": Q_obs_station_coords,
                     "closest_point_coords": closest_point_coords,
                     "subgrid_pixel_coords": subgrid_pixel_coords,
-                    "grid_pixel_coords": grid_pixel_coords,
-                    "closest_tuple": closest_tuple,
+                    "snapped_grid_pixel_lonlat": grid_pixel_coords,
+                    "snapped_grid_pixel_xy": closest_tuple,
                     "GEB_upstream_area_from_subgrid": float(
                         GEB_upstream_area_from_subgrid
                     ),
@@ -537,10 +538,10 @@ class Observations:
         discharge_snapping_gdf = gpd.GeoDataFrame(
             discharge_snapping_df,
             geometry=gpd.points_from_xy(
-                discharge_snapping_df["grid_pixel_coords"].apply(
+                discharge_snapping_df["snapped_grid_pixel_lonlat"].apply(
                     lambda coord: coord[0]
                 ),
-                discharge_snapping_df["grid_pixel_coords"].apply(
+                discharge_snapping_df["snapped_grid_pixel_lonlat"].apply(
                     lambda coord: coord[1]
                 ),
             ),
@@ -554,7 +555,7 @@ class Observations:
             discharge_df, name="discharge/Q_obs"
         )  # save the discharge data as a table
 
-        self.set_geoms(
+        self.set_geom(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"
         )
 

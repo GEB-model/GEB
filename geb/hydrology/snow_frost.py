@@ -189,10 +189,6 @@ class SnowFrost(Module):
         )
         # Pixel-average initial snow cover: average of values in 3 elevation
         # zones
-
-        # ---------------------------------------------------------------------------------
-        # Initial part of frost index
-
         self.var.Afrost = 0.97
         self.var.frost_index_threshold = 85.0
         self.var.SnowWaterEquivalent = 0.45
