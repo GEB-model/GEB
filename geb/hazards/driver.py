@@ -30,6 +30,9 @@ class HazardDriver:
 
         self.sfincs = SFINCS(self, n_timesteps=longest_flood_event)
 
+    def test_function(self, input1, input2):
+        return input1 + input2
+
     def step(self):
         if self.config["hazards"]["floods"]["simulate"]:
             if self.simulate_hydrology:
