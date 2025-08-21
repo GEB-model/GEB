@@ -21,6 +21,11 @@ class HazardDriver:
             self.initialize(longest_flood_event)
 
     def initialize(self, longest_flood_event):
+        """Initializes the hazard driver
+
+        Used to set up the SFINCS model for flood simulation and in the future perhaps other hazards.
+
+        """
         from geb.hazards.floods.sfincs import SFINCS
 
         self.sfincs = SFINCS(self, n_timesteps=longest_flood_event)
