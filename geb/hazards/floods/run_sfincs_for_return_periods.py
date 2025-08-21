@@ -200,13 +200,29 @@ def run_sfincs_for_return_periods_coastal(
 
 
 def run_sfincs_for_return_periods(
-    model_root,
-    return_periods=[2, 5, 10, 20, 50, 100, 250, 500, 1000],
-    clean_working_dir=True,
-    export=True,
-    export_dir=None,
-    gpu=False,
-):
+    model_root: Path,
+    return_periods: list[int] = [2, 5, 10, 20, 50, 100, 250, 500, 1000],
+    clean_working_dir: bool = True,
+    export: bool = True,
+    export_dir: Path | None = None,
+    gpu: bool = False,
+) -> dict[int, xr.DataArray]:
+    """Run SFINCS for coastal return periods.
+
+    Notes:
+        This function runs SFINCS for the specified return periods and exports the results.
+
+    Args:
+        model_root: The root directory of the SFINCS model.
+        return_periods: List of return periods to simulate.
+        clean_working_dir: Whether to clean the working directory before simulation.
+        export: Whether to export results.
+        export_dir: Directory to export results.
+        gpu: Whether to use GPU acceleration.
+
+    Returns:
+        Dictionary containing the maximum flood depth for each return period.
+    """
     if export_dir is None:
         export_dir: Path = model_root / "risk"
 

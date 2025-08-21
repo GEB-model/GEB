@@ -546,8 +546,17 @@ class SFINCS:
             )
         return rp_maps_riverine
 
-    def merge_return_period_maps(self, rp_maps_coastal, rp_maps_riverine):
-        """Merges the return period maps for riverine and coastal floods into a single dataset."""
+    def merge_return_period_maps(
+        self,
+        rp_maps_coastal: dict[int, xr.DataArray],
+        rp_maps_riverine: dict[int, xr.DataArray],
+    ):
+        """Merges the return period maps for riverine and coastal floods into a single dataset.
+
+        Args:
+            rp_maps_coastal: Dictionary of coastal return period maps.
+            rp_maps_riverine: Dictionary of riverine return period maps.
+        """
         for return_period in self.config["return_periods"]:
             if rp_maps_coastal is None:
                 riverine_da = rp_maps_riverine[return_period]
