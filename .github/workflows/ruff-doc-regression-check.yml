@@ -30,23 +30,39 @@ jobs:
       - name: Detect changed Python files
         id: changed_files
         run: |
-          cd pr-branch
-          # Fetch main branch for comparison
-          git fetch origin main:main
-          # Get changed Python files between main and current branch
-          changed_files=$(git diff --name-only main...HEAD | grep '\.py$' || true)
+          # Use filesystem comparison between checked out branches to find changed Python files
+          echo "Comparing Python files between main-branch and pr-branch directories..."
+          
+          # Find all Python files in both directories
+          find main-branch -name "*.py" -type f | sed 's|^main-branch/||' | sort > main_files.txt
+          find pr-branch -name "*.py" -type f | sed 's|^pr-branch/||' | sort > pr_files.txt
+          
+          # Find files that are different (new, modified, or only in PR)
+          changed_files=""
+          
+          # Check files that exist in PR branch
+          while IFS= read -r file; do
+            if [ -f "main-branch/$file" ]; then
+              # File exists in both, check if different
+              if ! diff -q "main-branch/$file" "pr-branch/$file" >/dev/null 2>&1; then
+                changed_files="$changed_files$file"$'\n'
+              fi
+            else
+              # New file in PR
+              changed_files="$changed_files$file"$'\n'
+            fi
+          done < pr_files.txt
+          
           echo "Changed Python files in this PR:"
           echo "$changed_files"
           
-          # Filter to only existing files and save to file
-          echo "$changed_files" | while IFS= read -r file; do
-            [ -n "$file" ] && [ -f "$file" ] && echo "$file"
-          done > ../changed_python_files.txt || true
+          # Save to file, filtering out empty lines
+          echo "$changed_files" | grep -v '^$' > changed_python_files.txt || touch changed_python_files.txt
           
-          # Count actual existing files
-          file_count=$(wc -l < ../changed_python_files.txt 2>/dev/null || echo "0")
+          # Count actual files
+          file_count=$(wc -l < changed_python_files.txt 2>/dev/null || echo "0")
           echo "Valid changed Python files found: $file_count"
-          cat ../changed_python_files.txt || true
+          cat changed_python_files.txt || true
           echo "files_exist=$([ "$file_count" -gt 0 ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
 
       - name: Run ruff on main (capture full output + per-rule stats)
@@ -100,17 +116,17 @@ jobs:
               echo "Regression detected for rule: $rule (main branch: $base -> pull request: $pr)"
               echo "More info: https://docs.astral.sh/ruff/rules/$rule"
               echo "Full PR error lines for rule $rule:"
-              cd pr-branch
               
               # Check if we have valid changed files to examine
-              if [ -s "../$CHANGED_FILES" ]; then
+              if [ -s "$CHANGED_FILES" ]; then
                 echo "Checking only changed Python files:"
-                # Use a more robust approach to handle file paths
+                # Convert relative paths to full paths in pr-branch directory
                 while IFS= read -r file; do
-                  [ -n "$file" ] && [ -f "$file" ] && echo "$file"
-                done < "../$CHANGED_FILES" | xargs -r ruff check --preview --select "$rule" --output-format full || true
+                  [ -n "$file" ] && [ -f "pr-branch/$file" ] && echo "pr-branch/$file"
+                done < "$CHANGED_FILES" | xargs -r ruff check --preview --select "$rule" --output-format full || true
               else
                 echo "No valid changed Python files found, checking all files:"
+                cd pr-branch
                 ruff check --preview --select "$rule" --output-format full . || true
               fi
               echo ""
