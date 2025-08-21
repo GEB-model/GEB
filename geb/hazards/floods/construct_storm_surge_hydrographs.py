@@ -453,19 +453,39 @@ def generate_surge_hydrograph(
 
 
 def generate_storm_tide_hydrograph(
-    rps,
-    station,
-    tidepd,
-    surgepd,
-    average_tide_signal,
-    spring_tide_signal,
-    surge_hydrograph_duration_mean,
-    surge_hydrograph_height,
-    percentile,
-    rp,
-    offset,
-    make_plot,
-):
+    rps: pd.DataFrame,
+    station: int,
+    tidepd: pd.DataFrame,
+    surgepd: pd.DataFrame,
+    average_tide_signal: np.ndarray,
+    spring_tide_signal: np.ndarray,
+    surge_hydrograph_duration_mean: np.ndarray,
+    surge_hydrograph_height: np.ndarray,
+    percentile: float,
+    rp: int,
+    offset: int,
+    make_plot: bool,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """This function generates storm tide hydrographs for a given station.
+
+    Args:
+        rps: A DataFrame containing return period statistics.
+        station: The station ID.
+        tidepd: A DataFrame containing tide predictions.
+        surgepd: A DataFrame containing surge predictions.
+        average_tide_signal: An array containing the average tide signal.
+        spring_tide_signal: An array containing the spring tide signal.
+        surge_hydrograph_duration_mean: An array containing the mean duration of the surge hydrograph.
+        surge_hydrograph_height: An array containing the height of the surge hydrograph.
+        percentile: The percentile to use for the hydrograph.
+        rp: The return period.
+        offset: The offset for the hydrograph.
+        make_plot: Whether to create a plot.
+
+    Returns:
+        A tuple containing the DataFrames with the tide and surge hydrographs.
+
+    """
     surgepd = surgepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
     tidepd = tidepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
 
