@@ -1,3 +1,8 @@
+"""This module is based on the HGRAPHER and COAST-RP modeling frameworks.
+
+Source code can be found on https://doi.org/10.5281/zenodo.7912730.
+"""
+
 import itertools
 import os
 import warnings
@@ -92,11 +97,6 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False):
         export_spring[rp].to_csv(
             export_folder / f"gtsm_spring_tide_hydrograph_rp{rp:04d}.csv"
         )
-
-    # df_event_to_file = df_event["twl"].to_frame(name=station)
-    # normal_tide = pd.concat([normal_tide, df_event_to_file], axis=1)
-    # df_event_spring_to_file = df_event_spring["twl"].to_frame(name=station)
-    # spring_tide = pd.concat([spring_tide, df_event_spring_to_file], axis=1)
 
 
 def generate_tide_signals(
