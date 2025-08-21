@@ -2,6 +2,7 @@ import itertools
 import os
 import warnings
 from datetime import datetime, timedelta
+from typing import Any, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,7 +15,16 @@ from ...workflows.io import load_table
 warnings.filterwarnings("ignore")
 
 
-def generate_storm_surge_hydrographs(model, make_plot=False):
+def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False):
+    """Generate storm surge hydrographs for a given GEB model.
+
+    Args:
+        model: The GEB model instance.
+        make_plot: Whether to create plots of the hydrographs.
+
+    Returns:
+        None
+    """
     # read geojson file to get station ids
     station_ids = load_geom(model.files["geom"]["gtsm/stations_coast_rp"])
     os.makedirs("plot/gtsm", exist_ok=True)
@@ -92,7 +102,19 @@ def generate_storm_surge_hydrographs(model, make_plot=False):
     # spring_tide = pd.concat([spring_tide, df_event_spring_to_file], axis=1)
 
 
-def generate_tide_signals(station, tidepd, make_plot=True):
+def generate_tide_signals(
+    station: int, tidepd: pd.Series, make_plot: bool = True
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Generate tidal signals for a given station.
+
+    Args:
+        station: The station ID.
+        tidepd: The tidal data for the station.
+        make_plot: Whether to create a plot of the tidal signals.
+
+    Returns:
+        A tuple containing the average and spring tidal signals.
+    """
     tidepd = tidepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
     tidepd = tidepd.dropna()  # drop NaN values
     # tidepd = tidepd.set_index("time")
@@ -253,7 +275,20 @@ def generate_tide_signals(station, tidepd, make_plot=True):
     return average_tide_signal, spring_tide_signal
 
 
-def generate_surge_hydrograph(station, surgepd, percentile, make_plot):
+def generate_surge_hydrograph(
+    station: int, surgepd: pd.Series, percentile: float, make_plot: bool
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Generate storm surge hydrographs for a given GEB model.
+
+    Args:
+        station: The station ID.
+        surgepd: The surge data for the station.
+        percentile: The percentile to use for peak selection.
+        make_plot: Whether to create plots of the hydrographs.
+
+    Returns:
+        A tuple containing the average and peak surge hydrographs arrays.
+    """
     # read surge data
     surgepd = surgepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
     surgepd = surgepd.dropna()  # drop NaN values
