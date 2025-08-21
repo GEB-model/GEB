@@ -24,6 +24,8 @@ jobs:
 
       - name: Install Ruff
         uses: astral-sh/ruff-action@v3
+        with:
+          args: "--version"
 
       - name: Run ruff on main (capture full output + per-rule stats)
         id: ruff_main
