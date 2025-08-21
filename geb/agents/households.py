@@ -79,7 +79,7 @@ class Households(AgentBaseClass):
     def name(self):
         return "agents.households"
 
-    def reproject_locations_to_floodmap_crs(self):
+    def reproject_locations_to_floodmap_crs(self) -> None:
         locations = self.var.locations.copy()
         self.var.household_points = self.var.household_points.to_crs(
             self.flood_maps["crs"]
@@ -132,7 +132,7 @@ class Households(AgentBaseClass):
         # set var
         self.var.income_distribution = income_distribution_region
 
-    def assign_household_wealth_and_income(self):
+    def assign_household_wealth_and_income(self) -> None:
         # initiate array with wealth indices
         wealth_index = load_array(
             self.model.files["array"]["agents/households/wealth_index"]
@@ -151,12 +151,8 @@ class Households(AgentBaseClass):
         # assign wealth based on income (dummy data, there are ratios available in literature)
         self.var.wealth = DynamicArray(2.5 * self.var.income.data, max_n=self.max_n)
 
-    def update_building_attributes(self):
-        """Update building attributes based on household data.
-
-        Returns:
-            None
-        """
+    def update_building_attributes(self) -> None:
+        """Update building attributes based on household data."""
         # Start by computing occupancy from the var.osm_id and var.osm_way_id arrays
         osm_id_series = pd.Series(self.var.osm_id.data)
         osm_way_id_series = pd.Series(self.var.osm_way_id.data)
@@ -209,12 +205,8 @@ class Households(AgentBaseClass):
         self.buildings.loc[buildings_mask, "flooded"] = True
         self.buildings["flooded"].fillna(False, inplace=True)
 
-    def update_building_adaptation_status(self, household_adapting: np.ndarray):
-        """Update the floodproofing status of buildings based on adapting households.
-
-        Returns:
-            None
-        """
+    def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
+        """Update the floodproofing status of buildings based on adapting households."""
         # Extract and clean OSM IDs from adapting households
         osm_ids = pd.DataFrame(
             np.unique(self.var.osm_id.data[household_adapting])
@@ -242,14 +234,11 @@ class Households(AgentBaseClass):
         # Replace NaNs with False (i.e., buildings not in the adapting households list)
         self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(False)
 
-    def assign_household_attributes(self):
+    def assign_household_attributes(self) -> None:
         """Household locations are already sampled from population map in GEBModel.setup_population().
 
         These are loaded in the spinup() method.
         Here we assign additional attributes (dummy data) to the households that are used in the decision module.
-
-        Returns:
-            None
         """
         # load household locations
         locations = load_array(self.model.files["array"]["agents/households/location"])
@@ -375,12 +364,8 @@ class Households(AgentBaseClass):
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
 
-    def update_risk_perceptions(self):
-        """Update the risk perceptions of households based on the latest flood data.
-
-        Returns:
-            None
-        """
+    def update_risk_perceptions(self) -> None:
+        """Update the risk perceptions of households based on the latest flood data."""
         # update timer
         self.var.years_since_last_flood.data += 1
 
