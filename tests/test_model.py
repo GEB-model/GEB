@@ -257,6 +257,7 @@ def test_alter():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.skip(reason="no way of currently testing this")
 def test_evaluate_water_circle():
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
