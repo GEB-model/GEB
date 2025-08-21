@@ -49,10 +49,6 @@ def reproject_and_apply_lapse_rate_temperature(
     return T_grid
 
 
-def test_function(arg1, arg2):
-    return arg1 + arg2
-
-
 def get_pressure_correction_factor(DEM, g, Mo, lapse_rate):
     return (288.15 / (288.15 + lapse_rate * DEM)) ** (g * Mo / (8.3144621 * lapse_rate))
 
