@@ -21,9 +21,6 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False):
     Args:
         model: The GEB model instance.
         make_plot: Whether to create plots of the hydrographs.
-
-    Returns:
-        None
     """
     # read geojson file to get station ids
     station_ids = load_geom(model.files["geom"]["gtsm/stations_coast_rp"])
