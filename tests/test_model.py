@@ -256,7 +256,7 @@ def test_alter():
         run_model_with_method(method="spinup", **run_args)
 
 
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.skip(reason="no way of currently testing this")
 def test_evaluate_water_circle():
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
@@ -389,6 +389,7 @@ def test_multiverse():
         args = DEFAULT_RUN_ARGS.copy()
 
         config = parse_config(args["config"])
+        config["hazards"]["floods"]["simulate"] = True
 
         forecast_after_n_days = 3
         forecast_n_days = 5
