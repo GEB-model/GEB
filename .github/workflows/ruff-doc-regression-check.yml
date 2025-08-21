@@ -37,9 +37,17 @@ jobs:
           changed_files=$(git diff --name-only main...HEAD | grep '\.py$' || true)
           echo "Changed Python files in this PR:"
           echo "$changed_files"
-          # Save to file for later use and set output variable
-          echo "$changed_files" > ../changed_python_files.txt
-          echo "files_exist=$([ -s ../changed_python_files.txt ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          
+          # Filter to only existing files and save to file
+          echo "$changed_files" | while IFS= read -r file; do
+            [ -n "$file" ] && [ -f "$file" ] && echo "$file"
+          done > ../changed_python_files.txt || true
+          
+          # Count actual existing files
+          file_count=$(wc -l < ../changed_python_files.txt 2>/dev/null || echo "0")
+          echo "Valid changed Python files found: $file_count"
+          cat ../changed_python_files.txt || true
+          echo "files_exist=$([ "$file_count" -gt 0 ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
 
       - name: Run ruff on main (capture full output + per-rule stats)
         id: ruff_main
@@ -76,8 +84,7 @@ jobs:
           [ -f "$PR_STATS" ] || touch "$PR_STATS"
           [ -f "$PR_FULL" ] || touch "$PR_FULL"
 
-          # Build union of rules seen in either run.
-          # Use cat with resilient fallbacks so awk is never asked to open missing files directly.
+          # Build union of rules seen in either run
           (cat "$MAIN_STATS" 2>/dev/null || true; cat "$PR_STATS" 2>/dev/null || true) | awk '{print $1}' | sort | uniq > all_rules.txt || true
 
           regressions=0
@@ -94,12 +101,16 @@ jobs:
               echo "More info: https://docs.astral.sh/ruff/rules/$rule"
               echo "Full PR error lines for rule $rule:"
               cd pr-branch
-              # Only check changed Python files if they exist, otherwise check all files
+              
+              # Check if we have valid changed files to examine
               if [ -s "../$CHANGED_FILES" ]; then
                 echo "Checking only changed Python files:"
-                cat "../$CHANGED_FILES" | tr '\n' '\0' | xargs -0 -r ruff check --preview --select "$rule" --output-format full || true
+                # Use a more robust approach to handle file paths
+                while IFS= read -r file; do
+                  [ -n "$file" ] && [ -f "$file" ] && echo "$file"
+                done < "../$CHANGED_FILES" | xargs -r ruff check --preview --select "$rule" --output-format full || true
               else
-                echo "No changed Python files found, checking all files:"
+                echo "No valid changed Python files found, checking all files:"
                 ruff check --preview --select "$rule" --output-format full . || true
               fi
               echo ""
