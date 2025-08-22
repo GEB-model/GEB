@@ -1,3 +1,5 @@
+import os
+
 import geopandas as gpd
 import hydromt.data_catalog
 import networkx as nx
@@ -10,7 +12,7 @@ from hydromt.exceptions import NoDataException
 from pyflwdir import FlwdirRaster
 from rasterio.features import rasterize
 from scipy.ndimage import value_indices
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point
 
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
@@ -644,3 +646,171 @@ class Hydrography:
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_geom(waterbodies, name="waterbodies/waterbody_data")
+
+    @build_method
+    def setup_coastal_model_regions(self):
+        """Sets up the coastal model regions for the model.
+
+        This function subdivides the coastal geoms into smaller regions that are used to simulate coastal flooding.
+        """
+        self.logger.info("Setting up coastal model regions")
+        # load river basins and coastline data
+        basins = self.geoms["routing/subbasins"]
+        # get coastal basins
+        coastal_basins = basins[basins["is_coastal_basin"]]
+        coastal_basins.to_file("output/coastal_basins.geojson", driver="GeoJSON")
+
+        # TODO: Implement coastal model region setup
+        pass
+
+    def setup_gtsm_water_levels(self, temporal_range):
+        """Sets up the GTSM hydrographs for station within the model bounds.
+
+        Args:
+            temporal_range (np.ndarray): The range of years to process.
+        """
+        # get the model bounds and buffer by ~2km
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
+
+        # First: get station indices from ONE representative file
+        ref_file = self.data_catalog.get_source("GTSM").path.format(1979, "01")
+        ref = xr.open_dataset(ref_file)
+
+        x_coords = ref.station_x_coordinate.load()
+        y_coords = ref.station_y_coordinate.load()
+
+        mask = (
+            (x_coords >= min_lon)
+            & (x_coords <= max_lon)
+            & (y_coords >= min_lat)
+            & (y_coords <= max_lat)
+        )
+        station_idx = np.nonzero(mask.values)[0]
+
+        station_df = pd.DataFrame(
+            {
+                "station_id": ref.stations.values[mask].astype(str),
+                "longitude": x_coords[mask].values,
+                "latitude": y_coords[mask].values,
+            }
+        )
+        ref.close()
+
+        # Then: loop through files in smaller batches
+        gtsm_data_region = []
+        for year in temporal_range:
+            for month in range(1, 13):
+                f = self.data_catalog.get_source("GTSM").path.format(
+                    year, f"{month:02d}"
+                )
+                ds = xr.open_dataset(f, chunks={"time": -1})
+                subset = ds.isel(stations=station_idx).drop_vars(
+                    ["station_x_coordinate", "station_y_coordinate"]
+                )
+                gtsm_data_region.append(subset.waterlevel.to_pandas())
+                print(f"Processed GTSM data for {year}-{month:02d}")
+                ds.close()
+        gtsm_data_region_pd = pd.concat(gtsm_data_region, axis=0)
+        # set _FillValue to NaN
+        self.set_table(gtsm_data_region_pd, name="gtsm/waterlevels")
+        stations = gpd.GeoDataFrame(
+            station_df,
+            geometry=[
+                Point(xy) for xy in zip(station_df.longitude, station_df.latitude)
+            ],
+            crs="EPSG:4326",
+        )
+        self.set_geom(stations, name="gtsm/stations")
+        self.logger.info("GTSM station waterlevels and geometries set")
+
+    def setup_gtsm_surge_levels(self, temporal_range):
+        """Sets up the GTSM surge hydrographs for station within the model bounds.
+
+        Args:
+            temporal_range (np.ndarray): The range of years to process.
+        """
+        self.logger.info("Setting up GTSM surge hydrographs")
+        # get the model bounds and buffer by ~2km
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
+
+        # First: get station indices from ONE representative file
+        ref_file = self.data_catalog.get_source("GTSM_surge").path.format(1979, "01")
+        ref = xr.open_dataset(ref_file)
+
+        x_coords = ref.station_x_coordinate.load()
+        y_coords = ref.station_y_coordinate.load()
+
+        mask = (
+            (x_coords >= min_lon)
+            & (x_coords <= max_lon)
+            & (y_coords >= min_lat)
+            & (y_coords <= max_lat)
+        )
+        station_idx = np.nonzero(mask.values)[0]
+
+        # Then: loop through files in smaller batches
+        gtsm_data_region = []
+        for year in temporal_range:
+            for month in range(1, 13):
+                f = self.data_catalog.get_source("GTSM").path.format(
+                    year, f"{month:02d}"
+                )
+                ds = xr.open_dataset(f, chunks={"time": -1})
+                subset = ds.isel(stations=station_idx).drop_vars(
+                    ["station_x_coordinate", "station_y_coordinate"]
+                )
+                gtsm_data_region.append(subset.waterlevel.to_pandas())
+                print(f"Processed GTSM data for {year}-{month:02d}")
+                ds.close()
+        gtsm_data_region_pd = pd.concat(gtsm_data_region, axis=0)
+        # set _FillValue to NaN
+        self.set_table(gtsm_data_region_pd, name="gtsm/surge")
+        self.logger.info("GTSM station waterlevels and geometries set")
+
+    def setup_coast_rp(self):
+        """Sets up the coastal return period data for the model."""
+        self.logger.info("Setting up coastal return period data")
+        stations = gpd.read_parquet(
+            os.path.join("input", self.files["geoms"]["gtsm/stations"])
+        )
+
+        fp_coast_rp = self.data_catalog.get_source("COAST_RP").path
+        coast_rp = pd.read_pickle(fp_coast_rp)
+
+        # remove stations that are not in coast_rp index
+        stations = stations[
+            stations["station_id"].astype(int).isin(coast_rp.index)
+        ].reset_index(drop=True)
+
+        coast_rp = coast_rp.loc[stations["station_id"].astype(int)]
+        self.set_table(coast_rp, name="coast_rp")
+
+        # also set stations (only those that are in coast_rp)
+        self.set_geom(stations, "gtsm/stations_coast_rp")
+
+    @build_method
+    def setup_gtsm_station_data(self) -> None:
+        """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
+        subbasins = gpd.read_parquet("input" / self.files["geom"]["routing/subbasins"])
+        if not subbasins["is_coastal_basin"].any():
+            self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
+            return
+        # Continue with GTSM hydrographs setup
+        temporal_range = np.arange(1979, 2018, 1, dtype=np.int32)
+        self.setup_gtsm_water_levels(temporal_range)
+        self.setup_gtsm_surge_levels(temporal_range)
+        self.setup_coast_rp()

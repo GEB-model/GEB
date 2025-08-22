@@ -33,13 +33,37 @@ class Hydrology:
         pass
 
     def plot_discharge(self, run_name: str = "default", *args, **kwargs) -> None:
-        """Method to plot the mean discharge from the GEB model.
+        """Plot the mean discharge from the GEB model as a spatial map.
+
+        Creates a spatial visualization of mean discharge values over time from the GEB model
+        simulation results. The plot is saved as both a zarr file and PNG image for analysis.
+
+        Notes:
+            The discharge data must exist in the report directory structure. If the discharge
+            file is not found, a FileNotFoundError will be raised. The mean is calculated
+            across the entire simulation time period.
 
         Args:
-            run_name: Defaults to "default".
-            *args: ignored.
-            **kwargs: ignored.
+            run_name: Name of the simulation run to plot. Must correspond to an existing
+                run directory in the model output folder.
+            *args: Additional positional arguments (ignored).
+            **kwargs: Additional keyword arguments (ignored).
+
+        Raises:
+            FileNotFoundError: If the discharge file for the specified run does not exist
+                in the report directory.
         """
+        # check if discharge file exists
+        if not (
+            self.model.output_folder
+            / "report"
+            / run_name
+            / "hydrology.routing"
+            / "discharge_daily.zarr"
+        ).exists():
+            raise FileNotFoundError(
+                f"Discharge file for run '{run_name}' does not exist in the report directory. Did you run the model?"
+            )
         # load the discharge simulation
         GEB_discharge = open_zarr(
             self.model.output_folder
@@ -78,23 +102,29 @@ class Hydrology:
         include_yearly_plots: bool = False,
         correct_Q_obs=False,
     ) -> None:
-        """Method to evaluate the discharge grid from GEB against observations from the Q_obs database.
+        """Evaluate the discharge grid from GEB against observations from the Q_obs database.
+
+        Compares simulated discharge from the GEB model with observed discharge data from
+        gauging stations. Calculates performance metrics (KGE, NSE, R) and creates
+        evaluation plots and interactive maps for analysis.
+
+        Notes:
+            The discharge simulation files must exist in the report directory structure.
+            If no discharge stations are found in the basin, empty evaluation datasets
+            are created. The evaluation can be skipped if results already exist.
 
         Args:
             spinup_name: Name of the spinup run to include in the evaluation.
-            run_name: Name of the run to evaluate.
+            run_name: Name of the simulation run to evaluate. Must correspond to an
+                existing run directory in the model output folder.
             include_spinup: Whether to include the spinup run in the evaluation.
-            include_yearly_plots: Whether to create plots for every year showing the evaluation
-            correct_Q_obs: Whether to correct the Q_obs discharge timeseries for the difference in upstream area
-                between the Q_obs station and the discharge from GEB.
-        """
-        # check if setup_discharge_observations method has been executed
-        if not self.model.files["geom"].get("discharge/discharge_snapped_locations"):
-            print(
-                "Discharge observations not set up, probably no stations present in the basin. Skipping discharge evaluation."
-            )
-            return
+            include_yearly_plots: Whether to create plots for every year showing the evaluation.
+            correct_Q_obs: Whether to correct the Q_obs discharge timeseries for the difference
+                in upstream area between the Q_obs station and the discharge from GEB.
 
+        Raises:
+            FileNotFoundError: If the run folder does not exist in the report directory.
+        """
         #  create folders
         eval_plot_folder: Path = (
             Path(self.output_folder_evaluate) / "discharge" / "plots"
@@ -106,6 +136,64 @@ class Hydrology:
         eval_plot_folder.mkdir(parents=True, exist_ok=True)
         eval_result_folder.mkdir(parents=True, exist_ok=True)
 
+        # load input data files
+        Q_obs = pd.read_parquet(
+            self.model.files["table"]["discharge/Q_obs"]
+        )  # load the Q_obs discharge data
+        region_shapefile = gpd.read_parquet(
+            self.model.files["geom"]["mask"]
+        )  # load the region shapefile
+        rivers = gpd.read_parquet(
+            self.model.files["geom"]["routing/rivers"]
+        )  # load the rivers shapefiles
+        snapped_locations = gpd.read_parquet(
+            self.model.files["geom"]["discharge/discharge_snapped_locations"]
+        )
+
+        if len(snapped_locations) == 0:
+            print(
+                "No discharge stations found in the basin. Creating empty evaluation datasets."
+            )
+
+            # Create empty evaluation dataframe with proper structure
+            empty_evaluation_df = pd.DataFrame(
+                columns=[
+                    "station_name",
+                    "x",
+                    "y",
+                    "Q_obs_to_GEB_upstream_area_ratio",
+                    "KGE",
+                    "NSE",
+                    "R",
+                ]
+            ).set_index(pd.Index([], name="station_ID"))
+
+            # Save empty evaluation metrics as Excel file
+            empty_evaluation_df.to_excel(
+                eval_result_folder / "evaluation_metrics.xlsx",
+                index=True,
+            )
+
+            # Create empty GeoDataFrame and save as parquet
+            empty_evaluation_gdf = gpd.GeoDataFrame(
+                empty_evaluation_df,
+                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
+                crs="EPSG:4326",
+            )
+            empty_evaluation_gdf.to_parquet(
+                eval_result_folder / "evaluation_metrics.geoparquet",
+            )
+            return
+
+        # check if evaluation has already been executed
+        if eval_result_folder.joinpath("evaluation_metrics.xlsx").exists():
+            print(
+                "evaluation already executed, skipping. If you want to re-run the discharge evaluation, delete the evaluation_results folder."
+            )
+            evaluation_df = pd.read_excel(
+                eval_result_folder.joinpath("evaluation_metrics.xlsx")
+            )
+            return
         GEB_discharge = open_zarr(
             self.model.output_folder
             / "report"
@@ -113,6 +201,7 @@ class Hydrology:
             / "hydrology.routing"
             / "discharge_daily.zarr"
         )
+        print(f"Loaded discharge simulation from {run_name} run.")
 
         # check if run file exists, if not, raise an error
         if not (self.model.output_folder / "report" / run_name).exists():
@@ -129,26 +218,13 @@ class Hydrology:
                 / "hydrology.routing"
                 / "discharge_daily.zarr"
             )
-
+            print(f"Loaded discharge spinup simulation from {spinup_name} run.")
             GEB_discharge = xr.concat([GEB_discharge_spinup, GEB_discharge], dim="time")
-
-        # load input data files
-        snapped_locations = gpd.read_parquet(
-            self.model.files["geom"]["discharge/discharge_snapped_locations"]
-        )  # load the snapped locations of the Q_obs stations
-        Q_obs = pd.read_parquet(
-            self.model.files["table"]["discharge/Q_obs"]
-        )  # load the Q_obs discharge data
-        region_shapefile = gpd.read_parquet(
-            self.model.files["geom"]["mask"]
-        )  # load the region shapefile
-        rivers = gpd.read_parquet(
-            self.model.files["geom"]["routing/rivers"]
-        )  # load the rivers shapefiles
 
         evaluation_per_station: list = []
 
-        # start validation loop over Q_obs stations
+        print("Starting discharge evaluation...")
+
         for ID in tqdm(Q_obs.columns):
             # create a discharge timeseries dataframe
             discharge_Q_obs_df = Q_obs[ID]
@@ -230,6 +306,7 @@ class Hydrology:
                 KGE = (
                     evaluator.kling_gupta_efficiency()
                 )  # https://hess.copernicus.org/articles/23/4323/2019/
+
                 NSE = evaluator.nash_sutcliffe_efficiency()  # https://hess.copernicus.org/articles/27/1827/2023/hess-27-1827-2023.pdf
                 R = evaluator.pearson_correlation_coefficient()
 
@@ -418,7 +495,7 @@ class Hydrology:
         evaluation_df = pd.DataFrame(evaluation_per_station).set_index("station_ID")
         evaluation_df.to_excel(
             eval_result_folder / "evaluation_metrics.xlsx",
-            index=False,
+            index=True,
         )
 
         # Save evaluation metrics as as excel and parquet file
@@ -721,7 +798,7 @@ class Hydrology:
                     color_upstream = colormap_upstream(
                         float(row["Q_obs_to_GEB_upstream_area_ratio"])
                     )
-                    if np.isnan(color_upstream):
+                    if not isinstance(color_upstream, (str)) or color_upstream == "nan":
                         # do not add to map if color is NaN
                         continue
 
@@ -782,6 +859,116 @@ class Hydrology:
         create_folium_map(evaluation_gdf)
 
         print("Discharge evaluation dashboard created.")
+
+    def skill_score_graphs(
+        self,
+        run_name: str = "default",
+        include_spinup: bool = False,
+        spinup_name: str = "spinup",
+        export: bool = True,
+    ) -> None:
+        """Create skill score boxplot graphs for hydrological model evaluation metrics.
+
+        Generates boxplot visualizations of discharge evaluation metrics (KGE, NSE, R)
+        from previously calculated station evaluations. Creates a plot
+        showing the distribution of performance metrics across all gauging stations.
+
+        Notes:
+            Requires evaluation metrics to exist from a previous `evaluate_discharge` run.
+            If no discharge stations are found for evaluation, the method will skip
+            graph creation and return early.
+
+        Args:
+            run_name: Name of the simulation run to evaluate (used in file paths).
+            include_spinup: Whether the spinup run was included in the evaluation
+                (currently not used in this method).
+            spinup_name: Name of the spinup run (currently not used in this method).
+            export: Whether to save the skill score graphs to PNG files.
+        """
+        eval_result_folder = (
+            Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
+        )
+        evaluation_df = pd.read_excel(
+            eval_result_folder.joinpath("evaluation_metrics.xlsx")
+        )
+
+        # Check if evaluation dataframe is empty
+        if evaluation_df.empty:
+            print(
+                "No discharge stations found for evaluation. Skipping skill score graphs."
+            )
+            return
+
+        # Create fancy boxplots for evaluation metrics
+        print("Creating evaluation metrics boxplots...")
+
+        # Prepare data for boxplots
+        metrics = [
+            {
+                "data": evaluation_df["KGE"].dropna(),
+                "label": "KGE\n(Kling-Gupta)",
+                "color": "#2E86AB",
+            },
+            {
+                "data": evaluation_df["NSE"].dropna(),
+                "label": "NSE\n(Nash-Sutcliffe)",
+                "color": "#A23B72",
+            },
+            {
+                "data": evaluation_df["R"].dropna(),
+                "label": "R\n(Correlation)",
+                "color": "#F18F01",
+            },
+        ]
+
+        # Create the figure with 3 subplots
+        fig, axes = plt.subplots(1, 3, figsize=(15, 6))
+        fig.suptitle(
+            "Hydrological Model Evaluation Metrics", fontsize=16, fontweight="bold"
+        )
+
+        for i, metric in enumerate(metrics):
+            ax = axes[i]
+
+            # Create boxplot
+            bp = ax.boxplot(
+                metric["data"],
+                patch_artist=True,
+                medianprops={"color": "white", "linewidth": 2},
+                boxprops={"linewidth": 1.5},
+                whiskerprops={"linewidth": 1.5},
+                capprops={"linewidth": 1.5},
+            )
+
+            # Color the box
+            bp["boxes"][0].set_facecolor(metric["color"])
+            bp["boxes"][0].set_alpha(0.7)
+
+            # Add title and styling
+            ax.set_title(metric["label"], fontsize=12, fontweight="bold")
+            ax.set_ylabel("Score", fontsize=11)
+            ax.grid(True, alpha=0.3, linestyle="--")
+            ax.set_xticks([])
+
+            # Set specific y-limits for each metric
+            if i == 0:  # KGE
+                ax.set_ylim(0, 1)
+            elif i == 1:  # NSE
+                ax.set_ylim(-1, 1)
+            # R (correlation) keeps automatic limits
+
+        plt.tight_layout()
+
+        # Save the plot
+        if export:
+            boxplot_path = eval_result_folder / "evaluation_boxplots_simple.png"
+            plt.savefig(boxplot_path, dpi=300, bbox_inches="tight")
+            print(f"Boxplots saved to: {boxplot_path}")
+
+        plt.show()
+        plt.close()
+
+        print("Skill score graphs created.")
 
     def water_circle(
         self,
@@ -1051,13 +1238,19 @@ class Hydrology:
     def evaluate_hydrodynamics(
         self, run_name: str = "default", *args, **kwargs
     ) -> None:
-        """Method to plot the mean discharge from the GEB model.
+        """Evaluate hydrodynamic model performance against flood observations.
+
+        Calculates performance metrics (hit rate, false alarm ratio, critical success index)
+        for flood maps generated by the hydrodynamic model by comparing them against
+        observed flood extent data.
 
         Args:
-            run_name: Defaults to "default".
-            *args: ignored.
-            **kwargs: ignored.
+            run_name: Name of the simulation run to evaluate.
+            *args: Additional positional arguments (ignored).
+            **kwargs: Additional keyword arguments (ignored).
 
+        Raises:
+            FileNotFoundError: If the flood map folder does not exist in the output directory.
         """
 
         def calculate_hit_rate(model, observations):
