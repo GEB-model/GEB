@@ -3612,19 +3612,20 @@ class CropFarmers(AgentBaseClass):
             self.var.adaptations[expired_adaptations, adaptation_type] = -1
             self.var.time_adapted[expired_adaptations, adaptation_type] = -1
 
+        if len(adaptation_types) > 1:
+            test_array = np.zeros_like(interest_rate, dtype=np.int8)
+
+            # Define extra constraints -- cant adapt another insurance type while having one before
+            for t in adaptation_types:
+                test_array += (self.var.adaptations[:, t] >= 0).astype(np.int8)
+
+            extra_constraint = test_array < 1
+            adapted = np.zeros_like(interest_rate, dtype=bool)
+        else:
+            extra_constraint = np.ones_like(interest_rate, dtype=bool)
             adapted = self.var.adaptations[:, adaptation_type] > 0
 
-            if len(adaptation_types) > 1:
-                # Define extra constraints -- cant adapt another insurance type while having one before
-                other_masks = [
-                    (self.var.adaptations[:, t] < 0)
-                    for t in adaptation_types
-                    if t != adaptation_type
-                ]
-                extra_constraint = np.logical_or.reduce(other_masks)
-            else:
-                extra_constraint = np.ones_like(adapted, dtype=bool)
-
+        for idx, adaptation_type in enumerate(adaptation_types):
             # Compute profits with index insurance
             annual_cost = annual_cost * (
                 interest_rate
@@ -3756,12 +3757,12 @@ class CropFarmers(AgentBaseClass):
                 self.var.social_network, adaptation_type
             ]
             network_has_payout = np.any(social_network_payout == 1, axis=1)
-            intention_factor_adjusted[network_has_payout] += 0.20
+            intention_factor_adjusted[network_has_payout] += 0.40
 
             agent_has_payout = self.var.payout_mask[:, adaptation_type]
-            intention_factor_adjusted[agent_has_payout] += 0.20
+            intention_factor_adjusted[agent_has_payout] += 0.40
         else:
-            intention_factor_adjusted[network_has_adaptation] += 0.33
+            intention_factor_adjusted[network_has_adaptation] += 0.40
 
         # Determine whether it passed the intention threshold
         random_values = np.random.rand(*intention_factor_adjusted.shape)
@@ -4129,7 +4130,7 @@ class CropFarmers(AgentBaseClass):
         crop_elevation_group = np.hstack(
             (
                 self.var.crop_calendar[:, :, 0].data,
-                self.farmer_command_area.reshape(-1, 1),
+                self.command_area.reshape(-1, 1),
                 self.up_or_downstream.reshape(-1, 1),
                 insurance_differentiator.reshape(-1, 1),
             )
