@@ -176,8 +176,8 @@ class Market(AgentBaseClass):
             > 0
         ), "Negative prices predicted"
 
-        print("DEBUG year_index:", self.year_index)
-        print("DEBUG inflation length:", len(self.var.cumulative_inflation_per_region))
+        # print("DEBUG year_index:", self.year_index)
+        # print("DEBUG inflation length:", len(self.var.cumulative_inflation_per_region))
 
         # TODO: This assumes that the inflation is the same for all regions (region_idx=0)
         return (
