@@ -36,9 +36,6 @@ class Evaluate(Hydrology):
         Raises:
             AssertionError: If methods is not a list or tuple, or if any method is not a string.
             ValueError: If a specified method is not implemented in the Evaluate class.
-
-        Returns:
-            None
         """
         if methods is None:
             methods: list = [

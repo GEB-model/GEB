@@ -180,6 +180,7 @@ class Reporter:
                                     "discharge/discharge_snapped_locations"
                                 ]
                             )
+
                             station_reporters = {}
                             for station_ID, station_info in stations.iterrows():
                                 xy_grid = station_info["snapped_grid_pixel_xy"]

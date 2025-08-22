@@ -437,7 +437,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             clean_report_folder=False,
         )
 
-        HazardDriver.initialize(self, longest_flood_event=30)
+        HazardDriver.initialize(self, longest_flood_event_in_days=30)
         self.sfincs.get_return_period_maps()
 
     def evaluate(self, *args, **kwargs) -> None:
