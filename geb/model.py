@@ -440,7 +440,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             clean_report_folder=False,
         )
 
-        HazardDriver.initialize(self, longest_flood_event=30)
+        HazardDriver.initialize(self, longest_flood_event_in_days=30)
         # ugly switch to determine whether model has coastal basins
         subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
         if subbasins["is_coastal_basin"].any():
