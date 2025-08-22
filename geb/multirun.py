@@ -2,16 +2,37 @@
 
 import multiprocessing
 import os
-import random
 import shutil
 import signal
-import string
-from copy import deepcopy
 from functools import wraps
-from subprocess import PIPE, Popen
+from subprocess import Popen
+import threading
+import sys
+import time
+import datetime
+import traceback
 
 import numpy as np
 import yaml
+
+SCENARIO_FILES = [
+    "well_combined_insurance.yml",
+    "well_index_insurance.yml",
+    "well_precipitation_insurance.yml",
+    "well_personal_insurance.yml",
+    "well_no_insurance.yml",
+]
+
+SCENARIO_DIR = "configs_insurance_multirun"
+
+
+def _tail_file(path, n=80):
+    try:
+        with open(path, "r", errors="ignore") as f:
+            lines = f.readlines()
+        return "".join(lines[-n:])
+    except Exception as e:
+        return f"<could not read {path}: {e}>"
 
 
 def handle_ctrl_c(func):
@@ -54,109 +75,194 @@ def multi_set(dict_obj, value, *attrs):
 
 @handle_ctrl_c
 def run_model(args):
-    """This function takes an individual from the population and runs the model with the corresponding parameters.
-
-    It first checks if the run directory already exists and whether the model was run before.
-    If the directory exists and the model was run before, it skips running the model.
-    Otherwise, it runs the model and saves the results to the run directory.
     """
-    config, run_id = args
-    os.makedirs(config["multirun"]["folder"], exist_ok=True)
-    runs_path = os.path.join(config["multirun"]["folder"], "runs")
-    os.makedirs(runs_path, exist_ok=True)
-    logs_path = os.path.join(config["multirun"]["folder"], "logs")
-    os.makedirs(logs_path, exist_ok=True)
+    Runs ONE replicate (run_id) that launches ALL scenarios concurrently.
+    Results: <multirun.folder>/runs/<run_id>/<scenario>/
+    Logs:    <multirun.folder>/logs/<run_id>/<scenario>/
+    """
+    config, run_id, scenario_files = args
 
-    # Define the directory where the model run will be stored
-    run_directory = os.path.join(runs_path, str(run_id))
+    base_folder = config["multirun"]["folder"]
+    os.makedirs(base_folder, exist_ok=True)
 
-    # Check if the run directory already exists
-    if os.path.isdir(run_directory):
-        if os.path.exists(os.path.join(run_directory, "done.txt")):
-            runmodel = False
-        else:
-            runmodel = True
-            shutil.rmtree(run_directory)
-    else:
-        runmodel = True
+    runs_root = os.path.join(base_folder, "runs")
+    os.makedirs(runs_root, exist_ok=True)
 
-    if runmodel:
-        # Create the configuration file for the model run
-        config_path = os.path.join(run_directory, "config.yml")
-        while True:
-            os.mkdir(run_directory)
-            template = deepcopy(config)
-            template["general"]["output_folder"] = run_directory
+    logs_root = os.path.join(base_folder, "logs")
+    os.makedirs(logs_root, exist_ok=True)
+    logs_run_path = os.path.join(logs_root, str(run_id))
+    os.makedirs(logs_run_path, exist_ok=True)
 
-            # write the template to the specified config file
-            with open(config_path, "w") as f:
-                yaml.dump(template, f)
+    # Per-run results folder (e.g., .../runs/0)
+    run_directory = os.path.join(runs_root, str(run_id))
+    os.makedirs(run_directory, exist_ok=True)
 
-            def run_model_scenario(scenario):
-                # build the command to run the script, including the use of a GPU if specified
-                command = [
-                    "geb",
-                    "run",
-                    "--config",
-                    config_path,
-                    "--scenario",
-                    scenario,
-                ]
-                print(command, flush=True)
+    def _tail_file(path, n=80):
+        try:
+            with open(path, "r", errors="ignore") as f:
+                lines = f.readlines()
+            return "".join(lines[-n:])
+        except Exception as e:
+            return f"<could not read {path}: {e}>"
 
-                # run the command and capture the output and errors
-                p = Popen(command, stdout=PIPE, stderr=PIPE)
-                output, errors = p.communicate()
+    def run_model_scenario(
+        config_path_for_cli: str, scenario_label: str, scenario_logs_dir: str
+    ):
+        """
+        Runs one scenario with retries. Prints tail of stderr on RC=2/66/1.
+        Uses current interpreter via sys.executable, and 'run' subcommand.
+        """
+        env = os.environ.copy()
+        cli_py_path = os.path.join(os.environ.get("GEB_PACKAGE_DIR"), "cli.py")
 
-                # check the return code of the command and handle accordingly
-                if p.returncode == 0:  # model has run successfully
-                    with open(
-                        os.path.join(logs_path, f"log{str(run_id)}_{scenario}.txt"), "w"
-                    ) as f:
-                        content = (
-                            "OUTPUT:\n"
-                            + str(output.decode())
-                            + "\nERRORS:\n"
-                            + str(errors.decode())
+        venv_activate = "/scistor/ivm/mka483/GEB_p3/GEB/.venvs/geb_p3_new/bin/activate"
+
+        command = (
+            f"source {venv_activate} && "
+            f"{sys.executable} {cli_py_path} run --config {config_path_for_cli}"
+        )
+
+        print(f"[rep {run_id} | {scenario_label}] Executing: {command}", flush=True)
+
+        max_retries = 10000
+        retries = 0
+
+        while retries <= max_retries:
+            attempt = retries + 1
+
+            out_file_path = os.path.join(
+                scenario_logs_dir,
+                f"model_out_run_{run_id}_{scenario_label}_attempt{attempt}.txt",
+            )
+            err_file_path = os.path.join(
+                scenario_logs_dir,
+                f"model_err_run_{run_id}_{scenario_label}_attempt{attempt}.txt",
+            )
+            retry_log_path = os.path.join(
+                scenario_logs_dir, f"retry_log_run_{run_id}_{scenario_label}.txt"
+            )
+
+            with (
+                open(out_file_path, "w") as out_file,
+                open(err_file_path, "w") as err_file,
+            ):
+                p = Popen(
+                    command,
+                    stdout=out_file,
+                    stderr=err_file,
+                    shell=True,
+                    executable="/bin/bash",
+                    env=env,
+                )
+                p.wait()
+
+            if p.returncode == 0:
+                return 0
+            elif p.returncode == 1:
+                err_tail = _tail_file(err_file_path, 80)
+                print(
+                    f"[rep {run_id} | {scenario_label}] RC=1 (no retry). "
+                    f"Last stderr lines:\n{err_tail}\n--- end stderr ---",
+                    flush=True,
+                )
+                return 1
+            elif p.returncode in (2, 66):
+                err_tail = _tail_file(err_file_path, 80)
+                msg = (
+                    f"[rep {run_id} | {scenario_label}] RC={p.returncode} "
+                    f"(attempt {attempt}/{max_retries}). Last stderr lines:\n"
+                    f"{err_tail}\n--- end stderr ---"
+                )
+                print(msg, flush=True)
+                try:
+                    with open(retry_log_path, "a") as rf:
+                        rf.write(
+                            f"\n==== Attempt {attempt} @ {datetime.datetime.now().isoformat()} ====\n{msg}\n"
                         )
-                        f.write(content)
-                    modflow_folder = os.path.join(
-                        run_directory, "spinup", "modflow_model"
+                except Exception:
+                    pass
+
+                retries += 1
+                if retries > max_retries:
+                    break
+                time.sleep(1)
+                continue
+            else:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                log_filename = os.path.join(
+                    scenario_logs_dir, f"log_error_run_{run_id}_{scenario_label}.txt"
+                )
+                with open(log_filename, "w") as f:
+                    content = (
+                        f"Timestamp: {timestamp}\n"
+                        f"Process ID: {os.getpid()}\n"
+                        f"Command: {command}\n\n"
+                        f"Return code: {p.returncode}\n"
+                        f"Traceback:\n{traceback.format_exc()}"
                     )
-                    if os.path.exists(modflow_folder):
-                        shutil.rmtree(modflow_folder)
+                    f.write(content)
+                raise ValueError(
+                    f"[rep {run_id} | {scenario_label}] RC={p.returncode}. "
+                    f"See {log_filename}."
+                )
 
-                elif p.returncode == 1:  # model has failed
-                    with open(
-                        os.path.join(
-                            logs_path,
-                            f"log{str(run_id)}_{scenario}_{''.join((random.choice(string.ascii_lowercase) for x in range(10)))}.txt",
-                        ),
-                        "w",
-                    ) as f:
-                        content = (
-                            "OUTPUT:\n"
-                            + str(output.decode())
-                            + "\nERRORS:\n"
-                            + str(errors.decode())
-                        )
-                        f.write(content)
-                    shutil.rmtree(run_directory)
+        raise ValueError(
+            f"[rep {run_id} | {scenario_label}] RC 2/66 received {max_retries} times. See logs."
+        )
 
-                else:
-                    raise ValueError(
-                        "Return code of run.py was not 0 or 1, but instead "
-                        + str(p.returncode)
-                        + "."
-                    )
+    # --- Launch all scenarios concurrently for this replicate ---
+    threads = []
+    for fname in scenario_files:
+        scenario_label = os.path.splitext(fname)[0]
+        scenario_src_path = os.path.join(SCENARIO_DIR, fname)
 
-                return p.returncode
+        # results folder for this scenario
+        scenario_dir = os.path.join(run_directory, scenario_label)
+        scenario_done_path = os.path.join(scenario_dir, "done.txt")
 
-            return_code = run_model_scenario(config["multirun"]["scenario"])
-            if return_code == 0:
-                with open(os.path.join(run_directory, "done.txt"), "w") as f:
+        scenario_logs_dir = os.path.join(logs_run_path, scenario_label)
+        os.makedirs(scenario_logs_dir, exist_ok=True)
+
+        # prepare results folder
+        if os.path.isdir(scenario_dir):
+            if os.path.exists(scenario_done_path):
+                print(f"[rep {run_id} | {scenario_label}] already done. Skipping.")
+                continue
+            else:
+                shutil.rmtree(scenario_dir)
+        os.makedirs(scenario_dir, exist_ok=True)
+
+        # write scenario config with output_folder pointing to scenario_dir
+        with open(scenario_src_path, "r") as f:
+            template = yaml.safe_load(f) or {}
+        if "general" not in template or not isinstance(template["general"], dict):
+            template["general"] = {}
+        template["general"]["output_folder"] = scenario_dir
+
+        scenario_config_path = os.path.join(scenario_dir, "config.yml")
+        with open(scenario_config_path, "w") as f:
+            yaml.safe_dump(template, f, sort_keys=False)
+
+        def _runner(
+            config_path=scenario_config_path,
+            label=scenario_label,
+            logs_dir=scenario_logs_dir,
+            done_path=scenario_done_path,
+        ):
+            rc = run_model_scenario(config_path, label, logs_dir)
+            if rc == 0:
+                with open(done_path, "w") as f:
                     f.write("done")
-                break
+                print(f"[rep {run_id} | {label}] done.")
+            else:
+                print(f"[rep {run_id} | {label}] failed with RC={rc}.")
+
+        t = threading.Thread(target=_runner, daemon=False)
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
 
 
 def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu):
@@ -176,15 +282,20 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu)
 
 def multi_run(config, working_directory):
     multi_run_config = config["multirun"]
-    nr_runs = multi_run_config["run_nrs"]
 
-    pool_size = int(os.getenv("SLURM_CPUS_PER_TASK") or multi_run_config["pool"])
+    pool_size = int(os.getenv("SLURM_CPUS_PER_TASK") or 10)
+    num_scenarios = len(SCENARIO_FILES)
+
+    replicates = max(1, pool_size // num_scenarios)
+
     print(f"Pool size: {pool_size}")
+    print(f"Scenarios per replicate: {num_scenarios}")
+    print(f"Replicates to run (folders 0..{replicates - 1}): {replicates}")
     # Ignore the interrupt signal
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     # Create a tuple of arguments for each run
-    args = [(config, i) for i in range(nr_runs)]
+    args = [(config, i, SCENARIO_FILES) for i in range(replicates)]
 
     # Create a manager for multiprocessing
     manager = multiprocessing.Manager()
@@ -193,18 +304,16 @@ def multi_run(config, working_directory):
     # Create a lock for managing access to the shared variable
     manager_lock = manager.Lock()
 
+    processes = min(pool_size, len(args)) if len(args) > 0 else 1
+
     with multiprocessing.Pool(
-        processes=pool_size,
+        processes=processes,
         initializer=init_pool,
         initargs=(
             current_gpu_use_count,
             manager_lock,
-            multi_run_config["gpus"],
-            (
-                multi_run_config["models_per_gpu"]
-                if "models_per_gpu" in multi_run_config
-                else 1
-            ),
+            multi_run_config.get("gpus", 0),
+            multi_run_config.get("models_per_gpu", 1),
         ),
     ) as pool:
         pool.map(run_model, args)
