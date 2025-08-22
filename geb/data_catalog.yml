@@ -20,7 +20,7 @@ GRDC:
     category: hydrology
     source_license: https://grdc.bafg.de/downloads/policy_guidelines.pdf
     source_url: https://grdc.bafg.de/
-  path: rivers/discharge/GRDC/GRDC-Daily_V2.nc
+  path: rivers/discharge/GRDC/GRDC_global.zip
 
 SWORD:
   data_type: GeoDataFrame

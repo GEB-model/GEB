@@ -1,4 +1,7 @@
+import io
 import os
+import tempfile
+import zipfile
 from pathlib import Path
 
 import cartopy.crs as ccrs
@@ -131,7 +134,7 @@ class Observations:
         self,
         max_uparea_difference_ratio: float = 0.3,
         max_spatial_difference_degrees: float = 0.1,
-        custom_river_stations: None = None,
+        custom_river_stations: str | None = None,
     ) -> None:
         """setup_discharge_observations is responsible for setting up discharge observations from the Q_obs dataset.
 
@@ -151,7 +154,30 @@ class Observations:
         upstream_area_subgrid = self.other["drainage/original_d8_upstream_area"]
         rivers = self.geom["routing/rivers"]
         region_shapefile = self.geom["mask"]
-        Q_obs = self.data_catalog.get_geodataset("GRDC")  # load the Q_obs dataset
+
+        # Load Q_obs dataset
+        Q_obs_source = self.data_catalog.get_source("GRDC")
+
+        if str(Q_obs_source.path).endswith(".zip"):
+            # Handle zip file containing single .nc file
+            with zipfile.ZipFile(Q_obs_source.path, "r") as zip_file:
+                self.logger.info(
+                    f"Loading global GRDC discharge observations : {Q_obs_source.path}"
+                )
+                # Get the .nc file from the zip
+                nc_filename = [f for f in zip_file.namelist() if f.endswith(".nc")][0]
+                # Read file content into memory
+                with zip_file.open(nc_filename) as file:
+                    file_content = file.read()
+
+            # Open dataset from memory buffer
+            Q_obs = xr.open_dataset(io.BytesIO(file_content), engine="h5netcdf")
+
+            # rename geo_x and geo_y to x and y
+            Q_obs = Q_obs.rename({"geo_x": "x", "geo_y": "y"})
+        else:
+            # Fallback to original method if not a zip file
+            Q_obs = self.data_catalog.get_geodataset("GRDC")  # is already renamed
 
         # create folders
         snapping_discharge_folder = (
@@ -218,6 +244,8 @@ class Observations:
                 )
             return Q_station, station_coords
 
+        Q_obs_merged = Q_obs.copy()  # Ensure Q_obs_merged is always defined
+
         if custom_river_stations is not None:
             for station in os.listdir(Path(self.root).parent / custom_river_stations):
                 if not station.endswith(".csv"):
@@ -259,10 +287,6 @@ class Observations:
                                 0
                             ]
                         )  # get the id of the station in the Q_obs dataset
-                        Q_obs_merged = Q_obs.copy()
-
-        else:
-            Q_obs_merged = Q_obs.copy()
 
         # Clip the Q_obs dataset to the region shapefile
         def clip_Q_obs(Q_obs_merged, region_shapefile):
@@ -294,15 +318,51 @@ class Observations:
             Q_obs_merged, region_shapefile
         )  # filter Q_obs stations based on the region shapefile
 
+        if len(Q_obs_clipped.id) == 0:
+            # No stations found - create empty files
+            self.logger.warning(
+                "No discharge stations found in the region. Creating empty files"
+            )
+
+            # Create empty snapping results Excel file with proper columns
+            empty_cols = [
+                "Q_obs_station_name",
+                "Q_obs_station_ID",
+                "Q_obs_river_name",
+                "Q_obs_upstream_area_m2",
+                "Q_obs_station_coords",
+                "closest_point_coords",
+                "subgrid_pixel_coords",
+                "snapped_grid_pixel_lonlat",
+                "snapped_grid_pixel_xy",
+                "GEB_upstream_area_from_subgrid",
+                "GEB_upstream_area_from_grid",
+                "Q_obs_to_GEB_upstream_area_ratio",
+                "snapping_distance_degrees",
+            ]
+            discharge_snapping_df = pd.DataFrame(columns=empty_cols)
+            discharge_snapping_df.to_excel(
+                self.report_dir / "snapping_discharge" / "discharge_snapping.xlsx",
+                index=False,
+            )
+
+            # Create empty discharge table
+            empty_discharge_df = pd.DataFrame()
+            self.set_table(empty_discharge_df, name="discharge/Q_obs")
+
+            # Create empty snapped locations geometry
+            empty_geom = gpd.GeoDataFrame(
+                discharge_snapping_df,
+                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
+                crs="EPSG:4326",
+            ).set_index(pd.Index([], name="Q_obs_station_ID"))
+            self.set_geom(empty_geom, name="discharge/discharge_snapped_locations")
+
+            self.logger.info("Empty discharge datasets created")
+
+            return
         # convert all the -999 values to NaN
         Q_obs_clipped = Q_obs_clipped.where(Q_obs_clipped != -999, np.nan)
-
-        if len(Q_obs_clipped.id) == 0:
-            # exit function/method
-            self.logger.warning(
-                "No discharge stations found in the region. Skipping discharge observations setup."
-            )
-            return
 
         # check if there are any NaN values in the Q_obs dataset
         discharge_df = Q_obs_clipped.runoff_mean.to_dataframe().reset_index()

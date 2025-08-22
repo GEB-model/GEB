@@ -31,7 +31,7 @@ from ..workflows.conversions import (
     setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
-from ..workflows.general import clip_with_grid, validate_farm_size_data
+from ..workflows.general import clip_with_grid
 from ..workflows.population import load_GLOPOP_S
 
 
@@ -1225,21 +1225,88 @@ class Agents:
                 agricultural_area_db_ha = agricultural_area_db_ha[region_n_holdings > 0]
                 region_n_holdings = region_n_holdings[region_n_holdings > 0]
 
-                if ISO3 == "ROU":
-                    # Romania has an error in the farm size data source for class '100 - 200 Ha'
-                    agricultural_area_db_ha["100 - 200 Ha"] = (
-                        region_n_holdings["100 - 200 Ha"] * 150
-                    )  # 150 Ha
-                    self.logger.info(
-                        f"new agricultural area for Romania: {agricultural_area_db_ha['100 - 200 Ha']}"
-                    )
+                def correct_farm_size_data(
+                    agricultural_area_db_ha: pd.Series,
+                    region_n_holdings: pd.Series,
+                    size_class_boundaries: dict,
+                    ISO3: str,
+                    tolerance: float = 0.3,
+                ) -> pd.Series:
+                    """Checks if agricultural area is consistent with farm size class boundaries. If not, it corrects the data.
+
+                    Args:
+                        agricultural_area_db_ha: Agricultural area in hectares per size class.
+                        region_n_holdings: Number of holdings per size class.
+                        size_class_boundaries: Dictionary mapping size class names to (min, max) boundaries in m².
+                        ISO3: ISO3 country code for the region.
+                        tolerance: Tolerance for validation (default: 0.3 = 30%).
+
+                    Returns:
+                        Corrected agricultural area data as a pandas Series.
+                    """
+                    for size_class in agricultural_area_db_ha.index:
+                        actual_area = agricultural_area_db_ha.loc[size_class]
+
+                        # Get the size class boundaries for validation
+                        min_size_ha, max_size_ha = size_class_boundaries[size_class]
+                        # Convert from m² to ha
+                        min_size_ha = min_size_ha / 10000
+                        max_size_ha = (
+                            max_size_ha / 10000 if max_size_ha != np.inf else np.inf
+                        )
+
+                        # Calculate expected area range based on class boundaries
+                        min_expected_area = (
+                            region_n_holdings.loc[size_class] * min_size_ha
+                        )
+                        max_expected_area = (
+                            region_n_holdings.loc[size_class] * max_size_ha
+                        )
+
+                        # Check if actual area falls within reasonable bounds
+                        if not (
+                            min_expected_area * (1 - tolerance)
+                            <= actual_area
+                            <= max_expected_area * (1 + tolerance)
+                        ):
+                            # Correct farmsize data by adjusting to the nearest valid boundary
+                            self.logger.info(
+                                f"farm sizes correction for: {ISO3} - Size class '{size_class}' area ({actual_area:.2f} ha) "
+                                f"outside expected range [{min_expected_area * (1 - tolerance):.2f}, "
+                                f"{max_expected_area * (1 + tolerance):.2f}] ha. Correcting..."
+                            )
+
+                            corrected_area = (
+                                actual_area.copy()
+                            )  # Initialize with current value
+
+                            if max_expected_area != np.inf:
+                                # corrected area is average of min and max expected area
+                                corrected_area = (
+                                    min_expected_area + max_expected_area
+                                ) / 2
+                            else:
+                                # If max is infinite, just set to min expected area
+                                corrected_area = min_expected_area.copy()
+
+                            self.logger.info(
+                                f"corrected agri area from {actual_area:.2f} ha to {corrected_area:.2f} ha for size class '{size_class}' in {ISO3}"
+                            )
+
+                            # Apply the correction if it changed
+                            if corrected_area != actual_area:
+                                agricultural_area_db_ha[size_class] = corrected_area
+
+                    return agricultural_area_db_ha
+
                 # Validate that holdings * average farm size approximately equals agricultural area
-                # validate_farm_size_data(
-                #     agricultural_area_db_ha,
-                #     region_n_holdings,
-                #     size_class_boundaries,
-                #     ISO3,
-                # )
+
+                correct_farm_size_data(
+                    agricultural_area_db_ha,
+                    region_n_holdings,
+                    size_class_boundaries,
+                    ISO3,
+                )
 
                 # Calculate total agricultural area in square meters
                 agricultural_area_db = (

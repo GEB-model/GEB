@@ -11,7 +11,6 @@ import pandas as pd
 from honeybees.library.neighbors import find_neighbors
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from numba import njit
-from numpy.lib.stride_tricks import sliding_window_view
 from scipy.optimize import curve_fit
 from scipy.stats import genextreme
 
@@ -26,7 +25,7 @@ from ..hydrology.HRUs import load_grid
 from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 from ..store import DynamicArray
 from ..workflows import balance_check
-from ..workflows.io import load_array, open_zarr
+from ..workflows.io import load_array
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
