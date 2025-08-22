@@ -1,0 +1,25 @@
+# Example Build Configuration for GEB Forecasts
+# This shows how to configure forecast settings in your build.yml file
+
+# Other build configuration...
+grid:
+  # ... your grid configuration
+
+time_range:
+  # ... your time range configuration
+
+# Forecast configuration section
+forecasts:
+  provider: "ECMWF"  # Currently only ECMWF is supported
+  resolution: 0.25   # Grid resolution in degrees
+  timestep: 24       # Timestep in hours
+  forecast_steps: "0/to/240/by/24"  # MARS forecast steps (0-240h in 24h intervals)
+  ensemble_members: "1/to/10"       # Ensemble members to download (1-10)
+  variables:         # ECMWF parameter codes for variables to download
+    - "167.128"      # 2m_temperature
+    - "228.128"      # total_precipitation  
+    - "134.128"      # surface_pressure
+    - "165.128"      # 10m_u_component_of_wind
+    - "166.128"      # 10m_v_component_of_wind
+
+# Other configuration...
