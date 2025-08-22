@@ -201,6 +201,7 @@ class Hydrology:
             / "hydrology.routing"
             / "discharge_daily.zarr"
         )
+        print(f"Loaded discharge simulation from {run_name} run.")
 
         # check if run file exists, if not, raise an error
         if not (self.model.output_folder / "report" / run_name).exists():
@@ -217,7 +218,7 @@ class Hydrology:
                 / "hydrology.routing"
                 / "discharge_daily.zarr"
             )
-
+            print(f"Loaded discharge spinup simulation from {spinup_name} run.")
             GEB_discharge = xr.concat([GEB_discharge_spinup, GEB_discharge], dim="time")
 
         evaluation_per_station: list = []
