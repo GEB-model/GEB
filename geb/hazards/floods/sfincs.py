@@ -675,6 +675,7 @@ class SFINCS:
             ),
             "mannings": self.mannings,
             "resolution": self.config["resolution"],
+            "subgrid": self.config["subgrid"],
             "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],
             "crs": self.crs,
             "depth_calculation_method": self.model.config["hydrology"]["routing"][

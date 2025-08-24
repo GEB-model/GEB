@@ -231,6 +231,23 @@ def test_run():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_run_without_subgrid():
+    args = DEFAULT_RUN_ARGS.copy()
+
+    with WorkingDirectory(working_directory):
+        args["config"] = parse_config(args["config"])
+        args["config"]["report"].update(
+            {
+                "_water_circle": True,
+            }
+        )
+        args["config"]["hazards"]["floods"]["simulate"] = True
+        args["config"]["hazards"]["floods"]["subgrid"] = False
+
+        run_model_with_method(method="run", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_alter():
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()

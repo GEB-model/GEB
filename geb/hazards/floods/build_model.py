@@ -101,6 +101,7 @@ def build_sfincs(
     mannings: xr.DataArray,
     resolution: float | int,
     nr_subgrid_pixels: int,
+    subgrid: bool,
     crs: str,
     depth_calculation_method: str,
     depth_calculation_parameters: dict[str, float | int] | None = None,
@@ -124,6 +125,7 @@ def build_sfincs(
         mannings: A xarray DataArray of Manning's n values for the rivers.
         resolution: The resolution of the requested SFINCS model grid in meters.
         nr_subgrid_pixels: The number of subgrid pixels to use for the SFINCS model. Must be an even number.
+        subgrid: Whether to use subgrid or not.
         crs: The coordinate reference system to use for the model.
         depth_calculation_method: The method to use for calculating river depth. Can be 'manning' or 'power_law'.
         depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
@@ -254,31 +256,36 @@ def build_sfincs(
     assert rivers["depth"].notnull().all(), "River depth cannot be null"
     assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
 
-    sf.setup_subgrid(
-        datasets_dep=DEMs,
-        datasets_rgh=[
-            {
-                "manning": mannings.to_dataset(name="manning"),
-            }
-        ],
-        datasets_riv=[
-            {
-                "centerlines": rivers.rename(
-                    columns={"width": "rivwth", "depth": "rivdph"}
-                )
-            }
-        ],
-        write_dep_tif=True,
-        write_man_tif=True,
-        nr_subgrid_pixels=nr_subgrid_pixels,
-        nlevels=20,
-        nrmax=500,
-    )
-
     # write all components, except forcing which must be done after the model building
     sf.write_grid()
     sf.write_geoms()
     sf.write_config()
-    sf.write_subgrid()
+
+    if subgrid:
+        logger.info("Setting up SFINCS subgrid...")
+        sf.setup_subgrid(
+            datasets_dep=DEMs,
+            datasets_rgh=[
+                {
+                    "manning": mannings.to_dataset(name="manning"),
+                }
+            ],
+            datasets_riv=[
+                {
+                    "centerlines": rivers.rename(
+                        columns={"width": "rivwth", "depth": "rivdph"}
+                    )
+                }
+            ],
+            write_dep_tif=True,
+            write_man_tif=True,
+            nr_subgrid_pixels=nr_subgrid_pixels,
+            nlevels=20,
+            nrmax=500,
+        )
+
+        sf.write_subgrid()
+    else:
+        logger.info("Skipping SFINCS subgrid...")
 
     sf.plot_basemap(fn_out="basemap.png")
