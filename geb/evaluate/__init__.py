@@ -10,7 +10,7 @@ class Evaluate(Hydrology):
         model: The GEB model instance.
     """
 
-    def __init__(self, model):
+    def __init__(self, model) -> None:
         self.model = model
 
     def run(

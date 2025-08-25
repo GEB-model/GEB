@@ -891,7 +891,7 @@ def plant(
 
 
 @njit(cache=True)
-def arrays_equal(a, b):
+def arrays_equal(a, b) -> bool:
     for i in range(a.size):
         if a.flat[i] != b.flat[i]:
             return True if a.flat[i] != b.flat[i] else False

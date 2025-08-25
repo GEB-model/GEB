@@ -163,7 +163,7 @@ class LakesReservoirs(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -174,10 +174,10 @@ class LakesReservoirs(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.lakes_reservoirs"
 
-    def spinup(self):
+    def spinup(self) -> None:
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped: np.ndarray = self.grid.load(
             self.model.files["grid"]["waterbodies/water_body_id"]
@@ -487,7 +487,7 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_reservoir]
 
     @reservoir_storage.setter
-    def reservoir_storage(self, value):
+    def reservoir_storage(self, value) -> None:
         self.var.storage[self.is_reservoir] = value
 
     @property
@@ -495,7 +495,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_reservoir]
 
     @reservoir_capacity.setter
-    def reservoir_capacity(self, value):
+    def reservoir_capacity(self, value) -> None:
         self.var.capacity[self.is_reservoir] = value
 
     @property
@@ -503,7 +503,7 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_lake]
 
     @lake_storage.setter
-    def lake_storage(self, value):
+    def lake_storage(self, value) -> None:
         self.var.storage[self.is_lake] = value
 
     @property
@@ -511,7 +511,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_lake]
 
     @lake_capacity.setter
-    def lake_capacity(self, value):
+    def lake_capacity(self, value) -> None:
         self.var.capacity[self.is_lake] = value
 
     @property
@@ -525,7 +525,7 @@ class LakesReservoirs(Module):
     def decompress(self, array):
         return array
 
-    def step(self):
+    def step(self) -> None:
         """Dynamic part set lakes and reservoirs for each year."""
         # if first timestep, or beginning of new year
         if self.model.current_timestep == 1 or (

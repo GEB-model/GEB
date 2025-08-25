@@ -20,7 +20,7 @@ from ..workflows.soilgrids import load_soilgrids
 
 
 class LandSurface:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=["setup_regions_and_land_use"])
@@ -91,7 +91,7 @@ class LandSurface:
             },
             {"name": "gebco"},
         ],
-    ):
+    ) -> None:
         """Sets up the elevation data for the model.
 
         For configuration of DEMs parameters, see

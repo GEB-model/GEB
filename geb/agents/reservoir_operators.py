@@ -20,7 +20,7 @@ class ReservoirOperators(AgentBaseClass):
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
 
-    def __init__(self, model, agents):
+    def __init__(self, model, agents) -> None:
         super().__init__(model)
         self.agents = agents
         self.config = (
@@ -38,7 +38,7 @@ class ReservoirOperators(AgentBaseClass):
     def name(self) -> str:
         return "agents.reservoir_operators"
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.reservoirs = self.model.hydrology.lakes_reservoirs.var.water_body_data[
             self.model.hydrology.lakes_reservoirs.var.water_body_data["waterbody_type"]
             == 2
@@ -551,7 +551,7 @@ class ReservoirOperators(AgentBaseClass):
         return self.model.hydrology.lakes_reservoirs.reservoir_storage
 
     @storage.setter
-    def storage(self, value):
+    def storage(self, value) -> None:
         self.model.hydrology.lakes_reservoirs.reservoir_storage = value
 
     # @property
@@ -563,7 +563,7 @@ class ReservoirOperators(AgentBaseClass):
         return self.model.hydrology.lakes_reservoirs.reservoir_capacity
 
     @capacity.setter
-    def capacity(self, value):
+    def capacity(self, value) -> None:
         self.model.hydrology.lakes_reservoirs.reservoir_capacity = value
 
     @property

@@ -71,7 +71,7 @@ def get_river_manning(river_segments):
     return np.full(len(river_segments), 0.02)
 
 
-def do_mask_flood_plains(sf):
+def do_mask_flood_plains(sf) -> None:
     elevation, d8 = pyflwdir.dem.fill_depressions(sf.grid.dep.values)
 
     flw = pyflwdir.from_array(

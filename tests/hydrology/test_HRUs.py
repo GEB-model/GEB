@@ -4,7 +4,7 @@ import pytest
 from geb.hydrology.HRUs import determine_nearest_river_cell, to_grid, to_HRU
 
 
-def test_determine_nearest_river_cell():
+def test_determine_nearest_river_cell() -> None:
     upstream_area = np.array(
         [
             [np.nan, np.nan, 10, np.nan, np.nan],
@@ -54,7 +54,7 @@ def common_data():
     return grid_data, HRU_data, HRU_data_with_nan, grid_to_HRU, land_use_ratio
 
 
-def test_to_grid(common_data):
+def test_to_grid(common_data) -> None:
     grid_data, HRU_data, HRU_data_with_nan, grid_to_HRU, land_use_ratio = common_data
 
     np.testing.assert_almost_equal(
@@ -124,7 +124,7 @@ def test_to_grid(common_data):
     )
 
 
-def test_to_HRU(common_data):
+def test_to_HRU(common_data) -> None:
     grid_data, HRU_data, HRU_data_with_nan, grid_to_HRU, land_use_ratio = common_data
 
     data = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)

@@ -32,7 +32,7 @@ def plot_snapping(
     closest_point_coords,
     closest_river_segment,
     grid_pixel_coords,
-):
+) -> None:
     fig, ax = plt.subplots(
         subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
     )
@@ -126,7 +126,7 @@ def plot_snapping(
 
 
 class Observations:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=["setup_hydrography"])

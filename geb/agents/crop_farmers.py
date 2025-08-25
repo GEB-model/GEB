@@ -55,7 +55,7 @@ INDEX_INSURANCE_ADAPTATION: int = 5
 PR_INSURANCE_ADAPTATION: int = 6
 
 
-def cumulative_mean(mean, counter, update, mask=None):
+def cumulative_mean(mean, counter, update, mask=None) -> None:
     """Calculates the cumulative mean of a series of numbers. This function operates in place.
 
     Args:
@@ -73,7 +73,7 @@ def cumulative_mean(mean, counter, update, mask=None):
         counter += 1
 
 
-def shift_and_update(array, update):
+def shift_and_update(array, update) -> None:
     """Shifts the array and updates the first element with the update value.
 
     Args:
@@ -93,7 +93,7 @@ def shift_and_reset_matrix(matrix: np.ndarray) -> None:
 def advance_crop_rotation_year(
     current_crop_calendar_rotation_year_index: np.ndarray,
     crop_calendar_rotation_years: np.ndarray,
-):
+) -> None:
     """Update the crop rotation year for each farmer. This function is used to update the crop rotation year for each farmer at the end of the year.
 
     Args:
@@ -196,10 +196,10 @@ class CropFarmers(AgentBaseClass):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "agents.crop_farmers"
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.var.crop_data_type, self.var.crop_data = load_crop_data(self.model.files)
         self.var.crop_ids = self.var.crop_data["name"].to_dict()
         # reverse dictionary
@@ -949,7 +949,7 @@ class CropFarmers(AgentBaseClass):
             maxy=bounds[3],
         )
 
-    def adjust_cultivation_costs(self):
+    def adjust_cultivation_costs(self) -> None:
         # Set the cultivation costs
         self.cultivation_costs = load_regional_crop_data_from_dict(
             self.model, "crops/cultivation_costs"
@@ -1027,7 +1027,7 @@ class CropFarmers(AgentBaseClass):
     def is_in_command_area(self):
         return self.command_area != -1
 
-    def save_pr(self):
+    def save_pr(self) -> None:
         pr = self.HRU.pr * (24 * 3600)  # mm / day
 
         pr_day_mm_per_farmer = np.bincount(
@@ -1042,7 +1042,7 @@ class CropFarmers(AgentBaseClass):
         if day_index == 364 and not calendar.isleap(self.model.current_time.year):
             self.var.cumulative_pr_mm[:, 365] = self.var.cumulative_pr_mm[:, 364]
 
-    def save_water_deficit(self, discount_factor=0.2):
+    def save_water_deficit(self, discount_factor=0.2) -> None:
         water_deficit_day_m3 = (
             self.HRU.var.reference_evapotranspiration_grass - self.HRU.pr
         ) * self.HRU.var.cell_area
@@ -1609,7 +1609,7 @@ class CropFarmers(AgentBaseClass):
                     assert crop_map[field] == -1
         return harvest
 
-    def harvest(self):
+    def harvest(self) -> None:
         """Determine which crops need to be harvested based on their current age and their harvest age.
 
         Once harvested, compute various metrics related to the harvest including potential profit,
@@ -2294,7 +2294,7 @@ class CropFarmers(AgentBaseClass):
             np.mean(full_size_SPEI_per_farmer[harvesting_farmers]),
         )
 
-    def save_harvest_precipitation(self, harvesting_farmers, crop_age):
+    def save_harvest_precipitation(self, harvesting_farmers, crop_age) -> None:
         avg_age = np.mean(crop_age, dtype=np.int32)
         end_day = self.model.current_day_of_year - 1
         start_day = end_day - avg_age
@@ -2310,7 +2310,7 @@ class CropFarmers(AgentBaseClass):
             season_pr_per_farmer
         )
 
-    def save_yearly_spei(self):
+    def save_yearly_spei(self) -> None:
         assert self.model.current_time.month == 1
 
         # calculate the SPEI probability using GEV parameters
@@ -2334,7 +2334,7 @@ class CropFarmers(AgentBaseClass):
         self.var.cumulative_SPEI_during_growing_season.fill(0)
         self.var.cumulative_SPEI_count_during_growing_season.fill(0)
 
-    def save_yearly_pr(self):
+    def save_yearly_pr(self) -> None:
         assert self.model.current_time.month == 1
 
         shift_and_update(
@@ -2363,7 +2363,7 @@ class CropFarmers(AgentBaseClass):
         self.var.yearly_income[:, 0] += income
         self.var.yearly_potential_income[:, 0] += potential_income
 
-    def calculate_yield_spei_relation_test_solo(self):
+    def calculate_yield_spei_relation_test_solo(self) -> None:
         import matplotlib
 
         matplotlib.use("Agg")  # Use the 'Agg' backend for non-interactive plotting
@@ -2584,7 +2584,7 @@ class CropFarmers(AgentBaseClass):
             median_r2 = np.median(valid_r2) if len(valid_r2) > 0 else np.nan
             print(f"Median R² for {model}: {median_r2}")
 
-    def calculate_yield_spei_relation_test_group(self):
+    def calculate_yield_spei_relation_test_group(self) -> None:
         import matplotlib
 
         matplotlib.use("Agg")
@@ -2854,7 +2854,7 @@ class CropFarmers(AgentBaseClass):
         best_model_overall = max(median_r2_values, key=median_r2_values.get)
         print(f"Best-fitting model overall: {best_model_overall}")
 
-    def calculate_yield_spei_relation(self):
+    def calculate_yield_spei_relation(self) -> None:
         # Number of agents
         n_agents = self.var.yearly_yield_ratio.shape[0]
 
@@ -3571,7 +3571,7 @@ class CropFarmers(AgentBaseClass):
         farmer_yield_probability_relation_base,
         farmer_yield_probability_relations_insured,
         premiums,
-    ):
+    ) -> None:
         """Handle the adaptation of farmers to irrigation wells.
 
         This function checks which farmers will adopt irrigation wells based on their expected utility
@@ -4357,7 +4357,7 @@ class CropFarmers(AgentBaseClass):
         adapted,
         groundwater_depth,
         additional_diffentiator,
-    ):
+    ) -> None:
         expired_adaptations = (
             self.var.time_adapted[:, WELL_ADAPTATION] == self.var.lifespan_well
         ) | (groundwater_depth > self.var.well_depth)
@@ -5154,7 +5154,7 @@ class CropFarmers(AgentBaseClass):
             "risk_decr": 1,
             "decision_horizon": 1,
         },
-    ):
+    ) -> None:
         """This function can be used to add new farmers."""
         HRU = self.model.data.split(indices)
         assert self.HRU.var.land_owners[HRU] == -1, "There is already a farmer here."
@@ -5189,7 +5189,7 @@ class CropFarmers(AgentBaseClass):
         return self.var._n
 
     @n.setter
-    def n(self, value):
+    def n(self, value) -> None:
         self.var._n = value
 
     def get_farmer_elevation(self):

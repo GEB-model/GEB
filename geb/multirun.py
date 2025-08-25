@@ -33,12 +33,12 @@ def handle_ctrl_c(func):
     return wrapper
 
 
-def pool_ctrl_c_handler(*args, **kwargs):
+def pool_ctrl_c_handler(*args, **kwargs) -> None:
     global ctrl_c_entered
     ctrl_c_entered = True
 
 
-def multi_set(dict_obj, value, *attrs):
+def multi_set(dict_obj, value, *attrs) -> None:
     d = dict_obj
     for attr in attrs[:-1]:
         d = d[attr]
@@ -53,7 +53,7 @@ def multi_set(dict_obj, value, *attrs):
 
 
 @handle_ctrl_c
-def run_model(args):
+def run_model(args) -> None:
     """This function takes an individual from the population and runs the model with the corresponding parameters.
 
     It first checks if the run directory already exists and whether the model was run before.
@@ -159,7 +159,7 @@ def run_model(args):
                 break
 
 
-def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu):
+def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu) -> None:
     # set global variable for each process in the pool:
     global ctrl_c_entered
     global default_sigint_handler
@@ -174,7 +174,7 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu)
     current_gpu_use_count = manager_current_gpu_use_count
 
 
-def multi_run(config, working_directory):
+def multi_run(config, working_directory) -> None:
     multi_run_config = config["multirun"]
     nr_runs = multi_run_config["run_nrs"]
 

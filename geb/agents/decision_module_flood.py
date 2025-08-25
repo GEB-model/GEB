@@ -36,7 +36,7 @@ class DecisionModule:
         else:
             self.error_interval = 0
 
-    def sample_error_terms(self, n_agents, regions_select):
+    def sample_error_terms(self, n_agents, regions_select) -> None:
         """This function samples error terms for the expected utility of migration and the expected utility of adaptation."""
         self.error_terms_stay = self.model.random_module.random_state.uniform(
             (1 - self.error_interval), (1 + self.error_interval), size=n_agents

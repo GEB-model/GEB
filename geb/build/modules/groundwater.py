@@ -10,7 +10,7 @@ from ..workflows.general import (
 
 
 class GroundWater:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=["setup_elevation"])
@@ -20,7 +20,7 @@ class GroundWater:
         maximum_thickness_confined_layer: int | float = 1000,
         intial_heads_source: str = "GLOBGM",
         force_one_layer: bool = True,
-    ):
+    ) -> None:
         """Sets up the MODFLOW grid for GEB.
 
         This code is adopted from the GLOBGM model (https://github.com/UU-Hydro/GLOBGM). Also see ThirdPartyNotices.txt.

@@ -74,7 +74,7 @@ class Households(AgentBaseClass):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "agents.households"
 
     def load_flood_maps(self) -> None:
@@ -463,7 +463,7 @@ class Households(AgentBaseClass):
 
         return probability_maps
 
-    def create_damage_probability_maps(self):
+    def create_damage_probability_maps(self) -> None:
         """Creates an object-based (buildings) probability map based on the ensemble of damage maps."""
         crs = self.model.config["hazards"]["floods"]["crs"]
         days = self.model.config["general"]["forecasts"]["days"]
@@ -532,7 +532,7 @@ class Households(AgentBaseClass):
 
             damage_probability_map.to_file(output_path)
 
-    def warning_strategy_1(self, prob_threshold=0.6):
+    def warning_strategy_1(self, prob_threshold=0.6) -> None:
         # I probably should use the probability_maps as argument for this function instead of getting it inside the function
         # ideally add an option to choose the warning strategy
 
@@ -601,7 +601,7 @@ class Households(AgentBaseClass):
         path = os.path.join(self.model.output_folder, "warnings_log.csv")
         pd.DataFrame(warnings_log).to_csv(path, index=False)
 
-    def infrastructure_warning_strategy(self, prob_threshold=0.6):
+    def infrastructure_warning_strategy(self, prob_threshold=0.6) -> None:
         # Load postal codes and substations
         PC4 = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
         substations = gpd.read_parquet(
@@ -776,7 +776,7 @@ class Households(AgentBaseClass):
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting)}")
 
-    def load_objects(self):
+    def load_objects(self) -> None:
         # Load buildings
         self.buildings = gpd.read_parquet(self.model.files["geom"]["assets/buildings"])
         self.buildings["object_type"] = (
@@ -796,7 +796,7 @@ class Households(AgentBaseClass):
         self.rail = gpd.read_parquet(self.model.files["geom"]["assets/rails"])
         self.rail["object_type"] = "rail"
 
-    def load_max_damage_values(self):
+    def load_max_damage_values(self) -> None:
         # Load maximum damages
         with open(
             self.model.files["dict"][
@@ -881,7 +881,7 @@ class Households(AgentBaseClass):
         ) as f:
             self.var.max_dam_agriculture_m2 = float(json.load(f)["maximum_damage"])
 
-    def load_damage_curves(self):
+    def load_damage_curves(self) -> None:
         # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
         road_curves = []
         road_types = [
@@ -981,7 +981,7 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "rail"}
         )
 
-    def create_damage_interpolators(self):
+    def create_damage_interpolators(self) -> None:
         # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
         self.buildings_content_curve_interpolator = interpolate.interp1d(
             x=self.buildings_content_curve.index,
@@ -994,7 +994,7 @@ class Households(AgentBaseClass):
             # fill_value="extrapolate",
         )
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.construct_income_distribution()
         self.assign_household_attributes()
 

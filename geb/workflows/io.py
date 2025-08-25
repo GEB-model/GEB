@@ -163,7 +163,7 @@ def check_buffer_size(
     da: xr.DataArray,
     chunks_or_shards: dict[str, int],
     max_buffer_size: int = 2147483647,
-):
+) -> None:
     buffer_size = (
         np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
     )
@@ -455,7 +455,7 @@ class AsyncGriddedForcingReader:
     multiple timesteps sequentially.
     """
 
-    def __init__(self, filepath, variable_name):
+    def __init__(self, filepath, variable_name) -> None:
         self.variable_name = variable_name
         self.filepath = filepath
 
@@ -545,7 +545,7 @@ class AsyncGriddedForcingReader:
             data = self.load(index)
             return data
 
-    def close(self):
+    def close(self) -> None:
         # cancel the preloading of the next timestep
         if self.preloaded_data_future is not None:
             self.preloaded_data_future.cancel()
@@ -563,7 +563,7 @@ class WorkingDirectory:
             # Code executed here will have the new directory as the CWD
     """
 
-    def __init__(self, new_path):
+    def __init__(self, new_path) -> None:
         """Initializes the context manager with the path to change to.
 
         Args:

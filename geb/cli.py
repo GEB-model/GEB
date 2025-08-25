@@ -108,7 +108,7 @@ def create_logger(fp):
 @click.group()
 @click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
-def cli(ctx):  # , quiet, verbose):
+def cli(ctx) -> None:  # , quiet, verbose):
     """Command line interface for GEB."""
     if ctx.obj is None:
         ctx.obj = {}
@@ -280,27 +280,27 @@ def run_model_with_method(
 
 @cli.command()
 @click_run_options()
-def run(*args, **kwargs):
+def run(*args, **kwargs) -> None:
     run_model_with_method(method="run", *args, **kwargs)
 
 
 @cli.command()
 @click_run_options()
-def spinup(*args, **kwargs):
+def spinup(*args, **kwargs) -> None:
     run_model_with_method(method="spinup", *args, **kwargs)
 
 
 @cli.command()
 @click.argument("method", required=True)
 @click_run_options()
-def exec(method, *args, **kwargs):
+def exec(method, *args, **kwargs) -> None:
     run_model_with_method(method=method, *args, **kwargs)
 
 
 @cli.command()
 @click_config
 @working_directory_option
-def calibrate(config, working_directory):
+def calibrate(config, working_directory) -> None:
     with WorkingDirectory(working_directory):
         config = parse_config(config)
         geb_calibrate(config, working_directory)
@@ -309,7 +309,7 @@ def calibrate(config, working_directory):
 @cli.command()
 @click_config
 @working_directory_option
-def sensitivity(config, working_directory):
+def sensitivity(config, working_directory) -> None:
     with WorkingDirectory(working_directory):
         config = parse_config(config)
         geb_sensitivity_analysis(config, working_directory)
@@ -318,7 +318,7 @@ def sensitivity(config, working_directory):
 @cli.command()
 @click_config
 @working_directory_option
-def multirun(config, working_directory):
+def multirun(config, working_directory) -> None:
     with WorkingDirectory(working_directory):
         config = parse_config(config)
         geb_multi_run(config, working_directory)
@@ -542,7 +542,7 @@ def init_fn(
     help="If set, overwrite existing config and build config files.",
 )
 @working_directory_option
-def init(*args, **kwargs):
+def init(*args, **kwargs) -> None:
     """Initialize a new model."""
     # Initialize the model with the given config and build config
     init_fn(*args, **kwargs)
@@ -556,7 +556,7 @@ def build_fn(
     working_directory,
     data_provider,
     data_root,
-):
+) -> None:
     """Build model."""
     with WorkingDirectory(working_directory):
         model = get_builder(
@@ -574,7 +574,7 @@ def build_fn(
 
 @cli.command()
 @click_build_options()
-def build(*args, **kwargs):
+def build(*args, **kwargs) -> None:
     build_fn(*args, **kwargs)
 
 
@@ -634,7 +634,7 @@ def alter_fn(
 @cli.command()
 @click_build_options()
 @click.option("--from-model", default="../base", help="Folder for the existing model.")
-def alter(*args, **kwargs):
+def alter(*args, **kwargs) -> None:
     """Create alternative version from base model with only changed files.
 
     This command is useful to create a new model based on an existing one, but with
@@ -653,7 +653,7 @@ def update_fn(
     working_directory,
     data_provider,
     data_root,
-):
+) -> None:
     """Update model."""
     with WorkingDirectory(working_directory):
         model = get_builder(
@@ -735,7 +735,7 @@ def update_fn(
     build_config="update.yml",
     build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
 )
-def update(*args, **kwargs):
+def update(*args, **kwargs) -> None:
     update_fn(*args, **kwargs)
 
 
@@ -810,7 +810,7 @@ def evaluate(
     )
 
 
-def share_fn(working_directory, name, include_preprocessing, include_output):
+def share_fn(working_directory, name, include_preprocessing, include_output) -> None:
     """Share model."""
     with WorkingDirectory(working_directory):
         # create a zip file called model.zip with the folders input, and model files
@@ -901,7 +901,7 @@ def share_fn(working_directory, name, include_preprocessing, include_output):
     default=False,
     help="Include output files in the zip file.",
 )
-def share(*args, **kwargs):
+def share(*args, **kwargs) -> None:
     """Share model as a zip file."""
     share_fn(*args, **kwargs)
 

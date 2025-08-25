@@ -165,7 +165,7 @@ def get_SWORD_river_widths(data_catalog, SWORD_reach_IDs):
 
 
 class Hydrography:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=["setup_hydrography", "setup_cell_area"])
@@ -194,7 +194,7 @@ class Hydrography:
 
         self.set_grid(mannings, "routing/mannings")
 
-    def set_routing_subbasins(self, river_graph, sink_subbasin_ids):
+    def set_routing_subbasins(self, river_graph, sink_subbasin_ids) -> None:
         # always make a list of the subbasin ids, such that the function always gets the same type of input
         if not isinstance(sink_subbasin_ids, (list, set)):
             sink_subbasin_ids = [sink_subbasin_ids]
@@ -223,7 +223,7 @@ class Hydrography:
         self.set_geom(subbasins, name="routing/subbasins")
 
     @build_method
-    def setup_hydrography(self):
+    def setup_hydrography(self) -> None:
         original_d8_elevation = self.other["drainage/original_d8_elevation"]
         original_d8_ldd = self.other["drainage/original_d8_flow_directions"]
         original_d8_ldd_data = original_d8_ldd.values
@@ -459,7 +459,7 @@ class Hydrography:
         self,
         command_areas=None,
         custom_reservoir_capacity=None,
-    ):
+    ) -> None:
         """Sets up the waterbodies for GEB.
 
         Args:
@@ -648,7 +648,7 @@ class Hydrography:
         self.set_geom(waterbodies, name="waterbodies/waterbody_data")
 
     @build_method
-    def setup_coastal_model_regions(self):
+    def setup_coastal_model_regions(self) -> None:
         """Sets up the coastal model regions for the model.
 
         This function subdivides the coastal geoms into smaller regions that are used to simulate coastal flooding.
@@ -663,7 +663,7 @@ class Hydrography:
         # TODO: Implement coastal model region setup
         pass
 
-    def setup_gtsm_water_levels(self, temporal_range):
+    def setup_gtsm_water_levels(self, temporal_range) -> None:
         """Sets up the GTSM hydrographs for station within the model bounds.
 
         Args:
@@ -730,7 +730,7 @@ class Hydrography:
         self.set_geom(stations, name="gtsm/stations")
         self.logger.info("GTSM station waterlevels and geometries set")
 
-    def setup_gtsm_surge_levels(self, temporal_range):
+    def setup_gtsm_surge_levels(self, temporal_range) -> None:
         """Sets up the GTSM surge hydrographs for station within the model bounds.
 
         Args:
@@ -781,7 +781,7 @@ class Hydrography:
         self.set_table(gtsm_data_region_pd, name="gtsm/surge")
         self.logger.info("GTSM station waterlevels and geometries set")
 
-    def setup_coast_rp(self):
+    def setup_coast_rp(self) -> None:
         """Sets up the coastal return period data for the model."""
         self.logger.info("Setting up coastal return period data")
         stations = gpd.read_parquet(

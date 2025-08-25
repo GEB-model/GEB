@@ -8,7 +8,7 @@ from geb.store import DynamicArray
 from .testconfig import tmp_folder
 
 
-def test_1D_dynamic_array_slice():
+def test_1D_dynamic_array_slice() -> None:
     a = DynamicArray(np.array([1, 2, 3]), max_n=10)
 
     sliced = a[:]
@@ -34,7 +34,7 @@ def test_1D_dynamic_array_slice():
     assert isinstance(sliced, np.ndarray)
 
 
-def test_2D_dynamic_array_slice():
+def test_2D_dynamic_array_slice() -> None:
     a = DynamicArray(
         np.array([[1, 2], [3, 4], [5, 6]]), max_n=10, extra_dims_names=["extra"]
     )
@@ -80,7 +80,7 @@ def test_2D_dynamic_array_slice():
     assert sliced.extra_dims_names == ["extra"]
 
 
-def test_dynamic_array_copy():
+def test_dynamic_array_copy() -> None:
     a = DynamicArray(
         np.array([[1, 2], [3, 4], [5, 6]]), max_n=10, extra_dims_names=["extra"]
     )
@@ -97,7 +97,7 @@ def test_dynamic_array_copy():
     assert copied[0, 0] == 1
 
 
-def test_dynamic_array_operations():
+def test_dynamic_array_operations() -> None:
     # Test initialization with max_n
     a = DynamicArray(np.array([1, 2, 3]), max_n=10)
     a_ = DynamicArray(dtype=np.int64, n=3, max_n=10)
@@ -293,7 +293,7 @@ def test_dynamic_array_operations():
     assert np.array_equal(a, np.array([42, 42, 42, 42]))
 
     # test that numba edits data in-place
-    def numba_function(data):
+    def numba_function(data) -> None:
         data[:] = -99
 
     numba_function(a.data)
@@ -316,37 +316,37 @@ def array():
     return DynamicArray(np.array([1, 2, 3, 4, 5]), max_n=10)
 
 
-def test_add_ufunc(array):
+def test_add_ufunc(array) -> None:
     result = np.add(array, 1)
     np.testing.assert_array_equal(result.data, np.array([2, 3, 4, 5, 6]))
 
 
-def test_subtract_ufunc(array):
+def test_subtract_ufunc(array) -> None:
     result = np.subtract(array, 1)
     np.testing.assert_array_equal(result.data, np.array([0, 1, 2, 3, 4]))
 
 
-def test_multiply_ufunc(array):
+def test_multiply_ufunc(array) -> None:
     result = np.multiply(array, 2)
     np.testing.assert_array_equal(result.data, np.array([2, 4, 6, 8, 10]))
 
 
-def test_divide_ufunc(array):
+def test_divide_ufunc(array) -> None:
     result = np.divide(array, 2)
     np.testing.assert_array_equal(result.data, np.array([0.5, 1.0, 1.5, 2.0, 2.5]))
 
 
-def test_power_ufunc(array):
+def test_power_ufunc(array) -> None:
     result = np.power(array, 2)
     np.testing.assert_array_equal(result.data, np.array([1, 4, 9, 16, 25]))
 
 
-def test_reduce_ufunc(array):
+def test_reduce_ufunc(array) -> None:
     result = np.add.reduce(array)
     assert result == 15
 
 
-def test_save_and_restore(array):
+def test_save_and_restore(array) -> None:
     array.save(tmp_folder / "test")
     array2 = DynamicArray.load(tmp_folder / "test.storearray.npz")
     assert np.array_equal(array, array2)

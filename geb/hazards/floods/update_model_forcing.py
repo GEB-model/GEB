@@ -29,7 +29,7 @@ def update_sfincs_model_forcing_coastal(
     model_root: Path,
     simulation_root: Path,
     return_period: int,
-):
+) -> None:
     """Update the SFINCS model forcing for coastal flooding.
 
     Notes:
@@ -90,7 +90,7 @@ def update_sfincs_model_forcing(
     uparea_discharge_grid,
     forcing_method,
     precipitation_grid=None,
-):
+) -> None:
     assert os.path.isfile(os.path.join(model_root, "sfincs.inp")), (
         f"model root does not exist {model_root}"
     )

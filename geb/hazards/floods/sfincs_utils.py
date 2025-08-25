@@ -66,7 +66,7 @@ def run_sfincs_subprocess(root: Path, cmd: list[str], log_file: Path) -> int:
 def write_zsmax_tif(
     root,
     zsmax_fn,
-):
+) -> None:
     """Write zsmax to tif."""
     mod = SfincsModel(root, mode="r")
     # get maximum waterlevel
@@ -144,7 +144,7 @@ def create_hourly_hydrograph(peak_discharge, rising_limb_hours, recession_limb_h
     return hydrograph_df
 
 
-def check_docker_running():
+def check_docker_running() -> bool | None:
     try:
         subprocess.run(
             ["docker", "info"],
@@ -422,7 +422,7 @@ def snap_to_grid(ds, reference, relative_tollerance=0.02, ydim="y", xdim="x"):
     return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})
 
 
-def configure_sfincs_model(sf, model_root, simulation_root):
+def configure_sfincs_model(sf, model_root, simulation_root) -> None:
     """Helper function to configure SFINCS model with common settings."""
     sf.setup_config(
         alpha=0.5
