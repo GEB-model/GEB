@@ -527,10 +527,29 @@ class DelayedReader(dict):
         self.reader: Any = reader
 
     def __getitem__(self, key: str) -> Any:
-        fp = super().__getitem__(key)
+        """Get item from the dictionary using reader.
+
+        Args:
+            key: dictionary key
+
+        Returns:
+            The data read from the file.
+        """
+        fp: str | Path = super().__getitem__(key)
         return self.reader(fp)
 
     def __setitem__(self, key: str, value: Any) -> None:
+        """Set item in the dictionary using a file path that refers to the actual data.
+
+        The file path is stored in the dictionary, not the actual data.
+
+        Args:
+            key: dictionary key
+            value: file path to the data
+
+        Raises:
+            ValueError: If the value is not a string or Path.
+        """
         if isinstance(value, (str, Path)):
             super().__setitem__(key, value)
         else:
