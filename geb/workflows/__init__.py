@@ -1,3 +1,7 @@
+"""
+Workflow helpers used in the GEB.
+"""
+
 from time import time
 
 import numpy as np

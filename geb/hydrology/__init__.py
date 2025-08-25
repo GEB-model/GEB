@@ -19,6 +19,10 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+"""
+Hydrology submodule for the GEB model. Holds all hydrology related submodules.
+"""
+
 import numpy as np
 
 from geb.hydrology.HRUs import Data

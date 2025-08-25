@@ -1,3 +1,9 @@
+"""
+Agent classes for the GEB model.
+
+This package exposes agent implementations used to simulate actors in the model.
+"""
+
 from geb.module import Module
 from geb.workflows import TimingModule
 
