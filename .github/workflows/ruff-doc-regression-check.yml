@@ -122,7 +122,7 @@ jobs:
               # Convert relative paths to full paths in pr-branch directory
               while IFS= read -r file; do
               [ -n "$file" ] && [ -f "pr-branch/$file" ] && echo "pr-branch/$file"
-                done < "$CHANGED_FILES" | xargs -r $COMMAND || true
+                done < "$CHANGED_FILES" | xargs -r $COMMAND --preview || true
               echo ""
             fi
           done < all_rules.txt
