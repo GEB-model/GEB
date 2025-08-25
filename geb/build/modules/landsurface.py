@@ -20,15 +20,12 @@ from ..workflows.soilgrids import load_soilgrids
 
 
 class LandSurface:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=["setup_regions_and_land_use"])
     def setup_cell_area(self) -> None:
         """Sets up the cell area map for the model.
-
-        Raises:
-            ValueError: If the grid mask is not available.
 
         Notes:
             This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
@@ -91,7 +88,7 @@ class LandSurface:
             },
             {"name": "gebco"},
         ],
-    ):
+    ) -> None:
         """Sets up the elevation data for the model.
 
         For configuration of DEMs parameters, see

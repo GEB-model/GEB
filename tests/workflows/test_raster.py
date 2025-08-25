@@ -5,7 +5,7 @@ import xarray as xr
 from geb.workflows.raster import reclassify
 
 
-def test_reclassify():
+def test_reclassify() -> None:
     classification_dict = {
         1: 10,
         2: 20,

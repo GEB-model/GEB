@@ -198,7 +198,7 @@ class HillSlopeErosion(Module):
     particles separately.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -211,10 +211,10 @@ class HillSlopeErosion(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.hillslope_erosion"
 
-    def spinup(self):
+    def spinup(self) -> None:
         if not self.simulate:
             return None
 

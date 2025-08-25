@@ -73,7 +73,7 @@ for layer in range(NLAY):
 class DummyGrid:
     """A dummy grid class to simulate the grid structure."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     def decompress(self, array):
@@ -83,14 +83,14 @@ class DummyGrid:
 class DummyHydrology:
     """A dummy hydrology class to simulate the hydrology structure."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.grid = DummyGrid()
 
 
 class DummyModel:
     """A dummy model class to simulate the MODFLOW model structure."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.simulation_root_spinup = tmp_folder / "modflow"
         self.hydrology = DummyHydrology()
 
@@ -115,14 +115,14 @@ default_params = {
 }
 
 
-def test_modflow_simulation_initialization():
+def test_modflow_simulation_initialization() -> None:
     sim: ModFlowSimulation = ModFlowSimulation(**default_params)
     assert sim.n_active_cells == (~basin_mask).sum()
     # In the Netherlands, the average area of a cell with this gt is ~75.8 m2
     assert np.allclose(sim.area, 75.8, atol=0.1)
 
 
-def test_step():
+def test_step() -> None:
     parameters = deepcopy(default_params)
 
     sim: ModFlowSimulation = ModFlowSimulation(**parameters)
@@ -142,7 +142,7 @@ def test_step():
     sim.finalize()
 
 
-def test_recharge():
+def test_recharge() -> None:
     parameters = deepcopy(default_params)
     parameters["heads"] = parameters["heads"] - 2
 
@@ -170,7 +170,7 @@ def test_recharge():
     sim.finalize()
 
 
-def test_drainage():
+def test_drainage() -> None:
     parameters = deepcopy(default_params)
     layer_boundary_elevation = parameters["layer_boundary_elevation"]
     topography = np.full((YSIZE, XSIZE), 0)
@@ -221,7 +221,7 @@ def test_drainage():
     sim.finalize()
 
 
-def test_wells():
+def test_wells() -> None:
     parameters = deepcopy(default_params)
     parameters["heads"][:,] = compress(
         topography - 2, basin_mask
@@ -268,7 +268,7 @@ def test_wells():
     sim.finalize()
 
 
-def visualize_modflow_results(sim, axes):
+def visualize_modflow_results(sim, axes) -> None:
     (ax1, ax2, ax3, ax4, ax5) = axes
 
     # Plot topography
@@ -304,7 +304,7 @@ def visualize_modflow_results(sim, axes):
     plt.colorbar(im5, ax=ax5, label="Drainage (m/day)")
 
 
-def test_modflow_simulation_with_visualization():
+def test_modflow_simulation_with_visualization() -> None:
     parameters = deepcopy(default_params)
     parameters["heads"][:,] = compress(topography, basin_mask)
     sim = ModFlowSimulation(**parameters)
@@ -334,7 +334,7 @@ def test_modflow_simulation_with_visualization():
     plt.savefig(output_folder / "modflow_simulation.png")
 
 
-def test_modflow_simulation_with_restore():
+def test_modflow_simulation_with_restore() -> None:
     parameters = deepcopy(default_params)
     parameters["heads"][:,] = compress(topography, basin_mask)
     sim = ModFlowSimulation(**parameters)
@@ -374,7 +374,7 @@ def test_modflow_simulation_with_restore():
     sim.finalize()
 
 
-def test_get_water_table_depth():
+def test_get_water_table_depth() -> None:
     layer_boundary_elevation = np.array(
         [
             [100, 100, 100, 100, 100, 100, 100],
@@ -402,7 +402,7 @@ def test_get_water_table_depth():
     np.testing.assert_allclose(water_table_depth, np.array([3, 13, 53, 63, 103, 53, 3]))
 
 
-def test_get_groundwater_storage_m():
+def test_get_groundwater_storage_m() -> None:
     layer_boundary_elevation = np.array(
         [
             [100, 100, 100, 100, 100],
@@ -430,7 +430,7 @@ def test_get_groundwater_storage_m():
     np.testing.assert_allclose(storage, np.array([36.75, 31.75, 12.25, 9.75, 0.0]))
 
 
-def test_distribute_well_rate_per_layer():
+def test_distribute_well_rate_per_layer() -> None:
     layer_boundary_elevation = np.array(
         [
             [100, 100, 100, 100, 100, 100, 100],

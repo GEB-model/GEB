@@ -228,7 +228,7 @@ def to_HRU(data, grid_to_HRU, land_use_ratio, output_data, fn=None):
 class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @property
@@ -260,7 +260,7 @@ class Grid(BaseVariables):
     Then, the mask is compressed by removing all masked cells, resulting in a compressed array.
     """
 
-    def __init__(self, data, model):
+    def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
         self.var = self.model.store.create_bucket("hydrology.grid.var")
@@ -375,7 +375,7 @@ class Grid(BaseVariables):
 
     def plot_compressed(
         self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float] = None
-    ):
+    ) -> None:
         """Plot compressed array.
 
         Args:
@@ -543,7 +543,7 @@ class HRUs(BaseVariables):
         if self.model.in_spinup:
             self.spinup()
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.var = self.model.store.create_bucket(
             "hydrology.HRU.var",
             validator=lambda x: isinstance(x, np.ndarray)
@@ -797,7 +797,9 @@ class HRUs(BaseVariables):
 
     @staticmethod
     @njit(cache=True)
-    def compress_numba(array, unmerged_HRU_indices, outarray, nodatavalue, method):
+    def compress_numba(
+        array, unmerged_HRU_indices, outarray, nodatavalue, method
+    ) -> np.ndarray:
         array = array.ravel()
         unmerged_HRU_indices = unmerged_HRU_indices.ravel()
         if method == "last":
@@ -858,7 +860,7 @@ class HRUs(BaseVariables):
             raise NotImplementedError
         return output_data
 
-    def plot(self, HRU_array: np.ndarray, ax=None, show: bool = True):
+    def plot(self, HRU_array: np.ndarray, ax=None, show: bool = True) -> None:
         """Function to plot HRU data.
 
         Args:
@@ -924,7 +926,7 @@ class HRUs(BaseVariables):
 class Modflow(BaseVariables):
     """This class is to store data for the MODFLOW model. It inherits from `BaseVariables` and initializes the variables needed for the MODFLOW model."""
 
-    def __init__(self, data, model):
+    def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
 
@@ -938,7 +940,7 @@ class Data:
         model: The GEB model.
     """
 
-    def __init__(self, model):
+    def __init__(self, model) -> None:
         self.model = model
 
         self.farms = load_grid(self.model.files["subgrid"]["agents/farmers/farms"])
@@ -952,12 +954,12 @@ class Data:
 
         self.load_water_demand()
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.HRU.var.cell_area = self.to_HRU(
             data=self.grid.var.cell_area, fn="weightedsplit"
         )
 
-    def load_water_demand(self):
+    def load_water_demand(self) -> None:
         self.model.industry_water_consumption_ds = load_water_demand_xr(
             self.model.files["other"]["water_demand/industry_water_consumption"]
         )

@@ -125,7 +125,7 @@ class LandCover(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -135,7 +135,7 @@ class LandCover(Module):
         if self.model.in_spinup:
             self.spinup()
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.HRU.var.capriseindex = self.HRU.full_compressed(0, dtype=np.float32)
 
         store = zarr.storage.LocalStore(
@@ -456,5 +456,5 @@ class LandCover(Module):
         )
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.landcover"

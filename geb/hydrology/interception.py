@@ -58,7 +58,7 @@ class Interception(Module):
     ====================  ================================================================================  =========
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -69,10 +69,10 @@ class Interception(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.interception"
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.HRU.var.minInterceptCap = self.HRU.full_compressed(
             np.nan, dtype=np.float32
         )

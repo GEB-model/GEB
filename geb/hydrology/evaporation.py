@@ -46,7 +46,7 @@ def get_CO2_induced_crop_factor_adustment(
 class Evaporation(Module):
     """Calculate potential evaporation and pot. transpiration."""
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -57,10 +57,10 @@ class Evaporation(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.evaporation"
 
-    def spinup(self):
+    def spinup(self) -> None:
         pass
 
     def step(

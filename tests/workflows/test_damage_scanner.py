@@ -75,7 +75,7 @@ def vulnerability_curves():
 
 
 @pytest.mark.parametrize("clip", [False, True])
-def test_vector_scanner(flood_raster, buildings, vulnerability_curves, clip):
+def test_vector_scanner(flood_raster, buildings, vulnerability_curves, clip) -> None:
     if clip:
         flood_raster = flood_raster.rio.clip(
             [Polygon([(1, 1), (1, 9), (9, 9), (9, 1)])]
@@ -116,7 +116,9 @@ def test_vector_scanner(flood_raster, buildings, vulnerability_curves, clip):
     )  # 1m2, 0.25 x 0, 0.25 x nan, 0.25 x 0.5, 0.25 x 3 hazard severity, residential, max_damage 100 > damage of 10
 
 
-def test_vector_scanner_missing_data(flood_raster, buildings, vulnerability_curves):
+def test_vector_scanner_missing_data(
+    flood_raster, buildings, vulnerability_curves
+) -> None:
     # Test missing 'maximum_damage' column
     buildings_missing_damage = buildings.drop(columns=["maximum_damage"])
     with pytest.raises(AssertionError):

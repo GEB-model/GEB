@@ -36,7 +36,7 @@ from ..workflows.population import load_GLOPOP_S
 
 
 class Agents:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @build_method(
@@ -47,7 +47,7 @@ class Agents:
             "setup_household_characteristics",
         ]
     )
-    def setup_water_demand(self):
+    def setup_water_demand(self) -> None:
         """Sets up the water demand data for GEB.
 
         Notes:
@@ -270,7 +270,7 @@ class Agents:
 
         self.logger.info("Setting up other water demands")
 
-        def set_demand(file, variable, name, ssp):
+        def set_demand(file, variable, name, ssp) -> None:
             ds_historic = xr.open_dataset(
                 self.data_catalog.get_source(f"cwatm_{file}_historical_year").path,
                 decode_times=False,
@@ -390,7 +390,7 @@ class Agents:
         self.set_table(income_distributions_pd, "income/national_distribution")
 
     @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
-    def setup_economic_data(self):
+    def setup_economic_data(self) -> None:
         """Sets up the economic data for GEB.
 
         Notes:
@@ -612,7 +612,7 @@ class Agents:
         self.set_dict(lcu_dict, name="socioeconomics/LCU_per_USD")
 
     @build_method
-    def setup_irrigation_sources(self, irrigation_sources):
+    def setup_irrigation_sources(self, irrigation_sources) -> None:
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
 
     @build_method(depends_on=["set_time_range", "setup_economic_data"])
@@ -625,7 +625,7 @@ class Agents:
         capital_cost_sprinkler: float,
         capital_cost_drip: float,
         reference_year: int,
-    ):
+    ) -> None:
         """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
 
         Args:
@@ -703,7 +703,7 @@ class Agents:
         WHY_20: float,
         WHY_30: float,
         reference_year: int,
-    ):
+    ) -> None:
         """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
 
         Args:
@@ -834,7 +834,7 @@ class Agents:
         reference_year: int,
         start_year: int,
         end_year: int,
-    ):
+    ) -> None:
         """Sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year.
 
         Args:
@@ -887,7 +887,7 @@ class Agents:
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
-    def set_farmers_and_create_farms(self, farmers: pd.DataFrame):
+    def set_farmers_and_create_farms(self, farmers: pd.DataFrame) -> None:
         """Sets up the farmers data for GEB.
 
         Args:
@@ -1508,7 +1508,7 @@ class Agents:
     @build_method(depends_on="setup_assets")
     def setup_household_characteristics(
         self, maximum_age: int = 85, skip_countries_ISO3: list = []
-    ):
+    ) -> None:
         # setup buildings in region for household allocation
         all_buildings_model_region = self.setup_buildings()
 
@@ -1866,7 +1866,7 @@ class Agents:
             )
 
     @build_method(depends_on=["setup_create_farms"])
-    def setup_farmer_household_characteristics(self, maximum_age=85):
+    def setup_farmer_household_characteristics(self, maximum_age=85) -> None:
         n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
@@ -2154,7 +2154,7 @@ class Agents:
     def setup_farmer_characteristics(
         self,
         interest_rate=0.05,
-    ):
+    ) -> None:
         n_farmers = self.array["agents/farmers/id"].size
 
         preferences_global = self.create_preferences()
@@ -2341,7 +2341,7 @@ class Agents:
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
-    def setup_farmer_irrigation_source(self, irrigating_farmers, year):
+    def setup_farmer_irrigation_source(self, irrigating_farmers, year) -> None:
         fraction_sw_irrigation = "aeisw"
 
         fraction_sw_irrigation_data = xr.open_dataarray(

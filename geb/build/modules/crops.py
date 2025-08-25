@@ -21,7 +21,7 @@ from ..workflows.farmers import get_farm_locations
 
 
 class Crops:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=[])
@@ -29,7 +29,7 @@ class Crops:
         self,
         crop_data: dict,
         type: str = "MIRCA2000",
-    ):
+    ) -> None:
         assert type in ("MIRCA2000", "GAEZ")
         for crop_id, crop_values in crop_data.items():
             assert "name" in crop_values
@@ -92,7 +92,7 @@ class Crops:
         self,
         source: Union[str, None] = "MIRCA2000",
         crop_specifier: Union[str, None] = None,
-    ):
+    ) -> None:
         """Sets up the crops data for the model."""
         self.logger.info("Preparing crops data")
 
@@ -748,7 +748,7 @@ class Crops:
         cultivation_costs: Optional[Union[str, int, float]] = 0,
         translate_crop_names: Optional[Dict[str, str]] = None,
         adjust_currency=False,
-    ):
+    ) -> None:
         """Sets up the cultivation costs for the model.
 
         Parameters
@@ -779,7 +779,7 @@ class Crops:
         crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
         translate_crop_names: Optional[Dict[str, str]] = None,
         adjust_currency=False,
-    ):
+    ) -> None:
         """Sets up the crop prices for the model.
 
         Parameters
@@ -798,7 +798,7 @@ class Crops:
         self.set_dict(crop_prices, name="crops/cultivation_costs")
 
     @build_method(depends_on=[])
-    def determine_crop_area_fractions(self, resolution="5-arcminute"):
+    def determine_crop_area_fractions(self, resolution="5-arcminute") -> None:
         output_folder = "plot/mirca_crops"
         os.makedirs(output_folder, exist_ok=True)
 
@@ -940,7 +940,7 @@ class Crops:
         reduce_crops=False,
         replace_base=False,
         export=False,
-    ):
+    ) -> None:
         years = [2000, 2005, 2010, 2015]
         nr_runs = 20
 
@@ -958,7 +958,7 @@ class Crops:
         replace_base=False,
         minimum_area_ratio=0.01,
         replace_crop_calendar_unit_code={},
-    ):
+    ) -> None:
         n_farmers = self.array["agents/farmers/id"].size
 
         MIRCA_unit_grid = xr.open_dataarray(
@@ -1104,7 +1104,7 @@ class Crops:
                     ]
                     all_farmers_assigned.append(farmer_idx)
 
-        def check_crop_calendar(crop_calendar_per_farmer):
+        def check_crop_calendar(crop_calendar_per_farmer) -> None:
             # this part asserts that the crop calendar is correctly set up
             # particulary that no two crops are planted at the same time
             for farmer_crop_calender in crop_calendar_per_farmer:

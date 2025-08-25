@@ -10,7 +10,7 @@ class HazardDriver:
     Currently it only supports floods but can be extended to include other hazards such as landslides in the future.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         if self.config["hazards"]["floods"]["simulate"]:
             # extract the longest flood event in days
             flood_events = self.config["hazards"]["floods"]["events"]
@@ -36,7 +36,7 @@ class HazardDriver:
 
         self.sfincs: SFINCS = SFINCS(self, n_timesteps=longest_flood_event_in_days)
 
-    def step(self):
+    def step(self) -> None:
         if self.config["hazards"]["floods"]["simulate"]:
             if self.simulate_hydrology:
                 self.sfincs.save_discharge()

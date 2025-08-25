@@ -6,16 +6,16 @@ import numpy as np
 class TimingModule:
     """A timing module to measure the time taken for different parts of a workflow."""
 
-    def __init__(self, name):
+    def __init__(self, name) -> None:
         self.name = name
         self.times = [time()]
         self.split_names = []
 
-    def new_split(self, name):
+    def new_split(self, name) -> None:
         self.times.append(time())
         self.split_names.append(name)
 
-    def __str__(self):
+    def __str__(self) -> str:
         messages = []
         for i in range(1, len(self.times)):
             time_difference = self.times[i] - self.times[i - 1]
@@ -43,7 +43,7 @@ def balance_check(
     tollerance: float = 1e-10,
     error_identifiers: dict = {},
     raise_on_error: bool = False,
-):
+) -> bool:
     income = 0
     out = 0
     store = 0

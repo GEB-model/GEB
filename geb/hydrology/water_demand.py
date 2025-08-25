@@ -49,7 +49,7 @@ class WaterDemand(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -60,10 +60,10 @@ class WaterDemand(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.water_demand"
 
-    def spinup(self):
+    def spinup(self) -> None:
         reservoir_command_areas = self.HRU.compress(
             load_grid(self.model.files["subgrid"]["waterbodies/subcommand_areas"]),
             method="last",

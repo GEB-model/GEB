@@ -45,7 +45,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         files: dict,
         mode: str = "w",
         timing: bool = False,
-    ):
+    ) -> None:
         self.timing = timing
         self.mode = mode
 
@@ -513,7 +513,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         return self._multiverse_name
 
     @multiverse_name.setter
-    def multiverse_name(self, value):
+    def multiverse_name(self, value) -> None:
         self._multiverse_name = str(value) if value is not None else None
 
     @property
@@ -529,7 +529,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
     @property
-    def crs(self):
+    def crs(self) -> int:
         return 4326
 
     @property

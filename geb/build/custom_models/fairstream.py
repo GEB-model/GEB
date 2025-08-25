@@ -32,7 +32,7 @@ class Survey:
     def __init__(self) -> None:
         self.mappers = {}
 
-    def learn_structure(self, max_indegree=3):
+    def learn_structure(self, max_indegree=3) -> None:
         print("Estimating network structure")
         est = HillClimbSearch(data=self.samples)
         self.structure = est.estimate(
@@ -43,7 +43,7 @@ class Survey:
             show_progress=True,
         )
 
-    def estimate_parameters(self, plot=False, save=False):
+    def estimate_parameters(self, plot=False, save=False) -> None:
         print("Learning network parameters")
         self.model = BayesianNetwork(self.structure)
         self.model.fit(
@@ -93,11 +93,11 @@ class Survey:
         samples = samples.replace(" ", "_", regex=True)
         return samples
 
-    def save(self, path):
+    def save(self, path) -> None:
         print("Saving model")
         self.model.save(str(path))
 
-    def read(self, path):
+    def read(self, path) -> None:
         print("Loading model")
         self.model = BayesianNetwork().load(str(path), n_jobs=1)
 
@@ -111,7 +111,7 @@ class Survey:
         save=False,
         distribution="normal",
         invert=False,
-    ):
+    ) -> None:
         assert distribution == "normal", "Only normal distribution is implemented"
         values = self.get(variable).values
         values = values[values != nan_value]
@@ -240,7 +240,7 @@ class Survey:
 
 
 class FarmerSurvey(Survey):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         # self.password = password
         self.bins = {
@@ -360,7 +360,7 @@ class FarmerSurvey(Survey):
 
 
 class IHDSSurvey(Survey):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.bins = {
             "age": {
@@ -644,7 +644,7 @@ class IHDSSurvey(Survey):
 
 
 class fairSTREAMModel(GEBModel):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
     def get_farm_size(self):
@@ -658,7 +658,7 @@ class fairSTREAMModel(GEBModel):
         return farm_size_m2
 
     @build_method(depends_on=["setup_forcing"])
-    def setup_pr_GEV(self):
+    def setup_pr_GEV(self) -> None:
         pr: xr.DataArray = open_zarr(
             Path("input/other/climate/pr.zarr"),
         ) * (24 * 3600)
@@ -692,7 +692,7 @@ class fairSTREAMModel(GEBModel):
         crop_variables,
         irrigation_status_per_tehsil_fn,
         crop_data_per_tehsil_fn,
-    ):
+    ) -> None:
         n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
@@ -1158,7 +1158,7 @@ class fairSTREAMModel(GEBModel):
         discount_rate_std,
         interest_rate,
         overwrite_bayesian_network=False,
-    ):
+    ) -> None:
         def normalize(array):
             return (array - np.min(array)) / (np.max(array) - np.min(array))
 

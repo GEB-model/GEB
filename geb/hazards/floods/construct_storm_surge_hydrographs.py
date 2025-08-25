@@ -20,7 +20,7 @@ from ...workflows.io import load_table
 warnings.filterwarnings("ignore")
 
 
-def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False):
+def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> None:
     """Generate storm surge hydrographs for a given GEB model.
 
     Args:

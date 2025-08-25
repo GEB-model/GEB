@@ -1253,7 +1253,7 @@ class Soil(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -1264,10 +1264,10 @@ class Soil(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.soil"
 
-    def spinup(self):
+    def spinup(self) -> None:
         # use a minimum root depth of 25 cm, following AQUACROP recommendation
         # see: Reference manual for AquaCrop v7.1 – Chapter 3
         self.var.minimum_effective_root_depth = 0.25  # m
@@ -1430,7 +1430,7 @@ class Soil(Module):
         ]  # calibration parameter
         self.HRU.var.arno_beta = np.clip(self.HRU.var.arno_beta, 0.01, 0.5)
 
-    def initiate_plantfate(self):
+    def initiate_plantfate(self) -> None:
         # plantFATE only runs on Linux, so we check if the system is Linux
         assert platform.system() == "Linux", (
             "plantFATE only runs on Linux. Please run the model on a Linux system."
@@ -1511,7 +1511,7 @@ class Soil(Module):
         # print(self.model.plantFATE[0:10])
         # print(all(v is None for v in self.model.plantFATE))
 
-    def plant_new_forest(self, indx):
+    def plant_new_forest(self, indx) -> None:
         assert not self.model.in_spinup
 
         from . import plantFATE
@@ -1620,7 +1620,7 @@ class Soil(Module):
         plantfate_biomass,
         plantfate_co2,
         plantfate_num_ind,
-    ):
+    ) -> None:
         if self.plantFATE_forest_RUs[indx]:
             plantFATE_model = self.model.plantFATE[indx]
             if plantFATE_model is not None:
@@ -1714,7 +1714,7 @@ class Soil(Module):
                     #     + str(plantfate_transpiration_by_layer[:, indx])
                     # )
 
-    def set_global_variables(self):
+    def set_global_variables(self) -> None:
         # set number of soil layers as global variable for numba
         global N_SOIL_LAYERS
         N_SOIL_LAYERS = self.HRU.var.soil_layer_height.shape[0]

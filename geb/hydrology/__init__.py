@@ -52,7 +52,7 @@ class Hydrology(Data, Module):
         model: The GEB model instance.
     """
 
-    def __init__(self, model):
+    def __init__(self, model) -> None:
         """Create the hydrology module."""
         Data.__init__(self, model)
         Module.__init__(self, model)
@@ -105,7 +105,7 @@ class Hydrology(Data, Module):
             + self.groundwater.groundwater_content_m3.astype(np.float64).sum()
         )
 
-    def step(self):
+    def step(self) -> None:
         timer: TimingModule = TimingModule("Hydrology")
 
         if __debug__:
@@ -295,5 +295,5 @@ class Hydrology(Data, Module):
         )
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology"

@@ -79,7 +79,7 @@ class SnowFrost(Module):
     ====================  ================================================================================  =========
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -90,10 +90,10 @@ class SnowFrost(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.snowfrost"
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.var.numberSnowLayers = 3  # default 3
         self.var.glaciertransportZone = (
             1.0  # default 1 -> highest zone is transported to middle zone

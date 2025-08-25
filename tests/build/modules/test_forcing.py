@@ -8,7 +8,7 @@ from geb.build.modules.forcing import get_pressure_correction_factor
 from ...testconfig import output_folder
 
 
-def test_get_pressure_correction_factor():
+def test_get_pressure_correction_factor() -> None:
     elevation = np.linspace(0, 8848.86, 1000)
     g = 9.80665
     Mo = 0.0289644

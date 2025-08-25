@@ -14,7 +14,7 @@ class Industry(AgentBaseClass):
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
 
-    def __init__(self, model, agents):
+    def __init__(self, model, agents) -> None:
         super().__init__(model)
 
         if self.model.simulate_hydrology:
@@ -32,7 +32,7 @@ class Industry(AgentBaseClass):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "agents.industry"
 
     def spinup(self) -> None:
