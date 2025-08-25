@@ -272,6 +272,16 @@ def download_forecasts_ECMWF(
 
     Args:
         self: The forcing instance containing configuration and logging.
+        forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
+        forecast_start_time: The forecast initialization time (date or datetime).
+        forecast_end_time: The forecast end time (date or datetime).
+        forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
+        forecast_start_date: The first date to download forecasts for (date or datetime).
+        forecast_end_date: The last date to download forecasts for (date or datetime).
+        forecast_resolution: The spatial resolution of the forecast data (degrees).
+        forecast_horizon: The forecast horizon in hours.
+        forecast_timestep: The forecast timestep in hours.
+        forecast_frequency: The frequency at which forecasts are initialized (hours).
 
     Returns:
         The downloaded forecast data.
@@ -1362,6 +1372,119 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
+    def download_forecasts_ECMWF(
+        self,
+        forecast_variable: List[int],
+        forecast_start_time: date | datetime,
+        forecast_end_time: date | datetime,
+        forecast_model: str,
+        forecast_start_date: date | datetime,
+        forecast_end_date: date | datetime,
+        forecast_resolution: float,
+        forecast_horizon: int,
+        forecast_timestep: int,
+        forecast_frequency: int,
+    ) -> xr.DataArray:
+        """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
+
+        This function downloads ECMWF forecast data for a specified variable and time period
+        from the MARS archive using the ECMWF API. It handles the download and processing of both
+        deterministic (HRES) and ensemble (ENS) forecasts returning them as an xarray DataArray.
+
+        Args:
+            self: The forcing instance containing configuration and logging.
+            forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
+            forecast_start_time: The forecast initialization time (date or datetime).
+            forecast_end_time: The forecast end time (date or datetime).
+            forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
+            forecast_start_date: The first date to download forecasts for (date or datetime).
+            forecast_end_date: The last date to download forecasts for (date or datetime).
+            forecast_resolution: The spatial resolution of the forecast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep: The forecast timestep in hours.
+            forecast_frequency: The frequency at which forecasts are initialized (hours).
+
+        Returns:
+            The downloaded forecast data.
+
+        Raises:
+            ImportError: If ecmwfapi is not installed.
+            ValueError: If no forecast files were downloaded or could be loaded.
+        """
+        # Set up output directory
+        forecast_dir = self.preprocessing_dir / "forecasts" / "ECMWF"
+        forecast_dir.mkdir(parents=True, exist_ok=True)
+
+        target = self.grid["mask"]
+        target.raster.set_crs(4326)
+
+        # check if .ecmwfapirc is present in the home directory
+        ecmwf_api_config = Path.home() / ".ecmwfapirc"
+        if not ecmwf_api_config.exists():
+            raise FileNotFoundError(
+                f"ECMWF API configuration file not found: {ecmwf_api_config}"
+            )
+
+        original_dir = os.getcwd()
+
+        # Change to ECMWF working directory
+        ecmwf_work_dir = Path("/scistor/ivm/tbr910/ECMWF")
+        ecmwf_work_dir.mkdir(exist_ok=True)
+
+        os.chdir(str(ecmwf_work_dir))
+        server = ECMWFService("mars")
+
+        def retrieve_mars_data():
+            # make list of dates between start and end time of forecast (with frequency as defined in forecast_frequency)
+            date_list = (
+                pd.date_range(
+                    "2007-01-01",
+                    "2023-01-01",  # 2007 start of total precip
+                    freq="D",
+                )
+                .strftime("%Y-%m-%d")
+                .tolist()
+            )  # YS
+            print(date_list)
+            # date_list=['2021-07-15'] # '2021-07-09', '2021-07-10', '2021-07-11', '2021-07-12', '2021-07-13', '2021-07-14',
+            # date_range= []
+            # for i in range(len(date_list)-1):
+            #     # if  date_list[i]!=forbidden_dates[0] and date_list[i]!=forbidden_dates[1]:
+            #         month_range= '%s/to/%s' % (date_list[i], date_list[i+1])
+            #         date_range.append(month_range)
+            times = ["00"]  # initialization time
+
+            for date in date_list:
+                for time in times:
+                    target = os.getcwd() + "/files_europe/ecmwf_europe_%s_%s.grb" % (
+                        date[:10],
+                        time[:2],
+                    )
+                    print("REQUEST ACTIVE FOR: %s" % (target))
+                    print(date, time)
+                    mars_ens_request(date, time, target)
+
+        def mars_ens_request(date, time, target):
+            server.execute(
+                {
+                    "class": "od",
+                    "date": date,
+                    "expver": "1",
+                    "levtype": "sfc",
+                    "param": "228.128",
+                    "step": "0/TO/240/BY/24",
+                    "stream": "enfo",
+                    "number": "1/to/50",
+                    "time": time,
+                    "type": "pf",
+                    "grid": "F640",  # O1280
+                    "area": "Europe",  # Specify as North/West/South/East in Geographic lat/long degrees. Southern latitudes and Western longitudes must be given as negative numbers.
+                },
+                target,
+            )
+
+        retrieve_mars_data()
+
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forecasts(
         self,
@@ -1380,10 +1503,22 @@ class Forcing:
         """Sets up forecast data for the model based on configuration.
 
         Args:
+            self: The instance of the Forcing class.
+            forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
+            forecast_start_time: The forecast initialization time (date or datetime).
+            forecast_end_time: The forecast end time (date or datetime).
             forecast_provider: The forecast data provider to use (default: "ECMWF").
+            forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
+            forecast_start_date: The first date to download forecasts for (date or datetime).
+            forecast_end_date: The last date to download forecasts for (date or datetime).
+            forecast_resolution: The spatial resolution of the forecast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep: The forecast timestep in hours.
+            forecast_frequency: The frequency at which forecasts are initialized (hours).
         """
         if forecast_provider == "ECMWF":
-            self.download_forecasts_ECMWF(
+            download_forecasts_ECMWF(
+                self,
                 forecast_variable,
                 forecast_start_time,
                 forecast_end_time,
