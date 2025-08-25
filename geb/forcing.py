@@ -68,7 +68,9 @@ class Forcing(Module):
             assert reader.ds["y"][0] > reader.ds["y"][-1]
         return reader
 
-    def __setitem__(self, name: str, reader: AsyncGriddedForcingReader | xr.DataArray) -> None:
+    def __setitem__(
+        self, name: str, reader: AsyncGriddedForcingReader | xr.DataArray
+    ) -> None:
         """Set the forcing data for a given name.
 
         Args:

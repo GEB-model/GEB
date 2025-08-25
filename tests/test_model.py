@@ -255,7 +255,7 @@ def test_alter() -> None:
 
         run_model_with_method(method="spinup", **run_args)
 
-        
+
 @pytest.mark.skip(reason="no way of currently testing this")
 def test_evaluate_water_circle() -> None:
     with WorkingDirectory(working_directory):

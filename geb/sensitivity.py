@@ -204,7 +204,9 @@ def run_model(args) -> None:
                 break
 
 
-def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu) -> None:
+def init_pool(
+    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
+) -> None:
     # set global variable for each process in the pool:
     global ctrl_c_entered
     global default_sigint_handler
