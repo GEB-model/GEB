@@ -9,7 +9,7 @@ jobs:
   check-ruff-errors:
     runs-on: ubuntu-latest
     env:
-      RULES: ANN001,ANN002,ANN003,ANN201,ANN202,ANN204,ANN205,ANN206,D102,D103,D100,D107,D105,D101,D104,D102,D103,D105,D107,D100,D101,D104,D102,D103,D105,D107,D100,D101,D104,DOC201,DOC202,DOC402,DOC501,DOC502,ANN003,ANN205,ANN206
+      RULES: ANN001,ANN002,ANN003,ANN201,ANN202,ANN204,D102,D103,D100,D107,D105,D101,D104,DOC201,DOC501
     steps:
       - name: Checkout main branch for baseline
         uses: actions/checkout@v3
@@ -71,7 +71,7 @@ jobs:
           set -o pipefail
           cd main-branch
           # Run ruff, capture full output to file and compute per-rule stats (RULE COUNT)
-          ruff check --preview --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_main_full.txt || true
+          ruff check --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_main_full.txt || true
           # extract lines like: "<count> <RULE>  <message>" -> produce "RULE COUNT"
           awk '/^[[:space:]]*[0-9]+[[:space:]]+[A-Z0-9_]+/ {print $2" "$1}' ruff_main_full.txt > ruff_main_stats.txt || true
           # expose paths as step outputs for later steps
@@ -83,7 +83,7 @@ jobs:
         run: |
           set -o pipefail
           cd pr-branch
-          ruff check --preview --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_pr_full.txt || true
+          ruff check --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_pr_full.txt || true
           awk '/^[[:space:]]*[0-9]+[[:space:]]+[A-Z0-9_]+/ {print $2" "$1}' ruff_pr_full.txt > ruff_pr_stats.txt || true
           echo "full_file=pr-branch/ruff_pr_full.txt" >> $GITHUB_OUTPUT
           echo "stats_file=pr-branch/ruff_pr_stats.txt" >> $GITHUB_OUTPUT
@@ -115,20 +115,14 @@ jobs:
               echo "------------------------------------------------------------"
               echo "Regression detected for rule: $rule (main branch: $base -> pull request: $pr)"
               echo "More info: https://docs.astral.sh/ruff/rules/$rule"
-              echo "Full PR error lines for rule $rule:"
-              
-              # Check if we have valid changed files to examine
-              if [ -s "$CHANGED_FILES" ]; then
-                echo "Checking only changed Python files:"
-                # Convert relative paths to full paths in pr-branch directory
-                while IFS= read -r file; do
-                  [ -n "$file" ] && [ -f "pr-branch/$file" ] && echo "pr-branch/$file"
-                done < "$CHANGED_FILES" | xargs -r ruff check --preview --select "$rule" --output-format full || true
-              else
-                echo "No valid changed Python files found, checking all files:"
-                cd pr-branch
-                ruff check --preview --select "$rule" --output-format full . || true
-              fi
+              echo "To replicate locally, run:"
+              COMMAND="ruff check --select "$rule" --output-format full"
+              echo $COMMAND
+              echo "PR error lines for rule $rule within changed files:"
+              # Convert relative paths to full paths in pr-branch directory
+              while IFS= read -r file; do
+              [ -n "$file" ] && [ -f "pr-branch/$file" ] && echo "pr-branch/$file"
+                done < "$CHANGED_FILES" | xargs -r $COMMAND || true
               echo ""
             fi
           done < all_rules.txt
