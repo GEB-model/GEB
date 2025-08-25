@@ -402,7 +402,7 @@ def get_chunk_size(da, target: float | int = 1e8) -> int:
 
 
 class Forcing:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     def download_isimip(
@@ -756,7 +756,7 @@ class Forcing:
                 f"{parse_files}"
             )
 
-    def plot_forcing(self, da, name):
+    def plot_forcing(self, da, name) -> None:
         fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
 
         mask = self.grid["mask"]
@@ -1239,7 +1239,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def setup_forcing_ERA5(self):
+    def setup_forcing_ERA5(self) -> None:
         target = self.grid["mask"]
         target.raster.set_crs(4326)
 
@@ -1593,7 +1593,7 @@ class Forcing:
         forcing: str = "ERA5",
         resolution_arcsec: int | None = None,
         model: str | None = None,
-    ):
+    ) -> None:
         """Sets up the forcing data for GEB.
 
         Args:
@@ -1742,7 +1742,7 @@ class Forcing:
         self,
         forcing: str,
         variables: List[str],
-    ):
+    ) -> None:
         """Sets up the high-resolution climate variables for GEB.
 
         Args:
@@ -1765,7 +1765,7 @@ class Forcing:
             )
             getattr(self, f"set_{variable}")(da)
 
-    def setup_30arcsec_variables_isimip(self, variables: List[str]):
+    def setup_30arcsec_variables_isimip(self, variables: List[str]) -> None:
         """Sets up the high-resolution climate variables for GEB.
 
         Args:
@@ -1782,7 +1782,7 @@ class Forcing:
             The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
-        def download_variable(variable):
+        def download_variable(variable) -> None:
             self.logger.info(f"Setting up {variable}...")
             ds: xr.DataArray = self.download_isimip(
                 product="InputData",
@@ -1806,7 +1806,7 @@ class Forcing:
         for variable in variables:
             download_variable(variable)
 
-    def setup_hurs_isimip_30arcsec(self):
+    def setup_hurs_isimip_30arcsec(self) -> None:
         """Sets up the relative humidity data for GEB.
 
         Notes:
@@ -1925,7 +1925,7 @@ class Forcing:
 
         self.set_hurs(hurs_output)
 
-    def setup_longwave_isimip_30arcsec(self):
+    def setup_longwave_isimip_30arcsec(self) -> None:
         """Sets up the longwave radiation data for GEB.
 
         Notes:
@@ -2029,7 +2029,7 @@ class Forcing:
         )
         self.set_rlds(lw_fine)
 
-    def setup_pressure_isimip_30arcsec(self):
+    def setup_pressure_isimip_30arcsec(self) -> None:
         """Sets up the surface pressure data for GEB.
 
         This method sets up the surface pressure data for GEB. It then downloads
@@ -2078,7 +2078,7 @@ class Forcing:
 
         self.set_ps(pressure_30_min_regridded_corr)
 
-    def setup_wind_isimip_30arcsec(self):
+    def setup_wind_isimip_30arcsec(self) -> None:
         """This method sets up the wind data for GEB.
 
         It first downloads the global wind atlas data and

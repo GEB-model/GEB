@@ -285,7 +285,7 @@ class KinematicWave(Router):
         river_beta: float,
         waterbody_id: npt.NDArray[np.int32],
         is_waterbody_outflow: npt.NDArray[np.bool_],
-    ):
+    ) -> None:
         super().__init__(
             dt, river_network, Q_initial, waterbody_id, is_waterbody_outflow
         )
@@ -529,7 +529,7 @@ class Accuflux(Router):
 
     def __init__(
         self, dt: float | int, river_network: pyflwdir.FlwdirRaster, *args, **kwargs
-    ):
+    ) -> None:
         super().__init__(dt, river_network, *args, **kwargs)
 
     def get_available_storage(
@@ -564,7 +564,12 @@ class Accuflux(Router):
         idxs_up_to_downstream,
         is_waterbody_outflow,
         waterbody_id,
-    ):
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
         """Accuflux routing.
 
         Args:
@@ -707,7 +712,7 @@ class Routing(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
 
         self.config = model.config["hydrology"]["routing"]
@@ -739,7 +744,7 @@ class Routing(Module):
             ldd_uncompressed=ldd_uncompressed, mask=mask
         )
 
-    def set_router(self):
+    def set_router(self) -> None:
         routing_algorithm: str = self.config["algorithm"]
         is_waterbody_outflow: npt.NDArray[np.bool] = (
             self.grid.var.waterbody_outflow_points != -1
@@ -775,7 +780,7 @@ class Routing(Module):
                 "Available algorithms are 'kinematic_wave' and 'accuflux'."
             )
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.grid.var.upstream_area = self.grid.load(
             self.model.files["grid"]["routing/upstream_area"]
         )

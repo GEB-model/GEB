@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 class Module(ABC):
     """Base class for all modules."""
 
-    def __init__(self, model, create_var: bool = True, var_validator=None):
+    def __init__(self, model, create_var: bool = True, var_validator=None) -> None:
         self.model = model
         if create_var:
             self.var = self.model.store.create_bucket(
@@ -24,5 +24,5 @@ class Module(ABC):
     def step(self):
         pass
 
-    def report(self, module, local_variables):
+    def report(self, module, local_variables) -> None:
         self.model.reporter.report(module, local_variables, self.name)

@@ -48,7 +48,7 @@ def zarr_file(varname: str) -> Path:
     return file_path
 
 
-def test_read_timestep():
+def test_read_timestep() -> None:
     temperature_file: Path = zarr_file("temperature")
     precipitation_file: Path = zarr_file("precipitation")
     pressure_file: Path = zarr_file("pressure")

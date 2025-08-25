@@ -53,7 +53,7 @@ DEFAULT_RUN_ARGS: dict[str, Any] = {
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_init():
+def test_init() -> None:
     working_directory.mkdir(parents=True, exist_ok=True)
 
     with WorkingDirectory(working_directory):
@@ -70,9 +70,9 @@ def test_init():
             overwrite=True,
         )
 
-        assert (working_directory / "model.yml").exists()
-        assert (working_directory / "build.yml").exists()
-        assert (working_directory / "update.yml").exists()
+        assert Path("model.yml").exists()
+        assert Path("build.yml").exists()
+        assert Path("update.yml").exists()
 
         assert pytest.raises(
             FileExistsError,
@@ -83,7 +83,7 @@ def test_init():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_build():
+def test_build() -> None:
     with WorkingDirectory(working_directory):
         build_fn(**DEFAULT_BUILD_ARGS)
 
@@ -92,7 +92,7 @@ def test_build():
     IN_GITHUB_ACTIONS or os.getenv("GEB_TEST_ALL", "no") != "yes",
     reason="Too heavy for GitHub Actions and needs GEB_TEST_ALL=yes.",
 )
-def test_build_dependencies():
+def test_build_dependencies() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
         build_config = parse_config(args["build_config"])
@@ -128,7 +128,7 @@ def test_build_dependencies():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_forcing():
+def test_forcing() -> None:
     with WorkingDirectory(working_directory):
         model: GEBModel = run_model_with_method(
             method=None,
@@ -155,7 +155,7 @@ def test_forcing():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_update_with_file():
+def test_update_with_file() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
         args["build_config"] = "update.yml"
@@ -163,7 +163,7 @@ def test_update_with_file():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_update_with_dict():
+def test_update_with_dict() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
         update = {"setup_land_use_parameters": {}}
@@ -184,7 +184,7 @@ def test_update_with_dict():
         "setup_CO2_concentration",
     ],
 )
-def test_update_with_method(method: str):
+def test_update_with_method(method: str) -> None:
     with WorkingDirectory(working_directory):
         args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
 
@@ -199,13 +199,13 @@ def test_update_with_method(method: str):
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_spinup():
+def test_spinup() -> None:
     with WorkingDirectory(working_directory):
         run_model_with_method(method="spinup", **DEFAULT_RUN_ARGS)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_run():
+def test_run() -> None:
     args = DEFAULT_RUN_ARGS.copy()
 
     with WorkingDirectory(working_directory):
@@ -231,7 +231,7 @@ def test_run():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_alter():
+def test_alter() -> None:
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         args["build_config"] = {
@@ -256,9 +256,8 @@ def test_alter():
         run_model_with_method(method="spinup", **run_args)
 
 
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.skip(reason="no way of currently testing this")
-def test_evaluate_water_circle():
+def test_evaluate_water_circle() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
@@ -269,7 +268,7 @@ def test_evaluate_water_circle():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate():
+def test_evaluate() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
@@ -280,7 +279,7 @@ def test_evaluate():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_land_use_change():
+def test_land_use_change() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(args["config"])
@@ -319,7 +318,7 @@ def test_land_use_change():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_run_yearly():
+def test_run_yearly() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(working_directory / args["config"])
@@ -342,7 +341,7 @@ def test_run_yearly():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_estimate_return_periods():
+def test_estimate_return_periods() -> None:
     with WorkingDirectory(working_directory):
         run_model_with_method(method="estimate_return_periods", **DEFAULT_RUN_ARGS)
 
@@ -385,11 +384,12 @@ def test_estimate_return_periods():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_multiverse():
+def test_multiverse() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
 
         config = parse_config(args["config"])
+        config["hazards"]["floods"]["simulate"] = True
 
         forecast_after_n_days = 3
         forecast_n_days = 5
@@ -511,7 +511,7 @@ def test_multiverse():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_ISIMIP_forcing_low_res():
+def test_ISIMIP_forcing_low_res() -> None:
     """Test the ISIMIP forcing update function.
 
     This is a special case that requires a specific setup.
@@ -545,7 +545,7 @@ def test_ISIMIP_forcing_low_res():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_share():
+def test_share() -> None:
     with WorkingDirectory(working_directory):
         share_fn(
             working_directory=".",

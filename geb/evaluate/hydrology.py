@@ -29,7 +29,7 @@ from geb.workflows.io import open_zarr, to_zarr
 class Hydrology:
     """Implements several functions to evaluate the hydrological module of GEB."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     def plot_discharge(self, run_name: str = "default", *args, **kwargs) -> None:
@@ -314,7 +314,7 @@ class Hydrology:
 
             KGE, NSE, R = calculate_validation_metrics()
 
-            def plot_validation_graphs(ID):
+            def plot_validation_graphs(ID) -> None:
                 """Plot the validation results for the current station."""
                 # scatter plot
                 fig, ax = plt.subplots()
@@ -509,7 +509,7 @@ class Hydrology:
         )
 
         # plot the evaluation metrics (R, KGE, NSE) on a 1x3 subplot
-        def plot_validation_map():
+        def plot_validation_map() -> None:
             """Plot the validation results on a map."""
             fig, ax = plt.subplots(1, 3, figsize=(20, 10))
 

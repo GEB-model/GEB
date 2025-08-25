@@ -525,7 +525,7 @@ class GEBModel(
         data_catalogs: List[str] | None = None,
         epsg=4326,
         data_provider: str = "default",
-    ):
+    ) -> None:
         self.logger = logger
         self.data_catalog = DataCatalog(
             data_libs=data_catalogs, logger=self.logger, fallback_lib=None
@@ -869,7 +869,7 @@ class GEBModel(
         # return the combination of the riverine mask and the coastal mask
         return riverine_mask | coastal_mask
 
-    def derive_mask(self, d8_original, transform, resolution_arcsec):
+    def derive_mask(self, d8_original, transform, resolution_arcsec) -> None:
         assert d8_original.dtype == np.uint8
 
         d8_original_data = d8_original.values
@@ -947,7 +947,7 @@ class GEBModel(
         idxs_out_da.data = idxs_out
         self.set_grid(idxs_out_da, name="idxs_outflow")
 
-    def create_subgrid(self, subgrid_factor):
+    def create_subgrid(self, subgrid_factor) -> None:
         mask = self.grid["mask"]
         dst_transform = mask.rio.transform(recalc=True) * Affine.scale(
             1 / subgrid_factor
@@ -967,7 +967,7 @@ class GEBModel(
         submask = self.set_subgrid(submask, name="mask")
 
     @build_method
-    def set_time_range(self, start_date, end_date):
+    def set_time_range(self, start_date, end_date) -> None:
         assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
             {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
@@ -983,7 +983,7 @@ class GEBModel(
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
 
     @build_method
-    def set_ssp(self, ssp: str):
+    def set_ssp(self, ssp: str) -> None:
         assert ssp in ["ssp1", "ssp3", "ssp5"], (
             f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
         )
@@ -994,7 +994,7 @@ class GEBModel(
         return self.dict["ssp"]["ssp"] if "ssp" in self.dict else "ssp3"
 
     @property
-    def ISIMIP_ssp(self):
+    def ISIMIP_ssp(self) -> str:
         """Returns the ISIMIP SSP name."""
         if self.ssp == "ssp1":
             return "ssp126"
@@ -1030,7 +1030,7 @@ class GEBModel(
 
     def setup_coastal_water_levels(
         self,
-    ):
+    ) -> None:
         water_levels = self.data_catalog.get_dataset("GTSM")
         assert (
             water_levels.time.diff("time").astype(np.int64)
@@ -1063,7 +1063,7 @@ class GEBModel(
         )
 
     @build_method
-    def setup_damage_parameters(self, parameters):
+    def setup_damage_parameters(self, parameters) -> None:
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
                 for component, asset_compontents in asset_parameters.items():
@@ -1088,13 +1088,13 @@ class GEBModel(
     @build_method
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors
-    ):
+    ) -> None:
         risk_scaling_factors = pd.DataFrame(
             risk_scaling_factors, columns=["exceedance_probability", "scaling_factor"]
         )
         self.set_table(risk_scaling_factors, name="precipitation_scaling_factors")
 
-    def set_table(self, table, name, write=True):
+    def set_table(self, table, name, write=True) -> None:
         fp: Path = Path("table") / (name + ".parquet")
         fp_with_root: Path = Path(self.root, fp)
         if write:
@@ -1113,7 +1113,7 @@ class GEBModel(
 
         self.table[name] = fp_with_root
 
-    def set_array(self, data, name, write=True):
+    def set_array(self, data, name, write=True) -> None:
         fp: Path = Path("array") / (name + ".zarr")
         fp_with_root: Path = Path(self.root, fp)
 
@@ -1125,7 +1125,7 @@ class GEBModel(
 
         self.array[name] = fp_with_root
 
-    def set_dict(self, data, name, write=True):
+    def set_dict(self, data, name, write=True) -> None:
         fp: Path = Path("dict") / (name + ".json")
         fp_with_root: Path = Path(self.root) / fp
         fp_with_root.parent.mkdir(parents=True, exist_ok=True)
@@ -1139,7 +1139,7 @@ class GEBModel(
 
         self.dict[name] = fp_with_root
 
-    def set_geom(self, geom, name, write=True):
+    def set_geom(self, geom, name, write=True) -> None:
         fp: Path = Path("geom") / (name + ".geoparquet")
         fp_with_root: Path = self.root / fp
         if write:
@@ -1197,19 +1197,19 @@ class GEBModel(
                 files["geom"] = files.pop("geoms", {})
         return files
 
-    def read_geom(self):
+    def read_geom(self) -> None:
         for name, fn in self.files["geom"].items():
             self.geom[name] = Path(self.root, fn)
 
-    def read_array(self):
+    def read_array(self) -> None:
         for name, fn in self.files["array"].items():
             self.array[name] = Path(self.root, fn)
 
-    def read_table(self):
+    def read_table(self) -> None:
         for name, fn in self.files["table"].items():
             self.table[name] = Path(self.root, fn)
 
-    def read_dict(self):
+    def read_dict(self) -> None:
         for name, fn in self.files["dict"].items():
             self.dict[name] = Path(self.root, fn)
 
@@ -1236,7 +1236,7 @@ class GEBModel(
         for name, fn in self.files["other"].items():
             self.other[name] = Path(self.root, fn)
 
-    def read(self):
+    def read(self) -> None:
         with suppress_logging_warning(self.logger):
             self.read_geom()
             self.read_array()
@@ -1407,7 +1407,7 @@ class GEBModel(
         return self._root
 
     @root.setter
-    def root(self, root):
+    def root(self, root) -> None:
         self._root = Path(root).absolute()
 
     @property
@@ -1472,7 +1472,7 @@ class GEBModel(
 
         self.logger.info("Finished!")
 
-    def build(self, region: dict, methods: dict):
+    def build(self, region: dict, methods: dict) -> None:
         """Build the model with the specified region and methods."""
         methods: dict[str:Any] = methods or {}
         methods["setup_region"].update(region=region)
@@ -1482,7 +1482,7 @@ class GEBModel(
     def update(
         self,
         methods: dict,
-    ):
+    ) -> None:
         methods = methods or {}
 
         if "setup_region" in methods:

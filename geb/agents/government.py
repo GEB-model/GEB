@@ -11,7 +11,7 @@ class Government(AgentBaseClass):
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
 
-    def __init__(self, model, agents):
+    def __init__(self, model, agents) -> None:
         super().__init__(model)
         self.agents = agents
         self.config = (
@@ -22,7 +22,7 @@ class Government(AgentBaseClass):
         self.ratio_farmers_to_provide_subsidies_per_year = 0.05
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "agents.government"
 
     def spinup(self) -> None:
@@ -42,7 +42,7 @@ class Government(AgentBaseClass):
 
         return
 
-    def request_flood_cushions(self, reservoirIDs):
+    def request_flood_cushions(self, reservoirIDs) -> None:
         pass
 
     def set_irrigation_limit(self) -> None:

@@ -12,7 +12,7 @@ __all__ = ["build_method"]
 
 
 class _build_method:
-    def __init__(self, logger: logging.Logger):
+    def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
         self.tree = nx.DiGraph()
 
@@ -49,7 +49,7 @@ class _build_method:
             f = partial_decorator(func)
             return f
 
-    def add_tree_node(self, func: Callable[..., Any]):
+    def add_tree_node(self, func: Callable[..., Any]) -> None:
         """Add a node to the dependency tree."""
         parameters = inspect.signature(func).parameters
         required_parameters = [
@@ -71,7 +71,7 @@ class _build_method:
             },
         )
 
-    def add_tree_edge(self, func: Callable[..., Any], depends_on: str):
+    def add_tree_edge(self, func: Callable[..., Any], depends_on: str) -> None:
         """Add an edge to the dependency tree."""
         if depends_on == "setup_region":
             raise ValueError(
@@ -79,7 +79,7 @@ class _build_method:
             )
         self.tree.add_edge(depends_on, func.__name__)
 
-    def validate_tree(self):
+    def validate_tree(self) -> None:
         """Validate the dependency tree.
 
         Checks if all the node dependencies are present in the tree.
@@ -171,7 +171,7 @@ class _build_method:
                     f"optional parameters are {optional_parameters}."
                 )
 
-    def export_tree(self):
+    def export_tree(self) -> None:
         pos = nx.spring_layout(self.tree)
         nx.draw(self.tree, pos, with_labels=True, arrows=True)
         plt.savefig("dependency_graph.png")

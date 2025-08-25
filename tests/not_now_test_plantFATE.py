@@ -3,7 +3,7 @@ import math
 from .modules.plantFATE import Model
 
 
-def test_soil_water_potential():
+def test_soil_water_potential() -> None:
     model = Model("tests/p_daily.ini")
     wilting_point = -1500  # kPa
     field_capacity = -33  # kPa
@@ -57,7 +57,7 @@ def test_soil_water_potential():
     # plt.savefig('swp.png')
 
 
-def test_vapour_pressure_deficit():
+def test_vapour_pressure_deficit() -> None:
     model = Model("tests/p_daily.ini")
     assert (
         model.calculate_vapour_pressure_deficit_kPa(
@@ -67,7 +67,7 @@ def test_vapour_pressure_deficit():
     )
 
 
-def test_calculate_photosynthetic_photon_flux_density():
+def test_calculate_photosynthetic_photon_flux_density() -> None:
     model = Model("tests/p_daily.ini")
     assert math.isclose(
         model.calculate_photosynthetic_photon_flux_density(

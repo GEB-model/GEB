@@ -48,7 +48,7 @@ class DateIndex:
 
         return np.searchsorted(self.dates, date, side="right").item() - 1
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Return the number of dates in the index."""
         return self.dates.size
 

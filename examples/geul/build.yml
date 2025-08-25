@@ -8,7 +8,15 @@ set_time_range:
 set_ssp:
   ssp: ssp3
 
+setup_assets:
+  feature_types:
+  - buildings
+  - roads
+  - rails
+
 setup_hydrography:
+
+setup_gtsm_station_data:
 
 setup_elevation:
 
@@ -45,6 +53,8 @@ setup_irrigation_sources:
     well: 1
 
 setup_create_farms:
+
+setup_income_distribution_parameters:
 
 setup_household_characteristics:
 
@@ -166,11 +176,6 @@ setup_crop_prices:
     sunflower: 
       - sunflower seed
 
-setup_assets:
-  feature_types:
-  - buildings
-  - roads
-  - rails
 
 setup_damage_parameters:
   parameters:

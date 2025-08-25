@@ -20,15 +20,12 @@ from ..workflows.soilgrids import load_soilgrids
 
 
 class LandSurface:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=["setup_regions_and_land_use"])
     def setup_cell_area(self) -> None:
         """Sets up the cell area map for the model.
-
-        Raises:
-            ValueError: If the grid mask is not available.
 
         Notes:
             This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
@@ -91,7 +88,7 @@ class LandSurface:
             },
             {"name": "gebco"},
         ],
-    ):
+    ) -> None:
         """Sets up the elevation data for the model.
 
         For configuration of DEMs parameters, see
@@ -156,7 +153,13 @@ class LandSurface:
                 byteshuffle=True,
             )
             DEM["path"] = f"DEM/{DEM['name']}"
-
+        low_elevation_coastal_zone = DEM_raster < 10
+        low_elevation_coastal_zone.values = low_elevation_coastal_zone.values.astype(
+            np.float32
+        )
+        self.set_other(
+            low_elevation_coastal_zone, name="landsurface/low_elevation_coastal_zone"
+        )  # Maybe remove this
         self.set_dict(DEMs, name="hydrodynamics/DEM_config")
 
     @build_method(depends_on=[])
