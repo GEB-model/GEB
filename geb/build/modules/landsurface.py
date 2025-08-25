@@ -27,9 +27,6 @@ class LandSurface:
     def setup_cell_area(self) -> None:
         """Sets up the cell area map for the model.
 
-        Raises:
-            ValueError: If the grid mask is not available.
-
         Notes:
             This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
             retrieves the grid mask from the `mask` attribute of the grid, and then calculates the cell area

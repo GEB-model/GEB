@@ -797,7 +797,9 @@ class HRUs(BaseVariables):
 
     @staticmethod
     @njit(cache=True)
-    def compress_numba(array, unmerged_HRU_indices, outarray, nodatavalue, method):
+    def compress_numba(
+        array, unmerged_HRU_indices, outarray, nodatavalue, method
+    ) -> np.ndarray:
         array = array.ravel()
         unmerged_HRU_indices = unmerged_HRU_indices.ravel()
         if method == "last":

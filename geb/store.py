@@ -174,7 +174,12 @@ class DynamicArray:
             return self.data.__getitem__(key)
 
     def copy(self):
-        """Create a deep copy of this DynamicArray."""
+        """Create a deep copy of this DynamicArray.
+
+        Returns:
+            A new DynamicArray instance that is a deep copy of the current instance.
+
+        """
         new_array = DynamicArray.__new__(DynamicArray)
         new_array._data = self._data.copy()
         new_array._n = self._n
@@ -354,7 +359,7 @@ class DynamicArray:
         )
 
     @classmethod
-    def load(cls, path):
+    def load(cls, path) -> "DynamicArray":
         assert path.suffixes == [".storearray", ".npz"]
         with np.load(path) as data:
             obj = cls.__new__(cls)
@@ -379,7 +384,11 @@ class Bucket:
         self._validator = validator
 
     def __iter__(self):
-        """Iterate over the items in the bucket."""
+        """Iterate over the items in the bucket.
+
+        Yields:
+            Tuples of (name, value) for each item in the bucket, excluding the validator.
+        """
         for name, value in self.__dict__.items():
             if name == "_validator":
                 continue

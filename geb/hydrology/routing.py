@@ -564,7 +564,12 @@ class Accuflux(Router):
         idxs_up_to_downstream,
         is_waterbody_outflow,
         waterbody_id,
-    ):
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
         """Accuflux routing.
 
         Args:
