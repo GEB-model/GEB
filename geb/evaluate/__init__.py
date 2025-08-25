@@ -10,12 +10,12 @@ class Evaluate(Hydrology):
         model: The GEB model instance.
     """
 
-    def __init__(self, model):
+    def __init__(self, model) -> None:
         self.model = model
 
     def run(
         self,
-        methods: list | None = None,
+        methods: list,
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
@@ -25,7 +25,7 @@ class Evaluate(Hydrology):
         """Run the evaluation methods.
 
         Args:
-            methods: List of method names to run. If None, defaults to
+            methods: List of method names to run. Defaults to
                 ["plot_discharge", "evaluate_discharge"].
             spinup_name: Name of the spinup run. Defaults to "spinup".
             run_name: Name of the run to evaluate. Defaults to "default".
@@ -34,11 +34,7 @@ class Evaluate(Hydrology):
             correct_Q_obs: If True, corrects the observed discharge values.
 
         Raises:
-            AssertionError: If methods is not a list or tuple, or if any method is not a string.
             ValueError: If a specified method is not implemented in the Evaluate class.
-
-        Returns:
-            None
         """
         if methods is None:
             methods: list = [

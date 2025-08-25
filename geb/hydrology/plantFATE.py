@@ -17,7 +17,7 @@ class Model:
 
     def __init__(
         self, param_file: str | Path, acclim_forcing_file: str | Path, use_acclim: bool
-    ):
+    ) -> None:
         self.plantFATE_model = patch(str(param_file))
         self.time_unit_base = self.process_time_units()
         self.tcurrent = 0
@@ -101,7 +101,7 @@ class Model:
         temperature,  # degrees Celcius, mean temperature
         topsoil_volumetric_water_content,
         net_radiation,
-    ):
+    ) -> None:
         datestart = datetime(tstart.year, tstart.month, tstart.day)
         datediff = datestart - self.time_unit_base
         datediff = datediff.days - 1
@@ -177,7 +177,7 @@ class Model:
             soil_specific_depletion_3,
         )
 
-    def finalize(self):
+    def finalize(self) -> None:
         import os
 
         print(os.getcwd())

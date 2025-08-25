@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import tempfile
 import time
 import zipfile
@@ -120,60 +121,79 @@ def download_ERA5(
         # print("outputfn exists. its here:")
         # print(output_fn)
         da: xr.DataArray = open_zarr(output_fn)
-    else:
-        folder.mkdir(parents=True, exist_ok=True)
-        da: xr.DataArray = xr.open_dataset(
-            "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
-            storage_options={"client_kwargs": {"trust_env": True}},
-            chunks={},
-            engine="zarr",
-        )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
 
-        da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
-
-        buffer: float = 0.5
-
-        # Check if region crosses the meridian (longitude=0)
-        # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
-        if bounds[0] < 0 and bounds[2] > 0:
-            # Need to handle the split across the meridian
-            # Get western hemisphere part (longitude < 0)
-            west_da: xr.DataArray = da.sel(
-                time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-                x=slice(((bounds[0] - buffer) + 360) % 360, 360),
+        # check if entire time range is available. If available, return the cached data
+        # otherwise, slice the data to the requested time range and return it
+        if start_date >= pd.to_datetime(
+            da.time[0].values
+        ) and end_date <= pd.to_datetime(da.time[-1].values):
+            logger.debug(
+                f"Using cached ERA5 {variable} data from {output_fn} for time range {start_date} to {end_date}"
             )
-            # Get eastern hemisphere part (longitude > 0)
-            east_da: xr.DataArray = da.sel(
-                time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-                x=slice(0, ((bounds[2] + buffer) + 360) % 360),
-            )
-            # Combine the two parts
-            da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
-        else:
-            # Regular case - doesn't cross meridian
             da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-                x=slice(
-                    ((bounds[0] - buffer) + 360) % 360,
-                    ((bounds[2] + buffer) + 360) % 360,
-                ),
             )
+            return da
+        else:
+            # remove the existing zarr folder
+            logger.debug(
+                f"Removing existing zarr folder {output_fn} as it does not contain the requested time range"
+            )
+            shutil.rmtree(output_fn)
 
-        # Reorder x to be between -180 and 180 degrees
-        da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
+    folder.mkdir(parents=True, exist_ok=True)
+    da: xr.DataArray = xr.open_dataset(
+        "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        storage_options={"client_kwargs": {"trust_env": True}},
+        chunks={},
+        engine="zarr",
+    )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
 
-        logger.info(f"Downloading ERA5 {variable} to {output_fn}")
-        da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
-        da: xr.DataArray = da.raster.mask_nodata()
-        da: xr.DataArray = to_zarr(
-            da,
-            output_fn,
-            time_chunksize=get_chunk_size(da, target=1e7),
-            crs=4326,
+    da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
+
+    buffer: float = 0.5
+
+    # Check if region crosses the meridian (longitude=0)
+    # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
+    if bounds[0] < 0 and bounds[2] > 0:
+        # Need to handle the split across the meridian
+        # Get western hemisphere part (longitude < 0)
+        west_da: xr.DataArray = da.sel(
+            time=slice(start_date, end_date),
+            y=slice(bounds[3] + buffer, bounds[1] - buffer),
+            x=slice(((bounds[0] - buffer) + 360) % 360, 360),
         )
+        # Get eastern hemisphere part (longitude > 0)
+        east_da: xr.DataArray = da.sel(
+            time=slice(start_date, end_date),
+            y=slice(bounds[3] + buffer, bounds[1] - buffer),
+            x=slice(0, ((bounds[2] + buffer) + 360) % 360),
+        )
+        # Combine the two parts
+        da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
+    else:
+        # Regular case - doesn't cross meridian
+        da: xr.DataArray = da.sel(
+            time=slice(start_date, end_date),
+            y=slice(bounds[3] + buffer, bounds[1] - buffer),
+            x=slice(
+                ((bounds[0] - buffer) + 360) % 360,
+                ((bounds[2] + buffer) + 360) % 360,
+            ),
+        )
+
+    # Reorder x to be between -180 and 180 degrees
+    da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
+
+    logger.info(f"Downloading ERA5 {variable} to {output_fn}")
+    da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
+    da: xr.DataArray = da.raster.mask_nodata()
+    da: xr.DataArray = to_zarr(
+        da,
+        output_fn,
+        time_chunksize=get_chunk_size(da, target=1e7),
+        crs=4326,
+    )
     return da
 
 
@@ -228,7 +248,7 @@ def process_ERA5(
     else:
         raise NotImplementedError
 
-    da: xr.DataArray = da.rio.set_crs(4326)
+    da: xr.DataArray = da.rio.write_crs(4326)
     da.raster.set_crs(4326)
     da: xr.DataArray = interpolate_na_along_time_dim(da)
 
@@ -272,7 +292,7 @@ def get_chunk_size(da, target: float | int = 1e8) -> int:
 
 
 class Forcing:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     def download_isimip(
@@ -626,7 +646,7 @@ class Forcing:
                 f"{parse_files}"
             )
 
-    def plot_forcing(self, da, name):
+    def plot_forcing(self, da, name) -> None:
         fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
 
         mask = self.grid["mask"]
@@ -1109,8 +1129,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    # @build_method(depends_on=["set_time_range"])
-    def setup_forcing_era5(self):
+    def setup_forcing_ERA5(self) -> None:
         target = self.grid["mask"]
         target.raster.set_crs(4326)
         # print(f"starting date is: {self.start_date}")
@@ -1129,6 +1148,7 @@ class Forcing:
             "tp",  # total_precipitation
             **download_args,
         )
+
         elevation_forcing, elevation_target = self.get_elevation_forcing_and_grid(
             self.grid["mask"], pr_hourly, forcing_name="ERA5"
         )
@@ -1181,6 +1201,23 @@ class Forcing:
 
         assert water_vapour_pressure.shape == saturation_vapour_pressure.shape
         relative_humidity = (water_vapour_pressure / saturation_vapour_pressure) * 100
+
+        original_crs = (
+            relative_humidity.rio.crs if hasattr(relative_humidity, "rio") else None
+        )
+
+        # convert values between 100 and 101 to 100, leave others unchanged
+        relative_humidity = xr.where(
+            (relative_humidity > 100) & (relative_humidity <= 101),
+            100,
+            relative_humidity,
+            keep_attrs=True,
+        )
+        if original_crs is not None and (
+            not hasattr(relative_humidity, "rio") or relative_humidity.rio.crs is None
+        ):
+            relative_humidity = relative_humidity.rio.write_crs(original_crs)
+
         self.set_hurs(relative_humidity)
 
         hourly_rsds = process_ERA5(
@@ -1250,6 +1287,15 @@ class Forcing:
             self.logger.info("setting up wind...")
             self.setup_wind_isimip_30arcsec()
         elif resolution_arcsec == 1800:
+            assert model in (
+                "ipsl-cm6a-lr",
+                "gfdl-esm4",
+                "mpi-esm1-2-hr",
+                "mri-esm2-0",
+                "ukesm1-0-ll",
+            ), (
+                "Only ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0 and ukesm1-0-ll are supported for 1800 arcsec resolution"
+            )
             variables = [
                 "pr",
                 "rsds",
@@ -1270,15 +1316,15 @@ class Forcing:
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forcing(
         self,
-        resolution_arcsec: int | None = None,
         forcing: str = "ERA5",
+        resolution_arcsec: int | None = None,
         model: str | None = None,
-    ):
+    ) -> None:
         """Sets up the forcing data for GEB.
 
         Args:
-            resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
             forcing: The data source to use for the forcing data. Can be ERA5 or ISIMIP. Default is 'era5'.
+            resolution_arcsec: The resolution of the data in arcseconds. Only used for ISIMIP. Supported values are 30 and 1800.
             model: The name of the forcing data to use within the dataset. Only required for ISIMIP data.
                 For ISIMIP, this can be 'chelsa-w5e5' for 30 arcsec resolution
                 or 'ipsl-cm6a-lr', 'gfdl-esm4', 'mpi-esm1-2-hr', 'mri-esm2-0', or 'mri-esm2-0' for 1800 arcsec resolution.
@@ -1297,9 +1343,17 @@ class Forcing:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
         """
         if forcing == "ISIMIP":
+            assert resolution_arcsec is not None, (
+                "resolution_arcsec must be specified for ISIMIP forcing data"
+            )
+            assert model is not None, "model must be specified for ISIMIP forcing data"
             self.setup_forcing_ISIMIP(resolution_arcsec, model)
         elif forcing == "ERA5":
-            self.setup_forcing_era5()
+            assert resolution_arcsec is None, (
+                "resolution_arcsec must be None for ERA5 forcing data"
+            )
+            assert model is None, "model must be None for ERA5 forcing data"
+            self.setup_forcing_ERA5()
         elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
@@ -1414,7 +1468,7 @@ class Forcing:
         self,
         forcing: str,
         variables: List[str],
-    ):
+    ) -> None:
         """Sets up the high-resolution climate variables for GEB.
 
         Args:
@@ -1437,7 +1491,7 @@ class Forcing:
             )
             getattr(self, f"set_{variable}")(da)
 
-    def setup_30arcsec_variables_isimip(self, variables: List[str]):
+    def setup_30arcsec_variables_isimip(self, variables: List[str]) -> None:
         """Sets up the high-resolution climate variables for GEB.
 
         Args:
@@ -1454,7 +1508,7 @@ class Forcing:
             The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
-        def download_variable(variable):
+        def download_variable(variable) -> None:
             self.logger.info(f"Setting up {variable}...")
             ds: xr.DataArray = self.download_isimip(
                 product="InputData",
@@ -1478,7 +1532,7 @@ class Forcing:
         for variable in variables:
             download_variable(variable)
 
-    def setup_hurs_isimip_30arcsec(self):
+    def setup_hurs_isimip_30arcsec(self) -> None:
         """Sets up the relative humidity data for GEB.
 
         Notes:
@@ -1597,7 +1651,7 @@ class Forcing:
 
         self.set_hurs(hurs_output)
 
-    def setup_longwave_isimip_30arcsec(self):
+    def setup_longwave_isimip_30arcsec(self) -> None:
         """Sets up the longwave radiation data for GEB.
 
         Notes:
@@ -1701,7 +1755,7 @@ class Forcing:
         )
         self.set_rlds(lw_fine)
 
-    def setup_pressure_isimip_30arcsec(self):
+    def setup_pressure_isimip_30arcsec(self) -> None:
         """Sets up the surface pressure data for GEB.
 
         This method sets up the surface pressure data for GEB. It then downloads
@@ -1750,7 +1804,7 @@ class Forcing:
 
         self.set_ps(pressure_30_min_regridded_corr)
 
-    def setup_wind_isimip_30arcsec(self):
+    def setup_wind_isimip_30arcsec(self) -> None:
         """This method sets up the wind data for GEB.
 
         It first downloads the global wind atlas data and
@@ -1853,8 +1907,6 @@ class Forcing:
             calibration_period_end: The end time of the SPEI data in ISO 8601 format (YYYY-MM-DD). Endtime is exclusive.
             window_months: The window size in months for the SPEI calculation. Default is 12 months.
         """
-        self.logger.info("setting up SPEI...")
-
         assert window_months <= 12, (
             "window_months must be less than or equal to 12 (otherwise we run out of climate data)"
         )
@@ -1980,7 +2032,6 @@ class Forcing:
 
                 # Group the data by year and find the maximum monthly sum for each year
                 SPEI_yearly_min = SPEI.groupby("time.year").min(dim="time", skipna=True)
-                SPEI_yearly_min = SPEI_yearly_min.dropna(dim="year")
                 SPEI_yearly_min = (
                     SPEI_yearly_min.rename({"year": "time"})
                     .chunk({"time": -1})
@@ -2001,7 +2052,7 @@ class Forcing:
                 )
 
     def get_elevation_forcing_and_grid(
-        self, grid: xr.DataArray, forcing_grid: xr.DataArray, forcing_name
+        self, grid: xr.DataArray, forcing_grid: xr.DataArray, forcing_name: str
     ) -> tuple[xr.DataArray, xr.DataArray]:
         """Gets elevation maps for both the normal grid (target of resampling) and the forcing grid.
 
@@ -2025,39 +2076,52 @@ class Forcing:
             elevation_forcing = open_zarr(elevation_forcing_fp)
             elevation_grid = open_zarr(elevation_grid_fp)
 
-        else:
-            elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
-            elevation = elevation.isel(
-                band=0,
-                **get_window(
-                    elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
-                ),
-            )
-            elevation = elevation.drop("band")
-            elevation = xr.where(elevation == -9999, 0, elevation)
-            elevation.attrs["_FillValue"] = np.nan
-            target = forcing_grid.isel(time=0).drop("time")
+            if (
+                np.array_equal(grid.x.values, elevation_grid.x.values)
+                and np.array_equal(grid.y.values, elevation_grid.y.values)
+                and np.array_equal(forcing_grid.x.values, elevation_forcing.x.values)
+                and np.array_equal(forcing_grid.y.values, elevation_forcing.y.values)
+            ):
+                self.logger.debug("Using cached elevation data")
+                return elevation_forcing, elevation_grid
+            else:
+                self.logger.warning(
+                    "Cached elevation data does not match the grid, recalculating elevation data"
+                )
+                shutil.rmtree(elevation_forcing_fp)
+                shutil.rmtree(elevation_grid_fp)
 
-            elevation_forcing = resample_like(elevation, target, method="bilinear")
-
-            elevation_forcing = to_zarr(
-                elevation_forcing,
-                elevation_forcing_fp,
-                crs=4326,
-            )
-
-            elevation_grid = resample_like(elevation, grid, method="bilinear")
-
-            elevation_grid = to_zarr(
-                elevation_grid,
-                elevation_grid_fp,
-                crs=4326,
-            )
-
-            print("done")
-        return elevation_forcing.chunk({"x": -1, "y": -1}), elevation_grid.chunk(
-            {"x": -1, "y": -1}
+        elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
+        elevation = elevation.isel(
+            band=0,
+            **get_window(
+                elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
+            ),
         )
+        elevation = elevation.drop_vars("band")
+        elevation = xr.where(elevation == -9999, 0, elevation)
+        elevation.attrs["_FillValue"] = np.nan
+        target = forcing_grid.isel(time=0).drop_vars("time")
+
+        elevation_forcing = resample_like(elevation, target, method="bilinear")
+        elevation_forcing = elevation_forcing.chunk({"x": -1, "y": -1})
+
+        elevation_forcing = to_zarr(
+            elevation_forcing,
+            elevation_forcing_fp,
+            crs=4326,
+        )
+
+        elevation_grid = resample_like(elevation, grid, method="bilinear")
+        elevation_grid = elevation_grid.chunk({"x": -1, "y": -1})
+
+        elevation_grid = to_zarr(
+            elevation_grid,
+            elevation_grid_fp,
+            crs=4326,
+        )
+
+        return elevation_forcing, elevation_grid
 
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_CO2_concentration(self) -> None:

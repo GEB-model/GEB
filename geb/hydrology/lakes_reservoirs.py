@@ -22,6 +22,7 @@
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 
 from geb.hydrology.HRUs import load_grid
 from geb.module import Module
@@ -72,19 +73,16 @@ def get_lake_height_from_bottom(lake_storage, lake_area):
     return height_from_bottom
 
 
-def get_lake_storage_from_height_above_bottom(lake_height, lake_area):
+def get_lake_storage_from_height_above_bottom(
+    lake_height: npt.NDArray[np.float32], lake_area: npt.NDArray[np.float32]
+) -> npt.NDArray[np.float32]:
     """Calculate the storage of a lake given its height above the bottom and area.
 
-    Parameters
-    ----------
-    lake_height : float
-        Height of the lake above the bottom in m
-    lake_area : float
-        Area of the lake in m2
+    Args:
+        lake_height: Height of the lake above the bottom in m
+        lake_area: Area of the lake in m2
 
     Returns:
-    -------
-    float
         Storage of the lake in m3
     """
     return lake_height * lake_area
@@ -121,40 +119,24 @@ def estimate_outflow_height(lake_capacity, lake_factor, lake_area, avg_outflow):
 
 
 def get_lake_outflow(
-    dt,
-    storage,
-    lake_factor,
-    lake_area,
-    outflow_height,
+    dt: float,
+    storage: npt.NDArray[np.float32],
+    lake_factor: npt.NDArray[np.float32],
+    lake_area: npt.NDArray[np.float32],
+    outflow_height: npt.NDArray[np.float32],
 ):
     """Calculate outflow and storage for a lake using the Modified Puls method.
 
-    Parameters
-    ----------
-    dt : float
-        Time step in seconds
-    storage : float
-        Current storage in m3
-    inflow : float
-        Inflow to the lake in m3/s
-    inflow_prev : float
-        Inflow to the lake in the previous time step in m3/s
-    outflow_prev : float
-        Outflow from the lake in the previous time step in m3/s
-    lake_factor : float
-        Factor for the Modified Puls approach to calculate retention of the lake
-    lake_area : float
-        Area of the lake in m2
-    outflow_height : float
-        Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
+    Args:
+        dt: Time step in seconds
+        storage: Current storage in m3
+        lake_factor: Factor for the Modified Puls approach to calculate retention of the lake
+        lake_area: Area of the lake in m2
+        outflow_height: Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
 
     Returns:
-    -------
-    outflow : float
-        New outflow from the lake in m3/s
-    storage : float
-        New storage in m3
-
+        outflow_m3: Outflow in m3.
+        height_above_outflow: Height of the lake above the outflow in m.
     """
     height_above_outflow = get_lake_height_above_outflow(
         lake_storage=storage, lake_area=lake_area, outflow_height=outflow_height
@@ -181,7 +163,7 @@ class LakesReservoirs(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -192,10 +174,10 @@ class LakesReservoirs(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.lakes_reservoirs"
 
-    def spinup(self):
+    def spinup(self) -> None:
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped: np.ndarray = self.grid.load(
             self.model.files["grid"]["waterbodies/water_body_id"]
@@ -227,7 +209,7 @@ class LakesReservoirs(Module):
         assert np.array_equal(self.var.water_body_data.index, waterbody_ids)
 
         self.var.water_body_type = self.var.water_body_data["waterbody_type"].values
-        self.var.waterBodyOrigID = self.var.water_body_data[
+        self.var.waterbody_ids_original = self.var.water_body_data[
             "original_waterbody_id"
         ].values
         # change water body type to LAKE if it is a control lake, thus currently modelled as normal lake
@@ -300,7 +282,7 @@ class LakesReservoirs(Module):
 
     def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
         water_body_data = gpd.read_parquet(
-            self.model.files["geoms"]["waterbodies/waterbody_data"],
+            self.model.files["geom"]["waterbodies/waterbody_data"],
         )
         # drop all data that is not in the original ids
         waterbody_original_ids_compressed = np.unique(waterbody_original_ids)
@@ -432,20 +414,18 @@ class LakesReservoirs(Module):
 
         return lake_outflow_m3
 
-    def routing_reservoirs(self, n_routing_substeps, current_substep):
+    def routing_reservoirs(
+        self, n_routing_substeps: int, current_substep: int
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
         """Routine to update reservoir volumes and calculate reservoir outflow.
 
-        Parameters
-        ----------
-        inflow_m3 : np.ndarray
-            Inflow to the reservoirs in m3 per routing substep
-        n_routing_substeps : int
-            Number of routing substeps per time step
+        Args:
+            n_routing_substeps: Number of routing substeps per time step
+            current_substep: Current substep in the routing process
 
         Returns:
-        -------
-        reservoir_release_m3 : np.ndarray
-            Outflow from the reservoirs in m3 per routing substep
+            main_channel_release_m3: Outflow from the main channel in m3 per routing step.
+            command_area_release_m3: Outflow from the command area in m3 per routing step
         """
         main_channel_release_m3, command_area_release_m3 = (
             self.model.agents.reservoir_operators.release(
@@ -507,7 +487,7 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_reservoir]
 
     @reservoir_storage.setter
-    def reservoir_storage(self, value):
+    def reservoir_storage(self, value) -> None:
         self.var.storage[self.is_reservoir] = value
 
     @property
@@ -515,7 +495,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_reservoir]
 
     @reservoir_capacity.setter
-    def reservoir_capacity(self, value):
+    def reservoir_capacity(self, value) -> None:
         self.var.capacity[self.is_reservoir] = value
 
     @property
@@ -523,7 +503,7 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_lake]
 
     @lake_storage.setter
-    def lake_storage(self, value):
+    def lake_storage(self, value) -> None:
         self.var.storage[self.is_lake] = value
 
     @property
@@ -531,7 +511,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_lake]
 
     @lake_capacity.setter
-    def lake_capacity(self, value):
+    def lake_capacity(self, value) -> None:
         self.var.capacity[self.is_lake] = value
 
     @property
@@ -545,7 +525,7 @@ class LakesReservoirs(Module):
     def decompress(self, array):
         return array
 
-    def step(self):
+    def step(self) -> None:
         """Dynamic part set lakes and reservoirs for each year."""
         # if first timestep, or beginning of new year
         if self.model.current_timestep == 1 or (

@@ -7,7 +7,7 @@ General Recommendations
 - It is RECOMMENDED to turn on notifications of GitHub issues to remain aware of current issues and suggested solutions. You can do so using the "watch" feature on the GEB GitHub page.
 - You MUST use descriptive commit messages for every commit (e.g., no "some fixes", "progress", etc.).
 - It is RECOMMENDED to keep up-to-date with the main branch by frequently (at least once a week) pulling updates from the main. This will reduce the number of merge conflicts and avoid work duplication.
-- You MUST use descriptive branch names, and include your name or your sub-project if multiple people work on the same topic.
+- You MUST use your name followed by a descriptive branch name. For example, ``tim-forecasting``.
 
 Feature Development
 ----------------------------
@@ -19,7 +19,7 @@ The main version of GEB is always on the ``main`` branch. This branch SHOULD be 
   working on similar topics, so that everyone is aware of ongoing work.
 - It is RECOMMENDED to limit the number of features in a single branch. If possible, break your feature into several sub-features.
 - When the (sub-)features are complete, the branch MUST be merged into ``main`` using a pull request on GitHub.
-- It is RECOMMENDED to get feedback on the code from one of the main developers. You can use the reviewer mechanism on the pull request page.
+- It is REQUIRED to get feedback on the code from one of the main developers. You can use the reviewer mechanism on the pull request page.
 
 Bugs
 ----------------------------
@@ -40,12 +40,15 @@ Testing
 We use ``pytest`` for automated testing of the GEB model.
 
 - It is RECOMMENDED to write tests for your code.
-- Tests are automatically run on GitHub when any branch is pushed.
+- Unit tests are automatically run on GitHub when any branch is pushed.
+- Integration tests are RECOMMENDED to run locally before pushing to GitHub. They can be run using the command ``pytest`` or in vscode.
 
 Coding Practices
 ----------------------------
 
 - All variable names MUST be clear. Prefer long and descriptive names over short, unclear ones.
+- Function documentation MUST be provided for all functions, including the function's purpose, parameters, and return values. Use the Google style for docstrings.
+- Type annotations MUST be used for all functions and methods, both for arguments and return values.
 - Code comments are RECOMMENDED, focusing on *why* something is done, rather than *what* is done. The *what* should ideally be
   evident from the variable naming and structure.
 - Units MUST be in SI units, or have the unit appended to the variable name. If SI units cannot be used (e.g., when coupling

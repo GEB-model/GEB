@@ -13,7 +13,7 @@ from geb.hydrology.routing import (
 )
 
 
-def test_update_node_kinematic_1():
+def test_update_node_kinematic_1() -> None:
     deltaX: int = 10
     Q_new, evaporation_m3_s = update_node_kinematic(
         Qin=0.000201343,
@@ -30,7 +30,7 @@ def test_update_node_kinematic_1():
     assert math.isclose(Q_new, Q_check, abs_tol=1e-12)
 
 
-def test_update_node_kinematic_2():
+def test_update_node_kinematic_2() -> None:
     deltaX: int = 10
     Q_new, evaporation_m3_s = update_node_kinematic(
         Qin=0,
@@ -46,7 +46,7 @@ def test_update_node_kinematic_2():
     assert math.isclose(Q_new, 1e-30, abs_tol=1e-12)
 
 
-def test_update_node_kinematic_no_flow():
+def test_update_node_kinematic_no_flow() -> None:
     Q_new, evaporation_m3_s = update_node_kinematic(
         Qin=0,
         Qold=0,
@@ -89,7 +89,7 @@ def test_update_node_kinematic_no_flow():
 #     assert storage_check[-1] == 0
 
 
-def test_get_channel_ratio():
+def test_get_channel_ratio() -> None:
     river_width = np.array([1, 2, 3, 4, 5])
     river_length = np.array([1000, 2000, 3000, 4000, 5000])
     cell_area = 10000
@@ -156,7 +156,7 @@ def Q_initial():
     )
 
 
-def test_accuflux(ldd, mask, Q_initial):
+def test_accuflux(ldd, mask, Q_initial) -> None:
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
 
     router: Accuflux = Accuflux(
@@ -182,6 +182,7 @@ def test_accuflux(ldd, mask, Q_initial):
         actual_evaporation_m3,
         over_abstraction_m3,
         waterbody_storage_m3,
+        waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
         sideflow,
@@ -201,11 +202,12 @@ def test_accuflux(ldd, mask, Q_initial):
             ]
         )[mask]
     ).all()
+    assert (waterbody_inflow_m3 == 0).all()
     assert outflow_at_pits_m3 == 2
     assert waterbody_storage_m3.size == 0
 
 
-def test_accuflux_with_longer_dt(ldd, mask, Q_initial):
+def test_accuflux_with_longer_dt(ldd, mask, Q_initial) -> None:
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router: Accuflux = Accuflux(
         dt=15,
@@ -230,6 +232,7 @@ def test_accuflux_with_longer_dt(ldd, mask, Q_initial):
         actual_evaporation_m3,
         over_abstraction_m3,
         waterbody_storage_m3,
+        waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
         sideflow,
@@ -249,11 +252,12 @@ def test_accuflux_with_longer_dt(ldd, mask, Q_initial):
             ]
         )[mask]
     ).all()
+    assert (waterbody_inflow_m3 == 0).all()
     assert outflow_at_pits_m3 == 30
     assert waterbody_storage_m3.size == 0
 
 
-def test_accuflux_with_sideflow(mask, ldd, Q_initial):
+def test_accuflux_with_sideflow(mask, ldd, Q_initial) -> None:
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router = Accuflux(
         dt=1,
@@ -277,6 +281,7 @@ def test_accuflux_with_sideflow(mask, ldd, Q_initial):
         actual_evaporation_m3,
         over_abstraction_m3,
         waterbody_storage_m3,
+        waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
         sideflow,
@@ -298,6 +303,7 @@ def test_accuflux_with_sideflow(mask, ldd, Q_initial):
     ).all()
     assert outflow_at_pits_m3 == 3  # 2 + 1 from the sideflow
     assert waterbody_storage_m3.size == 0
+    assert (waterbody_inflow_m3 == 0).all()
 
     assert (
         Q_initial[mask].sum() + sideflow.sum() - outflow_at_pits_m3
@@ -305,7 +311,7 @@ def test_accuflux_with_sideflow(mask, ldd, Q_initial):
     )
 
 
-def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
+def test_accuflux_with_water_bodies(mask, ldd, Q_initial) -> None:
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
 
     waterbody_id = np.array(
@@ -352,6 +358,7 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
         actual_evaporation_m3,
         over_abstraction_m3,
         waterbody_storage_m3,
+        waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
         sideflow,
@@ -372,8 +379,12 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
         )[mask],
     )
     assert outflow_at_pits_m3 == 2
+    assert (
+        waterbody_inflow_m3[0] == 4
+    )  # 2 from upstream reservoir, 1 from both other river inflows
+    assert waterbody_inflow_m3[1] == 0  # 2 no upstream cells
 
-    assert waterbody_storage_m3[0] == 7  # 10 - 7 + 2 + 1
+    assert waterbody_storage_m3[0] == 7  # 10 - 7 + 2 + 1 + 1
     assert waterbody_storage_m3[1] == 3  # 5 - 2
     assert (
         np.nansum(Q_initial[mask])
@@ -384,7 +395,7 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial):
     )
 
 
-def test_kinematic(mask, ldd, Q_initial):
+def test_kinematic(mask, ldd, Q_initial) -> None:
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router: KinematicWave = KinematicWave(
         river_network=river_network,

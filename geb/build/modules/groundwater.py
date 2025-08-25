@@ -10,34 +10,30 @@ from ..workflows.general import (
 
 
 class GroundWater:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=["setup_elevation"])
     def setup_groundwater(
         self,
-        minimum_thickness_confined_layer=50,
-        maximum_thickness_confined_layer=1000,
-        intial_heads_source="GLOBGM",
-        force_one_layer=True,
-    ):
+        minimum_thickness_confined_layer: int | float = 50,
+        maximum_thickness_confined_layer: int | float = 1000,
+        intial_heads_source: str = "GLOBGM",
+        force_one_layer: bool = True,
+    ) -> None:
         """Sets up the MODFLOW grid for GEB.
 
         This code is adopted from the GLOBGM model (https://github.com/UU-Hydro/GLOBGM). Also see ThirdPartyNotices.txt.
 
-        Parameters
-        ----------
-        minimum_thickness_confined_layer : float, optional
-            The minimum thickness of the confined layer in meters. Default is 50.
-        maximum_thickness_confined_layer : float, optional
-            The maximum thickness of the confined layer in meters. Default is 1000.
-        intial_heads_source : str, optional
-            The initial heads dataset to use, options are GLOBGM and Fan. Default is 'GLOBGM'.
-            - More about GLOBGM: https://doi.org/10.5194/gmd-17-275-2024
-            - More about Fan: https://doi.org/10.1126/science.1229881
-        """
-        self.logger.info("Setting up MODFLOW")
+        More about GLOBGM: https://doi.org/10.5194/gmd-17-275-2024
+        More about Fan: https://doi.org/10.1126/science.1229881
 
+        Args:
+            minimum_thickness_confined_layer: The minimum thickness of the confined layer in meters. Default is 50.
+            maximum_thickness_confined_layer: The maximum thickness of the confined layer in meters. Default is 1000.
+            intial_heads_source: The initial heads dataset to use, options are GLOBGM and Fan. Default is 'GLOBGM'.
+            force_one_layer: If True, the model will be forced to use only one layer. Default is True.
+        """
         aquifer_top_elevation = self.grid["landsurface/elevation"].raster.mask_nodata()
         aquifer_top_elevation.raster.set_crs(4326)
         aquifer_top_elevation = self.set_grid(
@@ -301,14 +297,14 @@ class GroundWater:
 
         elif intial_heads_source == "Fan":
             # Load in the starting groundwater depth
-            region_continent = np.unique(self.geoms["regions"]["CONTINENT"])
+            region_continent = np.unique(self.geom["regions"]["CONTINENT"])
             assert (
                 np.size(region_continent) == 1
             )  # Transcontinental basins should not be possible
 
             if (
-                np.unique(self.geoms["regions"]["CONTINENT"])[0] == "Asia"
-                or np.unique(self.geoms["regions"]["CONTINENT"])[0] == "Europe"
+                np.unique(self.geom["regions"]["CONTINENT"])[0] == "Asia"
+                or np.unique(self.geom["regions"]["CONTINENT"])[0] == "Europe"
             ):
                 region_continent = "Eurasia"
             else:

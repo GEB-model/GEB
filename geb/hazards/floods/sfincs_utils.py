@@ -41,85 +41,6 @@ def make_relative_paths(config, model_root, new_root, relpath=None):
     return config_kwargs
 
 
-def update_forcing(
-    model_root: str,
-    out_root: str,
-    tstart: pd.Timestamp,
-    tstop: pd.Timestamp,
-    precip: pd.DataFrame | None = None,
-    bzs: pd.DataFrame | None = None,
-    dis: pd.DataFrame | None = None,
-    bnd: gpd.GeoDataFrame | None = None,
-    src: gpd.GeoDataFrame | None = None,
-    use_relative_path: bool = True,
-    plot: bool = False,
-    **config_kwargs,
-) -> None:
-    """Update the forcing of a sfincs model with the given forcing data.
-
-    Parameters
-    ----------
-    mod : SfincsModel
-        sfincs model to update
-    precip, bzs, dis : pd.DataFrame, optional
-        precipitation, waterlevel, discharge forcing data, by default None
-    bnd, src : gpd.GeoDataFrame, optional
-        waterlevel boundary and discharge source locations, by default None
-    """
-    # read model
-    mod = SfincsModel(
-        root=model_root,
-        mode="r",
-        write_gis=False,  # avoid writing gis files
-    )
-    mod.read()
-
-    # update model root and paths in config (if use_relative_path)
-    mod.set_root(out_root, mode="w+")
-    if use_relative_path:
-        config_kwargs.update(make_relative_paths(mod.config, model_root, out_root))
-
-    # update model time
-    mod.setup_config(
-        tref=tstart.strftime("%Y%m%d %H%M%S"),
-        tstart=tstart.strftime("%Y%m%d %H%M%S"),
-        tstop=tstop.strftime("%Y%m%d %H%M%S"),
-        **config_kwargs,
-    )
-
-    # update model forcing
-    variables = []
-    if precip is not None:
-        mod.setup_precip_forcing(
-            timeseries=precip,
-        )
-        mod.setup_config(**{"precipfile": "sfincs.precip"})
-        variables.append("precip")
-    if bzs is not None:
-        mod.setup_waterlevel_forcing(timeseries=bzs, locations=bnd, merge=False)
-        mod.setup_config(**{"bzsfile": "sfincs.bzs", "bndfile": "sfincs.bnd"})
-        variables.append("waterlevel")
-    if dis is not None:
-        mod.setup_discharge_forcing(
-            timeseries=dis,
-            locations=src,
-            merge=False,
-        )
-        mod.setup_config(**{"srcfile": "sfincs.src", "disfile": "sfincs.dis"})
-        variables.append("discharge")
-
-    # save model
-    if use_relative_path:
-        mod.write_forcing(data_vars=variables)
-        mod.write_config()  # write config last
-    else:
-        mod.write()
-
-    # plot
-    if plot:
-        mod.plot_forcing(join(mod.root, "forcing.png"))
-
-
 def run_sfincs_subprocess(root: Path, cmd: list[str], log_file: Path) -> int:
     print(f"Running SFINCS with: {cmd}")
     with open(log_file, "w") as log:
@@ -145,7 +66,7 @@ def run_sfincs_subprocess(root: Path, cmd: list[str], log_file: Path) -> int:
 def write_zsmax_tif(
     root,
     zsmax_fn,
-):
+) -> None:
     """Write zsmax to tif."""
     mod = SfincsModel(root, mode="r")
     # get maximum waterlevel
@@ -223,7 +144,7 @@ def create_hourly_hydrograph(peak_discharge, rising_limb_hours, recession_limb_h
     return hydrograph_df
 
 
-def check_docker_running():
+def check_docker_running() -> bool | None:
     try:
         subprocess.run(
             ["docker", "info"],
@@ -501,7 +422,7 @@ def snap_to_grid(ds, reference, relative_tollerance=0.02, ydim="y", xdim="x"):
     return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})
 
 
-def configure_sfincs_model(sf, model_root, simulation_root):
+def configure_sfincs_model(sf, model_root, simulation_root) -> None:
     """Helper function to configure SFINCS model with common settings."""
     sf.setup_config(
         alpha=0.5

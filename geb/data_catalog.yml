@@ -20,7 +20,7 @@ GRDC:
     category: hydrology
     source_license: https://grdc.bafg.de/downloads/policy_guidelines.pdf
     source_url: https://grdc.bafg.de/
-  path: rivers/discharge/GRDC/GRDC-Daily_V2.nc
+  path: rivers/discharge/GRDC/GRDC_global.zip
 
 SWORD:
   data_type: GeoDataFrame
@@ -211,7 +211,7 @@ global_irrigation_area_{irrigation_type}:
     irrigation_type: [aei, aai, aeisw, aeigw]
 GTSM:
   data_type: Dataset
-  path: GTSM/reanalysis_waterlevel_10min_*_v1.nc
+  path: GTSM/reanalysis_waterlevel_10min_{}_{}_v1.nc
   meta:
     category: water level
     paper_doi: doi:10.1038/ncomms11969
@@ -220,6 +220,38 @@ GTSM:
     source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/sis-water-level-change-timeseries-cmip6?tab=overview
     source_version: 1.0
     unit: m+MSL
+GTSM_surge:
+  data_type: Dataset
+  path: GTSM/reanalysis_surge_10min_{}_{}_v2.nc
+  meta:
+    category: surge water level
+    paper_doi: doi:10.1038/ncomms11969
+    paper_ref: Muis, S. et al. (2016)
+    source_license: CC BY license
+    source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/sis-water-level-change-timeseries-cmip6?tab=overview
+    source_version: 1.0
+    unit: m+MSL
+COAST_HG:
+  path: COAST_RP/COAST-HG_RP100.nc
+  data_type: GeoDataset
+  meta:
+    category: extreme water levels
+    paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
+    paper_ref: Dullaart et al. (2023)
+COAST_RP:
+  path: COAST_RP/COAST-RP.pkl
+  data_type: Dataset
+  meta:
+    category: extreme water levels
+    paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
+    paper_ref: Dullaart et al. (2023)
+COAST_RP_stations:
+  path: COAST_RP/pxyn_coastal_points.xyn
+  data_type: Dataset
+  meta:
+      category: station ids
+      paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
+      paper_ref: Dullaart et al. (2023)
 gebco:
   crs: 4326
   data_type: RasterDataset
@@ -326,7 +358,15 @@ UN_dev_index:
   data_type: DataFrame
   driver_kwargs:
     index_col: 'Year'
-
+oecd_idd:
+  meta:
+    category: economics
+    source_author: OECD
+    source_url: https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov
+  path:
+    socioeconomic/OECD/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0+.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR..csv
+  driver: csv
+  data_type: DataFrame
 wb_inflation_rate:
   meta:
     category: economics

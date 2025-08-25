@@ -25,7 +25,7 @@ class DynamicArray:
         extra_dims_names=[],
         dtype=None,
         fill_value=None,
-    ):
+    ) -> None:
         self.extra_dims_names = np.array(extra_dims_names, dtype=str)
 
         if input_array is None and dtype is None:
@@ -77,7 +77,7 @@ class DynamicArray:
         return self._data[: self.n]
 
     @data.setter
-    def data(self, value):
+    def data(self, value) -> None:
         self._data[: self.n] = value
 
     @property
@@ -93,11 +93,11 @@ class DynamicArray:
         return self._extra_dims_names
 
     @extra_dims_names.setter
-    def extra_dims_names(self, value):
+    def extra_dims_names(self, value) -> None:
         self._extra_dims_names = value
 
     @n.setter
-    def n(self, value):
+    def n(self, value) -> None:
         if value > self.max_n:
             raise ValueError("n cannot exceed max_n")
         self._n = value
@@ -138,7 +138,7 @@ class DynamicArray:
             func, modified_types, modified_args, kwargs
         )
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value) -> None:
         self.data.__setitem__(key, value)
 
     def __getitem__(self, key):
@@ -174,7 +174,12 @@ class DynamicArray:
             return self.data.__getitem__(key)
 
     def copy(self):
-        """Create a deep copy of this DynamicArray."""
+        """Create a deep copy of this DynamicArray.
+
+        Returns:
+            A new DynamicArray instance that is a deep copy of the current instance.
+
+        """
         new_array = DynamicArray.__new__(DynamicArray)
         new_array._data = self._data.copy()
         new_array._n = self._n
@@ -185,13 +190,13 @@ class DynamicArray:
         )
         return new_array
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "DynamicArray(" + self.data.__str__() + ")"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.data.__str__()
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._n
 
     def __getattr__(self, name):
@@ -207,7 +212,7 @@ class DynamicArray:
         else:
             return getattr(self.data, name)
 
-    def __setattr__(self, name, value):
+    def __setattr__(self, name, value) -> None:
         if name in (
             "_data",
             "data",
@@ -347,14 +352,14 @@ class DynamicArray:
     def __invert__(self):
         return self._perform_operation(None, "__invert__")
 
-    def save(self, path):
+    def save(self, path) -> None:
         np.savez_compressed(
             path.with_suffix(".storearray.npz"),
             **{slot: getattr(self, slot) for slot in self.__slots__},
         )
 
     @classmethod
-    def load(cls, path):
+    def load(cls, path) -> "DynamicArray":
         assert path.suffixes == [".storearray", ".npz"]
         with np.load(path) as data:
             obj = cls.__new__(cls)
@@ -375,17 +380,21 @@ class Bucket:
 
     """
 
-    def __init__(self, validator: Callable | None = None):
+    def __init__(self, validator: Callable | None = None) -> None:
         self._validator = validator
 
     def __iter__(self):
-        """Iterate over the items in the bucket."""
+        """Iterate over the items in the bucket.
+
+        Yields:
+            Tuples of (name, value) for each item in the bucket, excluding the validator.
+        """
         for name, value in self.__dict__.items():
             if name == "_validator":
                 continue
             yield name, value
 
-    def __setattr__(self, name, value):
+    def __setattr__(self, name, value) -> None:
         # If the name is 'validator', we allow setting it directly.
         # i.e., we do not validate the validator itself.
         if name == "_validator":
@@ -413,7 +422,7 @@ class Bucket:
         )
         super().__setattr__(name, value)
 
-    def save(self, path):
+    def save(self, path) -> None:
         path.mkdir(parents=True, exist_ok=True)
         for name, value in self.__dict__.items():
             # do not save the validator itself
@@ -502,7 +511,7 @@ class Store:
     This class is use to store and restore the model's state in a structured way.
     """
 
-    def __init__(self, model):
+    def __init__(self, model) -> None:
         self.model = model
         self.buckets = {}
 
@@ -516,7 +525,7 @@ class Store:
         name = self.get_name(cls)
         return self.buckets[name]
 
-    def save(self, path=None):
+    def save(self, path=None) -> None:
         if path is None:
             path = self.path
 
@@ -525,7 +534,7 @@ class Store:
             self.model.logger.debug(f"Saving {name}")
             bucket.save(path / name)
 
-    def load(self, path=None):
+    def load(self, path=None) -> None:
         if path is None:
             path = self.path
 

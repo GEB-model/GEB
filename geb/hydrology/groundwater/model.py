@@ -189,7 +189,7 @@ class ModFlowSimulation:
         min_remaining_layer_storage_m: float = 0.1,
         verbose: bool = False,
         never_load_from_disk: bool = False,
-    ):
+    ) -> None:
         self.name = "MODEL"  # MODFLOW requires the name to be uppercase
         self.model = model
         self.heads_update_callback = heads_update_callback
@@ -510,11 +510,11 @@ class ModFlowSimulation:
 
         return sim
 
-    def write_hash_to_disk(self):
+    def write_hash_to_disk(self) -> None:
         with open(self.hash_file, "wb") as f:
             f.write(self.hash)
 
-    def load_from_disk(self, arguments):
+    def load_from_disk(self, arguments) -> bool:
         hashable_dict = {}
         for key, value in arguments.items():
             if isinstance(value, np.ndarray):
@@ -539,7 +539,7 @@ class ModFlowSimulation:
         with open("mfsim.stdout") as f:
             return f.readlines()
 
-    def load_bmi(self, heads: npt.NDArray[np.float64]):
+    def load_bmi(self, heads: npt.NDArray[np.float64]) -> None:
         """Load the Basic Model Interface."""
         # Current model version 6.5.0 from https://github.com/MODFLOW-USGS/modflow6/releases/tag/6.5.0
         if platform.system() == "Windows":
@@ -628,7 +628,7 @@ class ModFlowSimulation:
         return heads
 
     @heads.setter
-    def heads(self, value):
+    def heads(self, value) -> None:
         self.mf6.get_value_ptr(self.head_tag)[:] = value.ravel()
 
     @property
@@ -686,7 +686,7 @@ class ModFlowSimulation:
         return self.mf6.get_value_ptr(self.actual_well_rate_tag)
 
     @potential_well_rate.setter
-    def potential_well_rate(self, well_rate):
+    def potential_well_rate(self, well_rate) -> None:
         well_rate_per_layer = distribute_well_rate_per_layer(
             well_rate,
             self.layer_boundary_elevation,
@@ -724,7 +724,7 @@ class ModFlowSimulation:
         return recharge
 
     @_recharge_m.setter
-    def recharge_m(self, value):
+    def recharge_m(self, value) -> None:
         assert not np.isnan(value).any()
         self.mf6.get_value_ptr(self.recharge_tag)[:] = value
 
@@ -737,7 +737,7 @@ class ModFlowSimulation:
         mxit_tag = self.mf6.get_var_address("MXITER", "SLN_1")
         return self.mf6.get_value_ptr(mxit_tag)[0]
 
-    def prepare_time_step(self):
+    def prepare_time_step(self) -> None:
         dt = self.mf6.get_time_step()
         self.mf6.prepare_time_step(dt)
 
@@ -745,10 +745,10 @@ class ModFlowSimulation:
     #     """Set recharge, value in m/day."""
     #     self.recharge_m = recharge
 
-    def set_recharge_m3(self, recharge):
+    def set_recharge_m3(self, recharge) -> None:
         self.recharge_m = recharge / self.area
 
-    def set_groundwater_abstraction_m3(self, groundwater_abstraction):
+    def set_groundwater_abstraction_m3(self, groundwater_abstraction) -> None:
         """Set well rate, value in m3/day."""
         assert not np.isnan(groundwater_abstraction).any()
 
@@ -760,7 +760,7 @@ class ModFlowSimulation:
         assert (well_rate <= 0).all()
         self.potential_well_rate = well_rate
 
-    def step(self):
+    def step(self) -> None:
         if self.mf6.get_current_time() == self.end_time:
             raise StopIteration("MODFLOW used all iteration steps.")
 
@@ -844,8 +844,8 @@ class ModFlowSimulation:
         if self.mf6.get_current_time() < self.end_time:
             self.prepare_time_step()
 
-    def finalize(self):
+    def finalize(self) -> None:
         self.mf6.finalize()
 
-    def restore(self, heads):
+    def restore(self, heads) -> None:
         self.heads = heads

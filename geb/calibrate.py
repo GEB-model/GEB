@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """Calibration tool for Hydrological models.
 
 Uses a distributed evolutionary algorithms in python DEAP library
@@ -171,12 +169,12 @@ def handle_ctrl_c(func):
     return wrapper
 
 
-def pool_ctrl_c_handler(*args, **kwargs):
+def pool_ctrl_c_handler(*args, **kwargs) -> None:
     global ctrl_c_entered
     ctrl_c_entered = True
 
 
-def multi_set(dict_obj, value, *attrs):
+def multi_set(dict_obj, value, *attrs) -> None:
     d = dict_obj
     for attr in attrs[:-1]:
         d = d[attr]
@@ -373,7 +371,7 @@ def KGE_water_price(run_directory, individual, config):
     return kge
 
 
-def determine_water_price_model(run_directory, config):
+def determine_water_price_model(run_directory, config) -> None:
     # Load observed water prices
     regions_of_interest = [
         "VIC Goulburn-Broken",
@@ -450,7 +448,7 @@ def determine_water_price_model(run_directory, config):
     gauges = [(143.3458, -34.8458), (147.229, -36.405), (147.711, -35.929)]
     simulated_streamflows = {}
 
-    def get_streamflows(run_directory, gauge):
+    def get_streamflows(run_directory, gauge) -> None:
         gauge_name = f"{gauge[0]}_{gauge[1]}"
         Qsim_tss = os.path.join(
             run_directory,
@@ -621,10 +619,8 @@ def KGE_region_diversion(run_directory, individual, config):
     df_simulated = pd.concat(dfs_simulated, axis=1)
     df_simulated_yearly = df_simulated.resample("A-JUN").sum() / 1_000_000
 
-    # ---------------------------------------------------------
     # Load observed data; treat the 'Date' as YYYY-07-01
     # so it aligns with the July–June year used above.
-    # ---------------------------------------------------------
     annual_diversions_fp = Path("calibration_data/water_use/mdb_annual_diversions.xlsx")
     annual_diversions_df = pd.read_excel(annual_diversions_fp)
 
@@ -659,9 +655,7 @@ def KGE_region_diversion(run_directory, individual, config):
     # so the index labels match df_simulated_yearly's A-JUN endings.
     diversions_observed_yearly = diversions_observed_df.resample("A-JUN").sum()
 
-    # ---------------------------------------------------------
     # Combine VIC
-    # ---------------------------------------------------------
     df_combined_vic = pd.concat(
         [
             df_simulated_yearly["allocation_vic"],
@@ -673,9 +667,7 @@ def KGE_region_diversion(run_directory, individual, config):
     df_combined_vic.columns = ["simulated", "observed"]
     df_combined_vic["simulated"] += 0.0001
 
-    # ---------------------------------------------------------
     # Combine NSW
-    # ---------------------------------------------------------
     df_combined_nsw = pd.concat(
         [
             df_simulated_yearly["allocation_nsw"],
@@ -687,9 +679,7 @@ def KGE_region_diversion(run_directory, individual, config):
     df_combined_nsw.columns = ["simulated", "observed"]
     df_combined_nsw["simulated"] += 0.0001
 
-    # ---------------------------------------------------------
     # Compute KGE
-    # ---------------------------------------------------------
     kge_vic = KGE_calculation(df_combined_vic["simulated"], df_combined_vic["observed"])
     kge_nsw = KGE_calculation(df_combined_nsw["simulated"], df_combined_nsw["observed"])
     kge = (kge_vic + kge_nsw) / 2.0
@@ -1377,7 +1367,7 @@ def get_crops_KGE(run_directory, individual, config):
     return kge
 
 
-def export_front_history(config, ngen, effmax, effmin, effstd, effavg):
+def export_front_history(config, ngen, effmax, effmin, effstd, effavg) -> None:
     print(">> Saving optimization history (front_history.csv)")
     front_history = {}
     for i, calibration_value in enumerate(config["calibration"]["calibration_targets"]):
@@ -1670,7 +1660,9 @@ def run_model(individual, config, gauges, observed_streamflow):
     return tuple(scores)
 
 
-def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu):
+def init_pool(
+    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
+) -> None:
     """Initialize the global variables for the process pool."""
     global ctrl_c_entered
     global default_sigint_handler
@@ -1685,7 +1677,7 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu)
     current_gpu_use_count = manager_current_gpu_use_count
 
 
-def calibrate(config, working_directory):
+def calibrate(config, working_directory) -> None:
     calibration_config = config["calibration"]
 
     use_multiprocessing = calibration_config["DEAP"]["use_multiprocessing"]

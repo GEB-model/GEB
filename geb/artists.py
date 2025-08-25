@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import re
 from operator import attrgetter
 from typing import Union
@@ -121,7 +120,7 @@ class Artists(honeybeesArtists):
         """
         self.variables_dict = {}
 
-        def add_vars(name, compressed_size, dtypes, variant_dim, invariant_dim):
+        def add_vars(name, compressed_size, dtypes, variant_dim, invariant_dim) -> None:
             assert np.intersect1d(variant_dim, invariant_dim).size == 0
             container = attrgetter(name)(self.model)
             for varname, variable in vars(container).items():

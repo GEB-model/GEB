@@ -8,7 +8,7 @@ from geb.workflows.io import calculate_scaling, get_window, to_zarr
 from ..testconfig import tmp_folder
 
 
-def test_calculate_scaling():
+def test_calculate_scaling() -> None:
     def encode_decode(data, min_value, max_value, offset, precision=0.1):
         assert data.dtype == np.float32
 
@@ -89,7 +89,7 @@ def test_calculate_scaling():
         )
 
 
-def test_io():
+def test_io() -> None:
     x = np.linspace(-5, 5, 10)
     y = np.linspace(10, 0, 10)
 
@@ -121,7 +121,7 @@ def test_io():
     to_zarr(da, tmp_folder / "test.zarr", crs=4326)
 
 
-def test_get_window():
+def test_get_window() -> None:
     x = np.linspace(-5, 5, 11, dtype=np.int32)
     y = np.linspace(10, 0, 11, dtype=np.int32)
     values = np.arange(x.size * y.size).reshape(y.size, x.size).astype(np.int32)

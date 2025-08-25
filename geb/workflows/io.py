@@ -163,7 +163,7 @@ def check_buffer_size(
     da: xr.DataArray,
     chunks_or_shards: dict[str, int],
     max_buffer_size: int = 2147483647,
-):
+) -> None:
     buffer_size = (
         np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
     )
@@ -187,35 +187,21 @@ def to_zarr(
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.
 
-    Parameters
-    ----------
-    da : xarray.DataArray
-        The xarray DataArray to save.
-    path : str
-        The path to the zarr file.
-    crs : int or pyproj.CRS
-        The coordinate reference system to use.
-    x_chunksize : int, optional
-        The chunk size for the x dimension. Default is 350.
-    y_chunksize : int, optional
-        The chunk size for the y dimension. Default is 350.
-    time_chunksize : int, optional
-        The chunk size for the time dimension. Default is 1.
-    time_chunks_per_shard : int, optional
-        The number of time chunks per shard. Default is 30. Set to None
-        to disable sharding.
-    byteshuffle : bool, optional
-        Whether to use byteshuffle compression. Default is True.
-    filters : list, optional
-        A list of filters to apply. Default is [].
-    compressor : numcodecs, optional
-        The compressor to use. Default is None, using the default Blosc compressor.
-    progress : bool, optional
-        Whether to show a progress bar. Default is True.
+    Args:
+        da: The xarray DataArray to save.
+        path: The path to the zarr file.
+        crs: The coordinate reference system to use.
+        x_chunksize: The chunk size for the x dimension. Default is 350.
+        y_chunksize: The chunk size for the y dimension. Default is 350.
+        time_chunksize: The chunk size for the time dimension. Default is 1.
+        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
+            to disable sharding.
+        byteshuffle: Whether to use byteshuffle compression. Default is True.
+        filters: A list of filters to apply. Default is [].
+        compressor: The compressor to use. Default is None, using the default Blosc compressor.
+        progress: Whether to show a progress bar. Default is True.
 
     Returns:
-    -------
-    da_disk : xarray.DataArray
         The xarray DataArray saved to disk.
 
     """
@@ -352,24 +338,15 @@ def get_window(
 ) -> dict[str, slice]:
     """Get a window for the given x and y coordinates based on the provided bounds and buffer.
 
-    Parameters
-    ----------
-    x : xr.DataArray
-        The x coordinates as an xarray DataArray.
-    y : xr.DataArray
-        The y coordinates as an xarray DataArray.
-    bounds : tuple
-        A tuple of four values representing the bounds in the form (min_x, min_y, max_x, max_y).
-    buffer : int, optional
-        The buffer size to apply to the bounds. Default is 0.
-    raise_on_out_of_bounds : bool, optional
-        Whether to raise an error if the bounds are out of the x or y coordinate range. Default is True.
-    raise_on_buffer_out_of_bounds : bool, optional
-        Whether to raise an error if the buffer goes out of the x or y coordinate range. Default is True.
+    Args:
+        x: The x coordinates as an xarray DataArray.
+        y: The y coordinates as an xarray DataArray.
+        bounds: A tuple of four values representing the bounds in the form (min_x, min_y, max_x, max_y).
+        buffer: The buffer size to apply to the bounds. Default is 0.
+        raise_on_out_of_bounds: Whether to raise an error if the bounds are out of the x or y coordinate range. Default is True.
+        raise_on_buffer_out_of_bounds: Whether to raise an error if the buffer goes out of the x or y coordinate range. Default is True.
 
     Returns:
-    -------
-    dict
         A dictionary with slices for the x and y coordinates, e.g. {"x": slice(start, stop), "y": slice(start, stop)}.
     """
     if not isinstance(buffer, int):
@@ -478,7 +455,7 @@ class AsyncGriddedForcingReader:
     multiple timesteps sequentially.
     """
 
-    def __init__(self, filepath, variable_name):
+    def __init__(self, filepath, variable_name) -> None:
         self.variable_name = variable_name
         self.filepath = filepath
 
@@ -568,7 +545,7 @@ class AsyncGriddedForcingReader:
             data = self.load(index)
             return data
 
-    def close(self):
+    def close(self) -> None:
         # cancel the preloading of the next timestep
         if self.preloaded_data_future is not None:
             self.preloaded_data_future.cancel()
@@ -586,7 +563,7 @@ class WorkingDirectory:
             # Code executed here will have the new directory as the CWD
     """
 
-    def __init__(self, new_path):
+    def __init__(self, new_path) -> None:
         """Initializes the context manager with the path to change to.
 
         Args:

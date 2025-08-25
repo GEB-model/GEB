@@ -9,7 +9,6 @@ import json
 import logging
 import math
 import os
-from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -526,7 +525,7 @@ class GEBModel(
         data_catalogs: List[str] | None = None,
         epsg=4326,
         data_provider: str = "default",
-    ):
+    ) -> None:
         self.logger = logger
         self.data_catalog = DataCatalog(
             data_libs=data_catalogs, logger=self.logger, fallback_lib=None
@@ -552,7 +551,7 @@ class GEBModel(
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
-        self.geoms: DelayedReader = DelayedReader(reader=gpd.read_parquet)
+        self.geom: DelayedReader = DelayedReader(reader=gpd.read_parquet)
         self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
         self.array: DelayedReader = DelayedReader(zarr.load)
         self.dict: DelayedReader = DelayedReader(
@@ -560,7 +559,7 @@ class GEBModel(
         )
         self.other: DelayedReader = DelayedReader(reader=open_zarr)
 
-        self.files: defaultdict = defaultdict(dict)
+        self.files: dict = self.read_file_library()
 
     @build_method
     def setup_region(
@@ -625,7 +624,7 @@ class GEBModel(
         )
         self.set_routing_subbasins(river_graph, sink_subbasin_ids)
 
-        subbasins = self.geoms["routing/subbasins"]
+        subbasins = self.geom["routing/subbasins"]
         subbasins_without_outflow_basin = subbasins[
             ~subbasins["is_downstream_outflow_subbasin"]
         ]
@@ -870,7 +869,7 @@ class GEBModel(
         # return the combination of the riverine mask and the coastal mask
         return riverine_mask | coastal_mask
 
-    def derive_mask(self, d8_original, transform, resolution_arcsec):
+    def derive_mask(self, d8_original, transform, resolution_arcsec) -> None:
         assert d8_original.dtype == np.uint8
 
         d8_original_data = d8_original.values
@@ -924,7 +923,7 @@ class GEBModel(
             crs=4326,
         )
 
-        self.set_geoms(mask_geom, name="mask")
+        self.set_geom(mask_geom, name="mask")
 
         flow_raster_idxs_ds = self.full_like(
             self.grid["mask"],
@@ -948,7 +947,7 @@ class GEBModel(
         idxs_out_da.data = idxs_out
         self.set_grid(idxs_out_da, name="idxs_outflow")
 
-    def create_subgrid(self, subgrid_factor):
+    def create_subgrid(self, subgrid_factor) -> None:
         mask = self.grid["mask"]
         dst_transform = mask.rio.transform(recalc=True) * Affine.scale(
             1 / subgrid_factor
@@ -968,7 +967,7 @@ class GEBModel(
         submask = self.set_subgrid(submask, name="mask")
 
     @build_method
-    def set_time_range(self, start_date, end_date):
+    def set_time_range(self, start_date, end_date) -> None:
         assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
             {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
@@ -984,7 +983,7 @@ class GEBModel(
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
 
     @build_method
-    def set_ssp(self, ssp: str):
+    def set_ssp(self, ssp: str) -> None:
         assert ssp in ["ssp1", "ssp3", "ssp5"], (
             f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
         )
@@ -995,7 +994,7 @@ class GEBModel(
         return self.dict["ssp"]["ssp"] if "ssp" in self.dict else "ssp3"
 
     @property
-    def ISIMIP_ssp(self):
+    def ISIMIP_ssp(self) -> str:
         """Returns the ISIMIP SSP name."""
         if self.ssp == "ssp1":
             return "ssp126"
@@ -1031,7 +1030,7 @@ class GEBModel(
 
     def setup_coastal_water_levels(
         self,
-    ):
+    ) -> None:
         water_levels = self.data_catalog.get_dataset("GTSM")
         assert (
             water_levels.time.diff("time").astype(np.int64)
@@ -1064,7 +1063,7 @@ class GEBModel(
         )
 
     @build_method
-    def setup_damage_parameters(self, parameters):
+    def setup_damage_parameters(self, parameters) -> None:
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
                 for component, asset_compontents in asset_parameters.items():
@@ -1089,13 +1088,13 @@ class GEBModel(
     @build_method
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors
-    ):
+    ) -> None:
         risk_scaling_factors = pd.DataFrame(
             risk_scaling_factors, columns=["exceedance_probability", "scaling_factor"]
         )
         self.set_table(risk_scaling_factors, name="precipitation_scaling_factors")
 
-    def set_table(self, table, name, write=True):
+    def set_table(self, table, name, write=True) -> None:
         fp: Path = Path("table") / (name + ".parquet")
         fp_with_root: Path = Path(self.root, fp)
         if write:
@@ -1114,7 +1113,7 @@ class GEBModel(
 
         self.table[name] = fp_with_root
 
-    def set_array(self, data, name, write=True):
+    def set_array(self, data, name, write=True) -> None:
         fp: Path = Path("array") / (name + ".zarr")
         fp_with_root: Path = Path(self.root, fp)
 
@@ -1126,7 +1125,7 @@ class GEBModel(
 
         self.array[name] = fp_with_root
 
-    def set_dict(self, data, name, write=True):
+    def set_dict(self, data, name, write=True) -> None:
         fp: Path = Path("dict") / (name + ".json")
         fp_with_root: Path = Path(self.root) / fp
         fp_with_root.parent.mkdir(parents=True, exist_ok=True)
@@ -1140,29 +1139,30 @@ class GEBModel(
 
         self.dict[name] = fp_with_root
 
-    def set_geoms(self, geoms, name, write=True):
+    def set_geom(self, geom, name, write=True) -> None:
         fp: Path = Path("geom") / (name + ".geoparquet")
         fp_with_root: Path = self.root / fp
         if write:
             self.logger.info(f"Writing file {fp}")
-            self.files["geoms"][name] = fp
+            self.files["geom"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
             # brotli is a bit slower but gives better compression,
             # gzip is faster to read. Higher compression levels
             # generally don't make it slower to read, therefore
             # we use the highest compression level for gzip
-            geoms.to_parquet(
+            geom.to_parquet(
                 fp_with_root, engine="pyarrow", compression="gzip", compression_level=9
             )
 
-        self.geoms[name] = fp_with_root
+        self.geom[name] = fp_with_root
 
-    def write_file_library(self, read_first: bool = True) -> None:
-        if read_first:
-            file_library: defaultdict = self.read_file_library()
-        else:
-            file_library: defaultdict = defaultdict(dict)
+    @property
+    def files_path(self) -> Path:
+        """Path to the files.json file that contains the file library."""
+        return Path(self.root, "files.json")
 
+    def write_file_library(self) -> None:
+        file_library: dict = self.read_file_library()
         # merge file library from disk with new files, prioritizing new files
         for type_name, type_files in self.files.items():
             if type_name not in file_library:
@@ -1170,31 +1170,46 @@ class GEBModel(
             else:
                 file_library[type_name].update(type_files)
 
-        with open(Path(self.root, "files.json"), "w") as f:
+        with open(self.files_path, "w") as f:
             json.dump(file_library, f, indent=4, cls=PathEncoder)
 
-    def read_file_library(self) -> defaultdict:
+    def read_file_library(self) -> dict:
         fp: Path = Path(self.root, "files.json")
         if not fp.exists():
-            return defaultdict(dict)  # return empty defaultdict if file does not exist
+            return {
+                "geom": {},
+                "array": {},
+                "table": {},
+                "dict": {},
+                "grid": {},
+                "subgrid": {},
+                "region_subgrid": {},
+                "other": {},
+            }
         else:
             with open(Path(self.root, "files.json"), "r") as f:
                 files: dict[str, dict[str, str]] = json.load(f)
-        return defaultdict(dict, files)  # convert dict to defaultdict
 
-    def read_geoms(self):
-        for name, fn in self.files["geoms"].items():
-            self.geoms[name] = Path(self.root, fn)
+            # geoms was renamed to geom in the file library. To upgrade old models,
+            # we check if "geoms" is in the files and rename it to "geom"
+            # this line can be removed in august 2026 (also in geb/model.py)
+            if "geoms" in files:
+                files["geom"] = files.pop("geoms", {})
+        return files
 
-    def read_array(self):
+    def read_geom(self) -> None:
+        for name, fn in self.files["geom"].items():
+            self.geom[name] = Path(self.root, fn)
+
+    def read_array(self) -> None:
         for name, fn in self.files["array"].items():
             self.array[name] = Path(self.root, fn)
 
-    def read_table(self):
+    def read_table(self) -> None:
         for name, fn in self.files["table"].items():
             self.table[name] = Path(self.root, fn)
 
-    def read_dict(self):
+    def read_dict(self) -> None:
         for name, fn in self.files["dict"].items():
             self.dict[name] = Path(self.root, fn)
 
@@ -1221,11 +1236,9 @@ class GEBModel(
         for name, fn in self.files["other"].items():
             self.other[name] = Path(self.root, fn)
 
-    def read(self):
+    def read(self) -> None:
         with suppress_logging_warning(self.logger):
-            self.files = self.read_file_library()
-
-            self.read_geoms()
+            self.read_geom()
             self.read_array()
             self.read_table()
             self.read_dict()
@@ -1383,7 +1396,7 @@ class GEBModel(
 
     @property
     def region(self):
-        return self.geoms["mask"]
+        return self.geom["mask"]
 
     @property
     def bounds(self):
@@ -1394,7 +1407,7 @@ class GEBModel(
         return self._root
 
     @root.setter
-    def root(self, root):
+    def root(self, root) -> None:
         self._root = Path(root).absolute()
 
     @property
@@ -1449,14 +1462,17 @@ class GEBModel(
         for method in methods:
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
+
+            # if the method is "setup_region", we start an entirely new model
+            # ant therefore delete the files save path
             if method == "setup_region":
-                self.write_file_library(read_first=False)
-            else:
-                self.write_file_library(read_first=True)
+                self.files_path.unlink(missing_ok=True)
+
+            self.write_file_library()
 
         self.logger.info("Finished!")
 
-    def build(self, region: dict, methods: dict):
+    def build(self, region: dict, methods: dict) -> None:
         """Build the model with the specified region and methods."""
         methods: dict[str:Any] = methods or {}
         methods["setup_region"].update(region=region)
@@ -1466,7 +1482,7 @@ class GEBModel(
     def update(
         self,
         methods: dict,
-    ):
+    ) -> None:
         methods = methods or {}
 
         if "setup_region" in methods:

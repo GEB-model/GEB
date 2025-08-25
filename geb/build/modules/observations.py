@@ -1,10 +1,12 @@
+import io
 import os
+import tempfile
+import zipfile
 from pathlib import Path
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import geopandas as gpd
-import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -22,16 +24,15 @@ This module contains the Observations class.
 
 
 def plot_snapping(
-    station_id: np.int32,
-    output_folder: Path,
-    rivers: gpd.GeoDataFrame,
-    upstream_area: xr.DataArray,
-    Q_obs_station_coords: tuple[float, float],
-    closest_point_coords: tuple[float, float],
-    closest_river_segment: gpd.GeoDataFrame,
-    grid_pixel_coords: tuple[float, float],
-    max_spatial_difference_degrees: float,
-):
+    station_id,
+    output_folder,
+    rivers,
+    upstream_area,
+    Q_obs_station_coords,
+    closest_point_coords,
+    closest_river_segment,
+    grid_pixel_coords,
+) -> None:
     fig, ax = plt.subplots(
         subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
     )
@@ -42,12 +43,12 @@ def plot_snapping(
     ax.add_feature(cfeature.LAKES)
 
     # Set the extent to zoom in around the gauge location
-    buffer = max(max_spatial_difference_degrees * 1.5, 0.05)
+    buffer = 0.05  # Adjust this value to control the zoom level
 
-    xmin: float = closest_point_coords[0] - buffer
-    xmax: float = closest_point_coords[0] + buffer
-    ymin: float = closest_point_coords[1] - buffer
-    ymax: float = closest_point_coords[1] + buffer
+    xmin = Q_obs_station_coords[0] - buffer
+    xmax = Q_obs_station_coords[0] + buffer
+    ymin = Q_obs_station_coords[1] - buffer
+    ymax = Q_obs_station_coords[1] + buffer
 
     ax.set_extent(
         [
@@ -57,31 +58,6 @@ def plot_snapping(
             ymax,
         ],
         crs=ccrs.PlateCarree(),
-    )
-
-    resolution = upstream_area.rio.resolution()
-
-    # Draw a square around the grid cell using its center (grid_pixel_coords) and resolution
-    dx, dy = abs(resolution[0]), abs(resolution[1])
-    half_dx, half_dy = dx / 2, dy / 2
-    square = shapely.geometry.box(
-        grid_pixel_coords[0] - half_dx,
-        grid_pixel_coords[1] - half_dy,
-        grid_pixel_coords[0] + half_dx,
-        grid_pixel_coords[1] + half_dy,
-    )
-    ax.add_geometries(
-        [square],
-        crs=ccrs.PlateCarree(),
-        facecolor="none",
-        edgecolor="blue",
-        linewidth=2,
-        label="Grid cell",
-        zorder=3,
-    )
-
-    square_patch: mpatches.Patch = mpatches.Patch(
-        facecolor="none", edgecolor="blue", linewidth=2, label="Grid cell"
     )
 
     ax.scatter(
@@ -102,6 +78,15 @@ def plot_snapping(
         label="Closest point to river",
         zorder=3,
     )
+    ax.scatter(
+        grid_pixel_coords[0],
+        grid_pixel_coords[1],
+        color="blue",
+        marker="o",
+        s=30,
+        label="Grid pixel",
+        zorder=3,
+    )
 
     # Select the upstream area within the extent of the plot
     upstream_area_within_extent = upstream_area.isel(
@@ -110,8 +95,8 @@ def plot_snapping(
             upstream_area.y,
             bounds=(xmin, ymin, xmax, ymax),
             buffer=1,
-            raise_on_out_of_bounds=False,
             raise_on_buffer_out_of_bounds=False,
+            raise_on_out_of_bounds=False,
         )
     )
 
@@ -130,52 +115,18 @@ def plot_snapping(
     ax.set_title("Upstream area grid and gauge snapping for %s" % station_id)
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
-    # Add legend with all relevant elements
-    original_gauge_patch = plt.Line2D(
-        [0],
-        [0],
-        marker="o",
-        color="w",
-        label="Original gauge",
-        markerfacecolor="red",
-        markersize=8,
-    )
-    closest_point_patch = plt.Line2D(
-        [0],
-        [0],
-        marker="o",
-        color="w",
-        label="Closest point to river",
-        markerfacecolor="black",
-        markersize=8,
-    )
-    river_patch = plt.Line2D([0], [0], color="blue", lw=2, label="Rivers")
-    closest_river_patch = plt.Line2D(
-        [0], [0], color="green", lw=3, label="Closest river segment"
-    )
-
-    ax.legend(
-        handles=[
-            square_patch,
-            original_gauge_patch,
-            closest_point_patch,
-            river_patch,
-            closest_river_patch,
-        ],
-        loc="upper right",
-        frameon=True,
-    )
+    ax.legend()
     plt.savefig(
         output_folder / f"snapping_discharge_{station_id}.png",
         dpi=300,
         bbox_inches="tight",
     )
-
+    # plt.show()
     plt.close()
 
 
 class Observations:
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=["setup_hydrography"])
@@ -183,7 +134,7 @@ class Observations:
         self,
         max_uparea_difference_ratio: float = 0.3,
         max_spatial_difference_degrees: float = 0.1,
-        custom_river_stations: None = None,
+        custom_river_stations: str | None = None,
     ) -> None:
         """setup_discharge_observations is responsible for setting up discharge observations from the Q_obs dataset.
 
@@ -191,27 +142,42 @@ class Observations:
         It also saves necessary input data for the model in the input folder, and some additional information in the output folder (e.g snapping plots).
         Additional stations can be added as csv files in the custom_stations folder in the GEB data catalog.
 
-        Parameters
-        ----------
-        max_uparea_difference_ratio : float, optional
-            The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area. Default is 0.3 (30%).
-        max_spatial_difference_degrees : float, optional
-            The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment. Default is 0.1 degrees.
-        custom_river_stations : str, optional
-            Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
+        Args:
+            max_uparea_difference_ratio: The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area. Default is 0.3 (30%).
+            max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment. Default is 0.1 degrees.
+            custom_river_stations: Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
         """
         # load data
         upstream_area = self.grid[
             "routing/upstream_area"
         ].compute()  # we need to use this one many times, so we compute it once
         upstream_area_subgrid = self.other["drainage/original_d8_upstream_area"]
-        rivers = self.geoms["routing/rivers"]
+        rivers = self.geom["routing/rivers"]
+        region_shapefile = self.geom["mask"]
 
-        # select only the rivers within the basin area
-        rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
+        # Load Q_obs dataset
+        Q_obs_source = self.data_catalog.get_source("GRDC")
 
-        region_shapefile = self.geoms["mask"]
-        Q_obs = self.data_catalog.get_geodataset("GRDC")  # load the Q_obs dataset
+        if str(Q_obs_source.path).endswith(".zip"):
+            # Handle zip file containing single .nc file
+            with zipfile.ZipFile(Q_obs_source.path, "r") as zip_file:
+                self.logger.info(
+                    f"Loading global GRDC discharge observations : {Q_obs_source.path}"
+                )
+                # Get the .nc file from the zip
+                nc_filename = [f for f in zip_file.namelist() if f.endswith(".nc")][0]
+                # Read file content into memory
+                with zip_file.open(nc_filename) as file:
+                    file_content = file.read()
+
+            # Open dataset from memory buffer
+            Q_obs = xr.open_dataset(io.BytesIO(file_content), engine="h5netcdf")
+
+            # rename geo_x and geo_y to x and y
+            Q_obs = Q_obs.rename({"geo_x": "x", "geo_y": "y"})
+        else:
+            # Fallback to original method if not a zip file
+            Q_obs = self.data_catalog.get_geodataset("GRDC")  # is already renamed
 
         # create folders
         snapping_discharge_folder = (
@@ -278,6 +244,8 @@ class Observations:
                 )
             return Q_station, station_coords
 
+        Q_obs_merged = Q_obs.copy()  # Ensure Q_obs_merged is always defined
+
         if custom_river_stations is not None:
             for station in os.listdir(Path(self.root).parent / custom_river_stations):
                 if not station.endswith(".csv"):
@@ -319,10 +287,6 @@ class Observations:
                                 0
                             ]
                         )  # get the id of the station in the Q_obs dataset
-                        Q_obs_merged = Q_obs.copy()
-
-        else:
-            Q_obs_merged = Q_obs.copy()
 
         # Clip the Q_obs dataset to the region shapefile
         def clip_Q_obs(Q_obs_merged, region_shapefile):
@@ -354,15 +318,51 @@ class Observations:
             Q_obs_merged, region_shapefile
         )  # filter Q_obs stations based on the region shapefile
 
+        if len(Q_obs_clipped.id) == 0:
+            # No stations found - create empty files
+            self.logger.warning(
+                "No discharge stations found in the region. Creating empty files"
+            )
+
+            # Create empty snapping results Excel file with proper columns
+            empty_cols = [
+                "Q_obs_station_name",
+                "Q_obs_station_ID",
+                "Q_obs_river_name",
+                "Q_obs_upstream_area_m2",
+                "Q_obs_station_coords",
+                "closest_point_coords",
+                "subgrid_pixel_coords",
+                "snapped_grid_pixel_lonlat",
+                "snapped_grid_pixel_xy",
+                "GEB_upstream_area_from_subgrid",
+                "GEB_upstream_area_from_grid",
+                "Q_obs_to_GEB_upstream_area_ratio",
+                "snapping_distance_degrees",
+            ]
+            discharge_snapping_df = pd.DataFrame(columns=empty_cols)
+            discharge_snapping_df.to_excel(
+                self.report_dir / "snapping_discharge" / "discharge_snapping.xlsx",
+                index=False,
+            )
+
+            # Create empty discharge table
+            empty_discharge_df = pd.DataFrame()
+            self.set_table(empty_discharge_df, name="discharge/Q_obs")
+
+            # Create empty snapped locations geometry
+            empty_geom = gpd.GeoDataFrame(
+                discharge_snapping_df,
+                geometry=gpd.GeoSeries([], crs="EPSG:4326"),
+                crs="EPSG:4326",
+            ).set_index(pd.Index([], name="Q_obs_station_ID"))
+            self.set_geom(empty_geom, name="discharge/discharge_snapped_locations")
+
+            self.logger.info("Empty discharge datasets created")
+
+            return
         # convert all the -999 values to NaN
         Q_obs_clipped = Q_obs_clipped.where(Q_obs_clipped != -999, np.nan)
-
-        if len(Q_obs_clipped.id) == 0:
-            # exit function/method
-            self.logger.warning(
-                "No discharge stations found in the region. Skipping discharge observations setup."
-            )
-            return
 
         # check if there are any NaN values in the Q_obs dataset
         discharge_df = Q_obs_clipped.runoff_mean.to_dataframe().reset_index()
@@ -394,10 +394,10 @@ class Observations:
             Q_obs_station = Q_obs_clipped.sel(
                 id=station_id
             )  # select the station from the Q_obs dataset
-            Q_obs_station_name: str = str(
+            Q_obs_station_name = str(
                 Q_obs_station.station_name.values
             )  # get the name of the station
-            Q_obs_station_coords = tuple(
+            Q_obs_station_coords = list(
                 (
                     float(Q_obs_station.x.values),
                     float(Q_obs_station.y.values),
@@ -531,19 +531,19 @@ class Observations:
             )  # get the value of the selected pixel
 
             # make variables for all the different coordinates
-            closest_point_coords = tuple(
+            closest_point_coords = list(
                 (
                     float(closest_point_on_riverline.x),
                     float(closest_point_on_riverline.y),
                 )
             )  # closest point coordinates
-            subgrid_pixel_coords = tuple(
+            subgrid_pixel_coords = list(
                 (
                     float(selected_subgrid_pixel.x.values),
                     float(selected_subgrid_pixel.y.values),
                 )
             )  ## subgrid pixel coordinates
-            grid_pixel_coords = tuple(
+            grid_pixel_coords = list(
                 (
                     float(upstream_area_grid_pixel.x.values),
                     float(upstream_area_grid_pixel.y.values),
@@ -559,8 +559,8 @@ class Observations:
                     "Q_obs_station_coords": Q_obs_station_coords,
                     "closest_point_coords": closest_point_coords,
                     "subgrid_pixel_coords": subgrid_pixel_coords,
-                    "grid_pixel_coords": grid_pixel_coords,
-                    "closest_tuple": closest_tuple,
+                    "snapped_grid_pixel_lonlat": grid_pixel_coords,
+                    "snapped_grid_pixel_xy": closest_tuple,
                     "GEB_upstream_area_from_subgrid": float(
                         GEB_upstream_area_from_subgrid
                     ),
@@ -583,7 +583,6 @@ class Observations:
                 closest_point_coords,
                 closest_river_segment,
                 grid_pixel_coords,
-                max_spatial_difference_degrees,
             )
 
         self.logger.info("Discharge snapping done for all stations")
@@ -599,10 +598,10 @@ class Observations:
         discharge_snapping_gdf = gpd.GeoDataFrame(
             discharge_snapping_df,
             geometry=gpd.points_from_xy(
-                discharge_snapping_df["grid_pixel_coords"].apply(
+                discharge_snapping_df["snapped_grid_pixel_lonlat"].apply(
                     lambda coord: coord[0]
                 ),
-                discharge_snapping_df["grid_pixel_coords"].apply(
+                discharge_snapping_df["snapped_grid_pixel_lonlat"].apply(
                     lambda coord: coord[1]
                 ),
             ),
@@ -616,7 +615,7 @@ class Observations:
             discharge_df, name="discharge/Q_obs"
         )  # save the discharge data as a table
 
-        self.set_geoms(
+        self.set_geom(
             discharge_snapping_gdf, name="discharge/discharge_snapped_locations"
         )
 

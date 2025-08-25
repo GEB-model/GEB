@@ -19,7 +19,7 @@ class Forcing(Module):
         model: The GEB model instance.
     """
 
-    def __init__(self, model):
+    def __init__(self, model) -> None:
         self.model = model
         self._forcings = {}
         self.validators = {
@@ -39,7 +39,7 @@ class Forcing(Module):
         }
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "forcing"
 
     def load_forcing_ds(self, name: str) -> AsyncGriddedForcingReader | xr.DataArray:
@@ -68,7 +68,9 @@ class Forcing(Module):
             assert reader.ds["y"][0] > reader.ds["y"][-1]
         return reader
 
-    def __setitem__(self, name: str, reader: AsyncGriddedForcingReader | xr.DataArray):
+    def __setitem__(
+        self, name: str, reader: AsyncGriddedForcingReader | xr.DataArray
+    ) -> None:
         """Set the forcing data for a given name.
 
         Args:
@@ -134,7 +136,8 @@ class Forcing(Module):
         else:
             data = self[name].read_timestep(time)
         if __debug__ and not self.validators[name](data):
-            data = data.compute()
+            if isinstance(data, xr.DataArray):
+                data = data.values
             raise ValueError(
                 f"Invalid data for {name} at time {time}. "
                 f"\tMin data value: {data.min()}"
@@ -142,8 +145,8 @@ class Forcing(Module):
             )
         return data
 
-    def spinup(self):
+    def spinup(self) -> None:
         pass
 
-    def step(self):
+    def step(self) -> None:
         pass
