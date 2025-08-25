@@ -123,17 +123,9 @@ plantfate = [
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["D"]
+select = ["ANN205", "ANN206", "DOC202", "DOC402", "DOC502"]
 extend-select = ["I"]
-ignore = [
-    "D100",
-    "D101",
-    "D102",
-    "D103",
-    "D104",
-    "D105",
-    "D107"
-]
+preview = true
 
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]
