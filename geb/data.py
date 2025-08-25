@@ -7,6 +7,13 @@ from dateutil.relativedelta import relativedelta
 
 
 class DateIndex:
+    """This class allows for fast lookup of the index of a date in a list of dates.
+
+    Lots of data doesn't have a value for each date. This class allows
+    for fast lookup of the index of a date in a list of dates, so that the right
+    value can be be selected from another indexed object (e.g. a numpy array).
+    """
+
     def __init__(self, dates: list[date | datetime]) -> None:
         """Create a DateIndex object that allows for fast lookup of dates.
 

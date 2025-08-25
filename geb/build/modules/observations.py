@@ -126,6 +126,8 @@ def plot_snapping(
 
 
 class Observations:
+    """Collects, parses and processes observational data for model evaluation."""
+
     def __init__(self) -> None:
         pass
 

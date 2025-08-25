@@ -36,6 +36,8 @@ from ..workflows.population import load_GLOPOP_S
 
 
 class Agents:
+    """Contains all build methods for the agents for GEB."""
+
     def __init__(self) -> None:
         pass
 

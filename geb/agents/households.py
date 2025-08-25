@@ -46,6 +46,8 @@ def from_landuse_raster_to_polygon(mask, transform, crs) -> gpd.GeoDataFrame:
 
 
 class Households(AgentBaseClass):
+    """This class implements the household agents."""
+
     def __init__(self, model, agents, reduncancy: float) -> None:
         super().__init__(model)
 

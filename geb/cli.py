@@ -33,6 +33,12 @@ from geb.workflows.methods import multi_level_merge
 
 
 class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
+    """Custom YAML loader that detects duplicate keys in mappings.
+
+    Raises:
+        ValueError: If a duplicate key is found in the YAML mapping.
+    """
+
     def construct_mapping(self, node, deep=False):
         mapping = {}
         for key_node, value_node in node.value:

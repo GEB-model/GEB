@@ -21,6 +21,8 @@ from ..workflows.farmers import get_farm_locations
 
 
 class Crops:
+    """Contains all build methods for setting up crops for GEB."""
+
     def __init__(self) -> None:
         pass
 

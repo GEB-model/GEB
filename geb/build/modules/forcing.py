@@ -287,6 +287,8 @@ def get_chunk_size(da, target: float | int = 1e8) -> int:
 
 
 class Forcing:
+    """Contains methods to download and process climate forcing data for GEB."""
+
     def __init__(self) -> None:
         pass
 

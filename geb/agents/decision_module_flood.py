@@ -21,6 +21,8 @@ def fast_intersect(a, b):
 
 
 class DecisionModule:
+    """This class implements the decision module for flood adaptation and migration decisions."""
+
     def __init__(self, agents, model) -> None:
         self.agents = agents
         self.model = model
