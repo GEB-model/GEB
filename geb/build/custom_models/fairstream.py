@@ -29,6 +29,8 @@ from ..workflows.general import repeat_grid
 
 
 class Survey:
+    """Base class for parsing and processing survey data."""
+
     def __init__(self) -> None:
         self.mappers = {}
 
@@ -240,6 +242,8 @@ class Survey:
 
 
 class FarmerSurvey(Survey):
+    """Parse and process perfomed farmer survey in the Bhima subbasin."""
+
     def __init__(self) -> None:
         super().__init__()
         # self.password = password
@@ -360,6 +364,8 @@ class FarmerSurvey(Survey):
 
 
 class IHDSSurvey(Survey):
+    """Parse and process Indian IHDS survey data."""
+
     def __init__(self) -> None:
         super().__init__()
         self.bins = {
@@ -644,6 +650,8 @@ class IHDSSurvey(Survey):
 
 
 class fairSTREAMModel(GEBModel):
+    """Custom GEB model with fairSTREAM-specific build methods. Some methods override the standard GEB methods."""
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 

@@ -3,6 +3,8 @@ from numba import njit, prange
 
 
 class DecisionModule:
+    """This class implements the decision module for drought adaptation."""
+
     def __init__(self, agents) -> None:
         self.agents = agents
 

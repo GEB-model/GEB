@@ -77,6 +77,12 @@ def suppress_logging_warning(logger):
 
 
 class PathEncoder(json.JSONEncoder):
+    """Custom JSON encoder to handle Path objects.
+
+    Paths are converted to their string representation in posix format.
+    All files should be posix format to ensure compatibility across different operating systems.
+    """
+
     def default(self, obj):
         if isinstance(obj, Path):
             obj = obj.as_posix()
@@ -507,6 +513,16 @@ def create_riverine_mask(
 
 
 class DelayedReader(dict):
+    """A dictionary that reads data from files only when accessed.
+
+    This is useful because some datasets are very large and reading them
+    all at once would require a lot of memory. Furthermore, when updating the model
+    it is usually not required to have all data in memory. This class allows to
+    read data only when it is actually needed.
+
+    When setting an item, we should not set the actual data, but the file path.
+    """
+
     def __init__(self, reader: Any) -> None:
         self.reader: Any = reader
 
@@ -514,10 +530,24 @@ class DelayedReader(dict):
         fp = super().__getitem__(key)
         return self.reader(fp)
 
+    def __setitem__(self, key: str, value: Any) -> None:
+        if isinstance(value, (str, Path)):
+            super().__setitem__(key, value)
+        else:
+            raise ValueError("Value must be a file path (str or Path).")
+
 
 class GEBModel(
     Hydrography, Forcing, Crops, LandSurface, Agents, GroundWater, Observations
 ):
+    """Main GEB model build class.
+
+    This class contains:
+    - methods to setup the model region and grid
+    - all general methods for example for saving and loading data, calling methods etc.
+    - subclasses all build modules, which contain methods for building specific parts of the model.
+    """
+
     def __init__(
         self,
         logger: logging.Logger,
