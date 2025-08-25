@@ -35,95 +35,96 @@ class HazardDriver:
     def step(self):
         if self.config["hazards"]["floods"]["simulate"]:
             if self.simulate_hydrology:
+                print("sim hydro")
                 self.sfincs.save_discharge_timestep()
                 self.sfincs.save_soil_moisture()
                 self.sfincs.save_max_soil_moisture()
                 self.sfincs.save_soil_storage_capacity()
                 self.sfincs.save_ksat()
-                if not self.spinup:  # Dont detect floods within spinup
-                    if self.config["hazards"]["floods"]["detect_from_discharge"]:
-                        if (
-                            self.next_detection_time
-                            and self.current_time < self.next_detection_time
-                        ):
-                            print(
-                                "Flood has recently happened, no detection"
-                            )  # Within 5 days of the first flood, no second flood can happen
-                        else:
-                            discharge = self.sfincs.save_discharge_step()
-                            if discharge is not None:
-                                discharge_current_step = discharge[
-                                    -1
-                                ]  # last value from discharge deque corresponds to current timestep
+                print(self.spinup)
+                # if not self.spinup:  # Dont detect floods within spinup
+                if self.config["hazards"]["floods"]["detect_from_discharge"]:
+                    print("detectfromdischarge")
+                    if (
+                        self.next_detection_time
+                        and self.current_time < self.next_detection_time
+                    ):
+                        print(
+                            "Flood has recently happened, no detection"
+                        )  # Within 5 days of the first flood, no second flood can happen
+                    else:
+                        discharge = self.sfincs.save_discharge_step()
+                        if discharge is not None:
+                            discharge_current_step = discharge[
+                                -1
+                            ]  # last value from discharge deque corresponds to current timestep
 
-                                # discharge is on hydrology.grid so we can use the spatial information to extract the discharge from a certain location
-                                gt = self.model.hydrology.grid.gt
-                                decompressed_array = self.hydrology.grid.decompress(
-                                    discharge_current_step
+                            # discharge is on hydrology.grid so we can use the spatial information to extract the discharge from a certain location
+                            gt = self.model.hydrology.grid.gt
+                            decompressed_array = self.hydrology.grid.decompress(
+                                discharge_current_step
+                            )
+                            x, y = self.config["hazards"]["floods"][
+                                "threshold_location"
+                            ]
+                            px, py = coord_to_pixel((float(x), float(y)), gt)
+                            try:
+                                discharge_location = decompressed_array[py, px]
+                            except IndexError:
+                                raise IndexError(
+                                    f"The coordinate ({x},{y}) is outside the model domain."
                                 )
-                                x, y = self.config["hazards"]["floods"][
-                                    "threshold_location"
-                                ]
-                                px, py = coord_to_pixel((float(x), float(y)), gt)
-                                try:
-                                    discharge_location = decompressed_array[py, px]
-                                except IndexError:
-                                    raise IndexError(
-                                        f"The coordinate ({x},{y}) is outside the model domain."
+
+                            # Load in user-define discharge_threshold after which there is a flood
+                            threshold = self.config["hazards"]["floods"][
+                                "discharge_threshold"
+                            ]
+                            # check if discharge > discharge
+                            if discharge_location > threshold:
+                                print(
+                                    f"Flood detected at {self.current_time}, discharge = {discharge_location:.2f} "
+                                )
+                                start_time = self.current_time - timedelta(days=5)
+                                end_time = self.current_time + timedelta(days=5)
+
+                                # Block of code to save the start and end time of the detected event
+                                def represent_datetime(dumper, data):
+                                    return dumper.represent_scalar(
+                                        "tag:yaml.org,2002:timestamp",
+                                        data.strftime("%Y-%m-%d %H:%M:%S"),
                                     )
 
-                                # Load in user-define discharge_threshold after which there is a flood
-                                threshold = self.config["hazards"]["floods"][
-                                    "discharge_threshold"
-                                ]
-                                # check if discharge > discharge
-                                if discharge_location > threshold:
+                                yaml.add_representer(datetime, represent_datetime)
+                                new_event = {
+                                    "start_time": start_time,
+                                    "end_time": end_time,
+                                }
+                                # Check if event already exists (exact match on start and end)
+                                existing_events = self.config["hazards"]["floods"].get(
+                                    "events", []
+                                )
+                                event_exists = any(
+                                    e["start_time"] == new_event["start_time"]
+                                    and e["end_time"] == new_event["end_time"]
+                                    for e in existing_events
+                                )
+
+                                if not event_exists:
+                                    self.config["hazards"]["floods"]["events"].append(
+                                        new_event
+                                    )
+                                    config_path = Path.cwd() / "model.yml"
+                                    with open(config_path, "w") as f:
+                                        yaml.safe_dump(self.config, f, sort_keys=False)
+                                    print("Flood event saved to config.")
+                                else:
                                     print(
-                                        f"Flood detected at {self.current_time}, discharge = {discharge_location:.2f} "
-                                    )
-                                    start_time = self.current_time - timedelta(days=5)
-                                    end_time = self.current_time + timedelta(days=5)
-
-                                    # Block of code to save the start and end time of the detected event
-                                    def represent_datetime(dumper, data):
-                                        return dumper.represent_scalar(
-                                            "tag:yaml.org,2002:timestamp",
-                                            data.strftime("%Y-%m-%d %H:%M:%S"),
-                                        )
-
-                                    yaml.add_representer(datetime, represent_datetime)
-                                    new_event = {
-                                        "start_time": start_time,
-                                        "end_time": end_time,
-                                    }
-                                    # Check if event already exists (exact match on start and end)
-                                    existing_events = self.config["hazards"][
-                                        "floods"
-                                    ].get("events", [])
-                                    event_exists = any(
-                                        e["start_time"] == new_event["start_time"]
-                                        and e["end_time"] == new_event["end_time"]
-                                        for e in existing_events
+                                        "Flood event already in config, skipping save."
                                     )
 
-                                    if not event_exists:
-                                        self.config["hazards"]["floods"][
-                                            "events"
-                                        ].append(new_event)
-                                        config_path = Path.cwd() / "model.yml"
-                                        with open(config_path, "w") as f:
-                                            yaml.safe_dump(
-                                                self.config, f, sort_keys=False
-                                            )
-                                        print("Flood event saved to config.")
-                                    else:
-                                        print(
-                                            "Flood event already in config, skipping save."
-                                        )
-
-                                    self.next_detection_time = (
-                                        self.current_time + timedelta(days=5)
-                                    )
+                                self.next_detection_time = (
+                                    self.current_time + timedelta(days=5)
+                                )
 
             for event in self.config["hazards"]["floods"]["events"]:
                 assert isinstance(event["start_time"], datetime), (

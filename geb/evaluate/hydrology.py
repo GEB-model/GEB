@@ -1026,167 +1026,6 @@ class Hydrology:
         """
         print("exporting elements of water balance...")
 
-        # folder = self.model.output_folder / "report" / run_name
-
-        # storage = pd.read_csv(folder / "hydrology" / "storage.csv")
-        # storage_change = storage.iloc[-1]["storage"] - storage.iloc[0]["storage"]
-
-        # # Inputs to hydrological cycle
-        # rain = pd.read_csv(
-        #     folder / "hydrology.snowfrost" / "rain.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # snow = pd.read_csv(
-        #     folder / "hydrology.snowfrost" / "snow.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-
-        # # Water loss because of human influence
-        # domestic_water_loss = pd.read_csv(
-        #     folder / "hydrology.water_demand" / "domestic water loss.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # industry_water_loss = pd.read_csv(
-        #     folder / "hydrology.water_demand" / "industry water loss.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # livestock_water_loss = pd.read_csv(
-        #     folder / "hydrology.water_demand" / "livestock water loss.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-
-        # # River outflow
-        # river_outflow = pd.read_csv(
-        #     folder / "hydrology.routing" / "river outflow.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # GEB_discharge = open_zarr(
-        #         self.model.output_folder
-        #         / "report"
-        #         / run_name
-        #         / "hydrology.routing"
-        #         / "discharge_daily.zarr"
-        #     )
-        # snapped_locations = gpd.read_parquet(
-        #     self.model.files["geoms"]["discharge/discharge_snapped_locations"]
-        # )  # load the snapped locations of the Q_obs stations
-        # Q_obs = pd.read_parquet(
-        #     self.model.files["table"]["discharge/Q_obs"]
-        # )  # load the Q_obs discharge data
-
-        #    # start validation loop over Q_obs stations
-        # for ID in tqdm(Q_obs.columns):
-        #     # create a discharge timeseries dataframe
-        #     discharge_Q_obs_df = Q_obs[ID]
-        #     discharge_Q_obs_df.columns = ["Q"]
-        #     discharge_Q_obs_df.name = "Q"
-        #     # extract the properties from the snapping dataframe
-        #     Q_obs_station_name = snapped_locations.loc[ID].Q_obs_station_name
-        #     snapped_xy_coords = snapped_locations.loc[ID].closest_tuple
-        #     Q_obs_station_coords = snapped_locations.loc[ID].Q_obs_station_coords
-        #     Q_obs_to_GEB_upstream_area_ratio = snapped_locations.loc[
-        #         ID
-        #     ].Q_obs_to_GEB_upstream_area_ratio
-
-        #     def create_validation_df():
-        #         """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station."""
-        #         # select data closest to meerssen point
-        #         GEB_discharge_station = GEB_discharge.isel(
-        #             x=snapped_xy_coords[0], y=snapped_xy_coords[1]
-        #         )  # select the pixel in the grid that corresponds to the selected hydrography_xy value
-        #         # rename xarray dataarray to Q
-        #         GEB_discharge_station.name = "Q"
-        #         discharge_sim_station_df = GEB_discharge_station.to_dataframe()
-        #         discharge_sim_station_df = discharge_sim_station_df["Q"]
-        #         discharge_sim_station_df.index.name = "time"  # rename index to time
-
-        #         # merge to one df but keep only the rows where both have data
-        #         validation_df = pd.merge(
-        #             discharge_Q_obs_df,
-        #             discharge_sim_station_df,
-        #             left_index=True,
-        #             right_index=True,
-        #             how="inner",
-        #             suffixes=("_obs", "_sim"),
-        #         )  # merge the two dataframes on the index (time)
-
-        #         validation_df.dropna(how="any", inplace=True)  # drop rows with nans
-
-        #         return validation_df
-
-        #     validation_df = create_validation_df()
-
-        #     observed_discharge = validation_df["Q_obs"]
-        #     simulated_discharge = validation_df["Q_sim"]
-
-        # # All evaporation related outflows/losses
-        # transpiration = pd.read_csv(
-        #     folder / "hydrology.landcover" / "transpiration.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # bare_soil_evaporation = pd.read_csv(
-        #     folder / "hydrology.landcover" / "bare soil evaporation.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # direct_evaporation = pd.read_csv(
-        #     folder / "hydrology.landcover" / "direct evaporation.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # interception_evaporation = pd.read_csv(
-        #     folder / "hydrology.landcover" / "interception evaporation.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # snow_sublimation = pd.read_csv(
-        #     folder / "hydrology.landcover" / "snow sublimation.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # river_evaporation = pd.read_csv(
-        #     folder / "hydrology.routing" / "river evaporation.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # waterbody_evaporation = pd.read_csv(
-        #     folder / "hydrology.routing" / "waterbody evaporation.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-
-        # # Fluxes within system
-        # infiltration = pd.read_csv(
-        #     folder / "hydrology.soil" / "infiltration.csv",
-        #     index_col=0,
-        #     parse_dates=True,
-        # )
-        # groundwater_recharge = pd.read_csv(
-        #     folder / "hydrology.soil" / "groundwater_recharge.csv",
-        #     index_col=0,
-        #     parse_dates=True,)
-        # runoff =  pd.read_csv(
-        #     folder / "hydrology.soil" / "runoff.csv",
-        #     index_col=0,
-        #     parse_dates=True,)
-        # throughfall = pd.read_csv(
-        #     folder / "hydrology.interception" / "throughfall.csv",
-        #     index_col=0,
-        #     parse_dates=True,)
-
-        # # Storage in system
-        # groundwater_recharge = pd.read_csv(
-        #     folder / "hydrology.groundwater" / "groundwater_content_mean.csv",
-        #     index_col=0,
-        #     parse_dates=True,)
-
         folder = self.model.output_folder / "report" / run_name
 
         # === Helper to load CSV with datetime index ===
@@ -1204,16 +1043,22 @@ class Hydrology:
         )
 
         Q_all_df = pd.DataFrame()
-        for station_id in Q_obs.columns:
-            discharge_Q_obs_df = Q_obs[station_id].rename(f"{station_id}_obs")
-            snapped_xy_coords = snapped_locations.loc[station_id].closest_tuple
-            GEB_discharge_station = GEB_discharge.isel(
-                x=snapped_xy_coords[0], y=snapped_xy_coords[1]
-            ).to_dataframe()
-            GEB_discharge_station.index.name = "time"
-            GEB_discharge_station.name = f"{station_id}_sim"
-            discharge_Q_sim_df = GEB_discharge_station
 
+        for station_id in Q_obs.columns:
+            # Observed discharge series
+            discharge_Q_obs_df = Q_obs[station_id].rename(f"{station_id}_obs")
+
+            # Get the closest grid cell coordinates
+            snapped_xy_coords = snapped_locations.loc[station_id].closest_tuple
+
+            # Simulated discharge series (only values)
+            discharge_Q_sim_df = (
+                GEB_discharge.isel(x=snapped_xy_coords[0], y=snapped_xy_coords[1])
+                .to_series()
+                .rename(f"{station_id}_sim")
+            )
+
+            # Merge observed and simulated for this station
             merged_station_df = pd.merge(
                 discharge_Q_obs_df,
                 discharge_Q_sim_df,
@@ -1221,101 +1066,61 @@ class Hydrology:
                 right_index=True,
                 how="inner",
             )
+
+            # Concatenate to the full dataframe
             Q_all_df = pd.concat([Q_all_df, merged_station_df], axis=1)
-
-        # === Inputs ===
-        # river_outflow = load_csv(
-        #     folder / "hydrology.routing" / "river outflow.csv", "river_outflow"
-        # )
-        # rain = load_csv(folder / "hydrology.interception" / "rain.csv", "rain")
-        # snow = load_csv(folder / "hydrology.snowfrost" / "snow.csv", "snowfall")
-
-        # # === Evaporation losses ===
-        # transpiration = load_csv(
-        #     folder / "hydrology.soil" / "transpiration.csv", "transpiration"
-        # )
-        # bare_soil_evaporation = load_csv(
-        #     folder / "hydrology.landcover" / "bare soil evaporation.csv",
-        #     "bare_soil_evap",
-        # )
-        # direct_evaporation = load_csv(
-        #     folder / "hydrology.landcover" / "direct evaporation.csv", "direct_evap"
-        # )
-        # interception_evaporation = load_csv(
-        #     folder / "hydrology.landcover" / "interception evaporation.csv",
-        #     "interception_evap",
-        # )
-        # snow_sublimation = load_csv(
-        #     folder / "hydrology.landcover" / "snow sublimation.csv", "snow_sublimation"
-        # )
-        # river_evaporation = load_csv(
-        #     folder / "hydrology.routing" / "river evaporation.csv", "river_evap"
-        # )
-        # waterbody_evaporation = load_csv(
-        #     folder / "hydrology.routing" / "waterbody evaporation.csv", "waterbody_evap"
-        # )
-
-        # # === Human water losses ===
-        # domestic_water_loss = load_csv(
-        #     folder / "hydrology.water_demand" / "domestic water loss.csv",
-        #     "domestic_water_loss",
-        # )
-        # industry_water_loss = load_csv(
-        #     folder / "hydrology.water_demand" / "industry water loss.csv",
-        #     "industry_water_loss",
-        # )
-        # livestock_water_loss = load_csv(
-        #     folder / "hydrology.water_demand" / "livestock water loss.csv",
-        #     "livestock_water_loss",
-        # )
-
-        # # === Fluxes ===
-        # infiltration = load_csv(
-        #     folder / "hydrology.soil" / "infiltration.csv", "infiltration"
-        # )
-        # groundwater_recharge = load_csv(
-        #     folder / "hydrology.soil" / "groundwater_recharge.csv", "gw_recharge"
-        # )
-        # runoff = load_csv(folder / "hydrology.soil" / "runoff.csv", "runoff")
-        # throughfall = load_csv(
-        #     folder / "hydrology.interception" / "throughfall.csv", "throughfall"
-        # )
-
-        # # === Storage ===
-        # gw_content = load_csv(
-        #     folder / "hydrology.groundwater" / "groundwater_content_mean.csv",
-        #     "gw_content",
-        # )
 
         # === Merge all in column order ===
         all_df = pd.concat(
             [
                 Q_all_df,
-                # river_outflow,
-                # rain,
-                # snow,
-                # transpiration,
-                # bare_soil_evaporation,
-                # direct_evaporation,
-                # interception_evaporation,
-                # snow_sublimation,
-                # river_evaporation,
-                # waterbody_evaporation,
-                # domestic_water_loss,
-                # industry_water_loss,
-                # livestock_water_loss,
-                # infiltration,
-                # groundwater_recharge,
-                # runoff,
-                # throughfall,
-                # gw_content,
             ],
             axis=1,
         )
 
-        # === Aggregate yearly ===
-        yearly_df = all_df.resample("Y").sum(min_count=1)
-        yearly_df.index = yearly_df.index.year
+        # === Aggregate yearly totals per station (wide format) ===
+        yearly_totals = {}
+
+        # Detect years from the index
+        years = pd.DatetimeIndex(all_df.index).year.unique()
+        years = sorted(years)
+
+        for year in years:
+            start = f"{year}-01-01"
+            end = f"{year}-12-31 23:59:59"
+            yearly_data = {}
+            for station_id in Q_obs.columns:
+                obs_col = f"{station_id}_obs"
+                sim_col = f"{station_id}_sim"
+
+                # Sum observed
+                if obs_col in all_df.columns:
+                    obs_year = all_df.loc[start:end, obs_col]
+                    total_obs_Mm3 = (obs_year * 86400).sum() / 1e6
+                else:
+                    total_obs_Mm3 = None
+                # Sum simulated
+                if sim_col in all_df.columns:
+                    sim_year = all_df.loc[start:end, sim_col]
+                    total_sim_Mm3 = (sim_year * 86400).sum() / 1e6
+                else:
+                    total_sim_Mm3 = None
+
+                yearly_data[f"{station_id}_obs"] = (
+                    round(total_obs_Mm3, 2) if total_obs_Mm3 is not None else None
+                )
+                yearly_data[f"{station_id}_sim"] = (
+                    float(round(total_sim_Mm3, 2))
+                    if total_sim_Mm3 is not None
+                    else None
+                )
+
+                yearly_totals[year] = yearly_data
+
+        # Convert to DataFrame
+        yearly_df = pd.DataFrame.from_dict(yearly_totals, orient="index")
+        yearly_df.index.name = "Year"
+        yearly_df = yearly_df.round(2)
 
         # === Export ===
         out_path = folder / "water_balance_summary.csv"
@@ -1590,6 +1395,11 @@ class Hydrology:
                 / "discharge_daily.zarr"
             )
 
+            GEB_precip = open_zarr(self.model.files["other"]["climate/pr"])
+            GEB_precip_hourly = open_zarr(
+                self.model.files["other"]["climate/pr_hourly"]
+            )
+
             # check if run file exists, if not, raise an error
             if not (self.model.output_folder / "report" / run_name).exists():
                 raise FileNotFoundError(
@@ -1599,33 +1409,58 @@ class Hydrology:
             # Get the discharge from the user-defined threshold location
             x, y = self.config["hazards"]["floods"]["threshold_location"]
             GEB_discharge_station = GEB_discharge.sel(x=x, y=y, method="nearest")
+            print(GEB_discharge_station)
             threshold = self.config["hazards"]["floods"]["discharge_threshold"]
 
             # Loop over events
             for event in self.config["hazards"]["floods"]["events"]:
-                # Convert to datetime if strings
-                start_time = event["start_time"]
-                end_time = event["end_time"]
-                # if isinstance(start_time, str):
-                #     start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-                # if isinstance(end_time, str):
-                #     end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
+                # ensure pandas Timestamps aligned to daily data
+                start_time = pd.to_datetime(event["start_time"]).normalize()
+                end_time = pd.to_datetime(event["end_time"]).normalize()
+                print(start_time)
+                print(end_time)
 
-                # Select discharge for the event window
-                sel_data = GEB_discharge_station.sel(time=slice(start_time, end_time))
+                sel_discharge = GEB_discharge_station.sel(
+                    time=slice(start_time, end_time)
+                )
+                print(sel_discharge)
+
+                # Select precip for the event window
+                GEB_precip_station = GEB_precip.sel(x=x, y=y, method="nearest")
+                sel_precip = GEB_precip_station.sel(time=slice(start_time, end_time))
 
                 # Plot
-                fig, ax = plt.subplots(figsize=(10, 5))
-                sel_data.plot(ax=ax, label="Discharge")
-                ax.axhline(threshold, color="red", linestyle="--", label="Threshold")
+                fig, ax1 = plt.subplots(figsize=(10, 5))
 
-                ax.set_title(
+                sel_discharge.plot(ax=ax1, label="Discharge", color="blue")
+                ax1.axhline(threshold, color="red", linestyle="--", label="Threshold")
+                ax1.set_ylabel("Discharge (m³/s)", color="black")
+                ax1.tick_params(axis="y", labelcolor="black")
+
+                # Precipitation (bar plot on second axis)
+                ax2 = ax1.twinx()
+                ax2.bar(
+                    sel_precip.time.values,
+                    sel_precip.values,
+                    width=0.8,
+                    alpha=0.3,
+                    color="skyblue",
+                    label="Precipitation",
+                )
+                ax2.set_ylabel("Precipitation (mm/day)", color="black")
+                ax2.tick_params(axis="y", labelcolor="black")
+
+                # Title, labels, grid
+                ax1.set_title(
                     f"Flood Event {start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')}"
                 )
-                ax.set_xlabel("Time")
-                ax.set_ylabel("Discharge (m³/s)")
-                ax.legend()
-                ax.grid(True, linestyle="--", alpha=0.5)
+                ax1.set_xlabel("Time")
+                ax1.grid(True, linestyle="--", alpha=0.5)
+
+                # Legends
+                lines, labels = ax1.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax1.legend(lines + lines2, labels + labels2, loc="upper left")
 
                 # Save plot
                 plot_filename = f"{start_time.strftime('%Y%m%dT%H%M%S')} - {end_time.strftime('%Y%m%dT%H%M%S')}.png"
