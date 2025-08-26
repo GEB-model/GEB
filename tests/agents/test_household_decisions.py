@@ -55,6 +55,12 @@ def test_expenditure_cap() -> None:
     decision_module = DecisionModule(model=None, agents=None)
     decision_template = create_decision_template()
 
+    # quick basic test
+    EU_do_not_adapt = decision_module.calcEU_do_nothing(**decision_template)
+    assert all(EU_do_not_adapt > -np.inf), (
+        "Expected all EU_do_not_adapt values to be greater than -inf as there are no budget constraints"
+    )
+
     # make sure an expendature cap results in no adaptation
     decision_template["expendature_cap"] = 0
     EU_adapt = decision_module.calcEU_adapt(**decision_template)
@@ -80,4 +86,43 @@ def test_expenditure_cap() -> None:
 
 
 def test_risk_perception():
-    pass
+    decision_module = DecisionModule(model=None, agents=None)
+    decision_template = create_decision_template()
+    decision_template["expendature_cap"] = 10  # ensure all can adapt
+    decision_template["risk_perception"] = np.full(decision_template["n_agents"], 0.01)
+    EU_do_nothing_low_risk_perception = decision_module.calcEU_do_nothing(
+        **decision_template
+    )
+    decision_template["risk_perception"] = np.full(decision_template["n_agents"], 10)
+    EU_do_nothing_high_risk_perception = decision_module.calcEU_do_nothing(
+        **decision_template
+    )
+    # make sure EU_do_nothing_high_risk_perception EU of adaptation is
+    assert all(
+        EU_do_nothing_low_risk_perception > EU_do_nothing_high_risk_perception
+    ), "Expected EU_do_nothing_low to be greater than EU_do_nothing_high"
+
+
+def test_damages():
+    decision_module = DecisionModule(model=None, agents=None)
+    decision_template = create_decision_template()
+
+    # make sure all can adapt and behave rationally
+    decision_template["expendature_cap"] = 10
+    decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
+    # set damages under adaptation to zero
+    decision_template["expected_damages_adapt"] *= 0
+
+    # calculate EU
+    EU_adapt = decision_module.calcEU_adapt(**decision_template)
+    EU_do_not_adapt = decision_module.calcEU_do_nothing(**decision_template)
+    assert all(EU_adapt > EU_do_not_adapt), (
+        "Expected all EU_adapt values to be greater than EU_do_not_adapt"
+    )
+
+    # now check with no effect of adaptation on damage
+    decision_template["expected_damages_adapt"] = decision_template["expected_damages"]
+    EU_adapt_no_effect = decision_module.calcEU_adapt(**decision_template)
+    assert all(EU_adapt_no_effect < EU_do_not_adapt), (
+        "Expected all EU_adapt_no_effect values to be less than EU_do_not_adapt"
+    )
