@@ -1,13 +1,15 @@
 """Test suite for household decision making module."""
 
 import numpy as np
+from pytest import fixture
 
 from geb.agents.decision_module_flood import (
     DecisionModule,
 )  # update to now decision model after merge
 
 
-def create_decision_template() -> None:
+@fixture
+def decision_template() -> None:
     """This function creates a decision template for the decision module"""
     geom_id = "<GeoID>"
     n_agents = 100
@@ -54,10 +56,9 @@ def create_decision_template() -> None:
     return decision_template
 
 
-def test_expenditure_cap() -> None:
+def test_expenditure_cap(decision_template) -> None:
     """This function tests the functionality of the expenditure cap"""
     decision_module = DecisionModule(model=None, agents=None)
-    decision_template = create_decision_template()
 
     # quick basic test
     EU_do_not_adapt = decision_module.calcEU_do_nothing(**decision_template)
@@ -89,10 +90,9 @@ def test_expenditure_cap() -> None:
     )
 
 
-def test_risk_perception() -> None:
+def test_risk_perception(decision_template) -> None:
     """This function tests the functionality of risk perception"""
     decision_module = DecisionModule(model=None, agents=None)
-    decision_template = create_decision_template()
     decision_template["expendature_cap"] = 10  # ensure all can adapt
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 0.01)
     EU_do_nothing_low_risk_perception = decision_module.calcEU_do_nothing(
@@ -108,10 +108,9 @@ def test_risk_perception() -> None:
     ), "Expected EU_do_nothing_low to be greater than EU_do_nothing_high"
 
 
-def test_damages() -> None:
+def test_damages(decision_template) -> None:
     """This function tests the functionality of damages with and without adaptation"""
     decision_module = DecisionModule(model=None, agents=None)
-    decision_template = create_decision_template()
 
     # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
