@@ -424,7 +424,7 @@ class DecisionModule:
         return self.calcEU_adapt_drought_numba(**kwargs)
 
     @staticmethod
-    def calcEU_adapt_vectorized(
+    def calcEU_adapt_drought_vectorized(
         *,
         expenditure_cap: float,
         loan_duration: int,
