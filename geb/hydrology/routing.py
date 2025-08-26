@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 import pyflwdir
@@ -533,7 +535,11 @@ class Accuflux(Router):
     """
 
     def __init__(
-        self, dt: float | int, river_network: pyflwdir.FlwdirRaster, *args, **kwargs
+        self,
+        dt: float | int,
+        river_network: pyflwdir.FlwdirRaster,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         super().__init__(dt, river_network, *args, **kwargs)
 

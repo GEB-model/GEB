@@ -1,3 +1,8 @@
+from typing import Any
+
+import numpy as np
+
+
 def multi_level_merge(dict1: dict, dict2: dict) -> dict:
     """Recursively merges two dictionaries, updating dict1 with values from dict2.
 
@@ -18,3 +23,27 @@ def multi_level_merge(dict1: dict, dict2: dict) -> dict:
         else:
             dict1[key] = value
     return dict1
+
+
+def multi_set(dict_obj: dict, value: Any, *attrs: str) -> None:
+    """Set a value in a nested dictionary using a sequence of keys.
+
+    Args:
+        dict_obj: The dictionary to modify.
+        value: The value to set.
+        *attrs: A sequence of keys representing the path to the target value.
+
+    Raises:
+        KeyError: If any key in the path does not exist in the dictionary.
+    """
+    d = dict_obj
+    for attr in attrs[:-1]:
+        d = d[attr]
+    if attrs[-1] not in d:
+        raise KeyError(f"Key {attrs} does not exist in config file.")
+
+    # Check if the value is a numpy scalar and convert it if necessary
+    if isinstance(value, np.generic):
+        value = value.item()
+
+    d[attrs[-1]] = value

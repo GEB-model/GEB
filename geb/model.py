@@ -459,7 +459,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         rp_maps_riverine = self.sfincs.get_riverine_return_period_maps()
         self.sfincs.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
 
-    def evaluate(self, *args, **kwargs) -> None:
+    def evaluate(self, *args: Any, **kwargs: Any) -> None:
+        """Call the evaluator to evaluate the model results."""
         print("Evaluating model...")
         self.evaluator.run(*args, **kwargs)
 

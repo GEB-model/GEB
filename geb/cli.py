@@ -141,7 +141,7 @@ def click_config(func):
         help=f"Path of the model configuration file. Defaults to '{default}'.",
     )
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any):
         return func(*args, **kwargs)
 
     return wrapper
@@ -155,7 +155,7 @@ def working_directory_option(func):
         help="Working directory for model. Default is the current directory.",
     )
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any):
         return func(*args, **kwargs)
 
     return wrapper
@@ -193,7 +193,7 @@ def click_run_options():
         )
         @click.option("--timing", is_flag=True, help="Run GEB with timing.")
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any):
             return func(*args, **kwargs)
 
         return wrapper
@@ -301,20 +301,20 @@ def run_model_with_method(
 
 @cli.command()
 @click_run_options()
-def run(*args, **kwargs) -> None:
+def run(*args: Any, **kwargs: Any) -> None:
     run_model_with_method(method="run", *args, **kwargs)
 
 
 @cli.command()
 @click_run_options()
-def spinup(*args, **kwargs) -> None:
+def spinup(*args: Any, **kwargs: Any) -> None:
     run_model_with_method(method="spinup", *args, **kwargs)
 
 
 @cli.command()
 @click.argument("method", required=True)
 @click_run_options()
-def exec(method, *args, **kwargs) -> None:
+def exec(method, *args: Any, **kwargs: Any) -> None:
     run_model_with_method(method=method, *args, **kwargs)
 
 
@@ -393,7 +393,7 @@ def click_build_options(build_config="build.yml", build_config_help_extra=None):
             help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any):
             return func(*args, **kwargs)
 
         return wrapper
@@ -574,7 +574,7 @@ def init_fn(
     help="If set, overwrite existing config and build config files.",
 )
 @working_directory_option
-def init(*args, **kwargs) -> None:
+def init(*args: Any, **kwargs: Any) -> None:
     """Initialize a new model."""
     # Initialize the model with the given config and build config
     init_fn(*args, **kwargs)
@@ -606,7 +606,7 @@ def build_fn(
 
 @cli.command()
 @click_build_options()
-def build(*args, **kwargs) -> None:
+def build(*args: Any, **kwargs: Any) -> None:
     build_fn(*args, **kwargs)
 
 
@@ -666,7 +666,7 @@ def alter_fn(
 @cli.command()
 @click_build_options()
 @click.option("--from-model", default="../base", help="Folder for the existing model.")
-def alter(*args, **kwargs) -> None:
+def alter(*args: Any, **kwargs: Any) -> None:
     """Create alternative version from base model with only changed files.
 
     This command is useful to create a new model based on an existing one, but with
@@ -773,7 +773,7 @@ def update_fn(
     build_config="update.yml",
     build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
 )
-def update(*args, **kwargs) -> None:
+def update(*args: Any, **kwargs: Any) -> None:
     update_fn(*args, **kwargs)
 
 
@@ -939,7 +939,7 @@ def share_fn(working_directory, name, include_preprocessing, include_output) -> 
     default=False,
     help="Include output files in the zip file.",
 )
-def share(*args, **kwargs) -> None:
+def share(*args: Any, **kwargs: Any) -> None:
     """Share model as a zip file."""
     share_fn(*args, **kwargs)
 

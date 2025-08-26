@@ -4285,7 +4285,7 @@ class CropFarmers(AgentBaseClass):
 
         return yield_ratios_drought_event
 
-    def create_unique_groups(self, *additional_diffentiators):
+    def create_unique_groups(self, *additional_diffentiators: npt.NDarray):
         """Create unique groups based on elevation data and merge with crop calendar.
 
         Returns:
@@ -4682,7 +4682,7 @@ class CropFarmers(AgentBaseClass):
         assert not np.isnan(groundwater_depth).any(), "groundwater depth is nan"
         return groundwater_depth
 
-    def create_farmer_classes(self, *characteristics):
+    def create_farmer_classes(self, *characteristics: np.ndarray) -> np.ndarray:
         agent_classes = np.unique(
             np.stack(characteristics), axis=1, return_inverse=True
         )[1]

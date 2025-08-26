@@ -32,7 +32,9 @@ class Hydrology:
     def __init__(self) -> None:
         pass
 
-    def plot_discharge(self, run_name: str = "default", *args, **kwargs) -> None:
+    def plot_discharge(
+        self, run_name: str = "default", *args: Any, **kwargs: Any
+    ) -> None:
         """Plot the mean discharge from the GEB model as a spatial map.
 
         Creates a spatial visualization of mean discharge values over time from the GEB model
@@ -989,9 +991,9 @@ class Hydrology:
         run_name: str,
         include_spinup: bool,
         spinup_name: str,
-        *args,
-        export=True,
-        **kwargs,
+        *args: Any,
+        export: bool = True,
+        **kwargs: Any,
     ) -> None:
         """Create a water circle plot for the GEB model.
 
@@ -1250,7 +1252,7 @@ class Hydrology:
         return water_circle
 
     def evaluate_hydrodynamics(
-        self, run_name: str = "default", *args, **kwargs
+        self, run_name: str = "default", *args: Any, **kwargs: Any
     ) -> None:
         """Evaluate hydrodynamic model performance against flood observations.
 

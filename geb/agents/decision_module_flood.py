@@ -132,7 +132,6 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
         sigma: float,
-        **kwargs,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
@@ -249,7 +248,6 @@ class DecisionModule:
         r: float,
         sigma: float,
         deductable=0.1,
-        **kwargs,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
@@ -362,7 +360,6 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
         sigma: float,
-        **kwargs,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 

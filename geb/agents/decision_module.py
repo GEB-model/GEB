@@ -72,7 +72,6 @@ class DecisionModule:
         discount_rate: float,
         sigma: float,
         subjective: bool = True,
-        **kwargs,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
@@ -291,7 +290,7 @@ class DecisionModule:
 
         return EU_adapt
 
-    def calcEU_adapt(self, **kwargs):
+    def calcEU_adapt(self, **kwargs: Any):
         assert kwargs["adapted"].dtype == bool
         return self.calcEU_adapt_numba(**kwargs)
 

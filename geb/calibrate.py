@@ -23,10 +23,11 @@ import sys
 import time
 import traceback
 from copy import deepcopy
-from functools import partial, wraps
+from functools import partial
 from io import StringIO
 from pathlib import Path
 from subprocess import Popen
+from typing import Any
 
 import geopandas as gpd
 import joblib
@@ -37,6 +38,12 @@ import yaml
 from deap import algorithms, base, creator, tools
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold
+from workflows.methods import multi_set
+from workflows.multiprocessing import (
+    handle_ctrl_c,
+    init_pool,
+    pool_ctrl_c_handler,
+)
 
 
 def KGE_calculation(s, o):
@@ -148,39 +155,6 @@ def get_observed_well_ratio(config):
         total_holdings_with_well_observed / total_holdings_observed
     )
     return ratio_holdings_with_well_observed
-
-
-def handle_ctrl_c(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        global ctrl_c_entered
-        if not ctrl_c_entered:
-            signal.signal(signal.SIGINT, default_sigint_handler)  # the default
-            try:
-                return func(*args, **kwargs)
-            except KeyboardInterrupt:
-                ctrl_c_entered = True
-                return KeyboardInterrupt
-            finally:
-                signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-        else:
-            return KeyboardInterrupt
-
-    return wrapper
-
-
-def pool_ctrl_c_handler(*args, **kwargs) -> None:
-    global ctrl_c_entered
-    ctrl_c_entered = True
-
-
-def multi_set(dict_obj, value, *attrs) -> None:
-    d = dict_obj
-    for attr in attrs[:-1]:
-        d = d[attr]
-    if attrs[-1] not in d:
-        raise KeyError(f"Key {attrs} does not exist in config file.")
-    d[attrs[-1]] = value
 
 
 def get_irrigation_wells_score(run_directory, individual, config):
@@ -1669,23 +1643,6 @@ def run_model(individual, config, gauges, observed_streamflow):
     return tuple(scores)
 
 
-def init_pool(
-    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
-) -> None:
-    """Initialize the global variables for the process pool."""
-    global ctrl_c_entered
-    global default_sigint_handler
-    ctrl_c_entered = False
-    default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-
-    global lock
-    global current_gpu_use_count
-    global n_gpu_spots
-    n_gpu_spots = gpus * models_per_gpu
-    lock = manager_lock
-    current_gpu_use_count = manager_current_gpu_use_count
-
-
 def calibrate(config, working_directory) -> None:
     calibration_config = config["calibration"]
 
@@ -1762,8 +1719,8 @@ def calibrate(config, working_directory) -> None:
 
     def checkBounds(min_val, max_val):
         def decorator(func):
-            def wrappper(*args, **kargs):
-                offspring = func(*args, **kargs)
+            def wrappper(*args: Any, **kwargs: Any):
+                offspring = func(*args, **kwargs)
                 for child in offspring:
                     for i in range(len(child)):
                         if child[i] > max_val:

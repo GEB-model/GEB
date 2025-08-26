@@ -695,7 +695,9 @@ class Forcing:
         da.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
         da.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
 
-    def set_pr_hourly(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_pr_hourly(
+        self, da: xr.DataArray, *args: Any, **kwargs: Any
+    ) -> xr.DataArray:
         name: str = "climate/pr_hourly"
         da.attrs = {
             "standard_name": "precipitation_flux",
@@ -736,7 +738,7 @@ class Forcing:
         )
         return da
 
-    def set_pr(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_pr(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/pr"
         da.attrs = {
             "standard_name": "precipitation_flux",
@@ -778,7 +780,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_rsds(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_rsds(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/rsds"
         da.attrs = {
             "standard_name": "surface_downwelling_shortwave_flux_in_air",
@@ -813,7 +815,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_rlds(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_rlds(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/rlds"
         da.attrs = {
             "standard_name": "surface_downwelling_longwave_flux_in_air",
@@ -848,7 +850,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tas(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_tas(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/tas"
         da.attrs = {
             "standard_name": "air_temperature",
@@ -887,7 +889,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tasmax(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_tasmax(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/tasmax"
         da.attrs = {
             "standard_name": "air_temperature",
@@ -925,7 +927,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tasmin(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_tasmin(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/tasmin"
         da.attrs = {
             "standard_name": "air_temperature",
@@ -963,7 +965,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_hurs(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_hurs(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/hurs"
         da.attrs = {
             "standard_name": "relative_humidity",
@@ -1016,7 +1018,7 @@ class Forcing:
         da: xr.DataArray = da_.transpose(*da.dims)
         return da
 
-    def set_ps(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_ps(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/ps"
         da.attrs = {
             "standard_name": "surface_air_pressure",
@@ -1053,7 +1055,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_sfcwind(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_sfcwind(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/sfcwind"
         da.attrs = {
             "standard_name": "wind_speed",
@@ -1089,7 +1091,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_SPEI(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_SPEI(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/SPEI"
         da.attrs = {
             "units": "-",

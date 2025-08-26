@@ -17,6 +17,7 @@ from typing import Any, Callable, List, Union
 import geopandas as gpd
 import networkx
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import pyflwdir
 import rasterio
@@ -90,7 +91,9 @@ class PathEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
+def boolean_mask_to_graph(
+    mask: npt.NDAray[np.bool_], connectivity: int = 4, **kwargs: npt.NDArray[Any]
+) -> networkx.Graph:
     """Convert a boolean mask to an undirected NetworkX graph.
 
     Additional attributes can be passed as keyword arguments, which
@@ -99,7 +102,7 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     Args:
         mask (xarray.DataArray or numpy.ndarray):
             Boolean mask where True values are nodes in the graph
-        connectivity (int):
+        connectivity:
             4 for von Neumann neighborhood (up, down, left, right)
             8 for Moore neighborhood (includes diagonals)
         **kwargs:
@@ -163,7 +166,29 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     return G
 
 
-def clip_region(mask, *data_arrays, align):
+def clip_region(
+    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int
+) -> tuple[xr.DataArray, ...]:
+    """Use the given mask to clip the mask itself and the given data arrays.
+
+    The clipping is done to the bounding box of the True values in the mask. The bounding box
+    is aligned to the given align value. The align value is in the same units as the coordinates
+    of the mask and data arrays.
+
+    Args:
+        mask: The mask to use for clipping. Must be a 2D boolean DataArray with x and y coordinates.
+            True values indicate the area to keep.
+        *data_arrays: The data arrays to clip. Must have the same x and y coordinates as the mask.
+        align: Align the bounding box to a specific grid spacing. For example, when this is set to 1
+            the bounding box will be aligned to whole numbers. If set to 0.5, the bounding box will
+            be aligned to 0.5 intervals.
+
+    Returns:
+        A tuple containing the clipped mask and the clipped data arrays.
+
+    Raises:
+        ValueError: If the data arrays do not have the same shape or coordinates as the mask.
+    """
     rows, cols = np.where(mask)
     mincol = cols.min()
     maxcol = cols.max()
@@ -192,19 +217,25 @@ def clip_region(mask, *data_arrays, align):
     assert minrow_aligned <= minrow
     assert maxrow_aligned >= maxrow
 
-    mask = mask.isel(
+    clipped_mask = mask.isel(
         y=slice(minrow_aligned, maxrow_aligned),
         x=slice(mincol_aligned, maxcol_aligned),
     )
-    sliced_arrays = []
+    clipped_arrays = []
     for da in data_arrays:
-        sliced_arrays.append(
+        if da.shape != mask.shape:
+            raise ValueError("All data arrays must have the same shape as the mask.")
+        if not np.array_equal(da.x, mask.x) or not np.array_equal(da.y, mask.y):
+            raise ValueError(
+                "All data arrays must have the same coordinates as the mask."
+            )
+        clipped_arrays.append(
             da.isel(
                 y=slice(minrow_aligned, maxrow_aligned),
                 x=slice(mincol_aligned, maxcol_aligned),
             )
         )
-    return mask, *sliced_arrays
+    return clipped_mask, *clipped_arrays
 
 
 def get_river_graph(data_catalog):
@@ -465,7 +496,7 @@ def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
     return coastline_nodes
 
 
-def full_like(data, fill_value, nodata, attrs=None, *args, **kwargs):
+def full_like(data, fill_value, nodata, attrs=None, *args: Any, **kwargs: Any):
     ds = xr.full_like(data, fill_value, *args, **kwargs)
     ds.attrs = attrs or {}
     ds.attrs["_FillValue"] = nodata
@@ -1316,8 +1347,8 @@ class GEBModel(
         x_chunksize: int = XY_CHUNKSIZE,
         y_chunksize: int = XY_CHUNKSIZE,
         time_chunksize: int = 1,
-        *args,
-        **kwargs,
+        *args: Any,
+        **kwargs: Any,
     ):
         assert isinstance(da, xr.DataArray)
 
@@ -1479,7 +1510,9 @@ class GEBModel(
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def full_like(self, data, fill_value, nodata, attrs=None, *args, **kwargs):
+    def full_like(
+        self, data, fill_value, nodata, attrs=None, *args: Any, **kwargs: Any
+    ):
         return full_like(
             data,
             fill_value=fill_value,
@@ -1489,7 +1522,7 @@ class GEBModel(
             **kwargs,
         )
 
-    def run_method(self, method, *args, **kwargs):
+    def run_method(self, method, *args: Any, **kwargs: Any):
         """Log method parameters before running a method.
 
         Args:
