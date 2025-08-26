@@ -72,6 +72,7 @@ class DecisionModule:
             income: array containing the income of each household
             amenity_value: array containing the amenity value of each household
             expected_damages: array containing the expected damages of each household under all events i
+
         Returns:
             NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
         """
@@ -117,7 +118,21 @@ class DecisionModule:
         max_T: int,
         total_profits: np.ndarray,
         profits_no_event: np.ndarray,
-    ):
+    ) -> np.ndarray:
+        """This function calculates the NPV of each drought event.
+
+        Args:
+            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+            n_events: number of events (droughts and floods) included in model run
+            discount_rate: time discounting rate
+            max_T: time horizon (same for each agent)
+            total_profits: array containing the total profits of each household under all events i
+            profits_no_event: array containing the profits of each household under the no flood event
+
+        Returns:
+            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+        """
+
         # Iterate through all droughts
         for i, index in enumerate(np.arange(1, n_events + 3)):
             # Check if we are in the last iterations
