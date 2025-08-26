@@ -1500,6 +1500,9 @@ class CropFarmers(AgentBaseClass):
 
         Returns:
             yield_ratio: Map of yield ratio.
+
+        Raises:
+            ValueError: If crop data type is not GAEZ or MIRCA2000.
         """
         if self.var.crop_data_type == "GAEZ":
             yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_GAEZ(
@@ -4705,6 +4708,9 @@ class CropFarmers(AgentBaseClass):
         """This function is called at the beginning of each timestep.
 
         Then, farmers harvest and plant crops.
+
+        Raises:
+            ValueError: When farmers don't have a yield probability relation yet.
         """
         if not self.model.simulate_hydrology:
             return
@@ -4985,7 +4991,7 @@ class CropFarmers(AgentBaseClass):
                         )
                         timer.new_split("adapt prec. insurance")
                 else:
-                    raise AssertionError(
+                    raise ValueError(
                         "Cannot adapt without yield - probability relation"
                     )
 

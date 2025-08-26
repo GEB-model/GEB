@@ -109,6 +109,9 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     Returns:
         networkx.Graph:
             Undirected graph where nodes are (y,x) coordinates of True cells
+
+    Raises:
+        ValueError: If connectivity is not 4 or 8.
     """
     # check dtypes
     assert isinstance(mask, (np.ndarray))
@@ -637,6 +640,9 @@ class GEBModel(
                 If this parameter is set to True, the coastal area will be included in the riverine mask by automatically extending the riverine mask to the coastal area,
                 by finding all coastal basins between the outlets within the study area and half the distance to the nearest outlet outside the study area.
                 All cells upstream of these coastal basins will be included in the riverine mask.
+
+        Raises:
+            ValueError: If region is not understood.
         """
         assert resolution_arcsec % 3 == 0, (
             "resolution_arcsec must be a multiple of 3 to align with MERIT"
@@ -1044,7 +1050,11 @@ class GEBModel(
 
     @property
     def ISIMIP_ssp(self) -> str:
-        """Returns the ISIMIP SSP name."""
+        """Returns the ISIMIP SSP name.
+
+        Raises:
+            ValueError: If the SSP is not supported.
+        """
         if self.ssp == "ssp1":
             return "ssp126"
         elif self.ssp == "ssp3":

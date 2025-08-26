@@ -299,7 +299,14 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.step()
 
     def run(self, initialize_only: bool = False) -> None:
-        """Run the model for the entire period, and export water table in case of spinup scenario."""
+        """Run the model for the entire period, and export water table in case of spinup scenario.
+
+        Args:
+            initialize_only: If True, only initialize the model without running it.
+
+        Raises:
+            FileNotFoundError: If the initial conditions folder does not exist. Spinup is required before running the model.
+        """
         if not self.store.path.exists():
             raise FileNotFoundError(
                 f"The initial conditions folder ({self.store.path.resolve()}) does not exist. Spinup is required before running the model. Please run the spinup first."

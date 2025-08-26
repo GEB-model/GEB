@@ -1482,6 +1482,9 @@ def run_model(individual, config, gauges, observed_streamflow):
 
                 Returns:
                     int: The return code of the process.
+
+                Raises:
+                    ValueError: If the return code is unexpected or if maximum retries are exceeded.
                 """
                 env = os.environ.copy()
                 # Already set globally, but we can re-ensure here:

@@ -66,6 +66,10 @@ def calculate_scaling(
     Returns:
         scaling_factor: The scaling factor to apply to the original data.
         out_dtype: The output dtype to use for the fixed scale and offset codec.
+
+    Raises:
+        ValueError: If more than 64 bits are required for the given precision and range
+            and thus the data cannot be represented with a fixed scale and offset codec.
     """
     assert min_value < max_value, "min_value must be less than max_value"
     assert precision > 0, "precision must be greater than 0"
@@ -349,6 +353,12 @@ def get_window(
 
     Returns:
         A dictionary with slices for the x and y coordinates, e.g. {"x": slice(start, stop), "y": slice(start, stop)}.
+
+    Raises:
+        ValueError: If the bounds are invalid or out of range,
+            or if the buffer is invalid,
+            or if x or y are empty,
+            or the resulting slices are invalid.
     """
     if not isinstance(buffer, int):
         raise ValueError("buffer must be an integer")
@@ -623,6 +633,9 @@ def fetch_and_save(
         Returns True if the file was downloaded successfully and saved to the specified path.
         Raises an exception if all attempts to download the file fail.
 
+    Raises:
+        RuntimeError: If all attempts to download the file fail.
+
     """
     if not overwrite and file_path.exists():
         return True
@@ -669,4 +682,7 @@ def fetch_and_save(
             time.sleep(delay)
 
     # If all attempts fail, raise an exception
-    raise Exception("All attempts to download the file have failed.")
+    raise RuntimeError(
+        f"Failed to download '{url}' to '{file_path}' after {max_retries} attempts. "
+        "Please check the URL, network connectivity, and destination permissions."
+    )

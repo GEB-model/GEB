@@ -1256,6 +1256,9 @@ class Households(AgentBaseClass):
                 - water_efficiency_per_household: Water efficiency per household (0-1).
                     A factor of 1 means no water is wasted, while 0 means all water is wasted.
                 - locations: Locations of the households (x, y coordinates).
+
+        Raises:
+            ValueError: If the water demand method in the configuration is invalid.
         """
 
         assert (self.var.water_efficiency_per_household == 1).all(), (

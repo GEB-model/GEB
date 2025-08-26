@@ -285,6 +285,12 @@ def build_sfincs(
         depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
             depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
         mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
+
+    Raises:
+        ValueError: if depth_calculation_method is not 'manning' or 'power_law',
+        ValueError: if nr_subgrid_pixels is not a positive even number
+        ValueError: if resolution is not positive.
+
     """
     assert nr_subgrid_pixels % 2 == 0, "nr_subgrid_pixels must be an even number"
     assert nr_subgrid_pixels > 0, "nr_subgrid_pixels must be a positive number"
@@ -296,7 +302,7 @@ def build_sfincs(
     ], "Method should be 'manning' or 'power_law'"
 
     # build base model
-    sf = SfincsModel(root=str(model_root), mode="w+", logger=get_logger())
+    sf: SfincsModel = SfincsModel(root=str(model_root), mode="w+", logger=get_logger())
 
     sf.setup_grid_from_region({"geom": region}, res=resolution, crs=crs, rotated=False)
 
@@ -351,11 +357,11 @@ def build_sfincs(
     # Get the single outflow point coordinates
     x_coord = outflow_points.geometry.x.iloc[0]
     y_coord = outflow_points.geometry.y.iloc[0]
-    assert sf.grid.dep.rio.crs == outflow_points.crs, (  # type: ignore
+    assert sf.grid.dep.rio.crs == outflow_points.crs, (
         "CRS of sf.grid.dep is not the same as the outflow_points crs"
     )
     # Sample from sf.grid.dep (which is the DEM DataArray)
-    elevation_value = sf.grid.dep.sel(  # type: ignore
+    elevation_value = sf.grid.dep.sel(
         x=x_coord, y=y_coord, method="nearest"
     ).values.item()
 

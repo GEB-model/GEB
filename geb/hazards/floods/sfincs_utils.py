@@ -17,7 +17,11 @@ from tqdm import tqdm
 
 
 def make_relative_paths(config, model_root, new_root, relpath=None):
-    """Return dict with paths to the new model new root."""
+    """Return dict with paths to the new model new root.
+
+    Raises:
+        ValueError: if model_root and new_root do not have a common path.
+    """
     if not relpath:
         commonpath = ""
         if os.path.splitdrive(model_root)[0] == os.path.splitdrive(new_root)[0]:

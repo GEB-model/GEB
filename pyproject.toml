@@ -132,6 +132,7 @@ select = [
     "DOC201",
     "DOC202",
     "DOC402",
+    "DOC501",
     "DOC502"
 ]
 extend-select = ["I"]

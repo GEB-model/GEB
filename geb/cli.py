@@ -481,6 +481,10 @@ def init_fn(
             If not set, the basin ID is taken from the config file.
         overwrite: If True, overwrite existing config and build config files. Defaults to False.
 
+    Raises:
+        FileExistsError: If the config or build config file already exists and overwrite is False.
+        FileNotFoundError: If the example folder does not exist.
+
     """
     config: Path = Path(config)
     build_config: Path = Path(build_config)
@@ -682,7 +686,13 @@ def update_fn(
     data_provider,
     data_root,
 ) -> None:
-    """Update model."""
+    """Update model.
+
+    Raises:
+        FileNotFoundError: if the build config file is not found.
+        KeyError: if the specified method is not found in the build config file.
+        ValueError: if build_config is not a str or dict.
+    """
     with WorkingDirectory(working_directory):
         model = get_builder(
             config,

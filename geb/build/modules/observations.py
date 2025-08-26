@@ -148,6 +148,10 @@ class Observations:
             max_uparea_difference_ratio: The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area. Default is 0.3 (30%).
             max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment. Default is 0.1 degrees.
             custom_river_stations: Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
+
+        Raises:
+            ValueError: If no discharge stations are found in the region shapefile.
+            ValueError: If a custom station file does not have the correct format (2 coordinates in the first row, data starting from the fourth row).
         """
         # load data
         upstream_area = self.grid[

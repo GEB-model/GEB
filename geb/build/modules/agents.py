@@ -64,6 +64,10 @@ class Agents:
             monthly time step, but is assumed to be constant over the year.
 
             The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
+
+        Raises:
+            ValueError: If required data is missing in the data sources.
+
         """
         start_model_time = self.start_date.year
         end_model_time = self.end_date.year
@@ -1018,6 +1022,11 @@ class Agents:
             data_source: The source of the farm size data. Default is 'lowder', which uses the Lowder et al. (2016) dataset.
             size_class_boundaries: The boundaries for the size classes of farms. For the Lowder et al. (2016) dataset, this must be None
                 because the boundaries are defined in the dataset itself.
+
+        Raises:
+            ValueError: If the data_source is 'lowder' and size_class_boundaries is not None.
+            ValueError: If the data_source is not 'lowder' and size_class_boundaries is None.
+            ValueError: If required data is missing in the data sources.
         """
         if data_source == "lowder":
             assert size_class_boundaries is None, (
@@ -2510,6 +2519,10 @@ class Agents:
             feature_types: The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
             source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
             use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
+
+        Raises:
+            ValueError: If an unknown source is provided.
+            ValueError: When an unknown feature type is provided.
         """
         if isinstance(feature_types, str):
             feature_types = [feature_types]
