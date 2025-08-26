@@ -109,6 +109,27 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     )
 
 
+def load_omp_threading_layer() -> None:
+    """Load OpenMP shared library, a threading layer for parallelizing CPU-bound tasks in Numba-compiled functions."""
+    from numba import config
+
+    config.THREADING_LAYER = "omp"
+
+    @njit(parallel=True)
+    def test_threading_layer():
+        array = np.zeros(10, dtype=np.int32)
+        """Test function to check if OpenMP is loaded correctly."""
+        for i in prange(10):
+            array[i] = i
+        return array
+
+    test_threading_layer()
+
+    assert threading_layer() == "omp", (
+        f"Expected threading layer to be 'omp', but got {threading_layer()}"
+    )
+
+
 if __debug__:
     import numba
 
@@ -122,10 +143,7 @@ os.environ["NUMBA_ENABLE_AVX"] = "0"  # Enable AVX instructions
 # os.environ["NUMBA_PARALLEL_DIAGNOSTICS"] = "4"
 
 if platform.system() == "Darwin":
-    print(
-        "On Mac OS X, we disable the multi-threading layer by default due to compatibility issues."
-    )
-    os.environ["NUMBA_NUM_THREADS"] = "1"
+    load_omp_threading_layer()
 else:
     load_numba_threading_layer()
 
