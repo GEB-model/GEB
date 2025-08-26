@@ -20,6 +20,11 @@ class TimingModule:
         self.split_names.append(name)
 
     def __str__(self) -> str:
+        """Converts the timing information into a readable string format for logging or display.
+
+        Returns:
+            A formatted string summarizing the time taken for each split and the total time.
+        """
         messages = []
         for i in range(1, len(self.times)):
             time_difference = self.times[i] - self.times[i - 1]

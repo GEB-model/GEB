@@ -575,6 +575,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 reader.close()
 
     def __enter__(self) -> "GEBModel":
+        """ "Enters the context of the model.
+
+        Returns:
+            The model instance itself.
+        """
         return self
 
     def __exit__(
@@ -583,4 +588,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        """Exits the context of the model, ensuring proper cleanup.
+
+        Args:
+            exc_type: The type of exception raised (if any).
+            exc_val: The exception instance raised (if any).
+            exc_tb: The traceback of the exception raised (if any).
+        """
         self.close()

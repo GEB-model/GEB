@@ -604,6 +604,13 @@ class WorkingDirectory:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        """Exits the context, reverting to the original working directory.
+
+        Args:
+            exc_type: The type of exception raised (if any).
+            exc_val: The exception instance raised (if any).
+            exc_tb: The traceback of the exception raised (if any).
+        """
         # Change back to the original directory
         os.chdir(self._original_path)
 
