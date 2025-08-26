@@ -731,7 +731,7 @@ class Households(AgentBaseClass):
         damages_do_not_adapt, damages_adapt = self.calculate_building_flood_damages()
 
         # calculate expected utilities
-        EU_adapt = self.decision_module.calcEU_adapt(
+        EU_adapt = self.decision_module.calcEU_adapt_flood(
             geom_id="NoID",
             n_agents=self.n,
             wealth=self.var.wealth.data,
@@ -750,7 +750,7 @@ class Households(AgentBaseClass):
             sigma=1,
         )
 
-        EU_do_not_adapt = self.decision_module.calcEU_do_nothing(
+        EU_do_not_adapt = self.decision_module.calcEU_do_nothing_flood(
             geom_id="NoID",
             n_agents=self.n,
             wealth=self.var.wealth.data,

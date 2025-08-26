@@ -228,7 +228,7 @@ class DecisionModule:
 
         return NPV_summed
 
-    def calcEU_adapt(
+    def calcEU_adapt_flood(
         self,
         geom_id,
         n_agents: int,
@@ -462,7 +462,7 @@ class DecisionModule:
 
         return EU_insure_array
 
-    def calcEU_do_nothing(
+    def calcEU_do_nothing_flood(
         self,
         geom_id,
         n_agents: int,
