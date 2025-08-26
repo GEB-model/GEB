@@ -50,8 +50,51 @@ class DecisionModule:
         )
 
     @staticmethod
-    # @njit(cache=True)
+    @njit(cache=True)
+    def IterateThroughFloods(
+        NPV_summed: np.ndarray,
+        n_events: int,
+        discount_rate: float,
+        max_T: int,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        amenity_value: np.ndarray,
+        expected_damages: np.ndarray,
+    ):
+        NPV_t0 = (wealth + income + amenity_value).astype(
+            np.float32
+        )  # no flooding in t=0
+
+        # Iterate through all floods
+        for i, index in enumerate(np.arange(1, n_events + 3)):
+            # Check if we are in the last iterations
+            if i < n_events:
+                NPV_event_i = wealth + income + amenity_value - expected_damages[i]
+                NPV_event_i = (NPV_event_i).astype(np.float32)
+
+            # if in the last two iterations do not subtract damages (probs of no
+            # flood event)
+            elif i >= n_events:
+                NPV_event_i = wealth + income + amenity_value
+                NPV_event_i = NPV_event_i.astype(np.float32)
+
+            # Calculate time discounted NPVs
+            t_arr = np.arange(1, max_T, dtype=np.float32)
+            discounts = 1 / (1 + discount_rate) ** t_arr
+            NPV_tx = np.sum(discounts) * NPV_event_i
+
+            # Add NPV at t0 (which is not discounted)
+            NPV_tx += NPV_t0
+
+            # Store result
+            NPV_summed[index] = NPV_tx
+
+        # Store NPV at p=0 for bounds in integration
+        NPV_summed[0] = NPV_summed[1]
+        return NPV_summed
+
     def IterateThroughEvents(
+        self,
         n_events: int,
         n_agents: int,
         discount_rate: float,
@@ -87,37 +130,16 @@ class DecisionModule:
         NPV_summed = np.full((n_events + 3, n_agents), -1, dtype=np.float32)
 
         if mode == "flood":
-            NPV_t0 = (wealth + income + amenity_value).astype(
-                np.float32
-            )  # no flooding in t=0
-
-            # Iterate through all floods
-            for i, index in enumerate(np.arange(1, n_events + 3)):
-                # Check if we are in the last iterations
-                if i < n_events:
-                    NPV_event_i = wealth + income + amenity_value - expected_damages[i]
-                    NPV_event_i = (NPV_event_i).astype(np.float32)
-
-                # if in the last two iterations do not subtract damages (probs of no
-                # flood event)
-                elif i >= n_events:
-                    NPV_event_i = wealth + income + amenity_value
-                    NPV_event_i = NPV_event_i.astype(np.float32)
-
-                # Calculate time discounted NPVs
-                t_arr = np.arange(1, max_T, dtype=np.float32)
-                discounts = 1 / (1 + discount_rate) ** t_arr
-                NPV_tx = np.sum(discounts) * NPV_event_i
-
-                # Add NPV at t0 (which is not discounted)
-                NPV_tx += NPV_t0
-
-                # Store result
-                NPV_summed[index] = NPV_tx
-
-            # Store NPV at p=0 for bounds in integration
-            NPV_summed[0] = NPV_summed[1]
-            return NPV_summed
+            NPV_summed = self.IterateThroughFloods(
+                NPV_summed=NPV_summed,
+                n_events=n_events,
+                discount_rate=discount_rate,
+                max_T=max_T,
+                wealth=wealth,
+                income=income,
+                amenity_value=amenity_value,
+                expected_damages=expected_damages,
+            )
 
         elif mode == "drought":
             # Iterate through all droughts
@@ -151,9 +173,10 @@ class DecisionModule:
             # Store NPV at p=0 for bounds in integration
             NPV_summed[0] = NPV_summed[1]
 
-            return NPV_summed
         else:
             raise ValueError("Mode not recognized")
+
+        return NPV_summed
 
     def calcEU_adapt(
         self,
