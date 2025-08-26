@@ -87,9 +87,6 @@ class Evaporation(Module):
             potential evapotranspiration, remaining snow melt and snow evaporation.
         """
         # calculate potential bare soil evaporation
-        print("crop calibration fator:")
-        print(self.hydrology.crop_factor_calibration_factor)
-
         potential_bare_soil_evaporation: npt.NDArray[np.float32] = (
             self.hydrology.crop_factor_calibration_factor
             * 0.2

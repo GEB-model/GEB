@@ -86,7 +86,10 @@ class Households(AgentBaseClass):
         flood_maps = {}
         for return_period in self.return_periods:
             file_path = (
-                self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+                self.model.output_folder
+                / "flood_maps"
+                / f"riverine_{return_period:04d}.zarr"
+                # / f"riverine{return_period}.zarr"
             )
             flood_maps[return_period] = open_zarr(file_path)
         self.flood_maps = flood_maps
@@ -1266,16 +1269,31 @@ class Households(AgentBaseClass):
         )
 
     def step(self) -> None:
-        if (
-            self.config["adapt"]
-            and self.model.current_time.month == 1
-            and self.model.current_time.day == 1
-        ):
-            if "flooded" not in self.buildings.columns:
-                self.update_building_attributes()
+        if self.config["adapt"]:
+            flood_events = self.model.config["hazards"]["floods"]["events"]
+            current_time = self.model.current_time
 
-            print("Thinking about adapting...")
-            self.decide_household_strategy()
+            # Check if today is an event end_time
+            from datetime import datetime, timedelta
+
+            flood_trigger = any(
+                current_time
+                == (
+                    e["end_time"] + timedelta(days=10)
+                    if isinstance(e["end_time"], datetime)
+                    else datetime.strptime(e["end_time"], "%Y-%m-%d %H:%M:%S")
+                    + timedelta(days=10)
+                )
+                for e in flood_events
+            )
+
+            if (
+                self.model.current_time.month == 1 and self.model.current_time.day == 1
+            ) or flood_trigger:
+                if "flooded" not in self.buildings.columns:
+                    self.update_building_attributes()
+                print(f"Thinking about adapting at {current_time}...")
+                self.decide_household_strategy()
         self.report(self, locals())
 
     @property
