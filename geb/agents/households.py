@@ -19,7 +19,7 @@ from ..hydrology.landcover import (
 from ..store import DynamicArray
 from ..workflows.damage_scanner import VectorScanner
 from ..workflows.io import load_array, load_table, open_zarr
-from .decision_module_flood import DecisionModule
+from .decision_module import DecisionModule
 from .general import AgentBaseClass
 
 
