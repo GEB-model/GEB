@@ -3,6 +3,7 @@ import datetime
 import os
 from pathlib import Path
 from time import time
+from types import TracebackType
 from typing import Any, Literal, overload
 
 import numpy as np
@@ -566,8 +567,13 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             for reader in all_async_readers:
                 reader.close()
 
-    def __enter__(self):
+    def __enter__(self) -> "GEBModel":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         self.close()

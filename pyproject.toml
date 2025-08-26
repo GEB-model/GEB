@@ -123,7 +123,17 @@ plantfate = [
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["ANN205", "ANN206", "D101", "D104", "DOC201", "DOC202", "DOC402", "DOC502"]
+select = [
+    "ANN204",
+    "ANN205",
+    "ANN206",
+    "D101",
+    "D104",
+    "DOC201",
+    "DOC202",
+    "DOC402",
+    "DOC502"
+]
 extend-select = ["I"]
 preview = true
 

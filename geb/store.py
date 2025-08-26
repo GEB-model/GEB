@@ -2,7 +2,8 @@ import json
 import shutil
 from datetime import datetime
 from operator import attrgetter
-from typing import Callable
+from types import TracebackType
+from typing import Any, Callable
 
 import geopandas as gpd
 import numpy as np
@@ -102,17 +103,19 @@ class DynamicArray:
             raise ValueError("n cannot exceed max_n")
         self._n = value
 
-    def __array_finalize__(self, obj):
+    def __array_finalize__(self, obj) -> None:
         if obj is None:
             return
 
-    def __array__(self, dtype=None):
+    def __array__(self, dtype=None) -> np.ndarray:
         return np.asarray(self._data[: self.n], dtype=dtype)
 
-    def __array_interface__(self):
+    def __array_interface__(self) -> dict[str, Any]:
         return self._data.__array_interface__()
 
-    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+    def __array_ufunc__(
+        self, ufunc: Callable, method: str, *inputs: tuple[Any], **kwargs: dict[Any]
+    ) -> Any:
         modified_inputs = tuple(
             input_.data if isinstance(input_, DynamicArray) else input_
             for input_ in inputs
@@ -125,7 +128,9 @@ class DynamicArray:
         else:
             return self.__class__(result, max_n=self._data.shape[0])
 
-    def __array_function__(self, func, types, args, kwargs):
+    def __array_function__(
+        self, func: Callable, types: tuple[Any], args: tuple[Any], kwargs: dict[Any]
+    ) -> Any:
         # Explicitly call __array_function__ of the underlying NumPy array
         modified_args: tuple = tuple(
             arg.data if isinstance(arg, DynamicArray) else arg for arg in args
@@ -141,7 +146,7 @@ class DynamicArray:
     def __setitem__(self, key, value) -> None:
         self.data.__setitem__(key, value)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> "DynamicArray | np.ndarray":
         # if the first key selects the entire array, we can return
         # a new DynamicArray, but with only the extra dimensions
         # sliced
@@ -199,7 +204,7 @@ class DynamicArray:
     def __len__(self) -> int:
         return self._n
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         if name in (
             "_data",
             "data",
@@ -225,13 +230,7 @@ class DynamicArray:
         else:
             setattr(self.data, name, value)
 
-    def __getstate__(self):
-        return self.data.__getstate__()
-
-    def __setstate__(self, state):
-        self.data.__setstate__(state)
-
-    def __sizeof__(self):
+    def __sizeof__(self) -> int:
         return self.data.__sizeof__()
 
     def _perform_operation(self, other, operation: str, inplace: bool = False):
@@ -249,67 +248,67 @@ class DynamicArray:
         else:
             return self.__class__(result, max_n=self._data.shape[0])
 
-    def __add__(self, other):
+    def __add__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__add__")
 
-    def __radd__(self, other):
+    def __radd__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__radd__")
 
-    def __iadd__(self, other):
+    def __iadd__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__add__", inplace=True)
 
-    def __sub__(self, other):
+    def __sub__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__sub__")
 
-    def __rsub__(self, other):
+    def __rsub__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__rsub__")
 
-    def __isub__(self, other):
+    def __isub__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__sub__", inplace=True)
 
-    def __mul__(self, other):
+    def __mul__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__mul__")
 
-    def __rmul__(self, other):
+    def __rmul__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__rmul__")
 
-    def __imul__(self, other):
+    def __imul__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__mul__", inplace=True)
 
-    def __truediv__(self, other):
+    def __truediv__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__truediv__")
 
-    def __rtruediv__(self, other):
+    def __rtruediv__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__rtruediv__")
 
-    def __itruediv__(self, other):
+    def __itruediv__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__truediv__", inplace=True)
 
-    def __floordiv__(self, other):
+    def __floordiv__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__floordiv__")
 
-    def __rfloordiv__(self, other):
+    def __rfloordiv__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__rfloordiv__")
 
-    def __ifloordiv__(self, other):
+    def __ifloordiv__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__floordiv__", inplace=True)
 
-    def __mod__(self, other):
+    def __mod__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__mod__")
 
-    def __rmod__(self, other):
+    def __rmod__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__rmod__")
 
-    def __imod__(self, other):
+    def __imod__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__mod__", inplace=True)
 
-    def __pow__(self, other):
+    def __pow__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__pow__")
 
-    def __rpow__(self, other):
+    def __rpow__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__rpow__")
 
-    def __ipow__(self, other):
+    def __ipow__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__pow__", inplace=True)
 
     def _compare(self, value: object, operation: str) -> bool:
@@ -337,19 +336,19 @@ class DynamicArray:
     def __le__(self, value: object) -> bool:
         return self._compare(value, "__le__")
 
-    def __and__(self, other):
+    def __and__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__and__")
 
-    def __or__(self, other):
+    def __or__(self, other) -> "DynamicArray":
         return self._perform_operation(other, "__or__")
 
-    def __neg__(self):
+    def __neg__(self) -> "DynamicArray":
         return self._perform_operation(None, "__neg__")
 
-    def __pos__(self):
+    def __pos__(self) -> "DynamicArray":
         return self._perform_operation(None, "__pos__")
 
-    def __invert__(self):
+    def __invert__(self) -> "DynamicArray":
         return self._perform_operation(None, "__invert__")
 
     def save(self, path) -> None:
@@ -383,7 +382,7 @@ class Bucket:
     def __init__(self, validator: Callable | None = None) -> None:
         self._validator = validator
 
-    def __iter__(self):
+    def __iter__(self) -> tuple[str, Any]:
         """Iterate over the items in the bucket.
 
         Yields:

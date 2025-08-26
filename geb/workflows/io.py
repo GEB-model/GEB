@@ -6,6 +6,7 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 import cftime
@@ -572,7 +573,12 @@ class WorkingDirectory:
         self._new_path = new_path
         self._original_path = None  # To store the original path
 
-    def __enter__(self):
+    def __enter__(self) -> "WorkingDirectory":
+        """Enters the context, changing the current working directory.
+
+        Returns:
+            The context manager instance.
+        """
         # Store the current working directory
         self._original_path = os.getcwd()
 
@@ -582,7 +588,12 @@ class WorkingDirectory:
         # Return self (optional, but common)
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         # Change back to the original directory
         os.chdir(self._original_path)
 
