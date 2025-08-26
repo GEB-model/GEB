@@ -108,6 +108,48 @@ class DecisionModule:
         NPV_summed[0] = NPV_summed[1]
         return NPV_summed
 
+    @staticmethod
+    @njit(cache=True)
+    def IterateThroughDrought(
+        NPV_summed: np.ndarray,
+        n_events: int,
+        discount_rate: float,
+        max_T: int,
+        total_profits: np.ndarray,
+        profits_no_event: np.ndarray,
+    ):
+        # Iterate through all droughts
+        for i, index in enumerate(np.arange(1, n_events + 3)):
+            # Check if we are in the last iterations
+            if i < n_events:
+                NPV_event_i = total_profits[i]
+                NPV_event_i = (NPV_event_i).astype(np.float32)
+
+            # if in the last two iterations do not subtract damages (probs of no event)
+            elif i >= n_events:
+                NPV_event_i = profits_no_event
+                NPV_event_i = NPV_event_i.astype(np.float32)
+
+            # iterate over NPVs for each year in the time horizon and apply time
+            # discounting
+            NPV_t0 = (profits_no_event).astype(np.float32)  # no flooding in t=0
+
+            # Calculate time discounted NPVs
+            t_arr = np.arange(1, max_T, dtype=np.float32)
+
+            discounts = 1 / (1 + np.reshape(discount_rate, (-1, 1))) ** t_arr
+            NPV_tx = np.sum(discounts, axis=1) * NPV_event_i
+
+            # Add NPV at t0 (which is not discounted)
+            NPV_tx += NPV_t0
+
+            # Store result
+            NPV_summed[index] = NPV_tx
+
+        # Store NPV at p=0 for bounds in integration
+        NPV_summed[0] = NPV_summed[1]
+        return NPV_summed
+
     def IterateThroughEvents(
         self,
         n_events: int,
@@ -157,39 +199,17 @@ class DecisionModule:
             )
 
         elif mode == "drought":
-            # Iterate through all droughts
-            for i, index in enumerate(np.arange(1, n_events + 3)):
-                # Check if we are in the last iterations
-                if i < n_events:
-                    NPV_event_i = total_profits[i]
-                    NPV_event_i = (NPV_event_i).astype(np.float32)
-
-                # if in the last two iterations do not subtract damages (probs of no event)
-                elif i >= n_events:
-                    NPV_event_i = profits_no_event
-                    NPV_event_i = NPV_event_i.astype(np.float32)
-
-                # iterate over NPVs for each year in the time horizon and apply time
-                # discounting
-                NPV_t0 = (profits_no_event).astype(np.float32)  # no flooding in t=0
-
-                # Calculate time discounted NPVs
-                t_arr = np.arange(1, max_T, dtype=np.float32)
-
-                discounts = 1 / (1 + np.reshape(discount_rate, (-1, 1))) ** t_arr
-                NPV_tx = np.sum(discounts, axis=1) * NPV_event_i
-
-                # Add NPV at t0 (which is not discounted)
-                NPV_tx += NPV_t0
-
-                # Store result
-                NPV_summed[index] = NPV_tx
-
-            # Store NPV at p=0 for bounds in integration
-            NPV_summed[0] = NPV_summed[1]
+            NPV_summed = self.IterateThroughDrought(
+                NPV_summed=NPV_summed,
+                n_events=n_events,
+                discount_rate=discount_rate,
+                max_T=max_T,
+                total_profits=total_profits,
+                profits_no_event=profits_no_event,
+            )
 
         else:
-            raise ValueError("Mode not recognized")
+            raise ValueError("Mode must be either 'flood' or 'drought'")
 
         return NPV_summed
 
