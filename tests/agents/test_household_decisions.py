@@ -1,3 +1,5 @@
+"""Test suite for household decision making module."""
+
 import numpy as np
 
 from geb.agents.decision_module_flood import (
@@ -87,7 +89,7 @@ def test_expenditure_cap() -> None:
     )
 
 
-def test_risk_perception():
+def test_risk_perception() -> None:
     """This function tests the functionality of risk perception"""
     decision_module = DecisionModule(model=None, agents=None)
     decision_template = create_decision_template()
@@ -106,7 +108,7 @@ def test_risk_perception():
     ), "Expected EU_do_nothing_low to be greater than EU_do_nothing_high"
 
 
-def test_damages():
+def test_damages() -> None:
     """This function tests the functionality of damages with and without adaptation"""
     decision_module = DecisionModule(model=None, agents=None)
     decision_template = create_decision_template()
