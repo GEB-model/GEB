@@ -253,7 +253,11 @@ class Hydrology:
             ].Q_obs_to_GEB_upstream_area_ratio
 
             def create_validation_df():
-                """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station."""
+                """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station.
+
+                Returns:
+                    DataFrame with the Q_obs discharge observations and the GEB discharge simulation for the selected station.
+                """
                 # select data closest to meerssen point
                 GEB_discharge_station = GEB_discharge.isel(
                     x=snapped_xy_coords[0], y=snapped_xy_coords[1]
@@ -297,7 +301,13 @@ class Hydrology:
                 continue
 
             def calculate_validation_metrics():
-                """Calculate the validation metrics for the current station."""
+                """Calculate the validation metrics for the current station.
+
+                Returns:
+                    KGE: Kling-Gupta Efficiency
+                    NSE: Nash-Sutcliffe Efficiency
+                    R: Pearson correlation coefficient
+                """
                 # calculate kupta coefficient
                 y_true = validation_df["Q_obs"].values
                 y_pred = validation_df["Q_sim"].values
@@ -649,7 +659,11 @@ class Hydrology:
         plot_validation_map()
 
         def create_folium_map(evaluation_gdf):
-            """Create a Folium map with evaluation results and station markers."""
+            """Create a Folium map with evaluation results and station markers.
+
+            Returns:
+                Folium Map object with evaluation results.
+            """
             # Create a Folium map centered on the mean coordinates of the stations
             map_center = [
                 evaluation_gdf.geometry.y.mean(),

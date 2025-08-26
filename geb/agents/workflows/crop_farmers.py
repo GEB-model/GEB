@@ -944,7 +944,6 @@ def crop_profit_difference_njit_parallel(
     p_droughts,
     past_window,
 ):
-    """Parallelized only over unique crop groups; everything else follows your original logic exactly."""
     n_groups: int = len(unique_crop_groups)
     n_calendars: int = len(unique_crop_calendars)
     n_rotation: int = unique_crop_calendars.shape[1]
@@ -1044,8 +1043,23 @@ def crop_profit_difference_njit_parallel(
 
 
 @njit
-def gev_ppf_scalar(u, c, loc, scale):
-    """Scalar GEV inverse CDF."""
+def gev_ppf_scalar(u: float, c: float, loc: float, scale: float) -> float:
+    """Scalar GEV inverse CDF.
+
+    CDF = Cumulative Distribution Function
+    PPF = Percent Point Function = Inverse CDF
+    GEV = Generalized Extreme Value distribution
+
+    Args:
+        u: A uniform random variable in (0,1).
+        c: GEV shape parameter.
+        loc: GEV location parameter.
+        scale: GEV scale parameter.
+
+    Returns:
+        The inverse CDF value for a given uniform random variable u and GEV parameters c, loc, scale.
+
+    """
     if c != 0.0:
         return loc + scale * ((-np.log(u)) ** (-c) - 1.0) / c
     else:

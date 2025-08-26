@@ -207,6 +207,9 @@ class Survey:
             evidence_columns: list of evidence column names (i.e., ... for these columns)
             method: sampling method, only 'rejection' is implemented.
             show_progress: whether to show progress bar
+
+        Returns:
+            DataFrame with samples.
         """
         assert method == "rejection", "Only rejection sampling is implemented"
         if show_progress:

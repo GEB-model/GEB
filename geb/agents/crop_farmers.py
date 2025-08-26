@@ -4244,6 +4244,10 @@ class CropFarmers(AgentBaseClass):
         Note:
             - It assumes that the polynomial relationship is invertible.
             - Adjusts yield ratios to be non-negative and capped at 1.0.
+
+        Returns:
+            For each farmer, an array of yield ratios
+                corresponding to the given probabilities of a drought event.
         """
 
         def logarithmic_function(probability, params):

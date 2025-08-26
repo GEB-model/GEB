@@ -5,6 +5,7 @@ from typing import Tuple
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import rasterio
 import xarray as xr
@@ -684,11 +685,17 @@ class Households(AgentBaseClass):
             path = os.path.join(self.model.output_folder, "warning_log_energy.csv")
             pd.DataFrame(warning_log).to_csv(path, index=False)
 
-    def warning_communication(self, target_households):
+    def warning_communication(self, target_households: gpd.GeoDataFrame) -> int:
         """Communicates the warning to households based on the communication efficiency.
 
         changes risk perception --> to be moved to the update risk perception function;
-        and return the number of households that were warned
+        and return the number of households that were warned.
+
+        Args:
+            The households that are targeted to receive the warning.
+
+        Returns:
+            The number of households that received the warning.
         """
         print("Communicating the warning...")
         # Define the % of households reached by the warning
@@ -1095,6 +1102,9 @@ class Households(AgentBaseClass):
         Args:
             flood_map: The flood map containing water levels for the flood event.
 
+        Returns:
+            The total flood damages for the event for all assets and land use types.
+
         """
         flood_map: xr.DataArray = flood_map.compute()
         # flood_map = flood_map.chunk({"x": 100, "y": 1000})
@@ -1223,12 +1233,34 @@ class Households(AgentBaseClass):
 
         return total_flood_damages
 
-    def water_demand(self):
+    def water_demand(
+        self,
+    ) -> Tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
         """Calculate the water demand per household in m3 per day.
 
-        This function uses a multiplier to calculate the water demand for
-        for each region with respect to the base year.
+        In the default option (see configuration), the water demand is calculated
+        based on the municipal water demand per capita in the baseline year,
+        the size of the household, and a water demand multiplier that varies
+        by region and year.
+
+        In the 'custom_value' option, all households are assigned the same
+        water demand value specified in the configuration.
+
+        Returns:
+            Tuple containing:
+                - water_demand_per_household_m3: Water demand per household in m3 per day.
+                - water_efficiency_per_household: Water efficiency per household (0-1).
+                    A factor of 1 means no water is wasted, while 0 means all water is wasted.
+                - locations: Locations of the households (x, y coordinates).
         """
+
+        assert (self.var.water_efficiency_per_household == 1).all(), (
+            "if not 1, code must be updated to account for water efficiency in water demand"
+        )
         if self.config["water_demand"]["method"] == "default":
             # the water demand multiplier is a function of the year and region
             water_demand_multiplier_per_region = self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
@@ -1258,7 +1290,7 @@ class Households(AgentBaseClass):
             )
         else:
             raise ValueError(
-                "Invalid water demand method. Choose 'default' or 'customized_demand'."
+                "Invalid water demand method. Configuration must be 'default' or 'custom_value'."
             )
 
         return (

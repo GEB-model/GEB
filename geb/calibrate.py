@@ -1395,6 +1395,9 @@ def run_model(individual, config, gauges, observed_streamflow):
     This function takes an individual from the population and runs the model
     with the corresponding parameters in a subfolder. Then it returns the
     fitness scores (KGE, irrigation wells score, etc.) for that run.
+
+    Returns:
+        The fitness scores as a tuple for the selected calibration targets.
     """
     os.makedirs(config["calibration"]["path"], exist_ok=True)
     runs_path = os.path.join(config["calibration"]["path"], "runs")
@@ -1472,10 +1475,13 @@ def run_model(individual, config, gauges, observed_streamflow):
                 )
             lock.release()
 
-            def run_model_scenario(run_command):
+            def run_model_scenario(run_command: str) -> int:
                 """Run the shell command for spinup or run scenario.
 
                 stdout/stderr are redirected to their own log files.
+
+                Returns:
+                    int: The return code of the process.
                 """
                 env = os.environ.copy()
                 # Already set globally, but we can re-ensure here:

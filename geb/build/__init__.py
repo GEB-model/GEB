@@ -12,7 +12,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Union
+from typing import Any, Callable, List, Union
 
 import geopandas as gpd
 import networkx
@@ -1480,11 +1480,18 @@ class GEBModel(
         )
 
     def run_method(self, method, *args, **kwargs):
-        """Log method parameters before running a method."""
-        func = getattr(self, method)
+        """Log method parameters before running a method.
+
+        Args:
+            method: The name of the method to run.
+            *args: Positional arguments to pass to the method.
+            **kwargs: Keyword arguments to pass to the method.
+
+        """
+        func: Callable = getattr(self, method)
         signature = inspect.signature(func)
         # combine user and default options
-        params = {}
+        params: dict[str, Any] = {}
         for i, (k, v) in enumerate(signature.parameters.items()):
             if k in ["args", "kwargs"]:
                 if k == "args":
@@ -1492,11 +1499,13 @@ class GEBModel(
                 else:
                     params.update(**kwargs)
             else:
-                v = kwargs.get(k, v.default)
+                v: Any = kwargs.get(k, v.default)
                 if len(args) > i:
-                    v = args[i]
+                    v: Any = args[i]
                 params[k] = v
-        return func(*args, **kwargs)
+
+        # call the method
+        func(*args, **kwargs)
 
     def run_methods(self, methods, validate_order: bool = True) -> None:
         """Run methods in the order specified in the methods dictionary.
@@ -1539,8 +1548,21 @@ class GEBModel(
 
         self.run_methods(methods, validate_order=False and type(self) is GEBModel)
 
-    def get_linear_indices(self, da):
-        """Get linear indices for each cell in a 2D DataArray."""
+    def get_linear_indices(self, da: xr.DataArray) -> xr.DataArray:
+        """Get linear indices for each cell in a 2D DataArray.
+
+        A linear index is a single integer that represents the position of a cell in a flattened version of the array.
+        For a 2D array with shape (ny, nx), the linear index of a cell at position (row, column) is calculated as:
+        `linear_index = row * nx + column`.
+
+        Args:
+            da: A 2D xarray DataArray with dimensions 'y' and 'x'.
+
+        Returns:
+            A 2D xarray DataArray of the same shape as `da`, where each cell contains its linear index.
+            The linear index is calculated as `row * number_of_columns + column`.
+
+        """
         # Get the sizes of the spatial dimensions
         ny, nx = da.sizes["y"], da.sizes["x"]
 
@@ -1548,7 +1570,7 @@ class GEBModel(
         grid_ids = np.arange(ny * nx).reshape(ny, nx)
 
         # Create a DataArray with the same coordinates and dimensions as your spatial grid
-        grid_id_da = xr.DataArray(
+        grid_id_da: xr.DataArray = xr.DataArray(
             grid_ids,
             coords={
                 "y": da.coords["y"],
@@ -1559,19 +1581,37 @@ class GEBModel(
 
         return grid_id_da
 
-    def get_neighbor_cell_ids_for_linear_indices(self, cell_id, nx, ny, radius=1):
-        """Get the linear indices of the neighboring cells of a cell in a 2D grid."""
-        row = cell_id // nx
-        col = cell_id % nx
+    def get_neighbor_cell_ids_for_linear_indices(
+        self, cell_id: int, nx: int, ny: int, radius: int = 1
+    ) -> list[int]:
+        """Get the linear indices of the neighboring cells of a cell in a 2D grid.
 
-        neighbor_cell_ids = []
+        Linear indices are the indices of the cells in the flattened version of an array.
+        For a 2D array with shape (ny, nx), the linear index of a cell at position (row, column)
+        is calculated as:
+            `linear_index = row * nx + column`.
+
+        Args:
+            cell_id: The linear index of the cell for which to find neighbors.
+            nx: The number of columns in the grid.
+            ny: The number of rows in the grid.
+            radius: The radius around the cell to consider as neighbors. Default is 1.
+
+        Returns:
+            A list of linear indices of the neighboring cells.
+
+        """
+        row: int = cell_id // nx
+        col: int = cell_id % nx
+
+        neighbor_cell_ids: list[int] = []
         for dr in range(-radius, radius + 1):
             for dc in range(-radius, radius + 1):
                 if dr == 0 and dc == 0:
                     continue  # Skip the cell itself
-                r = row + dr
-                c = col + dc
+                r: int = row + dr
+                c: int = col + dc
                 if 0 <= r < ny and 0 <= c < nx:
-                    neighbor_id = r * nx + c
+                    neighbor_id: int = r * nx + c
                     neighbor_cell_ids.append(neighbor_id)
         return neighbor_cell_ids

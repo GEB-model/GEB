@@ -93,35 +93,42 @@ def calculate_photosynthetic_photon_flux_density(shortwave_radiation, xi=0.5):
     inline="always",
 )
 def get_soil_moisture_at_pressure(
-    capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
-):
+    capillary_suction: np.float32,
+    bubbling_pressure_cm: npt.NDArray[np.float32],
+    thetas: npt.NDArray[np.float32],
+    thetar: npt.NDArray[np.float32],
+    lambda_: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Calculates the soil moisture content at a given soil water potential (capillary suction) using the van Genuchten model.
 
     Args:
-        capillary_suction : np.ndarray
-            The soil water potential (capillary suction) (m)
-        bubbling_pressure_cm : np.ndarray
-            The bubbling pressure (cm)
-        thetas : np.ndarray
-            The saturated soil moisture content (m³/m³)
-        thetar : np.ndarray
-            The residual soil moisture content (m³/m³)
-        lambda_ : np.ndarray
-            The van Genuchten parameter lambda (1/m)
+        capillary_suction: The soil water potential (capillary suction) (m)
+        bubbling_pressure_cm: The bubbling pressure (cm)
+        thetas: The saturated soil moisture content (m³/m³)
+        thetar: The residual soil moisture content (m³/m³)
+        lambda_: The van Genuchten parameter lambda (1/m)
+
+    Returns:
+        The soil moisture content at the given soil water potential (m³/m³)
     """
-    alpha = np.float32(1) / bubbling_pressure_cm
-    n = lambda_ + np.float32(1)
-    m = np.float32(1) - np.float32(1) / n
-    phi = -capillary_suction
+    alpha: npt.NDArray[np.float32] = np.float32(1) / bubbling_pressure_cm
+    n: npt.NDArray[np.float32] = lambda_ + np.float32(1)
+    m: npt.NDArray[np.float32] = np.float32(1) - np.float32(1) / n
+    phi: np.float32 = -capillary_suction
 
-    water_retention_curve = (np.float32(1) / (np.float32(1) + (alpha * phi) ** n)) ** m
+    water_retention_curve: npt.NDArray[np.float32] = (
+        np.float32(1) / (np.float32(1) + (alpha * phi) ** n)
+    ) ** m
 
-    theta = water_retention_curve * (thetas - thetar) + thetar
-    return theta
+    return water_retention_curve * (thetas - thetar) + thetar
 
 
 @njit(cache=True, inline="always")
-def get_critical_soil_moisture_content(p, wfc, wwp):
+def get_critical_soil_moisture_content(
+    p: npt.NDArray[np.float32],
+    wfc: npt.NDArray[np.float32],
+    wwp: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Calculate the critical soil moisture content.
 
     The critical soil moisture content is defined as the quantity of stored soil moisture below
@@ -133,6 +140,15 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
     extract water from the soil at a lower soil moisture content. Thus when p is 1 the critical
     soil moisture content is equal to the wilting point, and when p is 0 the critical soil moisture
     content is equal to the field capacity.
+
+    Args:
+        p: The fraction of easily available soil water, between 0 and 1.
+        wfc: The field capacity in m.
+        wwp: The wilting point in m.
+
+    Returns:
+        The critical soil moisture content in m.
+
     """
     return (np.float32(1) - p) * (wfc - wwp) + wwp
 
@@ -1738,7 +1754,16 @@ class Soil(Module):
 
         For each of the land cover classes the vertical water transport is simulated
         Distribution of water holding capiacity in 3 soil layers based on saturation excess overland flow
-        Dependend on soil depth, soil hydraulic parameters
+        Dependend on soil depth, soil hydraulic parameters.
+
+        Returns:
+            interflow: lateral flow from the soil to the stream [m/day]
+            runoff: surface runoff [m/day]
+            groundwater_recharge: recharge to the groundwater [m/day]
+            open_water_evaporation: open water evaporation.
+                In this module, added are evaporation from padies, and from sealed areas (recent rainfall) [m/day]
+            transpiration: actual transpiration [m/day]
+            actual_bare_soil_evaporation: actual bare soil evaporation [m/day]
         """
         timer = TimingModule("Soil")
 

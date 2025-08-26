@@ -52,7 +52,18 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
 def parse_config(
     config_path: dict | Path | str, current_directory: Path | None = None
 ) -> dict[str, Any]:
-    """Parse config."""
+    """Parse config.
+
+    This method recursively parses the config file and resolves any 'inherits' keys.
+
+    Args:
+        config_path: Path to the config file or a dict with the config.
+        current_directory: Current directory to resolve relative paths.
+            If None, the current working directory is used.
+
+    Returns:
+        Full model configuation of the model without any remaining 'inherits' keys.
+    """
     if current_directory is None:
         current_directory = Path.cwd()
 
@@ -203,7 +214,11 @@ def run_model_with_method(
     method_args: dict = {},
     close_after_run=True,
 ) -> GEBModel | None:
-    """Run model."""
+    """Run model with a specific method.
+
+    Returns:
+        GEBModel if gui is False, else None
+    """
     # check if we need to run the model in optimized mode
     # if the model is already running in optimized mode, we don't need to restart it
     # or else we start an infinite loop
@@ -403,6 +418,13 @@ def customize_data_catalog(data_catalogs, data_root=None):
 
     This enables reading the data catalog from a different location than the location of the yml-file
     without the need to specify root in the meta of the data catalog.
+
+    Args:
+        data_catalogs: List of paths to data catalog yml files.
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
+
+    Returns:
+        List of paths to data catalog yml files, possibly modified to include the data_root.
     """
     if data_root:
         customized_data_catalogs = []
