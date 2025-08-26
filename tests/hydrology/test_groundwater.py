@@ -2,10 +2,11 @@ import math
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 from affine import Affine
 
 from geb.build.workflows.general import calculate_cell_area
@@ -19,7 +20,7 @@ from geb.hydrology.groundwater.model import (
 from ..testconfig import output_folder, tmp_folder
 
 
-def decompress(array, mask):
+def decompress(array, mask) -> npt.NDArray[Any]:
     if array.ndim == 1:
         out = np.full(mask.shape, np.nan)
     elif array.ndim == 2:
@@ -54,7 +55,7 @@ gt: tuple[float, float, float, float, float, float] = (
 cell_area = calculate_cell_area(Affine.from_gdal(*gt), (YSIZE, XSIZE))
 
 
-def compress(array, mask):
+def compress(array, mask) -> npt.NDArray[Any]:
     return array[..., ~mask]
 
 
@@ -76,7 +77,7 @@ class DummyGrid:
     def __init__(self) -> None:
         pass
 
-    def decompress(self, array):
+    def decompress(self, array) -> npt.NDArray[Any]:
         return decompress(array, basin_mask)
 
 

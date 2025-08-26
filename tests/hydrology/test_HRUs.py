@@ -1,4 +1,5 @@
 import numpy as np
+import numpy.typing as npt
 import pytest
 
 from geb.hydrology.HRUs import determine_nearest_river_cell, to_grid, to_HRU
@@ -43,11 +44,17 @@ def test_determine_nearest_river_cell() -> None:
 
 
 @pytest.fixture
-def common_data():
+def common_data() -> tuple[
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.int32],
+    npt.NDArray[np.float32],
+]:
     grid_data = np.array([1, 2, 3], dtype=np.float32)
     HRU_data = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=np.float32)
     HRU_data_with_nan = np.array([1, np.nan, 3, 4, 5, 6, 7, 8, 9], dtype=np.float32)
-    grid_to_HRU = np.array([1, 4, 9])
+    grid_to_HRU = np.array([1, 4, 9], dtype=np.int32)
     land_use_ratio = np.array(
         [1, 0.2, 0.4, 0.4, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32
     )

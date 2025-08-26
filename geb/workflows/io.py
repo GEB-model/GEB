@@ -11,6 +11,7 @@ from typing import Any
 
 import cftime
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import pyproj
 import rasterio.crs
@@ -496,20 +497,28 @@ class AsyncGriddedForcingReader:
         self.loop = asyncio.new_event_loop()
         self.executor = ThreadPoolExecutor(max_workers=1)
 
-    def load(self, index):
+    def load(self, index: int) -> npt.NDArray[Any]:
+        """Load the data for the given index from the zarr file.
+
+        Args:
+            index: The index of the timestep to load in the zarr file, along the time dimension.
+
+        Returns:
+            The data for the given index from the zarr file.
+        """
         data = self.var[index, :]
         return data
 
-    async def load_await(self, index):
+    async def load_await(self, index: int) -> npt.NDArray[Any]:
         return await self.loop.run_in_executor(self.executor, lambda: self.load(index))
 
-    async def preload_next(self, index):
+    async def preload_next(self, index: int) -> None | npt.NDArray[Any]:
         # Preload the next timestep asynchronously
         if index + 1 < self.time_size:
             return await self.load_await(index + 1)
         return None
 
-    async def read_timestep_async(self, index):
+    async def read_timestep_async(self, index: int) -> npt.NDArray[Any]:
         assert index < self.time_size, "Index out of bounds."
         assert index >= 0, "Index out of bounds."
         # Check if the requested data is already preloaded, if so, just return that data
@@ -528,7 +537,7 @@ class AsyncGriddedForcingReader:
         self.current_data = data
         return data
 
-    def get_index(self, date):
+    def get_index(self, date) -> int:
         # convert datetime object to dtype of time coordinate. There is a very high probability
         # that the dataset is the same as the previous one or the next one in line,
         # so we can just check the current index and the next one. Only if those do not match
@@ -545,7 +554,7 @@ class AsyncGriddedForcingReader:
             )
             return indices.argmax()
 
-    def read_timestep(self, date, asynchronous=False):
+    def read_timestep(self, date, asynchronous=False) -> npt.NDArray[Any]:
         if asynchronous:
             index = self.get_index(date)
             fn = self.read_timestep_async(index)

@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+import numpy.typing as npt
 import pyflwdir
 import pytest
 
@@ -102,7 +103,7 @@ def test_get_channel_ratio() -> None:
 
 
 @pytest.fixture
-def ldd():
+def ldd() -> npt.NDArray[np.uint8]:
     """Fixture providing a local drainage direction (ldd) array for routing tests.
 
     Returns:
@@ -121,7 +122,7 @@ def ldd():
 
 
 @pytest.fixture
-def mask():
+def mask() -> npt.NDArray[np.bool_]:
     """Fixture providing a mask array for routing tests.
 
     Returns:
@@ -139,7 +140,7 @@ def mask():
 
 
 @pytest.fixture
-def Q_initial():
+def Q_initial() -> npt.NDArray[np.float32]:
     """Fixture providing a sample discharge array for testing.
 
     Returns:

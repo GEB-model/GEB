@@ -10,7 +10,8 @@ from copy import deepcopy
 from subprocess import PIPE, Popen
 
 import yaml
-from workflows.multiprocessing import (
+
+from .workflows.multiprocessing import (
     handle_ctrl_c,
     init_pool,
     pool_ctrl_c_handler,

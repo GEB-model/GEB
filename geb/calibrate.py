@@ -38,8 +38,9 @@ import yaml
 from deap import algorithms, base, creator, tools
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold
-from workflows.methods import multi_set
-from workflows.multiprocessing import (
+
+from .workflows.methods import multi_set
+from .workflows.multiprocessing import (
     handle_ctrl_c,
     init_pool,
     pool_ctrl_c_handler,

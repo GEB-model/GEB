@@ -11,15 +11,16 @@ from subprocess import PIPE, Popen
 
 import yaml
 from SALib.sample import latin as latin_sample, sobol as sobol_sample
-from workflows.methods import multi_set
-from workflows.multiprocessing import (
+
+from .workflows.methods import multi_set
+from .workflows.multiprocessing import (
     handle_ctrl_c,
     init_pool,
     pool_ctrl_c_handler,
 )
 
 
-def sensitivity_parameters(parameters, distinct_samples, type="saltelli"):
+def sensitivity_parameters(parameters, distinct_samples, type: str = "saltelli"):
     parameters_list = list(parameters.keys())
     bounds = [
         [param_data["min"], param_data["max"]] for param_data in parameters.values()
@@ -34,6 +35,8 @@ def sensitivity_parameters(parameters, distinct_samples, type="saltelli"):
         param_values = sobol_sample.sample(problem, distinct_samples, seed=42)
     elif type == "delta":
         param_values = latin_sample.sample(problem, distinct_samples, seed=42)
+    else:
+        raise ValueError(f"Unknown sensitivity analysis type: {type}")
 
     return param_values
 

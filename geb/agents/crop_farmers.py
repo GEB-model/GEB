@@ -4285,7 +4285,7 @@ class CropFarmers(AgentBaseClass):
 
         return yield_ratios_drought_event
 
-    def create_unique_groups(self, *additional_diffentiators: npt.NDarray):
+    def create_unique_groups(self, *additional_diffentiators: npt.NDArray):
         """Create unique groups based on elevation data and merge with crop calendar.
 
         Returns:

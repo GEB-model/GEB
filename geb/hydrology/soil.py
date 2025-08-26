@@ -21,13 +21,13 @@ from .landcover import (
 
 
 def calculate_soil_water_potential_MPa(
-    soil_moisture,  # [m]
-    soil_moisture_wilting_point,  # [m]
-    soil_moisture_field_capacity,  # [m]
-    soil_tickness,  # [m]
-    wilting_point=-1500,  # kPa
-    field_capacity=-33,  # kPa
-):
+    soil_moisture: npt.NDArray[np.float32],  # [m]
+    soil_moisture_wilting_point: npt.NDArray[np.float32],  # [m]
+    soil_moisture_field_capacity: npt.NDArray[np.float32],  # [m]
+    soil_tickness: npt.NDArray[np.float32],  # [m]
+    wilting_point: float | int = -1500,  # kPa
+    field_capacity: float | int = -33,  # kPa
+) -> npt.NDArray[np.float32]:
     # https://doi.org/10.1016/B978-0-12-374460-9.00007-X (eq. 7.16)
     soil_moisture_fraction = soil_moisture / soil_tickness
     # assert (soil_moisture_fraction >= 0).all() and (soil_moisture_fraction <= 1).all()
@@ -1620,8 +1620,25 @@ class Soil(Module):
         return topsoil_volumetric_content
 
     def calculate_net_radiation(
-        self, shortwave_radiation_downwelling, longwave_radiation_net, albedo
-    ):
+        self,
+        shortwave_radiation_downwelling: npt.NDArray[np.float32],
+        longwave_radiation_net: npt.NDArray[np.float32],
+        albedo: npt.NDArray[np.float32] | float | np.float32,
+    ) -> npt.NDArray[np.float32]:
+        """Calculate net radiation in W/m2.
+
+        Obtained by subtracting the reflected shortwave radiation
+        (calculated using albedo) from the downwelling shortwave radiation,
+        and adding the net longwave radiation.
+
+        Args:
+            shortwave_radiation_downwelling: Downwelling shortwave radiation [W/m2].
+            longwave_radiation_net: Net longwave radiation [W/m2].
+            albedo: Albedo [-].
+
+        Returns:
+            Net radiation [W/m2].
+        """
         net_radiation = (
             shortwave_radiation_downwelling * (1 - albedo) + longwave_radiation_net
         )  # W/m2
@@ -1749,7 +1766,14 @@ class Soil(Module):
         potential_evapotranspiration,
         natural_available_water_infiltration,
         actual_irrigation_consumption,
-    ):
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
         """Dynamic part of the soil module.
 
         For each of the land cover classes the vertical water transport is simulated

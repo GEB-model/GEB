@@ -3,7 +3,7 @@ from functools import wraps
 from typing import Any, Callable
 
 
-def handle_ctrl_c(func):
+def handle_ctrl_c(func) -> Callable:
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Callable:
         global ctrl_c_entered

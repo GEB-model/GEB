@@ -2,6 +2,7 @@ import json
 import shutil
 from datetime import datetime
 from operator import attrgetter
+from pathlib import Path
 from typing import Any, Callable
 
 import geopandas as gpd
@@ -132,7 +133,7 @@ class DynamicArray:
             self._n = n
 
     @property
-    def data(self):
+    def data(self) -> npt.NDArray[Any]:
         """
         View of the active portion of the DynamicArray.
 
@@ -152,7 +153,7 @@ class DynamicArray:
         self._data[: self.n] = value
 
     @property
-    def max_n(self):
+    def max_n(self) -> int:
         """
         The maximum capacity of the DynamicArray.
 
@@ -162,7 +163,7 @@ class DynamicArray:
         return self._data.shape[0]
 
     @property
-    def n(self):
+    def n(self) -> int:
         """
         The logical length (number of active elements).
 
@@ -354,7 +355,7 @@ class DynamicArray:
         else:
             return self.data.__getitem__(key)
 
-    def copy(self):
+    def copy(self) -> "DynamicArray":
         """
         Create a deep copy of this DynamicArray.
 
@@ -1004,7 +1005,7 @@ class Bucket:
             else:
                 np.save((path / name).with_suffix(".npy"), value)
 
-    def load(self, path):
+    def load(self, path) -> "Bucket":
         for filename in path.iterdir():
             if filename.suffixes == [".storearray", ".npz"]:
                 setattr(
@@ -1059,13 +1060,13 @@ class Store:
         self.model = model
         self.buckets = {}
 
-    def create_bucket(self, name, validator=None):
+    def create_bucket(self, name, validator=None) -> Bucket:
         assert name not in self.buckets
         bucket = Bucket(validator=validator)
         self.buckets[name] = bucket
         return bucket
 
-    def get_bucket(self, cls):
+    def get_bucket(self, cls) -> Bucket:
         name = self.get_name(cls)
         return self.buckets[name]
 
@@ -1106,5 +1107,5 @@ class Store:
             setattr(bucket_parent_class, split_name[-1], bucket)
 
     @property
-    def path(self):
+    def path(self) -> Path:
         return self.model.simulation_root_spinup / "store"

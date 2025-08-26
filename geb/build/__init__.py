@@ -92,7 +92,7 @@ class PathEncoder(json.JSONEncoder):
 
 
 def boolean_mask_to_graph(
-    mask: npt.NDAray[np.bool_], connectivity: int = 4, **kwargs: npt.NDArray[Any]
+    mask: npt.NDArray[np.bool_], connectivity: int = 4, **kwargs: npt.NDArray[Any]
 ) -> networkx.Graph:
     """Convert a boolean mask to an undirected NetworkX graph.
 

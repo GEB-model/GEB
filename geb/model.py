@@ -505,7 +505,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         return folder
 
     @property
-    def run_name(self):
+    def run_name(self) -> str:
         if self.mode == "w" and self.in_spinup:
             return self.config["general"]["spinup_name"]
         else:
@@ -518,7 +518,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 return "default"
 
     @property
-    def multiverse_name(self):
+    def multiverse_name(self) -> str | None:
         return self._multiverse_name
 
     @multiverse_name.setter
@@ -526,11 +526,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self._multiverse_name = str(value) if value is not None else None
 
     @property
-    def output_folder(self):
+    def output_folder(self) -> Path:
         return Path(self.config["general"]["output_folder"])
 
     @property
-    def input_folder(self):
+    def input_folder(self) -> Path:
         return Path(self.config["general"]["input_folder"])
 
     @property
@@ -542,23 +542,24 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         return 4326
 
     @property
-    def bounds(self):
-        return self.mask.total_bounds
+    def bounds(self) -> tuple[float, float, float, float]:
+        total_bounds = self.mask.total_bounds
+        return (total_bounds[0], total_bounds[1], total_bounds[2], total_bounds[3])
 
     @property
-    def xmin(self):
+    def xmin(self) -> float:
         return self.bounds[0]
 
     @property
-    def xmax(self):
+    def xmax(self) -> float:
         return self.bounds[2]
 
     @property
-    def ymin(self):
+    def ymin(self) -> float:
         return self.bounds[1]
 
     @property
-    def ymax(self):
+    def ymax(self) -> float:
         return self.bounds[3]
 
     def close(self) -> None:
