@@ -60,7 +60,22 @@ class DecisionModule:
         income: np.ndarray,
         amenity_value: np.ndarray,
         expected_damages: np.ndarray,
-    ):
+    ) -> np.ndarray:
+        """This function calculates the NPV of each flood event.
+
+        Args:
+            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+            n_events: number of events (droughts and floods) included in model run
+            discount_rate: time discounting rate
+            max_T: time horizon (same for each agent)
+            wealth: array containing the wealth of each household
+            income: array containing the income of each household
+            amenity_value: array containing the amenity value of each household
+            expected_damages: array containing the expected damages of each household under all events i
+        Returns:
+            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+        """
+
         NPV_t0 = (wealth + income + amenity_value).astype(
             np.float32
         )  # no flooding in t=0
