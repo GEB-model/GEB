@@ -111,7 +111,7 @@ class DecisionModule:
 
     @staticmethod
     @njit(cache=True)
-    def IterateThroughDrought(
+    def IterateThroughDroughts(
         NPV_summed: np.ndarray,
         n_events: int,
         discount_rate: float,
@@ -214,7 +214,7 @@ class DecisionModule:
             )
 
         elif mode == "drought":
-            NPV_summed = self.IterateThroughDrought(
+            NPV_summed = self.IterateThroughDroughts(
                 NPV_summed=NPV_summed,
                 n_events=n_events,
                 discount_rate=discount_rate,
