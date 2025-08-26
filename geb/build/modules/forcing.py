@@ -363,7 +363,8 @@ def process_forecasts_ECMWF(
     folder: Path,
     forecast_variables: list[str],
     forecast_model: str,
-) -> None:
+    target: xr.DataArray,
+) -> xr.DataArray:
     """Process downloaded ECMWF forecast data.
 
     Args:
@@ -381,16 +382,13 @@ def process_forecasts_ECMWF(
             # Process each .grb file
             print(f"Processing file: {file}")
 
-            ds: xr.Dataset = xr.open_dataset(
+            ds: xr.DataArray = xr.open_dataset(
                 file,
                 engine="cfgrib",
             )
 
             # rename number dim to member
             ds = ds.rename({"number": "member"})
-
-            # drop first step
-            ds = ds.isel(step=slice(1, None))
 
             # make new dimension wich is valid_time variable
             ds = ds.assign_coords(valid_time=ds.time + ds.step)
@@ -400,19 +398,26 @@ def process_forecasts_ECMWF(
             ds = ds.drop_vars(["time", "step", "surface"])
             ds = ds.rename({"valid_time": "time"})
 
-            # shift time dimension with one day
-            ds = ds.assign_coords(time=ds.time - np.timedelta64(24, "h"))
-
             # rename variables and correct units
             if forecast_variable == 228.128:  # total precipitation
-                ds = ds.rename({"tp": "Rainfall"})
-                ds["Rainfall"] = ds["Rainfall"] * 1000  # convert m to mm
-                ds["Rainfall"].attrs["units"] = "mm"
+                ds = ds.rename({"tp": "rainfall"})
+                ds["rainfall"] = ds["rainfall"] * 1000  # convert m to mm
+                ds["rainfall"] = ds["rainfall"] / 3600  # convert from mm/hr to mm/s
+                ds["rainfall"].attrs["units"] = "kg m-2 s-1"
+                ds = ds.diff(dim="time", n=1, label="lower")  # de-accumulate
+                ds["rainfall"] = xr.where(
+                    ds["rainfall"] > 0, ds["rainfall"], 0, keep_attrs=True
+                )
 
-                # de-accumulate rainfall
-            # save dataset to zarr
-            output_fn = file.with_suffix(".zarr")
-        print("prcessing done")
+            else:
+                raise NotImplementedError(
+                    f"Variable {forecast_variable} not implemented yet."
+                )
+        ds = ds.rio.write_crs(4326)
+        ds.raster.set_crs(4326)
+        ds = resample_like(ds, target, method="conservative")
+
+        return ds
 
 
 def plot_timeline(
@@ -1422,6 +1427,47 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
+    def set_pr_forecast(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+        name: str = "climate/pr_forecast"
+        da.attrs = {
+            "standard_name": "precipitation_flux",
+            "long_name": "Precipitation",
+            "units": "kg m-2 s-1",
+            "_FillValue": np.nan,
+        }
+        self.set_xy_attrs(da)
+
+        offset = 0
+
+        # maximum rainfall in one hour was 304.8 mm in 1956 in Holt, Missouri, USA
+        # https://www.guinnessworldrecords.com/world-records/737965-greatest-rainfall-in-one-hour
+        # we take a wide margin of 500 mm/h
+        max_value = 500 / 3600  # convert to kg/m2/s
+        precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
+
+        scaling_factor, out_dtype = calculate_scaling(
+            0, max_value, offset=offset, precision=precision
+        )
+
+        filters: list = [
+            FixedScaleOffset(
+                offset=offset,
+                scale=scaling_factor,
+                dtype=da.dtype,
+                astype=out_dtype,
+            ),
+        ]
+
+        da = self.set_other(
+            da,
+            name=name,
+            *args,
+            **kwargs,
+            time_chunksize=7 * 24,
+            filters=filters,
+        )
+        return da
+
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forecasts(
         self,
@@ -1474,7 +1520,9 @@ class Forcing:
             )
 
         # process downloaded forecast data and set as forcing
-        process_forecasts_ECMWF(folder, forecast_variables, forecast_model)
+        ds = process_forecasts_ECMWF(folder, forecast_variables, forecast_model, target)
+
+        ds = self.set_pr_forecast(ds["tp"])
 
     def setup_forcing_ISIMIP(self, resolution_arcsec: int, model: str) -> None:
         """Sets up the forcing data for GEB using ISIMIP data.
