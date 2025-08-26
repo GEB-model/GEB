@@ -157,6 +157,9 @@ class DecisionModule:
 
         Returns:
             NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+
+        Raises:
+            ValueError: If `mode` is not 'flood' or 'drought'.
         """
         # Allocate array
         NPV_summed = np.full((n_events + 3, n_agents), -1, dtype=np.float32)
