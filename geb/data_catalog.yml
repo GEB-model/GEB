@@ -11,7 +11,6 @@ fabdem:
     source_version: 1-2
   path: ../../data_catalogue/topography/fabdem.vrt
   path: ../../data_catalogue/topography/fabdem.vrt
-
 GRDC:
   crs: 4326
   data_type: GeoDataset
@@ -21,7 +20,15 @@ GRDC:
     source_license: https://grdc.bafg.de/downloads/policy_guidelines.pdf
     source_url: https://grdc.bafg.de/
   path: rivers/discharge/GRDC/GRDC_global.zip
-
+GRDC_monthly:
+  crs: 4326
+  data_type: GeoDataset
+  driver: netcdf
+  meta:
+    category: hydrology
+    source_license: https://grdc.bafg.de/downloads/policy_guidelines.pdf
+    source_url: https://grdc.bafg.de/
+  path: rivers/discharge/GRDC/GRDC_global_monthly.zip
 SWORD:
   data_type: GeoDataFrame
   driver: vector

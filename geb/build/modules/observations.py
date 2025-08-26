@@ -157,27 +157,35 @@ class Observations:
 
         # Load Q_obs dataset
         Q_obs_source = self.data_catalog.get_source("GRDC")
+        Q_obs_source_monthly = self.data_catalog.get_source("GRDC_monthly")
 
-        if str(Q_obs_source.path).endswith(".zip"):
-            # Handle zip file containing single .nc file
-            with zipfile.ZipFile(Q_obs_source.path, "r") as zip_file:
-                self.logger.info(
-                    f"Loading global GRDC discharge observations : {Q_obs_source.path}"
-                )
-                # Get the .nc file from the zip
-                nc_filename = [f for f in zip_file.namelist() if f.endswith(".nc")][0]
-                # Read file content into memory
-                with zip_file.open(nc_filename) as file:
-                    file_content = file.read()
+        def _open_Q_obs(source, key: str):
+            if str(source.path).endswith(".zip"):
+                # Handle zip file containing single .nc file
+                with zipfile.ZipFile(source.path, "r") as zip_file:
+                    self.logger.info(
+                        f"Loading global GRDC discharge observations : {source.path}"
+                    )
+                    # Get the .nc file from the zip
+                    nc_filename = [f for f in zip_file.namelist() if f.endswith(".nc")][
+                        0
+                    ]
+                    # Read file content into memory
+                    with zip_file.open(nc_filename) as file:
+                        file_content = file.read()
 
-            # Open dataset from memory buffer
-            Q_obs = xr.open_dataset(io.BytesIO(file_content), engine="h5netcdf")
+                # Open dataset from memory buffer
+                Q = xr.open_dataset(io.BytesIO(file_content), engine="h5netcdf")
 
-            # rename geo_x and geo_y to x and y
-            Q_obs = Q_obs.rename({"geo_x": "x", "geo_y": "y"})
-        else:
-            # Fallback to original method if not a zip file
-            Q_obs = self.data_catalog.get_geodataset("GRDC")  # is already renamed
+                # rename geo_x and geo_y to x and y
+                Q = Q.rename({"geo_x": "x", "geo_y": "y"})
+            else:
+                # Fallback to original method if not a zip file
+                Q = self.data_catalog.get_geodataset(key)  # is already renamed
+            return Q
+
+        # primary attempt (daily)
+        Q_obs = _open_Q_obs(Q_obs_source, "GRDC")
 
         # create folders
         snapping_discharge_folder = (
@@ -205,9 +213,9 @@ class Observations:
                 },
             )
             # Add the new station to the Q_obs dataset
-            Q_obs_merged = xr.concat([Q_obs, new_station_ds], dim="id")
+            Q_obs_merged_local = xr.concat([Q_obs, new_station_ds], dim="id")
 
-            return Q_obs_merged
+            return Q_obs_merged_local
 
         def process_station_data(Q_station, dt_format, startrow):
             # process data
@@ -289,17 +297,17 @@ class Observations:
                         )  # get the id of the station in the Q_obs dataset
 
         # Clip the Q_obs dataset to the region shapefile
-        def clip_Q_obs(Q_obs_merged, region_shapefile):
+        def clip_Q_obs(Q_obs_merged_local, region_shapefile):
             """Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries."""
             # Convert Q_obs points to GeoDataFrame
             Q_obs_gdf = gpd.GeoDataFrame(
                 {
-                    "id": Q_obs_merged.id.values,
-                    "x": Q_obs_merged.x.values,
-                    "y": Q_obs_merged.y.values,
+                    "id": Q_obs_merged_local.id.values,
+                    "x": Q_obs_merged_local.x.values,
+                    "y": Q_obs_merged_local.y.values,
                 },
                 geometry=gpd.points_from_xy(
-                    Q_obs_merged.x.values, Q_obs_merged.y.values
+                    Q_obs_merged_local.x.values, Q_obs_merged_local.y.values
                 ),
                 crs="EPSG:4326",
             )
@@ -310,20 +318,31 @@ class Observations:
             ]
 
             # select the Q_obs stations from the Q_obs dataset that are in the region shapefile
-            Q_obs_merged = Q_obs_merged.sel(id=Q_obs_gdf.id.values)
+            Q_obs_merged_local = Q_obs_merged_local.sel(id=Q_obs_gdf.id.values)
 
-            return Q_obs_merged
+            return Q_obs_merged_local
 
         Q_obs_clipped = clip_Q_obs(
             Q_obs_merged, region_shapefile
         )  # filter Q_obs stations based on the region shapefile
+
+        # Fallback to monthly if the clipped selection is empty (skip custom_river_stations on retry)
+        if len(Q_obs_clipped.id) == 0:
+            self.logger.info(
+                "No discharge stations found in the region with daily GRDC. Trying GRDC_monthly."
+            )
+            Q_obs = _open_Q_obs(Q_obs_source_monthly, "GRDC_monthly")
+            Q_obs_merged = Q_obs.copy()
+            Q_obs_clipped = clip_Q_obs(Q_obs_merged, region_shapefile)
+
+            if len(Q_obs_clipped.id) > 0:
+                Q_obs_clipped.attrs["title"] = "Mean monthly discharge (MQ)"
 
         if len(Q_obs_clipped.id) == 0:
             # No stations found - create empty files
             self.logger.warning(
                 "No discharge stations found in the region. Creating empty files"
             )
-
             # Create empty snapping results Excel file with proper columns
             empty_cols = [
                 "Q_obs_station_name",
