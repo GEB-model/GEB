@@ -56,8 +56,12 @@ def decision_template() -> None:
     return decision_template
 
 
-def test_expenditure_cap(decision_template) -> None:
-    """This function tests the functionality of the expenditure cap"""
+def test_expenditure_cap(decision_template: dict) -> None:
+    """This function tests the functionality of the expenditure cap.
+
+    Args:
+        decision_template: A dictionary containing the parameters for the decision module.
+    """
     decision_module = DecisionModule(model=None, agents=None)
 
     # quick basic test
@@ -90,8 +94,13 @@ def test_expenditure_cap(decision_template) -> None:
     )
 
 
-def test_risk_perception(decision_template) -> None:
-    """This function tests the functionality of risk perception"""
+def test_risk_perception(decision_template: dict) -> None:
+    """This function tests the functionality of risk perception.
+
+    Args:
+        decision_template: A dictionary containing the parameters for the decision module.
+
+    """
     decision_module = DecisionModule(model=None, agents=None)
     decision_template["expendature_cap"] = 10  # ensure all can adapt
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 0.01)
@@ -108,8 +117,12 @@ def test_risk_perception(decision_template) -> None:
     ), "Expected EU_do_nothing_low to be greater than EU_do_nothing_high"
 
 
-def test_damages(decision_template) -> None:
-    """This function tests the functionality of damages with and without adaptation"""
+def test_damages(decision_template: dict) -> None:
+    """This function tests the functionality of damages with and without adaptation.
+
+    Args:
+        decision_template: A dictionary containing the parameters for the decision module.
+    """
     decision_module = DecisionModule(model=None, agents=None)
 
     # make sure all can adapt and behave rationally
