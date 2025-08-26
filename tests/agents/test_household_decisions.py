@@ -5,7 +5,8 @@ from geb.agents.decision_module_flood import (
 )  # update to now decision model after merge
 
 
-def create_decision_template():
+def create_decision_template() -> None:
+    """This function creates a decision template for the decision module"""
     geom_id = "<GeoID>"
     n_agents = 100
     return_periods = np.array([10, 50])
@@ -52,6 +53,7 @@ def create_decision_template():
 
 
 def test_expenditure_cap() -> None:
+    """This function tests the functionality of the expenditure cap"""
     decision_module = DecisionModule(model=None, agents=None)
     decision_template = create_decision_template()
 
@@ -86,6 +88,7 @@ def test_expenditure_cap() -> None:
 
 
 def test_risk_perception():
+    """This function tests the functionality of risk perception"""
     decision_module = DecisionModule(model=None, agents=None)
     decision_template = create_decision_template()
     decision_template["expendature_cap"] = 10  # ensure all can adapt
@@ -104,6 +107,7 @@ def test_risk_perception():
 
 
 def test_damages():
+    """This function tests the functionality of damages with and without adaptation"""
     decision_module = DecisionModule(model=None, agents=None)
     decision_template = create_decision_template()
 
