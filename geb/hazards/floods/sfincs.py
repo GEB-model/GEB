@@ -578,10 +578,12 @@ class SFINCS:
         for return_period in self.config["return_periods"]:
             if rp_maps_coastal is None:
                 riverine_da = rp_maps_riverine[return_period]
-                riverine_da.to_zarr(
+                to_zarr(
+                    riverine_da,
                     self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
-                    mode="w",
+                    crs=riverine_da.rio.crs,
                 )
+
                 continue
 
             coastal_da = rp_maps_coastal[return_period]
@@ -624,10 +626,10 @@ class SFINCS:
                 dim="stacked", skipna=True
             )
             rp_map.rio.write_crs(riverine_da.rio.crs)
-
-            rp_map.to_zarr(
+            to_zarr(
+                rp_map,
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
-                mode="w",
+                crs=rp_map.rio.crs,
             )
 
     def run(self, event) -> None:
