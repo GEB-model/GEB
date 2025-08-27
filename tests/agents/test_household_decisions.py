@@ -227,3 +227,30 @@ def test_time_discounting(decision_template: dict) -> None:
     assert all(EU_adapt_low > EU_adapt_high), (
         "Expected all EU_adapt_high values to be less than EU_adapt_low due to higher time discounting"
     )
+
+
+def test_decision_horizon(decision_template: dict) -> None:
+    """This function tests the functionality of the decision horizon.
+
+    Args:
+        decision_template: A dictionary containing the parameters for the decision module.
+    """
+    decision_module = DecisionModule(model=None, agents=None)
+    # make sure all can adapt and behave rationally and set time discounting to zero
+    decision_template["expendature_cap"] = 10
+    decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
+
+    # set time discounting low (no adaptation costs should be incurred in year zero)
+    decision_template["T"] = 0
+    EU_adapt_low = decision_module.calcEU_adapt(**decision_template)
+    EU_do_not_adapt_low = decision_module.calcEU_do_nothing(**decision_template)
+    assert all(EU_adapt_low == EU_do_not_adapt_low), (
+        "Expected all EU_adapt_low values to be equal to EU_do_not_adapt_low as there are no costs incurred anymore"
+    )
+    # set time discounting high
+    decision_template["T"] = 20
+    EU_adapt_high = decision_module.calcEU_adapt(**decision_template)
+
+    assert all(EU_adapt_low < EU_adapt_high), (
+        "Expected all EU_adapt_high values to be greater than EU_adapt_low due to summation over longer time period"
+    )
