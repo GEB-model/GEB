@@ -141,8 +141,7 @@ class Crops:
             A dictionary containing processed crop data in a time series format or as a constant value.
 
         Raises:
-            ValueError
-                If crop_prices is neither a valid file path nor an integer/float.
+            ValueError: If crop_prices is neither a valid file path nor an integer/float.
 
         Notes:
             The function performs the following steps:

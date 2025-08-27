@@ -2,17 +2,77 @@ import json
 import shutil
 from datetime import datetime
 from operator import attrgetter
-from typing import Callable
+from pathlib import Path
+from typing import Any, Callable
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from .hydrology.HRUs import load_geom
 
 
 class DynamicArray:
-    """A dynamic array almost identical to a Numpy array, but that can grow and shrink in size."""
+    """A resizable array container that behaves like a NumPy array but can grow and shrink.
+
+    This class wraps a contiguous underlying buffer and exposes most array-like
+    behaviour while tracking a logical length that may be less than the physical
+    capacity. It is designed for use cases where elements are appended, removed,
+    or otherwise managed without reallocating on every size change.
+
+    The DynamicArray:
+    - Stores data in a fixed-capacity backing buffer and tracks a current length.
+    - Exposes a `data` view representing the active portion of the buffer.
+    - Implements NumPy protocols (array conversion, array function and ufunc)
+        so it interoperates with NumPy operations.
+    - Supports slicing, arithmetic, in-place operations and comparisons, delegating
+        to the underlying array where appropriate.
+    - Can be saved to and loaded from disk using the provided save and load helpers.
+
+    Args:
+            input_array: An existing array-like object to initialize from. If provided,
+                    the DynamicArray will use its values as the initial contents.
+            n: The initial logical length of the DynamicArray. Required when creating
+                    from scratch (i.e. when input_array is not provided).
+            max_n: The maximum capacity (physical size) of the backing buffer. If not
+                    provided when initializing from an existing array, the array itself is
+                    used as the backing buffer and no extra capacity is allocated.
+            extra_dims: Optional shape for additional trailing dimensions stored for
+                    each element (for example, per-element vectors or matrices). When
+                    provided, the backing buffer will have shape (max_n, *extra_dims).
+            extra_dims_names: Optional list of names for the extra dimensions. These
+                    are preserved and adjusted when slicing across extra dimensions.
+            dtype: Data type to allocate when creating an empty or preallocated array.
+                    Mutually exclusive with input_array.
+            fill_value: Optional fill value used to initialize the backing buffer when
+                    creating from dtype and max_n.
+
+    Raises:
+            ValueError: If neither input_array nor dtype is provided, or if both are
+            provided, or if requested logical length exceeds capacity.
+
+    Attributes:
+            data: A view of the active portion of the buffer (up to the logical length).
+            n: The logical length of the array (number of active elements).
+            max_n: The capacity of the backing buffer (maximum number of elements).
+            extra_dims_names: Names associated with any extra trailing dimensions.
+            (Internal) _data: The backing buffer storing the raw values.
+
+    Examples:
+            - Create from existing array:
+                    dyn = DynamicArray(input_array=some_array)
+
+            - Create an empty buffer with capacity and logical length:
+                    dyn = DynamicArray(n=5, max_n=100, dtype=some_dtype)
+
+            - Perform NumPy-like operations:
+                    dyn2 = dyn + 3
+                    mask = dyn > 0
+
+            - Slice preserving DynamicArray wrapper across the first axis:
+                    dyn_slice = dyn[:]  # returns a DynamicArray copy
+    """
 
     __slots__: list = ["_data", "_n", "_extra_dims_names"]
 
@@ -22,7 +82,7 @@ class DynamicArray:
         n=None,
         max_n=None,
         extra_dims=None,
-        extra_dims_names=[],
+        extra_dims_names: list[str] = [],
         dtype=None,
         fill_value=None,
     ) -> None:
@@ -73,46 +133,132 @@ class DynamicArray:
             self._n = n
 
     @property
-    def data(self):
+    def data(self) -> npt.NDArray[Any]:
+        """
+        View of the active portion of the DynamicArray.
+
+        Returns:
+            A NumPy view of the active elements (shape depends on extra dimensions).
+        """
         return self._data[: self.n]
 
     @data.setter
     def data(self, value) -> None:
+        """
+        Replace the active portion of the DynamicArray with `value`.
+
+        Args:
+            value: Array-like object with shape compatible with the active slice.
+        """
         self._data[: self.n] = value
 
     @property
-    def max_n(self):
+    def max_n(self) -> int:
+        """
+        The maximum capacity of the DynamicArray.
+
+        Returns:
+            The maximum number of elements the DynamicArray buffer can hold (elements).
+        """
         return self._data.shape[0]
 
     @property
-    def n(self):
+    def n(self) -> int:
+        """
+        The logical length (number of active elements).
+
+        Returns:
+            Current logical length (elements).
+        """
         return self._n
 
     @property
-    def extra_dims_names(self):
+    def extra_dims_names(self) -> npt.NDArray[np.str_] | None:
+        """
+        Names associated with any extra trailing dimensions.
+
+        Returns:
+            Array of names for extra trailing dimensions, or None.
+        """
         return self._extra_dims_names
 
     @extra_dims_names.setter
-    def extra_dims_names(self, value) -> None:
+    def extra_dims_names(self, value: npt.NDArray[np.str_]) -> None:
+        """
+        Set names for extra trailing dimensions.
+
+        Args:
+            value: Iterable of strings representing names for each extra trailing dimension.
+        """
         self._extra_dims_names = value
 
     @n.setter
     def n(self, value) -> None:
+        """
+        Set the logical length.
+
+        Args:
+            value: New logical length (elements).
+
+        Raises:
+            ValueError: If `value` exceeds the capacity `max_n`.
+        """
         if value > self.max_n:
             raise ValueError("n cannot exceed max_n")
         self._n = value
 
-    def __array_finalize__(self, obj):
+    def __array_finalize__(self, obj) -> None:
+        """
+        Array finalize hook for NumPy interoperability.
+
+        Notes:
+            Kept minimal; no additional finalization is required currently.
+
+        Args:
+            obj: The object being finalized (handled by NumPy protocols).
+        """
         if obj is None:
             return
 
-    def __array__(self, dtype=None):
+    def __array__(self, dtype=None) -> np.ndarray:
+        """
+        Return a NumPy array representation of the active data.
+
+        Args:
+            dtype: Optional dtype to cast the returned array.
+
+        Returns:
+            A NumPy array containing the active elements.
+        """
         return np.asarray(self._data[: self.n], dtype=dtype)
 
-    def __array_interface__(self):
+    def __array_interface__(self) -> dict[str, Any]:
+        """
+        Expose the array interface of the entire underlying data (up to max_n).
+
+        Returns:
+            The __array_interface__ mapping from the underlying NumPy array.
+        """
         return self._data.__array_interface__()
 
-    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+    def __array_ufunc__(
+        self, ufunc: Callable, method: str, *inputs: tuple[Any], **kwargs: dict[Any]
+    ) -> Any:
+        """
+        Handle NumPy ufuncs applied to DynamicArray instances.
+
+        The active slices of DynamicArray operands are used for the operation. Results
+        are wrapped back into DynamicArray when appropriate.
+
+        Args:
+            ufunc: The NumPy ufunc being applied.
+            method: Ufunc method name (e.g., "__call__", "reduce").
+            *inputs: Operands for the ufunc.
+            **kwargs: Keyword arguments forwarded to the ufunc.
+
+        Returns:
+            Result of the ufunc, possibly wrapped as a DynamicArray.
+        """
         modified_inputs = tuple(
             input_.data if isinstance(input_, DynamicArray) else input_
             for input_ in inputs
@@ -125,7 +271,21 @@ class DynamicArray:
         else:
             return self.__class__(result, max_n=self._data.shape[0])
 
-    def __array_function__(self, func, types, args, kwargs):
+    def __array_function__(
+        self, func: Callable, types: tuple[Any], args: tuple[Any], kwargs: dict[Any]
+    ) -> Any:
+        """
+        Delegate NumPy __array_function__ calls to the underlying NumPy array.
+
+        Args:
+            func: The NumPy function being invoked.
+            types: Sequence of types participating in the operation.
+            args: Positional arguments passed to the function.
+            kwargs: Keyword arguments passed to the function.
+
+        Returns:
+            Result of calling the function on the underlying NumPy array(s).
+        """
         # Explicitly call __array_function__ of the underlying NumPy array
         modified_args: tuple = tuple(
             arg.data if isinstance(arg, DynamicArray) else arg for arg in args
@@ -139,9 +299,31 @@ class DynamicArray:
         )
 
     def __setitem__(self, key, value) -> None:
+        """
+        Set item(s) in the active portion of the array.
+
+        Args:
+            key: Index or slice.
+            value: Value to assign.
+        """
         self.data.__setitem__(key, value)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> "DynamicArray | np.ndarray":
+        """
+        Retrieve item(s) or a sliced DynamicArray.
+
+        Notes:
+            - If the slice selects the entire first axis (elements), returns a
+              DynamicArray preserving extra-dimension names when possible.
+            - If a full slice (:) is requested, returns a copy.
+            - Otherwise returns a NumPy array view.
+
+        Args:
+            key: Index, slice, or tuple of indices/slices.
+
+        Returns:
+            A DynamicArray for full-element selections or a NumPy array for other slices.
+        """
         # if the first key selects the entire array, we can return
         # a new DynamicArray, but with only the extra dimensions
         # sliced
@@ -173,12 +355,12 @@ class DynamicArray:
         else:
             return self.data.__getitem__(key)
 
-    def copy(self):
-        """Create a deep copy of this DynamicArray.
+    def copy(self) -> "DynamicArray":
+        """
+        Create a deep copy of this DynamicArray.
 
         Returns:
             A new DynamicArray instance that is a deep copy of the current instance.
-
         """
         new_array = DynamicArray.__new__(DynamicArray)
         new_array._data = self._data.copy()
@@ -191,15 +373,46 @@ class DynamicArray:
         return new_array
 
     def __repr__(self) -> str:
+        """
+        Formal string representation.
+
+        Returns:
+            A string that represents this DynamicArray.
+        """
         return "DynamicArray(" + self.data.__str__() + ")"
 
     def __str__(self) -> str:
+        """
+        Informal string representation.
+
+        Returns:
+            A human-readable string for the active data.
+        """
         return self.data.__str__()
 
     def __len__(self) -> int:
+        """
+        Number of active elements.
+
+        Returns:
+            The logical length (elements).
+        """
         return self._n
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
+        """
+        Fallback attribute access to the active NumPy array.
+
+        If the attribute is one of the internal attributes, defer to the normal
+        attribute lookup. Otherwise, forward the attribute access to the active
+        NumPy data view.
+
+        Args:
+            name: Attribute name.
+
+        Returns:
+            The requested attribute value.
+        """
         if name in (
             "_data",
             "data",
@@ -213,6 +426,17 @@ class DynamicArray:
             return getattr(self.data, name)
 
     def __setattr__(self, name, value) -> None:
+        """
+        Set attributes either on the wrapper internals or on the active data.
+
+        Notes:
+            Internal attributes are set on the object itself. Other attributes
+            are forwarded to the active NumPy data view.
+
+        Args:
+            name: Attribute name.
+            value: Value to set.
+        """
         if name in (
             "_data",
             "data",
@@ -225,16 +449,31 @@ class DynamicArray:
         else:
             setattr(self.data, name, value)
 
-    def __getstate__(self):
-        return self.data.__getstate__()
+    def __sizeof__(self) -> int:
+        """
+        Return the memory size of the active data.
 
-    def __setstate__(self, state):
-        self.data.__setstate__(state)
-
-    def __sizeof__(self):
+        Returns:
+            Size in bytes as reported by the underlying array.
+        """
         return self.data.__sizeof__()
 
     def _perform_operation(self, other, operation: str, inplace: bool = False):
+        """
+        Helper to perform binary/unary array operations delegating to NumPy.
+
+        This normalizes DynamicArray operands to NumPy arrays and performs the
+        requested operation by name. Optionally performs the operation in-place
+        on the active slice.
+
+        Args:
+            other: The other operand (DynamicArray or array-like).
+            operation: Name of the operation method to call on the active data.
+            inplace: Whether to perform the operation in-place.
+
+        Returns:
+            A new DynamicArray wrapping the result, or self if inplace=True.
+        """
         if isinstance(other, DynamicArray):
             other = other._data[: other._n]
         fn = getattr(self.data, operation)
@@ -249,110 +488,380 @@ class DynamicArray:
         else:
             return self.__class__(result, max_n=self._data.shape[0])
 
-    def __add__(self, other):
+    def __add__(self, other) -> "DynamicArray":
+        """Addition operator.
+
+        Args:
+            other: The value to add (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the addition operation.
+        """
         return self._perform_operation(other, "__add__")
 
-    def __radd__(self, other):
+    def __radd__(self, other) -> "DynamicArray":
+        """Right-hand addition operator.
+
+        Args:
+            other: The value to add (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the addition operation.
+        """
         return self._perform_operation(other, "__radd__")
 
-    def __iadd__(self, other):
+    def __iadd__(self, other) -> "DynamicArray":
+        """In-place addition operator.
+
+        Args:
+            other: The value to add (scalar or array-like).
+
+        Returns:
+            The modified DynamicArray instance.
+        """
         return self._perform_operation(other, "__add__", inplace=True)
 
-    def __sub__(self, other):
+    def __sub__(self, other) -> "DynamicArray":
+        """Subtraction operator.
+
+        Args:
+            other: The value to subtract by (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the subtraction operation.
+        """
         return self._perform_operation(other, "__sub__")
 
-    def __rsub__(self, other):
+    def __rsub__(self, other) -> "DynamicArray":
+        """Right-hand subtraction operator.
+
+        Args:
+            other: The value to subtract by (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the subtraction operation.
+
+        """
         return self._perform_operation(other, "__rsub__")
 
-    def __isub__(self, other):
+    def __isub__(self, other) -> "DynamicArray":
+        """In-place subtraction operator.
+
+        Args:
+            other: The value to subtract by (scalar or array-like).
+
+        Returns:
+            The modified DynamicArray instance.
+
+        """
         return self._perform_operation(other, "__sub__", inplace=True)
 
-    def __mul__(self, other):
+    def __mul__(self, other) -> "DynamicArray":
+        """Multiplication operator.
+
+        Args:
+            other: The value to multiply by (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the multiplication operation.
+
+        """
         return self._perform_operation(other, "__mul__")
 
-    def __rmul__(self, other):
+    def __rmul__(self, other) -> "DynamicArray":
+        """Right-hand multiplication operator.
+
+        Args:
+            other: The value to multiply by (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the multiplication operation.
+
+        """
         return self._perform_operation(other, "__rmul__")
 
-    def __imul__(self, other):
+    def __imul__(self, other) -> "DynamicArray":
+        """In-place multiplication operator.
+
+        Args:
+            other: The value to multiply by (scalar or array-like).
+
+            Returns:
+            The modified DynamicArray instance.
+
+        """
         return self._perform_operation(other, "__mul__", inplace=True)
 
-    def __truediv__(self, other):
+    def __truediv__(self, other) -> "DynamicArray":
+        """True division operator.
+
+        Args:
+            other: The value to divide by (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the true division operation.
+
+        """
         return self._perform_operation(other, "__truediv__")
 
-    def __rtruediv__(self, other):
+    def __rtruediv__(self, other) -> "DynamicArray":
+        """Right-hand true division operator.
+
+        Args:
+            other: The value to divide by (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the true division operation.
+
+        """
         return self._perform_operation(other, "__rtruediv__")
 
-    def __itruediv__(self, other):
+    def __itruediv__(self, other) -> "DynamicArray":
+        """In-place true division operator.
+
+        Args:
+            other: The value to divide by (scalar or array-like).
+
+        Returns:
+            The modified DynamicArray instance.
+
+        """
         return self._perform_operation(other, "__truediv__", inplace=True)
 
-    def __floordiv__(self, other):
+    def __floordiv__(self, other) -> "DynamicArray":
+        """Floor division operator.
+
+        Args:
+            other: The value to floor divide by (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the floor division operation.
+
+        """
         return self._perform_operation(other, "__floordiv__")
 
-    def __rfloordiv__(self, other):
+    def __rfloordiv__(self, other) -> "DynamicArray":
+        """Right-hand floor division operator.
+
+        Args:
+            other: The value to floor divide by (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the floor division operation.
+
+        """
         return self._perform_operation(other, "__rfloordiv__")
 
-    def __ifloordiv__(self, other):
+    def __ifloordiv__(self, other) -> "DynamicArray":
+        """In-place floor division operator.
+
+        Args:
+            other: The value to floor divide by (scalar or array-like).
+
+        Returns:
+            The modified DynamicArray instance.
+
+        """
         return self._perform_operation(other, "__floordiv__", inplace=True)
 
-    def __mod__(self, other):
+    def __mod__(self, other) -> "DynamicArray":
+        """Modulo operator.
+
+        Args:
+            other: The value to modulo by (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the modulo operation.
+
+        """
         return self._perform_operation(other, "__mod__")
 
-    def __rmod__(self, other):
+    def __rmod__(self, other) -> "DynamicArray":
+        """Right-hand modulo operator.
+
+        Args:
+            other: The value to modulo by (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element resulting from the modulo operation.
+
+        """
         return self._perform_operation(other, "__rmod__")
 
-    def __imod__(self, other):
+    def __imod__(self, other) -> "DynamicArray":
+        """In-place modulo operator.
+
+        Args:
+            other: The value to modulo by (scalar or array-like).
+
+        Returns:
+            The modified DynamicArray instance.
+        """
         return self._perform_operation(other, "__mod__", inplace=True)
 
-    def __pow__(self, other):
+    def __pow__(self, other) -> "DynamicArray":
+        """Power operator.
+
+        Args:
+            other: The exponent value (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element raised to the power of `other`.
+        """
         return self._perform_operation(other, "__pow__")
 
-    def __rpow__(self, other):
+    def __rpow__(self, other) -> "DynamicArray":
+        """Right-hand power operator.
+
+        Args:
+            other: The exponent value (scalar or array-like).
+
+        Returns:
+            A DynamicArray with each element raised to the power of `other`.
+        """
         return self._perform_operation(other, "__rpow__")
 
-    def __ipow__(self, other):
+    def __ipow__(self, other) -> "DynamicArray":
+        """In-place power operator.
+
+        Returns:
+            The modified DynamicArray instance.
+        """
         return self._perform_operation(other, "__pow__", inplace=True)
 
-    def _compare(self, value: object, operation: str) -> bool:
+    def _compare(self, value: Any, operation: str) -> "DynamicArray":
+        """
+        Helper for comparison operations.
+
+        Args:
+            value: Value to compare against (DynamicArray or scalar).
+            operation: Comparison method name.
+
+        Returns:
+            Result of the comparison.
+        """
         if isinstance(value, DynamicArray):
             return self.__class__(
                 getattr(self.data, operation)(value.data), max_n=self._data.shape[0]
             )
-        return getattr(self.data, operation)(value)
+        return self.__class__(getattr(self.data, operation)(value))
 
-    def __eq__(self, value: object) -> bool:
+    def __eq__(self, value: Any) -> "DynamicArray":
+        """Equality comparison.
+
+        Args:
+            value: Value to compare against (DynamicArray or scalar).
+
+        Returns:
+            Result of the comparison.
+        """
         return self._compare(value, "__eq__")
 
-    def __ne__(self, value: object) -> bool:
+    def __ne__(self, value: Any) -> "DynamicArray":
+        """Inequality comparison.
+
+        Args:
+            value: Value to compare against (DynamicArray or scalar).
+
+        Returns:
+            Result of the comparison.
+        """
         return self._compare(value, "__ne__")
 
-    def __gt__(self, value: object) -> bool:
+    def __gt__(self, value: Any) -> "DynamicArray":
+        """Greater-than comparison.
+
+        Args:
+            value: Value to compare against (DynamicArray or scalar).
+
+        Returns:
+            Result of the comparison.
+        """
         return self._compare(value, "__gt__")
 
-    def __ge__(self, value: object) -> bool:
+    def __ge__(self, value: Any) -> "DynamicArray":
+        """Greater-than-or-equal comparison.
+
+        Args:
+            value: Value to compare against (DynamicArray or scalar).
+
+        Returns:
+            Result of the comparison.
+        """
         return self._compare(value, "__ge__")
 
-    def __lt__(self, value: object) -> bool:
+    def __lt__(self, value: Any) -> "DynamicArray":
+        """Less-than comparison.
+
+        Args:
+            value: Value to compare against (DynamicArray or scalar).
+
+        Returns:
+            Result of the comparison, possibly wrapped as a DynamicArray.
+        """
         return self._compare(value, "__lt__")
 
-    def __le__(self, value: object) -> bool:
+    def __le__(self, value: Any) -> "DynamicArray":
+        """Less-than-or-equal comparison.
+
+        Args:
+            value: Value to compare against (DynamicArray or scalar).
+
+        Returns:
+            Result of the comparison.
+        """
         return self._compare(value, "__le__")
 
-    def __and__(self, other):
+    def __and__(self, other) -> "DynamicArray":
+        """Bitwise and / logical and operator.
+
+        Returns:
+            A DynamicArray with each element resulting from the bitwise and operation.
+        """
         return self._perform_operation(other, "__and__")
 
-    def __or__(self, other):
+    def __or__(self, other) -> "DynamicArray":
+        """Bitwise or / logical or operator.
+
+        Returns:
+            A DynamicArray with each element resulting from the bitwise or operation.
+
+        """
         return self._perform_operation(other, "__or__")
 
-    def __neg__(self):
+    def __neg__(self) -> "DynamicArray":
+        """Unary negation.
+
+        Returns:
+            A DynamicArray with each element negated.
+
+        """
         return self._perform_operation(None, "__neg__")
 
-    def __pos__(self):
+    def __pos__(self) -> "DynamicArray":
+        """Unary plus (no-op).
+
+        Returns:
+            A DynamicArray identical to self.
+
+        """
         return self._perform_operation(None, "__pos__")
 
-    def __invert__(self):
+    def __invert__(self) -> "DynamicArray":
+        """Bitwise invert / logical not.
+
+        Returns:
+            A DynamicArray with each element inverted.
+        """
         return self._perform_operation(None, "__invert__")
 
     def save(self, path) -> None:
+        """
+        Save the DynamicArray to disk in a compressed NumPy archive.
+
+        Args:
+            path: Path-like object (without suffix) where the .storearray.npz file will be written.
+        """
         np.savez_compressed(
             path.with_suffix(".storearray.npz"),
             **{slot: getattr(self, slot) for slot in self.__slots__},
@@ -360,6 +869,15 @@ class DynamicArray:
 
     @classmethod
     def load(cls, path) -> "DynamicArray":
+        """
+        Load a DynamicArray previously saved with `save`.
+
+        Args:
+            path: Path to a .storearray.npz file.
+
+        Returns:
+            A reconstructed DynamicArray instance.
+        """
         assert path.suffixes == [".storearray", ".npz"]
         with np.load(path) as data:
             obj = cls.__new__(cls)
@@ -383,7 +901,7 @@ class Bucket:
     def __init__(self, validator: Callable | None = None) -> None:
         self._validator = validator
 
-    def __iter__(self):
+    def __iter__(self) -> tuple[str, Any]:
         """Iterate over the items in the bucket.
 
         Yields:
@@ -394,7 +912,34 @@ class Bucket:
                 continue
             yield name, value
 
-    def __setattr__(self, name, value) -> None:
+    def __setattr__(
+        self,
+        name: str,
+        value: DynamicArray
+        | int
+        | float
+        | np.ndarray
+        | list
+        | gpd.GeoDataFrame
+        | pd.DataFrame
+        | str
+        | dict
+        | datetime
+        | Callable,
+    ) -> None:
+        """Set an value in the bucket with optional validation, except if the name is '_validator'.
+
+        If the name is '_validator', it sets the validator function directly.
+        If the name is not '_validator' and a validator function is provided, it validates the value before setting it.
+        If no validator is provided, it sets the value directly.
+
+        Args:
+            name: The name of the attribute to set.
+            value: The value to set.
+
+        Raises:
+            ValueError: If the value does not pass validation.
+        """
         # If the name is 'validator', we allow setting it directly.
         # i.e., we do not validate the validator itself.
         if name == "_validator":
@@ -460,7 +1005,7 @@ class Bucket:
             else:
                 np.save((path / name).with_suffix(".npy"), value)
 
-    def load(self, path):
+    def load(self, path) -> "Bucket":
         for filename in path.iterdir():
             if filename.suffixes == [".storearray", ".npz"]:
                 setattr(
@@ -515,13 +1060,13 @@ class Store:
         self.model = model
         self.buckets = {}
 
-    def create_bucket(self, name, validator=None):
+    def create_bucket(self, name, validator=None) -> Bucket:
         assert name not in self.buckets
         bucket = Bucket(validator=validator)
         self.buckets[name] = bucket
         return bucket
 
-    def get_bucket(self, cls):
+    def get_bucket(self, cls) -> Bucket:
         name = self.get_name(cls)
         return self.buckets[name]
 
@@ -562,5 +1107,5 @@ class Store:
             setattr(bucket_parent_class, split_name[-1], bucket)
 
     @property
-    def path(self):
+    def path(self) -> Path:
         return self.model.simulation_root_spinup / "store"

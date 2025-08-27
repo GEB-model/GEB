@@ -203,19 +203,19 @@ class SnowFrost(Module):
     ]:
         """Dynamic part of the snow module.
 
-        Distinguish between rain/snow and calculates snow melt and glacier melt
-        The equation is a modification of:
+        Distinguish between rain/snow and calculates snow melt and glacier melt.
 
         References:
             Speers, D.D., Versteeg, J.D. (1979) Runoff forecasting for reservoir operations - the pastand the future. In: Proceedings 52nd Western Snow Conference, 149-156
-
-        Frost index in soil [degree days] based on:
-
-        References:
             Molnau and Bissel (1983, A Continuous Frozen Ground Index for Flood Forecasting. In: Maidment, Handbook of Hydrology, p. 7.28, 7.55)
 
         Todo:
-            calculate sinus shape function for the southern hemisspere
+            calculate sinus shape function for the southern hemispere
+
+        Returns:
+            snow: snow (equal to a part of precipitation) [m]
+            rain: rain (equal to a part of precipitation) [m]
+            snow_melt: total snow melt from all snow layers [m]
         """
         if __debug__:
             self.HRU.var.prevSnowCover = self.HRU.var.SnowCoverS.copy()

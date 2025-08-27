@@ -217,6 +217,9 @@ def resample_like(
     Returns:
         A new DataArray that has been resampled to match the target's grid.
 
+    Raises:
+        ValueError: if the method is not 'bilinear', 'nearest', or 'conservative'.
+
     """
     source_spatial_ref: Any = source.spatial_ref
 

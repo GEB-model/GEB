@@ -17,7 +17,11 @@ from tqdm import tqdm
 
 
 def make_relative_paths(config, model_root, new_root, relpath=None):
-    """Return dict with paths to the new model new root."""
+    """Return dict with paths to the new model new root.
+
+    Raises:
+        ValueError: if model_root and new_root do not have a common path.
+    """
     if not relpath:
         commonpath = ""
         if os.path.splitdrive(model_root)[0] == os.path.splitdrive(new_root)[0]:
@@ -439,31 +443,3 @@ def configure_sfincs_model(sf, model_root, simulation_root) -> None:
     sf.write_config()
     sf.plot_basemap(fn_out="src_points_check.png")
     sf.plot_forcing(fn_out="forcing.png")
-
-
-def calculate_two_year_return(discharge_series, discharge_name):
-    """Processes a discharge series to calculate the 2-year return period value."""
-    # Reset index and preprocess the data
-    discharge_series = discharge_series.reset_index()
-    discharge_series["time"] = pd.to_datetime(discharge_series["time"])
-    discharge_series = discharge_series.sort_values(by="time", ascending=True)
-    discharge_series[discharge_name] = discharge_series[discharge_name].astype(float)
-    discharge_series = discharge_series.dropna(subset=["discharge"])
-
-    # Handle infinite values if any
-    discharge_series = discharge_series[np.isfinite(discharge_series[discharge_name])]
-    discharge_series.set_index("time", inplace=True)
-
-    # Extract the discharge series
-    discharge_series = discharge_series[discharge_name]
-
-    # Fit the model and calculate return periods
-    model = EVA(discharge_series)
-    model.get_extremes(method="BM", block_size="365.2425D")
-    model.fit_model()
-    summary = model.get_summary(
-        return_period=[1, 2, 5, 10, 25, 50, 100, 250, 500, 1000], alpha=0.95
-    )
-
-    # Get the 2-year return period value
-    return summary.loc[2.0, "return value"]

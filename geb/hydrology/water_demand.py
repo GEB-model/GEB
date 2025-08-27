@@ -19,6 +19,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 from honeybees.library.raster import write_to_array
@@ -119,16 +121,24 @@ class WaterDemand(Module):
             available_groundwater_m3,
         )
 
-    def withdraw(self, source, demand):
+    def withdraw(self, source, demand) -> npt.NDArray[Any]:
         withdrawal = np.minimum(source, demand)
         source -= withdrawal  # update in place
         demand -= withdrawal  # update in place
         return withdrawal
 
-    def step(self, potential_evapotranspiration):
+    def step(
+        self, potential_evapotranspiration: npt.NDArray[np.float32]
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        float,
+    ]:
         timer: TimingModule = TimingModule("Water demand")
 
-        total_water_demand_loss_m3 = 0
+        total_water_demand_loss_m3 = 0.0
 
         (
             domestic_water_demand_per_household,

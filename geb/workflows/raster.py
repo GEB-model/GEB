@@ -16,6 +16,10 @@ def reclassify(
 
     Returns:
         Reclassified array with the same dimensions and coordinates
+
+    Raises:
+        ValueError: If the method is not 'dict' or 'lookup', or in the case of lookup method if keys are not positive integers
+        TypeError: If the input is not an xarray.DataArray or numpy.ndarray
     """
     # create numpy array from dictionary values to get the dtype of the output
     values = np.array(list(remap_dict.values()))

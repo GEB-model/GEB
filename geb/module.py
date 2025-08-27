@@ -13,15 +13,15 @@ class Module(ABC):
 
     @property
     @abstractmethod
-    def name(self):
+    def name(self) -> str:
         pass
 
     @abstractmethod
-    def spinup(self):
+    def spinup(self) -> None:
         pass
 
     @abstractmethod
-    def step(self):
+    def step(self) -> None:
         pass
 
     def report(self, module, local_variables) -> None:

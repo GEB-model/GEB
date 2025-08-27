@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 import pyflwdir
@@ -329,12 +331,17 @@ class KinematicWave(Router):
                 This is the ratio of the available storage that can be used for abstraction.
 
         Returns:
-            The available storage of the river network.
+            The available storage of the river network [m3].
         """
         return self.get_total_storage() * maximum_abstraction_ratio
 
     def get_total_storage(self) -> npt.NDArray[np.float32]:
-        """Get the total storage of the river network, which is the sum of the available storage in each cell."""
+        """Get the total storage of the river network, which is the sum of the available storage in each cell.
+
+        Returns:
+            The total storage of the river network [m3].
+
+        """
         total_storage = self.calculate_river_storage_from_discharge(
             discharge=self.Q_prev,
             river_alpha=self.river_alpha,
@@ -528,7 +535,11 @@ class Accuflux(Router):
     """
 
     def __init__(
-        self, dt: float | int, river_network: pyflwdir.FlwdirRaster, *args, **kwargs
+        self,
+        dt: float | int,
+        river_network: pyflwdir.FlwdirRaster,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         super().__init__(dt, river_network, *args, **kwargs)
 
@@ -700,7 +711,12 @@ class Accuflux(Router):
         )
 
     def get_total_storage(self) -> npt.NDArray[np.float32]:
-        """Get the total storage of the river network, which is the sum of the available storage in each cell."""
+        """Get the total storage of the river network, which is the sum of the available storage in each cell.
+
+        Returns:
+            The total storage of the river network [m3].
+
+        """
         return self.get_available_storage(maximum_abstraction_ratio=1.0)
 
 

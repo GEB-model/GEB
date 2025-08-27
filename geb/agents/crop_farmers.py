@@ -1237,8 +1237,8 @@ class CropFarmers(AgentBaseClass):
             field_indices_by_farmer=self.var.field_indices_by_farmer,
             field_indices=self.var.field_indices,
             irrigation_efficiency=self.var.irrigation_efficiency.data,
-            surface_irrigated=self.surface_irrigated,
-            well_irrigated=self.well_irrigated,
+            surface_irrigated=self.surface_irrigated.data,
+            well_irrigated=self.well_irrigated.data,
             cell_area=self.model.hydrology.HRU.var.cell_area,
             HRU_to_grid=self.HRU.var.HRU_to_grid,
             nearest_river_grid_cell=self.HRU.var.nearest_river_grid_cell,
@@ -1500,6 +1500,9 @@ class CropFarmers(AgentBaseClass):
 
         Returns:
             yield_ratio: Map of yield ratio.
+
+        Raises:
+            ValueError: If crop data type is not GAEZ or MIRCA2000.
         """
         if self.var.crop_data_type == "GAEZ":
             yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_GAEZ(
@@ -4244,6 +4247,10 @@ class CropFarmers(AgentBaseClass):
         Note:
             - It assumes that the polynomial relationship is invertible.
             - Adjusts yield ratios to be non-negative and capped at 1.0.
+
+        Returns:
+            For each farmer, an array of yield ratios
+                corresponding to the given probabilities of a drought event.
         """
 
         def logarithmic_function(probability, params):
@@ -4278,7 +4285,7 @@ class CropFarmers(AgentBaseClass):
 
         return yield_ratios_drought_event
 
-    def create_unique_groups(self, *additional_diffentiators):
+    def create_unique_groups(self, *additional_diffentiators: npt.NDArray):
         """Create unique groups based on elevation data and merge with crop calendar.
 
         Returns:
@@ -4549,7 +4556,7 @@ class CropFarmers(AgentBaseClass):
         # Subtract 1 off each loan duration, except if that loan is at 0
         self.var.loan_tracker -= self.var.loan_tracker != 0
         # If the loan tracker is at 0, cancel the loan amount and subtract it of the total
-        expired_loan_mask = self.var.loan_tracker == 0
+        expired_loan_mask: npt.NDArray[np.bool_] = self.var.loan_tracker.data == 0
 
         # Add a column to make it the same shape as the loan amount array
         new_column = np.full((self.var.n, 1, 5), False)
@@ -4675,7 +4682,7 @@ class CropFarmers(AgentBaseClass):
         assert not np.isnan(groundwater_depth).any(), "groundwater depth is nan"
         return groundwater_depth
 
-    def create_farmer_classes(self, *characteristics):
+    def create_farmer_classes(self, *characteristics: np.ndarray) -> np.ndarray:
         agent_classes = np.unique(
             np.stack(characteristics), axis=1, return_inverse=True
         )[1]
@@ -4701,6 +4708,9 @@ class CropFarmers(AgentBaseClass):
         """This function is called at the beginning of each timestep.
 
         Then, farmers harvest and plant crops.
+
+        Raises:
+            ValueError: When farmers don't have a yield probability relation yet.
         """
         if not self.model.simulate_hydrology:
             return
@@ -4981,7 +4991,7 @@ class CropFarmers(AgentBaseClass):
                         )
                         timer.new_split("adapt prec. insurance")
                 else:
-                    raise AssertionError(
+                    raise ValueError(
                         "Cannot adapt without yield - probability relation"
                     )
 

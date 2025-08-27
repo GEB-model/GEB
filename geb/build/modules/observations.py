@@ -148,6 +148,10 @@ class Observations:
             max_uparea_difference_ratio: The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area. Default is 0.3 (30%).
             max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment. Default is 0.1 degrees.
             custom_river_stations: Path to a folder containing custom river stations as csv files. Each csv file should have the first row containing the coordinates (longitude, latitude) and the data starting from the fourth row. Default is None, which means no custom stations are used.
+
+        Raises:
+            ValueError: If no discharge stations are found in the region shapefile.
+            ValueError: If a custom station file does not have the correct format (2 coordinates in the first row, data starting from the fourth row).
         """
         # load data
         upstream_area = self.grid[
@@ -155,7 +159,7 @@ class Observations:
         ].compute()  # we need to use this one many times, so we compute it once
         upstream_area_subgrid = self.other["drainage/original_d8_upstream_area"]
         rivers = self.geom["routing/rivers"]
-        region_shapefile = self.geom["mask"]
+        region_mask = self.geom["mask"]
 
         # Load Q_obs dataset
         Q_obs_source = self.data_catalog.get_source("GRDC")
@@ -189,7 +193,13 @@ class Observations:
 
         # add external stations to Q_obs
         def add_station_Q_obs(station_name, station_coords, station_dataframe):
-            """This function adds a new station to the Q_obs dataset (in this case GRDC). It should be a dataframe with the first row (lon, lat) and data should start at index 3 (row4)."""
+            """This function adds a new station to the Q_obs dataset (in this case GRDC).
+
+            It should be a dataframe with the first row (lon, lat) and data should start at index 3 (row4).
+
+            Returns:
+                The updated dataset with discharge observations with the new station added.
+            """
             # Convert the pandas DataFrame to an xarray Dataset
             new_station_ds = xr.Dataset(
                 {
@@ -291,10 +301,20 @@ class Observations:
                         )  # get the id of the station in the Q_obs dataset
 
         # Clip the Q_obs dataset to the region shapefile
-        def clip_Q_obs(Q_obs_merged, region_shapefile):
-            """Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries."""
+        def clip_Q_obs(
+            Q_obs_merged: xr.Dataset, region_mask: gpd.GeoDataFrame
+        ) -> xr.Dataset:
+            """Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries.
+
+            Args:
+                Q_obs_merged: Dataset with discharge observations.
+                region_mask: Shapefile of the region to clip the Q_obs stations to
+
+            Returns:
+                The clipped discharge observations dataset with only stations within the region shapefile.
+            """
             # Convert Q_obs points to GeoDataFrame
-            Q_obs_gdf = gpd.GeoDataFrame(
+            Q_obs_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
                 {
                     "id": Q_obs_merged.id.values,
                     "x": Q_obs_merged.x.values,
@@ -307,8 +327,8 @@ class Observations:
             )
 
             # Filter Q_obs stations that are in the region shapefile
-            Q_obs_gdf = Q_obs_gdf[
-                Q_obs_gdf.geometry.within(region_shapefile.geometry.unary_union)
+            Q_obs_gdf: gpd.GeoDataFrame = Q_obs_gdf[
+                Q_obs_gdf.geometry.within(region_mask.geometry.unary_union)
             ]
 
             # select the Q_obs stations from the Q_obs dataset that are in the region shapefile
@@ -317,7 +337,7 @@ class Observations:
             return Q_obs_merged
 
         Q_obs_clipped = clip_Q_obs(
-            Q_obs_merged, region_shapefile
+            Q_obs_merged, region_mask
         )  # filter Q_obs stations based on the region shapefile
 
         if len(Q_obs_clipped.id) == 0:
@@ -416,7 +436,14 @@ class Observations:
 
             # find river section closest to the Q_obs station
             def get_distance_to_stations(rivers):
-                """This function returns the distance of each river section to the station."""
+                """This function returns the distance of each river section to the station.
+
+                Args:
+                    rivers: A row of the rivers GeoDataFrame.
+
+                Returns:
+                    Distance in degrees between the river section and the station.
+                """
                 return rivers.distance(Q_obs_location).values.item()
 
             rivers["station_distance"] = rivers.geometry.apply(
@@ -426,11 +453,20 @@ class Observations:
 
             def select_river_segment(
                 max_uparea_difference_ratio, max_spatial_difference_degrees
-            ):
+            ) -> pd.DataFrame | bool:
                 """This function selects the closest river segment to the Q_obs station based on the spatial distance.
 
-                It returns an error if the spatial distance is larger than the max_spatial_difference_degrees. If the difference between the upstream area from MERIT (from the river centerlines)
-                and the Q_obs upstream area is larger than the max_uparea_difference_ratio, it will select the closest river segment within the correct upstream area range.
+                It returns false if the spatial distance is larger than the max_spatial_difference_degrees.
+                If the difference between the upstream area from MERIT (from the river centerlines)
+                and the Q_obs upstream area is larger than the max_uparea_difference_ratio,
+                it will select the closest river segment within the correct upstream area range.
+
+                Args:
+                    max_uparea_difference_ratio: The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area.
+                    max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment.
+
+                Returns:
+                    The closest river segment to the Q_obs station that meets the criteria or False if no segment is found.
                 """
                 if np.isnan(
                     Q_obs_uparea

@@ -38,6 +38,9 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     Args:
         version: version of TBB to use, default is "2022.1.0".
 
+    Raises:
+        RuntimeError: If the platform is not supported.
+
     """
     version = "2022.1.0"
     bin_path: Path = Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin" / "tbb"

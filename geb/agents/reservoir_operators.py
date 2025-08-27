@@ -335,7 +335,23 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         daily_substeps,
     ):
-        """Adjusts the provisional reservoir release to ensure it meets environmental flow requirements, does not exceed the reservoir capacity, and maintains a minimum usable release."""
+        """Adjusts the provisional reservoir release to ensure it meets environmental flow requirements, does not exceed the reservoir capacity, and maintains a minimum usable release.
+
+        Args:
+            provisional_reservoir_release_m3: The initial calculated release from the reservoir [m3].
+            storage_m3: The current storage in the reservoir [m3].
+            capacity_m3: The total capacity of the reservoir [m3].
+            minimum_usable_release_m3: The minimum usable release required [m3].
+            environmental_flow_requirement_m3: The environmental flow requirement [m3].
+            alpha: The reservoir capacity reduction factor [-].
+            daily_substeps: The number of substeps in the current day [-].
+
+        Returns:
+            A tuple containing:
+                - The adjusted usable release from the reservoir [m3].
+                - The environmental flow release from the reservoir [m3].
+
+        """
         # release is at least 10% of the mean monthly inflow (environmental flow)
         reservoir_release_m3 = np.maximum(
             provisional_reservoir_release_m3, environmental_flow_requirement_m3
@@ -393,7 +409,29 @@ class ReservoirOperators(AgentBaseClass):
         alpha,
         n_monthly_substeps,
     ):
-        """https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py."""
+        """Computes release from irrigation reservoirs.
+
+        Based on:
+            Based on Shin et al. (2019)
+            https://doi.org/10.1029/2018WR023025
+            https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py.
+
+        Args:
+            capacity: The reservoir capacity [m3].
+            storage_year_start: The storage at the beginning of the hydrological year [m3].
+            long_term_monthly_inflow_m3: The long-term average inflow per month [m3].
+            long_term_monthly_inflow_this_month_m3: The long-term average inflow for the current month [m3].
+                e.g., if the current month is January, this is the long-term average inflow for January.
+            current_irrigation_demand_m3: The current irrigation demand for this timestep [m3].
+            long_term_monthly_irrigation_demand_m3: The long-term average irrigation demand per month [m3].
+            alpha: The reservoir capacity reduction factor [-].
+            n_monthly_substeps: The number of substeps in the current month [-].
+                If the method is called for daily timesteps, this is 30 for a 30-day month.
+                If the method is called with hourly timesteps, this is 30*24 for a 30-day month.
+
+        Returns:
+            The reservoir release for irrigation [m3].
+        """
         # Based on Shin et al. (2019)
         # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
         M = 0.1
@@ -454,54 +492,54 @@ class ReservoirOperators(AgentBaseClass):
         )
         return final_release
 
-    def get_flood_control_reservoir_release(
-        self, cpa, cond_ppose, qin, S_begin_yr, mtifl, alpha
-    ):
-        """Computes release from flood control reservoirs.
+    # def get_flood_control_reservoir_release(
+    #     self, cpa, cond_ppose, qin, S_begin_yr, mtifl, alpha
+    # ):
+    #     """Computes release from flood control reservoirs.
 
-        cpa = reservoir capacity                                    (m^3)
-        cond_ppose = array containing irrigation reservoir cells
-        based on selection mask
-        qin = inflow                                                (m^3/s)
-        Sini = initial storage                                      (m^3)
-        mtifl = annual mean total annual inflow                     (m^3/s)
-        alpha = reservoir capacity reduction factor                 (dimensionless).
-        """
-        # flood Reservoirs
-        # initialization
-        Nx = len(cond_ppose)
-        Rprovisional = np.zeros(
-            [
-                Nx,
-            ]
-        )  # Provisional Release
-        Rflood_final = np.zeros(
-            [
-                Nx,
-            ]
-        )  # Final Release
-        # water management
-        mtifl_flood = mtifl[cond_ppose]  # mean flow:  m^3/s
-        cpa_flood = cpa[cond_ppose]  # capacity:   m^3
-        qin_flood = qin[cond_ppose]  # mean flow:  m^3/s
-        Sbeginning_ofyear = S_begin_yr[cond_ppose]  # capacity:   m^3
-        # Provisional Release
-        Rprovisional = mtifl_flood.copy()
-        # Final Release
-        # capacity & annual total infow
-        c = np.divide(cpa_flood, (mtifl_flood * 365 * 24 * 3600))
-        cond1 = np.where(c >= 0.5)[0]  # c = capacity/imean >= 0.5
-        cond2 = np.where(c < 0.5)[0]  # c = capacity/imean < 0.5
-        # c = capacity/imean >= 0.5
-        Krls = np.divide(Sbeginning_ofyear, (alpha * cpa_flood))
-        Rflood_final[cond1] = np.multiply(Krls[cond1], mtifl_flood[cond1])
-        # c = capacity/imean < 0.5
-        temp1 = (c[cond2] / 0.5) ** 2
-        temp2 = np.multiply(temp1, Krls[cond2])
-        temp3 = np.multiply(temp2, Rprovisional[cond2])
-        temp4 = np.multiply((1 - temp1), qin_flood[cond2])
-        Rflood_final[cond2] = temp3 + temp4
-        return Rflood_final
+    #     cpa = reservoir capacity                                    (m^3)
+    #     cond_ppose = array containing irrigation reservoir cells
+    #     based on selection mask
+    #     qin = inflow                                                (m^3/s)
+    #     Sini = initial storage                                      (m^3)
+    #     mtifl = annual mean total annual inflow                     (m^3/s)
+    #     alpha = reservoir capacity reduction factor                 (dimensionless).
+    #     """
+    #     # flood Reservoirs
+    #     # initialization
+    #     Nx = len(cond_ppose)
+    #     Rprovisional = np.zeros(
+    #         [
+    #             Nx,
+    #         ]
+    #     )  # Provisional Release
+    #     Rflood_final = np.zeros(
+    #         [
+    #             Nx,
+    #         ]
+    #     )  # Final Release
+    #     # water management
+    #     mtifl_flood = mtifl[cond_ppose]  # mean flow:  m^3/s
+    #     cpa_flood = cpa[cond_ppose]  # capacity:   m^3
+    #     qin_flood = qin[cond_ppose]  # mean flow:  m^3/s
+    #     Sbeginning_ofyear = S_begin_yr[cond_ppose]  # capacity:   m^3
+    #     # Provisional Release
+    #     Rprovisional = mtifl_flood.copy()
+    #     # Final Release
+    #     # capacity & annual total infow
+    #     c = np.divide(cpa_flood, (mtifl_flood * 365 * 24 * 3600))
+    #     cond1 = np.where(c >= 0.5)[0]  # c = capacity/imean >= 0.5
+    #     cond2 = np.where(c < 0.5)[0]  # c = capacity/imean < 0.5
+    #     # c = capacity/imean >= 0.5
+    #     Krls = np.divide(Sbeginning_ofyear, (alpha * cpa_flood))
+    #     Rflood_final[cond1] = np.multiply(Krls[cond1], mtifl_flood[cond1])
+    #     # c = capacity/imean < 0.5
+    #     temp1 = (c[cond2] / 0.5) ** 2
+    #     temp2 = np.multiply(temp1, Krls[cond2])
+    #     temp3 = np.multiply(temp2, Rprovisional[cond2])
+    #     temp4 = np.multiply((1 - temp1), qin_flood[cond2])
+    #     Rflood_final[cond2] = temp3 + temp4
+    #     return Rflood_final
 
     def step(self) -> None:
         # operational year should start after the end of the rainy season

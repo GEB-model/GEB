@@ -3,6 +3,7 @@ import datetime
 import os
 from pathlib import Path
 from time import time
+from types import TracebackType
 from typing import Any, Literal, overload
 
 import numpy as np
@@ -298,7 +299,14 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.step()
 
     def run(self, initialize_only: bool = False) -> None:
-        """Run the model for the entire period, and export water table in case of spinup scenario."""
+        """Run the model for the entire period, and export water table in case of spinup scenario.
+
+        Args:
+            initialize_only: If True, only initialize the model without running it.
+
+        Raises:
+            FileNotFoundError: If the initial conditions folder does not exist. Spinup is required before running the model.
+        """
         if not self.store.path.exists():
             raise FileNotFoundError(
                 f"The initial conditions folder ({self.store.path.resolve()}) does not exist. Spinup is required before running the model. Please run the spinup first."
@@ -451,7 +459,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         rp_maps_riverine = self.sfincs.get_riverine_return_period_maps()
         self.sfincs.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
 
-    def evaluate(self, *args, **kwargs) -> None:
+    def evaluate(self, *args: Any, **kwargs: Any) -> None:
+        """Call the evaluator to evaluate the model results."""
         print("Evaluating model...")
         self.evaluator.run(*args, **kwargs)
 
@@ -496,7 +505,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         return folder
 
     @property
-    def run_name(self):
+    def run_name(self) -> str:
         if self.mode == "w" and self.in_spinup:
             return self.config["general"]["spinup_name"]
         else:
@@ -509,7 +518,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 return "default"
 
     @property
-    def multiverse_name(self):
+    def multiverse_name(self) -> str | None:
         return self._multiverse_name
 
     @multiverse_name.setter
@@ -517,11 +526,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self._multiverse_name = str(value) if value is not None else None
 
     @property
-    def output_folder(self):
+    def output_folder(self) -> Path:
         return Path(self.config["general"]["output_folder"])
 
     @property
-    def input_folder(self):
+    def input_folder(self) -> Path:
         return Path(self.config["general"]["input_folder"])
 
     @property
@@ -533,23 +542,24 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         return 4326
 
     @property
-    def bounds(self):
-        return self.mask.total_bounds
+    def bounds(self) -> tuple[float, float, float, float]:
+        total_bounds = self.mask.total_bounds
+        return (total_bounds[0], total_bounds[1], total_bounds[2], total_bounds[3])
 
     @property
-    def xmin(self):
+    def xmin(self) -> float:
         return self.bounds[0]
 
     @property
-    def xmax(self):
+    def xmax(self) -> float:
         return self.bounds[2]
 
     @property
-    def ymin(self):
+    def ymin(self) -> float:
         return self.bounds[1]
 
     @property
-    def ymax(self):
+    def ymax(self) -> float:
         return self.bounds[3]
 
     def close(self) -> None:
@@ -566,8 +576,25 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             for reader in all_async_readers:
                 reader.close()
 
-    def __enter__(self):
+    def __enter__(self) -> "GEBModel":
+        """ "Enters the context of the model.
+
+        Returns:
+            The model instance itself.
+        """
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Exits the context of the model, ensuring proper cleanup.
+
+        Args:
+            exc_type: The type of exception raised (if any).
+            exc_val: The exception instance raised (if any).
+            exc_tb: The traceback of the exception raised (if any).
+        """
         self.close()

@@ -300,7 +300,7 @@ class Grid(BaseVariables):
 
         BaseVariables.__init__(self)
 
-    def full(self, *args, **kwargs) -> np.ndarray:
+    def full(self, *args: Any, **kwargs: Any) -> np.ndarray:
         """Return a full array with size of mask. Takes any other argument normally used in np.full.
 
         Args:
@@ -309,7 +309,7 @@ class Grid(BaseVariables):
         """
         return np.full(self.mask.shape, *args, **kwargs)
 
-    def full_compressed(self, *args, **kwargs) -> np.ndarray:
+    def full_compressed(self, *args: Any, **kwargs: Any) -> np.ndarray:
         """Return a full array with size of compressed array. Takes any other argument normally used in np.full.
 
         Args:
@@ -748,7 +748,7 @@ class HRUs(BaseVariables):
             self.data.farms, land_use_classes, self.data.grid.mask, self.scaling
         )
 
-    def zeros(self, size, dtype, *args, **kwargs) -> np.ndarray:
+    def zeros(self, size, dtype, *args: Any, **kwargs: Any) -> np.ndarray:
         """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
 
         Args:
@@ -762,7 +762,9 @@ class HRUs(BaseVariables):
         """
         return np.zeros(size, dtype, *args, **kwargs)
 
-    def full_compressed(self, fill_value, dtype, *args, **kwargs) -> np.ndarray:
+    def full_compressed(
+        self, fill_value, dtype, *args: Any, **kwargs: Any
+    ) -> np.ndarray:
         """Return a full array with size of number of HRUs. Takes any other argument normally used in np.full.
 
         Args:

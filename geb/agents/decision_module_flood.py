@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 from numba.core.decorators import njit
 from scipy import interpolate
@@ -132,7 +134,7 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
         sigma: float,
-        **kwargs,
+        **kwargs: Any,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
@@ -249,7 +251,7 @@ class DecisionModule:
         r: float,
         sigma: float,
         deductable=0.1,
-        **kwargs,
+        **kwargs: Any,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
@@ -362,7 +364,7 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
         sigma: float,
-        **kwargs,
+        **kwargs: Any,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 

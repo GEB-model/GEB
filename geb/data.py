@@ -68,6 +68,9 @@ def load_regional_crop_data_from_dict(
     Returns:
         date_index: Dictionary of states containing a dictionary of dates and their index in the 2D array.
         crop_prices: Dictionary of states containing a 2D array of crop prices. First index is for date, second index is for crop.
+
+    Raises:
+        ValueError: if the data is invalid according to the validation criteria.
     """
     with open(model.files["dict"][name], "r") as f:
         timedata = json.load(f)

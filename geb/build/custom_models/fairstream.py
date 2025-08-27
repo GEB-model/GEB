@@ -1,5 +1,6 @@
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -207,6 +208,9 @@ class Survey:
             evidence_columns: list of evidence column names (i.e., ... for these columns)
             method: sampling method, only 'rejection' is implemented.
             show_progress: whether to show progress bar
+
+        Returns:
+            DataFrame with samples.
         """
         assert method == "rejection", "Only rejection sampling is implemented"
         if show_progress:
@@ -652,7 +656,7 @@ class IHDSSurvey(Survey):
 class fairSTREAMModel(GEBModel):
     """Custom GEB model with fairSTREAM-specific build methods. Some methods override the standard GEB methods."""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
 
     def get_farm_size(self):
@@ -732,7 +736,7 @@ class fairSTREAMModel(GEBModel):
 
         # Set all farmers within cells with rivers to canal irrigation
 
-        def get_rivers(da, axis, **kwargs):
+        def get_rivers(da, axis, **kwargs: Any):
             from geb.hydrology.landcover import OPEN_WATER
 
             return np.any(da == OPEN_WATER, axis=axis)
