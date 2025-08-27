@@ -579,7 +579,8 @@ class SFINCS:
             if rp_maps_coastal is None:
                 riverine_da = rp_maps_riverine[return_period]
                 riverine_da.to_zarr(
-                    self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
+                    self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
+                    mode="w",
                 )
                 continue
 
