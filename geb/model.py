@@ -443,6 +443,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         HazardDriver.initialize(self, longest_flood_event_in_days=30)
         # ugly switch to determine whether model has coastal basins
         subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        rp_maps = self.sfincs.get_return_period_maps()
         if subbasins["is_coastal_basin"].any():
             generate_storm_surge_hydrographs(self)
             rp_maps_coastal = self.sfincs.get_coastal_return_period_maps()
