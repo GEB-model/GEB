@@ -261,6 +261,7 @@ def build_sfincs(
     depth_calculation_method: str,
     depth_calculation_parameters: dict[str, float | int] | None = None,
     mask_flood_plains: bool = False,
+    **kwargs,
 ) -> None:
     """Build a SFINCS model.
 
