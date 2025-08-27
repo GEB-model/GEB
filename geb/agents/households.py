@@ -1114,8 +1114,12 @@ class Households(AgentBaseClass):
             flood_map.rio.crs
         )
 
+        assert len(household_points) == self.var.risk_perception.size
+
         household_points["protect_building"] = False
-        household_points.loc[self.var.risk_perception >= 0.1, "protect_building"] = True
+        household_points.loc[
+            self.var.risk_perception.data >= 0.1, "protect_building"
+        ] = True
 
         buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
             buildings, household_points, how="left", exclusive=True

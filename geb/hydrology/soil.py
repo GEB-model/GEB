@@ -1085,7 +1085,11 @@ def get_bubbling_pressure(
     return bubbling_pressure
 
 
-def get_pore_size_index_brakensiek(sand, thetas, clay):
+def get_pore_size_index_brakensiek(
+    sand: npt.NDArray[np.float32],
+    thetas: npt.NDArray[np.float32],
+    clay: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Determine Brooks-Corey pore size distribution index [-].
 
     Thetas is equal to porosity (Φ) in this case.

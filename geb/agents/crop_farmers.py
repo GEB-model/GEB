@@ -1237,8 +1237,8 @@ class CropFarmers(AgentBaseClass):
             field_indices_by_farmer=self.var.field_indices_by_farmer,
             field_indices=self.var.field_indices,
             irrigation_efficiency=self.var.irrigation_efficiency.data,
-            surface_irrigated=self.surface_irrigated,
-            well_irrigated=self.well_irrigated,
+            surface_irrigated=self.surface_irrigated.data,
+            well_irrigated=self.well_irrigated.data,
             cell_area=self.model.hydrology.HRU.var.cell_area,
             HRU_to_grid=self.HRU.var.HRU_to_grid,
             nearest_river_grid_cell=self.HRU.var.nearest_river_grid_cell,
@@ -4556,7 +4556,7 @@ class CropFarmers(AgentBaseClass):
         # Subtract 1 off each loan duration, except if that loan is at 0
         self.var.loan_tracker -= self.var.loan_tracker != 0
         # If the loan tracker is at 0, cancel the loan amount and subtract it of the total
-        expired_loan_mask = self.var.loan_tracker == 0
+        expired_loan_mask: npt.NDArray[np.bool_] = self.var.loan_tracker.data == 0
 
         # Add a column to make it the same shape as the loan amount array
         new_column = np.full((self.var.n, 1, 5), False)
