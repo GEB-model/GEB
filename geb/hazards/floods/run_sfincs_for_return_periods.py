@@ -178,11 +178,10 @@ def run_sfincs_for_return_periods_coastal(
             root=simulation_root, mode="r+", logger=get_logger()
         )
 
+        # read model
         sf.read()
-        # copy the model root to the simulation root
-        # sf.set_root(simulation_root, mode="w+")
-        # sf._write_gis = False
 
+        # setup config for new model root
         sf.setup_config(
             **make_relative_paths(
                 sf.config,

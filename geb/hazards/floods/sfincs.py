@@ -22,7 +22,7 @@ from ...hydrology.HRUs import load_geom, load_grid
 from ...hydrology.landcover import OPEN_WATER, SEALED
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
-from .build_model import build_sfincs, build_sfincs_coastal
+from .build_model import build_sfincs
 from .estimate_discharge_for_return_periods import estimate_discharge_for_return_periods
 from .postprocess_model import read_maximum_flood_depth
 from .run_sfincs_for_return_periods import (
@@ -486,20 +486,21 @@ class SFINCS:
                 **build_parameters,
             )
 
+        # check if there are coastal areas within the model domain
         if subbasins["is_coastal_basin"].any():
             # create the storm surge hydrographs
             generate_storm_surge_hydrographs(self.model)
-
             rp_maps_coastal = run_sfincs_for_return_periods_coastal(
                 model=self.model,
                 model_root=model_root,
                 gpu=self.config["SFINCS"]["gpu"],
                 export_dir=self.model.output_folder / "flood_maps",
+                export=True,
                 clean_working_dir=True,
                 return_periods=self.config["return_periods"],
             )
         else:
-            # if no coastal areas return None
+            # if no coastal areas in domain return None
             rp_maps_coastal = None
 
         # Now do the same for riverine flooding
@@ -522,6 +523,7 @@ class SFINCS:
             return_periods=self.config["return_periods"],
             gpu=self.config["SFINCS"]["gpu"],
             export_dir=self.model.output_folder / "flood_maps",
+            export=True,
             clean_working_dir=True,
         )
 
@@ -545,6 +547,7 @@ class SFINCS:
             rp_maps_riverine: Dictionary of riverine return period maps.
         """
         for return_period in self.config["return_periods"]:
+            # if the model is not coastal, only export riverine floodmaps
             if rp_maps_coastal is None:
                 to_zarr(
                     da=rp_maps_riverine[return_period],
@@ -554,12 +557,11 @@ class SFINCS:
                     crs=rp_maps_riverine[return_period].rio.crs,
                 )
                 continue
-
+            # if there are both coastal and riverine maps, combine and export
             rp_map = xr.concat(
                 [rp_maps_riverine[return_period], rp_maps_coastal[return_period]],
                 dim="stacked",
             ).max(dim="stacked", skipna=True)
-            # rp_map.rio.write_crs(rp_maps_riverine[return_period].rio.crs)
             to_zarr(
                 da=rp_map,
                 path=self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
