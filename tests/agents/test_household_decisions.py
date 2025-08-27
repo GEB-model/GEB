@@ -240,7 +240,7 @@ def test_decision_horizon(decision_template: dict) -> None:
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
 
-    # set time discounting low (no adaptation costs should be incurred in year zero)
+    # set time discounting to zero (no adaptation costs should be incurred in year zero)
     decision_template["T"] = 0
     EU_adapt_low = decision_module.calcEU_adapt(**decision_template)
     EU_do_not_adapt_low = decision_module.calcEU_do_nothing(**decision_template)
