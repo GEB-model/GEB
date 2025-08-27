@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Tuple
 
@@ -348,19 +349,84 @@ class Households(AgentBaseClass):
 
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
+
         # update timer
         self.var.years_since_last_flood.data += 1
 
-        # generate random flood (not based on actual modeled flood data, replace this later with events)
-        if np.random.random() < 0.1:
-            print("Flood event!")
-            self.var.years_since_last_flood.data = 0
+        # # generate random flood (not based on actual modeled flood data, replace this later with events)
+        # if np.random.random() < 0.1:
+        #     print("Flood event!")
+        #     self.var.years_since_last_flood.data = 0
+
+        # Find the flood event that corresponds to the current time (in the model)
+        for event in self.flood_events:
+            start = event["start_time"]
+            end = event["end_time"]
+
+            if self.model.current_time == end + timedelta(days=10):
+                # Open the flood map
+                flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
+                zarr_path: Path = (
+                    self.model.output_folder / "flood_maps" / flood_map_name
+                )
+
+                flood_map: xr.DataArray = open_zarr(zarr_path)
+
+                print("opened right flood map")
+                print(flood_map)
+                print("crs is:")
+                print(flood_map.rio.crs)
+
+                # Get the locations of the household locations and reproject to flood map
+                households_proj = self.var.household_points.to_crs(flood_map.rio.crs)
+
+                xs = households_proj.geometry.x.values
+                ys = households_proj.geometry.y.values
+
+                # Interpolate flood depths at household locations
+                depths = flood_map.interp(x=("points", xs), y=("points", ys)).values
+                depths = np.nan_to_num(
+                    depths, nan=0.0
+                )  # replace NaNs outside the raster with 0
+
+                print(depths)
+                print(f"Min flood depth: {np.min(depths):.3f} m")
+                print(f"Max flood depth: {np.max(depths):.3f} m")
+                print(f"Mean flood depth: {np.mean(depths):.3f} m")
+
+                # Identify flooded households (more than 5cm of water)
+                flooded = depths > 0.05  #
+
+                # Print some statistics to check if the flooded households are identified correctly
+                print(flooded)
+                n_total = len(flooded)
+                n_true = np.sum(flooded)
+                n_false = n_total - n_true
+                print(f"Total households: {n_total}")
+                print(f"Flooded (True): {n_true} ({100 * n_true / n_total:.2f}%)")
+                print(
+                    f"Not flooded (False): {n_false} ({100 * n_false / n_total:.2f}%)"
+                )
+
+                # Reset years_since_last_flood to 0 for flooded households
+                self.var.years_since_last_flood.data[flooded] = 0
+
+                print(self.var.household_points)
+                print(self.var.locations.data)
 
         self.var.risk_perception.data = (
             self.var.risk_perc_max
-            * 1.6 ** (self.var.risk_decr * self.var.years_since_last_flood)
+            * 1.6 ** (self.var.risk_decr * self.var.years_since_last_flood.data)
             + self.var.risk_perc_min
         )
+
+        # Print flood risk perception stats
+        print(self.var.risk_perception)
+        print(self.var.risk_perception.data)
+        print("Risk perception stats:")
+        print(f"  Min: {np.min(self.var.risk_perception.data):.4f}")
+        print(f"  Max: {np.max(self.var.risk_perception.data):.4f}")
+        print(f"  Mean: {np.mean(self.var.risk_perception.data):.4f}")
 
     def load_ensemble_flood_maps(self):
         # Load all the flood maps in an ensemble per each day
@@ -1270,11 +1336,8 @@ class Households(AgentBaseClass):
 
     def step(self) -> None:
         if self.config["adapt"]:
-            flood_events = self.model.config["hazards"]["floods"]["events"]
+            self.flood_events = self.model.config["hazards"]["floods"]["events"]
             current_time = self.model.current_time
-
-            # Check if today is an event end_time
-            from datetime import datetime, timedelta
 
             flood_trigger = any(
                 current_time
@@ -1284,7 +1347,7 @@ class Households(AgentBaseClass):
                     else datetime.strptime(e["end_time"], "%Y-%m-%d %H:%M:%S")
                     + timedelta(days=10)
                 )
-                for e in flood_events
+                for e in self.flood_events
             )
 
             if (
