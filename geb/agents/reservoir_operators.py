@@ -582,7 +582,7 @@ class ReservoirOperators(AgentBaseClass):
         self.var.history_fill_index = max(
             2, min(RESERVOIR_MEMORY_YEARS, self.var.hydrological_year_counter)
         )
-        self.report(self, locals())
+        self.report(locals())
 
     @property
     def storage(self):

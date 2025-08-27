@@ -145,15 +145,15 @@ class WaterDemand(Module):
             domestic_water_efficiency_per_household,
             household_locations,
         ) = self.model.agents.households.water_demand()
-        timer.new_split("Domestic")
+        timer.finish_split("Domestic")
         industry_water_demand, industry_water_efficiency = (
             self.model.agents.industry.water_demand()
         )
-        timer.new_split("Industry")
+        timer.finish_split("Industry")
         livestock_water_demand, livestock_water_efficiency = (
             self.model.agents.livestock_farmers.water_demand()
         )
-        timer.new_split("Livestock")
+        timer.finish_split("Livestock")
 
         (
             gross_irrigation_demand_m3_per_field,
@@ -276,7 +276,7 @@ class WaterDemand(Module):
         ).sum()
         total_water_demand_loss_m3 += livestock_water_loss_m3
 
-        timer.new_split("Water withdrawal")
+        timer.finish_split("Water withdrawal")
 
         # 4. irrigation (surface + reservoir + ground)
         (
@@ -302,7 +302,7 @@ class WaterDemand(Module):
             "Reservoir storage should be empty after abstraction"
         )
 
-        timer.new_split("Irrigation")
+        timer.finish_split("Irrigation")
 
         if __debug__:
             assert balance_check(
@@ -388,7 +388,7 @@ class WaterDemand(Module):
         if self.model.timing:
             print(timer)
 
-        self.report(self, locals())
+        self.report(locals())
 
         return (
             groundwater_abstraction_m3,

@@ -225,7 +225,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         HazardDriver.step(self)
 
-        self.report(self, locals())
+        self.report(locals())
 
         t1 = time()
         print(

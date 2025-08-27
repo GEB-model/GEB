@@ -24,5 +24,13 @@ class Module(ABC):
     def step(self) -> None:
         pass
 
-    def report(self, module, local_variables) -> None:
-        self.model.reporter.report(module, local_variables, self.name)
+    def report(self, local_variables) -> None:
+        """Used to report data from the module.
+
+        Adds the name of the module to the report and calls the reporter in the model.
+
+        Args:
+            module: The
+            local_variables: _description_
+        """
+        self.model.reporter.report(self, local_variables, self.name)

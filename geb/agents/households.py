@@ -1317,7 +1317,7 @@ class Households(AgentBaseClass):
 
             print("Thinking about adapting...")
             self.decide_household_strategy()
-        self.report(self, locals())
+        self.report(locals())
 
     @property
     def n(self):

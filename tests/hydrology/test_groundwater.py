@@ -77,7 +77,15 @@ class DummyGrid:
     def __init__(self) -> None:
         pass
 
-    def decompress(self, array) -> npt.NDArray[Any]:
+    def decompress(self, array: npt.NDArray[Any]) -> npt.NDArray[Any]:
+        """Decompress an array from 1D to 2D using the basin mask.
+
+        Args:
+            array: The compressed array.
+
+        Returns:
+            The decompressed array.
+        """
         return decompress(array, basin_mask)
 
 
@@ -97,6 +105,11 @@ class DummyModel:
 
     @property
     def bin_folder(self) -> Path:
+        """Gets the folder where MODFLOW binaries are stored.
+
+        Returns:
+            Path to the folder with MODFLOW binaries.
+        """
         return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
 

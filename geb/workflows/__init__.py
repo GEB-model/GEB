@@ -15,7 +15,15 @@ class TimingModule:
         self.times = [time()]
         self.split_names = []
 
-    def new_split(self, name) -> None:
+    def finish_split(self, name) -> None:
+        """Finish split with with name given.
+
+        Appends the current time and the name of the split to their respective lists, which will be
+        used to calculate the time taken for each split and the total time when converting to string.
+
+        Args:
+            name: The name of the split. This is the name of the previous split.
+        """
         self.times.append(time())
         self.split_names.append(name)
 

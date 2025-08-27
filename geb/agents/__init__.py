@@ -60,9 +60,9 @@ class Agents(Module):
 
         for agent_type in self.agents:
             agent_type.step()
-            timer.new_split(agent_type.name)
+            timer.finish_split(agent_type.name)
 
         if self.model.timing:
             print(timer)
 
-        self.report(self, locals())
+        self.report(locals())

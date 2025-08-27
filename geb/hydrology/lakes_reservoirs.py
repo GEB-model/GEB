@@ -565,4 +565,4 @@ class LakesReservoirs(Module):
                 raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
         # print(self.reservoir_fill_percentage.astype(int))
-        self.report(self, locals())
+        self.report(locals())

@@ -123,7 +123,7 @@ class Evaporation(Module):
             - snow_sublimation,
         )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return (
             potential_transpiration,

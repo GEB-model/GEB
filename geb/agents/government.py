@@ -106,4 +106,4 @@ class Government(AgentBaseClass):
         """This function is run each timestep."""
         self.set_irrigation_limit()
         self.provide_subsidies()
-        self.report(self, locals())
+        self.report(locals())

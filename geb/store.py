@@ -967,7 +967,14 @@ class Bucket:
         )
         super().__setattr__(name, value)
 
-    def save(self, path) -> None:
+    def save(self, path: Path) -> None:
+        """Save the bucket data to disk.
+
+        Can then be loaded back with `load`.
+
+        Args:
+            path: The location where the data should be saved. Must be a directory.
+        """
         path.mkdir(parents=True, exist_ok=True)
         for name, value in self.__dict__.items():
             # do not save the validator itself
@@ -1005,7 +1012,15 @@ class Bucket:
             else:
                 np.save((path / name).with_suffix(".npy"), value)
 
-    def load(self, path) -> "Bucket":
+    def load(self, path: Path) -> "Bucket":
+        """Load the bucket data from disk to the Bucket instance.
+
+        Args:
+            path: The location of the data to be restored.
+
+        Returns:
+            The Bucket instance itself with the loaded data.
+        """
         for filename in path.iterdir():
             if filename.suffixes == [".storearray", ".npz"]:
                 setattr(
@@ -1060,17 +1075,35 @@ class Store:
         self.model = model
         self.buckets = {}
 
-    def create_bucket(self, name, validator=None) -> Bucket:
+    def create_bucket(self, name: str, validator: Callable | None = None) -> Bucket:
+        """Create a new bucket in the store.
+
+        The bucket is used to store data for a specific part of the model, usually a Module,
+        which can then be restored later. This is useful for saving the state of the model
+        at a specific point in time, and for restoring it later.
+
+        Args:
+            name: The name of the bucket to create.
+            validator: A function to validate values before setting them in the bucket.
+                If provided, it should return True for valid values and False for invalid ones.
+                Defaults to None, meaning no validation is performed.
+
+        Returns:
+            The created Bucket instance.
+        """
         assert name not in self.buckets
         bucket = Bucket(validator=validator)
         self.buckets[name] = bucket
         return bucket
 
-    def get_bucket(self, cls) -> Bucket:
-        name = self.get_name(cls)
-        return self.buckets[name]
+    def save(self, path: None | Path = None) -> None:
+        """
 
-    def save(self, path=None) -> None:
+        Args:
+            path: A Path object representing the directory to load the model data from. Defaults to None.
+                In this case, a default path is used. In most cases this should not be changed, but can
+                be useful for special cases such as forecasting and testing.
+        """
         if path is None:
             path = self.path
 
@@ -1079,7 +1112,16 @@ class Store:
             self.model.logger.debug(f"Saving {name}")
             bucket.save(path / name)
 
-    def load(self, path=None) -> None:
+    def load(self, path: None | Path = None) -> None:
+        """Load the store data from disk into the model.
+
+        If no path is provided, it defaults to the store path of the model.
+
+        Args:
+            path: A Path object representing the directory to load the model data from. Defaults to None.
+                In this case, a default path is used. In most cases this should not be changed, but can
+                be useful for special cases such as forecasting and testing.
+        """
         if path is None:
             path = self.path
 
@@ -1108,4 +1150,9 @@ class Store:
 
     @property
     def path(self) -> Path:
+        """The path where the store data is saved.
+
+        Returns:
+            A Path object representing the directory for storing model data.
+        """
         return self.model.simulation_root_spinup / "store"

@@ -1172,7 +1172,7 @@ class Routing(Module):
 
             assert routing_loss >= 0, "Routing loss cannot be negative"
 
-        self.report(self, locals())
+        self.report(locals())
 
         total_over_abstraction_m3: np.float64 = over_abstraction_m3.astype(
             np.float64

@@ -1939,7 +1939,7 @@ class Soil(Module):
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
-        timer.new_split("Vertical transport")
+        timer.finish_split("Vertical transport")
 
         if __debug__:
             assert balance_check(
@@ -1979,7 +1979,7 @@ class Soil(Module):
         assert not np.isnan(runoff).any()
         assert runoff.dtype == np.float32
 
-        timer.new_split("Evapotranspiration")
+        timer.finish_split("Evapotranspiration")
 
         mask_soil_evaporation = self.HRU.var.land_use_type < SEALED
         mask_transpiration = self.HRU.var.land_use_type < SEALED
@@ -2188,7 +2188,7 @@ class Soil(Module):
                     },
                 )
 
-        timer.new_split("Finalizing")
+        timer.finish_split("Finalizing")
         if self.model.timing:
             print(timer)
 
@@ -2257,7 +2257,7 @@ class Soil(Module):
                 HRU_data=groundwater_recharge_forest_plantFATE_HRU, fn="weightednanmean"
             )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return (
             interflow,

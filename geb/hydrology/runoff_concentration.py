@@ -50,5 +50,5 @@ class RunoffConcentration(Module):
         assert (runoff >= 0).all()
         assert (interflow >= 0).all()
         assert (baseflow >= 0).all()
-        self.report(self, locals())
+        self.report(locals())
         return interflow + baseflow + runoff

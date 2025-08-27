@@ -374,6 +374,6 @@ class SnowFrost(Module):
             self.HRU.var.frost_index + frost_indexChangeRate, 0
         )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return snow, rain, snow_melt
