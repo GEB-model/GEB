@@ -577,13 +577,12 @@ class SFINCS:
         """
         for return_period in self.config["return_periods"]:
             if rp_maps_coastal is None:
-                riverine_da = rp_maps_riverine[return_period]
                 to_zarr(
-                    da=riverine_da,
+                    da=rp_maps_riverine[return_period],
                     path=self.model.output_folder
                     / "flood_maps"
                     / f"{return_period}.zarr",
-                    crs=riverine_da.rio.crs,
+                    crs=rp_maps_riverine[return_period].rio.crs,
                 )
                 continue
 
