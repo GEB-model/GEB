@@ -449,7 +449,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )
 
         HazardDriver.initialize(self, longest_flood_event_in_days=30)
-        rp_maps_riverine, rp_maps_coastal = self.sfincs.get_coastal_return_period_maps()
+        rp_maps_riverine, rp_maps_coastal = self.sfincs.get_return_period_maps()
         self.sfincs.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
 
     def evaluate(self, *args: Any, **kwargs: Any) -> None:
