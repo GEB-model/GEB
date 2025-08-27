@@ -212,7 +212,7 @@ def test_time_discounting(decision_template: dict) -> None:
         decision_template: A dictionary containing the parameters for the decision module.
     """
     decision_module = DecisionModule(model=None, agents=None)
-    # make sure all can adapt and behave rationally and set time discounting to zero
+    # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
 
@@ -236,7 +236,7 @@ def test_decision_horizon(decision_template: dict) -> None:
         decision_template: A dictionary containing the parameters for the decision module.
     """
     decision_module = DecisionModule(model=None, agents=None)
-    # make sure all can adapt and behave rationally and set time discounting to zero
+    # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
 
