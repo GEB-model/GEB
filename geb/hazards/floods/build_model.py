@@ -333,7 +333,7 @@ def build_sfincs(
         gdf_riv=rivers.to_crs(sf.crs),
         gdf_mask=sf.region,
         src_type="outflow",
-        buffer=sf.reggrid.dx,  # type: ignore
+        buffer=500,  # sf.reggrid.dx,  # type: ignore # increase buffer to find outflow point. Region is extended to the coastline
         river_upa=0,
         river_len=0,
     )
@@ -435,6 +435,15 @@ def build_sfincs(
         nr_subgrid_pixels=nr_subgrid_pixels,
         nlevels=20,
         nrmax=500,
+    )
+
+    # setup coastal boundary mask
+    sf.setup_mask_bounds(
+        btype="waterlevel",
+        # include_mask=boundary_mask,
+        zmax=10,  # Maximum elevation of boundary cells [m] to assign as waterlevel boundary
+        reset_bounds=True,
+        all_touched=True,
     )
 
     # write all components, except forcing which must be done after the model building

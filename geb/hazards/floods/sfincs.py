@@ -11,6 +11,9 @@ import pandas as pd
 import rasterio
 import xarray as xr
 import zarr
+from geb.hazards.floods.construct_storm_surge_hydrographs import (
+    generate_storm_surge_hydrographs,
+)
 from rioxarray.merge import merge_arrays
 from shapely.geometry import shape
 from shapely.geometry.point import Point
@@ -423,7 +426,7 @@ class SFINCS:
         damages = self.flood(flood_map=flood_map)
         return damages
 
-    def build_mask_for_coastal_sfincs(self) -> gpd.GeoDataFrame:
+    def build_region_coastal(self) -> gpd.GeoDataFrame:
         """Builds a mask to define the active cells and boundaries for the coastal SFINCS model.
 
         Returns:
@@ -463,81 +466,47 @@ class SFINCS:
 
         return gdf
 
-    def build_coastal_boundary_mask(self) -> gpd.GeoDataFrame:
-        """Builds a mask to define the coastal boundaries for the SFINCS model.
-
-        Returns:
-            GeoDataFrame: A GeoDataFrame containing the coastal boundary mask.
-        """
-        lecz = xr.load_dataset(
-            self.model.files["other"]["landsurface/low_elevation_coastal_zone"]
-        )
-
-        # Make sure it has a CRS
-        if lecz.rio.crs is None:
-            lecz = lecz.rio.write_crs(
-                "EPSG:4326", inplace=False
-            )  # check CRS for later applications
-
-        # Extract binary mask values
-        lecz_data = lecz["low_elevation_coastal_zone"].values.astype(np.uint8)
-
-        # Get transform from raster metadata
-        transform = lecz.rio.transform()
-
-        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
-        shapes = rasterio.features.shapes(lecz_data, mask=None, transform=transform)
-
-        # Build GeoDataFrame from the shapes generator
-        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
-
-        gdf = gpd.GeoDataFrame.from_records(records)
-        gdf.set_geometry("geometry", inplace=True)
-        gdf = gdf.set_crs(lecz.rio.crs, inplace=True)
-        gdf = gdf[gdf["value"] == 1]  # Keep only mask == 1
-        return gdf
-
     def get_coastal_return_period_maps(self) -> dict[int, xr.DataArray]:
         """This function models coastal flooding for the return periods specified in the model config.
 
         Returns:
             dict[int, xr.DataArray]: A dictionary mapping return periods to their respective flood maps.
         """
-        coastal_mask = self.build_mask_for_coastal_sfincs()
-        boundary_mask = self.build_coastal_boundary_mask()
-        model_root: Path = self.sfincs_model_root("entire_region_coastal")
-        build_parameters = self.get_build_parameters(model_root)
-        build_parameters["region"] = coastal_mask
-        build_parameters["boundary_mask"] = boundary_mask
-        build_sfincs_coastal(
-            **build_parameters,
-        )
+        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        model_root: Path = self.sfincs_model_root("entire_region")
 
-        rp_maps_coastal = run_sfincs_for_return_periods_coastal(
-            model=self.model,
-            model_root=model_root,
-            gpu=self.config["SFINCS"]["gpu"],
-            export_dir=self.model.output_folder / "flood_maps",
-            clean_working_dir=True,
-            return_periods=self.config["return_periods"],
-        )
-        return rp_maps_coastal
+        if self.config["force_overwrite"] or not (model_root / "sfincs.inp").exists():
+            build_parameters = self.get_build_parameters(model_root)
+            # if coastal areas in model region, replace region file with the one that is extended to the coast
+            if subbasins["is_coastal_basin"].any():
+                region_coastal = self.build_region_coastal()
+                build_parameters["region"] = region_coastal
+            # build model
+            build_sfincs(
+                **build_parameters,
+            )
 
-    def get_riverine_return_period_maps(self) -> dict[int, xr.DataArray]:
-        """This function models riverine flooding for the return periods specified in the model config.
+        if subbasins["is_coastal_basin"].any():
+            # create the storm surge hydrographs
+            generate_storm_surge_hydrographs(self.model)
 
-        Returns:
-            dict[int, xr.DataArray]: A dictionary mapping return periods to their respective flood maps.
-        """
+            rp_maps_coastal = run_sfincs_for_return_periods_coastal(
+                model=self.model,
+                model_root=model_root,
+                gpu=self.config["SFINCS"]["gpu"],
+                export_dir=self.model.output_folder / "flood_maps",
+                clean_working_dir=True,
+                return_periods=self.config["return_periods"],
+            )
+        else:
+            # if no coastal areas return None
+            rp_maps_coastal = None
+
+        # Now do the same for riverine flooding
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
 
-        model_root: Path = self.sfincs_model_root("entire_region")
-        if self.config["force_overwrite"] or not (model_root / "sfincs.inp").exists():
-            build_sfincs(
-                **self.get_build_parameters(model_root),
-            )
         estimate_discharge_for_return_periods(
             model_root,
             discharge=self.discharge_spinup_ds,
@@ -562,7 +531,7 @@ class SFINCS:
                 self.model.config["report_hydrology"]["discharge_daily"]["path"],
                 mode="a",
             )
-        return rp_maps_riverine
+        return rp_maps_riverine, rp_maps_coastal
 
     def merge_return_period_maps(
         self,
