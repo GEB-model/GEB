@@ -351,13 +351,28 @@ class Agents:
         oecd_idd = pd.read_csv(path)
 
         # clean data
-        cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
+        cols_to_keep = [
+            "REF_AREA",
+            "STATISTICAL_OPERATION",
+            "TIME_PERIOD",
+            "OBS_VALUE",
+            "Currency",
+        ]
         oecd_idd = oecd_idd[cols_to_keep]
         # only done to check countries in region, could probably be done more efficiently
         countries = self.data_catalog.get_geodataframe(
             "GADM_level0",
             geom=self.region,
         )
+
+        # filter income data to only include countries in model
+        oecd_idd = oecd_idd[oecd_idd["REF_AREA"].isin(countries["GID_0"].values)]
+        if np.unique(oecd_idd["Currency"]).size > 1:
+            self.logger.warning(
+                "Multiple currencies found in model region: {}. Be mindful of potential discrepancies between monetary values used in model.".format(
+                    np.unique(oecd_idd["Currency"])
+                )
+            )
         # setup donor countries for country missing in oecd data
         donor_countries = setup_donor_countries(self, oecd_idd["REF_AREA"])
 
