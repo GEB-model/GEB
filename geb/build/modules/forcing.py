@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import time
 import zipfile
+from ast import Raise
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -252,9 +253,9 @@ def process_ERA5(
 
 
 def download_forecasts_ECMWF(
+    forecast_variable: int,
     folder: Path,
     bounds: tuple[float, float, float, float],
-    forecast_variables: List[int],
     forecast_start_time: date | datetime,
     forecast_end_time: date | datetime,
     forecast_model: str,
@@ -295,6 +296,13 @@ def download_forecasts_ECMWF(
     folder.mkdir(parents=True, exist_ok=True)
 
     # preprocess download arguments
+    fc_area_buffer: float = 0.12  # spatial buffer around the forecasts
+    bounds = (
+        bounds[0] - fc_area_buffer,
+        bounds[1] - fc_area_buffer,
+        bounds[2] + fc_area_buffer,
+        bounds[3] + fc_area_buffer,
+    )
     bounds_str: str = f"{bounds[3]}/{bounds[0]}/{bounds[1]}/{bounds[2]}"  # setup bounds -- > bounds should be in North/West/South/East
     forecast_date_list = pd.date_range(
         forecast_start_time,
@@ -304,66 +312,78 @@ def download_forecasts_ECMWF(
 
     server = ECMWFService("mars")
 
-    for forecast_variable in forecast_variables:
-        # make directoy for each variable
-        forecast_variable_str = str(forecast_variable).replace(".", "-")
-        variable_folder = folder / forecast_variable_str
-        variable_folder.mkdir(parents=True, exist_ok=True)
-        for date_str in forecast_date_list:
-            # Process datetime and extract components
-            forecast_datetime: pd.Timestamp = pd.to_datetime(
-                date_str, format="%Y-%m-%d-%H"
-            )
-            forecast_date: str = forecast_datetime.date().strftime("%Y-%m-%d")
-            forecast_hour: str = forecast_datetime.strftime("%H")
+    # make directoy for each variable
+    forecast_variable_str = str(forecast_variable).replace(".", "-")
+    variable_folder = folder / forecast_variable_str
+    variable_folder.mkdir(parents=True, exist_ok=True)
+    for date_str in forecast_date_list:
+        # Process datetime and extract components
+        forecast_datetime: pd.Timestamp = pd.to_datetime(date_str, format="%Y-%m-%d-%H")
+        forecast_date: str = forecast_datetime.date().strftime("%Y-%m-%d")
+        forecast_hour: str = forecast_datetime.strftime("%H")
 
-            # Generate output filename
-            output_filename: Path = (
-                variable_folder
-                / f"{forecast_model}_{forecast_date}-{forecast_hour}.grb"
-            )
+        # Generate output filename
+        output_filename: Path = (
+            variable_folder / f"{forecast_model}_{forecast_date}-{forecast_hour}.grb"
+        )
 
-            # Process MARS request parameters
-            mars_class: str = "od"  # operational data
-            mars_expver: str = "1"  # operational version
-            mars_levtype: str = "sfc"  # surface level data
-            mars_param: str = str(forecast_variable)
-            mars_step: str = f"0/TO/{forecast_horizon}/BY/{forecast_timestep}"
-            mars_stream: str = "enfo" if forecast_model == "ENS" else "oper"
-            mars_number: str = "1/to/3" if forecast_model == "ENS" else "0"
-            mars_time: str = forecast_hour  # initialization time (hour)
-            mars_type: str = "pf" if forecast_model == "ENS" else "cf"
-            mars_grid: str = str(forecast_resolution)  # spatial resolution
-            mars_area: str = bounds_str  # bounding box, North/West/South/East
+        # Process MARS request parameters
+        mars_class: str = "od"  # operational data
+        mars_expver: str = "1"  # operational version
+        mars_levtype: str = "sfc"  # surface level data
+        mars_param: str = str(forecast_variable)
+        mars_step: str = f"0/TO/{forecast_horizon}/BY/{forecast_timestep}"
+        mars_stream: str = "enfo" if forecast_model == "ENS" else "oper"
+        mars_number: str = "1/to/3" if forecast_model == "ENS" else "0"
+        mars_time: str = forecast_hour  # initialization time (hour)
+        mars_type: str = "pf" if forecast_model == "ENS" else "cf"
+        mars_grid: str = str(forecast_resolution)  # spatial resolution
+        mars_area: str = bounds_str  # bounding box, North/West/South/East
 
-            # Execute MARS request with preprocessed parameters
+        # check if all the forecast dates (forecast_date_list) are present in the preprocessing / climate / forecasts / ecmwf / variable / folder.
+        missing_dates = [
+            date_str
+            for date_str in forecast_date_list
+            if not (variable_folder / f"{forecast_model}_{date_str}.grb").exists()
+        ]
+        if missing_dates:
+            print(f"Missing forecast files for dates: {missing_dates}")
+        else:
             print(
-                f"Requesting data from ECMWF MARS server.. {mars_class} {forecast_datetime} {mars_param} {mars_step} {mars_stream} {mars_number} {mars_type} {mars_grid} {mars_area}"
+                f"All forecast files for variable {forecast_variable} are already downloaded in {variable_folder}, skipping download."
             )
-            # server.execute(
-            #     {
-            #         "class": mars_class,
-            #         "date": forecast_date,
-            #         "expver": mars_expver,
-            #         "levtype": mars_levtype,
-            #         "param": mars_param,
-            #         "step": mars_step,
-            #         "stream": mars_stream,
-            #         "number": mars_number,
-            #         "time": mars_time,
-            #         "type": mars_type,
-            #         "grid": mars_grid,
-            #         "area": mars_area,
-            #     },
-            #     output_filename,
-            # )
+            continue
+
+        # Execute MARS request with preprocessed parameters
+        print(
+            f"Requesting data from ECMWF MARS server.. {mars_class} {forecast_datetime} {mars_param} {mars_step} {mars_stream} {mars_number} {mars_type} {mars_grid} {mars_area}"
+        )
+
+        server.execute(
+            {
+                "class": mars_class,
+                "date": forecast_date,
+                "expver": mars_expver,
+                "levtype": mars_levtype,
+                "param": mars_param,
+                "step": mars_step,
+                "stream": mars_stream,
+                "number": mars_number,
+                "time": mars_time,
+                "type": mars_type,
+                "grid": mars_grid,
+                "area": mars_area,
+            },
+            output_filename,
+        )
 
 
-def process_forecasts_ECMWF(
-    folder: Path,
-    forecast_variables: list[str],
-    forecast_model: str,
+def process_forecast_ECMWF(
+    self,
+    forecast_variable: int,
+    input_folder: Path,
     target: xr.DataArray,
+    bounds: tuple[float, float, float, float],
 ) -> xr.DataArray:
     """Process downloaded ECMWF forecast data.
 
@@ -371,53 +391,112 @@ def process_forecasts_ECMWF(
         folder: Path to the folder containing the downloaded ECMWF forecast data.
     """
 
-    for forecast_variable in forecast_variables:
-        forecast_variable_str = str(forecast_variable).replace(".", "-")
-        variable_folder = folder / forecast_variable_str
+    self.logger.info(f"Processing forecast variable {forecast_variable}")
 
-        # list files from folder
-        files = sorted([f for f in variable_folder.iterdir() if f.suffix == ".grb"])
+    # create variable folder path
+    forecast_variable_str = str(forecast_variable).replace(".", "-")
+    variable_folder = input_folder / forecast_variable_str
 
-        for file in files:
-            # Process each .grb file
-            print(f"Processing file: {file}")
+    # list all .grb files from the variable folder (each file represents a forecast initialization time)
+    files = sorted([f for f in variable_folder.iterdir() if f.suffix == ".grb"])
 
-            ds: xr.DataArray = xr.open_dataset(
-                file,
-                engine="cfgrib",
+    if not files:
+        self.logger.warning(
+            f"No .grb forecast files found for variable {forecast_variable} in {variable_folder}"
+        )
+        continue
+
+    self.logger.info(
+        f"Found {len(files)} forecast initialization times for variable {forecast_variable}"
+    )
+
+    # loop over all forecast initialization times
+    for file in files:
+        self.logger.info(f"Processing forecast file: {file.name}")
+
+        file = variable_folder / file
+
+        da: xr.DataArray = xr.open_dataarray(
+            file,
+            engine="cfgrib",
+        ).rename({"latitude": "y", "longitude": "x", "number": "member"})
+
+        # make new dimension wich is valid_time variable
+        da = da.assign_coords(valid_time=da.time + da.step)
+
+        # make valid_time the new time dimension
+        da = da.swap_dims({"step": "valid_time"})
+        da = da.drop_vars(["time", "step", "surface"])
+        da = da.rename({"valid_time": "time"})
+
+        # rename variables and correct units
+        if forecast_variable == 228.128:  # total precipitation
+            da = da.rename("rainfall")
+            da = da * 1000  # convert m to mm
+            da = da / 3600  # convert from mm/hr to mm/s
+            da.attrs["units"] = "kg m-2 s-1"
+            da = da.diff(dim="time", n=1, label="lower")  # de-accumulate
+            da = xr.where(da > 0, da, 0, keep_attrs=True)
+
+        else:
+            raise NotImplementedError(
+                f"Variable {forecast_variable} not implemented yet."
             )
 
-            # rename number dim to member
-            ds = ds.rename({"number": "member"})
+        buffer: float = 0.5
 
-            # make new dimension wich is valid_time variable
-            ds = ds.assign_coords(valid_time=ds.time + ds.step)
+        # Check if region crosses the meridian (longitude=0)
+        # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
+        if bounds[0] < 0 and bounds[2] > 0:
+            # Need to handle the split across the meridian
+            # Get western hemisphere part (longitude < 0)
+            west_da: xr.DataArray = da.sel(
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                x=slice(((bounds[0] - buffer) + 360) % 360, 360),
+            )
+            # Get eastern hemisphere part (longitude > 0)
+            east_da: xr.DataArray = da.sel(
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                x=slice(0, ((bounds[2] + buffer) + 360) % 360),
+            )
+            # Combine the two parts
+            da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
+        else:
+            # Regular case - doesn't cross meridian
+            da: xr.DataArray = da.sel(
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                x=slice(
+                    ((bounds[0] - buffer) + 360) % 360,
+                    ((bounds[2] + buffer) + 360) % 360,
+                ),
+            )
 
-            # make valid_time the new time dimension
-            ds = ds.swap_dims({"step": "valid_time"})
-            ds = ds.drop_vars(["time", "step", "surface"])
-            ds = ds.rename({"valid_time": "time"})
+        # Reorder x to be between -180 and 180 degrees
+        da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
+        da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
+        da: xr.DataArray = da.raster.mask_nodata()
 
-            # rename variables and correct units
-            if forecast_variable == 228.128:  # total precipitation
-                ds = ds.rename({"tp": "rainfall"})
-                ds["rainfall"] = ds["rainfall"] * 1000  # convert m to mm
-                ds["rainfall"] = ds["rainfall"] / 3600  # convert from mm/hr to mm/s
-                ds["rainfall"].attrs["units"] = "kg m-2 s-1"
-                ds = ds.diff(dim="time", n=1, label="lower")  # de-accumulate
-                ds["rainfall"] = xr.where(
-                    ds["rainfall"] > 0, ds["rainfall"], 0, keep_attrs=True
-                )
+        da = da.rio.write_crs(4326)
+        da.raster.set_crs(4326)
+        da = resample_like(da, target, method="conservative")
 
-            else:
-                raise NotImplementedError(
-                    f"Variable {forecast_variable} not implemented yet."
-                )
-        ds = ds.rio.write_crs(4326)
-        ds.raster.set_crs(4326)
-        ds = resample_like(ds, target, method="conservative")
+        # assert % of nan values is less than 5%
+        assert float(da.isnull().mean().compute().item() * 100) < 5, (
+            "More than 5% of the data is missing after regridding. check the area and try to increase the buffer around the forecasts (fc_area_buffer), as probably not the whole area is downloaded"
+        )
 
-        return ds
+        da = interpolate_na_along_time_dim(
+            da
+        )  # interpolate nans in case <5% of data is missing
+
+        # process specific forecast variables
+        if forecast_variable == 228.128:  # total precipitation
+            self.set_pr_hourly(da, name="forecasts/pr_hourly")
+        else:
+            # raise value error
+            raise NotImplementedError(
+                f"Variable {forecast_variable} not implemented yet."
+            )
 
 
 def plot_timeline(
@@ -857,8 +936,9 @@ class Forcing:
         da.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
         da.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
 
-    def set_pr_hourly(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/pr_hourly"
+    def set_pr_hourly(
+        self, da: xr.DataArray, name: str = "climate/pr_hourly", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "precipitation_flux",
             "long_name": "Precipitation",
@@ -898,8 +978,9 @@ class Forcing:
         )
         return da
 
-    def set_pr(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/pr"
+    def set_pr(
+        self, da: xr.DataArray, name: str = "climate/pr", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "precipitation_flux",
             "long_name": "Precipitation",
@@ -940,8 +1021,9 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_rsds(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/rsds"
+    def set_rsds(
+        self, da: xr.DataArray, name: str = "climate/rsds", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "surface_downwelling_shortwave_flux_in_air",
             "long_name": "Surface Downwelling Shortwave Radiation",
@@ -975,8 +1057,9 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_rlds(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/rlds"
+    def set_rlds(
+        self, da: xr.DataArray, name: str = "climate/rlds", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "surface_downwelling_longwave_flux_in_air",
             "long_name": "Surface Downwelling Longwave Radiation",
@@ -1010,8 +1093,9 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tas(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/tas"
+    def set_tas(
+        self, da: xr.DataArray, name: str = "climate/tas", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "air_temperature",
             "long_name": "Near-Surface Air Temperature",
@@ -1049,8 +1133,9 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tasmax(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/tasmax"
+    def set_tasmax(
+        self, da: xr.DataArray, name: str = "climate/tasmax", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "air_temperature",
             "long_name": "Daily Maximum Near-Surface Air Temperature",
@@ -1087,8 +1172,9 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tasmin(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/tasmin"
+    def set_tasmin(
+        self, da: xr.DataArray, name: str = "climate/tasmin", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "air_temperature",
             "long_name": "Daily Minimum Near-Surface Air Temperature",
@@ -1125,8 +1211,9 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_hurs(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/hurs"
+    def set_hurs(
+        self, da: xr.DataArray, name: str = "climate/hurs", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "relative_humidity",
             "long_name": "Near-Surface Relative Humidity",
@@ -1178,8 +1265,9 @@ class Forcing:
         da: xr.DataArray = da_.transpose(*da.dims)
         return da
 
-    def set_ps(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/ps"
+    def set_ps(
+        self, da: xr.DataArray, name: str = "climate/ps", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "surface_air_pressure",
             "long_name": "Surface Air Pressure",
@@ -1215,8 +1303,9 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_sfcwind(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/sfcwind"
+    def set_sfcwind(
+        self, da: xr.DataArray, name: str = "climate/sfcwind", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "wind_speed",
             "long_name": "Near-Surface Wind Speed",
@@ -1251,8 +1340,9 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_SPEI(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/SPEI"
+    def set_SPEI(
+        self, da: xr.DataArray, name: str = "climate/SPEI", *args, **kwargs
+    ) -> xr.DataArray:
         da.attrs = {
             "units": "-",
             "long_name": "Standard Precipitation Evapotranspiration Index",
@@ -1427,47 +1517,6 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
-    def set_pr_forecast(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
-        name: str = "climate/pr_forecast"
-        da.attrs = {
-            "standard_name": "precipitation_flux",
-            "long_name": "Precipitation",
-            "units": "kg m-2 s-1",
-            "_FillValue": np.nan,
-        }
-        self.set_xy_attrs(da)
-
-        offset = 0
-
-        # maximum rainfall in one hour was 304.8 mm in 1956 in Holt, Missouri, USA
-        # https://www.guinnessworldrecords.com/world-records/737965-greatest-rainfall-in-one-hour
-        # we take a wide margin of 500 mm/h
-        max_value = 500 / 3600  # convert to kg/m2/s
-        precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
-
-        scaling_factor, out_dtype = calculate_scaling(
-            0, max_value, offset=offset, precision=precision
-        )
-
-        filters: list = [
-            FixedScaleOffset(
-                offset=offset,
-                scale=scaling_factor,
-                dtype=da.dtype,
-                astype=out_dtype,
-            ),
-        ]
-
-        da = self.set_other(
-            da,
-            name=name,
-            *args,
-            **kwargs,
-            time_chunksize=7 * 24,
-            filters=filters,
-        )
-        return da
-
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forecasts(
         self,
@@ -1495,16 +1544,14 @@ class Forcing:
             forecast_frequency: The frequency at which forecasts are initialized (hours).
         """
 
-        target = self.grid["mask"]
-        target.raster.set_crs(4326)
-
-        bounds = target.raster.bounds
         if forecast_provider == "ECMWF":
-            folder = self.preprocessing_dir / "climate" / "forecasts" / "ECMWF"
-            download_forecasts_ECMWF(
-                folder,
-                bounds,
-                forecast_variables,
+            preprocessing_folder = (
+                self.preprocessing_dir / "climate" / "forecasts" / "ECMWF"
+            )
+            input_folder = self.input_dir / "climate" / "forecasts" / "ECMWF"
+            self.setup_forecasts_ECMWF(
+                preprocessing_folder,
+                input_folder,
                 forecast_start_time,
                 forecast_end_time,
                 forecast_model,
@@ -1513,16 +1560,92 @@ class Forcing:
                 forecast_timestep,
                 forecast_frequency,
             )
-            self.logger.info("ECMWF forecasts setup complete.")
-        else:
-            raise ValueError(
-                f"Unsupported forecast provider: {forecast_provider}. Only 'ECMWF' is currently supported."
+        # process downloaded forecast data and set as forcing
+
+        # loop over all the forecast variables
+        for forecast_variable in forecast_variables:
+            self.logger.info(f"Processing forecast variable {forecast_variable}")
+
+            # create variable folder path
+            forecast_variable_str = str(forecast_variable).replace(".", "-")
+            variable_folder = folder / forecast_variable_str
+
+            # list all .grb files from the variable folder (each file represents a forecast initialization time)
+            files = sorted([f for f in variable_folder.iterdir() if f.suffix == ".grb"])
+
+            if not files:
+                self.logger.warning(
+                    f"No .grb forecast files found for variable {forecast_variable} in {variable_folder}"
+                )
+                continue
+
+            self.logger.info(
+                f"Found {len(files)} forecast initialization times for variable {forecast_variable}"
             )
 
-        # process downloaded forecast data and set as forcing
-        ds = process_forecasts_ECMWF(folder, forecast_variables, forecast_model, target)
+    def setup_forecasts_ECMWF(
+        self,
+        preprocessing_folder: Path,
+        input_folder: Path,
+        forecast_start_time: date | datetime,
+        forecast_end_time: date | datetime,
+        forecast_model: str,
+        forecast_resolution: float,
+        forecast_horizon: int,
+        forecast_timestep: int,
+        forecast_frequency: int,
+    ) -> None:
+        """Sets up the folder structure for ECMWF forecast data.
 
-        ds = self.set_pr_forecast(ds["tp"])
+        Args:
+            folder: The base folder to store the forecast data.
+            bounds: The spatial bounds for the forecast data [min_lon, min_lat, max_lon, max_lat].
+            forecast_variables: List of ECMWF parameter codes to download (see ECMWF documentation).
+            forecast_start_time: The forecast initialization time (date or datetime).
+            forecast_end_time: The forecast end time (date or datetime).
+            forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
+            forecast_resolution: The spatial resolution of the forecast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep: The forecast timestep in hours.
+            forecast_frequency: The frequency at which forecasts are initialized (hours).
+        """
+        target = self.grid["mask"]
+        target.raster.set_crs(4326)
+        bounds = target.raster.bounds
+
+        MARS_parameter_codes = {
+            "total_precipitation": 228.128,
+            # add more variables here as needed
+        }
+
+        download_args: dict[str, Any] = {
+            "folder": preprocessing_folder,
+            "bounds": bounds,
+            "forecast_start_time": forecast_start_time,
+            "forecast_end_time": forecast_end_time,
+            "forecast_model": forecast_model,
+            "forecast_resolution": forecast_resolution,
+            "forecast_horizon": forecast_horizon,
+            "forecast_timestep": forecast_timestep,
+            "forecast_frequency": forecast_frequency,
+        }
+
+        process_args: dict[str, Any] = {
+            "folder": input_folder,
+            "target": target,
+            "bounds": bounds,
+        }
+
+        # precipitation (hourly)
+        self.logger.info("Downloading ECMWF precipitation forecasts...")
+        download_forecasts_ECMWF(
+            MARS_parameter_codes.get("total_precipitation"), **download_args
+        )
+
+        self.logger.info("Processing ECMWF precipitation forecasts...")
+        process_forecast_ECMWF(
+            MARS_parameter_codes.get("total_precipitation"), **process_args
+        )
 
     def setup_forcing_ISIMIP(self, resolution_arcsec: int, model: str) -> None:
         """Sets up the forcing data for GEB using ISIMIP data.
