@@ -231,7 +231,24 @@ def test_run() -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_alter() -> None:
+def test_SFINCS_run_without_subgrid():
+    args = DEFAULT_RUN_ARGS.copy()
+
+    with WorkingDirectory(working_directory):
+        args["config"] = parse_config(args["config"])
+        args["config"]["report"].update(
+            {
+                "_water_circle": True,
+            }
+        )
+        args["config"]["hazards"]["floods"]["simulate"] = True
+        args["config"]["hazards"]["floods"]["nr_subgrid_pixels"] = None
+
+        run_model_with_method(method="run", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_alter():
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         args["build_config"] = {
@@ -256,7 +273,7 @@ def test_alter() -> None:
         run_model_with_method(method="spinup", **run_args)
 
 
-# @pytest.mark.skip(reason="no way of currently testing this")
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_evaluate_water_circle() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()

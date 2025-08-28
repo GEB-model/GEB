@@ -101,7 +101,7 @@ def build_sfincs_coastal(
     river_width_beta: npt.NDArray[np.float32],
     mannings: xr.DataArray,
     resolution: float,
-    nr_subgrid_pixels: int,
+    nr_subgrid_pixels: int | None,
     crs: str,
     depth_calculation_method: str,
     depth_calculation_parameters: dict[str, float],
@@ -122,7 +122,8 @@ def build_sfincs_coastal(
         river_width_beta: An numpy array of river width beta parameters. Used for calculating river width
         mannings: A xarray DataArray of Manning's n values for the rivers.
         resolution: The resolution of the requested SFINCS model grid in meters.
-        nr_subgrid_pixels: The number of subgrid pixels to use for the SFINCS model. Must be an even number.
+        nr_subgrid_pixels: The number of subgrid pixels to use for the SFINCS model. Must be an even number if specified. If None,
+            the model is run without subgrid.
         crs: The coordinate reference system to use for the model.
         depth_calculation_method: The method to use for calculating river depth. Can be 'manning' or 'power_law'.
         depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
@@ -288,13 +289,16 @@ def build_sfincs(
 
     Raises:
         ValueError: if depth_calculation_method is not 'manning' or 'power_law',
-        ValueError: if nr_subgrid_pixels is not a positive even number
+        ValueError: if nr_subgrid_pixels is not None and not positive even number.
         ValueError: if resolution is not positive.
 
     """
-    assert nr_subgrid_pixels % 2 == 0, "nr_subgrid_pixels must be an even number"
-    assert nr_subgrid_pixels > 0, "nr_subgrid_pixels must be a positive number"
-    assert resolution > 0, "Resolution must be a positive number"
+    if nr_subgrid_pixels is not None and nr_subgrid_pixels <= 0:
+        raise ValueError("nr_subgrid_pixels must be a positive number")
+    if nr_subgrid_pixels is not None and nr_subgrid_pixels % 2 != 0:
+        raise ValueError("nr_subgrid_pixels must be an even number")
+    if resolution <= 0:
+        raise ValueError("Resolution must be a positive number")
 
     assert depth_calculation_method in [
         "manning",
@@ -416,31 +420,36 @@ def build_sfincs(
     assert rivers["depth"].notnull().all(), "River depth cannot be null"
     assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
 
-    sf.setup_subgrid(
-        datasets_dep=DEMs,
-        datasets_rgh=[
-            {
-                "manning": mannings.to_dataset(name="manning"),
-            }
-        ],
-        datasets_riv=[
-            {
-                "centerlines": rivers.rename(
-                    columns={"width": "rivwth", "depth": "rivdph"}
-                )
-            }
-        ],
-        write_dep_tif=True,
-        write_man_tif=True,
-        nr_subgrid_pixels=nr_subgrid_pixels,
-        nlevels=20,
-        nrmax=500,
-    )
-
     # write all components, except forcing which must be done after the model building
     sf.write_grid()
     sf.write_geoms()
     sf.write_config()
-    sf.write_subgrid()
+
+    if nr_subgrid_pixels is not None:
+        logger.info("Setting up SFINCS subgrid...")
+        sf.setup_subgrid(
+            datasets_dep=DEMs,
+            datasets_rgh=[
+                {
+                    "manning": mannings.to_dataset(name="manning"),
+                }
+            ],
+            datasets_riv=[
+                {
+                    "centerlines": rivers.rename(
+                        columns={"width": "rivwth", "depth": "rivdph"}
+                    )
+                }
+            ],
+            write_dep_tif=True,
+            write_man_tif=True,
+            nr_subgrid_pixels=nr_subgrid_pixels,
+            nlevels=20,
+            nrmax=500,
+        )
+
+        sf.write_subgrid()
+    else:
+        logger.info("Skipping SFINCS subgrid...")
 
     sf.plot_basemap(fn_out="basemap.png")

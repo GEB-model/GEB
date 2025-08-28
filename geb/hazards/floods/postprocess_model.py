@@ -21,11 +21,9 @@ def read_maximum_flood_depth(model_root: Path, simulation_root: Path) -> xr.Data
     mod.read_config()
     # we can simply read the model results (sfincs_map.nc and sfincs_his.nc) using the read_results method
     mod.read_results()
-    zsmax: xr.DataArray = mod.results["zsmax"].max(dim="timemax")
 
-    # read subgrid elevation
-    depfile: Path = model_root / "subgrid" / "dep_subgrid.tif"
-    dep: xr.DataArray = mod.data_catalog.get_rasterdataset(depfile)
+    zsmax: xr.DataArray = mod.results["zsmax"].max(dim="timemax")
+    elevation: xr.DataArray = mod.grid.get("dep")
 
     # we use a threshold to mask minimum flood depth (use 0.05 m for fluvial model and 0.15 for pluvial/coastal model)
     # check if the model is fluvial or pluvial/coastal
@@ -43,7 +41,7 @@ def read_maximum_flood_depth(model_root: Path, simulation_root: Path) -> xr.Data
     # However, we keep our eyes out for better solutions.
     hmax: xr.DataArray = utils.downscale_floodmap(
         zsmax=zsmax,
-        dep=dep,
+        dep=elevation,
         hmin=hmin,
         reproj_method="bilinear",  # maybe use "nearest" for coastal
     )

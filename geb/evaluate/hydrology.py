@@ -1000,6 +1000,8 @@ class Hydrology:
         Adapted from: https://github.com/mikhailsmilovic/flowplot
         Also see the paper: https://doi.org/10.1088/1748-9326/ad18de
 
+        This method installs a headless version of Chrome if not already available,
+
         Args:
             run_name: Name of the run to evaluate.
             include_spinup: Whether to include the spinup run in the evaluation.
@@ -1008,6 +1010,12 @@ class Hydrology:
             *args: ignored.
             **kwargs: ignored.
         """
+
+        import plotly.io as pio
+
+        # auto install chrome if not available
+        pio.get_chrome()
+
         folder = self.model.output_folder / "report" / run_name
 
         def read_csv_with_date_index(
