@@ -467,6 +467,7 @@ def build_sfincs(
             rivwth_name="width",
             rivdph_name="depth",
             manning_name="manning",
+            segment_length=sf.reggrid.dx,
         )
         # set the modified grids back to the model
         sf.set_grid(elevation, name="dep")
