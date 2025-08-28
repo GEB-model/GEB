@@ -66,6 +66,8 @@ class Households(AgentBaseClass):
 
         if self.config["adapt"]:
             self.load_flood_maps()
+            self.flood_risk_perceptions = []  # Store the flood risk percpetions in here
+            self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
 
         self.load_objects()
         self.load_max_damage_values()
@@ -427,6 +429,56 @@ class Households(AgentBaseClass):
         print(f"  Min: {np.min(self.var.risk_perception.data):.4f}")
         print(f"  Max: {np.max(self.var.risk_perception.data):.4f}")
         print(f"  Mean: {np.mean(self.var.risk_perception.data):.4f}")
+
+        stats = {
+            "time": self.model.current_time,
+            "min_risk": np.min(self.var.risk_perception.data),
+            "max_risk": np.max(self.var.risk_perception.data),
+            "mean_risk": np.mean(self.var.risk_perception.data),
+        }
+        self.flood_risk_perceptions_statistics.append(stats)
+
+        # Append and save floor risk perception data spatially
+        df = pd.DataFrame(
+            {
+                "time": [self.model.current_time] * len(self.var.household_points),
+                "x": self.var.household_points.geometry.x,
+                "y": self.var.household_points.geometry.y,
+                "risk_perception": self.var.risk_perception.data,
+                "years_since_last_flood": self.var.years_since_last_flood.data,
+            }
+        )
+        self.flood_risk_perceptions.append(df)
+
+        print("Current time:", self.model.current_time, type(self.model.current_time))
+        print(
+            "End time:",
+            self.model.config["general"]["end_time"],
+            type(self.model.config["general"]["end_time"]),
+        )
+
+        end_time = datetime.combine(
+            self.model.config["general"]["end_time"], datetime.min.time()
+        )
+
+        if self.model.current_time == end_time:
+            print("end of sim reached")
+            df_all = pd.concat(self.flood_risk_perceptions, ignore_index=True)
+
+            gdf = gpd.GeoDataFrame(
+                df_all,
+                geometry=gpd.points_from_xy(df_all.x, df_all.y),
+                crs=self.var.household_points.crs,
+            )
+
+            out_path = Path(self.model.output_folder) / "risk_perceptions.gpkg"
+            print(f"saved risk perception here: {out_path}")
+            gdf.to_file(out_path, layer="perceptions", driver="GPKG")
+
+            df_stats = pd.DataFrame(self.flood_risk_perceptions_statistics)
+            out_path = Path(self.model.output_folder) / "risk_perception_stats.csv"
+            df_stats.to_csv(out_path, index=False)
+            print(f"Saved risk perception statistics to {out_path}")
 
     def load_ensemble_flood_maps(self):
         # Load all the flood maps in an ensemble per each day
