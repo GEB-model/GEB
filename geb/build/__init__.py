@@ -523,7 +523,21 @@ def create_riverine_mask(
         nodata=False,
         dtype=bool,
     )
+
     riverine_mask = riverine_mask.rio.clip([geom.union_all()], drop=False)
+
+    # MERIT-Basins rivers don't always extend all the way into coastline pits.
+    # To extend these rivers, we first find all downstream cells of the area
+    # within the initial riverine mask. Then we find all pits within these
+    # downstream cells, and set these pits to be part of the riverine mask.
+    downstream_indices_of_area_in_mask = ldd_network.idxs_ds[
+        riverine_mask.values.ravel()
+    ]
+    all_pits_in_area = ldd_network.idxs_pit
+    downstream_indices_that_are_pits = np.intersect1d(
+        downstream_indices_of_area_in_mask, all_pits_in_area
+    )
+    riverine_mask.values.ravel()[downstream_indices_that_are_pits] = True
 
     # because the basin mask from the source is not perfect and has some holes
     # we need to extend the riverine mask to include all cells upstream of any
@@ -864,12 +878,16 @@ class GEBModel(
 
         downstream_indices = flow_raster.idxs_ds
 
-        river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
-        downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]
-
-        river_raster_ID[
-            downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]
-        ] = river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
+        # MERIT-Basins rivers don't always extend all the way into coastline pits.
+        # To extend these rivers, we first find the river (which have a river ID),
+        # but have a no downstream cell.
+        river_cells_with_downstream_pits = (downstream_indices != -1) & (
+            river_raster_ID != -1
+        )
+        # For those cells, we extract the river ID, and set this river ID to the downstream cells.
+        river_raster_ID[downstream_indices[river_cells_with_downstream_pits]] = (
+            river_raster_ID[river_cells_with_downstream_pits]
+        )
         river_raster_ID = river_raster_ID.reshape(ldd.shape)
 
         pits = ldd == 0
