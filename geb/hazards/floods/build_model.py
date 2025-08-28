@@ -420,11 +420,9 @@ def build_sfincs(
     assert rivers["depth"].notnull().all(), "River depth cannot be null"
     assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
 
-    # write all components, except forcing which must be done after the model building
-    sf.write_grid()
-    sf.write_geoms()
-    sf.write_config()
-
+    # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
+    # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
+    # including mannings roughness.
     if nr_subgrid_pixels is not None:
         logger.info("Setting up SFINCS subgrid...")
         sf.setup_subgrid(
@@ -451,5 +449,32 @@ def build_sfincs(
         sf.write_subgrid()
     else:
         logger.info("Skipping SFINCS subgrid...")
+        # first set up the mannings roughness with the default method
+        # (we already have the DEM set up)
+        sf.setup_manning_roughness(
+            datasets_rgh=[
+                {
+                    "manning": mannings.to_dataset(name="manning"),
+                }
+            ]
+        )
+        # retrieve the elevation and mannings grids
+        # burn the rivers into these grids
+        elevation, mannings = workflows.burn_river_rect(
+            da_elv=sf.grid.dep,
+            gdf_riv=rivers,
+            da_man=sf.grid.manning,
+            rivwth_name="width",
+            rivdph_name="depth",
+            manning_name="manning",
+        )
+        # set the modified grids back to the model
+        sf.set_grid(elevation, name="dep")
+        sf.set_grid(mannings, name="manning")
+
+    # write all components, except forcing which must be done after the model building
+    sf.write_grid()
+    sf.write_geoms()
+    sf.write_config()
 
     sf.plot_basemap(fn_out="basemap.png")
