@@ -358,10 +358,21 @@ class Agents:
             "GADM_level0",
             geom=self.region,
         )
+        # setup donor countries for country missing in oecd data
+        donor_countries = setup_donor_countries(self, oecd_idd["REF_AREA"])
+
         for country in countries["GID_0"]:
             income_distribution_parameters[country] = {}
             income_distributions[country] = {}
-            oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
+            if country not in oecd_idd["REF_AREA"].values:
+                donor = donor_countries[country]
+                self.logger.info(
+                    f"Missing income distribution data for {country}, using donor country {donor}"
+                )
+                oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == donor]
+            else:
+                oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
+
             # take the most recent year
             most_recent_year = oecd_widd_country[
                 oecd_widd_country["TIME_PERIOD"]
