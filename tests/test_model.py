@@ -231,7 +231,7 @@ def test_run() -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_SFINCS_run_without_subgrid():
+def test_SFINCS_run_without_subgrid() -> None:
     args = DEFAULT_RUN_ARGS.copy()
 
     with WorkingDirectory(working_directory):
@@ -248,7 +248,7 @@ def test_SFINCS_run_without_subgrid():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_alter():
+def test_alter() -> None:
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         args["build_config"] = {
