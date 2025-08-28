@@ -1385,7 +1385,7 @@ class Soil(Module):
                 out_dir.mkdir(parents=True, exist_ok=True)
 
                 pfModel.plantFATE_model.config.out_dir = out_dir.as_posix()
-                pfModel.plantFATE_model.config.save_state = False
+                # pfModel.plantFATE_model.config.save_state = False
 
                 if self.model.in_spinup:
                     pfModel.plantFATE_model.config.save_state = True
@@ -1679,6 +1679,7 @@ class Soil(Module):
             forest = gpd.read_file(
                 self.model.config["plantFATE"]["new_forest_filename"]
             )
+            print("using forest file " + self.model.config["plantFATE"]["new_forest_filename"])
             forest = rasterize(
                 [(shape(geom), 1) for geom in forest.geometry],
                 out_shape=self.HRU.shape,
