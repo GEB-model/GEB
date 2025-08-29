@@ -1,3 +1,5 @@
+"""The main GEB model class. This class is used to initialize and run the model."""
+
 import copy
 import datetime
 import os
@@ -47,8 +49,22 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         mode: str = "w",
         timing: bool = False,
     ) -> None:
+        """Initialize the GEB model.
+
+        Args:
+            config: A dictionary containing the model configuration.
+            files: A dictionary containing the paths to the input files.
+            mode: Run model writing mode "w", or reading mode "r". Defaults to "w" for writing.
+                If "r", the model will not write any output files, but will read from existing files.
+            timing: Whether to log timing of modules. Defaults to False.
+
+        Raises:
+            ValueError: If the mode is not 'r' or 'w'.
+        """
         self.timing = timing
         self.mode = mode
+        if self.mode not in ["r", "w"]:
+            raise ValueError("Mode must be either 'r' (read) or 'w' (write)")
 
         Module.__init__(self, self, create_var=False)
 
@@ -80,10 +96,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # Empty list to hold plantFATE models. If forests are not used, this will be empty
         self.plantFATE = []
 
-    @property
-    def name(self) -> str:
-        return ""
-
     def restore(
         self, store_location: str | Path, timestep: int, n_timesteps: int
     ) -> None:
@@ -108,17 +120,46 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     @overload
     def multiverse(
-        self, forecast_dt: datetime.datetime, return_mean_discharge: Literal[True]
+        self,
+        forecast_issue_datetime: datetime.datetime,
+        return_mean_discharge: Literal[True],
     ) -> dict[Any, float]: ...
 
     @overload
     def multiverse(
-        self, forecast_dt: datetime.datetime, return_mean_discharge: Literal[False]
+        self,
+        forecast_issue_datetime: datetime.datetime,
+        return_mean_discharge: Literal[False],
     ) -> None: ...
 
     def multiverse(
-        self, forecast_dt: datetime.datetime, return_mean_discharge: bool = False
+        self,
+        forecast_issue_datetime: datetime.datetime,
+        return_mean_discharge: bool = False,
     ) -> None | dict[Any, float]:
+        """Run the model in a multiverse mode, where different forecast members are used to run the model.
+
+        This function first saves the current state of the model to a temporary location.
+        Then, for each forecast member, it sets the precipitation forcing to the forecast data,
+        runs the model to the end of the forecast period, and optionally calculates the mean discharge.
+        After all forecast members have been processed, the model state is restored to the original state
+        before the function was called.
+
+        The file where the forecast data is stored should have the following format:
+        `data/forecasts/YYYYMMDDTHHMMSS.zarr`, where `YYYYMMDDTHHMMSS` is the datetime of the forecast.
+        The forecast data should be a zarr file with a `member` dimension, where each member is a different forecast.
+
+        All other dimensions should be the same as the original forcing data. Units are also expected to be the same.
+
+        Args:
+            forecast_issue_datetime: Datetime that the forecast was issued.
+            return_mean_discharge: Whether to return the mean discharge for each forecast member. This is
+                mostly useful for testing purposes.
+
+        Returns:
+            If `return_mean_discharge` is True, a dictionary with the mean discharge for each forecast member is returned.
+            Otherwise, None is returned.
+        """
         # copy current state of timestep and time
         store_timestep: int = copy.copy(self.current_timestep)
         store_n_timesteps: int = copy.copy(self.n_timesteps)
@@ -130,7 +171,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         original_pr_hourly: xr.DataArray = self.forcing["pr_hourly"]
 
         forecasts: xr.DataArray = open_zarr(
-            Path("data") / "forecasts" / f"{forecast_dt.strftime('%Y%m%dT%H%M%S')}.zarr"
+            Path("data")
+            / "forecasts"
+            / f"{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
         if return_mean_discharge:
@@ -193,11 +236,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             return None
 
     def step(self) -> None:
-        """Forward the model by the given the number of steps.
-
-        Args:
-            step_size: Number of steps the model should take. Can be integer or string `day`, `week`, `month`, `year`, `decade` or `century`.
-        """
+        """Forward the model by one timestep."""
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
         if (
@@ -209,7 +248,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             for dt in self.config["general"]["forecasts"]["times"]:
                 if dt.date() == self.current_time.date():
                     self.multiverse(
-                        forecast_dt=dt,
+                        forecast_issue_datetime=dt,
                         return_mean_discharge=True,
                     )
 
@@ -235,29 +274,30 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self.current_timestep += 1
 
-    def create_datetime(self, date: datetime.date) -> datetime.datetime:
-        """Create a datetime object from a date with time set to midnight.
-
-        Args:
-            date:  Date object to convert to datetime.
-
-        Returns:
-            Datetime object with time set to midnight.
-        """
-        return datetime.datetime.combine(date, datetime.time(0))
-
     def _initialize(
         self,
-        create_reporter,
-        current_time,
-        n_timesteps,
-        timestep_length,
-        in_spinup=False,
-        simulate_hydrology=True,
-        clean_report_folder=False,
-        load_data_from_store=False,
+        create_reporter: bool,
+        current_time: datetime.datetime,
+        n_timesteps: int,
+        timestep_length: datetime.timedelta | relativedelta,
+        in_spinup: bool = False,
+        simulate_hydrology: bool = True,
+        clean_report_folder: bool = False,
+        load_data_from_store: bool = False,
     ) -> None:
-        """Initializes the model."""
+        """Initializes the model.
+
+        Args:
+            create_reporter: Whether to create a reporter instance.
+            current_time: Current time of the model.
+            n_timesteps: Number of timesteps to run the model for.
+            timestep_length: Length of each timestep.
+            in_spinup: Whether the model is in spinup mode.
+            simulate_hydrology: Whether to simulate hydrology.
+            clean_report_folder: Whether to clean the report folder before creating a new reporter.
+            load_data_from_store: Whether to load data from the store.
+
+        """
         self.in_spinup = in_spinup
         self.simulate_hydrology = simulate_hydrology
 
@@ -265,9 +305,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
-        self.spinup_start = datetime.datetime.combine(
-            self.config["general"]["spinup_time"], datetime.time(0)
-        )
         self.timestep_length = timestep_length
 
         self.hydrology = Hydrology(self)
@@ -284,6 +321,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         if load_data_from_store:
             self.store.load()
+
+        if not in_spinup:
+            self._verify_spinup_time_range()
 
         if self.simulate_hydrology:
             self.hydrology.routing.set_router()
@@ -312,12 +352,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 f"The initial conditions folder ({self.store.path.resolve()}) does not exist. Spinup is required before running the model. Please run the spinup first."
             )
 
-        current_time: datetime.datetime = self.create_datetime(
-            self.config["general"]["start_time"]
-        )
-        end_time: datetime.datetime = self.create_datetime(
-            self.config["general"]["end_time"]
-        )
+        current_time: datetime.datetime = self.run_start
+        end_time: datetime.datetime = self.run_end
 
         timestep_length: datetime.timedelta = datetime.timedelta(days=1)
         n_timesteps: float | int = (
@@ -345,23 +381,35 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.reporter.finalize()
 
     def run_yearly(self) -> None:
-        current_time: datetime.datetime = self.create_datetime(
-            self.config["general"]["start_time"]
-        )
-        end_time: datetime.datetime = self.create_datetime(
-            self.config["general"]["end_time"]
-        )
+        """Run the model in yearly mode, where timesteps are yearly rather than daily.
 
-        assert self.config["hazards"]["floods"]["simulate"] is False, (
-            "Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config."
-        )
+        This depends on a spinup run that was run in daily mode.
 
-        assert current_time.month == 1 and current_time.day == 1, (
-            "In yearly mode start time should be the first day of the year"
-        )
-        assert end_time.month == 12 and end_time.day == 31, (
-            "In yearly mode end time should be the last day of the year"
-        )
+        Notes:
+            Cannot be run in combination with hydrology simulation.
+            This mode is experimential and is not fully tested.
+
+        Raises:
+            ValueError: If the start or end time is not at the beginning or end of a year, respectively.
+            ValueError: If flood simulation is enabled in the config, as this is not compatible with yearly mode.
+        """
+        current_time: datetime.datetime = self.run_start
+        end_time: datetime.datetime = self.run_end
+
+        if self.config["hazards"]["floods"]["simulate"] is True:
+            raise ValueError(
+                "Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config."
+            )
+
+        if not (current_time.month == 1 and current_time.day == 1):
+            raise ValueError(
+                "In yearly mode start time should be the first day of the year"
+            )
+
+        if not (end_time.month == 12 and end_time.day == 31):
+            raise ValueError(
+                "In yearly mode end time should be the last day of the year"
+            )
 
         n_timesteps = end_time.year - current_time.year + 1
 
@@ -381,10 +429,17 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.reporter.finalize()
 
     def spinup(self, initialize_only: bool = False) -> None:
-        """Run the model for the spinup period."""
+        """Run the model for the spinup period.
+
+        Also reports all data at the end of the spinup period, and saves the model state to the store,
+        so that it can be used as initial conditions for the actual model run.
+
+        Args:
+            initialize_only: If True, only initialize the model without running it.
+        """
         # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
-        current_time = self.create_datetime(self.config["general"]["spinup_time"])
-        end_time_exclusive = self.create_datetime(self.config["general"]["start_time"])
+        current_time = self.spinup_start
+        end_time_exclusive = self.run_start
 
         if end_time_exclusive.year - current_time.year < 10:
             print(
@@ -411,6 +466,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # }
 
         self.var = self.store.create_bucket("var")
+        self._store_spinup_time_range()
 
         self._initialize(
             create_reporter=True,
@@ -431,11 +487,39 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self.reporter.finalize()
 
+    def _store_spinup_time_range(self) -> None:
+        """Store the spinup time range in the variable store.
+
+        This is used in the run and estimate_return_periods methods to verify that the spinup time
+        range matches the stored time range. If they do not match, an error is raised, because this
+        indicates that the model configuration has changed since the spinup was run,
+        and can lead to undefined or unexpected behavior.
+        """
+        self.var._spinup_start = self.spinup_start
+        self.var._run_start = self.run_start
+
+    def _verify_spinup_time_range(self) -> None:
+        """Verify that the spinup time range matches the stored time range.
+
+        If they do not match, an error is raised, because this indicates that the model configuration
+        has changed since the spinup was run, and can lead to undefined or unexpected behavior.
+
+        Raises:
+            ValueError: If the spinup start or run start time does not match the stored time range.
+        """
+        if self.var._spinup_start != self.spinup_start:
+            raise ValueError(
+                f"Spinup start time does not match the stored time range. Stored: {self.var._spinup_start}, Configured: {self.spinup_start}"
+            )
+
+        if self.var._run_start != self.run_start:
+            raise ValueError(
+                f"Run start time does not match the stored time range. Stored: {self.var._run_start}, Configured: {self.run_start}"
+            )
+
     def estimate_return_periods(self) -> None:
-        """Estimate the risk of the model."""
-        current_time: datetime.datetime = self.create_datetime(
-            self.config["general"]["start_time"]
-        )
+        """Estimate flood maps for different return periods."""
+        current_time: datetime.datetime = self.run_start
         self.config["general"]["name"] = "estimate_return_periods"
 
         self._initialize(
@@ -506,60 +590,114 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     @property
     def run_name(self) -> str:
-        if self.mode == "w" and self.in_spinup:
+        """Get the name of the current model spinup or run.
+
+        Returns:
+            Name of the current model run. If in spinup mode, the spinup name is returned.
+        """
+        if self.in_spinup:
             return self.config["general"]["spinup_name"]
         else:
-            if "name" in self.config["general"]:
-                return self.config["general"]["name"]
-            else:
-                print(
-                    'No "name" specified in config file under general. Using "default".'
-                )
-                return "default"
+            return self.config["general"]["name"]
 
     @property
     def multiverse_name(self) -> str | None:
+        """To explore different model futures, GEB can be run in a multiverse mode.
+        In this mode, a number of timesteps can be run with different input data (e.g. different precipitation forecasts).
+        The multiverse_name is used to identify the different model futures. It is typically set to the forecast member name.
+
+        Returns:
+            Name of the multiverse. If None, the model is not in multiverse mode.
+        """
         return self._multiverse_name
 
     @multiverse_name.setter
-    def multiverse_name(self, value) -> None:
+    def multiverse_name(self, value: str | None) -> None:
+        """To explore different model futures, GEB can be run in a multiverse mode.
+        In this mode, a number of timesteps can be run with different input data (e.g. different precipitation forecasts).
+        The multiverse_name is used to identify the different model futures. It is typically set to the forecast member name.
+
+        Args:
+            value: Name of the multiverse. If None, the model is not in multiverse mode.
+        """
         self._multiverse_name = str(value) if value is not None else None
 
     @property
     def output_folder(self) -> Path:
+        """Get the folder where the output files will be saved.
+
+        Returns:
+            Path to the folder where output files will be saved.
+        """
         return Path(self.config["general"]["output_folder"])
 
     @property
     def input_folder(self) -> Path:
+        """Get the folder where the input files are located.
+
+        Returns:
+            Path to the folder containing input files.
+        """
         return Path(self.config["general"]["input_folder"])
 
     @property
     def bin_folder(self) -> Path:
+        """Get the folder where the GEB binaries, such as MODFLOW and TBB, are located.
+
+        Returns:
+            Path to the folder containing GEB binaries.
+        """
         return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
     @property
     def crs(self) -> int:
+        """Get the coordinate reference system (CRS) of the model."""
         return 4326
 
     @property
     def bounds(self) -> tuple[float, float, float, float]:
+        """Get the bounding box of the model's mask.
+
+        Returns:
+            A tuple representing the bounding box in the format (minx, miny, maxx, maxy).
+        """
         total_bounds = self.mask.total_bounds
         return (total_bounds[0], total_bounds[1], total_bounds[2], total_bounds[3])
 
     @property
     def xmin(self) -> float:
+        """Get the minimum x-coordinate of the model's bounding box.
+
+        Returns:
+            Minimum x-coordinate of the bounding box.
+        """
         return self.bounds[0]
 
     @property
     def xmax(self) -> float:
+        """Get the maximum x-coordinate of the model's bounding box.
+
+        Returns:
+            Maximum x-coordinate of the bounding box.
+        """
         return self.bounds[2]
 
     @property
     def ymin(self) -> float:
+        """Get the minimum y-coordinate of the model's bounding box.
+
+        Returns:
+            Minimum y-coordinate of the bounding box.
+        """
         return self.bounds[1]
 
     @property
     def ymax(self) -> float:
+        """Get the maximum y-coordinate of the model's bounding box.
+
+        Returns:
+            Maximum y-coordinate of the bounding box.
+        """
         return self.bounds[3]
 
     def close(self) -> None:
@@ -598,3 +736,52 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             exc_tb: The traceback of the exception raised (if any).
         """
         self.close()
+
+    def create_datetime(self, date: datetime.date) -> datetime.datetime:
+        """Create a datetime object from a date with time set to midnight.
+
+        Args:
+            date:  Date object to convert to datetime.
+
+        Returns:
+            Datetime object with time set to midnight.
+        """
+        return datetime.datetime.combine(date, datetime.time(0))
+
+    @property
+    def spinup_start(self) -> datetime.datetime:
+        """Get the start time of the spinup period.
+
+        Returns:
+            Datetime object representing the start of the spinup period.
+        """
+        return self.create_datetime(self.config["general"]["spinup_time"])
+
+    @property
+    def run_start(self) -> datetime.datetime:
+        """Get the start time of the model run.
+
+        Returns:
+            Datetime object representing the start of the model run.
+        """
+        return self.create_datetime(self.config["general"]["start_time"])
+
+    @property
+    def run_end(self) -> datetime.datetime:
+        """Get the end time of the model run.
+
+        Returns:
+            Datetime object representing the end of the model run.
+        """
+        return self.create_datetime(self.config["general"]["end_time"])
+
+    @property
+    def name(self) -> str:
+        """This is the name of this module, NOT the model or model run.
+
+        Used to store variables in the store.
+
+        Returns:
+            Name of the module.
+        """
+        return ""

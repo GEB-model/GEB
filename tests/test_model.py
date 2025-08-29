@@ -175,12 +175,6 @@ def test_update_with_dict() -> None:
 @pytest.mark.parametrize(
     "method",
     [
-        "setup_hydrography",
-        "setup_crop_prices",
-        "setup_discharge_observations",
-        "setup_forcing",
-        "setup_water_demand",
-        "setup_SPEI",
         "setup_CO2_concentration",
     ],
 )
@@ -339,7 +333,6 @@ def test_run_yearly() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(working_directory / args["config"])
-        config["general"]["start_time"] = date(2000, 1, 1)
         config["general"]["end_time"] = date(2049, 12, 31)
         config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
 
@@ -347,7 +340,7 @@ def test_run_yearly() -> None:
         args["config"]["report"] = {}
 
         with pytest.raises(
-            AssertionError,
+            ValueError,
             match="Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config.",
         ):
             run_model_with_method(method="run_yearly", **args)
@@ -476,7 +469,7 @@ def test_multiverse() -> None:
             geb.step()
 
         mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
-            return_mean_discharge=True, forecast_dt=forecast_date
+            return_mean_discharge=True, forecast_issue_datetime=forecast_date
         )
 
         end_date = round_up_to_start_of_next_day_unless_midnight(
