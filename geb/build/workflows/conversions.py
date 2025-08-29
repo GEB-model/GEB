@@ -23,9 +23,36 @@ def setup_donor_countries(
     )  # calculate mean HDI for each country
 
     # find potential donors
-    global_countries = self.geom[
-        "global_countries"
-    ]  # we need this to get the centroids of the countries geoms
+    global_countries = None
+    if hasattr(self, "geom") and isinstance(self.geom, dict):
+        global_countries = self.geom.get("global_countries")
+
+    # If missing or empty, build it
+    if global_countries is None or getattr(global_countries, "empty", False):
+        global_countries = self.data_catalog.get_geodataframe("GADM_level0").rename(
+            columns={"GID_0": "ISO3"}
+        )
+
+        # Use centroids of the country geometries
+        # (Note: for geographic CRS this is planar; reproject if you need geodesic accuracy.)
+        global_countries = global_countries.set_geometry(
+            global_countries.geometry.centroid
+        )
+
+        # Fix Kosovo code: XKO -> XKX, then index by ISO3
+        global_countries["ISO3"] = global_countries["ISO3"].replace({"XKO": "XKX"})
+        global_countries = global_countries.set_index("ISO3")
+
+        # (Optional) If you also want to ensure the index label is correct:
+        # global_countries.index.name = "ISO3"
+
+        self.logger.info(
+            "Built 'global_countries' (centroids) and normalized ISO3 codes (XKO->XKX)."
+        )
+        # self.set_geom(global_countries, name="global_countries")
+    else:
+        self.logger.debug("'global_countries' already present; using cached geometry.")
+
     potential_donors = global_countries.loc[
         global_countries.index.isin(countries_with_data)
     ]
