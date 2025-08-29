@@ -335,7 +335,7 @@ def download_forecasts_ECMWF(
         else:
             raise ValueError("forecast_timestep between 1 and 6 hours is not supported")
         mars_stream: str = "enfo" if forecast_model == "ENS" else "oper"
-        mars_number: str = "1/to/2" if forecast_model == "ENS" else "0"
+        mars_number: str = "1/to/50" if forecast_model == "ENS" else "0"
         mars_time: str = forecast_hour  # initialization time (hour)
         mars_type: str = "pf" if forecast_model == "ENS" else "cf"
         mars_grid: str = str(forecast_resolution)  # spatial resolution
@@ -356,7 +356,7 @@ def download_forecasts_ECMWF(
             continue
 
         # Execute MARS request with preprocessed parameters
-        print(
+        self.logger.info(
             f"Requesting data from ECMWF MARS server.. {mars_class} {forecast_datetime_str} {mars_param} {mars_step} {mars_stream} {mars_number} {mars_type} {mars_grid} {mars_area}"
         )
 
