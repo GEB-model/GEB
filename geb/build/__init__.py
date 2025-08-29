@@ -25,7 +25,6 @@ import xarray as xr
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
-from pyflwdir import from_array
 from rasterio.env import defenv
 from shapely.geometry import Point
 
@@ -544,7 +543,7 @@ def create_riverine_mask(
     # riverine cell. This is done by creating a flow raster from the masked
     # ldd, find all the pits within the riverine mask, and then get all upstream
     # cells from these pits.
-    ldd_network_masked = from_array(
+    ldd_network_masked = pyflwdir.from_array(
         ldd.values,
         ftype="d8",
         mask=riverine_mask.values,
