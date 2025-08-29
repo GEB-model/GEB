@@ -19,8 +19,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-from typing import Any
-
 import numpy as np
 import numpy.typing as npt
 from honeybees.library.raster import write_to_array
