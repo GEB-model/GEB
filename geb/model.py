@@ -120,16 +120,22 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     @overload
     def multiverse(
-        self, forecast_dt: datetime.datetime, return_mean_discharge: Literal[True]
+        self,
+        forecast_issue_datetime: datetime.datetime,
+        return_mean_discharge: Literal[True],
     ) -> dict[Any, float]: ...
 
     @overload
     def multiverse(
-        self, forecast_dt: datetime.datetime, return_mean_discharge: Literal[False]
+        self,
+        forecast_issue_datetime: datetime.datetime,
+        return_mean_discharge: Literal[False],
     ) -> None: ...
 
     def multiverse(
-        self, forecast_dt: datetime.datetime, return_mean_discharge: bool = False
+        self,
+        forecast_issue_datetime: datetime.datetime,
+        return_mean_discharge: bool = False,
     ) -> None | dict[Any, float]:
         """Run the model in a multiverse mode, where different forecast members are used to run the model.
 
@@ -146,7 +152,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         All other dimensions should be the same as the original forcing data. Units are also expected to be the same.
 
         Args:
-            forecast_dt: Datetime that the forecast was issued.
+            forecast_issue_datetime: Datetime that the forecast was issued.
             return_mean_discharge: Whether to return the mean discharge for each forecast member. This is
                 mostly useful for testing purposes.
 
@@ -165,7 +171,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         original_pr_hourly: xr.DataArray = self.forcing["pr_hourly"]
 
         forecasts: xr.DataArray = open_zarr(
-            Path("data") / "forecasts" / f"{forecast_dt.strftime('%Y%m%dT%H%M%S')}.zarr"
+            Path("data")
+            / "forecasts"
+            / f"{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
         if return_mean_discharge:
@@ -240,7 +248,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             for dt in self.config["general"]["forecasts"]["times"]:
                 if dt.date() == self.current_time.date():
                     self.multiverse(
-                        forecast_dt=dt,
+                        forecast_issue_datetime=dt,
                         return_mean_discharge=True,
                     )
 

@@ -14,14 +14,17 @@ class Module(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
+        """Return the name of the module. This method should be overridden by subclasses."""
         pass
 
     @abstractmethod
     def spinup(self) -> None:
+        """Perform any necessary spinup for the module. This method should be overridden by subclasses."""
         pass
 
     @abstractmethod
     def step(self) -> None:
+        """Perform a single time step of the module. This method should be overridden by subclasses."""
         pass
 
     def report(self, local_variables) -> None:

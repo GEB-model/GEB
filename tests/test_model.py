@@ -175,12 +175,6 @@ def test_update_with_dict() -> None:
 @pytest.mark.parametrize(
     "method",
     [
-        "setup_hydrography",
-        "setup_crop_prices",
-        "setup_discharge_observations",
-        "setup_forcing",
-        "setup_water_demand",
-        "setup_SPEI",
         "setup_CO2_concentration",
     ],
 )

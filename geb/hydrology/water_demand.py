@@ -63,9 +63,20 @@ class WaterDemand(Module):
 
     @property
     def name(self) -> str:
+        """Name of the module.
+
+        Should be identical to the path of the module in the model.
+
+        Returns:
+            The name of the module.
+        """
         return "hydrology.water_demand"
 
     def spinup(self) -> None:
+        """Perform any necessary spinup for the water demand module.
+
+        This method initializes the reservoir command areas for the HRU grid.
+        """
         reservoir_command_areas = self.HRU.compress(
             load_grid(self.model.files["subgrid"]["waterbodies/subcommand_areas"]),
             method="last",
@@ -121,7 +132,25 @@ class WaterDemand(Module):
             available_groundwater_m3,
         )
 
-    def withdraw(self, source, demand) -> npt.NDArray[Any]:
+    def withdraw(
+        self, source: npt.NDArray[np.floating], demand: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.floating]:
+        """Withdraw water from a source to meet a demand.
+
+        When the source is less than the demand, all available water is withdrawn.
+        When the source is more than the demand, only the demanded amount is withdrawn.
+
+        Source and demand are expected to be in the same units (e.g., m3).
+
+        Source and demand are updated in place.
+
+        Args:
+            source: Available water from a source (e.g., channel, reservoir, groundwater).
+            demand: Water demand.
+
+        Returns:
+            Water withdrawn from the source to meet the demand.
+        """
         withdrawal = np.minimum(source, demand)
         source -= withdrawal  # update in place
         demand -= withdrawal  # update in place
@@ -136,6 +165,28 @@ class WaterDemand(Module):
         npt.NDArray[np.float32],
         float,
     ]:
+        """Perform a single time step of the water demand module.
+
+        Water is abstracted in the following order:
+            1. Domestic water demand (surface water first, then groundwater)
+            2. Industry water demand (surface water first, then groundwater)
+            3. Livestock water demand (surface water only)
+            4. Irrigation water demand (surface water first, then reservoir water, then groundwater)
+
+        For the domestic and irrigation water demand, the agent-based model is used,
+        while for the industry and livestock water demand, a gridded approach is used.
+
+        Args:
+            potential_evapotranspiration: Potential evapotranspiration in m per HRU [m].
+
+        Returns:
+            Groundwater abstraction per grid cell [m3].
+            Channel abstraction per grid cell [m3].
+            Return flow from all sources per grid cell [m].
+                This is added to the channel flow in the routing module.
+            Irrigation loss to evaporation per HRU [m].
+            Total water demand loss [m3].
+        """
         timer: TimingModule = TimingModule("Water demand")
 
         total_water_demand_loss_m3 = 0.0
