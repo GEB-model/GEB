@@ -469,7 +469,7 @@ def test_multiverse() -> None:
             geb.step()
 
         mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
-            return_mean_discharge=True, forecast_dt=forecast_date
+            return_mean_discharge=True, forecast_issue_datetime=forecast_date
         )
 
         end_date = round_up_to_start_of_next_day_unless_midnight(

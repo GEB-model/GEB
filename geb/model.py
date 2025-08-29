@@ -774,3 +774,14 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             Datetime object representing the end of the model run.
         """
         return self.create_datetime(self.config["general"]["end_time"])
+
+    @property
+    def name(self) -> str:
+        """This is the name of this module, NOT the model or model run.
+
+        Used to store variables in the store.
+
+        Returns:
+            Name of the module.
+        """
+        return ""
