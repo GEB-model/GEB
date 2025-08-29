@@ -2,6 +2,7 @@ import json
 import math
 import os
 from datetime import datetime
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
@@ -21,7 +22,7 @@ from geb.agents.crop_farmers import (
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
-from geb.workflows.io import fetch_and_save, get_window
+from geb.workflows.io import fetch_and_save, get_window, load_table
 
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
@@ -1569,8 +1570,8 @@ class Agents:
                 continue
 
             # load table with income distribution data
-            national_income_distribution = pd.read_parquet(
-                "input" / self.files["table"]["income/national_distribution"]
+            national_income_distribution = load_table(
+                Path("input") / self.files["table"]["income/national_distribution"]
             )
 
             # construct national income distribution
