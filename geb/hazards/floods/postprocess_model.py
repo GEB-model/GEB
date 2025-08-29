@@ -46,7 +46,7 @@ def read_maximum_flood_depth(model_root: Path, simulation_root: Path) -> xr.Data
         # read subgrid elevation
         surface_elevation: xr.DataArray = xr.open_dataarray(
             model_root / "subgrid" / "dep_subgrid.tif"
-        )["dep_subgrid"]
+        ).sel(band=1)
     else:
         # the the grid elevation from the model
         surface_elevation: xr.DataArray = model.grid.get("dep")
