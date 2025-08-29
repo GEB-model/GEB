@@ -336,6 +336,9 @@ class Observations:
             Q_obs_clipped = clip_Q_obs(Q_obs_merged, region_shapefile)
 
             if len(Q_obs_clipped.id) > 0:
+                self.logger.warning(
+                    f"Found {len(Q_obs_clipped.id)} discharge station(s) with mean monthly discharge data. Continuing with monthly data."
+                )
                 Q_obs_clipped.attrs["title"] = "Mean monthly discharge (MQ)"
 
         if len(Q_obs_clipped.id) == 0:
