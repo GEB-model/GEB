@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any, List
 from urllib.parse import urlparse
 
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import ecmwfapi
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -18,8 +21,8 @@ import requests
 import rioxarray as rxr
 import xarray as xr
 import xclim.indices as xci
+from cartopy.mpl.geoaxes import GeoAxes
 from dateutil.relativedelta import relativedelta
-from ecmwfapi import ECMWFService
 from isimip_client.client import ISIMIPClient
 from numcodecs.zarr3 import FixedScaleOffset
 from tqdm import tqdm
@@ -253,8 +256,8 @@ def process_ERA5(
 
 
 def download_forecasts_ECMWF(
-    forecast_variable: int,
-    folder: Path,
+    forecast_variable: float,
+    preprocessing_folder: Path,
     bounds: tuple[float, float, float, float],
     forecast_start_time: date | datetime,
     forecast_end_time: date | datetime,
@@ -284,16 +287,16 @@ def download_forecasts_ECMWF(
         forecast_timestep: The forecast timestep in hours.
         forecast_frequency: The frequency at which forecasts are initialized (hours).
     """
-    # Set up output directory
+    # make directoy for the forecast variable
+    forecast_variable_str = str(forecast_variable).replace(".", "-")
+    variable_folder = preprocessing_folder / forecast_variable_str
+    variable_folder.mkdir(parents=True, exist_ok=True)
 
     # check if ecmwf api key is in environment variables
     if "ECMWF_API_KEY" not in os.environ:
         raise ImportError(
             "ECMWF_API_KEY not found in environment variables. Please set it to your ECMWF API key in .env file. See https://github.com/ecmwf/ecmwf-api-client"
         )
-
-    # setup folder structure
-    folder.mkdir(parents=True, exist_ok=True)
 
     # preprocess download arguments
     fc_area_buffer: float = 0.12  # spatial buffer around the forecasts
@@ -308,33 +311,31 @@ def download_forecasts_ECMWF(
         forecast_start_time,
         forecast_end_time,
         freq=f"{forecast_frequency}H",
-    ).strftime("%Y-%m-%d-%H")
+    )
 
-    server = ECMWFService("mars")
+    server = ecmwfapi.ECMWFService("mars")
 
-    # make directoy for each variable
-    forecast_variable_str = str(forecast_variable).replace(".", "-")
-    variable_folder = folder / forecast_variable_str
-    variable_folder.mkdir(parents=True, exist_ok=True)
-    for date_str in forecast_date_list:
-        # Process datetime and extract components
-        forecast_datetime: pd.Timestamp = pd.to_datetime(date_str, format="%Y-%m-%d-%H")
-        forecast_date: str = forecast_datetime.date().strftime("%Y-%m-%d")
-        forecast_hour: str = forecast_datetime.strftime("%H")
+    for date in forecast_date_list:
+        forecast_date: str = date.date().strftime("%Y-%m-%d")
+        forecast_hour: str = date.strftime("%H")
 
         # Generate output filename
-        output_filename: Path = (
-            variable_folder / f"{forecast_model}_{forecast_date}-{forecast_hour}.grb"
-        )
+        forecast_datetime_str = date.strftime("%Y%m%dT%H%M%S")
+        output_filename: Path = variable_folder / f"{forecast_datetime_str}.grb"
 
         # Process MARS request parameters
         mars_class: str = "od"  # operational data
         mars_expver: str = "1"  # operational version
         mars_levtype: str = "sfc"  # surface level data
         mars_param: str = str(forecast_variable)
-        mars_step: str = f"0/TO/{forecast_horizon}/BY/{forecast_timestep}"
+        if forecast_timestep == 1:
+            mars_step: str = f"0/to/{forecast_horizon}"  # forecast steps
+        elif forecast_timestep > 6:
+            mars_step: str = f"0/to/{forecast_horizon}/{forecast_timestep}"
+        else:
+            raise ValueError("forecast_timestep between 1 and 6 hours is not supported")
         mars_stream: str = "enfo" if forecast_model == "ENS" else "oper"
-        mars_number: str = "1/to/3" if forecast_model == "ENS" else "0"
+        mars_number: str = "1/to/2" if forecast_model == "ENS" else "0"
         mars_time: str = forecast_hour  # initialization time (hour)
         mars_type: str = "pf" if forecast_model == "ENS" else "cf"
         mars_grid: str = str(forecast_resolution)  # spatial resolution
@@ -342,9 +343,9 @@ def download_forecasts_ECMWF(
 
         # check if all the forecast dates (forecast_date_list) are present in the preprocessing / climate / forecasts / ecmwf / variable / folder.
         missing_dates = [
-            date_str
-            for date_str in forecast_date_list
-            if not (variable_folder / f"{forecast_model}_{date_str}.grb").exists()
+            date
+            for date in forecast_date_list
+            if not (variable_folder / f"{forecast_datetime_str}.grb").exists()
         ]
         if missing_dates:
             print(f"Missing forecast files for dates: {missing_dates}")
@@ -356,8 +357,10 @@ def download_forecasts_ECMWF(
 
         # Execute MARS request with preprocessed parameters
         print(
-            f"Requesting data from ECMWF MARS server.. {mars_class} {forecast_datetime} {mars_param} {mars_step} {mars_stream} {mars_number} {mars_type} {mars_grid} {mars_area}"
+            f"Requesting data from ECMWF MARS server.. {mars_class} {forecast_datetime_str} {mars_param} {mars_step} {mars_stream} {mars_number} {mars_type} {mars_grid} {mars_area}"
         )
+
+        # retrieve steps from mars
 
         server.execute(
             {
@@ -380,11 +383,11 @@ def download_forecasts_ECMWF(
 
 def process_forecast_ECMWF(
     self,
-    forecast_variable: int,
-    input_folder: Path,
+    forecast_variable: float,
+    preprocessing_folder: Path,
     target: xr.DataArray,
     bounds: tuple[float, float, float, float],
-) -> xr.DataArray:
+) -> None | xr.DataArray:
     """Process downloaded ECMWF forecast data.
 
     Args:
@@ -395,16 +398,18 @@ def process_forecast_ECMWF(
 
     # create variable folder path
     forecast_variable_str = str(forecast_variable).replace(".", "-")
-    variable_folder = input_folder / forecast_variable_str
+    variable_folder = preprocessing_folder / forecast_variable_str
 
     # list all .grb files from the variable folder (each file represents a forecast initialization time)
     files = sorted([f for f in variable_folder.iterdir() if f.suffix == ".grb"])
+
+    # extract the datetimes in the variable_folder
 
     if not files:
         self.logger.warning(
             f"No .grb forecast files found for variable {forecast_variable} in {variable_folder}"
         )
-        continue
+        return
 
     self.logger.info(
         f"Found {len(files)} forecast initialization times for variable {forecast_variable}"
@@ -413,8 +418,6 @@ def process_forecast_ECMWF(
     # loop over all forecast initialization times
     for file in files:
         self.logger.info(f"Processing forecast file: {file.name}")
-
-        file = variable_folder / file
 
         da: xr.DataArray = xr.open_dataarray(
             file,
@@ -489,9 +492,13 @@ def process_forecast_ECMWF(
             da
         )  # interpolate nans in case <5% of data is missing
 
-        # process specific forecast variables
+        # determine datetime from filename
+        forecast_datetime = file.stem
+        # save variables
         if forecast_variable == 228.128:  # total precipitation
-            self.set_pr_hourly(da, name="forecasts/pr_hourly")
+            self.set_pr_hourly(
+                da, name=f"forecasts/ECMWF/pr_hourly_{forecast_datetime}"
+            )
         else:
             # raise value error
             raise NotImplementedError(
@@ -931,6 +938,177 @@ class Forcing:
 
         plt.close()
 
+    def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
+        """Plot forecast data with both temporal and spatial visualizations.
+
+        Handles both deterministic and ensemble forecasts. For ensemble forecasts,
+        shows individual ensemble members as separate lines in temporal plots and
+        separate subplots in spatial plots.
+
+        Args:
+            da: Forecast data as xarray DataArray. May include a 'member' dimension for ensembles.
+            name: Name for the plots and file outputs.
+
+        Notes:
+            Creates temporal plots showing the forecast evolution and spatial plots
+            showing the mean values. For ensemble forecasts, temporal plots include
+            all members and spatial plots show each member in separate subplots.
+        """
+        # Calculate spatial averages (exclude masked areas)
+        mask = self.grid["mask"]
+
+        # For ensemble data, calculate averages for each member
+        n_members: int = da.sizes["member"]
+
+        # Create single temporal plot with all ensemble members
+        fig, ax_time = plt.subplots(1, 1, figsize=(15, 6))
+
+        # Calculate spatial mean for each member
+        ensemble_data = []
+        for member in da.member:
+            member_da = da.sel(member=member)
+            member_avg = (
+                (member_da * ~mask).sum(dim=("y", "x")) / (~mask).sum()
+            ).compute()
+            ensemble_data.append(member_avg)
+
+            # Convert data to mm/hour if it's precipitation
+            if "pr" in name.lower() and "kg m-2 s-1" in da.attrs.get("units", ""):
+                member_plot = member_avg * 3600
+            else:
+                member_plot = member_avg
+
+            # Plot this member on the timeline
+            ax_time.plot(
+                member_avg.time,
+                member_plot,
+                alpha=0.7,
+                label=f"Member {member.values}",
+            )
+
+        # Calculate ensemble mean and add to plot
+        ensemble_mean = sum(ensemble_data) / len(ensemble_data)
+
+        # Convert ensemble mean to mm/hour if it's precipitation
+        if "pr" in name.lower() and "kg m-2 s-1" in da.attrs.get("units", ""):
+            ensemble_mean_plot = ensemble_mean * 3600
+            ylabel = "mm/hour"
+        else:
+            ensemble_mean_plot = ensemble_mean
+            ylabel = da.attrs.get("units", "")
+
+        ax_time.plot(
+            ensemble_mean.time,
+            ensemble_mean_plot,
+            "k-",
+            linewidth=2,
+            label="Ensemble Mean",
+        )
+        ax_time.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        ax_time.set_xlabel("Time")
+        ax_time.set_ylabel(ylabel)
+        ax_time.set_title(f"{name} - Ensemble Forecast Timeline")
+        ax_time.grid(True, alpha=0.3)
+
+        # Save temporal plot
+        fp = self.report_dir / (name + "_ensemble_timeline.png")
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        plt.tight_layout()
+        plt.savefig(fp, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+        # Create spatial plots - multiple subplots for different members
+        n_cols = min(4, n_members)
+        n_rows = (n_members + n_cols - 1) // n_cols
+
+        import cartopy.crs as ccrs
+
+        # Create figure with cartopy projection
+        fig, axes = plt.subplots(
+            n_rows,
+            n_cols,
+            figsize=(5 * n_cols, 4 * n_rows),
+            subplot_kw={"projection": ccrs.PlateCarree()},
+        )
+        plt.subplots_adjust(hspace=0.4, wspace=0.4)
+
+        vmin = np.min(ensemble_data) * 3600
+        vmax = np.max(ensemble_data) * 3600
+        # fill the subplots with ensemble data
+
+        for i, member in enumerate(da.member):
+            ax = axes.flatten()[i]
+            member_da = da.sel(member=member)
+
+            # plot maximum
+            spatial_data = member_da.max(dim="time").compute()
+
+            # Convert spatial data to mm/hour if it's precipitation
+            if "pr" in name.lower() and "kg m-2 s-1" in da.attrs.get("units", ""):
+                spatial_data_plot = spatial_data * 3600
+                cbar_label = "mm/hour"
+            else:
+                spatial_data_plot = spatial_data
+                cbar_label = da.attrs.get("units", "")
+
+            im = ax.pcolormesh(
+                spatial_data_plot.x,
+                spatial_data_plot.y,
+                spatial_data_plot,
+                cmap="viridis",
+                vmin=vmin,
+                vmax=vmax,
+                shading="auto",
+            )
+            ax.set_title(f"Member {member.values}")
+            ax.set_xlabel("Longitude")
+            ax.set_ylabel("Latitude")
+
+            # Add title and labels
+            ax.set_title(f"Member {member.values}")
+            ax.set_xlabel("Longitude")
+            ax.set_ylabel("Latitude")
+
+            # gridlines
+            gl = ax.gridlines(draw_labels=True, linewidth=0.2, color="gray", alpha=0.5)
+            gl.top_labels = False
+            gl.right_labels = False
+            gl.xlabel_style = {"size": 8}
+            gl.ylabel_style = {"size": 8}
+
+            # add coastlines and borders
+            ax.add_feature(cfeature.COASTLINE, linewidth=0.5, color="black")
+            ax.add_feature(cfeature.BORDERS, linewidth=0.5, color="gray")
+
+        # add colorbar which applies to all subplots
+        fig.subplots_adjust(right=0.85)
+        cbar_ax = fig.add_axes((0.87, 0.15, 0.03, 0.7))  # (left, bottom, width, height)
+        cbar = fig.colorbar(
+            im,
+            cax=cbar_ax,
+        )
+        cbar.set_label(cbar_label)
+        fig.suptitle(f"{name} - Ensemble Spatial Distribution (Max over Time)")
+
+        # save
+        spatial_fp: Path = self.report_dir / (name + "_ensemble_spatial.png")
+        plt.savefig(spatial_fp, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+    def _plot_data(self, da: xr.DataArray, name: str) -> None:
+        """Plot data using appropriate method based on data type.
+
+        Uses plot_forecasts if 'forecast' is in the name, otherwise uses plot_forcing.
+
+        Args:
+            da: Data to plot.
+            name: Name for the plots and file outputs.
+        """
+        if "forecast" in name.lower():
+            self.plot_forecasts(da, name)
+        else:
+            self.plot_forcing(da, name)
+
     def set_xy_attrs(self, da: xr.DataArray) -> None:
         """Set CF-compliant attributes for the x and y coordinates of a DataArray."""
         da.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
@@ -976,6 +1154,11 @@ class Forcing:
             time_chunksize=7 * 24,
             filters=filters,
         )
+
+        # plot data (only forecasts)
+        if "forecast" in name.lower():
+            self._plot_data(da, name)
+
         return da
 
     def set_pr(
@@ -1018,7 +1201,7 @@ class Forcing:
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        self.plot_forcing(da, name)
+        self._plot_data(da, name)
         return da
 
     def set_rsds(
@@ -1054,7 +1237,7 @@ class Forcing:
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        self.plot_forcing(da, name)
+        self._plot_data(da, name)
         return da
 
     def set_rlds(
@@ -1090,7 +1273,7 @@ class Forcing:
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        self.plot_forcing(da, name)
+        self._plot_data(da, name)
         return da
 
     def set_tas(
@@ -1130,7 +1313,7 @@ class Forcing:
             time_chunks_per_shard=get_chunk_size(da),
         )
 
-        self.plot_forcing(da, name)
+        self._plot_data(da, name)
         return da
 
     def set_tasmax(
@@ -1169,7 +1352,7 @@ class Forcing:
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        self.plot_forcing(da, name)
+        self._plot_data(da, name)
         return da
 
     def set_tasmin(
@@ -1208,7 +1391,7 @@ class Forcing:
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        self.plot_forcing(da, name)
+        self._plot_data(da, name)
         return da
 
     def set_hurs(
@@ -1246,7 +1429,7 @@ class Forcing:
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        self.plot_forcing(da, name)
+        self._plot_data(da, name)
         return da
 
     def _mask_forcing(self, da: xr.DataArray, value: int | float) -> xr.DataArray:
@@ -1300,7 +1483,7 @@ class Forcing:
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        self.plot_forcing(da, name)
+        self._plot_data(da, name)
         return da
 
     def set_sfcwind(
@@ -1337,7 +1520,7 @@ class Forcing:
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        self.plot_forcing(da, name)
+        self._plot_data(da, name)
         return da
 
     def set_SPEI(
@@ -1381,7 +1564,7 @@ class Forcing:
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        self.plot_forcing(da, name)
+        self._plot_data(da, name)
         return da
 
     def setup_forcing_ERA5(self) -> None:
@@ -1545,13 +1728,7 @@ class Forcing:
         """
 
         if forecast_provider == "ECMWF":
-            preprocessing_folder = (
-                self.preprocessing_dir / "climate" / "forecasts" / "ECMWF"
-            )
-            input_folder = self.input_dir / "climate" / "forecasts" / "ECMWF"
             self.setup_forecasts_ECMWF(
-                preprocessing_folder,
-                input_folder,
                 forecast_start_time,
                 forecast_end_time,
                 forecast_model,
@@ -1562,31 +1739,8 @@ class Forcing:
             )
         # process downloaded forecast data and set as forcing
 
-        # loop over all the forecast variables
-        for forecast_variable in forecast_variables:
-            self.logger.info(f"Processing forecast variable {forecast_variable}")
-
-            # create variable folder path
-            forecast_variable_str = str(forecast_variable).replace(".", "-")
-            variable_folder = folder / forecast_variable_str
-
-            # list all .grb files from the variable folder (each file represents a forecast initialization time)
-            files = sorted([f for f in variable_folder.iterdir() if f.suffix == ".grb"])
-
-            if not files:
-                self.logger.warning(
-                    f"No .grb forecast files found for variable {forecast_variable} in {variable_folder}"
-                )
-                continue
-
-            self.logger.info(
-                f"Found {len(files)} forecast initialization times for variable {forecast_variable}"
-            )
-
     def setup_forecasts_ECMWF(
         self,
-        preprocessing_folder: Path,
-        input_folder: Path,
         forecast_start_time: date | datetime,
         forecast_end_time: date | datetime,
         forecast_model: str,
@@ -1609,17 +1763,21 @@ class Forcing:
             forecast_timestep: The forecast timestep in hours.
             forecast_frequency: The frequency at which forecasts are initialized (hours).
         """
+        # setup folder structure
+        preprocessing_folder = self.preprocessing_dir / "forecasts" / "ECMWF"
+        preprocessing_folder.mkdir(parents=True, exist_ok=True)
+
+        # get target grid and bounds
         target = self.grid["mask"]
         target.raster.set_crs(4326)
         bounds = target.raster.bounds
 
-        MARS_parameter_codes = {
-            "total_precipitation": 228.128,
-            # add more variables here as needed
+        MARS_codes: dict[str, float] = {
+            "total_precipitation": 228.128,  # in kg/m2
         }
 
         download_args: dict[str, Any] = {
-            "folder": preprocessing_folder,
+            "preprocessing_folder": preprocessing_folder,
             "bounds": bounds,
             "forecast_start_time": forecast_start_time,
             "forecast_end_time": forecast_end_time,
@@ -1631,20 +1789,18 @@ class Forcing:
         }
 
         process_args: dict[str, Any] = {
-            "folder": input_folder,
+            "preprocessing_folder": preprocessing_folder,
             "target": target,
             "bounds": bounds,
         }
 
         # precipitation (hourly)
         self.logger.info("Downloading ECMWF precipitation forecasts...")
-        download_forecasts_ECMWF(
-            MARS_parameter_codes.get("total_precipitation"), **download_args
-        )
+        download_forecasts_ECMWF(MARS_codes.get("total_precipitation"), **download_args)
 
         self.logger.info("Processing ECMWF precipitation forecasts...")
         process_forecast_ECMWF(
-            MARS_parameter_codes.get("total_precipitation"), **process_args
+            self, MARS_codes.get("total_precipitation"), **process_args
         )
 
     def setup_forcing_ISIMIP(self, resolution_arcsec: int, model: str) -> None:
