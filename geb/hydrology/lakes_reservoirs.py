@@ -51,7 +51,11 @@ if SHAPE == "rectangular":
         return lake_factor * height_above_outflow**1.5
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """Inverse function of estimate_lake_outflow."""
+        """Inverse function of estimate_lake_outflow.
+
+        Returns:
+            Height of the lake above elevation of the outflow [m]
+        """
         return (outflow / lake_factor) ** (2 / 3)
 
 elif SHAPE == "parabola":
@@ -61,7 +65,18 @@ elif SHAPE == "parabola":
         return lake_factor * height_above_outflow**2
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """Inverse function of estimate_lake_outflow."""
+        """Inverse function of estimate_lake_outflow.
+
+        References:
+            http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
+
+        Args:
+            lake_factor: A lake-specific constant factor used in the lake outflow equations.
+            outflow: Outflow in m3/s
+
+        Returns:
+            Height of the lake above the outflow [m]
+        """
         return np.sqrt(outflow / lake_factor)
 
 else:
@@ -101,6 +116,21 @@ def get_river_width(average_discharge):
 
 
 def get_lake_factor(river_width, overflow_coefficient_mu, lake_a_factor):
+    """A lake-constant factor that is used in the equations for lake outflow.
+
+    Pre-calculated to save computation time.
+
+    References:
+        http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
+
+    Args:
+        river_width: Width of the river in m
+        overflow_coefficient_mu: Overflow coefficient, depends on the shape of the lake outflow
+        lake_a_factor: Calibration factor for the lake outflow
+
+    Returns:
+        A lake-specific constant factor used in the lake outflow equations.
+    """
     return (
         lake_a_factor
         * overflow_coefficient_mu
@@ -535,4 +565,4 @@ class LakesReservoirs(Module):
                 raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
         # print(self.reservoir_fill_percentage.astype(int))
-        self.report(self, locals())
+        self.report(locals())

@@ -1,3 +1,7 @@
+"""
+Workflow helpers used in the GEB.
+"""
+
 from time import time
 
 import numpy as np
@@ -11,11 +15,24 @@ class TimingModule:
         self.times = [time()]
         self.split_names = []
 
-    def new_split(self, name) -> None:
+    def finish_split(self, name) -> None:
+        """Finish split with with name given.
+
+        Appends the current time and the name of the split to their respective lists, which will be
+        used to calculate the time taken for each split and the total time when converting to string.
+
+        Args:
+            name: The name of the split. This is the name of the previous split.
+        """
         self.times.append(time())
         self.split_names.append(name)
 
     def __str__(self) -> str:
+        """Converts the timing information into a readable string format for logging or display.
+
+        Returns:
+            A formatted string summarizing the time taken for each split and the total time.
+        """
         messages = []
         for i in range(1, len(self.times)):
             time_difference = self.times[i] - self.times[i - 1]

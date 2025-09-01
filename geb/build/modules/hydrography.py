@@ -165,6 +165,8 @@ def get_SWORD_river_widths(data_catalog, SWORD_reach_IDs):
 
 
 class Hydrography:
+    """Contains all build methods for the hydrography for GEB."""
+
     def __init__(self) -> None:
         pass
 

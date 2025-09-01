@@ -107,4 +107,4 @@ class LiveStockFarmers(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
-        self.report(self, locals())
+        self.report(locals())

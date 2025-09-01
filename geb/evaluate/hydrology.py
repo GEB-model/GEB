@@ -32,7 +32,9 @@ class Hydrology:
     def __init__(self) -> None:
         pass
 
-    def plot_discharge(self, run_name: str = "default", *args, **kwargs) -> None:
+    def plot_discharge(
+        self, run_name: str = "default", *args: Any, **kwargs: Any
+    ) -> None:
         """Plot the mean discharge from the GEB model as a spatial map.
 
         Creates a spatial visualization of mean discharge values over time from the GEB model
@@ -253,7 +255,11 @@ class Hydrology:
             ].Q_obs_to_GEB_upstream_area_ratio
 
             def create_validation_df():
-                """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station."""
+                """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station.
+
+                Returns:
+                    DataFrame with the Q_obs discharge observations and the GEB discharge simulation for the selected station.
+                """
                 # select data closest to meerssen point
                 GEB_discharge_station = GEB_discharge.isel(
                     x=snapped_xy_coords[0], y=snapped_xy_coords[1]
@@ -297,7 +303,13 @@ class Hydrology:
                 continue
 
             def calculate_validation_metrics():
-                """Calculate the validation metrics for the current station."""
+                """Calculate the validation metrics for the current station.
+
+                Returns:
+                    KGE: Kling-Gupta Efficiency
+                    NSE: Nash-Sutcliffe Efficiency
+                    R: Pearson correlation coefficient
+                """
                 # calculate kupta coefficient
                 y_true = validation_df["Q_obs"].values
                 y_pred = validation_df["Q_sim"].values
@@ -649,7 +661,11 @@ class Hydrology:
         plot_validation_map()
 
         def create_folium_map(evaluation_gdf):
-            """Create a Folium map with evaluation results and station markers."""
+            """Create a Folium map with evaluation results and station markers.
+
+            Returns:
+                Folium Map object with evaluation results.
+            """
             # Create a Folium map centered on the mean coordinates of the stations
             map_center = [
                 evaluation_gdf.geometry.y.mean(),
@@ -975,14 +991,16 @@ class Hydrology:
         run_name: str,
         include_spinup: bool,
         spinup_name: str,
-        *args,
-        export=True,
-        **kwargs,
+        *args: Any,
+        export: bool = True,
+        **kwargs: Any,
     ) -> None:
         """Create a water circle plot for the GEB model.
 
         Adapted from: https://github.com/mikhailsmilovic/flowplot
         Also see the paper: https://doi.org/10.1088/1748-9326/ad18de
+
+        This method installs a headless version of Chrome if not already available,
 
         Args:
             run_name: Name of the run to evaluate.
@@ -992,6 +1010,12 @@ class Hydrology:
             *args: ignored.
             **kwargs: ignored.
         """
+
+        import plotly.io as pio
+
+        # auto install chrome if not available
+        pio.get_chrome()
+
         folder = self.model.output_folder / "report" / run_name
 
         def read_csv_with_date_index(
@@ -1236,7 +1260,7 @@ class Hydrology:
         return water_circle
 
     def evaluate_hydrodynamics(
-        self, run_name: str = "default", *args, **kwargs
+        self, run_name: str = "default", *args: Any, **kwargs: Any
     ) -> None:
         """Evaluate hydrodynamic model performance against flood observations.
 

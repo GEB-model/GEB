@@ -7,6 +7,13 @@ from dateutil.relativedelta import relativedelta
 
 
 class DateIndex:
+    """This class allows for fast lookup of the index of a date in a list of dates.
+
+    Lots of data doesn't have a value for each date. This class allows
+    for fast lookup of the index of a date in a list of dates, so that the right
+    value can be be selected from another indexed object (e.g. a numpy array).
+    """
+
     def __init__(self, dates: list[date | datetime]) -> None:
         """Create a DateIndex object that allows for fast lookup of dates.
 
@@ -61,6 +68,9 @@ def load_regional_crop_data_from_dict(
     Returns:
         date_index: Dictionary of states containing a dictionary of dates and their index in the 2D array.
         crop_prices: Dictionary of states containing a 2D array of crop prices. First index is for date, second index is for crop.
+
+    Raises:
+        ValueError: if the data is invalid according to the validation criteria.
     """
     with open(model.files["dict"][name], "r") as f:
         timedata = json.load(f)

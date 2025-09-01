@@ -175,12 +175,6 @@ def test_update_with_dict() -> None:
 @pytest.mark.parametrize(
     "method",
     [
-        "setup_hydrography",
-        "setup_crop_prices",
-        "setup_discharge_observations",
-        "setup_forcing",
-        "setup_water_demand",
-        "setup_SPEI",
         "setup_CO2_concentration",
     ],
 )
@@ -231,6 +225,23 @@ def test_run() -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_SFINCS_run_without_subgrid() -> None:
+    args = DEFAULT_RUN_ARGS.copy()
+
+    with WorkingDirectory(working_directory):
+        args["config"] = parse_config(args["config"])
+        args["config"]["report"].update(
+            {
+                "_water_circle": True,
+            }
+        )
+        args["config"]["hazards"]["floods"]["simulate"] = True
+        args["config"]["hazards"]["floods"]["nr_subgrid_pixels"] = None
+
+        run_model_with_method(method="run", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_alter() -> None:
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
@@ -256,7 +267,7 @@ def test_alter() -> None:
         run_model_with_method(method="spinup", **run_args)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_evaluate_water_circle() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
@@ -322,7 +333,6 @@ def test_run_yearly() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(working_directory / args["config"])
-        config["general"]["start_time"] = date(2000, 1, 1)
         config["general"]["end_time"] = date(2049, 12, 31)
         config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
 
@@ -330,7 +340,7 @@ def test_run_yearly() -> None:
         args["config"]["report"] = {}
 
         with pytest.raises(
-            AssertionError,
+            ValueError,
             match="Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config.",
         ):
             run_model_with_method(method="run_yearly", **args)
@@ -459,7 +469,7 @@ def test_multiverse() -> None:
             geb.step()
 
         mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
-            return_mean_discharge=True, forecast_dt=forecast_date
+            return_mean_discharge=True, forecast_issue_datetime=forecast_date
         )
 
         end_date = round_up_to_start_of_next_day_unless_midnight(

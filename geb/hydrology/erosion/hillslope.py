@@ -489,6 +489,6 @@ class HillSlopeErosion(Module):
 
         self.var.total_erosion += transported_material_kg.sum()
 
-        self.report(self, locals())
+        self.report(locals())
 
         return transported_material

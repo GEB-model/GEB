@@ -233,6 +233,10 @@ class Artists(honeybeesArtists):
         Returns:
             background: RGBA-array to display as background.
             legend: Dictionary with data and formatting rules for background legend.
+
+        Raises:
+            ValueError: If the variable to display is not found.
+            ValueError: If the variable to display is of an unsupported type.
         """
         if self.background_variable.startswith("agents.crop_farmers"):
             slicer = re.search(r"\[([^\]]+)\]$", self.background_variable)

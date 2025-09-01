@@ -13,7 +13,7 @@ from geb.workflows.damage_scanner import VectorScanner
 
 
 @fixture
-def flood_raster():
+def flood_raster() -> xr.DataArray:
     x = np.zeros((10, 10), dtype=np.float32)
     x[:5, :5] = 0.5
     x[:5, 5:] = 3
@@ -33,7 +33,7 @@ def flood_raster():
 
 
 @fixture
-def buildings():
+def buildings() -> gpd.GeoDataFrame:
     data = {
         "object_type": [
             "residential",
@@ -64,7 +64,7 @@ def buildings():
 
 
 @fixture
-def vulnerability_curves():
+def vulnerability_curves() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "residential": [0.0, 0.2, 0.3],

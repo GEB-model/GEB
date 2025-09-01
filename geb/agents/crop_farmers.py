@@ -1237,8 +1237,8 @@ class CropFarmers(AgentBaseClass):
             field_indices_by_farmer=self.var.field_indices_by_farmer,
             field_indices=self.var.field_indices,
             irrigation_efficiency=self.var.irrigation_efficiency.data,
-            surface_irrigated=self.surface_irrigated,
-            well_irrigated=self.well_irrigated,
+            surface_irrigated=self.surface_irrigated.data,
+            well_irrigated=self.well_irrigated.data,
             cell_area=self.model.hydrology.HRU.var.cell_area,
             HRU_to_grid=self.HRU.var.HRU_to_grid,
             nearest_river_grid_cell=self.HRU.var.nearest_river_grid_cell,
@@ -1500,6 +1500,9 @@ class CropFarmers(AgentBaseClass):
 
         Returns:
             yield_ratio: Map of yield ratio.
+
+        Raises:
+            ValueError: If crop data type is not GAEZ or MIRCA2000.
         """
         if self.var.crop_data_type == "GAEZ":
             yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_GAEZ(
@@ -3027,7 +3030,7 @@ class CropFarmers(AgentBaseClass):
         ) = self.profits_SEUT_crops(
             unique_crop_calendars, farmer_yield_probability_relation
         )
-        timer_crops.new_split("profit_difference")
+        timer_crops.finish_split("profit_difference")
         total_annual_costs_m2 = (
             self.var.all_loans_annual_cost[:, -1, 0] / self.field_size_per_farmer
         )
@@ -3095,7 +3098,7 @@ class CropFarmers(AgentBaseClass):
             )
 
         assert np.any(SEUT_do_nothing != -1) or np.any(SEUT_crop_options != -1)
-        timer_crops.new_split("SEUT")
+        timer_crops.finish_split("SEUT")
         # Determine the best adaptation option
         best_option_SEUT = np.max(SEUT_crop_options, axis=1)
         chosen_option = np.argmax(SEUT_crop_options, axis=1)
@@ -3152,7 +3155,7 @@ class CropFarmers(AgentBaseClass):
         self.var.yearly_SPEI_probability[SEUT_adaptation_decision, :] = (
             self.var.yearly_SPEI_probability[new_id_final, :]
         )
-        timer_crops.new_split("final steps")
+        timer_crops.finish_split("final steps")
         print(timer_crops)
 
     def adapt_irrigation_well(
@@ -4244,6 +4247,10 @@ class CropFarmers(AgentBaseClass):
         Note:
             - It assumes that the polynomial relationship is invertible.
             - Adjusts yield ratios to be non-negative and capped at 1.0.
+
+        Returns:
+            For each farmer, an array of yield ratios
+                corresponding to the given probabilities of a drought event.
         """
 
         def logarithmic_function(probability, params):
@@ -4278,7 +4285,7 @@ class CropFarmers(AgentBaseClass):
 
         return yield_ratios_drought_event
 
-    def create_unique_groups(self, *additional_diffentiators):
+    def create_unique_groups(self, *additional_diffentiators: npt.NDArray):
         """Create unique groups based on elevation data and merge with crop calendar.
 
         Returns:
@@ -4549,7 +4556,7 @@ class CropFarmers(AgentBaseClass):
         # Subtract 1 off each loan duration, except if that loan is at 0
         self.var.loan_tracker -= self.var.loan_tracker != 0
         # If the loan tracker is at 0, cancel the loan amount and subtract it of the total
-        expired_loan_mask = self.var.loan_tracker == 0
+        expired_loan_mask: npt.NDArray[np.bool_] = self.var.loan_tracker.data == 0
 
         # Add a column to make it the same shape as the loan amount array
         new_column = np.full((self.var.n, 1, 5), False)
@@ -4675,7 +4682,7 @@ class CropFarmers(AgentBaseClass):
         assert not np.isnan(groundwater_depth).any(), "groundwater depth is nan"
         return groundwater_depth
 
-    def create_farmer_classes(self, *characteristics):
+    def create_farmer_classes(self, *characteristics: np.ndarray) -> np.ndarray:
         agent_classes = np.unique(
             np.stack(characteristics), axis=1, return_inverse=True
         )[1]
@@ -4701,6 +4708,9 @@ class CropFarmers(AgentBaseClass):
         """This function is called at the beginning of each timestep.
 
         Then, farmers harvest and plant crops.
+
+        Raises:
+            ValueError: When farmers don't have a yield probability relation yet.
         """
         if not self.model.simulate_hydrology:
             return
@@ -4708,12 +4718,12 @@ class CropFarmers(AgentBaseClass):
         timer = TimingModule("crop_farmers")
 
         self.harvest()
-        timer.new_split("harvest")
+        timer.finish_split("harvest")
         self.plant()
-        timer.new_split("planting")
+        timer.finish_split("planting")
 
         self.water_abstraction_sum()
-        timer.new_split("water abstraction calculation")
+        timer.finish_split("water abstraction calculation")
 
         self.save_pr()
 
@@ -4786,7 +4796,7 @@ class CropFarmers(AgentBaseClass):
                 self.calculate_water_costs()
             )
 
-            timer.new_split("water & energy costs")
+            timer.finish_split("water & energy costs")
 
             if (
                 not self.model.in_spinup
@@ -4806,7 +4816,7 @@ class CropFarmers(AgentBaseClass):
                     :, 0
                 ].copy()
 
-                timer.new_split("yield-spei relation")
+                timer.finish_split("yield-spei relation")
 
                 if (
                     self.personal_insurance_adaptation_active
@@ -4847,7 +4857,7 @@ class CropFarmers(AgentBaseClass):
                     ] = farmer_yield_probability_relation_insured_personal[
                         personal_insured_farmers_mask, :
                     ]
-                    timer.new_split("personal insurance")
+                    timer.finish_split("personal insurance")
                 if self.index_insurance_adaptation_active:
                     gev_params = self.var.GEV_parameters.data
                     strike_vals = np.round(np.arange(0.0, -2.6, -0.2), 2)
@@ -4876,7 +4886,7 @@ class CropFarmers(AgentBaseClass):
                     farmer_yield_probability_relation_insured_index = (
                         self.insured_yields(potential_insured_loss_index)
                     )
-                    timer.new_split("index insurance")
+                    timer.finish_split("index insurance")
                 if self.pr_insurance_adaptation_active:
                     gev_params = self.var.GEV_parameters.data
                     strike_vals = np.round(np.arange(1500, 300, -100), 2)
@@ -4909,7 +4919,7 @@ class CropFarmers(AgentBaseClass):
                     farmer_yield_probability_relation_insured_pr = self.insured_yields(
                         potential_insured_loss_pr
                     )
-                    timer.new_split("precipitation insurance")
+                    timer.finish_split("precipitation insurance")
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(farmer_yield_probability_relation == 0):
                     if self.wells_adaptation_active:
@@ -4919,16 +4929,16 @@ class CropFarmers(AgentBaseClass):
                             energy_cost,
                             water_cost,
                         )
-                        timer.new_split("irr well")
+                        timer.finish_split("irr well")
                     if self.sprinkler_adaptation_active:
                         self.adapt_irrigation_efficiency(
                             farmer_yield_probability_relation, energy_cost, water_cost
                         )
 
-                        timer.new_split("irr efficiency")
+                        timer.finish_split("irr efficiency")
                     if self.crop_switching_adaptation_active:
                         self.adapt_crops(farmer_yield_probability_relation)
-                        timer.new_split("adapt crops")
+                        timer.finish_split("adapt crops")
 
                     if (
                         self.personal_insurance_adaptation_active
@@ -4961,7 +4971,7 @@ class CropFarmers(AgentBaseClass):
                             [farmer_yield_probability_relation_insured_personal],
                             [personal_premium],
                         )
-                        timer.new_split("adapt pers. insurance")
+                        timer.finish_split("adapt pers. insurance")
                     elif self.index_insurance_adaptation_active:
                         self.adapt_insurance(
                             [INDEX_INSURANCE_ADAPTATION],
@@ -4970,7 +4980,7 @@ class CropFarmers(AgentBaseClass):
                             [farmer_yield_probability_relation_insured_index],
                             [index_premium],
                         )
-                        timer.new_split("adapt index insurance")
+                        timer.finish_split("adapt index insurance")
                     elif self.pr_insurance_adaptation_active:
                         self.adapt_insurance(
                             [PR_INSURANCE_ADAPTATION],
@@ -4979,9 +4989,9 @@ class CropFarmers(AgentBaseClass):
                             [farmer_yield_probability_relation_insured_pr],
                             [pr_premium],
                         )
-                        timer.new_split("adapt prec. insurance")
+                        timer.finish_split("adapt prec. insurance")
                 else:
-                    raise AssertionError(
+                    raise ValueError(
                         "Cannot adapt without yield - probability relation"
                     )
 
@@ -5012,7 +5022,7 @@ class CropFarmers(AgentBaseClass):
         if self.model.timing:
             print(timer)
 
-        self.report(self, locals())
+        self.report(locals())
 
     def remove_agents(
         self, farmer_indices: list[int], new_land_use_type: int

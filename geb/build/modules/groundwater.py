@@ -10,6 +10,8 @@ from ..workflows.general import (
 
 
 class GroundWater:
+    """Contains all build methods for the groundwater for GEB."""
+
     def __init__(self) -> None:
         pass
 

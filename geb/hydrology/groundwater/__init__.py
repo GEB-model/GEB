@@ -19,6 +19,12 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+"""
+Groundwater submodule for hydrology in GEB.
+
+Provides groundwater simulation and ModFlow integration utilities.
+"""
+
 import numpy as np
 import numpy.typing as npt
 
@@ -176,7 +182,7 @@ class GroundWater(Module):
             data=np.float32(self.grid.var.capillar > 0)
         )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return baseflow
 

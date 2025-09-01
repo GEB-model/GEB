@@ -101,7 +101,7 @@ def build_sfincs_coastal(
     river_width_beta: npt.NDArray[np.float32],
     mannings: xr.DataArray,
     resolution: float,
-    nr_subgrid_pixels: int,
+    nr_subgrid_pixels: int | None,
     crs: str,
     depth_calculation_method: str,
     depth_calculation_parameters: dict[str, float],
@@ -122,7 +122,8 @@ def build_sfincs_coastal(
         river_width_beta: An numpy array of river width beta parameters. Used for calculating river width
         mannings: A xarray DataArray of Manning's n values for the rivers.
         resolution: The resolution of the requested SFINCS model grid in meters.
-        nr_subgrid_pixels: The number of subgrid pixels to use for the SFINCS model. Must be an even number.
+        nr_subgrid_pixels: The number of subgrid pixels to use for the SFINCS model. Must be an even number if specified. If None,
+            the model is run without subgrid.
         crs: The coordinate reference system to use for the model.
         depth_calculation_method: The method to use for calculating river depth. Can be 'manning' or 'power_law'.
         depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
@@ -285,10 +286,19 @@ def build_sfincs(
         depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
             depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
         mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
+
+    Raises:
+        ValueError: if depth_calculation_method is not 'manning' or 'power_law',
+        ValueError: if nr_subgrid_pixels is not None and not positive even number.
+        ValueError: if resolution is not positive.
+
     """
-    assert nr_subgrid_pixels % 2 == 0, "nr_subgrid_pixels must be an even number"
-    assert nr_subgrid_pixels > 0, "nr_subgrid_pixels must be a positive number"
-    assert resolution > 0, "Resolution must be a positive number"
+    if nr_subgrid_pixels is not None and nr_subgrid_pixels <= 0:
+        raise ValueError("nr_subgrid_pixels must be a positive number")
+    if nr_subgrid_pixels is not None and nr_subgrid_pixels % 2 != 0:
+        raise ValueError("nr_subgrid_pixels must be an even number")
+    if resolution <= 0:
+        raise ValueError("Resolution must be a positive number")
 
     assert depth_calculation_method in [
         "manning",
@@ -296,7 +306,7 @@ def build_sfincs(
     ], "Method should be 'manning' or 'power_law'"
 
     # build base model
-    sf = SfincsModel(root=str(model_root), mode="w+", logger=get_logger())
+    sf: SfincsModel = SfincsModel(root=str(model_root), mode="w+", logger=get_logger())
 
     sf.setup_grid_from_region({"geom": region}, res=resolution, crs=crs, rotated=False)
 
@@ -351,11 +361,11 @@ def build_sfincs(
     # Get the single outflow point coordinates
     x_coord = outflow_points.geometry.x.iloc[0]
     y_coord = outflow_points.geometry.y.iloc[0]
-    assert sf.grid.dep.rio.crs == outflow_points.crs, (  # type: ignore
+    assert sf.grid.dep.rio.crs == outflow_points.crs, (
         "CRS of sf.grid.dep is not the same as the outflow_points crs"
     )
     # Sample from sf.grid.dep (which is the DEM DataArray)
-    elevation_value = sf.grid.dep.sel(  # type: ignore
+    elevation_value = sf.grid.dep.sel(
         x=x_coord, y=y_coord, method="nearest"
     ).values.item()
 
@@ -410,31 +420,62 @@ def build_sfincs(
     assert rivers["depth"].notnull().all(), "River depth cannot be null"
     assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
 
-    sf.setup_subgrid(
-        datasets_dep=DEMs,
-        datasets_rgh=[
-            {
-                "manning": mannings.to_dataset(name="manning"),
-            }
-        ],
-        datasets_riv=[
-            {
-                "centerlines": rivers.rename(
-                    columns={"width": "rivwth", "depth": "rivdph"}
-                )
-            }
-        ],
-        write_dep_tif=True,
-        write_man_tif=True,
-        nr_subgrid_pixels=nr_subgrid_pixels,
-        nlevels=20,
-        nrmax=500,
-    )
+    # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
+    # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
+    # including mannings roughness.
+    if nr_subgrid_pixels is not None:
+        logger.info("Setting up SFINCS subgrid...")
+        sf.setup_subgrid(
+            datasets_dep=DEMs,
+            datasets_rgh=[
+                {
+                    "manning": mannings.to_dataset(name="manning"),
+                }
+            ],
+            datasets_riv=[
+                {
+                    "centerlines": rivers.rename(
+                        columns={"width": "rivwth", "depth": "rivdph"}
+                    )
+                }
+            ],
+            write_dep_tif=True,
+            write_man_tif=True,
+            nr_subgrid_pixels=nr_subgrid_pixels,
+            nlevels=20,
+            nrmax=500,
+        )
+
+        sf.write_subgrid()
+    else:
+        logger.info("Skipping SFINCS subgrid...")
+        # first set up the mannings roughness with the default method
+        # (we already have the DEM set up)
+        sf.setup_manning_roughness(
+            datasets_rgh=[
+                {
+                    "manning": mannings.to_dataset(name="manning"),
+                }
+            ]
+        )
+        # retrieve the elevation and mannings grids
+        # burn the rivers into these grids
+        elevation, mannings = workflows.burn_river_rect(
+            da_elv=sf.grid.dep,
+            gdf_riv=rivers,
+            da_man=sf.grid.manning,
+            rivwth_name="width",
+            rivdph_name="depth",
+            manning_name="manning",
+            segment_length=sf.reggrid.dx,
+        )
+        # set the modified grids back to the model
+        sf.set_grid(elevation, name="dep")
+        sf.set_grid(mannings, name="manning")
 
     # write all components, except forcing which must be done after the model building
     sf.write_grid()
     sf.write_geoms()
     sf.write_config()
-    sf.write_subgrid()
 
     sf.plot_basemap(fn_out="basemap.png")

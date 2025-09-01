@@ -543,6 +543,8 @@ def get_chunk_size(da, target: float | int = 1e8) -> int:
 
 
 class Forcing:
+    """Contains methods to download and process climate forcing data for GEB."""
+
     def __init__(self) -> None:
         pass
 
@@ -581,6 +583,12 @@ class Forcing:
 
         Returns:
             The downloaded climate data as an xarray dataset.
+
+        Raises:
+            ValueError: If no files are found for the specified variable in the ISIMIP dataset.
+            ValueError: If the parse_files does not all end with either .nc or .txt.
+            ValueError: If an unknown file type is encountered in the ISIMIP dataset.
+            RuntimeError: If the ISIMIP server returns an unknown status during file download.
         """
         # if start_date is specified, end_date must be specified as well
         assert (start_date is None) == (end_date is None)
@@ -721,7 +729,7 @@ class Forcing:
                                 "ISIMIP internal server error, waiting 60 seconds before retrying"
                             )
                         else:
-                            raise ValueError(
+                            raise RuntimeError(
                                 f"Could not download files: {response['status']}"
                             )
                     time.sleep(60)
@@ -1115,7 +1123,11 @@ class Forcing:
         da.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
 
     def set_pr_hourly(
-        self, da: xr.DataArray, name: str = "climate/pr_hourly", *args, **kwargs
+        self,
+        da: xr.DataArray,
+        name: str = "climate/pr_hourly",
+        *args: Any,
+        **kwargs: Any,
     ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "precipitation_flux",
@@ -1162,7 +1174,7 @@ class Forcing:
         return da
 
     def set_pr(
-        self, da: xr.DataArray, name: str = "climate/pr", *args, **kwargs
+        self, da: xr.DataArray, name: str = "climate/pr", *args: Any, **kwargs: Any
     ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "precipitation_flux",
@@ -1700,6 +1712,60 @@ class Forcing:
         wind_speed = resample_like(wind_speed, target, method="conservative")
         self.set_sfcwind(wind_speed)
 
+    def setup_forcing_ISIMIP(self, resolution_arcsec: int, model: str) -> None:
+        """Sets up the forcing data for GEB using ISIMIP data.
+
+        Args:
+            resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
+            model: The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
+                and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
+
+        Raises:
+            ValueError: If an unsupported resolution or model is specified.
+        """
+        if resolution_arcsec == 30:
+            assert model == "chelsa-w5e5", (
+                "Only chelsa-w5e5 is supported for 30 arcsec resolution"
+            )
+            # download source data from ISIMIP
+            self.logger.info("setting up forcing data")
+            high_res_variables: list = ["pr", "rsds", "tas", "tasmax", "tasmin"]
+            self.setup_30arcsec_variables_isimip(high_res_variables)
+            self.logger.info("setting up relative humidity...")
+            self.setup_hurs_isimip_30arcsec()
+            self.logger.info("setting up longwave radiation...")
+            self.setup_longwave_isimip_30arcsec()
+            self.logger.info("setting up pressure...")
+            self.setup_pressure_isimip_30arcsec()
+            self.logger.info("setting up wind...")
+            self.setup_wind_isimip_30arcsec()
+        elif resolution_arcsec == 1800:
+            assert model in (
+                "ipsl-cm6a-lr",
+                "gfdl-esm4",
+                "mpi-esm1-2-hr",
+                "mri-esm2-0",
+                "ukesm1-0-ll",
+            ), (
+                "Only ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0 and ukesm1-0-ll are supported for 1800 arcsec resolution"
+            )
+            variables = [
+                "pr",
+                "rsds",
+                "tas",
+                "tasmax",
+                "tasmin",
+                "hurs",
+                "rlds",
+                "ps",
+                "sfcwind",
+            ]
+            self.setup_1800arcsec_variables_isimip(model, variables)
+        else:
+            raise ValueError(
+                "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
+            )
+
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forcing(
         self,
@@ -1728,6 +1794,9 @@ class Forcing:
             from the ISIMIP dataset using the `setup_wind_isimip_30arcsec` method. All these data are first downscaled to the model grid.
 
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
+
+        Raises:
+            ValueError: If an unknown data source is specified.
         """
         if forcing == "ISIMIP":
             assert resolution_arcsec is not None, (
@@ -2293,6 +2362,9 @@ class Forcing:
             calibration_period_start: The start time of the reSPEI data in ISO 8601 format (YYYY-MM-DD).
             calibration_period_end: The end time of the SPEI data in ISO 8601 format (YYYY-MM-DD). Endtime is exclusive.
             window_months: The window size in months for the SPEI calculation. Default is 12 months.
+
+        Raises:
+            ValueError: If the input data do not have the same coordinates.
         """
         assert window_months <= 12, (
             "window_months must be less than or equal to 12 (otherwise we run out of climate data)"
@@ -2321,7 +2393,7 @@ class Forcing:
         ].time.max().dt.date >= calibration_period_end - timedelta(days=1):
             forcing_start_date = self.other["climate/pr"].time.min().dt.date.item()
             forcing_end_date = self.other["climate/pr"].time.max().dt.date.item()
-            raise AssertionError(
+            raise ValueError(
                 f"water data does not cover the entire calibration period, forcing data covers from {forcing_start_date} to {forcing_end_date}, "
                 f"while requested calibration period is from {calibration_period_start} to {calibration_period_end}"
             )

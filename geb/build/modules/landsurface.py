@@ -20,6 +20,8 @@ from ..workflows.soilgrids import load_soilgrids
 
 
 class LandSurface:
+    """Implements land surface submodel, responsible for land surface characteristics and processes."""
+
     def __init__(self) -> None:
         pass
 

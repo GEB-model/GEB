@@ -312,7 +312,7 @@ def test_dynamic_array_operations() -> None:
 
 
 @pytest.fixture
-def array():
+def array() -> DynamicArray:
     return DynamicArray(np.array([1, 2, 3, 4, 5]), max_n=10)
 
 

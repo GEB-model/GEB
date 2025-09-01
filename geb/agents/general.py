@@ -100,6 +100,8 @@ def downscale_volume(
 
 
 class AgentBaseClass(Module, HoneybeesAgentBaseClass):
+    """Base class for all agent classes."""
+
     def __init__(self, model) -> None:
         if not hasattr(self, "redundancy"):
             self.redundancy = None  # default redundancy is None

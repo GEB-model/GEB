@@ -535,12 +535,27 @@ class ModFlowSimulation:
             return False
 
     def bmi_return(self) -> list[str]:
-        """Parse libmf6.so and libmf6.dll stdout file."""
+        """Parse the stdout file created by the modflow library.
+
+        stdout is a file created by the modflow library that contains
+        information about the model run.
+
+        Returns:
+            The contents of the stdout file as a list of strings.
+        """
         with open("mfsim.stdout") as f:
             return f.readlines()
 
     def load_bmi(self, heads: npt.NDArray[np.float64]) -> None:
-        """Load the Basic Model Interface."""
+        """Load the Basic Model Interface.
+
+        Args:
+            heads: The initial heads of the model grid, in m.
+
+        Raises:
+            FileNotFoundError: If the config file is not found on disk.
+            ValueError: If the platform is not supported.
+        """
         # Current model version 6.5.0 from https://github.com/MODFLOW-USGS/modflow6/releases/tag/6.5.0
         if platform.system() == "Windows":
             libary_name: str = "libmf6.dll"
