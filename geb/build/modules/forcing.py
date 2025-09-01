@@ -356,7 +356,7 @@ def download_forecasts_ECMWF(
             continue
 
         # Execute MARS request with preprocessed parameters
-        self.logger.info(
+        print(
             f"Requesting data from ECMWF MARS server.. {mars_class} {forecast_datetime_str} {mars_param} {mars_step} {mars_stream} {mars_number} {mars_type} {mars_grid} {mars_area}"
         )
 
@@ -1701,160 +1701,6 @@ class Forcing:
         self.set_sfcwind(wind_speed)
 
     @build_method(depends_on=["set_ssp", "set_time_range"])
-    def setup_forecasts(
-        self,
-        forecast_variables: List[int],
-        forecast_start_time: date | datetime,
-        forecast_end_time: date | datetime,
-        forecast_provider: str,
-        forecast_model: str,
-        forecast_resolution: float,
-        forecast_horizon: int,
-        forecast_timestep: int,
-        forecast_frequency: int,
-    ):
-        """Sets up forecast data for the model based on configuration.
-
-        Args:
-            forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
-            forecast_start_time: The forecast initialization time (date or datetime).
-            forecast_end_time: The forecast end time (date or datetime).
-            forecast_provider: The forecast data provider to use (default: "ECMWF").
-            forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
-            forecast_resolution: The spatial resolution of the forecast data (degrees).
-            forecast_horizon: The forecast horizon in hours.
-            forecast_timestep: The forecast timestep in hours.
-            forecast_frequency: The frequency at which forecasts are initialized (hours).
-        """
-
-        if forecast_provider == "ECMWF":
-            self.setup_forecasts_ECMWF(
-                forecast_start_time,
-                forecast_end_time,
-                forecast_model,
-                forecast_resolution,
-                forecast_horizon,
-                forecast_timestep,
-                forecast_frequency,
-            )
-        # process downloaded forecast data and set as forcing
-
-    def setup_forecasts_ECMWF(
-        self,
-        forecast_start_time: date | datetime,
-        forecast_end_time: date | datetime,
-        forecast_model: str,
-        forecast_resolution: float,
-        forecast_horizon: int,
-        forecast_timestep: int,
-        forecast_frequency: int,
-    ) -> None:
-        """Sets up the folder structure for ECMWF forecast data.
-
-        Args:
-            folder: The base folder to store the forecast data.
-            bounds: The spatial bounds for the forecast data [min_lon, min_lat, max_lon, max_lat].
-            forecast_variables: List of ECMWF parameter codes to download (see ECMWF documentation).
-            forecast_start_time: The forecast initialization time (date or datetime).
-            forecast_end_time: The forecast end time (date or datetime).
-            forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
-            forecast_resolution: The spatial resolution of the forecast data (degrees).
-            forecast_horizon: The forecast horizon in hours.
-            forecast_timestep: The forecast timestep in hours.
-            forecast_frequency: The frequency at which forecasts are initialized (hours).
-        """
-        # setup folder structure
-        preprocessing_folder = self.preprocessing_dir / "forecasts" / "ECMWF"
-        preprocessing_folder.mkdir(parents=True, exist_ok=True)
-
-        # get target grid and bounds
-        target = self.grid["mask"]
-        target.raster.set_crs(4326)
-        bounds = target.raster.bounds
-
-        MARS_codes: dict[str, float] = {
-            "total_precipitation": 228.128,  # in kg/m2
-        }
-
-        download_args: dict[str, Any] = {
-            "preprocessing_folder": preprocessing_folder,
-            "bounds": bounds,
-            "forecast_start_time": forecast_start_time,
-            "forecast_end_time": forecast_end_time,
-            "forecast_model": forecast_model,
-            "forecast_resolution": forecast_resolution,
-            "forecast_horizon": forecast_horizon,
-            "forecast_timestep": forecast_timestep,
-            "forecast_frequency": forecast_frequency,
-        }
-
-        process_args: dict[str, Any] = {
-            "preprocessing_folder": preprocessing_folder,
-            "target": target,
-            "bounds": bounds,
-        }
-
-        # precipitation (hourly)
-        self.logger.info("Downloading ECMWF precipitation forecasts...")
-        download_forecasts_ECMWF(MARS_codes.get("total_precipitation"), **download_args)
-
-        self.logger.info("Processing ECMWF precipitation forecasts...")
-        process_forecast_ECMWF(
-            self, MARS_codes.get("total_precipitation"), **process_args
-        )
-
-    def setup_forcing_ISIMIP(self, resolution_arcsec: int, model: str) -> None:
-        """Sets up the forcing data for GEB using ISIMIP data.
-
-        Args:
-            resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
-            model: The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
-                and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
-        """
-        if resolution_arcsec == 30:
-            assert model == "chelsa-w5e5", (
-                "Only chelsa-w5e5 is supported for 30 arcsec resolution"
-            )
-            # download source data from ISIMIP
-            self.logger.info("setting up forcing data")
-            high_res_variables: list = ["pr", "rsds", "tas", "tasmax", "tasmin"]
-            self.setup_30arcsec_variables_isimip(high_res_variables)
-            self.logger.info("setting up relative humidity...")
-            self.setup_hurs_isimip_30arcsec()
-            self.logger.info("setting up longwave radiation...")
-            self.setup_longwave_isimip_30arcsec()
-            self.logger.info("setting up pressure...")
-            self.setup_pressure_isimip_30arcsec()
-            self.logger.info("setting up wind...")
-            self.setup_wind_isimip_30arcsec()
-        elif resolution_arcsec == 1800:
-            assert model in (
-                "ipsl-cm6a-lr",
-                "gfdl-esm4",
-                "mpi-esm1-2-hr",
-                "mri-esm2-0",
-                "ukesm1-0-ll",
-            ), (
-                "Only ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0 and ukesm1-0-ll are supported for 1800 arcsec resolution"
-            )
-            variables = [
-                "pr",
-                "rsds",
-                "tas",
-                "tasmax",
-                "tasmin",
-                "hurs",
-                "rlds",
-                "ps",
-                "sfcwind",
-            ]
-            self.setup_1800arcsec_variables_isimip(model, variables)
-        else:
-            raise ValueError(
-                "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
-            )
-
-    @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forcing(
         self,
         forcing: str = "ERA5",
@@ -2676,3 +2522,157 @@ class Forcing:
             da,
             name="climate/CO2_ppm",
         )
+
+    @build_method(depends_on=["set_ssp", "set_time_range"])
+    def setup_forecasts(
+        self,
+        forecast_variables: List[int],
+        forecast_start_time: date | datetime,
+        forecast_end_time: date | datetime,
+        forecast_provider: str,
+        forecast_model: str,
+        forecast_resolution: float,
+        forecast_horizon: int,
+        forecast_timestep: int,
+        forecast_frequency: int,
+    ):
+        """Sets up forecast data for the model based on configuration.
+
+        Args:
+            forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
+            forecast_start_time: The forecast initialization time (date or datetime).
+            forecast_end_time: The forecast end time (date or datetime).
+            forecast_provider: The forecast data provider to use (default: "ECMWF").
+            forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
+            forecast_resolution: The spatial resolution of the forecast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep: The forecast timestep in hours.
+            forecast_frequency: The frequency at which forecasts are initialized (hours).
+        """
+
+        if forecast_provider == "ECMWF":
+            self.setup_forecasts_ECMWF(
+                forecast_start_time,
+                forecast_end_time,
+                forecast_model,
+                forecast_resolution,
+                forecast_horizon,
+                forecast_timestep,
+                forecast_frequency,
+            )
+        # process downloaded forecast data and set as forcing
+
+    def setup_forecasts_ECMWF(
+        self,
+        forecast_start_time: date | datetime,
+        forecast_end_time: date | datetime,
+        forecast_model: str,
+        forecast_resolution: float,
+        forecast_horizon: int,
+        forecast_timestep: int,
+        forecast_frequency: int,
+    ) -> None:
+        """Sets up the folder structure for ECMWF forecast data.
+
+        Args:
+            folder: The base folder to store the forecast data.
+            bounds: The spatial bounds for the forecast data [min_lon, min_lat, max_lon, max_lat].
+            forecast_variables: List of ECMWF parameter codes to download (see ECMWF documentation).
+            forecast_start_time: The forecast initialization time (date or datetime).
+            forecast_end_time: The forecast end time (date or datetime).
+            forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
+            forecast_resolution: The spatial resolution of the forecast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep: The forecast timestep in hours.
+            forecast_frequency: The frequency at which forecasts are initialized (hours).
+        """
+        # setup folder structure
+        preprocessing_folder = self.preprocessing_dir / "forecasts" / "ECMWF"
+        preprocessing_folder.mkdir(parents=True, exist_ok=True)
+
+        # get target grid and bounds
+        target = self.grid["mask"]
+        target.raster.set_crs(4326)
+        bounds = target.raster.bounds
+
+        MARS_codes: dict[str, float] = {
+            "total_precipitation": 228.128,  # in kg/m2
+        }
+
+        download_args: dict[str, Any] = {
+            "preprocessing_folder": preprocessing_folder,
+            "bounds": bounds,
+            "forecast_start_time": forecast_start_time,
+            "forecast_end_time": forecast_end_time,
+            "forecast_model": forecast_model,
+            "forecast_resolution": forecast_resolution,
+            "forecast_horizon": forecast_horizon,
+            "forecast_timestep": forecast_timestep,
+            "forecast_frequency": forecast_frequency,
+        }
+
+        process_args: dict[str, Any] = {
+            "preprocessing_folder": preprocessing_folder,
+            "target": target,
+            "bounds": bounds,
+        }
+
+        # precipitation (hourly)
+        self.logger.info("Downloading ECMWF precipitation forecasts...")
+        download_forecasts_ECMWF(MARS_codes.get("total_precipitation"), **download_args)
+
+        self.logger.info("Processing ECMWF precipitation forecasts...")
+        process_forecast_ECMWF(
+            self, MARS_codes.get("total_precipitation"), **process_args
+        )
+
+    def setup_forcing_ISIMIP(self, resolution_arcsec: int, model: str) -> None:
+        """Sets up the forcing data for GEB using ISIMIP data.
+
+        Args:
+            resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
+            model: The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
+                and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
+        """
+        if resolution_arcsec == 30:
+            assert model == "chelsa-w5e5", (
+                "Only chelsa-w5e5 is supported for 30 arcsec resolution"
+            )
+            # download source data from ISIMIP
+            self.logger.info("setting up forcing data")
+            high_res_variables: list = ["pr", "rsds", "tas", "tasmax", "tasmin"]
+            self.setup_30arcsec_variables_isimip(high_res_variables)
+            self.logger.info("setting up relative humidity...")
+            self.setup_hurs_isimip_30arcsec()
+            self.logger.info("setting up longwave radiation...")
+            self.setup_longwave_isimip_30arcsec()
+            self.logger.info("setting up pressure...")
+            self.setup_pressure_isimip_30arcsec()
+            self.logger.info("setting up wind...")
+            self.setup_wind_isimip_30arcsec()
+        elif resolution_arcsec == 1800:
+            assert model in (
+                "ipsl-cm6a-lr",
+                "gfdl-esm4",
+                "mpi-esm1-2-hr",
+                "mri-esm2-0",
+                "ukesm1-0-ll",
+            ), (
+                "Only ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0 and ukesm1-0-ll are supported for 1800 arcsec resolution"
+            )
+            variables = [
+                "pr",
+                "rsds",
+                "tas",
+                "tasmax",
+                "tasmin",
+                "hurs",
+                "rlds",
+                "ps",
+                "sfcwind",
+            ]
+            self.setup_1800arcsec_variables_isimip(model, variables)
+        else:
+            raise ValueError(
+                "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
+            )
