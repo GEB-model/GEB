@@ -1,3 +1,10 @@
+"""Tests for hydrological routing functions in GEB.
+
+Tests for accuflux routing are quite nice and complete. Tests for kinematic wave routing are
+more limited, as this is a more complex function. More tests should be added in the future.
+
+"""
+
 import math
 
 import numpy as np
@@ -15,6 +22,10 @@ from geb.hydrology.routing import (
 
 
 def test_update_node_kinematic_1() -> None:
+    """Test the update_node_kinematic function with known inputs and outputs.
+
+    Test adopted from PCRaster implementation.
+    """
     deltaX: int = 10
     Q_new, evaporation_m3_s = update_node_kinematic(
         Qin=0.000201343,
@@ -32,6 +43,14 @@ def test_update_node_kinematic_1() -> None:
 
 
 def test_update_node_kinematic_2() -> None:
+    """Test the update_node_kinematic function with negative sideflow.
+
+    In this function, the sideflow is so strongly negative that the discharge
+    should be set to the minimum value by update_node_kinematic (1e-30).
+    The 1e-30 is to avoid numerical issues.
+
+    Test adopted from PCRaster implementation.
+    """
     deltaX: int = 10
     Q_new, evaporation_m3_s = update_node_kinematic(
         Qin=0,
@@ -157,7 +176,11 @@ def Q_initial() -> npt.NDArray[np.float32]:
     )
 
 
-def test_accuflux(ldd, mask, Q_initial) -> None:
+def test_accuflux(
+    ldd: npt.NDArray[np.uint8],
+    mask: npt.NDArray[np.bool_],
+    Q_initial: npt.NDArray[np.float32],
+) -> None:
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
 
     router: Accuflux = Accuflux(
@@ -208,7 +231,11 @@ def test_accuflux(ldd, mask, Q_initial) -> None:
     assert waterbody_storage_m3.size == 0
 
 
-def test_accuflux_with_longer_dt(ldd, mask, Q_initial) -> None:
+def test_accuflux_with_longer_dt(
+    ldd: npt.NDArray[np.uint8],
+    mask: npt.NDArray[np.bool_],
+    Q_initial: npt.NDArray[np.float32],
+) -> None:
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router: Accuflux = Accuflux(
         dt=15,
@@ -258,7 +285,11 @@ def test_accuflux_with_longer_dt(ldd, mask, Q_initial) -> None:
     assert waterbody_storage_m3.size == 0
 
 
-def test_accuflux_with_sideflow(mask, ldd, Q_initial) -> None:
+def test_accuflux_with_sideflow(
+    mask: npt.NDArray[np.bool_],
+    ldd: npt.NDArray[np.uint8],
+    Q_initial: npt.NDArray[np.float32],
+) -> None:
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router = Accuflux(
         dt=1,
@@ -312,7 +343,11 @@ def test_accuflux_with_sideflow(mask, ldd, Q_initial) -> None:
     )
 
 
-def test_accuflux_with_water_bodies(mask, ldd, Q_initial) -> None:
+def test_accuflux_with_water_bodies(
+    mask: npt.NDArray[np.bool_],
+    ldd: npt.NDArray[np.uint8],
+    Q_initial: npt.NDArray[np.float32],
+) -> None:
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
 
     waterbody_id = np.array(
@@ -396,7 +431,11 @@ def test_accuflux_with_water_bodies(mask, ldd, Q_initial) -> None:
     )
 
 
-def test_kinematic(mask, ldd, Q_initial) -> None:
+def test_kinematic(
+    mask: npt.NDArray[np.bool_],
+    ldd: npt.NDArray[np.uint8],
+    Q_initial: npt.NDArray[np.float32],
+) -> None:
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router: KinematicWave = KinematicWave(
         river_network=river_network,

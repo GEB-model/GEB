@@ -14,6 +14,8 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import cKDTree
 
+from geb.workflows.raster import compress
+
 
 def determine_nearest_river_cell(
     upstream_area: npt.NDArray[np.float32],
@@ -327,7 +329,7 @@ class Grid(BaseVariables):
         Returns:
             array: Compressed array.
         """
-        return array[..., ~self.mask]
+        return compress(array, self.mask)
 
     def decompress(
         self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float] = None

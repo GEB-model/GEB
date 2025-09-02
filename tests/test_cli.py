@@ -1,3 +1,9 @@
+"""Tests for the command line interface (CLI) of GEB.
+
+These tests include checking that the CLI commands are accessible and that the
+multi-level dictionary merge function works correctly.
+"""
+
 import pytest
 from click.testing import CliRunner
 

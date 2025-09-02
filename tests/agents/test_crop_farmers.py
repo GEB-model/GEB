@@ -1,3 +1,5 @@
+"""Tests for the crop farmers agent functions."""
+
 import numpy as np
 
 from geb.agents.crop_farmers import (
