@@ -370,6 +370,8 @@ def run_sfincs_for_return_periods(
         rp_map: xr.DataArray = rp_map.max(dim="node")
         rp_map.attrs["_FillValue"] = max_depth.attrs["_FillValue"]
 
+        assert rp_map.rio.crs is not None
+
         if export:
             rp_map: xr.DataArray = to_zarr(
                 rp_map,

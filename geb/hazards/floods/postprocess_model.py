@@ -71,6 +71,7 @@ def read_maximum_flood_depth(model_root: Path, simulation_root: Path) -> xr.Data
         hmin=minimum_flood_depth,
         reproj_method="bilinear",  # maybe use "nearest" for coastal
     )
+    flood_depth_m = flood_depth_m.rio.write_crs(model.crs)
 
     print(
         f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "
