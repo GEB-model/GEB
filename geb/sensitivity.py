@@ -105,7 +105,7 @@ def run_model(args) -> None:
             with open(config_path, "w") as f:
                 yaml.dump(template, f)
 
-            def run_model_scenario(scenario):
+            def run_model_scenario(scenario: str):
                 # build the command to run the script, including the use of a GPU if specified
                 command = [
                     "geb",
