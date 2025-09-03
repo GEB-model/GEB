@@ -1666,6 +1666,12 @@ class Soil(Module):
             w_pre = self.HRU.var.w.copy()
             topwater_pre = self.HRU.var.topwater.copy()
 
+        print("SETTINGS")
+        print(self.model.in_spinup)
+        print(self.model.config["general"]["simulate_forest"])
+        print(self.model.config["plantFATE"]["new_forest"])
+        print(self.model.current_timestep)
+
         if (
             not self.model.in_spinup
             and self.model.config["general"]["simulate_forest"]
