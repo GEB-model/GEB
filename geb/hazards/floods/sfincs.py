@@ -112,33 +112,6 @@ class SFINCS:
             utm_crs: str = f"EPSG:327{utm_zone}"  # Southern hemisphere
         return utm_crs
 
-    def mirror_dataset_horizontal(self, ds, var_name="initial_soil_moisture"):
-        """Mirror an xarray Dataset horizontally.
-
-        Mirrors an xarray Dataset across a horizontal line
-        based on the bottomleft coordinate.
-
-        Parameters:
-            ds (xr.Dataset): Input dataset with 'x' and 'y' dimensions.
-            var_name (str): Name of the data variable to mirror.
-
-        Returns:
-            xr.Dataset: Horizontally mirrored dataset.
-        """
-        # Bottom y
-        y0 = ds.y.min().item()
-
-        # Mirror y coordinates only
-        mirrored_y = 2 * y0 - ds.y
-
-        # Assign mirrored y
-        ds_mirrored = ds.assign_coords(y=mirrored_y)
-
-        # Flip the data along y-axis only
-        ds_mirrored[var_name] = ds_mirrored[var_name].isel(y=slice(None, None, -1))
-
-        return ds_mirrored
-
     def build(self, event) -> None:
         build_parameters = {}
 
@@ -230,17 +203,6 @@ class SFINCS:
                 },
             )
 
-            # GEB HRU data is somehow mirrored, so we need to mirror it back
-            self.initial_soil_moisture_grid = self.mirror_dataset_horizontal(
-                self.initial_soil_moisture_grid, "initial_soil_moisture"
-            )
-            self.initial_soil_moisture_grid = self.initial_soil_moisture_grid.sortby(
-                "x"
-            )
-            self.initial_soil_moisture_grid = self.initial_soil_moisture_grid.sortby(
-                "y"
-            )
-
             self.max_water_storage_grid = xr.Dataset(
                 {
                     "max_water_storage": (
@@ -257,12 +219,6 @@ class SFINCS:
                     "x": self.HRU.lon,
                 },
             )
-
-            self.max_water_storage_grid = self.mirror_dataset_horizontal(
-                self.max_water_storage_grid, "max_water_storage"
-            )
-            self.max_water_storage_grid = self.max_water_storage_grid.sortby("x")
-            self.max_water_storage_grid = self.max_water_storage_grid.sortby("y")
 
             soil_storage_capacity_grid = xr.Dataset(
                 {
@@ -281,12 +237,6 @@ class SFINCS:
                 },
             )
 
-            soil_storage_capacity_grid = self.mirror_dataset_horizontal(
-                soil_storage_capacity_grid, "soil_storage_capacity"
-            )
-            soil_storage_capacity_grid = soil_storage_capacity_grid.sortby("x")
-            soil_storage_capacity_grid = soil_storage_capacity_grid.sortby("y")
-
             saturated_hydraulic_conductivity_grid = xr.Dataset(
                 {
                     "saturated_hydraulic_conductivity": (
@@ -302,17 +252,6 @@ class SFINCS:
                     "y": self.HRU.lat,
                     "x": self.HRU.lon,
                 },
-            )
-
-            saturated_hydraulic_conductivity_grid = self.mirror_dataset_horizontal(
-                saturated_hydraulic_conductivity_grid,
-                "saturated_hydraulic_conductivity",
-            )
-            saturated_hydraulic_conductivity_grid = (
-                saturated_hydraulic_conductivity_grid.sortby("x")
-            )
-            saturated_hydraulic_conductivity_grid = (
-                saturated_hydraulic_conductivity_grid.sortby("y")
             )
 
             self.initial_soil_moisture_grid.raster.set_crs(

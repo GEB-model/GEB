@@ -1,38 +1,86 @@
+"""Tests for I/O workflow functions."""
+
+import shutil
+from datetime import date
+from pathlib import Path
+from time import sleep, time
+
 import numpy as np
+import numpy.typing as npt
+import pandas as pd
 import pytest
 import xarray as xr
+import zarr
+import zarr.storage
 from numcodecs import FixedScaleOffset
 
-from geb.workflows.io import calculate_scaling, get_window, to_zarr
+from geb.workflows.io import (
+    AsyncGriddedForcingReader,
+    calculate_scaling,
+    get_window,
+    to_zarr,
+)
 
 from ..testconfig import tmp_folder
 
 
+def encode_decode(
+    data: npt.NDArray[np.floating],
+    min_value: float | int,
+    max_value: float | int,
+    offset: float | int,
+    precision: float | int = 0.1,
+) -> tuple[npt.NDArray[np.floating], float, str]:
+    """Helper function to test encoding and decoding of data using FixedScaleOffset codec.
+
+    This function first encodes the input data using the FixedScaleOffset codec with the specified scaling factor and offset.
+    It then decodes the encoded data back to its original form. The function checks that the maximum absolute difference
+    between the original and decoded data is within the specified precision.
+
+    It is very important that the minimum and maximum values are never exceeded in the data. If they are, there
+    will be overflow errors and the decoded data will be (very) wrong.
+
+    Args:
+        data: Input data to be encoded and decoded.
+        min_value: Minimum value that is expected in the data.
+            This value is used to calculate the scaling factor.
+        max_value: Maximum value that is expected in the data.
+            This value is used to calculate the scaling factor.
+        offset:
+            Offset to be used in the FixedScaleOffset codec.
+            This value is subtracted from the data before scaling.
+        precision: Required precision of the data. Defaults to 0.1.
+
+    Returns:
+        A tuple containing the decoded data
+        The scaling factor used
+        The output data type.
+    """
+    assert data.dtype == np.float32
+
+    scaling_factor, out_dtype = calculate_scaling(
+        min_value=min_value,
+        max_value=max_value,
+        precision=precision,
+        offset=offset,
+    )
+    codec = FixedScaleOffset(
+        offset=offset, scale=scaling_factor, dtype=np.float32, astype=out_dtype
+    )
+
+    encoded_data = codec.encode(data)
+
+    decoded_data = codec.decode(encoded_data)
+
+    diff = data - decoded_data
+
+    assert np.all(np.abs(diff) <= precision * 1.05), (
+        f"max diff: {diff.max()}; min diff: {diff.min()}"
+    )
+    return decoded_data, scaling_factor, out_dtype
+
+
 def test_calculate_scaling() -> None:
-    def encode_decode(data, min_value, max_value, offset, precision=0.1):
-        assert data.dtype == np.float32
-
-        scaling_factor, out_dtype = calculate_scaling(
-            min_value=min_value,
-            max_value=max_value,
-            precision=precision,
-            offset=offset,
-        )
-        codec = FixedScaleOffset(
-            offset=offset, scale=scaling_factor, dtype=np.float32, astype=out_dtype
-        )
-
-        encoded_data = codec.encode(data)
-
-        decoded_data = codec.decode(encoded_data)
-
-        diff = data - decoded_data
-
-        assert np.all(np.abs(diff) <= precision * 1.05), (
-            f"max diff: {diff.max()}; min diff: {diff.min()}"
-        )
-        return decoded_data, scaling_factor, out_dtype
-
     for precision in [0.1, 0.01, 0.001, 0.0001]:
         data = ((np.random.rand(100) - 0.5) * 20).astype(np.float32)
         encode_decode(data, -10, 100, offset=0, precision=precision)
@@ -247,3 +295,113 @@ def test_get_window() -> None:
     da_slice = da.isel(window)
     assert (da_slice.x.values == x[1:-1]).all()
     assert (da_slice.y.values == y[1:-1]).all()
+
+
+def zarr_file(varname: str) -> Path:
+    size: int = 1000
+    # Create a temporary zarr file for testing
+    file_path: Path = tmp_folder / f"{varname}.zarr"
+
+    periods: int = 100
+
+    times = pd.date_range("2000-01-01", periods=periods, freq="D")
+    data = np.empty((periods, size, size), dtype=np.int32)
+    for i in range(periods):
+        data[i][:] = i
+    ds: xr.Dataset = xr.Dataset(
+        {
+            varname: (("time", "x", "y"), data),
+        },
+        coords={"time": times, "x": np.arange(0, size), "y": np.arange(0, size)[::-1]},
+    )
+
+    store: zarr.storage.LocalStore = zarr.storage.LocalStore(file_path, read_only=False)
+    ds.to_zarr(
+        store,
+        mode="w",
+        encoding={
+            varname: {
+                "chunks": (1, size, size),
+            }
+        },
+        consolidated=False,
+    )
+    return file_path
+
+
+def test_read_timestep() -> None:
+    temperature_file: Path = zarr_file("temperature")
+    precipitation_file: Path = zarr_file("precipitation")
+    pressure_file: Path = zarr_file("pressure")
+    reader1: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
+        temperature_file, variable_name="temperature"
+    )
+    reader2: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
+        precipitation_file, variable_name="precipitation"
+    )
+    reader3: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
+        pressure_file, variable_name="pressure"
+    )
+
+    data0 = reader1.read_timestep(date(2000, 1, 1))
+
+    sleep(3)  # Simulate some processing time
+
+    t0 = time()
+    data1 = reader1.read_timestep(date(2000, 1, 2))
+    t1 = time()
+    print("Load next timestep (quick): {:.3f}s".format(t1 - t0))
+
+    # wait half the time it took to load the previous timestep to simulate a short
+    # processing time
+    sleep((t1 - t0) / 2)
+
+    t0 = time()
+    data2 = reader1.read_timestep(date(2000, 1, 3))
+    t1 = time()
+    print("Load next timestep short waiting (semi-quick): {:.3f}s".format(t1 - t0))
+
+    assert (data0 == 0).all()
+    assert (data1 == 1).all()
+    assert (data2 == 2).all()
+    assert data0.dtype == np.int32
+
+    sleep(3)
+
+    t0 = time()
+    data3 = reader1.read_timestep(date(2000, 1, 4))
+    t1 = time()
+    print("Load next timestep with waiting (quick): {:.3f}s".format(t1 - t0))
+
+    t0 = time()
+    data3 = reader1.read_timestep(date(2000, 1, 4))
+    t1 = time()
+    print("Load same timestep (quick): {:.3f}s".format(t1 - t0))
+    assert (data3 == 3).all()
+
+    t0 = time()
+    data0 = reader1.read_timestep(date(2000, 1, 1))
+    t1 = time()
+    print("Load previous timestep (slow): {:.3f}s".format(t1 - t0))
+    assert (data0 == 0).all()
+
+    reader2.read_timestep(date(2000, 1, 1))
+    reader3.read_timestep(date(2000, 1, 1))
+
+    sleep(3)  # Simulate some processing time
+    print("-----------------")
+
+    t0 = time()
+    data1 = reader1.read_timestep(date(2000, 1, 2))
+    reader2.read_timestep(date(2000, 1, 2))
+    reader3.read_timestep(date(2000, 1, 2))
+    t1 = time()
+    print("Load data from three readers (quick): {:.3f}s".format(t1 - t0))
+
+    reader1.close()
+    reader2.close()
+    reader3.close()
+
+    shutil.rmtree(temperature_file)
+    shutil.rmtree(precipitation_file)
+    shutil.rmtree(pressure_file)

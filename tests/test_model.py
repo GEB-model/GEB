@@ -1,3 +1,7 @@
+"""Tests for the main model functions of GEB, such as model initialization, building, and running.
+
+Most of these tests are quite heavy and therefore skipped on GitHub Actions."""
+
 import json
 import os
 import shutil

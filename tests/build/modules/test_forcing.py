@@ -1,3 +1,5 @@
+"""Tests for the forcing module functions."""
+
 from math import isclose
 
 import matplotlib.pyplot as plt
@@ -9,6 +11,11 @@ from ...testconfig import output_folder
 
 
 def test_get_pressure_correction_factor() -> None:
+    """Test the pressure correction factor function.
+
+    Pressure decreases with elevation, following the barometric formula.
+    This test checks that the function returns reasonable values.
+    """
     elevation = np.linspace(0, 8848.86, 1000)
     g = 9.80665
     Mo = 0.0289644

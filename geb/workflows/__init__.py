@@ -10,12 +10,17 @@ import numpy as np
 class TimingModule:
     """A timing module to measure the time taken for different parts of a workflow."""
 
-    def __init__(self, name) -> None:
+    def __init__(self, name: str) -> None:
+        """Initializes the TimingModule with a name and starts the timer.
+
+        Args:
+            name: The name of the timing module. Will be used when printing the timing results.
+        """
         self.name = name
         self.times = [time()]
         self.split_names = []
 
-    def finish_split(self, name) -> None:
+    def finish_split(self, name: str) -> None:
         """Finish split with with name given.
 
         Appends the current time and the name of the split to their respective lists, which will be

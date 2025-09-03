@@ -1,3 +1,5 @@
+"""Utility functions for datetime operations in GEB workflows."""
+
 from datetime import datetime, timedelta
 
 

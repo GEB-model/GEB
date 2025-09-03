@@ -14,6 +14,8 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import cKDTree
 
+from geb.workflows.raster import compress
+
 
 def determine_nearest_river_cell(
     upstream_area: npt.NDArray[np.float32],
@@ -327,7 +329,7 @@ class Grid(BaseVariables):
         Returns:
             array: Compressed array.
         """
-        return array[..., ~self.mask]
+        return compress(array, self.mask)
 
     def decompress(
         self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float] = None
@@ -529,13 +531,13 @@ class HRUs(BaseVariables):
 
         # get lats and lons for subgrid
         self.lon = np.linspace(
-            self.gt[0] + self.cell_size / 2,
-            self.gt[0] + self.cell_size * submask_width - self.cell_size / 2,
+            self.gt[0] + self.gt[1] / 2,
+            self.gt[0] + self.gt[1] * submask_width - self.gt[1] / 2,
             submask_width,
         )
         self.lat = np.linspace(
-            self.gt[3] + self.cell_size / 2,
-            self.gt[3] + self.cell_size * submask_height - self.cell_size / 2,
+            self.gt[3] + self.gt[5] / 2,
+            self.gt[3] + self.gt[5] * submask_height - self.gt[5] / 2,
             submask_height,
         )
         BaseVariables.__init__(self)

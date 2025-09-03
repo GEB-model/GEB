@@ -1,3 +1,5 @@
+"""Tests for the crop calendar functions."""
+
 from datetime import date
 
 from geb.build.workflows.crop_calendars import (
@@ -18,3 +20,5 @@ def test_day_of_year() -> None:
     assert get_day_index(date(2000, 1, 1)) == 0
     assert get_day_index(date(2000, 1, 2)) == 1
     assert get_day_index(date(2000, 2, 1)) == 31
+    assert get_day_index(date(2000, 12, 31)) == 365  # Leap year
+    assert get_day_index(date(2001, 12, 31)) == 364  # Non-leap year

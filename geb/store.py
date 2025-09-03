@@ -31,22 +31,22 @@ class DynamicArray:
     - Can be saved to and loaded from disk using the provided save and load helpers.
 
     Args:
-            input_array: An existing array-like object to initialize from. If provided,
-                    the DynamicArray will use its values as the initial contents.
-            n: The initial logical length of the DynamicArray. Required when creating
-                    from scratch (i.e. when input_array is not provided).
-            max_n: The maximum capacity (physical size) of the backing buffer. If not
-                    provided when initializing from an existing array, the array itself is
-                    used as the backing buffer and no extra capacity is allocated.
-            extra_dims: Optional shape for additional trailing dimensions stored for
-                    each element (for example, per-element vectors or matrices). When
-                    provided, the backing buffer will have shape (max_n, *extra_dims).
-            extra_dims_names: Optional list of names for the extra dimensions. These
-                    are preserved and adjusted when slicing across extra dimensions.
-            dtype: Data type to allocate when creating an empty or preallocated array.
-                    Mutually exclusive with input_array.
-            fill_value: Optional fill value used to initialize the backing buffer when
-                    creating from dtype and max_n.
+        input_array: An existing array-like object to initialize from. If provided,
+                the DynamicArray will use its values as the initial contents.
+        n: The initial logical length of the DynamicArray. Required when creating
+                from scratch (i.e. when input_array is not provided).
+        max_n: The maximum capacity (physical size) of the backing buffer. If not
+                provided when initializing from an existing array, the array itself is
+                used as the backing buffer and no extra capacity is allocated.
+        extra_dims: Optional shape for additional trailing dimensions stored for
+                each element (for example, per-element vectors or matrices). When
+                provided, the backing buffer will have shape (max_n, *extra_dims).
+        extra_dims_names: Optional list of names for the extra dimensions. These
+                are preserved and adjusted when slicing across extra dimensions.
+        dtype: Data type to allocate when creating an empty or preallocated array.
+                Mutually exclusive with input_array.
+        fill_value: Optional fill value used to initialize the backing buffer when
+                creating from dtype and max_n.
 
     Raises:
             ValueError: If neither input_array nor dtype is provided, or if both are
@@ -78,13 +78,13 @@ class DynamicArray:
 
     def __init__(
         self,
-        input_array=None,
-        n=None,
-        max_n=None,
-        extra_dims=None,
+        input_array: npt.ArrayLike | None = None,
+        n: int | None = None,
+        max_n: int | None = None,
+        extra_dims: tuple[int, ...] | None = None,
         extra_dims_names: list[str] = [],
-        dtype=None,
-        fill_value=None,
+        dtype: npt.DTypeLike | None = None,
+        fill_value: Any | None = None,
     ) -> None:
         self.extra_dims_names = np.array(extra_dims_names, dtype=str)
 
@@ -143,7 +143,7 @@ class DynamicArray:
         return self._data[: self.n]
 
     @data.setter
-    def data(self, value) -> None:
+    def data(self, value: npt.NDArray[Any]) -> None:
         """
         Replace the active portion of the DynamicArray with `value`.
 
@@ -193,7 +193,7 @@ class DynamicArray:
         self._extra_dims_names = value
 
     @n.setter
-    def n(self, value) -> None:
+    def n(self, value: int) -> None:
         """
         Set the logical length.
 
@@ -812,7 +812,7 @@ class DynamicArray:
         """
         return self._compare(value, "__le__")
 
-    def __and__(self, other) -> "DynamicArray":
+    def __and__(self, other: npt.NDArray[Any]) -> "DynamicArray":
         """Bitwise and / logical and operator.
 
         Returns:
@@ -820,7 +820,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__and__")
 
-    def __or__(self, other) -> "DynamicArray":
+    def __or__(self, other: npt.NDArray[Any]) -> "DynamicArray":
         """Bitwise or / logical or operator.
 
         Returns:
@@ -899,6 +899,13 @@ class Bucket:
     """
 
     def __init__(self, validator: Callable | None = None) -> None:
+        """Initialize the Bucket with an optional validator.
+
+        Args:
+            validator: Validation function to use on any data that is set
+                in the bucket. Must return True for correct data, False
+                otherwise. Defaults to None.
+        """
         self._validator = validator
 
     def __iter__(self) -> tuple[str, Any]:

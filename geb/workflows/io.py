@@ -42,7 +42,7 @@ def load_array(fp: Path) -> np.ndarray:
 
 
 def calculate_scaling(
-    min_value: float, max_value: float, precision: float, offset=0.0
+    min_value: float, max_value: float, precision: float, offset: float | int = 0.0
 ) -> tuple[float, str]:
     """This function calculates the scaling factor and output dtype for a fixed scale and offset codec.
 
@@ -468,7 +468,13 @@ class AsyncGriddedForcingReader:
     multiple timesteps sequentially.
     """
 
-    def __init__(self, filepath, variable_name) -> None:
+    def __init__(self, filepath: Path, variable_name: str) -> None:
+        """Initializes the AsyncGriddedForcingReader.
+
+        Args:
+            filepath: The path to the zarr file.
+            variable_name: The name of the variable to read from the zarr file.
+        """
         self.variable_name = variable_name
         self.filepath = filepath
 
@@ -635,11 +641,11 @@ class WorkingDirectory:
             # Code executed here will have the new directory as the CWD
     """
 
-    def __init__(self, new_path) -> None:
+    def __init__(self, new_path: Path) -> None:
         """Initializes the context manager with the path to change to.
 
         Args:
-            new_path (str): The path to the directory to change into.
+            new_path: The path to the directory to change into.
         """
         self._new_path = new_path
         self._original_path = None  # To store the original path

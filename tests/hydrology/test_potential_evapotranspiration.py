@@ -1,3 +1,5 @@
+"""Tests for potential evapotranspiration functions in GEB."""
+
 import math
 
 import numpy as np

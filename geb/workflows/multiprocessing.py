@@ -32,7 +32,7 @@ def pool_ctrl_c_handler(*args: Any, **kwargs: Any) -> None:
 
 
 def init_pool(
-    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
+    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu: int
 ) -> None:
     # set global variable for each process in the pool:
     global ctrl_c_entered
