@@ -1,3 +1,5 @@
+"""General utility methods for workflows in GEB."""
+
 from typing import Any
 
 import numpy as np

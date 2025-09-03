@@ -1,3 +1,5 @@
+"""Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
+
 from typing import Any
 
 import numpy as np
