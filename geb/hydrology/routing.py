@@ -1,24 +1,4 @@
-# --------------------------------------------------------------------------------
-# This file contains code that has been adapted from an original source available
-# in a public repository under the GNU General Public License. The original code
-# has been modified to fit the specific needs of this project.
-#
-# Original source repository: https://github.com/iiasa/CWatM
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-# --------------------------------------------------------------------------------
-
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -307,7 +287,7 @@ class KinematicWave(Router):
         river_beta: float,
         waterbody_id: npt.NDArray[np.int32],
         is_waterbody_outflow: npt.NDArray[np.bool_],
-    ):
+    ) -> None:
         super().__init__(
             dt, river_network, Q_initial, waterbody_id, is_waterbody_outflow
         )
@@ -351,12 +331,17 @@ class KinematicWave(Router):
                 This is the ratio of the available storage that can be used for abstraction.
 
         Returns:
-            The available storage of the river network.
+            The available storage of the river network [m3].
         """
         return self.get_total_storage() * maximum_abstraction_ratio
 
     def get_total_storage(self) -> npt.NDArray[np.float32]:
-        """Get the total storage of the river network, which is the sum of the available storage in each cell."""
+        """Get the total storage of the river network, which is the sum of the available storage in each cell.
+
+        Returns:
+            The total storage of the river network [m3].
+
+        """
         total_storage = self.calculate_river_storage_from_discharge(
             discharge=self.Q_prev,
             river_alpha=self.river_alpha,
@@ -371,6 +356,7 @@ class KinematicWave(Router):
     @staticmethod
     @njit(cache=True)
     def _step(
+        dt: float | int,
         Qold,
         sideflow_m3,
         evaporation_m3,
@@ -383,18 +369,34 @@ class KinematicWave(Router):
         river_alpha,
         river_beta,
         river_length,
-        dt,
     ) -> tuple[
         npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]
     ]:
         """Kinematic wave routing.
 
-        Parameters
-        ----------
-        dt: float
-            Time step, must be > 0
-        river_length: np.ndarray
-            Array of floats containing the channel length, must be > 0
+        Args:
+            dt: Time step, must be > 0
+            Qold: Old discharge array, which is a 1D array with dicharge for each grid cell in the river network.
+            sideflow_m3: Sideflow in m3 for each grid cell in the river network.
+            evaporation_m3: Evaporation in m3 for each grid cell in the river network.
+            waterbody_storage_m3: Storage of each waterbody in m3.
+            outflow_per_waterbody_m3: Outflow of each waterbody in m3.
+            upstream_matrix_from_up_to_downstream: Upstream matrix from the river network, which is a 2D array. For each
+                cell (first dimension) in the river network, it contains the indices of the upstream cells (second dimension).
+                -1 indicates no upstream cell. There should never be any upstream cells after the first -1. The node associated with
+                the row is specified by idxs_up_to_downstream.
+            idxs_up_to_downstream: Indices of the cells in the river network, associated with the upstream_matrix_from_up_to_downstream.
+            is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
+            waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell. -1 indicates no waterbody.
+            river_alpha: The alpha parameter for the kinematic wave equation, which is a 1D array with the same shape as the grid.
+            river_beta: The beta parameter for the kinematic wave equation, which is a float.
+            river_length: Array of floats containing the channel length, must be > 0
+
+        Returns:
+            Qnew: New discharge array, which is a 1D array with discharge for each grid cell in the river network.
+            actual_evaporation_m3: Actual evaporation in m3 for each grid cell in the river network.
+            over_abstraction_m3: Over abstraction in m3 for each grid cell in the river network.
+            waterbody_inflow_m3: Inflow to each waterbody in m3.
         """
         Qnew: npt.NDArray[np.float32] = np.full_like(Qold, np.nan, dtype=np.float32)
         actual_evaporation_m3: npt.NDArray[np.float32] = np.zeros_like(
@@ -402,6 +404,9 @@ class KinematicWave(Router):
         )
         over_abstraction_m3: npt.NDArray[np.float32] = np.zeros_like(
             Qold, dtype=np.float32
+        )
+        waterbody_inflow_m3: npt.NDArray[np.float32] = np.zeros_like(
+            waterbody_storage_m3, dtype=np.float32
         )
 
         for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
@@ -448,8 +453,9 @@ class KinematicWave(Router):
 
             node_waterbody_id: np.int32 = waterbody_id[node]
             if node_waterbody_id != -1:
-                waterbody_storage_m3[node_waterbody_id] += Qin * dt
-                waterbody_storage_m3[node_waterbody_id] += sideflow_node_m3
+                waterbody_inflow_m3_node = Qin * dt + sideflow_node_m3
+                waterbody_storage_m3[node_waterbody_id] += waterbody_inflow_m3_node
+                waterbody_inflow_m3[node_waterbody_id] += waterbody_inflow_m3_node
                 assert evaporation_m3[node] == 0.0
             else:
                 Qnew[node], actual_evaporation_m3_dt = update_node_kinematic(
@@ -463,7 +469,13 @@ class KinematicWave(Router):
                     river_length[node],
                 )
                 actual_evaporation_m3[node] = actual_evaporation_m3_dt * dt
-        return Qnew, actual_evaporation_m3, over_abstraction_m3
+
+        return (
+            Qnew,
+            actual_evaporation_m3,
+            over_abstraction_m3,
+            waterbody_inflow_m3,
+        )
 
     def step(
         self,
@@ -472,7 +484,8 @@ class KinematicWave(Router):
         waterbody_storage_m3,
         outflow_per_waterbody_m3,
     ):
-        Q, actual_evaporation_m3, over_abstraction_m3 = self._step(
+        Q, actual_evaporation_m3, over_abstraction_m3, waterbody_inflow_m3 = self._step(
+            dt=self.dt,
             Qold=self.Q_prev,
             sideflow_m3=sideflow_m3,
             evaporation_m3=evaporation_m3,
@@ -485,7 +498,6 @@ class KinematicWave(Router):
             river_alpha=self.river_alpha,
             river_beta=self.river_beta,
             river_length=self.river_length,
-            dt=self.dt,
         )
 
         self.Q_prev = Q
@@ -498,6 +510,7 @@ class KinematicWave(Router):
             actual_evaporation_m3,
             over_abstraction_m3,
             waterbody_storage_m3,
+            waterbody_inflow_m3,
             outflow_at_pits_m3,
         )
 
@@ -522,8 +535,12 @@ class Accuflux(Router):
     """
 
     def __init__(
-        self, dt: float | int, river_network: pyflwdir.FlwdirRaster, *args, **kwargs
-    ):
+        self,
+        dt: float | int,
+        river_network: pyflwdir.FlwdirRaster,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(dt, river_network, *args, **kwargs)
 
     def get_available_storage(
@@ -558,7 +575,35 @@ class Accuflux(Router):
         idxs_up_to_downstream,
         is_waterbody_outflow,
         waterbody_id,
-    ):
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
+        """Accuflux routing.
+
+        Args:
+            dt: Time step, must be > 0
+            Qold: Old discharge array, which is a 1D array with dicharge for each grid cell in the river network.
+            sideflow_m3: Sideflow in m3 for each grid cell in the river network.
+            evaporation_m3: Evaporation in m3 for each grid cell in the river network.
+            waterbody_storage_m3: Storage of each waterbody in m3.
+            outflow_per_waterbody_m3: Outflow of each waterbody in m3.
+            upstream_matrix_from_up_to_downstream: Upstream matrix from the river network, which is a 2D array. For each
+                cell (first dimension) in the river network, it contains the indices of the upstream cells (second dimension).
+                -1 indicates no upstream cell. There should never be any upstream cells after the first -1. The node associated with
+                the row is specified by idxs_up_to_downstream.
+            idxs_up_to_downstream: Indices of the cells in the river network, associated with the upstream_matrix_from_up_to_downstream.
+            is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
+            waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell. -1 indicates no waterbody.
+
+        Returns:
+            Qnew: New discharge array, which is a 1D array with discharge for each grid cell in the river network.
+            actual_evaporation_m3: Actual evaporation in m3 for each grid cell in the river network.
+            over_abstraction_m3: Over abstraction in m3 for each grid cell in the river network.
+            waterbody_inflow_m3: Inflow to each waterbody in m3.
+        """
         Qold += sideflow_m3 / dt
 
         evaporation_m3_s: npt.NDArray[np.float32] = evaporation_m3 / dt
@@ -573,6 +618,9 @@ class Accuflux(Router):
         Qnew: npt.NDArray[np.float32] = np.full_like(Qold, np.nan, dtype=np.float32)
         over_abstraction_m3: npt.NDArray[np.float32] = np.zeros_like(
             Qold, dtype=np.float32
+        )
+        waterbody_inflow_m3: npt.NDArray[np.float32] = np.zeros_like(
+            waterbody_storage_m3, dtype=np.float32
         )
         for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
             node = idxs_up_to_downstream[i]
@@ -615,6 +663,7 @@ class Accuflux(Router):
             node_waterbody_id = waterbody_id[node]
             if node_waterbody_id != -1:
                 waterbody_storage_m3[node_waterbody_id] += inflow_volume
+                waterbody_inflow_m3[node_waterbody_id] += inflow_volume
             else:
                 Qnew_node = inflow_volume / dt
                 if Qnew_node < 0.0:
@@ -623,7 +672,7 @@ class Accuflux(Router):
                     Qnew_node = 0.0
                 Qnew[node] = Qnew_node
                 assert Qnew[node] >= 0.0, "Discharge cannot be negative"
-        return Qnew, actual_evaporation_m3, over_abstraction_m3
+        return Qnew, actual_evaporation_m3, over_abstraction_m3, waterbody_inflow_m3
 
     def step(
         self,
@@ -637,7 +686,7 @@ class Accuflux(Router):
             + sideflow_m3[self.is_pit].sum()
             - evaporation_m3[self.is_pit].sum()
         )
-        Q, actual_evaporation_m3, over_abstraction_m3 = self._step(
+        Q, actual_evaporation_m3, over_abstraction_m3, waterbody_inflow_m3 = self._step(
             dt=self.dt,
             Qold=self.Q_prev,
             sideflow_m3=sideflow_m3,
@@ -657,11 +706,17 @@ class Accuflux(Router):
             actual_evaporation_m3,
             over_abstraction_m3,
             waterbody_storage_m3,
+            waterbody_inflow_m3,
             outflow_at_pits_m3,
         )
 
     def get_total_storage(self) -> npt.NDArray[np.float32]:
-        """Get the total storage of the river network, which is the sum of the available storage in each cell."""
+        """Get the total storage of the river network, which is the sum of the available storage in each cell.
+
+        Returns:
+            The total storage of the river network [m3].
+
+        """
         return self.get_available_storage(maximum_abstraction_ratio=1.0)
 
 
@@ -673,7 +728,7 @@ class Routing(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
 
         self.config = model.config["hydrology"]["routing"]
@@ -705,7 +760,7 @@ class Routing(Module):
             ldd_uncompressed=ldd_uncompressed, mask=mask
         )
 
-    def set_router(self):
+    def set_router(self) -> None:
         routing_algorithm: str = self.config["algorithm"]
         is_waterbody_outflow: npt.NDArray[np.bool] = (
             self.grid.var.waterbody_outflow_points != -1
@@ -741,7 +796,7 @@ class Routing(Module):
                 "Available algorithms are 'kinematic_wave' and 'accuflux'."
             )
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.grid.var.upstream_area = self.grid.load(
             self.model.files["grid"]["routing/upstream_area"]
         )
@@ -1026,12 +1081,18 @@ class Routing(Module):
                 actual_evaporation_in_rivers_m3_per_routing_step,
                 over_abstraction_m3_routing_step,
                 self.hydrology.lakes_reservoirs.var.storage,
+                waterbody_inflow_m3,
                 outflow_at_pits_m3_routing_step,
             ) = self.router.step(
                 sideflow_m3=side_flow_channel_m3_per_routing_step.astype(np.float32),
                 evaporation_m3=potential_evaporation_in_rivers_m3_per_routing_step,
                 waterbody_storage_m3=self.hydrology.lakes_reservoirs.var.storage,
                 outflow_per_waterbody_m3=outflow_per_waterbody_m3,
+            )
+
+            # the reservoir operators need to track the inflow to the reservoirs
+            self.model.agents.reservoir_operators.track_inflow(
+                waterbody_inflow_m3[self.model.hydrology.lakes_reservoirs.is_reservoir]
             )
 
             # ensure that discharge is nan for water bodies
@@ -1111,7 +1172,7 @@ class Routing(Module):
 
             assert routing_loss >= 0, "Routing loss cannot be negative"
 
-        self.report(self, locals())
+        self.report(locals())
 
         total_over_abstraction_m3: np.float64 = over_abstraction_m3.astype(
             np.float64

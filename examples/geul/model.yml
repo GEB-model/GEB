@@ -5,7 +5,7 @@ inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2021-07-01
+  start_time: 2021-01-01
   ###
   # model end time (YYYY-MM-DD).
   end_time: 2024-12-30
@@ -22,7 +22,7 @@ general:
     subbasin: 23011134
 hazards:
   floods:
-    simulate: true
+    simulate: false
     resolution: 100
     nr_subgrid_pixels: 4
     flood_risk: false

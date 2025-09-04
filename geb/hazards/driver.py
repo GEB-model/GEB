@@ -10,25 +10,40 @@ class HazardDriver:
     Currently it only supports floods but can be extended to include other hazards such as landslides in the future.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         if self.config["hazards"]["floods"]["simulate"]:
-            # exract the longest flood event in days
+            # extract the longest flood event in days
             flood_events = self.config["hazards"]["floods"]["events"]
             flood_event_lengths = [
                 event["end_time"] - event["start_time"] for event in flood_events
             ]
-            longest_flood_event = max(flood_event_lengths).days
-            self.initialize(longest_flood_event)
+            longest_flood_event_in_days = max(flood_event_lengths).days
+            self.initialize(longest_flood_event_in_days=longest_flood_event_in_days)
 
-    def initialize(self, longest_flood_event):
+    def initialize(self, longest_flood_event_in_days: int) -> None:
+        """Initializes the hazard driver.
+
+        Used to set up the SFINCS model for flood simulation and in the future perhaps other hazards.
+
+        Args:
+            longest_flood_event_in_days: The longest flood event in days. This is needed because
+                the SFINCS model is initiated at the end of the flood event, but requires
+                the conditions at the start of the flood event. Therefore, the conditions during the
+                last n_timesteps is saved in memory to be used at the start of the flood event.
+
+        """
         from geb.hazards.floods.sfincs import SFINCS
 
-        self.sfincs = SFINCS(self, n_timesteps=longest_flood_event)
+        self.sfincs: SFINCS = SFINCS(self, n_timesteps=longest_flood_event_in_days)
 
-    def step(self):
+    def step(self) -> None:
         if self.config["hazards"]["floods"]["simulate"]:
             if self.simulate_hydrology:
                 self.sfincs.save_discharge()
+                self.sfincs.save_soil_moisture()
+                self.sfincs.save_max_soil_moisture()
+                self.sfincs.save_soil_storage_capacity()
+                self.sfincs.save_saturated_hydraulic_conductivity()
 
             for event in self.config["hazards"]["floods"]["events"]:
                 assert isinstance(event["start_time"], datetime), (

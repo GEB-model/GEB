@@ -1,4 +1,9 @@
-# -*- coding: utf-8 -*-
+"""
+Agent classes for the GEB model.
+
+This package exposes agent implementations used to simulate actors in the model.
+"""
+
 from geb.module import Module
 from geb.workflows import TimingModule
 
@@ -55,9 +60,9 @@ class Agents(Module):
 
         for agent_type in self.agents:
             agent_type.step()
-            timer.new_split(agent_type.name)
+            timer.finish_split(agent_type.name)
 
         if self.model.timing:
             print(timer)
 
-        self.report(self, locals())
+        self.report(locals())

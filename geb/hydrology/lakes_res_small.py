@@ -30,7 +30,7 @@ class SmallLakesReservoirs(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -41,11 +41,11 @@ class SmallLakesReservoirs(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.lakes_res_small"
 
-    def spinup(self):
+    def spinup(self) -> None:
         pass
 
-    def step(self):
-        self.report(self, locals())
+    def step(self) -> None:
+        self.report(locals())

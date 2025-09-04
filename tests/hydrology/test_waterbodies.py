@@ -1,3 +1,5 @@
+"""Tests for lake and reservoir functions in GEB."""
+
 import math
 
 import matplotlib.pyplot as plt
@@ -17,7 +19,7 @@ from geb.hydrology.lakes_reservoirs import (
 from ..testconfig import output_folder
 
 
-def test_get_lake_height_from_bottom():
+def test_get_lake_height_from_bottom() -> None:
     lake_area = np.array([100])
     lake_storage = np.linspace(0, 1000, 100)
 
@@ -38,7 +40,7 @@ def test_get_lake_height_from_bottom():
     )
 
 
-def test_get_lake_storage_from_height_above_bottom():
+def test_get_lake_storage_from_height_above_bottom() -> None:
     lake_area = np.array([100])
     lake_height = np.linspace(0, 10, 100)
 
@@ -57,7 +59,7 @@ def test_get_lake_storage_from_height_above_bottom():
     )
 
 
-def test_estimate_initial_lake_storage_and_outflow_height():
+def test_estimate_initial_lake_storage_and_outflow_height() -> None:
     lake_area = np.array([3_480_000.0])
     lake_capacity = np.array([7_630_000.0])
     avg_outflow = np.array([2.494])

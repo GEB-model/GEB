@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import os
 import shutil
 import tempfile
@@ -6,10 +7,12 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 import cftime
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import pyproj
 import rasterio.crs
@@ -39,7 +42,7 @@ def load_array(fp: Path) -> np.ndarray:
 
 
 def calculate_scaling(
-    min_value: float, max_value: float, precision: float, offset=0.0
+    min_value: float, max_value: float, precision: float, offset: float | int = 0.0
 ) -> tuple[float, str]:
     """This function calculates the scaling factor and output dtype for a fixed scale and offset codec.
 
@@ -65,6 +68,10 @@ def calculate_scaling(
     Returns:
         scaling_factor: The scaling factor to apply to the original data.
         out_dtype: The output dtype to use for the fixed scale and offset codec.
+
+    Raises:
+        ValueError: If more than 64 bits are required for the given precision and range
+            and thus the data cannot be represented with a fixed scale and offset codec.
     """
     assert min_value < max_value, "min_value must be less than max_value"
     assert precision > 0, "precision must be greater than 0"
@@ -163,7 +170,7 @@ def check_buffer_size(
     da: xr.DataArray,
     chunks_or_shards: dict[str, int],
     max_buffer_size: int = 2147483647,
-):
+) -> None:
     buffer_size = (
         np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
     )
@@ -187,35 +194,21 @@ def to_zarr(
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.
 
-    Parameters
-    ----------
-    da : xarray.DataArray
-        The xarray DataArray to save.
-    path : str
-        The path to the zarr file.
-    crs : int or pyproj.CRS
-        The coordinate reference system to use.
-    x_chunksize : int, optional
-        The chunk size for the x dimension. Default is 350.
-    y_chunksize : int, optional
-        The chunk size for the y dimension. Default is 350.
-    time_chunksize : int, optional
-        The chunk size for the time dimension. Default is 1.
-    time_chunks_per_shard : int, optional
-        The number of time chunks per shard. Default is 30. Set to None
-        to disable sharding.
-    byteshuffle : bool, optional
-        Whether to use byteshuffle compression. Default is True.
-    filters : list, optional
-        A list of filters to apply. Default is [].
-    compressor : numcodecs, optional
-        The compressor to use. Default is None, using the default Blosc compressor.
-    progress : bool, optional
-        Whether to show a progress bar. Default is True.
+    Args:
+        da: The xarray DataArray to save.
+        path: The path to the zarr file.
+        crs: The coordinate reference system to use.
+        x_chunksize: The chunk size for the x dimension. Default is 350.
+        y_chunksize: The chunk size for the y dimension. Default is 350.
+        time_chunksize: The chunk size for the time dimension. Default is 1.
+        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
+            to disable sharding.
+        byteshuffle: Whether to use byteshuffle compression. Default is True.
+        filters: A list of filters to apply. Default is [].
+        compressor: The compressor to use. Default is None, using the default Blosc compressor.
+        progress: Whether to show a progress bar. Default is True.
 
     Returns:
-    -------
-    da_disk : xarray.DataArray
         The xarray DataArray saved to disk.
 
     """
@@ -352,25 +345,22 @@ def get_window(
 ) -> dict[str, slice]:
     """Get a window for the given x and y coordinates based on the provided bounds and buffer.
 
-    Parameters
-    ----------
-    x : xr.DataArray
-        The x coordinates as an xarray DataArray.
-    y : xr.DataArray
-        The y coordinates as an xarray DataArray.
-    bounds : tuple
-        A tuple of four values representing the bounds in the form (min_x, min_y, max_x, max_y).
-    buffer : int, optional
-        The buffer size to apply to the bounds. Default is 0.
-    raise_on_out_of_bounds : bool, optional
-        Whether to raise an error if the bounds are out of the x or y coordinate range. Default is True.
-    raise_on_buffer_out_of_bounds : bool, optional
-        Whether to raise an error if the buffer goes out of the x or y coordinate range. Default is True.
+    Args:
+        x: The x coordinates as an xarray DataArray.
+        y: The y coordinates as an xarray DataArray.
+        bounds: A tuple of four values representing the bounds in the form (min_x, min_y, max_x, max_y).
+        buffer: The buffer size to apply to the bounds. Default is 0.
+        raise_on_out_of_bounds: Whether to raise an error if the bounds are out of the x or y coordinate range. Default is True.
+        raise_on_buffer_out_of_bounds: Whether to raise an error if the buffer goes out of the x or y coordinate range. Default is True.
 
     Returns:
-    -------
-    dict
         A dictionary with slices for the x and y coordinates, e.g. {"x": slice(start, stop), "y": slice(start, stop)}.
+
+    Raises:
+        ValueError: If the bounds are invalid or out of range,
+            or if the buffer is invalid,
+            or if x or y are empty,
+            or the resulting slices are invalid.
     """
     if not isinstance(buffer, int):
         raise ValueError("buffer must be an integer")
@@ -478,7 +468,13 @@ class AsyncGriddedForcingReader:
     multiple timesteps sequentially.
     """
 
-    def __init__(self, filepath, variable_name):
+    def __init__(self, filepath: Path, variable_name: str) -> None:
+        """Initializes the AsyncGriddedForcingReader.
+
+        Args:
+            filepath: The path to the zarr file.
+            variable_name: The name of the variable to read from the zarr file.
+        """
         self.variable_name = variable_name
         self.filepath = filepath
 
@@ -503,20 +499,55 @@ class AsyncGriddedForcingReader:
         self.loop = asyncio.new_event_loop()
         self.executor = ThreadPoolExecutor(max_workers=1)
 
-    def load(self, index):
+    def load(self, index: int) -> npt.NDArray[Any]:
+        """Load the data for the given index from the zarr file.
+
+        Args:
+            index: The index of the timestep to load in the zarr file, along the time dimension.
+
+        Returns:
+            The data for the given index from the zarr file.
+        """
         data = self.var[index, :]
         return data
 
-    async def load_await(self, index):
+    async def load_await(self, index: int) -> npt.NDArray[Any]:
+        """Load the data for the given index from the zarr file asynchronously.
+
+        Args:
+            index: The index of the timestep to read in the zarr file, along the time dimension.
+
+        Returns:
+            An awaitable that resolves to the data for the given index from the zarr file.
+        """
         return await self.loop.run_in_executor(self.executor, lambda: self.load(index))
 
-    async def preload_next(self, index):
+    async def preload_next(self, index: int) -> None | npt.NDArray[Any]:
+        """Preload the next timestep asynchronously.
+
+        Args:
+            index: The index of the timestep to read in the zarr file, along the time dimension.
+
+        Returns:
+            An awaitable that resolves to the data for the next index, or None if there is no next index.
+        """
         # Preload the next timestep asynchronously
         if index + 1 < self.time_size:
             return await self.load_await(index + 1)
         return None
 
-    async def read_timestep_async(self, index):
+    async def read_timestep_async(self, index: int) -> npt.NDArray[Any]:
+        """Read the data for the given index from the zarr file asynchronously.
+
+        Also preloads the next timestep asynchronously so that it is ready when needed.
+
+        Args:
+            index: The index of the timestep to read in the zarr file, along the time dimension.
+
+        Returns:
+            The data for the given index from the zarr file.
+
+        """
         assert index < self.time_size, "Index out of bounds."
         assert index >= 0, "Index out of bounds."
         # Check if the requested data is already preloaded, if so, just return that data
@@ -535,11 +566,20 @@ class AsyncGriddedForcingReader:
         self.current_data = data
         return data
 
-    def get_index(self, date):
-        # convert datetime object to dtype of time coordinate. There is a very high probability
-        # that the dataset is the same as the previous one or the next one in line,
-        # so we can just check the current index and the next one. Only if those do not match
-        # we have to search for the correct index.
+    def get_index(self, date: datetime.datetime) -> int:
+        """Convert datetime object to dtype of time coordinate.
+
+        There is a very high probability that the dataset is the same as
+        the previous one or the next one in line, so we can just check the current
+        index and the next one. Only if those do not match we have to search for the correct index.
+
+        Args:
+            date: The date to convert.
+
+        Returns:
+            The index of the given date in the zarr file.
+
+        """
         numpy_date: np.datetime64 = np.datetime64(date, "ns")
         if self.datetime_index[self.current_index] == numpy_date:
             return self.current_index
@@ -552,7 +592,21 @@ class AsyncGriddedForcingReader:
             )
             return indices.argmax()
 
-    def read_timestep(self, date, asynchronous=False):
+    def read_timestep(
+        self, date: datetime.datetime, asynchronous: bool = False
+    ) -> npt.NDArray[Any]:
+        """Read the data for the given date from the zarr file.
+
+        Args:
+            date: The date of the timestep to read.
+            asynchronous: If True, the data is read asynchronously. Defaults to False.
+
+        Note:
+            The asynchronous mode is currently broken.
+
+        Returns:
+            The data for the given date from the zarr file.
+        """
         if asynchronous:
             index = self.get_index(date)
             fn = self.read_timestep_async(index)
@@ -563,7 +617,8 @@ class AsyncGriddedForcingReader:
             data = self.load(index)
             return data
 
-    def close(self):
+    def close(self) -> None:
+        """Close the reader and clean up resources."""
         # cancel the preloading of the next timestep
         if self.preloaded_data_future is not None:
             self.preloaded_data_future.cancel()
@@ -581,16 +636,21 @@ class WorkingDirectory:
             # Code executed here will have the new directory as the CWD
     """
 
-    def __init__(self, new_path):
+    def __init__(self, new_path: Path) -> None:
         """Initializes the context manager with the path to change to.
 
         Args:
-            new_path (str): The path to the directory to change into.
+            new_path: The path to the directory to change into.
         """
         self._new_path = new_path
         self._original_path = None  # To store the original path
 
-    def __enter__(self):
+    def __enter__(self) -> "WorkingDirectory":
+        """Enters the context, changing the current working directory.
+
+        Returns:
+            The context manager instance.
+        """
         # Store the current working directory
         self._original_path = os.getcwd()
 
@@ -600,7 +660,19 @@ class WorkingDirectory:
         # Return self (optional, but common)
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Exits the context, reverting to the original working directory.
+
+        Args:
+            exc_type: The type of exception raised (if any).
+            exc_val: The exception instance raised (if any).
+            exc_tb: The traceback of the exception raised (if any).
+        """
         # Change back to the original directory
         os.chdir(self._original_path)
 
@@ -629,6 +701,9 @@ def fetch_and_save(
     Returns:
         Returns True if the file was downloaded successfully and saved to the specified path.
         Raises an exception if all attempts to download the file fail.
+
+    Raises:
+        RuntimeError: If all attempts to download the file fail.
 
     """
     if not overwrite and file_path.exists():
@@ -676,4 +751,7 @@ def fetch_and_save(
             time.sleep(delay)
 
     # If all attempts fail, raise an exception
-    raise Exception("All attempts to download the file have failed.")
+    raise RuntimeError(
+        f"Failed to download '{url}' to '{file_path}' after {max_retries} attempts. "
+        "Please check the URL, network connectivity, and destination permissions."
+    )

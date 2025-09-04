@@ -49,7 +49,7 @@ class WaterDemand(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -60,10 +60,21 @@ class WaterDemand(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
+        """Name of the module.
+
+        Should be identical to the path of the module in the model.
+
+        Returns:
+            The name of the module.
+        """
         return "hydrology.water_demand"
 
-    def spinup(self):
+    def spinup(self) -> None:
+        """Perform any necessary spinup for the water demand module.
+
+        This method initializes the reservoir command areas for the HRU grid.
+        """
         reservoir_command_areas = self.HRU.compress(
             load_grid(self.model.files["subgrid"]["waterbodies/subcommand_areas"]),
             method="last",
@@ -119,48 +130,97 @@ class WaterDemand(Module):
             available_groundwater_m3,
         )
 
-    def withdraw(self, source, demand):
+    def withdraw(
+        self, source: npt.NDArray[np.floating], demand: npt.NDArray[np.floating]
+    ) -> npt.NDArray[np.floating]:
+        """Withdraw water from a source to meet a demand.
+
+        When the source is less than the demand, all available water is withdrawn.
+        When the source is more than the demand, only the demanded amount is withdrawn.
+
+        Source and demand are expected to be in the same units (e.g., m3).
+
+        Source and demand are updated in place.
+
+        Args:
+            source: Available water from a source (e.g., channel, reservoir, groundwater).
+            demand: Water demand.
+
+        Returns:
+            Water withdrawn from the source to meet the demand.
+        """
         withdrawal = np.minimum(source, demand)
         source -= withdrawal  # update in place
         demand -= withdrawal  # update in place
         return withdrawal
 
-    def step(self, potential_evapotranspiration):
+    def step(
+        self, potential_evapotranspiration: npt.NDArray[np.float32]
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        float,
+    ]:
+        """Perform a single time step of the water demand module.
+
+        Water is abstracted in the following order:
+            1. Domestic water demand (surface water first, then groundwater)
+            2. Industry water demand (surface water first, then groundwater)
+            3. Livestock water demand (surface water only)
+            4. Irrigation water demand (surface water first, then reservoir water, then groundwater)
+
+        For the domestic and irrigation water demand, the agent-based model is used,
+        while for the industry and livestock water demand, a gridded approach is used.
+
+        Args:
+            potential_evapotranspiration: Potential evapotranspiration in m per HRU [m].
+
+        Returns:
+            Groundwater abstraction per grid cell [m3].
+            Channel abstraction per grid cell [m3].
+            Return flow from all sources per grid cell [m].
+                This is added to the channel flow in the routing module.
+            Irrigation loss to evaporation per HRU [m].
+            Total water demand loss [m3].
+        """
         timer: TimingModule = TimingModule("Water demand")
 
-        total_water_demand_loss_m3 = 0
+        total_water_demand_loss_m3 = 0.0
 
         (
             domestic_water_demand_per_household,
             domestic_water_efficiency_per_household,
             household_locations,
         ) = self.model.agents.households.water_demand()
-        timer.new_split("Domestic")
+        timer.finish_split("Domestic")
         industry_water_demand, industry_water_efficiency = (
             self.model.agents.industry.water_demand()
         )
-        timer.new_split("Industry")
+        timer.finish_split("Industry")
         livestock_water_demand, livestock_water_efficiency = (
             self.model.agents.livestock_farmers.water_demand()
         )
-        timer.new_split("Livestock")
+        timer.finish_split("Livestock")
 
-        gross_irrigation_demand_m3_per_field: npt.NDArray[np.float32] = (
-            self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
-                potential_evapotranspiration=potential_evapotranspiration,
-                available_infiltration=self.HRU.var.natural_available_water_infiltration,
-            )
+        (
+            gross_irrigation_demand_m3_per_field,
+            gross_potential_irrigation_m3_per_field_limit_adjusted,
+        ) = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
+            potential_evapotranspiration=potential_evapotranspiration,
+            available_infiltration=self.HRU.var.natural_available_water_infiltration,
         )
 
         gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32] = (
             self.model.agents.crop_farmers.field_to_farmer(
-                gross_irrigation_demand_m3_per_field
+                gross_potential_irrigation_m3_per_field_limit_adjusted
             )
         )
 
         gross_irrigation_demand_m3_per_water_body: npt.NDArray[np.float32] = (
             weighted_sum_per_reservoir(
-                self.model.agents.crop_farmers.farmer_command_area,
+                self.model.agents.crop_farmers.command_area,
                 gross_irrigation_demand_m3_per_farmer,
                 min_length=self.hydrology.lakes_reservoirs.n,
             )
@@ -201,7 +261,6 @@ class WaterDemand(Module):
         assert (domestic_water_efficiency_per_household == 1).all()
         domestic_water_efficiency = 1
 
-        # water withdrawal
         # 1. domestic (surface + ground)
         self.hydrology.grid.domestic_withdrawal_m3 = self.withdraw(
             available_channel_storage_m3, domestic_water_demand_m3
@@ -266,7 +325,7 @@ class WaterDemand(Module):
         ).sum()
         total_water_demand_loss_m3 += livestock_water_loss_m3
 
-        timer.new_split("Water withdrawal")
+        timer.finish_split("Water withdrawal")
 
         # 4. irrigation (surface + reservoir + ground)
         (
@@ -278,6 +337,7 @@ class WaterDemand(Module):
             groundwater_abstraction_m3_farmers,
         ) = self.model.agents.crop_farmers.abstract_water(
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
+            gross_irrigation_demand_m3_per_field_limit_adjusted=gross_potential_irrigation_m3_per_field_limit_adjusted,
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
             groundwater_depth=self.hydrology.groundwater.modflow.groundwater_depth,
@@ -291,7 +351,7 @@ class WaterDemand(Module):
             "Reservoir storage should be empty after abstraction"
         )
 
-        timer.new_split("Irrigation")
+        timer.finish_split("Irrigation")
 
         if __debug__:
             assert balance_check(
@@ -377,7 +437,7 @@ class WaterDemand(Module):
         if self.model.timing:
             print(timer)
 
-        self.report(self, locals())
+        self.report(locals())
 
         return (
             groundwater_abstraction_m3,

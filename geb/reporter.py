@@ -1,16 +1,97 @@
-# -*- coding: utf-8 -*-
 import datetime
 import re
 import shutil
 from operator import attrgetter
 from typing import Any, Union
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import zarr
 from honeybees.library.raster import coord_to_pixel
 
 from geb.store import DynamicArray
+from geb.workflows.methods import multi_level_merge
+
+WATER_CIRCLE_REPORT_CONFIG = {
+    "hydrology": {
+        "_water_circle_storage": {
+            "varname": ".current_storage",
+            "type": "scalar",
+        },
+        "_water_circle_routing_loss": {
+            "varname": ".routing_loss_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.snowfrost": {
+        "_water_circle_rain": {
+            "varname": ".rain",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_snow": {
+            "varname": ".snow",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+    },
+    "hydrology.routing": {
+        "_water_circle_river_evaporation": {
+            "varname": ".total_evaporation_in_rivers_m3",
+            "type": "scalar",
+        },
+        "_water_circle_waterbody_evaporation": {
+            "varname": ".total_waterbody_evaporation_m3",
+            "type": "scalar",
+        },
+        "_water_circle_river_outflow": {
+            "varname": ".total_outflow_at_pits_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.water_demand": {
+        "_water_circle_domestic_water_loss": {
+            "varname": ".domestic_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_circle_industry_water_loss": {
+            "varname": ".industry_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_circle_livestock_water_loss": {
+            "varname": ".livestock_water_loss_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.landcover": {
+        "_water_circle_transpiration": {
+            "varname": ".actual_transpiration",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_bare_soil_evaporation": {
+            "varname": ".actual_bare_soil_evaporation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_direct_evaporation": {
+            "varname": ".open_water_evaporation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_interception_evaporation": {
+            "varname": ".interception_evaporation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_snow_sublimation": {
+            "varname": ".snow_sublimation",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+    },
+}
 
 
 def create_time_array(
@@ -29,6 +110,9 @@ def create_time_array(
 
     Returns:
         time: The time array.
+
+    Raises:
+        ValueError: If the frequency is not recognized.
     """
     if "frequency" not in conf:
         frequency = {"every": "day"}
@@ -85,12 +169,46 @@ class Reporter:
             and "report" in self.model.config
             and self.model.config["report"]
         ):
-            self.activated = True
+            self.activated: bool = True
 
-            to_delete = []
-            for module_name, configs in self.model.config["report"].items():
+            report_config: dict[str, Any] = self.model.config["report"]
+
+            to_delete: list[str] = []
+            for module_name, module_values in list(report_config.items()):
                 if module_name.startswith("_"):
-                    # skip internal modules
+                    if module_name == "_discharge_stations":
+                        if module_values is True:
+                            stations = gpd.read_parquet(
+                                self.model.files["geom"][
+                                    "discharge/discharge_snapped_locations"
+                                ]
+                            )
+
+                            station_reporters = {}
+                            for station_ID, station_info in stations.iterrows():
+                                xy_grid = station_info["snapped_grid_pixel_xy"]
+                                station_reporters[
+                                    f"discharge_daily_m3_s_{station_ID}"
+                                ] = {
+                                    "varname": f"grid.var.discharge_m3_s",
+                                    "type": "grid",
+                                    "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
+                                }
+                            report_config = multi_level_merge(
+                                report_config,
+                                {"hydrology.routing": station_reporters},
+                            )
+                    elif module_name == "_water_circle":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                WATER_CIRCLE_REPORT_CONFIG,
+                            )
+                    else:
+                        raise ValueError(
+                            f"Module {module_name} is not a valid module for reporting."
+                        )
+
                     to_delete.append(module_name)
 
             for module_name in to_delete:
@@ -99,6 +217,9 @@ class Reporter:
             for module_name, configs in self.model.config["report"].items():
                 self.variables[module_name] = {}
                 for name, config in configs.items():
+                    assert isinstance(config, dict), (
+                        f"Configuration for {module_name}.{name} must be a dictionary, but is {type(config)}."
+                    )
                     self.variables[module_name][name] = self.create_variable(
                         config, module_name, name
                     )
@@ -117,6 +238,13 @@ class Reporter:
             config: The configuration for the variable.
             module_name: The name of the module to which the variable belongs.
             name: The name of the variable.
+
+        Returns:
+            zarr_store: The zarr store for the variable, or an empty list if the
+                variable is a scalar or has an aggregation function.
+
+        Raises:
+            ValueError: If the variable type is not recognized.
         """
         if config["type"] == "scalar":
             assert "function" not in config or config["function"] is None, (
@@ -297,6 +425,11 @@ class Reporter:
             local_variables: A dictionary of local variables from the function
                 that calls this one.
             config: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.
+
+        Raises:
+            ValueError: If the frequency is not recognized.
+            KeyError: If the variable is not found in the local variables or module attributes.
+            AttributeError: If the attribute is not found in the module.
         """
         # here we return None if the value is not to be reported on this timestep
         if "frequency" in config:
@@ -376,6 +509,11 @@ class Reporter:
             name: Name of the value to be exported.
             value: The array itself.
             config: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
+
+        Raises:
+            ValueError: If the function is not recognized,
+                or if the variable type is not recognized.
+            IndexError: If the coordinate is in sample_lon_lat is outside the model domain.
         """
         if config["type"] in ("grid", "HRU"):
             if config["function"] is None:
@@ -409,18 +547,26 @@ class Reporter:
                     value = np.sum(value)
                 elif function == "nansum":
                     value = np.nansum(value)
-                elif function == "sample":
-                    decompressed_array = self.decompress(config["varname"], value)
-                    value = decompressed_array[int(args[0]), int(args[1])]
-                elif function == "sample_coord":
-                    if config["varname"].startswith("hydrology.grid"):
-                        gt = self.model.hydrology.grid.gt
-                    elif config["varname"].startswith("hydrology.HRU"):
-                        gt = self.hydrology.HRU.gt
+                elif function == "sample_xy":
+                    if config["type"] == "grid":
+                        decompressed_array = self.hydrology.grid.decompress(value)
+                    elif config["type"] == "HRU":
+                        decompressed_array = self.hydrology.HRU.decompress(value)
                     else:
-                        raise ValueError
-                    px, py = coord_to_pixel((float(args[1]), float(args[0])), gt)
-                    decompressed_array = self.decompress(config["varname"], value)
+                        raise ValueError(f"Unknown varname type {config['varname']}")
+                    value = decompressed_array[int(args[1]), int(args[0])]
+                elif function == "sample_lonlat":
+                    if config["type"] == "grid":
+                        gt = self.model.hydrology.grid.gt
+                        decompressed_array = self.hydrology.grid.decompress(value)
+                    elif config["type"] == "HRU":
+                        gt = self.hydrology.HRU.gt
+                        decompressed_array = self.hydrology.HRU.decompress(value)
+                    else:
+                        raise ValueError(f"Unknown varname type {config['varname']}")
+
+                    px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
+
                     try:
                         value = decompressed_array[py, px]
                     except IndexError:
@@ -474,6 +620,8 @@ class Reporter:
                         fill_value = np.nan
                     elif dtype in (int, np.int32, np.int64):
                         fill_value = -1
+                    elif dtype == bool:
+                        fill_value = False
                     else:
                         raise ValueError(
                             f"Value {dtype} of type {type(dtype)} not recognized."
@@ -528,7 +676,6 @@ class Reporter:
             self.variables[module_name][name] = []
 
         self.variables[module_name][name].append((self.model.current_time, value))
-        return None
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""

@@ -1,3 +1,5 @@
+import os
+
 import geopandas as gpd
 import hydromt.data_catalog
 import networkx as nx
@@ -10,7 +12,7 @@ from hydromt.exceptions import NoDataException
 from pyflwdir import FlwdirRaster
 from rasterio.features import rasterize
 from scipy.ndimage import value_indices
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point
 
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
@@ -163,7 +165,9 @@ def get_SWORD_river_widths(data_catalog, SWORD_reach_IDs):
 
 
 class Hydrography:
-    def __init__(self):
+    """Contains all build methods for the hydrography for GEB."""
+
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=["setup_hydrography", "setup_cell_area"])
@@ -171,19 +175,17 @@ class Hydrography:
         """Sets up the Manning's coefficient for the model.
 
         Notes:
-        -----
-        This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
-        and topography of the grid. It first calculates the upstream area of each cell in the grid using the
-        `routing/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
+            This method sets up the Manning's coefficient for the model by calculating the coefficient based on the cell area
+            and topography of the grid. It first calculates the upstream area of each cell in the grid using the
+            `routing/upstream_area` attribute of the grid. It then calculates the coefficient using the formula:
 
-            C = 0.025 + 0.015 * (2 * A / U) + 0.030 * (Z / 2000)
+                C = 0.025 + 0.015 * (2 * A / U) + 0.030 * (Z / 2000)
 
-        where C is the Manning's coefficient, A is the cell area, U is the upstream area, and Z is the elevation of the cell.
+            where C is the Manning's coefficient, A is the cell area, U is the upstream area, and Z is the elevation of the cell.
 
-        The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
-        `set_grid()` method.
+            The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
+            `set_grid()` method.
         """
-        self.logger.info("Setting up Manning's coefficient")
         a = (2 * self.grid["cell_area"]) / self.grid["routing/upstream_area"]
         a = xr.where(a < 1, a, 1, keep_attrs=True)
         b = self.grid["routing/outflow_elevation"] / 2000
@@ -194,7 +196,7 @@ class Hydrography:
 
         self.set_grid(mannings, "routing/mannings")
 
-    def set_routing_subbasins(self, river_graph, sink_subbasin_ids):
+    def set_routing_subbasins(self, river_graph, sink_subbasin_ids) -> None:
         # always make a list of the subbasin ids, such that the function always gets the same type of input
         if not isinstance(sink_subbasin_ids, (list, set)):
             sink_subbasin_ids = [sink_subbasin_ids]
@@ -220,10 +222,10 @@ class Hydrography:
             lambda row: len(list(river_graph.neighbors(row.name))) == 0, axis=1
         )
 
-        self.set_geoms(subbasins, name="routing/subbasins")
+        self.set_geom(subbasins, name="routing/subbasins")
 
     @build_method
-    def setup_hydrography(self):
+    def setup_hydrography(self) -> None:
         original_d8_elevation = self.other["drainage/original_d8_elevation"]
         original_d8_ldd = self.other["drainage/original_d8_flow_directions"]
         original_d8_ldd_data = original_d8_ldd.values
@@ -346,7 +348,7 @@ class Hydrography:
         )
 
         # river width
-        subbasin_ids: list[int] = self.geoms["routing/subbasins"].index.tolist()
+        subbasin_ids: list[int] = self.geom["routing/subbasins"].index.tolist()
 
         self.logger.info("Retrieving river data")
         rivers: gpd.GeoDataFrame = get_rivers(self.data_catalog, subbasin_ids)
@@ -358,7 +360,7 @@ class Hydrography:
         ]
 
         rivers: gpd.GeoDataFrame = rivers.join(
-            self.geoms["routing/subbasins"][
+            self.geom["routing/subbasins"][
                 ["is_downstream_outflow_subbasin", "associated_upstream_basins"]
             ],
             how="left",
@@ -441,7 +443,7 @@ class Hydrography:
         # ensure that all rivers with a SWORD ID have a width
         assert (~np.isnan(rivers["width"][(SWORD_reach_IDs != -1).any(axis=0)])).all()
 
-        self.set_geoms(rivers, name="routing/rivers")
+        self.set_geom(rivers, name="routing/rivers")
 
         river_with_mapper: dict[int, float] = rivers["width"].to_dict()
         river_width_data: npt.NDArray[np.float32] = np.vectorize(
@@ -459,27 +461,27 @@ class Hydrography:
         self,
         command_areas=None,
         custom_reservoir_capacity=None,
-    ):
+    ) -> None:
         """Sets up the waterbodies for GEB.
 
+        Args:
+            command_areas: The path to the command areas data in the data catalog. If None, command areas are not set up.
+            custom_reservoir_capacity: The path to the custom reservoir capacity data in the data catalog.
+                If None, the default reservoir capacity is used. The data should be a DataFrame with
+                'waterbody_id' as the index and 'volume_total' as the column for the reservoir capacity.
+
         Notes:
-        -----
-        This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
-        specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
-        grid and the subgrid using the `rasterize` method of the `raster` object. The resulting grids are set as attributes
-        of the model with names of the form 'waterbodies/{grid_name}'.
+            This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
+            specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
+            grid and the subgrid using the `rasterize` method of the `raster` object. The resulting grids are set as attributes
+            of the model with names of the form 'waterbodies/{grid_name}'.
 
-        The method also retrieves the reservoir command area data from the data catalog and calculates the area of each
-        command area that falls within the model region. The `waterbody_id` key is used to do the matching between these
-        databases. The relative area of each command area within the model region is calculated and set as a column in
-        the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
-        with any custom reservoir capacity data from the data catalog.
-
-        TODO: Make the reservoir command area data optional.
-
-        The resulting waterbody data is set as a table in the model with the name 'waterbodies/waterbody_data'.
+            The method also retrieves the reservoir command area data from the data catalog and calculates the area of each
+            command area that falls within the model region. The `waterbody_id` key is used to do the matching between these
+            databases. The relative area of each command area within the model region is calculated and set as a column in
+            the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
+            with any custom reservoir capacity data from the data catalog.
         """
-        self.logger.info("Setting up waterbodies")
         dtypes = {
             "waterbody_id": np.int32,
             "waterbody_type": np.int32,
@@ -584,6 +586,8 @@ class Hydrography:
                 command_areas["waterbody_id"].isin(reservoir_ids)
             ].reset_index(drop=True)
 
+            self.set_geom(command_areas_dissolved, name="waterbodies/command_areas")
+
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
             self.set_grid(
@@ -643,4 +647,172 @@ class Hydrography:
             "average_discharge is required"
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
-        self.set_geoms(waterbodies, name="waterbodies/waterbody_data")
+        self.set_geom(waterbodies, name="waterbodies/waterbody_data")
+
+    @build_method
+    def setup_coastal_model_regions(self) -> None:
+        """Sets up the coastal model regions for the model.
+
+        This function subdivides the coastal geoms into smaller regions that are used to simulate coastal flooding.
+        """
+        self.logger.info("Setting up coastal model regions")
+        # load river basins and coastline data
+        basins = self.geoms["routing/subbasins"]
+        # get coastal basins
+        coastal_basins = basins[basins["is_coastal_basin"]]
+        coastal_basins.to_file("output/coastal_basins.geojson", driver="GeoJSON")
+
+        # TODO: Implement coastal model region setup
+        pass
+
+    def setup_gtsm_water_levels(self, temporal_range) -> None:
+        """Sets up the GTSM hydrographs for station within the model bounds.
+
+        Args:
+            temporal_range (np.ndarray): The range of years to process.
+        """
+        # get the model bounds and buffer by ~2km
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
+
+        # First: get station indices from ONE representative file
+        ref_file = self.data_catalog.get_source("GTSM").path.format(1979, "01")
+        ref = xr.open_dataset(ref_file)
+
+        x_coords = ref.station_x_coordinate.load()
+        y_coords = ref.station_y_coordinate.load()
+
+        mask = (
+            (x_coords >= min_lon)
+            & (x_coords <= max_lon)
+            & (y_coords >= min_lat)
+            & (y_coords <= max_lat)
+        )
+        station_idx = np.nonzero(mask.values)[0]
+
+        station_df = pd.DataFrame(
+            {
+                "station_id": ref.stations.values[mask].astype(str),
+                "longitude": x_coords[mask].values,
+                "latitude": y_coords[mask].values,
+            }
+        )
+        ref.close()
+
+        # Then: loop through files in smaller batches
+        gtsm_data_region = []
+        for year in temporal_range:
+            for month in range(1, 13):
+                f = self.data_catalog.get_source("GTSM").path.format(
+                    year, f"{month:02d}"
+                )
+                ds = xr.open_dataset(f, chunks={"time": -1})
+                subset = ds.isel(stations=station_idx).drop_vars(
+                    ["station_x_coordinate", "station_y_coordinate"]
+                )
+                gtsm_data_region.append(subset.waterlevel.to_pandas())
+                print(f"Processed GTSM data for {year}-{month:02d}")
+                ds.close()
+        gtsm_data_region_pd = pd.concat(gtsm_data_region, axis=0)
+        # set _FillValue to NaN
+        self.set_table(gtsm_data_region_pd, name="gtsm/waterlevels")
+        stations = gpd.GeoDataFrame(
+            station_df,
+            geometry=[
+                Point(xy) for xy in zip(station_df.longitude, station_df.latitude)
+            ],
+            crs="EPSG:4326",
+        )
+        self.set_geom(stations, name="gtsm/stations")
+        self.logger.info("GTSM station waterlevels and geometries set")
+
+    def setup_gtsm_surge_levels(self, temporal_range) -> None:
+        """Sets up the GTSM surge hydrographs for station within the model bounds.
+
+        Args:
+            temporal_range (np.ndarray): The range of years to process.
+        """
+        self.logger.info("Setting up GTSM surge hydrographs")
+        # get the model bounds and buffer by ~2km
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
+
+        # First: get station indices from ONE representative file
+        ref_file = self.data_catalog.get_source("GTSM_surge").path.format(1979, "01")
+        ref = xr.open_dataset(ref_file)
+
+        x_coords = ref.station_x_coordinate.load()
+        y_coords = ref.station_y_coordinate.load()
+
+        mask = (
+            (x_coords >= min_lon)
+            & (x_coords <= max_lon)
+            & (y_coords >= min_lat)
+            & (y_coords <= max_lat)
+        )
+        station_idx = np.nonzero(mask.values)[0]
+
+        # Then: loop through files in smaller batches
+        gtsm_data_region = []
+        for year in temporal_range:
+            for month in range(1, 13):
+                f = self.data_catalog.get_source("GTSM").path.format(
+                    year, f"{month:02d}"
+                )
+                ds = xr.open_dataset(f, chunks={"time": -1})
+                subset = ds.isel(stations=station_idx).drop_vars(
+                    ["station_x_coordinate", "station_y_coordinate"]
+                )
+                gtsm_data_region.append(subset.waterlevel.to_pandas())
+                print(f"Processed GTSM data for {year}-{month:02d}")
+                ds.close()
+        gtsm_data_region_pd = pd.concat(gtsm_data_region, axis=0)
+        # set _FillValue to NaN
+        self.set_table(gtsm_data_region_pd, name="gtsm/surge")
+        self.logger.info("GTSM station waterlevels and geometries set")
+
+    def setup_coast_rp(self) -> None:
+        """Sets up the coastal return period data for the model."""
+        self.logger.info("Setting up coastal return period data")
+        stations = gpd.read_parquet(
+            os.path.join("input", self.files["geoms"]["gtsm/stations"])
+        )
+
+        fp_coast_rp = self.data_catalog.get_source("COAST_RP").path
+        coast_rp = pd.read_pickle(fp_coast_rp)
+
+        # remove stations that are not in coast_rp index
+        stations = stations[
+            stations["station_id"].astype(int).isin(coast_rp.index)
+        ].reset_index(drop=True)
+
+        coast_rp = coast_rp.loc[stations["station_id"].astype(int)]
+        self.set_table(coast_rp, name="coast_rp")
+
+        # also set stations (only those that are in coast_rp)
+        self.set_geom(stations, "gtsm/stations_coast_rp")
+
+    @build_method
+    def setup_gtsm_station_data(self) -> None:
+        """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
+        subbasins = gpd.read_parquet("input" / self.files["geom"]["routing/subbasins"])
+        if not subbasins["is_coastal_basin"].any():
+            self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
+            return
+        # Continue with GTSM hydrographs setup
+        temporal_range = np.arange(1979, 2018, 1, dtype=np.int32)
+        self.setup_gtsm_water_levels(temporal_range)
+        self.setup_gtsm_surge_levels(temporal_range)
+        self.setup_coast_rp()

@@ -36,6 +36,9 @@ def get_CO2_induced_crop_factor_adustment(
 
     Args:
         CO2_concentration_ppm: The CO2 concentration in ppm.
+
+    Returns:
+        The CO2 induced crop factor adjustment [dimensionless]
     """
     base_co2_concentration_ppm: float = 369.41
     return 1.0 - 0.05 * (CO2_concentration_ppm - base_co2_concentration_ppm) / (
@@ -46,7 +49,7 @@ def get_CO2_induced_crop_factor_adustment(
 class Evaporation(Module):
     """Calculate potential evaporation and pot. transpiration."""
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -57,10 +60,10 @@ class Evaporation(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.evaporation"
 
-    def spinup(self):
+    def spinup(self) -> None:
         pass
 
     def step(
@@ -120,7 +123,7 @@ class Evaporation(Module):
             - snow_sublimation,
         )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return (
             potential_transpiration,

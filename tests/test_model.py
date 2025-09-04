@@ -1,3 +1,7 @@
+"""Tests for the main model functions of GEB, such as model initialization, building, and running.
+
+Most of these tests are quite heavy and therefore skipped on GitHub Actions."""
+
 import json
 import os
 import shutil
@@ -53,7 +57,7 @@ DEFAULT_RUN_ARGS: dict[str, Any] = {
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_init():
+def test_init() -> None:
     working_directory.mkdir(parents=True, exist_ok=True)
 
     with WorkingDirectory(working_directory):
@@ -70,9 +74,9 @@ def test_init():
             overwrite=True,
         )
 
-        assert (working_directory / "model.yml").exists()
-        assert (working_directory / "build.yml").exists()
-        assert (working_directory / "update.yml").exists()
+        assert Path("model.yml").exists()
+        assert Path("build.yml").exists()
+        assert Path("update.yml").exists()
 
         assert pytest.raises(
             FileExistsError,
@@ -83,7 +87,7 @@ def test_init():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_build():
+def test_build() -> None:
     with WorkingDirectory(working_directory):
         build_fn(**DEFAULT_BUILD_ARGS)
 
@@ -92,7 +96,7 @@ def test_build():
     IN_GITHUB_ACTIONS or os.getenv("GEB_TEST_ALL", "no") != "yes",
     reason="Too heavy for GitHub Actions and needs GEB_TEST_ALL=yes.",
 )
-def test_build_dependencies():
+def test_build_dependencies() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
         build_config = parse_config(args["build_config"])
@@ -128,7 +132,7 @@ def test_build_dependencies():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_forcing():
+def test_forcing() -> None:
     with WorkingDirectory(working_directory):
         model: GEBModel = run_model_with_method(
             method=None,
@@ -155,7 +159,94 @@ def test_forcing():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_alter():
+def test_update_with_file() -> None:
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_BUILD_ARGS.copy()
+        args["build_config"] = "update.yml"
+        update_fn(**args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_update_with_dict() -> None:
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_BUILD_ARGS.copy()
+        update = {"setup_land_use_parameters": {}}
+        args["build_config"] = update
+        update_fn(**args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.parametrize(
+    "method",
+    [
+        "setup_CO2_concentration",
+    ],
+)
+def test_update_with_method(method: str) -> None:
+    with WorkingDirectory(working_directory):
+        args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
+
+        build_config: dict[str, dict] = parse_config(
+            working_directory / args["build_config"]
+        )
+
+        update: dict[str, dict] = {method: build_config[method]}
+
+        args["build_config"] = update
+        update_fn(**args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_spinup() -> None:
+    with WorkingDirectory(working_directory):
+        run_model_with_method(method="spinup", **DEFAULT_RUN_ARGS)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_run() -> None:
+    args = DEFAULT_RUN_ARGS.copy()
+
+    with WorkingDirectory(working_directory):
+        args["config"] = parse_config(args["config"])
+        args["config"]["report"].update(
+            {
+                "_water_circle": True,
+            }
+        )
+        args["config"]["hazards"]["floods"]["simulate"] = True
+
+        run_model_with_method(method="run", **args)
+
+    if os.getenv("GEB_TEST_GPU", "no") == "yes":
+        with WorkingDirectory(working_directory):
+            args = DEFAULT_RUN_ARGS.copy()
+            args["config"] = parse_config(args["config"])
+            args["config"]["hazards"]["floods"]["SFINCS"]["gpu"] = True
+            args["config"]["general"]["name"] = "run_gpu"
+            run_model_with_method(method="run", **args)
+
+    # TODO: Add similarity check for the output of the CPU and GPU runs
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_SFINCS_run_without_subgrid() -> None:
+    args = DEFAULT_RUN_ARGS.copy()
+
+    with WorkingDirectory(working_directory):
+        args["config"] = parse_config(args["config"])
+        args["config"]["report"].update(
+            {
+                "_water_circle": True,
+            }
+        )
+        args["config"]["hazards"]["floods"]["simulate"] = True
+        args["config"]["hazards"]["floods"]["nr_subgrid_pixels"] = None
+
+        run_model_with_method(method="run", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_alter() -> None:
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         args["build_config"] = {
@@ -172,170 +263,16 @@ def test_alter():
 
         run_args = DEFAULT_RUN_ARGS.copy()
         run_args["working_directory"] = args["working_directory"]
+        run_args["config"] = parse_config(run_args["config"])
+        run_args["config"]["general"]["start_time"] = run_args["config"]["general"][
+            "spinup_time"
+        ] + timedelta(days=370)  # run just over a year more is not needed
 
         run_model_with_method(method="spinup", **run_args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_update_with_file():
-    with WorkingDirectory(working_directory):
-        args = DEFAULT_BUILD_ARGS.copy()
-        args["build_config"] = "update.yml"
-        update_fn(**args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_update_with_dict():
-    with WorkingDirectory(working_directory):
-        args = DEFAULT_BUILD_ARGS.copy()
-        update = {"setup_land_use_parameters": {}}
-        args["build_config"] = update
-        update_fn(**args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-@pytest.mark.parametrize(
-    "method",
-    [
-        "setup_hydrography",
-        "setup_crop_prices",
-        "setup_discharge_observations",
-        "setup_forcing",
-        "setup_water_demand",
-        "setup_SPEI",
-        "setup_CO2_concentration",
-    ],
-)
-def test_update_with_method(method: str):
-    with WorkingDirectory(working_directory):
-        args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
-
-        build_config: dict[str, dict] = parse_config(
-            working_directory / args["build_config"]
-        )
-
-        update: dict[str, dict] = {method: build_config[method]}
-
-        args["build_config"] = update
-        update_fn(**args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_spinup():
-    with WorkingDirectory(working_directory):
-        run_model_with_method(method="spinup", **DEFAULT_RUN_ARGS)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_run():
-    args = DEFAULT_RUN_ARGS.copy()
-
-    with WorkingDirectory(working_directory):
-        args["config"] = parse_config(args["config"])
-        args["config"]["report"].update(
-            {
-                "hydrology": {
-                    "storage": {
-                        "varname": ".current_storage",
-                        "type": "scalar",
-                    },
-                    "routing loss": {
-                        "varname": ".routing_loss_m3",
-                        "type": "scalar",
-                    },
-                }
-            }
-        )
-        args["config"]["report"].update(
-            {
-                "hydrology.snowfrost": {
-                    "rain": {
-                        "varname": ".rain",
-                        "type": "HRU",
-                        "function": "weightedsum",
-                    },
-                    "snow": {
-                        "varname": ".snow",
-                        "type": "HRU",
-                        "function": "weightedsum",
-                    },
-                }
-            }
-        )
-        args["config"]["report"].update(
-            {
-                "hydrology.routing": {
-                    "river evaporation": {
-                        "varname": ".total_evaporation_in_rivers_m3",
-                        "type": "scalar",
-                    },
-                    "waterbody evaporation": {
-                        "varname": ".total_waterbody_evaporation_m3",
-                        "type": "scalar",
-                    },
-                    "river outflow": {
-                        "varname": ".total_outflow_at_pits_m3",
-                        "type": "scalar",
-                    },
-                }
-            }
-        )
-        args["config"]["report"]["hydrology.water_demand"] = {
-            "domestic water loss": {
-                "varname": ".domestic_water_loss_m3",
-                "type": "scalar",
-            },
-            "industry water loss": {
-                "varname": ".industry_water_loss_m3",
-                "type": "scalar",
-            },
-            "livestock water loss": {
-                "varname": ".livestock_water_loss_m3",
-                "type": "scalar",
-            },
-        }
-        args["config"]["report"]["hydrology.landcover"] = {
-            "transpiration": {
-                "varname": ".actual_transpiration",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "bare soil evaporation": {
-                "varname": ".actual_bare_soil_evaporation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "direct evaporation": {
-                "varname": ".open_water_evaporation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "interception evaporation": {
-                "varname": ".interception_evaporation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-            "snow sublimation": {
-                "varname": ".snow_sublimation",
-                "type": "HRU",
-                "function": "weightedsum",
-            },
-        }
-        run_model_with_method(method="run", **args)
-
-    if os.getenv("GEB_TEST_GPU", "no") == "yes":
-        with WorkingDirectory(working_directory):
-            args = DEFAULT_RUN_ARGS.copy()
-            args["config"] = parse_config(args["config"])
-            args["config"]["hazards"]["floods"]["SFINCS"]["gpu"] = True
-            args["config"]["general"]["name"] = "run_gpu"
-            run_model_with_method(method="run", **args)
-
-    # TODO: Add similarity check for the output of the CPU and GPU runs
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate_water_circle():
+def test_evaluate_water_circle() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
@@ -346,17 +283,25 @@ def test_evaluate_water_circle():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate():
+def test_evaluate() -> None:
     with WorkingDirectory(working_directory):
-        run_model_with_method(method="evaluate", **DEFAULT_RUN_ARGS)
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "methods": ["plot_discharge", "evaluate_discharge"],
+        }
+        args["method_args"] = method_args
+        run_model_with_method(method="evaluate", **args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_land_use_change():
+def test_land_use_change() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(args["config"])
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
+            days=370
+        )
         args["config"] = config
 
         geb = run_model_with_method(method=None, close_after_run=False, **args)
@@ -388,20 +333,21 @@ def test_land_use_change():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_run_yearly():
+def test_run_yearly() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(working_directory / args["config"])
-        config["general"]["start_time"] = date(2000, 1, 1)
         config["general"]["end_time"] = date(2049, 12, 31)
+        config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
+
         args["config"] = config
         args["config"]["report"] = {}
-        assert pytest.raises(
-            AssertionError,
-            run_model_with_method,
-            method="run_yearly",
-            **args,
-        )
+
+        with pytest.raises(
+            ValueError,
+            match="Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config.",
+        ):
+            run_model_with_method(method="run_yearly", **args)
 
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
 
@@ -409,7 +355,7 @@ def test_run_yearly():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_estimate_return_periods():
+def test_estimate_return_periods() -> None:
     with WorkingDirectory(working_directory):
         run_model_with_method(method="estimate_return_periods", **DEFAULT_RUN_ARGS)
 
@@ -452,11 +398,12 @@ def test_estimate_return_periods():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_multiverse():
+def test_multiverse() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
 
         config = parse_config(args["config"])
+        config["hazards"]["floods"]["simulate"] = True
 
         forecast_after_n_days = 3
         forecast_n_days = 5
@@ -526,7 +473,7 @@ def test_multiverse():
             geb.step()
 
         mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
-            return_mean_discharge=True, forecast_dt=forecast_date
+            return_mean_discharge=True, forecast_issue_datetime=forecast_date
         )
 
         end_date = round_up_to_start_of_next_day_unless_midnight(
@@ -578,7 +525,7 @@ def test_multiverse():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_ISIMIP_forcing_low_res():
+def test_ISIMIP_forcing_low_res() -> None:
     """Test the ISIMIP forcing update function.
 
     This is a special case that requires a specific setup.
@@ -612,7 +559,7 @@ def test_ISIMIP_forcing_low_res():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_share():
+def test_share() -> None:
     with WorkingDirectory(working_directory):
         share_fn(
             working_directory=".",

@@ -1,3 +1,5 @@
+"""Tests for raster workflow functions."""
+
 import numpy as np
 import pytest
 import xarray as xr
@@ -5,7 +7,8 @@ import xarray as xr
 from geb.workflows.raster import reclassify
 
 
-def test_reclassify():
+def test_reclassify() -> None:
+    """Test the reclassify function."""
     classification_dict = {
         1: 10,
         2: 20,

@@ -9,15 +9,15 @@ import json
 import logging
 import math
 import os
-from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Union
+from typing import Any, Callable, List, Union
 
 import geopandas as gpd
 import networkx
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import pyflwdir
 import rasterio
@@ -25,7 +25,6 @@ import xarray as xr
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
-from pyflwdir import from_array
 from rasterio.env import defenv
 from shapely.geometry import Point
 
@@ -78,6 +77,12 @@ def suppress_logging_warning(logger):
 
 
 class PathEncoder(json.JSONEncoder):
+    """Custom JSON encoder to handle Path objects.
+
+    Paths are converted to their string representation in posix format.
+    All files should be posix format to ensure compatibility across different operating systems.
+    """
+
     def default(self, obj):
         if isinstance(obj, Path):
             obj = obj.as_posix()
@@ -85,7 +90,9 @@ class PathEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
+def boolean_mask_to_graph(
+    mask: npt.NDArray[np.bool_], connectivity: int = 4, **kwargs: npt.NDArray[Any]
+) -> networkx.Graph:
     """Convert a boolean mask to an undirected NetworkX graph.
 
     Additional attributes can be passed as keyword arguments, which
@@ -94,7 +101,7 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     Args:
         mask (xarray.DataArray or numpy.ndarray):
             Boolean mask where True values are nodes in the graph
-        connectivity (int):
+        connectivity:
             4 for von Neumann neighborhood (up, down, left, right)
             8 for Moore neighborhood (includes diagonals)
         **kwargs:
@@ -104,6 +111,9 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     Returns:
         networkx.Graph:
             Undirected graph where nodes are (y,x) coordinates of True cells
+
+    Raises:
+        ValueError: If connectivity is not 4 or 8.
     """
     # check dtypes
     assert isinstance(mask, (np.ndarray))
@@ -155,7 +165,29 @@ def boolean_mask_to_graph(mask, connectivity=4, **kwargs):
     return G
 
 
-def clip_region(mask, *data_arrays, align):
+def clip_region(
+    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int
+) -> tuple[xr.DataArray, ...]:
+    """Use the given mask to clip the mask itself and the given data arrays.
+
+    The clipping is done to the bounding box of the True values in the mask. The bounding box
+    is aligned to the given align value. The align value is in the same units as the coordinates
+    of the mask and data arrays.
+
+    Args:
+        mask: The mask to use for clipping. Must be a 2D boolean DataArray with x and y coordinates.
+            True values indicate the area to keep.
+        *data_arrays: The data arrays to clip. Must have the same x and y coordinates as the mask.
+        align: Align the bounding box to a specific grid spacing. For example, when this is set to 1
+            the bounding box will be aligned to whole numbers. If set to 0.5, the bounding box will
+            be aligned to 0.5 intervals.
+
+    Returns:
+        A tuple containing the clipped mask and the clipped data arrays.
+
+    Raises:
+        ValueError: If the data arrays do not have the same shape or coordinates as the mask.
+    """
     rows, cols = np.where(mask)
     mincol = cols.min()
     maxcol = cols.max()
@@ -184,19 +216,25 @@ def clip_region(mask, *data_arrays, align):
     assert minrow_aligned <= minrow
     assert maxrow_aligned >= maxrow
 
-    mask = mask.isel(
+    clipped_mask = mask.isel(
         y=slice(minrow_aligned, maxrow_aligned),
         x=slice(mincol_aligned, maxcol_aligned),
     )
-    sliced_arrays = []
+    clipped_arrays = []
     for da in data_arrays:
-        sliced_arrays.append(
+        if da.shape != mask.shape:
+            raise ValueError("All data arrays must have the same shape as the mask.")
+        if not np.array_equal(da.x, mask.x) or not np.array_equal(da.y, mask.y):
+            raise ValueError(
+                "All data arrays must have the same coordinates as the mask."
+            )
+        clipped_arrays.append(
             da.isel(
                 y=slice(minrow_aligned, maxrow_aligned),
                 x=slice(mincol_aligned, maxcol_aligned),
             )
         )
-    return mask, *sliced_arrays
+    return clipped_mask, *clipped_arrays
 
 
 def get_river_graph(data_catalog):
@@ -457,7 +495,7 @@ def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
     return coastline_nodes
 
 
-def full_like(data, fill_value, nodata, attrs=None, *args, **kwargs):
+def full_like(data, fill_value, nodata, attrs=None, *args: Any, **kwargs: Any):
     ds = xr.full_like(data, fill_value, *args, **kwargs)
     ds.attrs = attrs or {}
     ds.attrs["_FillValue"] = nodata
@@ -484,14 +522,28 @@ def create_riverine_mask(
         nodata=False,
         dtype=bool,
     )
+
     riverine_mask = riverine_mask.rio.clip([geom.union_all()], drop=False)
+
+    # MERIT-Basins rivers don't always extend all the way into coastline pits.
+    # To extend these rivers, we first find all downstream cells of the area
+    # within the initial riverine mask. Then we find all pits within these
+    # downstream cells, and set these pits to be part of the riverine mask.
+    downstream_indices_of_area_in_mask = ldd_network.idxs_ds[
+        riverine_mask.values.ravel()
+    ]
+    all_pits_in_area = ldd_network.idxs_pit
+    downstream_indices_that_are_pits = np.intersect1d(
+        downstream_indices_of_area_in_mask, all_pits_in_area
+    )
+    riverine_mask.values.ravel()[downstream_indices_that_are_pits] = True
 
     # because the basin mask from the source is not perfect and has some holes
     # we need to extend the riverine mask to include all cells upstream of any
     # riverine cell. This is done by creating a flow raster from the masked
     # ldd, find all the pits within the riverine mask, and then get all upstream
     # cells from these pits.
-    ldd_network_masked = from_array(
+    ldd_network_masked = pyflwdir.from_array(
         ldd.values,
         ftype="d8",
         mask=riverine_mask.values,
@@ -508,17 +560,60 @@ def create_riverine_mask(
 
 
 class DelayedReader(dict):
+    """A dictionary that reads data from files only when accessed.
+
+    This is useful because some datasets are very large and reading them
+    all at once would require a lot of memory. Furthermore, when updating the model
+    it is usually not required to have all data in memory. This class allows to
+    read data only when it is actually needed.
+
+    When setting an item, we should not set the actual data, but the file path.
+    """
+
     def __init__(self, reader: Any) -> None:
         self.reader: Any = reader
 
     def __getitem__(self, key: str) -> Any:
-        fp = super().__getitem__(key)
+        """Get item from the dictionary using reader.
+
+        Args:
+            key: dictionary key
+
+        Returns:
+            The data read from the file.
+        """
+        fp: str | Path = super().__getitem__(key)
         return self.reader(fp)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        """Set item in the dictionary using a file path that refers to the actual data.
+
+        The file path is stored in the dictionary, not the actual data.
+
+        Args:
+            key: dictionary key
+            value: file path to the data
+
+        Raises:
+            ValueError: If the value is not a string or Path.
+        """
+        if isinstance(value, (str, Path)):
+            super().__setitem__(key, value)
+        else:
+            raise ValueError("Value must be a file path (str or Path).")
 
 
 class GEBModel(
     Hydrography, Forcing, Crops, LandSurface, Agents, GroundWater, Observations
 ):
+    """Main GEB model build class.
+
+    This class contains:
+    - methods to setup the model region and grid
+    - all general methods for example for saving and loading data, calling methods etc.
+    - subclasses all build modules, which contain methods for building specific parts of the model.
+    """
+
     def __init__(
         self,
         logger: logging.Logger,
@@ -526,7 +621,7 @@ class GEBModel(
         data_catalogs: List[str] | None = None,
         epsg=4326,
         data_provider: str = "default",
-    ):
+    ) -> None:
         self.logger = logger
         self.data_catalog = DataCatalog(
             data_libs=data_catalogs, logger=self.logger, fallback_lib=None
@@ -552,7 +647,7 @@ class GEBModel(
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
-        self.geoms: DelayedReader = DelayedReader(reader=gpd.read_parquet)
+        self.geom: DelayedReader = DelayedReader(reader=gpd.read_parquet)
         self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
         self.array: DelayedReader = DelayedReader(zarr.load)
         self.dict: DelayedReader = DelayedReader(
@@ -560,7 +655,7 @@ class GEBModel(
         )
         self.other: DelayedReader = DelayedReader(reader=open_zarr)
 
-        self.files: defaultdict = defaultdict(dict)
+        self.files: dict = self.read_file_library()
 
     @build_method
     def setup_region(
@@ -589,6 +684,9 @@ class GEBModel(
                 If this parameter is set to True, the coastal area will be included in the riverine mask by automatically extending the riverine mask to the coastal area,
                 by finding all coastal basins between the outlets within the study area and half the distance to the nearest outlet outside the study area.
                 All cells upstream of these coastal basins will be included in the riverine mask.
+
+        Raises:
+            ValueError: If region is not understood.
         """
         assert resolution_arcsec % 3 == 0, (
             "resolution_arcsec must be a multiple of 3 to align with MERIT"
@@ -625,7 +723,7 @@ class GEBModel(
         )
         self.set_routing_subbasins(river_graph, sink_subbasin_ids)
 
-        subbasins = self.geoms["routing/subbasins"]
+        subbasins = self.geom["routing/subbasins"]
         subbasins_without_outflow_basin = subbasins[
             ~subbasins["is_downstream_outflow_subbasin"]
         ]
@@ -779,12 +877,16 @@ class GEBModel(
 
         downstream_indices = flow_raster.idxs_ds
 
-        river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
-        downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]
-
-        river_raster_ID[
-            downstream_indices[(downstream_indices != -1) & (river_raster_ID != -1)]
-        ] = river_raster_ID[(downstream_indices != -1) & (river_raster_ID != -1)]
+        # MERIT-Basins rivers don't always extend all the way into coastline pits.
+        # To extend these rivers, we first find the river (which have a river ID),
+        # but have a no downstream cell.
+        river_cells_with_downstream_pits = (downstream_indices != -1) & (
+            river_raster_ID != -1
+        )
+        # For those cells, we extract the river ID, and set this river ID to the downstream cells.
+        river_raster_ID[downstream_indices[river_cells_with_downstream_pits]] = (
+            river_raster_ID[river_cells_with_downstream_pits]
+        )
         river_raster_ID = river_raster_ID.reshape(ldd.shape)
 
         pits = ldd == 0
@@ -870,7 +972,7 @@ class GEBModel(
         # return the combination of the riverine mask and the coastal mask
         return riverine_mask | coastal_mask
 
-    def derive_mask(self, d8_original, transform, resolution_arcsec):
+    def derive_mask(self, d8_original, transform, resolution_arcsec) -> None:
         assert d8_original.dtype == np.uint8
 
         d8_original_data = d8_original.values
@@ -924,7 +1026,7 @@ class GEBModel(
             crs=4326,
         )
 
-        self.set_geoms(mask_geom, name="mask")
+        self.set_geom(mask_geom, name="mask")
 
         flow_raster_idxs_ds = self.full_like(
             self.grid["mask"],
@@ -948,7 +1050,7 @@ class GEBModel(
         idxs_out_da.data = idxs_out
         self.set_grid(idxs_out_da, name="idxs_outflow")
 
-    def create_subgrid(self, subgrid_factor):
+    def create_subgrid(self, subgrid_factor) -> None:
         mask = self.grid["mask"]
         dst_transform = mask.rio.transform(recalc=True) * Affine.scale(
             1 / subgrid_factor
@@ -968,7 +1070,7 @@ class GEBModel(
         submask = self.set_subgrid(submask, name="mask")
 
     @build_method
-    def set_time_range(self, start_date, end_date):
+    def set_time_range(self, start_date, end_date) -> None:
         assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
             {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
@@ -984,7 +1086,7 @@ class GEBModel(
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
 
     @build_method
-    def set_ssp(self, ssp: str):
+    def set_ssp(self, ssp: str) -> None:
         assert ssp in ["ssp1", "ssp3", "ssp5"], (
             f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
         )
@@ -995,8 +1097,12 @@ class GEBModel(
         return self.dict["ssp"]["ssp"] if "ssp" in self.dict else "ssp3"
 
     @property
-    def ISIMIP_ssp(self):
-        """Returns the ISIMIP SSP name."""
+    def ISIMIP_ssp(self) -> str:
+        """Returns the ISIMIP SSP name.
+
+        Raises:
+            ValueError: If the SSP is not supported.
+        """
         if self.ssp == "ssp1":
             return "ssp126"
         elif self.ssp == "ssp3":
@@ -1031,7 +1137,7 @@ class GEBModel(
 
     def setup_coastal_water_levels(
         self,
-    ):
+    ) -> None:
         water_levels = self.data_catalog.get_dataset("GTSM")
         assert (
             water_levels.time.diff("time").astype(np.int64)
@@ -1064,7 +1170,7 @@ class GEBModel(
         )
 
     @build_method
-    def setup_damage_parameters(self, parameters):
+    def setup_damage_parameters(self, parameters) -> None:
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
                 for component, asset_compontents in asset_parameters.items():
@@ -1089,13 +1195,13 @@ class GEBModel(
     @build_method
     def setup_precipitation_scaling_factors_for_return_periods(
         self, risk_scaling_factors
-    ):
+    ) -> None:
         risk_scaling_factors = pd.DataFrame(
             risk_scaling_factors, columns=["exceedance_probability", "scaling_factor"]
         )
         self.set_table(risk_scaling_factors, name="precipitation_scaling_factors")
 
-    def set_table(self, table, name, write=True):
+    def set_table(self, table, name, write=True) -> None:
         fp: Path = Path("table") / (name + ".parquet")
         fp_with_root: Path = Path(self.root, fp)
         if write:
@@ -1114,7 +1220,7 @@ class GEBModel(
 
         self.table[name] = fp_with_root
 
-    def set_array(self, data, name, write=True):
+    def set_array(self, data, name, write=True) -> None:
         fp: Path = Path("array") / (name + ".zarr")
         fp_with_root: Path = Path(self.root, fp)
 
@@ -1126,7 +1232,7 @@ class GEBModel(
 
         self.array[name] = fp_with_root
 
-    def set_dict(self, data, name, write=True):
+    def set_dict(self, data, name, write=True) -> None:
         fp: Path = Path("dict") / (name + ".json")
         fp_with_root: Path = Path(self.root) / fp
         fp_with_root.parent.mkdir(parents=True, exist_ok=True)
@@ -1140,29 +1246,30 @@ class GEBModel(
 
         self.dict[name] = fp_with_root
 
-    def set_geoms(self, geoms, name, write=True):
+    def set_geom(self, geom, name, write=True) -> None:
         fp: Path = Path("geom") / (name + ".geoparquet")
         fp_with_root: Path = self.root / fp
         if write:
             self.logger.info(f"Writing file {fp}")
-            self.files["geoms"][name] = fp
+            self.files["geom"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
             # brotli is a bit slower but gives better compression,
             # gzip is faster to read. Higher compression levels
             # generally don't make it slower to read, therefore
             # we use the highest compression level for gzip
-            geoms.to_parquet(
+            geom.to_parquet(
                 fp_with_root, engine="pyarrow", compression="gzip", compression_level=9
             )
 
-        self.geoms[name] = fp_with_root
+        self.geom[name] = fp_with_root
 
-    def write_file_library(self, read_first: bool = True) -> None:
-        if read_first:
-            file_library: defaultdict = self.read_file_library()
-        else:
-            file_library: defaultdict = defaultdict(dict)
+    @property
+    def files_path(self) -> Path:
+        """Path to the files.json file that contains the file library."""
+        return Path(self.root, "files.json")
 
+    def write_file_library(self) -> None:
+        file_library: dict = self.read_file_library()
         # merge file library from disk with new files, prioritizing new files
         for type_name, type_files in self.files.items():
             if type_name not in file_library:
@@ -1170,31 +1277,46 @@ class GEBModel(
             else:
                 file_library[type_name].update(type_files)
 
-        with open(Path(self.root, "files.json"), "w") as f:
+        with open(self.files_path, "w") as f:
             json.dump(file_library, f, indent=4, cls=PathEncoder)
 
-    def read_file_library(self) -> defaultdict:
+    def read_file_library(self) -> dict:
         fp: Path = Path(self.root, "files.json")
         if not fp.exists():
-            return defaultdict(dict)  # return empty defaultdict if file does not exist
+            return {
+                "geom": {},
+                "array": {},
+                "table": {},
+                "dict": {},
+                "grid": {},
+                "subgrid": {},
+                "region_subgrid": {},
+                "other": {},
+            }
         else:
             with open(Path(self.root, "files.json"), "r") as f:
                 files: dict[str, dict[str, str]] = json.load(f)
-        return defaultdict(dict, files)  # convert dict to defaultdict
 
-    def read_geoms(self):
-        for name, fn in self.files["geoms"].items():
-            self.geoms[name] = Path(self.root, fn)
+            # geoms was renamed to geom in the file library. To upgrade old models,
+            # we check if "geoms" is in the files and rename it to "geom"
+            # this line can be removed in august 2026 (also in geb/model.py)
+            if "geoms" in files:
+                files["geom"] = files.pop("geoms", {})
+        return files
 
-    def read_array(self):
+    def read_geom(self) -> None:
+        for name, fn in self.files["geom"].items():
+            self.geom[name] = Path(self.root, fn)
+
+    def read_array(self) -> None:
         for name, fn in self.files["array"].items():
             self.array[name] = Path(self.root, fn)
 
-    def read_table(self):
+    def read_table(self) -> None:
         for name, fn in self.files["table"].items():
             self.table[name] = Path(self.root, fn)
 
-    def read_dict(self):
+    def read_dict(self) -> None:
         for name, fn in self.files["dict"].items():
             self.dict[name] = Path(self.root, fn)
 
@@ -1221,11 +1343,9 @@ class GEBModel(
         for name, fn in self.files["other"].items():
             self.other[name] = Path(self.root, fn)
 
-    def read(self):
+    def read(self) -> None:
         with suppress_logging_warning(self.logger):
-            self.files = self.read_file_library()
-
-            self.read_geoms()
+            self.read_geom()
             self.read_array()
             self.read_table()
             self.read_dict()
@@ -1244,8 +1364,8 @@ class GEBModel(
         x_chunksize: int = XY_CHUNKSIZE,
         y_chunksize: int = XY_CHUNKSIZE,
         time_chunksize: int = 1,
-        *args,
-        **kwargs,
+        *args: Any,
+        **kwargs: Any,
     ):
         assert isinstance(da, xr.DataArray)
 
@@ -1383,7 +1503,7 @@ class GEBModel(
 
     @property
     def region(self):
-        return self.geoms["mask"]
+        return self.geom["mask"]
 
     @property
     def bounds(self):
@@ -1394,7 +1514,7 @@ class GEBModel(
         return self._root
 
     @root.setter
-    def root(self, root):
+    def root(self, root) -> None:
         self._root = Path(root).absolute()
 
     @property
@@ -1407,7 +1527,9 @@ class GEBModel(
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def full_like(self, data, fill_value, nodata, attrs=None, *args, **kwargs):
+    def full_like(
+        self, data, fill_value, nodata, attrs=None, *args: Any, **kwargs: Any
+    ):
         return full_like(
             data,
             fill_value=fill_value,
@@ -1417,12 +1539,19 @@ class GEBModel(
             **kwargs,
         )
 
-    def run_method(self, method, *args, **kwargs):
-        """Log method parameters before running a method."""
-        func = getattr(self, method)
+    def run_method(self, method, *args: Any, **kwargs: Any):
+        """Log method parameters before running a method.
+
+        Args:
+            method: The name of the method to run.
+            *args: Positional arguments to pass to the method.
+            **kwargs: Keyword arguments to pass to the method.
+
+        """
+        func: Callable = getattr(self, method)
         signature = inspect.signature(func)
         # combine user and default options
-        params = {}
+        params: dict[str, Any] = {}
         for i, (k, v) in enumerate(signature.parameters.items()):
             if k in ["args", "kwargs"]:
                 if k == "args":
@@ -1430,11 +1559,13 @@ class GEBModel(
                 else:
                     params.update(**kwargs)
             else:
-                v = kwargs.get(k, v.default)
+                v: Any = kwargs.get(k, v.default)
                 if len(args) > i:
-                    v = args[i]
+                    v: Any = args[i]
                 params[k] = v
-        return func(*args, **kwargs)
+
+        # call the method
+        func(*args, **kwargs)
 
     def run_methods(self, methods, validate_order: bool = True) -> None:
         """Run methods in the order specified in the methods dictionary.
@@ -1449,14 +1580,17 @@ class GEBModel(
         for method in methods:
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
+
+            # if the method is "setup_region", we start an entirely new model
+            # ant therefore delete the files save path
             if method == "setup_region":
-                self.write_file_library(read_first=False)
-            else:
-                self.write_file_library(read_first=True)
+                self.files_path.unlink(missing_ok=True)
+
+            self.write_file_library()
 
         self.logger.info("Finished!")
 
-    def build(self, region: dict, methods: dict):
+    def build(self, region: dict, methods: dict) -> None:
         """Build the model with the specified region and methods."""
         methods: dict[str:Any] = methods or {}
         methods["setup_region"].update(region=region)
@@ -1466,7 +1600,7 @@ class GEBModel(
     def update(
         self,
         methods: dict,
-    ):
+    ) -> None:
         methods = methods or {}
 
         if "setup_region" in methods:
@@ -1474,8 +1608,21 @@ class GEBModel(
 
         self.run_methods(methods, validate_order=False and type(self) is GEBModel)
 
-    def get_linear_indices(self, da):
-        """Get linear indices for each cell in a 2D DataArray."""
+    def get_linear_indices(self, da: xr.DataArray) -> xr.DataArray:
+        """Get linear indices for each cell in a 2D DataArray.
+
+        A linear index is a single integer that represents the position of a cell in a flattened version of the array.
+        For a 2D array with shape (ny, nx), the linear index of a cell at position (row, column) is calculated as:
+        `linear_index = row * nx + column`.
+
+        Args:
+            da: A 2D xarray DataArray with dimensions 'y' and 'x'.
+
+        Returns:
+            A 2D xarray DataArray of the same shape as `da`, where each cell contains its linear index.
+            The linear index is calculated as `row * number_of_columns + column`.
+
+        """
         # Get the sizes of the spatial dimensions
         ny, nx = da.sizes["y"], da.sizes["x"]
 
@@ -1483,7 +1630,7 @@ class GEBModel(
         grid_ids = np.arange(ny * nx).reshape(ny, nx)
 
         # Create a DataArray with the same coordinates and dimensions as your spatial grid
-        grid_id_da = xr.DataArray(
+        grid_id_da: xr.DataArray = xr.DataArray(
             grid_ids,
             coords={
                 "y": da.coords["y"],
@@ -1494,19 +1641,37 @@ class GEBModel(
 
         return grid_id_da
 
-    def get_neighbor_cell_ids_for_linear_indices(self, cell_id, nx, ny, radius=1):
-        """Get the linear indices of the neighboring cells of a cell in a 2D grid."""
-        row = cell_id // nx
-        col = cell_id % nx
+    def get_neighbor_cell_ids_for_linear_indices(
+        self, cell_id: int, nx: int, ny: int, radius: int = 1
+    ) -> list[int]:
+        """Get the linear indices of the neighboring cells of a cell in a 2D grid.
 
-        neighbor_cell_ids = []
+        Linear indices are the indices of the cells in the flattened version of an array.
+        For a 2D array with shape (ny, nx), the linear index of a cell at position (row, column)
+        is calculated as:
+            `linear_index = row * nx + column`.
+
+        Args:
+            cell_id: The linear index of the cell for which to find neighbors.
+            nx: The number of columns in the grid.
+            ny: The number of rows in the grid.
+            radius: The radius around the cell to consider as neighbors. Default is 1.
+
+        Returns:
+            A list of linear indices of the neighboring cells.
+
+        """
+        row: int = cell_id // nx
+        col: int = cell_id % nx
+
+        neighbor_cell_ids: list[int] = []
         for dr in range(-radius, radius + 1):
             for dc in range(-radius, radius + 1):
                 if dr == 0 and dc == 0:
                     continue  # Skip the cell itself
-                r = row + dr
-                c = col + dc
+                r: int = row + dr
+                c: int = col + dc
                 if 0 <= r < ny and 0 <= c < nx:
-                    neighbor_id = r * nx + c
+                    neighbor_id: int = r * nx + c
                     neighbor_cell_ids.append(neighbor_id)
         return neighbor_cell_ids

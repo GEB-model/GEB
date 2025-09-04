@@ -29,7 +29,7 @@ class RunoffConcentration(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -40,15 +40,15 @@ class RunoffConcentration(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.runoff_concentration"
 
-    def spinup(self):
+    def spinup(self) -> None:
         pass
 
     def step(self, interflow, baseflow, runoff):
         assert (runoff >= 0).all()
         assert (interflow >= 0).all()
         assert (baseflow >= 0).all()
-        self.report(self, locals())
+        self.report(locals())
         return interflow + baseflow + runoff

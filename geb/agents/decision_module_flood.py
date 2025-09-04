@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 from numba.core.decorators import njit
 from scipy import interpolate
@@ -21,6 +23,8 @@ def fast_intersect(a, b):
 
 
 class DecisionModule:
+    """This class implements the decision module for flood adaptation and migration decisions."""
+
     def __init__(self, agents, model) -> None:
         self.agents = agents
         self.model = model
@@ -36,7 +40,7 @@ class DecisionModule:
         else:
             self.error_interval = 0
 
-    def sample_error_terms(self, n_agents, regions_select):
+    def sample_error_terms(self, n_agents, regions_select) -> None:
         """This function samples error terms for the expected utility of migration and the expected utility of adaptation."""
         self.error_terms_stay = self.model.random_module.random_state.uniform(
             (1 - self.error_interval), (1 + self.error_interval), size=n_agents
@@ -130,7 +134,7 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
         sigma: float,
-        **kwargs,
+        **kwargs: Any,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
@@ -247,7 +251,7 @@ class DecisionModule:
         r: float,
         sigma: float,
         deductable=0.1,
-        **kwargs,
+        **kwargs: Any,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
@@ -360,7 +364,7 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
         sigma: float,
-        **kwargs,
+        **kwargs: Any,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 

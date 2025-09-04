@@ -1,3 +1,7 @@
+"""
+Workflow helpers used in the GEB.
+"""
+
 from time import time
 
 import numpy as np
@@ -6,16 +10,34 @@ import numpy as np
 class TimingModule:
     """A timing module to measure the time taken for different parts of a workflow."""
 
-    def __init__(self, name):
+    def __init__(self, name: str) -> None:
+        """Initializes the TimingModule with a name and starts the timer.
+
+        Args:
+            name: The name of the timing module. Will be used when printing the timing results.
+        """
         self.name = name
         self.times = [time()]
         self.split_names = []
 
-    def new_split(self, name):
+    def finish_split(self, name: str) -> None:
+        """Finish split with with name given.
+
+        Appends the current time and the name of the split to their respective lists, which will be
+        used to calculate the time taken for each split and the total time when converting to string.
+
+        Args:
+            name: The name of the split. This is the name of the previous split.
+        """
         self.times.append(time())
         self.split_names.append(name)
 
-    def __str__(self):
+    def __str__(self) -> str:
+        """Converts the timing information into a readable string format for logging or display.
+
+        Returns:
+            A formatted string summarizing the time taken for each split and the total time.
+        """
         messages = []
         for i in range(1, len(self.times)):
             time_difference = self.times[i] - self.times[i - 1]
@@ -34,15 +56,16 @@ class TimingModule:
 
 
 def balance_check(
-    name,
-    how="cellwise",
-    influxes=[],
-    outfluxes=[],
-    prestorages=[],
-    poststorages=[],
-    tollerance=1e-10,
-    raise_on_error=False,
-):
+    name: str,
+    how: str = "cellwise",
+    influxes: list = [],
+    outfluxes: list = [],
+    prestorages: list = [],
+    poststorages: list = [],
+    tollerance: float = 1e-10,
+    error_identifiers: dict = {},
+    raise_on_error: bool = False,
+) -> bool:
     income = 0
     out = 0
     store = 0
@@ -73,7 +96,13 @@ def balance_check(
         if balance.size == 0:
             return True
         elif np.abs(balance).max() > tollerance:
-            text = f"{balance[np.abs(balance).argmax()]} > tollerance {tollerance}, max imbalance at index {np.abs(balance).argmax()}"
+            index = np.abs(balance).argmax()
+            text = f"{balance[np.abs(balance).argmax()]} > tollerance {tollerance}, max imbalance at index {index}."
+
+            if error_identifiers:
+                text += " Error identifiers: " + ", ".join(
+                    f"{key}={value[index]}" for key, value in error_identifiers.items()
+                )
             if name:
                 print(name, text)
             else:
@@ -85,6 +114,9 @@ def balance_check(
             return True
 
     elif how == "sum":
+        assert not error_identifiers, (
+            "Error identifiers not supported for 'sum' method."
+        )
         for fluxIn in influxes:
             income += fluxIn.sum()
         for fluxOut in outfluxes:

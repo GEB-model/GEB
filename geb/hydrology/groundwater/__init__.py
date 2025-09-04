@@ -19,6 +19,12 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+"""
+Groundwater submodule for hydrology in GEB.
+
+Provides groundwater simulation and ModFlow integration utilities.
+"""
+
 import numpy as np
 import numpy.typing as npt
 
@@ -39,7 +45,7 @@ class GroundWater(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -50,10 +56,10 @@ class GroundWater(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.groundwater"
 
-    def spinup(self):
+    def spinup(self) -> None:
         # load hydraulic conductivity (md-1)
         self.grid.var.hydraulic_conductivity = self.hydrology.grid.load(
             self.model.files["grid"]["groundwater/hydraulic_conductivity"],
@@ -108,10 +114,10 @@ class GroundWater(Module):
 
         self.grid.var.capillar = self.grid.full_compressed(0, dtype=np.float32)
 
-    def heads_update_callback(self, heads):
+    def heads_update_callback(self, heads) -> None:
         self.hydrology.grid.var.heads = heads
 
-    def initalize_modflow_model(self):
+    def initalize_modflow_model(self) -> None:
         self.modflow = ModFlowSimulation(
             self.model,
             topography=self.grid.var.elevation,
@@ -176,7 +182,7 @@ class GroundWater(Module):
             data=np.float32(self.grid.var.capillar > 0)
         )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return baseflow
 

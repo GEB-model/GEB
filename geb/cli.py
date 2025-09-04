@@ -29,18 +29,16 @@ from geb.model import GEBModel
 from geb.multirun import multi_run as geb_multi_run
 from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 from geb.workflows.io import WorkingDirectory
-
-
-def multi_level_merge(dict1, dict2):
-    for key, value in dict2.items():
-        if key in dict1 and isinstance(dict1[key], dict) and isinstance(value, dict):
-            multi_level_merge(dict1[key], value)
-        else:
-            dict1[key] = value
-    return dict1
+from geb.workflows.methods import multi_level_merge
 
 
 class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
+    """Custom YAML loader that detects duplicate keys in mappings.
+
+    Raises:
+        ValueError: If a duplicate key is found in the YAML mapping.
+    """
+
     def construct_mapping(self, node, deep=False):
         mapping = {}
         for key_node, value_node in node.value:
@@ -54,7 +52,18 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
 def parse_config(
     config_path: dict | Path | str, current_directory: Path | None = None
 ) -> dict[str, Any]:
-    """Parse config."""
+    """Parse config.
+
+    This method recursively parses the config file and resolves any 'inherits' keys.
+
+    Args:
+        config_path: Path to the config file or a dict with the config.
+        current_directory: Current directory to resolve relative paths.
+            If None, the current working directory is used.
+
+    Returns:
+        Full model configuation of the model without any remaining 'inherits' keys.
+    """
     if current_directory is None:
         current_directory = Path.cwd()
 
@@ -116,7 +125,7 @@ def create_logger(fp):
 @click.group()
 @click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
-def cli(ctx):  # , quiet, verbose):
+def cli(ctx) -> None:  # , quiet, verbose):
     """Command line interface for GEB."""
     if ctx.obj is None:
         ctx.obj = {}
@@ -132,7 +141,7 @@ def click_config(func):
         help=f"Path of the model configuration file. Defaults to '{default}'.",
     )
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any):
         return func(*args, **kwargs)
 
     return wrapper
@@ -146,7 +155,7 @@ def working_directory_option(func):
         help="Working directory for model. Default is the current directory.",
     )
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any):
         return func(*args, **kwargs)
 
     return wrapper
@@ -184,7 +193,7 @@ def click_run_options():
         )
         @click.option("--timing", is_flag=True, help="Run GEB with timing.")
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any):
             return func(*args, **kwargs)
 
         return wrapper
@@ -205,7 +214,11 @@ def run_model_with_method(
     method_args: dict = {},
     close_after_run=True,
 ) -> GEBModel | None:
-    """Run model."""
+    """Run model with a specific method.
+
+    Returns:
+        GEBModel if gui is False, else None
+    """
     # check if we need to run the model in optimized mode
     # if the model is already running in optimized mode, we don't need to restart it
     # or else we start an infinite loop
@@ -288,27 +301,27 @@ def run_model_with_method(
 
 @cli.command()
 @click_run_options()
-def run(*args, **kwargs):
+def run(*args: Any, **kwargs: Any) -> None:
     run_model_with_method(method="run", *args, **kwargs)
 
 
 @cli.command()
 @click_run_options()
-def spinup(*args, **kwargs):
+def spinup(*args: Any, **kwargs: Any) -> None:
     run_model_with_method(method="spinup", *args, **kwargs)
 
 
 @cli.command()
 @click.argument("method", required=True)
 @click_run_options()
-def exec(method, *args, **kwargs):
+def exec(method, *args: Any, **kwargs: Any) -> None:
     run_model_with_method(method=method, *args, **kwargs)
 
 
 @cli.command()
 @click_config
 @working_directory_option
-def calibrate(config, working_directory):
+def calibrate(config, working_directory) -> None:
     with WorkingDirectory(working_directory):
         config = parse_config(config)
         geb_calibrate(config, working_directory)
@@ -317,7 +330,7 @@ def calibrate(config, working_directory):
 @cli.command()
 @click_config
 @working_directory_option
-def sensitivity(config, working_directory):
+def sensitivity(config, working_directory) -> None:
     with WorkingDirectory(working_directory):
         config = parse_config(config)
         geb_sensitivity_analysis(config, working_directory)
@@ -326,7 +339,7 @@ def sensitivity(config, working_directory):
 @cli.command()
 @click_config
 @working_directory_option
-def multirun(config, working_directory):
+def multirun(config, working_directory) -> None:
     with WorkingDirectory(working_directory):
         config = parse_config(config)
         geb_multi_run(config, working_directory)
@@ -380,7 +393,7 @@ def click_build_options(build_config="build.yml", build_config_help_extra=None):
             help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any):
             return func(*args, **kwargs)
 
         return wrapper
@@ -405,6 +418,13 @@ def customize_data_catalog(data_catalogs, data_root=None):
 
     This enables reading the data catalog from a different location than the location of the yml-file
     without the need to specify root in the meta of the data catalog.
+
+    Args:
+        data_catalogs: List of paths to data catalog yml files.
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
+
+    Returns:
+        List of paths to data catalog yml files, possibly modified to include the data_root.
     """
     if data_root:
         customized_data_catalogs = []
@@ -460,6 +480,10 @@ def init_fn(
         basin_id:Basin ID(s) to use for the model. Can be a comma-separated list of integers.
             If not set, the basin ID is taken from the config file.
         overwrite: If True, overwrite existing config and build config files. Defaults to False.
+
+    Raises:
+        FileExistsError: If the config or build config file already exists and overwrite is False.
+        FileNotFoundError: If the example folder does not exist.
 
     """
     config: Path = Path(config)
@@ -550,7 +574,7 @@ def init_fn(
     help="If set, overwrite existing config and build config files.",
 )
 @working_directory_option
-def init(*args, **kwargs):
+def init(*args: Any, **kwargs: Any) -> None:
     """Initialize a new model."""
     # Initialize the model with the given config and build config
     init_fn(*args, **kwargs)
@@ -564,7 +588,7 @@ def build_fn(
     working_directory,
     data_provider,
     data_root,
-):
+) -> None:
     """Build model."""
     with WorkingDirectory(working_directory):
         model = get_builder(
@@ -582,7 +606,7 @@ def build_fn(
 
 @cli.command()
 @click_build_options()
-def build(*args, **kwargs):
+def build(*args: Any, **kwargs: Any) -> None:
     build_fn(*args, **kwargs)
 
 
@@ -642,7 +666,7 @@ def alter_fn(
 @cli.command()
 @click_build_options()
 @click.option("--from-model", default="../base", help="Folder for the existing model.")
-def alter(*args, **kwargs):
+def alter(*args: Any, **kwargs: Any) -> None:
     """Create alternative version from base model with only changed files.
 
     This command is useful to create a new model based on an existing one, but with
@@ -661,8 +685,14 @@ def update_fn(
     working_directory,
     data_provider,
     data_root,
-):
-    """Update model."""
+) -> None:
+    """Update model.
+
+    Raises:
+        FileNotFoundError: if the build config file is not found.
+        KeyError: if the specified method is not found in the build config file.
+        ValueError: if build_config is not a str or dict.
+    """
     with WorkingDirectory(working_directory):
         model = get_builder(
             config,
@@ -743,14 +773,16 @@ def update_fn(
     build_config="update.yml",
     build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
 )
-def update(*args, **kwargs):
+def update(*args: Any, **kwargs: Any) -> None:
     update_fn(*args, **kwargs)
 
 
 @cli.command()
 @click_run_options()
 @click.option(
-    "--methods", default=None, help="Comma-seperated list of methods to evaluate."
+    "--methods",
+    default="plot_discharge,evaluate_discharge",
+    help="Comma-seperated list of methods to evaluate. Currently supported methods: 'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.",
 )
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
 @click.option("--run-name", default="default", help="Name of the run to evaluate.")
@@ -761,6 +793,12 @@ def update(*args, **kwargs):
     help="Include spinup in evaluation.",
 )
 @click.option(
+    "--include-yearly-plots",
+    is_flag=True,
+    default=False,
+    help="Create yearly plots in evaluation.",
+)
+@click.option(
     "--correct-q-obs",
     is_flag=True,
     default=False,
@@ -768,11 +806,12 @@ def update(*args, **kwargs):
 )
 def evaluate(
     working_directory,
-    config,
-    methods: list | None,
-    spinup_name,
-    run_name,
+    config: dict | str,
+    methods: str,
+    spinup_name: str,
+    run_name: str,
     include_spinup,
+    include_yearly_plots,
     correct_q_obs,
     port,
     gui,
@@ -782,16 +821,20 @@ def evaluate(
     timing,
 ) -> None:
     # If no methods are provided, pass None to run_model_with_method
-    methods: list | None = None if not methods else methods.split(",")
+    methods_list: list[str] = methods.split(",")
+    methods_list: list[str] = [
+        method.replace("-", "_").strip() for method in methods_list
+    ]
     spinup_name: str
     run_name: str
     run_model_with_method(
         method="evaluate",
         method_args={
-            "methods": methods,
+            "methods": methods_list,
             "spinup_name": spinup_name,
             "run_name": run_name,
             "include_spinup": include_spinup,
+            "include_yearly_plots": include_yearly_plots,
             "correct_Q_obs": correct_q_obs,
         },
         working_directory=working_directory,
@@ -805,7 +848,7 @@ def evaluate(
     )
 
 
-def share_fn(working_directory, name, include_preprocessing, include_output):
+def share_fn(working_directory, name, include_preprocessing, include_output) -> None:
     """Share model."""
     with WorkingDirectory(working_directory):
         # create a zip file called model.zip with the folders input, and model files
@@ -896,7 +939,7 @@ def share_fn(working_directory, name, include_preprocessing, include_output):
     default=False,
     help="Include output files in the zip file.",
 )
-def share(*args, **kwargs):
+def share(*args: Any, **kwargs: Any) -> None:
     """Share model as a zip file."""
     share_fn(*args, **kwargs)
 

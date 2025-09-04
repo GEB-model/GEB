@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import re
 from operator import attrgetter
 from typing import Union
@@ -121,7 +120,7 @@ class Artists(honeybeesArtists):
         """
         self.variables_dict = {}
 
-        def add_vars(name, compressed_size, dtypes, variant_dim, invariant_dim):
+        def add_vars(name, compressed_size, dtypes, variant_dim, invariant_dim) -> None:
             assert np.intersect1d(variant_dim, invariant_dim).size == 0
             container = attrgetter(name)(self.model)
             for varname, variable in vars(container).items():
@@ -234,6 +233,10 @@ class Artists(honeybeesArtists):
         Returns:
             background: RGBA-array to display as background.
             legend: Dictionary with data and formatting rules for background legend.
+
+        Raises:
+            ValueError: If the variable to display is not found.
+            ValueError: If the variable to display is of an unsupported type.
         """
         if self.background_variable.startswith("agents.crop_farmers"):
             slicer = re.search(r"\[([^\]]+)\]$", self.background_variable)

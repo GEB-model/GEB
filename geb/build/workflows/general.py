@@ -9,7 +9,7 @@ import xarray
 import xarray as xr
 import xarray_regrid
 from affine import Affine
-from pyresample import geometry
+from pyresample.geometry import AreaDefinition
 from pyresample.gradient import (
     block_bilinear_interpolator,
     block_nn_interpolator,
@@ -54,7 +54,7 @@ def clip_with_grid(ds, mask):
     return ds.isel(bounds), bounds
 
 
-def bounds_are_within(small_bounds, large_bounds, tollerance=0):
+def bounds_are_within(small_bounds, large_bounds, tollerance=0) -> bool:
     assert small_bounds[0] + tollerance >= large_bounds[0], "Region bounds do not match"
     assert small_bounds[1] + tollerance >= large_bounds[1], "Region bounds do not match"
     assert small_bounds[2] <= large_bounds[2] + tollerance, "Region bounds do not match"
@@ -217,6 +217,9 @@ def resample_like(
     Returns:
         A new DataArray that has been resampled to match the target's grid.
 
+    Raises:
+        ValueError: if the method is not 'bilinear', 'nearest', or 'conservative'.
+
     """
     source_spatial_ref: Any = source.spatial_ref
 
@@ -256,7 +259,7 @@ def resample_like(
     return dst
 
 
-def get_area_definition(da: xr.DataArray) -> geometry.AreaDefinition:
+def get_area_definition(da: xr.DataArray) -> AreaDefinition:
     """Get the pyresample area definition from an xarray DataArray.
 
     This is a requirement for the resampling functions in pyresample.
@@ -267,7 +270,7 @@ def get_area_definition(da: xr.DataArray) -> geometry.AreaDefinition:
     Returns:
         A pyresample AreaDefinition object.
     """
-    return geometry.AreaDefinition(
+    return AreaDefinition(
         area_id="",
         description="",
         proj_id="",
@@ -319,8 +322,8 @@ def resample_chunked(
 
     assert target.dims == ("y", "x")
 
-    source_geo: geometry.AreaDefinition = get_area_definition(source)
-    target_geo: geometry.AreaDefinition = get_area_definition(target)
+    source_geo: AreaDefinition = get_area_definition(source)
+    target_geo: AreaDefinition = get_area_definition(target)
 
     indices: dask.Array = resample_blocks(
         gradient_resampler_indices_block,

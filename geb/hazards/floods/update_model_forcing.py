@@ -24,15 +24,73 @@ def to_sfincs_datetime(dt: datetime) -> str:
     return dt.strftime("%Y%m%d %H%M%S")
 
 
+def update_sfincs_model_forcing_coastal(
+    model_files: dict,
+    model_root: Path,
+    simulation_root: Path,
+    return_period: int,
+) -> None:
+    """Update the SFINCS model forcing for coastal flooding.
+
+    Notes:
+        This function now only updates forcing with storm surge hydrographs. Compound flooding is not yet considered
+
+    Args:
+        model_files: Dictionary containing model file paths.
+        model_root: Path to the model root directory.
+        simulation_root: Path to the simulation root directory.
+        return_period: Return period for the simulation.
+
+    """
+    # read model
+    sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
+
+    locations = (
+        gpd.GeoDataFrame(
+            gpd.read_parquet(model_files["geom"]["gtsm/stations_coast_rp"])
+        )
+        .rename(columns={"station_id": "stations"})
+        .set_index("stations")
+    )
+    # convert index to int
+    locations.index = locations.index.astype(int)
+    timeseries = pd.read_csv(
+        Path(
+            f"output/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
+        ),
+        index_col=0,
+    )
+    timeseries.index = pd.to_datetime(timeseries.index, format="%Y-%m-%d %H:%M:%S")
+    # convert columns to int
+    timeseries.columns = timeseries.columns.astype(int)
+    assert timeseries.columns.equals(locations.index)
+
+    # Align timeseries columns with locations index
+    timeseries.columns = locations.index
+    timeseries = timeseries.iloc[300:-300]  # trim the first and last 300 rows
+
+    sf.setup_config(
+        tref=to_sfincs_datetime(timeseries.index[0]),
+        tstart=to_sfincs_datetime(timeseries.index[0]),
+        tstop=to_sfincs_datetime(timeseries.index[-1]),
+    )
+    # set forcing and configure model
+    sf.setup_waterlevel_forcing(timeseries=timeseries, locations=locations)
+    configure_sfincs_model(sf, model_root, simulation_root)
+
+
 def update_sfincs_model_forcing(
     model_root,
     simulation_root,
     event,
     discharge_grid,
+    soil_water_capacity_grid,  # seff
+    max_water_storage_grid,  # smax
+    saturated_hydraulic_conductivity_grid,  # ks
     uparea_discharge_grid,
     forcing_method,
     precipitation_grid=None,
-):
+) -> None:
     assert os.path.isfile(os.path.join(model_root, "sfincs.inp")), (
         f"model root does not exist {model_root}"
     )
@@ -139,7 +197,7 @@ def update_sfincs_model_forcing(
             river_inflow_points = sf.forcing["dis"].vector.to_gdf()
             river_inflow_points = river_inflow_points.to_crs(
                 4326
-            )  # <------Change crs to 4326 before sampling uparea
+            )  # Change crs to 4326 before sampling uparea
             uparea_sfincs = sf.data_catalog.get_rasterdataset(
                 "merit_hydro",
                 bbox=sf.mask.raster.transform_bounds(4326),
@@ -154,7 +212,7 @@ def update_sfincs_model_forcing(
             )
             river_inflow_points = river_inflow_points.to_crs(
                 sf.crs
-            )  # <------Change crs back to sf.crs
+            )  # Change crs back to sf.crs
             # Concatenate the two DataFrames
             assert river_inflow_points.crs == head_water_points.crs, (
                 "CRS mismatch between river_inflow_points and head_water_points"
@@ -177,7 +235,7 @@ def update_sfincs_model_forcing(
 
         discharge_forcing_points = discharge_forcing_points.to_crs(
             sf.crs
-        )  # <--------------------------------------------------Use For setting up Discharge forcing
+        )  # used for setting up discharge forcing
         discharge_forcing_points.to_file(
             model_root / "inflow_points.gpkg", driver="GPKG"
         )
@@ -190,7 +248,30 @@ def update_sfincs_model_forcing(
             "dis" in sf.forcing
         ):  # if no inflow points (headwater catchment) don't set discharge forcing
             sf.setup_discharge_forcing()
-        # curve number infiltration based on global CN dataset
+
+        # CODE FOR INFILTRATION WITH RECOVERY
+        # smax
+        smax = max_water_storage_grid.raster.reproject_like(sf.grid, method="average")
+        smax = smax.rename_vars({"max_water_storage": "smax"})
+        smax.attrs.update(**sf._ATTRS.get("smax", {}))
+        sf.set_grid(smax, name="smax")
+        sf.set_config("smaxfile", "sfincs.smax")
+
+        # seff
+        seff = soil_water_capacity_grid.raster.reproject_like(sf.grid, method="average")
+        seff = seff.rename_vars({"soil_storage_capacity": "seff"})
+        seff.attrs.update(**sf._ATTRS.get("seff", {}))
+        sf.set_grid(seff, name="seff")
+        sf.set_config("sefffile", "sfincs.seff")
+
+        # ks
+        ks = saturated_hydraulic_conductivity_grid.raster.reproject_like(
+            sf.grid, method="average"
+        )
+        ks = ks.rename_vars({"saturated_hydraulic_conductivity": "ks"})
+        ks.attrs.update(**sf._ATTRS.get("ks", {}))
+        sf.set_grid(ks, name="ks")
+        sf.set_config("ksfile", "sfincs.ks")
 
     else:
         raise ValueError(
@@ -255,11 +336,13 @@ def update_sfincs_model_forcing(
             #     uparea=uparea_discharge_grid,
             # )
 
-    # detect whether water level forcing should be set
+    # detect whether water level forcing should be set (use this under forcing == coastal) PLot basemap and forcing to check
     if (
         sf.grid["msk"] == 2
     ).any():  # if mask is 2, the model requires water level forcing
-        waterlevel = sf.data_catalog.get_dataset("waterlevel").compute()
+        waterlevel = sf.data_catalog.get_dataset(
+            "waterlevel"
+        ).compute()  # define water levels and stations in data_catalog.yml
 
         locations = gpd.GeoDataFrame(
             index=waterlevel.stations,
