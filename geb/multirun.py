@@ -11,9 +11,13 @@ import sys
 import time
 import datetime
 import traceback
+from .workflows.io import open_zarr
 
 import numpy as np
 import yaml
+from pathlib import Path
+import zarr
+import xarray as xr
 
 SCENARIO_FILES = [
     "well_combined_insurance.yml",
@@ -73,6 +77,183 @@ def multi_set(dict_obj, value, *attrs):
     d[attrs[-1]] = value
 
 
+def summarize_multirun(
+    config,
+    start_time,
+    end_time,
+    replicates,
+):
+    # load in data per parameter, summarize, write and do next
+    # First check which variables & nr of runs
+    folder = config["multirun"]["folder"]
+    base_directory = Path(folder) / "runs"
+
+    def list_params_from_any_run(base_directory: Path):
+        candidates = [p.name for p in base_directory.iterdir() if p.is_dir()]
+        if not candidates:
+            raise FileNotFoundError(f"No subfolders found in {base_directory}")
+        chosen = sorted(candidates)[0]
+        target = base_directory / chosen / "report" / chosen / "agents.crop_farmers"
+        if not target.is_dir():
+            raise FileNotFoundError(f"Expected directory not found: {target}")
+        names = []
+        for p in target.iterdir():
+            if p.is_dir():
+                n = p.name[:-5] if p.name.endswith(".zarr") else p.name
+                names.append(n)
+        names.sort()
+        return chosen, names
+
+    chosen_name, params = list_params_from_any_run(base_directory / "0")
+    STD_DDOF = 0
+    module_name = "agents.crop_farmers"
+
+    for key in SCENARIO_FILES:
+        for param in params:
+            print("Scenario:", key, ", Parameter:", param)
+            # --- collect + aggregate runs (same as before) ---
+            da_runs = []
+            for run in range(replicates):
+                run_dir = base_directory / str(run) / key / "report" / key / module_name
+                da = open_zarr(
+                    run_dir, param, start_time=start_time, end_time=end_time
+                )  # DataArray (time, agents)
+                da_runs.append(da.transpose("time", "agents"))
+
+            da_all = xr.concat(da_runs, dim="run")
+            mean_da = da_all.astype(np.float64).mean("run")
+            std_da = da_all.astype(np.float64).std("run", ddof=STD_DDOF)
+
+            mean_np = np.asarray(
+                getattr(mean_da.data, "compute", lambda: mean_da.data)()
+            ).astype(np.float32, copy=False)
+            std_np = np.asarray(
+                getattr(std_da.data, "compute", lambda: std_da.data)()
+            ).astype(np.float32, copy=False)
+            T, A = mean_np.shape
+
+            # --- TEMPLATE: read from run 0's param.zarr ---
+            template_path = (
+                base_directory
+                / "0"
+                / key
+                / "report"
+                / key
+                / module_name
+                / f"{param}.zarr"
+            )
+            template_store = zarr.storage.LocalStore(template_path, read_only=True)
+            template_group = zarr.open_group(template_store, mode="r")
+
+            # reuse time from template (slice if your aggregated time is shorter)
+            template_time = np.asarray(template_group["time"][:], dtype=np.int64)
+            # if needed, rebuild time from DA to match the slice exactly
+            out_time = mean_da["time"].astype("datetime64[s]").astype(np.int64).values
+            if out_time.shape != template_time.shape or not np.array_equal(
+                out_time, template_time[: out_time.shape[0]]
+            ):
+                # prefer DA-derived time so it matches the aggregated data slice
+                time_to_write = out_time
+            else:
+                time_to_write = template_time[:T]
+
+            # get chunking from first non-time array in the template
+            # (keeps the "structure" closer to your originals)
+            non_time_keys = [k for k in template_group.array_keys() if k != "time"]
+            template_chunks = None
+            if non_time_keys:
+                template_chunks = template_group[
+                    non_time_keys[0]
+                ].chunks  # e.g., (time_chunk, agent_chunk)
+
+            # --- OUTPUT: open in append mode, reuse what exists, only add/overwrite what's needed ---
+            filepath = Path(folder) / "report" / key / module_name / (param + ".zarr")
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            out_store = zarr.storage.LocalStore(filepath, read_only=False)
+            z = zarr.open_group(out_store, mode="a")
+
+            # TIME: create only if missing; else verify length
+            if "time" not in z:
+                time_arr = z.create_array(
+                    "time",
+                    shape=time_to_write.shape,
+                    dtype=time_to_write.dtype,
+                    dimension_names=["time"],
+                )
+                time_arr[:] = time_to_write
+                time_arr.attrs.update(
+                    {
+                        "standard_name": "time",
+                        "units": "seconds since 1970-01-01T00:00:00",
+                        "calendar": "gregorian",
+                    }
+                )
+            else:
+                # optional: sanity check
+                if z["time"].shape[0] != time_to_write.shape[0]:
+                    # overwrite to keep it consistent with this slice
+                    del z["time"]
+                    time_arr = z.create_array(
+                        "time",
+                        shape=time_to_write.shape,
+                        dtype=time_to_write.dtype,
+                        dimension_names=["time"],
+                    )
+                    time_arr[:] = time_to_write
+                    time_arr.attrs.update(
+                        {
+                            "standard_name": "time",
+                            "units": "seconds since 1970-01-01T00:00:00",
+                            "calendar": "gregorian",
+                        }
+                    )
+
+            # MEAN: (delete if exists, then recreate with same chunking style as template)
+            if "mean" in z:
+                del z["mean"]
+            mean_arr = z.create_array(
+                "mean",
+                shape=(T, A),
+                dtype=mean_np.dtype,
+                chunks=template_chunks,  # <-- reuse template chunking if available
+                dimension_names=["time", "agents"],
+            )
+            mean_arr[:] = mean_np
+            mean_arr.attrs.update(
+                {
+                    "statistic": "mean",
+                    **(
+                        {"units": da_all.attrs["units"]}
+                        if "units" in da_all.attrs
+                        else {}
+                    ),
+                }
+            )
+
+            # STDEV:
+            if "stdev" in z:
+                del z["stdev"]
+            std_arr = z.create_array(
+                "stdev",
+                shape=(T, A),
+                dtype=std_np.dtype,
+                chunks=template_chunks,
+                dimension_names=["time", "agents"],
+            )
+            std_arr[:] = std_np
+            std_arr.attrs.update(
+                {
+                    "statistic": "stdev",
+                    "ddof": STD_DDOF,
+                    **(
+                        {"units": da_all.attrs["units"]}
+                        if "units" in da_all.attrs
+                        else {}
+                    ),
+                }
+            )
+
+
 @handle_ctrl_c
 def run_model(args):
     """
@@ -80,7 +261,7 @@ def run_model(args):
     Results: <multirun.folder>/runs/<run_id>/<scenario>/
     Logs:    <multirun.folder>/logs/<run_id>/<scenario>/
     """
-    config, run_id, scenario_files = args
+    config, run_id, scenario_files, cpus_per_scenario = args
 
     base_folder = config["multirun"]["folder"]
     os.makedirs(base_folder, exist_ok=True)
@@ -108,19 +289,41 @@ def run_model(args):
     def run_model_scenario(
         config_path_for_cli: str, scenario_label: str, scenario_logs_dir: str
     ):
-        """
-        Runs one scenario with retries. Prints tail of stderr on RC=2/66/1.
-        Uses current interpreter via sys.executable, and 'run' subcommand.
-        """
         env = os.environ.copy()
-        cli_py_path = os.path.join(os.environ.get("GEB_PACKAGE_DIR"), "cli.py")
 
+        # NEW: cap threads so the scenario respects cpus_per_scenario
+        thread_cap = str(max(1, int(cpus_per_scenario)))
+        for k in (
+            "OMP_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+            "BLIS_NUM_THREADS",
+        ):
+            env[k] = thread_cap
+        env.setdefault("OMP_PROC_BIND", "close")
+        env.setdefault("OMP_PLACES", "cores")
+
+        cli_py_path = os.path.join(os.environ.get("GEB_PACKAGE_DIR"), "cli.py")
         venv_activate = "/scistor/ivm/mka483/GEB_p3/GEB/.venvs/geb_p3_new/bin/activate"
 
-        command = (
+        # Keep sourcing the venv, and use your current interpreter
+        inner_shell = (
             f"source {venv_activate} && "
             f"{sys.executable} {cli_py_path} run --config {config_path_for_cli}"
         )
+
+        # NEW: if under SLURM, give this scenario its own CPUs via srun; else plain bash -lc
+        if "SLURM_JOB_ID" in os.environ:
+            command = (
+                "srun --ntasks=1 "
+                f"--cpus-per-task={cpus_per_scenario} "
+                "--exclusive --cpu-bind=cores "
+                f"bash -lc '{inner_shell}'"
+            )
+        else:
+            command = f"bash -lc '{inner_shell}'"
 
         print(f"[rep {run_id} | {scenario_label}] Executing: {command}", flush=True)
 
@@ -282,26 +485,33 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu)
 
 def multi_run(config, working_directory):
     multi_run_config = config["multirun"]
-
-    pool_size = int(os.getenv("SLURM_CPUS_PER_TASK") or 10)
+    DEFAULT_CPUS_PER_SCENARIO = int(os.getenv("CPUS_PER_SCENARIO", "1"))
+    pool_size = int(os.getenv("SLURM_CPUS_PER_TASK") or os.cpu_count() or 1)
     num_scenarios = len(SCENARIO_FILES)
 
-    replicates = max(1, pool_size // num_scenarios)
+    # read from config first, fallback to env, then 1
+    cpus_per_scenario = int(
+        multi_run_config.get("cpus_per_scenario", DEFAULT_CPUS_PER_SCENARIO)
+    )
 
-    print(f"Pool size: {pool_size}")
+    # avoid oversubscription: reps * scenarios * cpus_per_scenario <= pool_size
+    replicates = max(1, pool_size // (num_scenarios * cpus_per_scenario))
+
+    if replicates * num_scenarios * cpus_per_scenario > pool_size:
+        print("[warn] computed replicates oversubscribe CPUs; throttling.", flush=True)
+
+    print(f"Pool size (SLURM_CPUS_PER_TASK): {pool_size}")
+    print(f"CPUs per scenario: {cpus_per_scenario}")
     print(f"Scenarios per replicate: {num_scenarios}")
     print(f"Replicates to run (folders 0..{replicates - 1}): {replicates}")
-    # Ignore the interrupt signal
+
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-    # Create a tuple of arguments for each run
-    args = [(config, i, SCENARIO_FILES) for i in range(replicates)]
+    # each arg = one replicate with all scenarios + cpus_per_scenario
+    args = [(config, i, SCENARIO_FILES, cpus_per_scenario) for i in range(replicates)]
 
-    # Create a manager for multiprocessing
     manager = multiprocessing.Manager()
-    # Create a shared variable to keep track of the number of GPUs in use
     current_gpu_use_count = manager.Value("i", 0)
-    # Create a lock for managing access to the shared variable
     manager_lock = manager.Lock()
 
     processes = min(pool_size, len(args)) if len(args) > 0 else 1
@@ -318,9 +528,15 @@ def multi_run(config, working_directory):
     ) as pool:
         pool.map(run_model, args)
 
-    pool.close()
+    # no need to pool.close() inside 'with'
 
-    global ctrl_c_entered
-    global default_sigint_handler
+    global ctrl_c_entered, default_sigint_handler
     ctrl_c_entered = False
     default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
+
+    from dateutil.relativedelta import relativedelta
+
+    start_time = config["general"]["start_time"]
+    end_time = config["general"]["end_time"] - relativedelta(years=1)
+
+    summarize_multirun(config, start_time, end_time, replicates)
