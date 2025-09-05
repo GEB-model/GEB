@@ -110,14 +110,31 @@ def calculate_scaling(
 
 
 def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
+    """Open a zarr file as an xarray DataArray.
+
+    Parses the _CRS attribute and sets it as the CRS of the DataArray using rioxarray.
+    Also ensures that boolean arrays have a _FillValue attribute set to None.
+
+    Args:
+        zarr_folder: The path to the zarr folder.
+
+    Raises:
+        FileNotFoundError: If the zarr folder does not exist.
+
+    Returns:
+        The xarray DataArray.
+    """
     # it is rather odd, but in some cases using mask_and_scale=False is necessary
     # or dtypes start changing, seemingly randomly
     # consolidated metadata is off-spec for zarr, therefore we set it to False
-    da = xr.open_dataset(
+    path: Path = Path(zarr_folder)
+    if not path.exists():
+        raise FileNotFoundError(f"Zarr folder {zarr_folder} does not exist")
+    da: xr.Dataset = xr.open_dataset(
         zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
     )
     assert len(da.data_vars) == 1, "Only one data variable is supported"
-    da = da[list(da.data_vars)[0]]
+    da: xr.DataArray = da[list(da.data_vars)[0]]
 
     if da.dtype == bool and "_FillValue" not in da.attrs:
         da.attrs["_FillValue"] = None
