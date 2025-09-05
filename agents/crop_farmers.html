@@ -1,0 +1,960 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Farmers &mdash; GEB  documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=5dd5ad26" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5be48651"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=27b9c81c"></script>
+      <script src="../_static/doctools.js?v=695de88e"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="copyright" title="Copyright" href="../copyright.html" />
+    <link rel="next" title="Reservoir operators" href="reservoir_operators.html" />
+    <link rel="prev" title="Households" href="households.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            GEB
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../overview_and_installation.html">Overview and installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../configuration.html">Configuration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../creating_a_model.html">Creating a model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../running.html">Running the model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../visualisation.html">Visualisation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../calibration.html">Calibration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ODD/ODD.html">ODD protocol</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Agents</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="__init__.html">Agents</a></li>
+<li class="toctree-l1"><a class="reference internal" href="households.html">Households</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Crop farmers</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers"><code class="docutils literal notranslate"><span class="pre">CropFarmers</span></code></a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.abstract_water"><code class="docutils literal notranslate"><span class="pre">CropFarmers.abstract_water()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.activation_order_by_elevation"><code class="docutils literal notranslate"><span class="pre">CropFarmers.activation_order_by_elevation</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.adapt_insurance"><code class="docutils literal notranslate"><span class="pre">CropFarmers.adapt_insurance()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.adapt_irrigation_efficiency"><code class="docutils literal notranslate"><span class="pre">CropFarmers.adapt_irrigation_efficiency()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.adapt_irrigation_well"><code class="docutils literal notranslate"><span class="pre">CropFarmers.adapt_irrigation_well()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.adaptation_water_cost_difference"><code class="docutils literal notranslate"><span class="pre">CropFarmers.adaptation_water_cost_difference()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.adaptation_yield_ratio_difference"><code class="docutils literal notranslate"><span class="pre">CropFarmers.adaptation_yield_ratio_difference()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.add_agent"><code class="docutils literal notranslate"><span class="pre">CropFarmers.add_agent()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.calculate_water_costs"><code class="docutils literal notranslate"><span class="pre">CropFarmers.calculate_water_costs()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.calculate_well_costs_global"><code class="docutils literal notranslate"><span class="pre">CropFarmers.calculate_well_costs_global()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.compute_total_profits"><code class="docutils literal notranslate"><span class="pre">CropFarmers.compute_total_profits()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.convert_probability_to_yield_ratio"><code class="docutils literal notranslate"><span class="pre">CropFarmers.convert_probability_to_yield_ratio()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.create_unique_groups"><code class="docutils literal notranslate"><span class="pre">CropFarmers.create_unique_groups()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.drought_risk_perception"><code class="docutils literal notranslate"><span class="pre">CropFarmers.drought_risk_perception()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.field_size_per_farmer"><code class="docutils literal notranslate"><span class="pre">CropFarmers.field_size_per_farmer</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.field_size_per_farmer_numba"><code class="docutils literal notranslate"><span class="pre">CropFarmers.field_size_per_farmer_numba()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.format_results"><code class="docutils literal notranslate"><span class="pre">CropFarmers.format_results()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.get_gross_irrigation_demand_m3"><code class="docutils literal notranslate"><span class="pre">CropFarmers.get_gross_irrigation_demand_m3()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.get_yield_ratio"><code class="docutils literal notranslate"><span class="pre">CropFarmers.get_yield_ratio()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.get_yield_ratio_numba_GAEZ"><code class="docutils literal notranslate"><span class="pre">CropFarmers.get_yield_ratio_numba_GAEZ()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.get_yield_ratio_numba_MIRCA2000"><code class="docutils literal notranslate"><span class="pre">CropFarmers.get_yield_ratio_numba_MIRCA2000()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.harvest"><code class="docutils literal notranslate"><span class="pre">CropFarmers.harvest()</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.harvest_numba"><code class="docutils literal notranslate"><span class="pre">CropFarmers.harvest_numba</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id0"><code class="docutils literal notranslate"><span class="pre">CropFarmers.get_yield_ratio</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#id1"><code class="docutils literal notranslate"><span class="pre">CropFarmers.harvest_numba()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.irrigated_fields"><code class="docutils literal notranslate"><span class="pre">CropFarmers.irrigated_fields</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.microcredit"><code class="docutils literal notranslate"><span class="pre">CropFarmers.microcredit()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.name"><code class="docutils literal notranslate"><span class="pre">CropFarmers.name</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.plant"><code class="docutils literal notranslate"><span class="pre">CropFarmers.plant()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.profits_SEUT"><code class="docutils literal notranslate"><span class="pre">CropFarmers.profits_SEUT()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.profits_SEUT_crops"><code class="docutils literal notranslate"><span class="pre">CropFarmers.profits_SEUT_crops()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.save_harvest_spei"><code class="docutils literal notranslate"><span class="pre">CropFarmers.save_harvest_spei()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.save_yearly_income"><code class="docutils literal notranslate"><span class="pre">CropFarmers.save_yearly_income()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.set_social_network"><code class="docutils literal notranslate"><span class="pre">CropFarmers.set_social_network()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.spinup"><code class="docutils literal notranslate"><span class="pre">CropFarmers.spinup()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.step"><code class="docutils literal notranslate"><span class="pre">CropFarmers.step()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.update_field_indices"><code class="docutils literal notranslate"><span class="pre">CropFarmers.update_field_indices()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.update_field_indices_numba"><code class="docutils literal notranslate"><span class="pre">CropFarmers.update_field_indices_numba()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.water_abstraction_sum"><code class="docutils literal notranslate"><span class="pre">CropFarmers.water_abstraction_sum()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#geb.agents.crop_farmers.CropFarmers.yield_ratio_to_profit"><code class="docutils literal notranslate"><span class="pre">CropFarmers.yield_ratio_to_profit()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#geb.agents.crop_farmers.advance_crop_rotation_year"><code class="docutils literal notranslate"><span class="pre">advance_crop_rotation_year()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="#geb.agents.crop_farmers.cumulative_mean"><code class="docutils literal notranslate"><span class="pre">cumulative_mean()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="#geb.agents.crop_farmers.shift_and_reset_matrix"><code class="docutils literal notranslate"><span class="pre">shift_and_reset_matrix()</span></code></a></li>
+<li class="toctree-l2"><a class="reference internal" href="#geb.agents.crop_farmers.shift_and_update"><code class="docutils literal notranslate"><span class="pre">shift_and_update()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="reservoir_operators.html">Reservoir operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="government.html">Government</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../model.html">Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../report.html">Report</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../HRUs.html">Farm-level HRUs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../artists.html">Artists</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">About</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../authors_page.html">Authors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contribution_guide.html">Contribution guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../updates.html">Updates</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">GEB</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Farmers</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/agents/crop_farmers.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-geb.agents.crop_farmers">
+<span id="farmers"></span><h1>Farmers<a class="headerlink" href="#module-geb.agents.crop_farmers" title="Link to this heading"></a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">CropFarmers</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">agents</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reduncancy</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers" title="Link to this definition"></a></dt>
+<dd><p>The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>model</strong> – The GEB model.</p></li>
+<li><p><strong>agents</strong> – The class that includes all agent types (allowing easier communication between agents).</p></li>
+<li><p><strong>redundancy</strong> – a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.</p></li>
+</ul>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.abstract_water">
+<span class="sig-name descname"><span class="pre">abstract_water</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">gross_irrigation_demand_m3_per_field</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gross_irrigation_demand_m3_per_field_limit_adjusted</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">available_channel_storage_m3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">available_groundwater_m3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">groundwater_depth</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">available_reservoir_storage_m3</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.abstract_water"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.abstract_water" title="Link to this definition"></a></dt>
+<dd><p>This function allows the abstraction of water by farmers for irrigation purposes.</p>
+<p>Its main purpose is to call the relevant numba function to do the actual abstraction.
+In addition, the function saves the abstraction from the various sources by farmer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>gross_irrigation_demand_m3_per_field</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – gross irrigation demand in m3 per field</p></li>
+<li><p><strong>gross_irrigation_demand_m3_per_field_limit_adjusted</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – adjusted gross irrigation demand in m3 per field</p></li>
+<li><p><strong>available_channel_storage_m3</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – available channel storage in m3 per grid cell</p></li>
+<li><p><strong>available_groundwater_m3</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float64</span></code>]]</span>) – available groundwater storage in m3 per grid cell</p></li>
+<li><p><strong>groundwater_depth</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float64</span></code>]]</span>) – groundwater depth in meters per grid cell</p></li>
+<li><p><strong>available_reservoir_storage_m3</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – available reservoir storage in m3 per reservoir</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>water_withdrawal_m</strong> – water withdrawal in meters</p></li>
+<li><p><strong>water_consumption_m</strong> – water consumption in meters</p></li>
+<li><p><strong>returnFlowIrr_m</strong> – return flow in meters</p></li>
+<li><p><strong>addtoevapotrans_m</strong> – evaporated irrigation water in meters</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]], <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]], <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]], <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]], <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]], <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float64</span></code>]]]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.activation_order_by_elevation">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">activation_order_by_elevation</span></span><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.activation_order_by_elevation" title="Link to this definition"></a></dt>
+<dd><p>Activation order is determined by the agent elevation, starting from the highest.</p>
+<p>Agents with the same elevation are randomly shuffled.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.adapt_insurance">
+<span class="sig-name descname"><span class="pre">adapt_insurance</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">adaptation_types</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adaptation_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">farmer_yield_probability_relation_base</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">farmer_yield_probability_relations_insured</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">premiums</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.adapt_insurance"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.adapt_insurance" title="Link to this definition"></a></dt>
+<dd><p>Handle the adaptation of farmers to irrigation wells.</p>
+<p>This function checks which farmers will adopt irrigation wells based on their expected utility
+and the provided constraints. It calculates the costs and the benefits for each farmer and updates
+their statuses (e.g., irrigation source, adaptation costs) accordingly.
+:rtype: <span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.adapt_irrigation_efficiency">
+<span class="sig-name descname"><span class="pre">adapt_irrigation_efficiency</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">farmer_yield_probability_relation</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">energy_cost</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">water_cost</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.adapt_irrigation_efficiency"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.adapt_irrigation_efficiency" title="Link to this definition"></a></dt>
+<dd><p>Handle the adaptation of farmers to irrigation wells.</p>
+<p>This function checks which farmers will adopt irrigation wells based on their expected utility
+and the provided constraints. It calculates the costs and the benefits for each farmer and updates
+their statuses (e.g., irrigation source, adaptation costs) accordingly.
+:rtype: <span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.adapt_irrigation_well">
+<span class="sig-name descname"><span class="pre">adapt_irrigation_well</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">farmer_yield_probability_relation</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">average_extraction_speed</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">energy_cost</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">water_cost</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.adapt_irrigation_well"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.adapt_irrigation_well" title="Link to this definition"></a></dt>
+<dd><p>Handle the adaptation of farmers to irrigation wells.</p>
+<p>This function checks which farmers will adopt irrigation wells based on their expected utility
+and the provided constraints. It calculates the costs and the benefits for each farmer and updates
+their statuses (e.g., irrigation source, adaptation costs) accordingly.
+:rtype: <span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.adaptation_water_cost_difference">
+<span class="sig-name descname"><span class="pre">adaptation_water_cost_difference</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">additional_diffentiators</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adapted</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">energy_cost</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">water_cost</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.adaptation_water_cost_difference"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.adaptation_water_cost_difference" title="Link to this definition"></a></dt>
+<dd><p>Calculate the relative yield ratio improvement for farmers adopting a certain adaptation.</p>
+<p>This function determines how much better farmers that have adopted a particular adaptation
+are doing in terms of their yield ratio as compared to those who haven’t.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>additional_diffentiators</strong> (<em>np.ndarray</em>) – Additional differentiators for grouping agents.</p></li>
+<li><p><strong>adapted</strong> (<em>np.ndarray</em>) – Array indicating adaptation status (0 or 1) for each agent.</p></li>
+<li><p><strong>energy_cost</strong> (<em>np.ndarray</em>) – Array of energy costs for each agent.</p></li>
+<li><p><strong>water_cost</strong> (<em>np.ndarray</em>) – Array of water costs for each agent.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>Tuple[np.ndarray, np.ndarray]</strong> – Arrays representing the relative energy cost and water cost improvements for each agent.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.adaptation_yield_ratio_difference">
+<span class="sig-name descname"><span class="pre">adaptation_yield_ratio_difference</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">additional_diffentiators</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adapted</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">yield_ratios</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.adaptation_yield_ratio_difference"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.adaptation_yield_ratio_difference" title="Link to this definition"></a></dt>
+<dd><p>Calculate the relative yield ratio improvement for farmers adopting a certain adaptation.</p>
+<p>This function determines how much better farmers that have adopted a particular adaptation
+are doing in terms of their yield ratio as compared to those who haven’t.</p>
+<p>The additional differentiator must be different from the adapted class</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>An array representing the relative yield ratio improvement for each agent.</strong></p>
+</dd>
+</dl>
+<p>TO DO: vectorize</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.add_agent">
+<span class="sig-name descname"><span class="pre">add_agent</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">indices</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">values</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">{'EUT_no_adapt':</span> <span class="pre">1,</span> <span class="pre">'GEV_parameters':</span> <span class="pre">1,</span> <span class="pre">'SEUT_no_adapt':</span> <span class="pre">1,</span> <span class="pre">'adapted':</span> <span class="pre">False,</span> <span class="pre">'annual_costs_all_adaptations':</span> <span class="pre">1,</span> <span class="pre">'base_management_yield_ratio':</span> <span class="pre">1,</span> <span class="pre">'channel_abstraction_m3_by_farmer':</span> <span class="pre">0,</span> <span class="pre">'crops':</span> <span class="pre">-1,</span> <span class="pre">'decision_horizon':</span> <span class="pre">1,</span> <span class="pre">'discount_rate':</span> <span class="pre">1,</span> <span class="pre">'disposable_income':</span> <span class="pre">0,</span> <span class="pre">'drought_timer':</span> <span class="pre">1,</span> <span class="pre">'farmer_class':</span> <span class="pre">1,</span> <span class="pre">'farmer_yield_probability_relation':</span> <span class="pre">1,</span> <span class="pre">'groundwater_abstraction_m3_by_farmer':</span> <span class="pre">0,</span> <span class="pre">'household_size':</span> <span class="pre">2,</span> <span class="pre">'interest_rate':</span> <span class="pre">1,</span> <span class="pre">'irrigation_efficiency':</span> <span class="pre">0.9,</span> <span class="pre">'irrigation_source':</span> <span class="pre">-1,</span> <span class="pre">'monthly_SPEI':</span> <span class="pre">0,</span> <span class="pre">'per_harvest_SPEI':</span> <span class="pre">0,</span> <span class="pre">'per_harvest_yield_ratio':</span> <span class="pre">0,</span> <span class="pre">'reservoir_abstraction_m3_by_farmer':</span> <span class="pre">0,</span> <span class="pre">'risk_aversion':</span> <span class="pre">1,</span> <span class="pre">'risk_decr':</span> <span class="pre">1,</span> <span class="pre">'risk_perc_max':</span> <span class="pre">1,</span> <span class="pre">'risk_perc_min':</span> <span class="pre">1,</span> <span class="pre">'risk_perception':</span> <span class="pre">1,</span> <span class="pre">'time_adapted':</span> <span class="pre">False,</span> <span class="pre">'total_crop_age':</span> <span class="pre">0,</span> <span class="pre">'water_use':</span> <span class="pre">1,</span> <span class="pre">'well_depth':</span> <span class="pre">-1,</span> <span class="pre">'yearly_SPEI_probability':</span> <span class="pre">1,</span> <span class="pre">'yearly_abstraction_m3_by_farmer':</span> <span class="pre">0,</span> <span class="pre">'yearly_income':</span> <span class="pre">1,</span> <span class="pre">'yearly_potential_income':</span> <span class="pre">1,</span> <span class="pre">'yearly_yield_ratio':</span> <span class="pre">1,</span> <span class="pre">'yield_ratio_management':</span> <span class="pre">1,</span> <span class="pre">'yield_ratios_drought_event':</span> <span class="pre">1}</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.add_agent"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.add_agent" title="Link to this definition"></a></dt>
+<dd><p>This function can be used to add new farmers.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.calculate_water_costs">
+<span class="sig-name descname"><span class="pre">calculate_water_costs</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.calculate_water_costs"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.calculate_water_costs" title="Link to this definition"></a></dt>
+<dd><p>Calculate the water and energy costs per agent and the average extraction speed.</p>
+<p>This method computes the energy costs for agents using groundwater, the water costs for all agents
+depending on their water source, and the average extraction speed per agent. It also updates the
+loans and annual costs associated with water and energy use.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>Tuple[np.ndarray, np.ndarray, np.ndarray]</strong> – A tuple containing:
+- energy_costs (np.ndarray): Energy costs per agent (LCU/year).
+- water_costs (np.ndarray): Water costs per agent (LCU/year).
+- average_extraction_speed (np.ndarray): Average water extraction speed per agent (m³/s).</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.calculate_well_costs_global">
+<span class="sig-name descname"><span class="pre">calculate_well_costs_global</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">groundwater_depth</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">average_extraction_speed</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.calculate_well_costs_global"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.calculate_well_costs_global" title="Link to this definition"></a></dt>
+<dd><p>Calculate the annual costs associated with well installation and operation globally.</p>
+<p>This function computes the annual costs for installing wells, maintaining them, and the energy costs
+associated with pumping groundwater for each agent (farmer). It takes into account regional variations
+in costs and agent-specific parameters such as groundwater depth and extraction speed.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>groundwater_depth</strong> (<em>np.ndarray</em>) – Array of groundwater depths per agent (in meters).</p></li>
+<li><p><strong>average_extraction_speed</strong> (<em>np.ndarray</em>) – Array of average water extraction speeds per agent (m³/s).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>Tuple[np.ndarray, np.ndarray]</strong></p></li>
+<li><p><strong>annual_cost</strong> (<em>np.ndarray</em>) – Annual cost per agent (local currency units per year).</p></li>
+<li><p><strong>potential_well_length</strong> (<em>np.ndarray</em>) – Potential well length per agent (in meters).</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.compute_total_profits">
+<span class="sig-name descname"><span class="pre">compute_total_profits</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">yield_ratios</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.compute_total_profits"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.compute_total_profits" title="Link to this definition"></a></dt>
+<dd><p>Compute total profits for all agents across different drought scenarios.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>yield_ratios</strong> (<em>np.ndarray</em>) – Yield ratios for agents under different drought scenarios.</p></li>
+<li><p><strong>crops_mask</strong> (<em>np.ndarray</em>) – Mask indicating valid crop entries.</p></li>
+<li><p><strong>nan_array</strong> (<em>np.ndarray</em>) – Array filled with NaNs for reference.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>np.ndarray</strong> – Total profits for agents under each drought scenario.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.convert_probability_to_yield_ratio">
+<span class="sig-name descname"><span class="pre">convert_probability_to_yield_ratio</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">farmer_yield_probability_relation</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.convert_probability_to_yield_ratio"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.convert_probability_to_yield_ratio" title="Link to this definition"></a></dt>
+<dd><p>Convert drought probabilities to yield ratios based on the given polynomial relationship.</p>
+<p>For each farmer’s yield-probability relationship (represented as a polynomial),
+this function calculates the inverse of the relationship and then applies the
+inverted polynomial to a set of given probabilities to obtain yield ratios.
+The resulting yield ratios are then adjusted to lie between 0 and 1. The final
+results are stored in <cite>self.var.yield_ratios_drought_event</cite>.
+:rtype: <span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span></p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<ul class="simple">
+<li><p>It assumes that the polynomial relationship is invertible.</p></li>
+<li><p>Adjusts yield ratios to be non-negative and capped at 1.0.</p></li>
+</ul>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>For each farmer, an array of yield ratios</strong> – corresponding to the given probabilities of a drought event.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.create_unique_groups">
+<span class="sig-name descname"><span class="pre">create_unique_groups</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">additional_diffentiators</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.create_unique_groups"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.create_unique_groups" title="Link to this definition"></a></dt>
+<dd><p>Create unique groups based on elevation data and merge with crop calendar.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>numpy.ndarray</strong> – Merged array with crop calendar and elevation distribution groups.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.drought_risk_perception">
+<span class="sig-name descname"><span class="pre">drought_risk_perception</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">harvesting_farmers</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">current_crop_age</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.drought_risk_perception"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.drought_risk_perception" title="Link to this definition"></a></dt>
+<dd><p>Calculate and update the drought risk perception for harvesting farmers.</p>
+<p>This function computes the risk perception of farmers based on the difference
+between their latest profits and potential profits. The perception is influenced
+by the historical losses and time since the last drought event. Farmers who have
+experienced a drought event will have their drought timer reset.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>harvesting_farmers</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Index array of farmers that are currently harvesting.</p></li>
+<li><p><strong>current_crop_age</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Array of current crop age for each farmer.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+<p>TODO: Perhaps move the constant to the model.yml</p>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.field_size_per_farmer">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">field_size_per_farmer</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ndarray</span></em><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.field_size_per_farmer" title="Link to this definition"></a></dt>
+<dd><p>Gets the field size for each farmer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>field_size_per_farmer</strong> – Field size for each farmer in m2.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.field_size_per_farmer_numba">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">field_size_per_farmer_numba</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">field_indices_by_farmer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">field_indices</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cell_area</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.field_size_per_farmer_numba"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.field_size_per_farmer_numba" title="Link to this definition"></a></dt>
+<dd><p>Gets the field size for each farmer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>field_indices_by_farmer</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – This array contains the indices where the fields of a farmer are stored in <cite>field_indices</cite>.</p></li>
+<li><p><strong>field_indices</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.</p></li>
+<li><p><strong>cell_area</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Subarray of cell_area.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>field_size_per_farmer</strong> – Field size for each farmer in m2.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.format_results">
+<span class="sig-name descname"><span class="pre">format_results</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">total_profits</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.format_results"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.format_results" title="Link to this definition"></a></dt>
+<dd><p>Transpose and slice the total profits matrix, and extract the ‘no drought’ scenario profits.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>total_profits</strong> (<em>np.ndarray</em>) – Total profits matrix.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>Tuple[np.ndarray, np.ndarray]</strong> – Transposed profits and ‘no drought’ scenario profits.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.get_gross_irrigation_demand_m3">
+<span class="sig-name descname"><span class="pre">get_gross_irrigation_demand_m3</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">potential_evapotranspiration</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">available_infiltration</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.get_gross_irrigation_demand_m3"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.get_gross_irrigation_demand_m3" title="Link to this definition"></a></dt>
+<dd><p>Calculates the gross irrigation demand in m3 for each farmer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>potential_evapotranspiration</strong> – potential evapotranspiration in m/day</p></li>
+<li><p><strong>available_infiltration</strong> – available infiltration from other sources in m/day</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>gross_irrigation_demand_m3</strong> – gross irrigation demand in m3 for each farmer</p></li>
+<li><p><strong>gross_potential_irrigation_m3_limit_adjusted</strong> – adjusted gross potential irrigation in m3 limit for each farmer</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]], <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.get_yield_ratio">
+<span class="sig-name descname"><span class="pre">get_yield_ratio</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">harvest</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">actual_transpiration</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">potential_transpiration</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">actual_transpiration_per_crop_stage</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">potential_transpiration_per_crop_stage</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">crop_map</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.get_yield_ratio"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.get_yield_ratio" title="Link to this definition"></a></dt>
+<dd><p>Gets yield ratio for each crop given the ratio between actual and potential evapostranspiration during growth.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>harvest</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Map of crops that are harvested.</p></li>
+<li><p><strong>actual_transpiration</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Actual evapotranspiration during crop growth period.</p></li>
+<li><p><strong>potential_transpiration</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Potential evapotranspiration during crop growth period.</p></li>
+<li><p><strong>actual_transpiration_per_crop_stage</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Actual evapotranspiration per crop stage.</p></li>
+<li><p><strong>potential_transpiration_per_crop_stage</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Potential evapotranspiration per crop stage.</p></li>
+<li><p><strong>crop_map</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Subarray of type of crop grown.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>yield_ratio</strong> – Map of yield ratio.</p>
+</dd>
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>ValueError</strong> – If crop data type is not GAEZ or MIRCA2000.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.get_yield_ratio_numba_GAEZ">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">get_yield_ratio_numba_GAEZ</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">crop_map</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">evaporation_ratio</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">evaporation_ratio_per_crop_stage</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">KyT</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Ky1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Ky2a</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Ky2b</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Ky3a</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Ky3b</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">Ky4</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.get_yield_ratio_numba_GAEZ"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.get_yield_ratio_numba_GAEZ" title="Link to this definition"></a></dt>
+<dd><p>Calculate yield ratio based on <a class="reference external" href="https://doi.org/10.1016/j.jhydrol.2009.07.031">https://doi.org/10.1016/j.jhydrol.2009.07.031</a>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>crop_map</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – array of currently harvested crops.</p></li>
+<li><p><strong>evaporation_ratio</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – ratio of actual to potential evapotranspiration of harvested crops.</p></li>
+<li><p><strong>evaporation_ratio_per_crop_stage</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – ratio of actual to potential evapotranspiration per crop stage.</p></li>
+<li><p><strong>KyT</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Water stress reduction factor from GAEZ.</p></li>
+<li><p><strong>Ky1</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Water stress reduction factor for crop stage 1 from GAEZ.</p></li>
+<li><p><strong>Ky2a</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Water stress reduction factor for crop stage 2a from GAEZ.</p></li>
+<li><p><strong>Ky2b</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Water stress reduction factor for crop stage 2b from GAEZ.</p></li>
+<li><p><strong>Ky3a</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Water stress reduction factor for crop stage 3a from GAEZ.</p></li>
+<li><p><strong>Ky3b</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Water stress reduction factor for crop stage 3b from GAEZ.</p></li>
+<li><p><strong>Ky4</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span>) – Water stress reduction factor for crop stage 4 from GAEZ.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>yield_ratios</strong> – yield ratio (as ratio of maximum obtainable yield) per harvested crop.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.get_yield_ratio_numba_MIRCA2000">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">get_yield_ratio_numba_MIRCA2000</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">crop_map</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">evap_ratios</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">alpha</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">P0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">P1</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.get_yield_ratio_numba_MIRCA2000"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.get_yield_ratio_numba_MIRCA2000" title="Link to this definition"></a></dt>
+<dd><p>Calculate yield ratio based on <a class="reference external" href="https://doi.org/10.1016/j.jhydrol.2009.07.031">https://doi.org/10.1016/j.jhydrol.2009.07.031</a>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>crop_map</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – array of currently harvested crops.</p></li>
+<li><p><strong>evap_ratios</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – ratio of actual to potential evapotranspiration of harvested crops.</p></li>
+<li><p><strong>alpha</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – alpha value per crop used in MIRCA2000.</p></li>
+<li><p><strong>beta</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – beta value per crop used in MIRCA2000.</p></li>
+<li><p><strong>P0</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – P0 value per crop used in MIRCA2000.</p></li>
+<li><p><strong>P1</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – P1 value per crop used in MIRCA2000.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>yield_ratios</strong> – yield ratio (as ratio of maximum obtainable yield) per harvested crop.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">int</span></code>, <code class="xref py py-data docutils literal notranslate"><span class="pre">...</span></code>], <code class="xref py py-class docutils literal notranslate"><span class="pre">dtype</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">float32</span></code>]]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.harvest">
+<span class="sig-name descname"><span class="pre">harvest</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.harvest"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.harvest" title="Link to this definition"></a></dt>
+<dd><p>Determine which crops need to be harvested based on their current age and their harvest age.</p>
+<p>Once harvested, compute various metrics related to the harvest including potential profit,
+actual profit, crop age, drought perception, and update corresponding attributes of the model.
+Save the corresponding SPEI over the last harvest.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.harvest_numba">
+<span class="sig-name descname"><span class="pre">harvest_numba</span></span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.harvest_numba"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.harvest_numba" title="Link to this definition"></a></dt>
+<dd><p>A helper function to obtain the harvest map.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="id0">
+<span class="sig-name descname"><span class="pre">get_yield_ratio</span></span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.get_yield_ratio"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#id0" title="Link to this definition"></a></dt>
+<dd><p>A function to calculate yield ratio based on the ratio of actual to potential evapotranspiration.</p>
+</dd></dl>
+
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The function also updates the drought risk perception and tracks disposable income.</p>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="id1">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">harvest_numba</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">field_indices_by_farmer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">field_indices</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">crop_map</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">crop_age_days</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">crop_harvest_age_days</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.harvest_numba"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#id1" title="Link to this definition"></a></dt>
+<dd><p>This function determines whether crops are ready to be harvested by comparing the crop harvest age to the current age of the crop. If the crop is harvested, the crops next multicrop index and next plant day are determined.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>n</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Number of farmers.</p></li>
+<li><p><strong>start_day_per_month</strong> – Array containing the starting day of each month.</p></li>
+<li><p><strong>field_indices_by_farmer</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – This array contains the indices where the fields of a farmer are stored in <cite>field_indices</cite>.</p></li>
+<li><p><strong>field_indices</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.</p></li>
+<li><p><strong>crop_map</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Subarray map of crops.</p></li>
+<li><p><strong>crop_age_days</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Subarray map of current crop age in days.</p></li>
+<li><p><strong>crop_harvest_age_days</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Subarray map of crop harvest age in days. I.e., the age at which the crop is ready to be harvested.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>harvest</strong> – Boolean subarray map of fields to be harvested.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.irrigated_fields">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">irrigated_fields</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">ndarray</span></em><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.irrigated_fields" title="Link to this definition"></a></dt>
+<dd><p>Gets the indices of fields that are irrigated.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>irrigated_fields</strong> – Indices of fields that are irrigated.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.microcredit">
+<span class="sig-name descname"><span class="pre">microcredit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">loaning_farmers</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">drought_loss_current</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">current_crop_age</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.microcredit"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.microcredit" title="Link to this definition"></a></dt>
+<dd><p>Compute the microcredit for farmers based on their average profits, drought losses, and the age of their crops with respect to their total cropping time.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>loaning_farmers</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Boolean mask of farmers looking to obtain a loan, based on drought loss of harvesting farmers.</p></li>
+<li><p><strong>drought_loss_current</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Array of drought losses of the most recent harvest for each farmer.</p></li>
+<li><p><strong>current_crop_age</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Array of total crop age for each farmer.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.name">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">str</span></em><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.name" title="Link to this definition"></a></dt>
+<dd><p>Return the name of the module. This method should be overridden by subclasses.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.plant">
+<span class="sig-name descname"><span class="pre">plant</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.plant"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.plant" title="Link to this definition"></a></dt>
+<dd><p>Determines when and what crop should be planted, mainly through calling the <code class="xref py py-meth docutils literal notranslate"><span class="pre">agents.farmers.Farmers.plant_numba()</span></code>. Then converts the array to cupy array if model is running with GPU.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.profits_SEUT">
+<span class="sig-name descname"><span class="pre">profits_SEUT</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">additional_diffentiators</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adapted</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">farmer_yield_probability_relation</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.profits_SEUT"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.profits_SEUT" title="Link to this definition"></a></dt>
+<dd><p>Calculate total profits under different drought probability scenarios, with and without adaptation measures for adaptation types 0 and 1.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>additional_diffentiators</strong> – Additional differentiators for grouping agents.</p></li>
+<li><p><strong>adapted</strong> (<em>np.ndarray</em>) – An array indicating which agents have adapted (relevant for adaptation_type == 1).</p></li>
+<li><p><strong>farmer_yield_probability_relation</strong> (<em>np.ndarray</em>) – Yield probability relation for farmers.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]</strong></p></li>
+<li><p><strong>total_profits</strong> (<em>np.ndarray</em>) – Total profits under different drought scenarios without adaptation.</p></li>
+<li><p><strong>profits_no_event</strong> (<em>np.ndarray</em>) – Profits under the ‘no drought’ scenario without adaptation.</p></li>
+<li><p><strong>total_profits_adaptation</strong> (<em>np.ndarray</em>) – Total profits under different drought scenarios with adaptation.</p></li>
+<li><p><strong>profits_no_event_adaptation</strong> (<em>np.ndarray</em>) – Profits under the ‘no drought’ scenario with adaptation.</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.profits_SEUT_crops">
+<span class="sig-name descname"><span class="pre">profits_SEUT_crops</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">unique_crop_calendars</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">farmer_yield_probability_relation</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.profits_SEUT_crops"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.profits_SEUT_crops" title="Link to this definition"></a></dt>
+<dd><p>Calculate total profits under different drought probability scenarios with crop adaptation measures (Adaptation Type 2).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>Tuple containing profits without adaptation, profits with adaptation options, and additional data.</strong></p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-data docutils literal notranslate"><span class="pre">Tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.save_harvest_spei">
+<span class="sig-name descname"><span class="pre">save_harvest_spei</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">harvesting_farmers</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.save_harvest_spei"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.save_harvest_spei" title="Link to this definition"></a></dt>
+<dd><p>Update the monthly Standardized Precipitation Evapotranspiration Index (SPEI) array by shifting past records and adding the SPEI for the current month.
+:rtype: <span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This method updates the <cite>monthly_SPEI</cite> attribute in place.</p>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.save_yearly_income">
+<span class="sig-name descname"><span class="pre">save_yearly_income</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">income</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">potential_income</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.save_yearly_income"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.save_yearly_income" title="Link to this definition"></a></dt>
+<dd><p>Saves the latest profit and potential profit values for harvesting farmers to determine yearly profits, considering inflation and field size.
+:rtype: <span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<dl>
+<dt>This function performs the following operations:</dt><dd><ol class="arabic simple">
+<li><p>Asserts that all profit and potential profit values are non-negative.</p></li>
+</ol>
+<p>2. Updates the latest profits and potential profits matrices by shifting all columns one column further.
+The last column value is dropped.
+3. Adjusts the yearly profits by accounting for the latest profit, field size, and inflation.</p>
+</dd>
+</dl>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.set_social_network">
+<span class="sig-name descname"><span class="pre">set_social_network</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.set_social_network"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.set_social_network" title="Link to this definition"></a></dt>
+<dd><p>Determines for each farmer a group of neighbors which constitutes their social network.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.spinup">
+<span class="sig-name descname"><span class="pre">spinup</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.spinup"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.spinup" title="Link to this definition"></a></dt>
+<dd><p>Perform any necessary spinup for the module. This method should be overridden by subclasses.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.step">
+<span class="sig-name descname"><span class="pre">step</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.step"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.step" title="Link to this definition"></a></dt>
+<dd><p>This function is called at the beginning of each timestep.</p>
+<p>Then, farmers harvest and plant crops.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>ValueError</strong> – When farmers don’t have a yield probability relation yet.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.update_field_indices">
+<span class="sig-name descname"><span class="pre">update_field_indices</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.update_field_indices"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.update_field_indices" title="Link to this definition"></a></dt>
+<dd><p>Creates <cite>field_indices_by_farmer</cite> and <cite>field_indices</cite>. These indices are used to quickly find the fields for a specific farmer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.update_field_indices_numba">
+<em class="property"><span class="pre">static</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">update_field_indices_numba</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">land_owners</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.update_field_indices_numba"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.update_field_indices_numba" title="Link to this definition"></a></dt>
+<dd><p>Creates <cite>field_indices_by_farmer</cite> and <cite>field_indices</cite>. These indices are used to quickly find the fields for a specific farmer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>land_owners</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – Array of the land owners. Each unique ID is a different land owner. -1 means the land is not owned by anyone.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>field_indices_by_farmer</strong> – This array contains the indices where the fields of a farmer are stored in <cite>field_indices</cite>.</p></li>
+<li><p><strong>field_indices</strong> – This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">tuple</span></code>[<code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>, <code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code>]</span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.water_abstraction_sum">
+<span class="sig-name descname"><span class="pre">water_abstraction_sum</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.water_abstraction_sum"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.water_abstraction_sum" title="Link to this definition"></a></dt>
+<dd><p>Aggregates yearly water abstraction from different sources (channel, reservoir, groundwater) for each farmer.</p>
+<p>Also computes the total abstraction per farmer.
+:rtype: <span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<dl class="simple">
+<dt>This function performs the following steps:</dt><dd><ol class="arabic simple">
+<li><p>Updates the yearly channel water abstraction for each farmer.</p></li>
+<li><p>Updates the yearly reservoir water abstraction for each farmer.</p></li>
+<li><p>Updates the yearly groundwater water abstraction for each farmer.</p></li>
+<li><p>Computes and updates the total water abstraction for each farmer.</p></li>
+</ol>
+</dd>
+</dl>
+</div>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.CropFarmers.yield_ratio_to_profit">
+<span class="sig-name descname"><span class="pre">yield_ratio_to_profit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">yield_ratios</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">crops_mask</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nan_array</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#CropFarmers.yield_ratio_to_profit"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.CropFarmers.yield_ratio_to_profit" title="Link to this definition"></a></dt>
+<dd><p>Convert yield ratios to monetary profit values.</p>
+<p>This function computes the profit values for each crop based on given yield ratios.
+The profit is calculated by multiplying the crop yield in kilograms per sqr. meter with
+the average crop price. The function leverages various data inputs, such as current crop
+prices and reference yields.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>yield_ratios</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – The array of yield ratios for the crops.</p></li>
+<li><p><strong>crops_mask</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – A mask that denotes valid crops, based on certain conditions.</p></li>
+<li><p><strong>array_with_reference</strong> – An array initialized with NaNs, later used to store reference yields and crop prices.</p></li>
+<li><p><strong>nan_array</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – An array filled with NaNs, used for initializing arrays.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>An array representing the profit values for each crop based on the given yield ratios.</strong></p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span></p>
+</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<ul class="simple">
+<li><p>It assumes that the crop prices are non-NaN for the current model time.</p></li>
+<li><p>The function asserts that crop yields in kg are always non-negative.</p></li>
+</ul>
+</div>
+<p>TODO: Take the average crop prices over the last x years.</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.advance_crop_rotation_year">
+<span class="sig-name descname"><span class="pre">advance_crop_rotation_year</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">current_crop_calendar_rotation_year_index</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">crop_calendar_rotation_years</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#advance_crop_rotation_year"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.advance_crop_rotation_year" title="Link to this definition"></a></dt>
+<dd><p>Update the crop rotation year for each farmer. This function is used to update the crop rotation year for each farmer at the end of the year.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>current_crop_calendar_rotation_year_index</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – The current crop rotation year for each farmer.</p></li>
+<li><p><strong>crop_calendar_rotation_years</strong> (<span class="sphinx_autodoc_typehints-type"><code class="xref py py-class docutils literal notranslate"><span class="pre">ndarray</span></code></span>) – The number of years in the crop rotation cycle for each farmer.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.cumulative_mean">
+<span class="sig-name descname"><span class="pre">cumulative_mean</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mean</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">counter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">update</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#cumulative_mean"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.cumulative_mean" title="Link to this definition"></a></dt>
+<dd><p>Calculates the cumulative mean of a series of numbers. This function operates in place.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>mean</strong> – The cumulative mean.</p></li>
+<li><p><strong>counter</strong> – The number of elements that have been added to the mean.</p></li>
+<li><p><strong>update</strong> – The new elements that needs to be added to the mean.</p></li>
+<li><p><strong>mask</strong> – A mask that indicates which elements should be updated. If None, all elements are updated.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.shift_and_reset_matrix">
+<span class="sig-name descname"><span class="pre">shift_and_reset_matrix</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">matrix</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#shift_and_reset_matrix"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.shift_and_reset_matrix" title="Link to this definition"></a></dt>
+<dd><p>Shifts columns to the right in the matrix and sets the first column to zero.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="geb.agents.crop_farmers.shift_and_update">
+<span class="sig-name descname"><span class="pre">shift_and_update</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">array</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">update</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/geb/agents/crop_farmers.html#shift_and_update"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#geb.agents.crop_farmers.shift_and_update" title="Link to this definition"></a></dt>
+<dd><p>Shifts the array and updates the first element with the update value.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>array</strong> – The array that needs to be shifted.</p></li>
+<li><p><strong>update</strong> – The value that needs to be added to the first element of the array.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p><span class="sphinx_autodoc_typehints-type"><code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></span></p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="households.html" class="btn btn-neutral float-left" title="Households" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="reservoir_operators.html" class="btn btn-neutral float-right" title="Reservoir operators" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; <a href="../copyright.html">Copyright</a> 2023, VU-IVM and IIASA.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
