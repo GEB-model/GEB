@@ -296,7 +296,9 @@ def get_discharge_and_river_parameters_by_river(
         x=x_points,
         y=y_points,
     ).compute()
-    assert not np.isnan(discharge_per_point).any(), "Discharge values contain NaNs"
+    assert not np.isnan(discharge_per_point.values).any(), (
+        "Discharge values contain NaNs"
+    )
 
     if river_width_alpha is not None:
         river_width_alpha_per_point = river_width_alpha[y_points, x_points]
