@@ -322,7 +322,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if load_data_from_store:
             self.store.load()
 
-        if not in_spinup:
+        # in spinup mode, save the spinup time range to the store for later verification
+        # in run mode, verify that the spinup time range matches the stored time range
+        if in_spinup:
+            self._store_spinup_time_range()
+        else:
             self._verify_spinup_time_range()
 
         if self.simulate_hydrology:
@@ -466,7 +470,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # }
 
         self.var = self.store.create_bucket("var")
-        self._store_spinup_time_range()
 
         self._initialize(
             create_reporter=True,
