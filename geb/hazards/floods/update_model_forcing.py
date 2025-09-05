@@ -1,15 +1,23 @@
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import geopandas as gpd
+import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel
-from shapely.geometry import Point
 
 from .io import import_rivers
-from .sfincs_utils import configure_sfincs_model, get_logger
+from .sfincs_utils import (
+    configure_sfincs_model,
+    get_discharge_and_river_parameters_by_river,
+    get_logger,
+    get_representative_river_points,
+    get_start_point,
+)
 
 
 def to_sfincs_datetime(dt: datetime) -> str:
@@ -79,24 +87,94 @@ def update_sfincs_model_forcing_coastal(
     configure_sfincs_model(sf, model_root, simulation_root)
 
 
-def update_sfincs_model_forcing(
-    model_root,
-    simulation_root,
-    event,
-    discharge_grid,
-    soil_water_capacity_grid,  # seff
-    max_water_storage_grid,  # smax
-    saturated_hydraulic_conductivity_grid,  # ks
-    uparea_discharge_grid,
-    forcing_method,
-    precipitation_grid=None,
+def setup_infiltration(
+    sfincs_model: SfincsModel,
+    max_water_storage: xr.Dataset,
+    soil_water_capacity: xr.Dataset,
+    saturated_hydraulic_conductivity: xr.Dataset,
 ) -> None:
+    """Set up infiltration parameters in the SFINCS model.
+
+    Uses the curve number method with recovery.
+
+    Args:
+        sfincs_model: SfincsModel object to update.
+        max_water_storage: xarray Dataset containing maximum water storage (smax).
+        soil_water_capacity: xarray Dataset containing soil water capacity (seff).
+        saturated_hydraulic_conductivity: xarray Dataset containing saturated hydraulic conductivity (ks).
+    """
+    max_water_storage = max_water_storage.raster.reproject_like(
+        sfincs_model.grid, method="average"
+    )
+    max_water_storage = max_water_storage.rename_vars({"max_water_storage": "smax"})
+    max_water_storage.attrs.update(**sfincs_model._ATTRS.get("smax", {}))
+    sfincs_model.set_grid(max_water_storage, name="smax")
+    sfincs_model.set_config("smaxfile", "sfincs.smax")
+
+    soil_water_capacity = soil_water_capacity.raster.reproject_like(
+        sfincs_model.grid, method="average"
+    )
+    soil_water_capacity = soil_water_capacity.rename_vars(
+        {"soil_storage_capacity": "seff"}
+    )
+    soil_water_capacity.attrs.update(**sfincs_model._ATTRS.get("seff", {}))
+    sfincs_model.set_grid(soil_water_capacity, name="seff")
+    sfincs_model.set_config("sefffile", "sfincs.seff")
+
+    saturated_hydraulic_conductivity = (
+        saturated_hydraulic_conductivity.raster.reproject_like(
+            sfincs_model.grid, method="average"
+        )
+    )
+    saturated_hydraulic_conductivity = saturated_hydraulic_conductivity.rename_vars(
+        {"saturated_hydraulic_conductivity": "ks"}
+    )
+    saturated_hydraulic_conductivity.attrs.update(**sfincs_model._ATTRS.get("ks", {}))
+    sfincs_model.set_grid(saturated_hydraulic_conductivity, name="ks")
+    sfincs_model.set_config("ksfile", "sfincs.ks")
+
+
+def update_sfincs_model_forcing(
+    model_root: Path,
+    simulation_root: Path,
+    event: dict[str, Any],
+    discharge_grid: str | xr.DataArray,
+    waterbody_ids: npt.NDArray[np.int32],
+    soil_water_capacity_grid: xr.Dataset,
+    max_water_storage_grid: xr.Dataset,
+    saturated_hydraulic_conductivity_grid: xr.Dataset,
+    forcing_method: str,
+    precipitation_grid: None | xr.DataArray | list[xr.DataArray] = None,
+) -> None:
+    """Sets forcing for a SFINCS model based on the provided parameters.
+
+    Creates a new simulation directory and creteas a new sfincs model
+    in that folder. Variables that do not change between simulations
+    (e.g., grid, mask, etc.) are retained in the original model folder
+    and inherited by the new simulation using relative paths.
+
+    Args:
+        model_root: Path to the model root directory.
+        simulation_root: Path to the simulation root directory.
+        event: Dictionary containing event details such as start and end times.
+        discharge_grid: Discharge grid as xarray Dataset or path to netcdf file.
+        waterbody_ids: Array of waterbody IDs, of identical x and y dimensions as discharge_grid.
+        soil_water_capacity_grid: Dataset containing soil water capacity (seff).
+        max_water_storage_grid: Dataset containing maximum water storage (smax).
+        saturated_hydraulic_conductivity_grid: Dataset containing saturated hydraulic conductivity (ks).
+        forcing_method: Method to set forcing, either "headwater_points" or "precipitation".
+        precipitation_grid: Precipitation grid as xarray DataArray or list of DataArrays. Can also be None when
+            forcing method is headwater_points. Defaults to None.
+
+    Raises:
+        ValueError: If an invalid forcing method is provided.
+    """
     assert os.path.isfile(os.path.join(model_root, "sfincs.inp")), (
         f"model root does not exist {model_root}"
     )
     if not isinstance(discharge_grid, str):
-        assert isinstance(discharge_grid, xr.Dataset), (
-            "discharge_grid should be a string or a xr.Dataset"
+        assert isinstance(discharge_grid, xr.DataArray), (
+            "discharge_grid should be a string or a xr.DataArray"
         )
         assert discharge_grid.raster.crs is not None, "discharge_grid should have a crs"
         assert (
@@ -108,17 +186,57 @@ def update_sfincs_model_forcing(
         ) >= event["end_time"]
 
     # read model
-    sf: SfincsModel = SfincsModel(root=model_root, mode="r+", logger=get_logger())
+    sfincs_model: SfincsModel = SfincsModel(
+        root=model_root, mode="r+", logger=get_logger()
+    )
 
     # update mode time based on event tstart and tend from event dict
-    sf.setup_config(
+    sfincs_model.setup_config(
         tref=to_sfincs_datetime(event["start_time"]),
         tstart=to_sfincs_datetime(event["start_time"]),
         tstop=to_sfincs_datetime(event["end_time"]),
     )
-    segments = import_rivers(model_root)
 
-    if precipitation_grid is not None:
+    if forcing_method == "headwater_points":
+        rivers = import_rivers(model_root)
+        rivers_with_forcing_point = rivers[~rivers["is_downstream_outflow_subbasin"]]
+        headwater_rivers = rivers_with_forcing_point[
+            rivers_with_forcing_point["maxup"] == 0
+        ]
+
+        inflow_nodes = headwater_rivers.copy()
+
+        # Only select headwater points. Maxup is the number of upstream river segments.
+        inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(get_start_point)
+
+        river_representative_points = []
+        for ID in headwater_rivers.index:
+            river_representative_points.append(
+                get_representative_river_points(ID, headwater_rivers, waterbody_ids)
+            )
+
+        discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
+            headwater_rivers.index,
+            river_representative_points,
+            discharge=discharge_grid,
+        )
+
+        locations = inflow_nodes.to_crs(sfincs_model.crs)
+        index_mapping = {
+            idx: i + 1
+            for i, idx in enumerate(locations.index)  # SFINCS index starts at 1
+        }
+        locations.index = locations.index.map(index_mapping)
+        locations.index.name = "sfincs_idx"
+        discharge_by_river.columns = discharge_by_river.columns.map(index_mapping)
+
+        # Give discharge_forcing_points as forcing points
+        sfincs_model.setup_discharge_forcing(
+            locations=inflow_nodes.to_crs(sfincs_model.crs),
+            timeseries=discharge_by_river,
+        )
+
+    elif forcing_method == "precipitation":
         if not isinstance(precipitation_grid, list):
             assert isinstance(precipitation_grid, xr.DataArray), (
                 "precipitation_grid should be a list or an xr.DataArray"
@@ -147,200 +265,27 @@ def update_sfincs_model_forcing(
             time=slice(event["start_time"], event["end_time"])
         )
 
-        sf.set_forcing(
+        sfincs_model.set_forcing(
             (precipitation_grid * 3600).to_dataset(name="precip_2d"), name="precip_2d"
         )  # convert from kg/m2/s to mm/h
 
-    if forcing_method == "headwater_points":
-        # TODO: Cleanup and re-use nodes (or create nodes here)
-        exploded = segments[segments["order"] == 1]
-        exploded = exploded.explode(
-            index_parts=True
-        )  # To Handle any MULTILINE Geometries, we explode the MULTILINE to seperate LINES
-        head_water_points = gpd.GeoDataFrame(
-            columns=["uparea", "geometry"], crs=segments.crs
+        setup_infiltration(
+            sfincs_model=sfincs_model,
+            max_water_storage=max_water_storage_grid,
+            soil_water_capacity=soil_water_capacity_grid,
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_grid,
         )
-
-        # Iterate through the rows of the original GeoDataFrame
-        for index, row in exploded.iterrows():
-            if row["order"] == 1:
-                start_point = Point(
-                    row["geometry"].coords[
-                        0
-                    ]  # TODO: Check if this is the correct point to use
-                )  # Extract the starting point of the LineString
-                head_water_points.loc[len(head_water_points)] = [
-                    row["uparea"],
-                    start_point,
-                ]
-
-        # If needed, set the geometry column
-        head_water_points.set_geometry("geometry", inplace=True)
-        # Align the CRS of the head_water_points with the river segments
-        head_water_points = head_water_points.set_crs(crs=segments.crs)
-        # update the upstream area point using merit_hydro uparea
-        uparea_sfincs = sf.data_catalog.get_rasterdataset(
-            "merit_hydro",
-            bbox=sf.mask.raster.transform_bounds(4326),
-            buffer=2,
-            variables=["uparea"],
-        )
-        assert head_water_points.crs == uparea_sfincs.rio.crs, (
-            "CRS mismatch between head_water_points and uparea_sfincs, make sure they are in the same CRS"
-        )
-        head_water_points["uparea"] = uparea_sfincs.raster.sample(head_water_points)
-        # Combine River_inflow with Headwater points
-        head_water_points = head_water_points.to_crs(sf.crs)
-        if (
-            "dis" in sf.forcing
-        ):  # we have a basin which has both river inflow and headwater points
-            river_inflow_points = sf.forcing["dis"].vector.to_gdf()
-            river_inflow_points = river_inflow_points.to_crs(
-                4326
-            )  # Change crs to 4326 before sampling uparea
-            uparea_sfincs = sf.data_catalog.get_rasterdataset(
-                "merit_hydro",
-                bbox=sf.mask.raster.transform_bounds(4326),
-                buffer=2,
-                variables=["uparea"],
-            )
-            assert river_inflow_points.crs == uparea_sfincs.rio.crs, (
-                "CRS mismatch between river_inflow_points and uparea_sfincs, make sure they are in the same CRS"
-            )
-            river_inflow_points["uparea"] = uparea_sfincs.raster.sample(
-                river_inflow_points
-            )
-            river_inflow_points = river_inflow_points.to_crs(
-                sf.crs
-            )  # Change crs back to sf.crs
-            # Concatenate the two DataFrames
-            assert river_inflow_points.crs == head_water_points.crs, (
-                "CRS mismatch between river_inflow_points and head_water_points"
-            )
-            discharge_forcing_points = gpd.GeoDataFrame(
-                pd.concat(
-                    [
-                        river_inflow_points[
-                            ["geometry", "uparea"]
-                        ],  # Select the "geometry" and "uparea "column from the dataframe
-                        head_water_points[
-                            ["geometry", "uparea"]
-                        ],  # Select the "geometry" and "uparea" column from the dataframe
-                    ],
-                    ignore_index=True,
-                )
-            )
-        else:
-            discharge_forcing_points = head_water_points  # otherwise we have a basin with only headwater points
-
-        discharge_forcing_points = discharge_forcing_points.to_crs(
-            sf.crs
-        )  # used for setting up discharge forcing
-        discharge_forcing_points.to_file(
-            model_root / "inflow_points.gpkg", driver="GPKG"
-        )
-        # Give discharge_forcing_points as forcing points
-        sf.setup_discharge_forcing(locations=discharge_forcing_points)
-
-    elif forcing_method == "precipitation":
-        # Only set inflow points (not using headwater points)
-        if (
-            "dis" in sf.forcing
-        ):  # if no inflow points (headwater catchment) don't set discharge forcing
-            sf.setup_discharge_forcing()
-
-        # CODE FOR INFILTRATION WITH RECOVERY
-        # smax
-        smax = max_water_storage_grid.raster.reproject_like(sf.grid, method="average")
-        smax = smax.rename_vars({"max_water_storage": "smax"})
-        smax.attrs.update(**sf._ATTRS.get("smax", {}))
-        sf.set_grid(smax, name="smax")
-        sf.set_config("smaxfile", "sfincs.smax")
-
-        # seff
-        seff = soil_water_capacity_grid.raster.reproject_like(sf.grid, method="average")
-        seff = seff.rename_vars({"soil_storage_capacity": "seff"})
-        seff.attrs.update(**sf._ATTRS.get("seff", {}))
-        sf.set_grid(seff, name="seff")
-        sf.set_config("sefffile", "sfincs.seff")
-
-        # ks
-        ks = saturated_hydraulic_conductivity_grid.raster.reproject_like(
-            sf.grid, method="average"
-        )
-        ks = ks.rename_vars({"saturated_hydraulic_conductivity": "ks"})
-        ks.attrs.update(**sf._ATTRS.get("ks", {}))
-        sf.set_grid(ks, name="ks")
-        sf.set_config("ksfile", "sfincs.ks")
 
     else:
         raise ValueError(
             "Invalid forcing method. Choose between 'headwater_points' and 'precipitation'"
         )
 
-    if (
-        precipitation_grid is None
-    ):  # Case being basin contains both river_inflow & Headwater points
-        # in some cases the geometry of the geojson is slightly different from the geometry of the forcing points.
-        # This leads to errors. Therefore, we first read the forcing points and then update the geometry of the geojson
-        # to those of the forcing points
-        locations_all = gpd.read_file(Path(sf.root) / "gis" / "src.geojson")
-        locations_all["index"] = locations_all["index"] + 1
-        locations_all = locations_all.set_index("index")
-        forcing_points = sf.forcing["dis"].vector.to_gdf()
-        # Assert that the geometry columns are almost equal
-        for point1, point2 in zip(locations_all.iterrows(), forcing_points.iterrows()):
-            assert point1[1]["geometry"].almost_equals(point2[1]["geometry"], decimal=0)
-            assert point1[0] == point2[0]
-        locations_all["geometry"] = forcing_points["geometry"]
-
-        bounds = sf.mask.raster.transform_bounds(4326)
-        if isinstance(discharge_grid, (xr.Dataset, xr.DataArray)):
-            discharge_grid = discharge_grid.rio.pad_box(
-                minx=bounds[0],
-                miny=bounds[1],
-                maxx=bounds[2],
-                maxy=bounds[3],
-                constant_values=0,
-            )
-        sf.setup_discharge_forcing_from_grid(
-            discharge=discharge_grid,
-            locations=locations_all,  # all_points(river_inflow+Headwater Points)
-            uparea=uparea_discharge_grid,
-        )
-        assert len(locations_all) == sf.forcing["dis"].shape[1]
-    else:  # Case being basin contains only river_inflow points, and precipitation grid is provided
-        if "dis" in sf.forcing:
-            forcing_points = sf.forcing["dis"].vector.to_gdf()
-            # change crs to 4326 if needed
-            forcing_points = forcing_points.to_crs(4326)
-            uparea_sfincs = sf.data_catalog.get_rasterdataset(
-                "merit_hydro",
-                bbox=sf.mask.raster.transform_bounds(4326),
-                buffer=2,
-                variables=["uparea"],
-            )
-            assert forcing_points.crs == uparea_sfincs.rio.crs, (
-                "CRS mismatch between river_inflow_points and uparea_sfincs, make sure they are in the same CRS"
-            )
-            forcing_points["uparea"] = uparea_sfincs.raster.sample(forcing_points)
-            forcing_points = forcing_points.to_crs(
-                sf.crs
-            )  # change crs back to model crs after sampling uparea
-            uparea_discharge_grid = uparea_discharge_grid.compute()
-
-            # TODO: Create a proper assertion for this
-            # sf.setup_discharge_forcing_from_grid(
-            #     discharge=discharge_grid,
-            #     locations=forcing_points,  # Only river inflow point here
-            #     uparea=uparea_discharge_grid,
-            # )
-
     # detect whether water level forcing should be set (use this under forcing == coastal) PLot basemap and forcing to check
     if (
-        sf.grid["msk"] == 2
+        sfincs_model.grid["msk"] == 2
     ).any():  # if mask is 2, the model requires water level forcing
-        waterlevel = sf.data_catalog.get_dataset(
+        waterlevel = sfincs_model.data_catalog.get_dataset(
             "waterlevel"
         ).compute()  # define water levels and stations in data_catalog.yml
 
@@ -363,6 +308,8 @@ def update_sfincs_model_forcing(
         )  # for hydromt/SFINCS index should start at 1
         timeseries.columns = locations.index
 
-        sf.setup_waterlevel_forcing(timeseries=timeseries, locations=locations)
+        sfincs_model.setup_waterlevel_forcing(
+            timeseries=timeseries, locations=locations
+        )
 
-    configure_sfincs_model(sf, model_root, simulation_root)
+    configure_sfincs_model(sfincs_model, model_root, simulation_root)

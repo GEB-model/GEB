@@ -293,13 +293,11 @@ class SFINCS:
                 name="discharge",
             )
 
-        discharge_grid: xr.Dataset = xr.Dataset({"discharge": discharge_grid})
-
         discharge_grid.raster.set_crs(self.model.crs)
         end_time = discharge_grid.time[-1] + pd.Timedelta(
             self.model.timestep_length / routing_substeps
         )
-        discharge_grid: xr.Dataset = discharge_grid.sel(
+        discharge_grid: xr.DataArray = discharge_grid.sel(
             time=slice(start_time, end_time)
         )
 
@@ -322,13 +320,15 @@ class SFINCS:
             model_root=self.sfincs_model_root(event_name),
             simulation_root=self.sfincs_simulation_root(event),
             event=event,
-            forcing_method="precipitation",
+            forcing_method="headwater_points",
             discharge_grid=discharge_grid,
+            waterbody_ids=self.model.hydrology.grid.decompress(
+                self.model.hydrology.grid.var.waterBodyID
+            ),
             soil_water_capacity_grid=soil_storage_capacity_grid,
             max_water_storage_grid=self.max_water_storage_grid,
             saturated_hydraulic_conductivity_grid=saturated_hydraulic_conductivity_grid,
             precipitation_grid=precipitation_grid,
-            uparea_discharge_grid=None,
         )
 
     def run_single_event(self, event, start_time, precipitation_scale_factor=1.0):
