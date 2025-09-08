@@ -134,6 +134,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
     def multiverse(
         self,
+        variables: list[str],
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = False,
     ) -> None | dict[Any, float]:
@@ -167,68 +168,78 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # set a folder to store the initial state of the multiverse
         store_location: Path = self.simulation_root / "multiverse" / "forecast"
         self.store.save(store_location)
-
-        original_pr_hourly: xr.DataArray = self.forcing["pr_hourly"]
-
-        forecasts: xr.DataArray = open_zarr(
-            Path("data")
-            / "forecasts"
-            / f"{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
-        )
-
-        if return_mean_discharge:
-            mean_discharge: dict[Any, float] = {}
-
-        for member in forecasts.member:
-            self.multiverse_name = member.item()
-
-            pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member)
-
+        for var in variables:
+            forecasts: xr.DataArray = open_zarr(
+                self.input_folder
+                / "other"
+                / "forecasts"
+                / "ECMWF"
+                / f"{var}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
+            ).compute()
+            forecast_lead_time = pd.to_datetime(
+                forecasts.time[-1].item()
+            ) - pd.to_datetime(forecasts.time[0].item())
+            test = self.forcing["pr"].compute()
             forecast_end_date = round_up_to_start_of_next_day_unless_midnight(
-                pd.to_datetime(pr_hourly_forecast.time[-1].item()).to_pydatetime()
+                pd.to_datetime(forecasts.time[-1].item()).to_pydatetime()
             ).date()
             self.n_timesteps = (forecast_end_date - self.start_time.date()).days
 
-            # Clip the original precipitation data to the start of the forecast
-            # Therefore we take the start of the forecast and subtract one second
-            # to ensure that the original precipitation data does not overlap with the forecast
-            original_pr_hourly_clipped_to_start_of_forecast: xr.DataArray = (
-                original_pr_hourly.sel(
-                    time=slice(
-                        None, (pr_hourly_forecast.time[0] - pd.Timedelta(seconds=1))
-                    )
-                )
-            )
-
-            # Concatenate the original precipitation data with the forecast data
-            pr_hourly_observed_and_forecasted_combined: list[xr.DataArray] = [
-                original_pr_hourly_clipped_to_start_of_forecast,
-                pr_hourly_forecast,
-            ]
-
-            # Set the pr_hourly forcing data to the combined data
-            self.model.forcing["pr_hourly"] = pr_hourly_observed_and_forecasted_combined
-
-            print(f"Running forecast member {member.item()}...")
-            self.step_to_end()
+            original_data: xr.DataArray = self.forcing[
+                var
+            ].compute()  # save original dataarray to restore later
 
             if return_mean_discharge:
-                mean_discharge[member.item()] = (
-                    self.hydrology.routing.grid.var.discharge_m3_s.mean()
-                ).item()
+                mean_discharge: dict[Any, float] = {}
 
-            # restore the initial state of the multiverse
-            self.restore(
-                store_location=store_location,
-                timestep=store_timestep,
-                n_timesteps=store_n_timesteps,
+            print(
+                f"Entering the multiverse space for variable {var}. Hydrological model run starts at {self.start_time}. SFINCS and forecasts will be active from {forecast_issue_datetime} with max. lead time of {forecast_lead_time} days"
             )
+            for member in forecasts.member:
+                self.multiverse_name = member.item()
 
-        print("Forecast finished, restoring all conditions...")
+                forecast_member: xr.DataArray = forecasts.sel(member=member)
 
-        # restore the precipitation dataarray, step out of the multiverse
-        self.forcing["pr_hourly"] = original_pr_hourly
-        self.multiverse_name: None = None
+                # Clip the original precipitation data to the start of the forecast
+                # Therefore we take the start of the forecast and subtract one second
+                # to ensure that the original precipitation data does not overlap with the forecast
+                original_data_clipped_to_start_of_forecast: xr.DataArray = (
+                    original_data.sel(
+                        time=slice(
+                            None, (forecast_member.time[0] - pd.Timedelta(seconds=1))
+                        )
+                    )
+                )
+
+                # Concatenate the original precipitation data with the forecast data
+                observed_and_forecasted_combined: list[xr.DataArray] = [
+                    original_data_clipped_to_start_of_forecast,
+                    forecast_member,
+                ]
+
+                # Set the forcing data to the combined data
+                self.model.forcing[var] = observed_and_forecasted_combined
+
+                print(f"Running forecast member {member.item()}")
+                self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
+
+                if return_mean_discharge:
+                    mean_discharge[member.item()] = (
+                        self.hydrology.routing.grid.var.discharge_m3_s.mean()
+                    ).item()
+
+                # restore the initial state of the multiverse
+                self.restore(
+                    store_location=store_location,
+                    timestep=store_timestep,
+                    n_timesteps=store_n_timesteps,
+                )
+
+            print("Forecast finished, restoring all conditions...")
+
+            # restore the precipitation dataarray, step out of the multiverse
+            self.forcing[var] = original_data
+            self.multiverse_name: None = None
 
         if return_mean_discharge:
             return mean_discharge
@@ -245,10 +256,39 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             is None  # only start multiverse if not already in one
             and self.current_time.date()
         ):
-            for dt in self.config["general"]["forecasts"]["times"]:
-                if dt.date() == self.current_time.date():
+            # get files from the model input folder
+            # Get forecast files and extract datetimes from filenames
+            forecast_files: list[Path] = list(
+                (self.input_folder / "other" / "forecasts" / "ECMWF").glob("*.zarr")
+            )
+            # ...existing code...
+            forecast_issue_dates: list[datetime.date] = []
+            for f in forecast_files:
+                datetime_str = f.stem.split("_")[-1]
+                # Check if datetime string contains only digits, T, and colons (valid format)
+                if datetime_str.replace("T", "").replace(":", "").isdigit():
+                    dt = datetime.datetime.strptime(datetime_str, "%Y%m%dT%H%M%S")
+                    forecast_issue_dates.append(dt)
+                else:
+                    print(
+                        f"Warning: Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'. Skipping this file."
+                    )
+            if self.config["general"]["forecasts"]["only_rainfall"]:
+                variables = ["pr_hourly"]
+            else:
+                print("Other variables than rainfall not yet implemented.")
+
+            for dt in forecast_issue_dates:
+                if (
+                    dt == self.current_time
+                ):  # change to include hours (for when we move to hourly)
+                    forecast_datetime = datetime.datetime.combine(
+                        dt, datetime.time(0)
+                    )  # Convert date back to datetime for the multiverse method
+
                     self.multiverse(
-                        forecast_issue_datetime=dt,
+                        variables=variables,
+                        forecast_issue_datetime=forecast_datetime,
                         return_mean_discharge=True,
                     )
 

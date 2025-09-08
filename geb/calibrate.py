@@ -117,7 +117,7 @@ def get_observed_well_ratio(config):
     simulated_subdistricts.set_index(
         ["state_code", "district_c", "sub_distri"], inplace=True
     )
-    # select rows from observed_irrigation_sources where the index is in simulated_subdistricts
+    # select rows from observed_irrigation_sources wheFre the index is in simulated_subdistricts
     observed_irrigation_sources = observed_irrigation_sources.loc[
         simulated_subdistricts.index
     ]

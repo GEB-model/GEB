@@ -882,6 +882,8 @@ class Hydrology:
         include_spinup: bool = False,
         spinup_name: str = "spinup",
         export: bool = True,
+        include_yearly_plots: bool = False,
+        correct_Q_obs: bool = False,
     ) -> None:
         """Create skill score boxplot graphs for hydrological model evaluation metrics.
 
@@ -900,6 +902,10 @@ class Hydrology:
                 (currently not used in this method).
             spinup_name: Name of the spinup run (currently not used in this method).
             export: Whether to save the skill score graphs to PNG files.
+            include_yearly_plots: Whether yearly plots were created in the evaluation
+                (parameter accepted for compatibility but not used in this method).
+            correct_Q_obs: Whether observed discharge values were corrected in the evaluation
+                (parameter accepted for compatibility but not used in this method).
         """
         eval_result_folder = (
             Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"

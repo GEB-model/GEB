@@ -255,17 +255,50 @@ def process_ERA5(
     return da
 
 
+def generate_forecast_steps(forecast_date: datetime) -> str:
+    """Generate ECMWF forecast step string based on the forecast date.
+
+    ECMWF does not have a consistent 1h timestep for the entire operational archive. Asking hourly data to the server when it does not excist, will result in an error.
+    Therefore, we need to adjust the requested steps based on the available data, which is different before and after 2016-11-23:
+    - Before 2016-11-23: 3-hourly steps from 0-144h, 6-hourly steps from 144-360h
+    - From 2016-11-23 onwards: hourly steps from 0-90h, 3-hourly steps from 90-144h, 6-hourly steps from 144-360h
+
+    Args:
+        forecast_date: The forecast initialization date and time.
+
+    Returns:
+        ECMWF MARS step string in the format "0/3/6/9/..." with actual step hours.
+
+    Notes:
+        Returns step hours as required by ECMWF MARS API.
+    """
+    cutoff_date = date(2016, 11, 23)
+    steps = []
+
+    if forecast_date.date() < cutoff_date:
+        # Before 2016-11-23: 3-hourly from 0-144h, 6-hourly from 144-360h
+        steps.extend(range(0, 145, 3))  # 0, 3, 6, 9, ..., 144 (3-hourly)
+        steps.extend(range(150, 361, 6))  # 150, 156, 162, ..., 360 (6-hourly from 144h)
+    else:
+        # From 2016-11-23: hourly from 0-90h, 3-hourly from 90-144h, 6-hourly from 144-360h
+        steps.extend(range(0, 91))  # 0, 1, 2, 3, ..., 90 (hourly)
+        steps.extend(range(93, 145, 3))  # 93, 96, 99, ..., 144 (3-hourly from 90h)
+        steps.extend(range(150, 361, 6))  # 150, 156, 162, ..., 360 (6-hourly from 144h)
+
+    return "/".join(str(step) for step in steps)
+
+
 def download_forecasts_ECMWF(
     forecast_variable: float,
     preprocessing_folder: Path,
     bounds: tuple[float, float, float, float],
-    forecast_start_time: date | datetime,
-    forecast_end_time: date | datetime,
+    forecast_start: date | datetime,
+    forecast_end: date | datetime,
     forecast_model: str,
     forecast_resolution: float,
     forecast_horizon: int,
     forecast_timestep: int,
-    forecast_frequency: int,
+    forecast_frequency: list[int],
 ) -> None:
     """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
@@ -279,13 +312,17 @@ def download_forecasts_ECMWF(
     Args:
         bounds: The bounding box in the format (min_lon, min_lat, max_lon, max_lat).
         forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
-        forecast_start_time: The forecast initialization time (date or datetime).
-        forecast_end_time: The forecast end time (date or datetime).
+        forecast_start: The forecast initialization time (date or datetime).
+        forecast_end: The forecast end time (date or datetime).
         forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
         forecast_resolution: The spatial resolution of the forecast data (degrees).
         forecast_horizon: The forecast horizon in hours.
         forecast_timestep: The forecast timestep in hours.
         forecast_frequency: The frequency at which forecasts are initialized (hours).
+
+    Raises:
+        ImportError: If ECMWF_API_KEY is not found in environment variables.
+        ValueError: If forecast dates are before 2010-01-01.
     """
     # make directoy for the forecast variable
     forecast_variable_str = str(forecast_variable).replace(".", "-")
@@ -297,9 +334,9 @@ def download_forecasts_ECMWF(
         raise ImportError(
             "ECMWF_API_KEY not found in environment variables. Please set it to your ECMWF API key in .env file. See https://github.com/ecmwf/ecmwf-api-client"
         )
-
+    server = ecmwfapi.ECMWFService("mars")
     # preprocess download arguments
-    fc_area_buffer: float = 0.12  # spatial buffer around the forecasts
+    fc_area_buffer: float = 0.5  # spatial buffer around the forecasts
     bounds = (
         bounds[0] - fc_area_buffer,
         bounds[1] - fc_area_buffer,
@@ -307,20 +344,27 @@ def download_forecasts_ECMWF(
         bounds[3] + fc_area_buffer,
     )
     bounds_str: str = f"{bounds[3]}/{bounds[0]}/{bounds[1]}/{bounds[2]}"  # setup bounds -- > bounds should be in North/West/South/East
+    # check if other values than 00 or 12 are present in the list of forecast_frequency
     forecast_date_list = pd.date_range(
-        forecast_start_time,
-        forecast_end_time,
-        freq=f"{forecast_frequency}H",
+        forecast_start,
+        forecast_end,
     )
 
-    server = ecmwfapi.ECMWFService("mars")
+    # Date validation: only allow forecasts after 2010-01-01
+    earliest_allowed_date = date(2010, 1, 1)
+    for forecast_date in forecast_date_list:
+        if forecast_date.date() < earliest_allowed_date:
+            raise ValueError(
+                f"Forecast date {forecast_date.date()} is before 2010-01-01. "
+                "For historical data before 2010, please use hindcast data instead."
+            )
 
-    for date in forecast_date_list:
-        forecast_date: str = date.date().strftime("%Y-%m-%d")
-        forecast_hour: str = date.strftime("%H")
+    for forecast_date in forecast_date_list:
+        print(forecast_date)
+        forecast_date_str: str = forecast_date.date().strftime("%Y-%m-%d")
 
         # Generate output filename
-        forecast_datetime_str = date.strftime("%Y%m%dT%H%M%S")
+        forecast_datetime_str = forecast_date.strftime("%Y%m%dT%H%M%S")
         output_filename: Path = variable_folder / f"{forecast_datetime_str}.grb"
 
         # Process MARS request parameters
@@ -329,19 +373,22 @@ def download_forecasts_ECMWF(
         mars_levtype: str = "sfc"  # surface level data
         mars_param: str = str(forecast_variable)
         if forecast_timestep == 1:
-            mars_step: str = f"0/to/{forecast_horizon}"  # forecast steps
-        elif forecast_timestep > 6:
-            mars_step: str = f"0/to/{forecast_horizon}/{forecast_timestep}"
+            mars_step: str = generate_forecast_steps(
+                forecast_date
+            )  # forecast steps based on date
+        elif forecast_timestep >= 6:
+            mars_step: str = f"0/to/{forecast_horizon}/BY/{forecast_timestep}"
         else:
-            raise ValueError("forecast_timestep between 1 and 6 hours is not supported")
-        mars_stream: str = "enfo" if forecast_model == "ENS" else "oper"
-        mars_number: str = "1/to/50" if forecast_model == "ENS" else "0"
-        mars_time: str = forecast_hour  # initialization time (hour)
-        mars_type: str = "pf" if forecast_model == "ENS" else "cf"
+            raise ValueError(
+                f"Forecast timestep {forecast_timestep} is not supported. Please use 1 or >=6."
+            )
+        mars_stream: str = "enfo"
+        mars_time: list[int] = forecast_frequency
+        mars_type: str = "pf" if forecast_model == "pf" else "cf"
         mars_grid: str = str(forecast_resolution)  # spatial resolution
         mars_area: str = bounds_str  # bounding box, North/West/South/East
 
-        # check if all the forecast dates (forecast_date_list) are present in the preprocessing / climate / forecasts / ecmwf / variable / folder.
+        # download only necessary dates
         missing_dates = [
             date
             for date in forecast_date_list
@@ -355,30 +402,30 @@ def download_forecasts_ECMWF(
             )
             continue
 
-        # Execute MARS request with preprocessed parameters
-        print(
-            f"Requesting data from ECMWF MARS server.. {mars_class} {forecast_datetime_str} {mars_param} {mars_step} {mars_stream} {mars_number} {mars_type} {mars_grid} {mars_area}"
-        )
-
         # retrieve steps from mars
+        mars_request: dict[str, Any] = {
+            "class": mars_class,
+            "date": forecast_date_str,
+            "expver": mars_expver,
+            "levtype": mars_levtype,
+            "param": mars_param,
+            "step": mars_step,
+            "stream": mars_stream,
+            "time": mars_time,
+            "type": mars_type,
+            "grid": mars_grid,
+            "area": mars_area,
+        }
+        if forecast_model == "ENS":
+            mars_request["number"] = "1/to/50"
+
+        # Execute MARS request with preprocessed parameters
+        print(f"Requesting data from ECMWF MARS server.. {mars_request}")
 
         server.execute(
-            {
-                "class": mars_class,
-                "date": forecast_date,
-                "expver": mars_expver,
-                "levtype": mars_levtype,
-                "param": mars_param,
-                "step": mars_step,
-                "stream": mars_stream,
-                "number": mars_number,
-                "time": mars_time,
-                "type": mars_type,
-                "grid": mars_grid,
-                "area": mars_area,
-            },
+            mars_request,
             output_filename,
-        )
+        )  # start the download
 
 
 def process_forecast_ECMWF(
@@ -432,6 +479,21 @@ def process_forecast_ECMWF(
         da = da.drop_vars(["time", "step", "surface"])
         da = da.rename({"valid_time": "time"})
 
+        # ensure all the timesteps are hourly
+        # check if the time dimension always has a 1 hour difference between consecutive timesteps
+        if not (da.time.diff("time").astype(np.int64) == 3600 * 1e9).all():
+            # convert to hourly timesteps
+
+            # print all the unique timesteps in the time dimension
+            print(
+                f"Timesteps in the forecast are not hourly, resampling to hourly. Found timesteps: {np.unique(da.time.diff('time').astype(np.int64) / 1e9 / 3600)} hours"
+            )
+
+            da = da.resample(time="1H").interpolate("linear")
+            # convert back to float32
+            da = da.astype(np.float32)
+        else:
+            print("All timesteps are already hourly, no need to resample")
         # rename variables and correct units
         if forecast_variable == 228.128:  # total precipitation
             da = da.rename("rainfall")
@@ -2598,9 +2660,9 @@ class Forcing:
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forecasts(
         self,
-        forecast_variables: List[int],
-        forecast_start_time: date | datetime,
-        forecast_end_time: date | datetime,
+        only_rainfall: bool,
+        forecast_start: date | datetime,
+        forecast_end: date | datetime,
         forecast_provider: str,
         forecast_model: str,
         forecast_resolution: float,
@@ -2612,8 +2674,8 @@ class Forcing:
 
         Args:
             forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
-            forecast_start_time: The forecast initialization time (date or datetime).
-            forecast_end_time: The forecast end time (date or datetime).
+            forecast_start: The forecast initialization time (date or datetime).
+            forecast_end: The forecast end time (date or datetime).
             forecast_provider: The forecast data provider to use (default: "ECMWF").
             forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
             forecast_resolution: The spatial resolution of the forecast data (degrees).
@@ -2624,8 +2686,9 @@ class Forcing:
 
         if forecast_provider == "ECMWF":
             self.setup_forecasts_ECMWF(
-                forecast_start_time,
-                forecast_end_time,
+                only_rainfall,
+                forecast_start,
+                forecast_end,
                 forecast_model,
                 forecast_resolution,
                 forecast_horizon,
@@ -2636,8 +2699,9 @@ class Forcing:
 
     def setup_forecasts_ECMWF(
         self,
-        forecast_start_time: date | datetime,
-        forecast_end_time: date | datetime,
+        only_rainfall: bool,
+        forecast_start: date | datetime,
+        forecast_end: date | datetime,
         forecast_model: str,
         forecast_resolution: float,
         forecast_horizon: int,
@@ -2647,12 +2711,11 @@ class Forcing:
         """Sets up the folder structure for ECMWF forecast data.
 
         Args:
-            folder: The base folder to store the forecast data.
-            bounds: The spatial bounds for the forecast data [min_lon, min_lat, max_lon, max_lat].
-            forecast_variables: List of ECMWF parameter codes to download (see ECMWF documentation).
-            forecast_start_time: The forecast initialization time (date or datetime).
-            forecast_end_time: The forecast end time (date or datetime).
-            forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
+            only_rainfall: If True, only download rainfall forecasts.
+            forecast_start: The forecast initialization time (date or datetime).
+            forecast_end: The forecast end time (date or datetime).
+            forecast_model: The ECMWF forecast model to use (e.g., "HRES",
+                "ENS").
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep: The forecast timestep in hours.
@@ -2668,14 +2731,14 @@ class Forcing:
         bounds = target.raster.bounds
 
         MARS_codes: dict[str, float] = {
-            "total_precipitation": 228.128,  # in kg/m2
-        }
+            "total_precipitation": 228,  # in kg/m2
+        }  # https://codes.ecmwf.int/grib/param-db/ --> parameter IDs (the .128 is necessary for parameters with up to 3 digits)
 
         download_args: dict[str, Any] = {
             "preprocessing_folder": preprocessing_folder,
             "bounds": bounds,
-            "forecast_start_time": forecast_start_time,
-            "forecast_end_time": forecast_end_time,
+            "forecast_start": forecast_start,
+            "forecast_end": forecast_end,
             "forecast_model": forecast_model,
             "forecast_resolution": forecast_resolution,
             "forecast_horizon": forecast_horizon,
