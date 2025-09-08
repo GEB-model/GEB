@@ -24,8 +24,8 @@ jobs:
         run: uv sync --dev
       - uses: ammaraskar/sphinx-problem-matcher@master
       - name: Build Sphinx docs
+        working-directory: docs
         run: |
-          cd docs
           mkdir -p _build
           uv run make html
       - uses: actions/upload-artifact@v4
@@ -38,8 +38,8 @@ jobs:
       - name: Install Wrangler
         run: |
           npm install -g wrangler
-      - name: Deploy with Wrangler (run from docs/)
-        working-directory: docs
+      - name: Deploy with Wrangler
+        working-directory: docs/_build/html
         run: |
           wrangler deploy
         env:
