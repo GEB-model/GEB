@@ -365,7 +365,7 @@ def download_forecasts_ECMWF(
         forecast_date_str: str = forecast_date.date().strftime("%Y-%m-%d")
 
         # Generate output filename
-        forecast_datetime_str = forecast_date.strftime("%Y%m%dT%H%M%S")
+        forecast_datetime_str = forecast_date.strftime("%Y%m%d")
         output_filename: Path = variable_folder / f"{forecast_datetime_str}.grb"
 
         # Process MARS request parameters
