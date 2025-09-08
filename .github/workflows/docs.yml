@@ -39,9 +39,9 @@ jobs:
         run: |
           npm install -g wrangler
       - name: Deploy with Wrangler
-        working-directory: docs/_build/html
+        working-directory: docs
         run: |
-          wrangler deploy
+          wrangler pages deploy _build/html
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
