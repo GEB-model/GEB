@@ -26,18 +26,6 @@ jobs:
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
       - name: Install the project
         run: uv sync --dev
-      - name: Debugging information
-        run: |
-          echo "github.ref:" ${{github.ref}}
-          echo "github.event_name:" ${{github.event_name}}
-          echo "github.head_ref:" ${{github.head_ref}}
-          echo "github.base_ref:" ${{github.base_ref}}
-          set -x
-          git rev-parse --abbrev-ref HEAD
-          git branch
-          git branch -a
-          git remote -v
-      # Build Sphinx documentation
       - uses: ammaraskar/sphinx-problem-matcher@master
       - name: Build Sphinx docs
         run: |
@@ -49,9 +37,6 @@ jobs:
         with:
           name: run_logs
           path: /tmp/sphinx-err-*.log
-      # The following supports building all branches and combining on
-      # docs
-
       # Clone and set up the old docs branch
       - name: Clone old docs
         run: |
@@ -98,11 +83,8 @@ jobs:
                   rm -r _docs/branch/$brdir/
               fi
           done
-      - name: Publish to Cloudflare Pages
-        uses: cloudflare/pages-action@v1
+      - name: Build and deploy Worker
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: 'geb-docs'
-          directory: '_docs'
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          command: deploy
