@@ -2,6 +2,6 @@
   "name": "geb-docs",
   "compatibility_date": "2025-09-07",
   "assets": {
-    "directory": "."
+    "directory": "./_build/html"
   }
 }
