@@ -496,13 +496,16 @@ def process_forecast_ECMWF(
         else:
             print("All timesteps are already hourly, no need to resample")
         # rename variables and correct units
-        if forecast_variable == 228.128:  # total precipitation
+        if forecast_variable == 228:  # total precipitation
             da = da.rename("rainfall")
             da = da * 1000  # convert m to mm
             da = da / 3600  # convert from mm/hr to mm/s
             da.attrs["units"] = "kg m-2 s-1"
+
+            # assert that rainfall in the next time step of the xrarray is always equal or larger than the previous time step
             da = da.diff(dim="time", n=1, label="lower")  # de-accumulate
-            da = xr.where(da > 0, da, 0, keep_attrs=True)
+            # assert that rainfall is never negative
+            assert (da >= 0).all(), "Rainfall is negative after de-accumulation"
 
         else:
             raise NotImplementedError(
@@ -556,12 +559,10 @@ def process_forecast_ECMWF(
         )  # interpolate nans in case <5% of data is missing
 
         # determine datetime from filename
-        forecast_datetime = file.stem
+        forecast_date = file.stem
         # save variables
         if forecast_variable == 228:  # total precipitation
-            self.set_pr_hourly(
-                da, name=f"forecasts/ECMWF/pr_hourly_{forecast_datetime}"
-            )
+            self.set_pr_hourly(da, name=f"forecasts/ECMWF/pr_hourly_{forecast_date}")
         else:
             # raise value error
             raise NotImplementedError(
