@@ -304,17 +304,18 @@ def download_forecasts_ECMWF(
 
     This function downloads ECMWF forecast data for a specified variable and time period
     from the MARS archive using the ECMWF API. It handles the download and processing of both
-    deterministic (HRES) and ensemble (ENS) forecasts returning them as an xarray DataArray.
+    deterministic (cf) and ensemble (pf) forecasts returning them as an xarray DataArray.
 
     MARS data archive: https://apps.ecmwf.int/mars-catalogue/
     Extra Documentation: https://confluence.ecmwf.int/display/UDOC/MARS+content
+    Your API key: https://api.ecmwf.int/v1/key/
 
     Args:
         bounds: The bounding box in the format (min_lon, min_lat, max_lon, max_lat).
         forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
         forecast_start: The forecast initialization time (date or datetime).
         forecast_end: The forecast end time (date or datetime).
-        forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
+        forecast_model: The ECMWF forecast model to use (e.g., "pf" or "cf").
         forecast_resolution: The spatial resolution of the forecast data (degrees).
         forecast_horizon: The forecast horizon in hours.
         forecast_timestep: The forecast timestep in hours.
@@ -416,7 +417,7 @@ def download_forecasts_ECMWF(
             "grid": mars_grid,
             "area": mars_area,
         }
-        if forecast_model == "ENS":
+        if forecast_model == "pf":  # check
             mars_request["number"] = "1/to/50"
 
         # Execute MARS request with preprocessed parameters
@@ -557,7 +558,7 @@ def process_forecast_ECMWF(
         # determine datetime from filename
         forecast_datetime = file.stem
         # save variables
-        if forecast_variable == 228.128:  # total precipitation
+        if forecast_variable == 228:  # total precipitation
             self.set_pr_hourly(
                 da, name=f"forecasts/ECMWF/pr_hourly_{forecast_datetime}"
             )
@@ -2677,7 +2678,7 @@ class Forcing:
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
             forecast_provider: The forecast data provider to use (default: "ECMWF").
-            forecast_model: The ECMWF forecast model to use (e.g., "HRES", "ENS").
+            forecast_model: The ECMWF forecast model to use (e.g., "HRES", "pf").
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep: The forecast timestep in hours.
@@ -2715,7 +2716,7 @@ class Forcing:
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
             forecast_model: The ECMWF forecast model to use (e.g., "HRES",
-                "ENS").
+                "pf").
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep: The forecast timestep in hours.
@@ -2731,7 +2732,7 @@ class Forcing:
         bounds = target.raster.bounds
 
         MARS_codes: dict[str, float] = {
-            "total_precipitation": 228,  # in kg/m2
+            "total_precipitation": 228,
         }  # https://codes.ecmwf.int/grib/param-db/ --> parameter IDs (the .128 is necessary for parameters with up to 3 digits)
 
         download_args: dict[str, Any] = {
