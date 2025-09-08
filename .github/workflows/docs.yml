@@ -33,9 +33,15 @@ jobs:
         with:
           name: run_logs
           path: /tmp/sphinx-err-*.log
-      - name: Build and deploy Worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          command: deploy
-          workingDirectory: "docs"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+      - name: Install Wrangler
+        run: |
+          npm install -g wrangler
+      - name: Deploy with Wrangler (run from docs/)
+        working-directory: docs
+        run: |
+          wrangler deploy
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
