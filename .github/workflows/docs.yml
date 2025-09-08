@@ -5,15 +5,11 @@ on:
       - main
   workflow_dispatch:
 
-env:
-  DEFAULT_BRANCH: "main"
-
 jobs:
   build-and-deploy:
     name: Create docs
     runs-on: ubuntu-latest
     steps:
-      # https://github.com/marketplace/actions/checkout
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -37,52 +33,6 @@ jobs:
         with:
           name: run_logs
           path: /tmp/sphinx-err-*.log
-      # Clone and set up the old docs branch
-      - name: Clone old docs
-        run: |
-          set -x
-          git fetch
-          ( git branch docs remotes/origin/docs && git clone . --branch=docs _docs/ ) || mkdir _docs
-          rm -rf _docs/.git/
-          mkdir -p _docs/branch/
-      # If a push and default branch, copy build to _docs/ as the "main"
-      # deployment.
-      - name: Copy new build (default branch)
-        if: |
-          contains(github.ref, env.DEFAULT_BRANCH)
-        run: |
-          set -x
-          # Delete everything under _docs/ that is from the
-          # primary branch deployment.  Eicludes the other branches
-          # _docs/branch-* paths, and not including
-          # _docs itself.
-          find _docs/ -mindepth 1 ! -path '_docs/branch*' -delete
-          rsync -a docs/_build/html/ _docs/
-      # If a push and not on default branch, then copy the build to
-      # _docs/branch/$brname (transforming '/' into '--')
-      - name: Copy new build (branch)
-        if: |
-          !contains(github.ref, env.DEFAULT_BRANCH)
-        run: |
-          set -x
-          #brname=$(git rev-parse --abbrev-ref HEAD)
-          brname="${{github.ref}}"
-          brname="${brname##refs/heads/}"
-          brdir=${brname//\//--}   # replace '/' with '--'
-          rm -rf   _docs/branch/${brdir}
-          rsync -a _build/dirhtml/ _docs/branch/${brdir}
-      # Go through each branch in _docs/branch/, if it's not a
-      # ref, then delete it.
-      - name: Delete old feature branches
-        run: |
-          set -x
-          for brdir in `ls _docs/branch/` ; do
-              brname=${brdir//--/\/}   # replace '--' with '/'
-              if ! git show-ref remotes/origin/$brname ; then
-                  echo "Removing $brdir"
-                  rm -r _docs/branch/$brdir/
-              fi
-          done
       - name: Build and deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
