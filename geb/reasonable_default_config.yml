@@ -156,7 +156,7 @@ draw:
 
 report:
   _water_circle: false
-  _discharge_stations: true
+  _discharge_stations: false
   hydrology.routing:
     discharge_daily:
       varname: grid.var.discharge_m3_s
@@ -172,9 +172,9 @@ parameters:
   manningsN: 1
   preferentialFlowConstant: 3.14300925049279
   ksat_multiplier: 1.0
+  crop_factor_multiplier: 1.0
   water_demand_multiplier: 1.0
-
-
+  reservoir_release_factor: 0.1
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini
@@ -183,3 +183,19 @@ plantFATE:
   new_forest: false
   new_forest_filename: null
   n_cells: 'all'
+
+calibration:
+  spinup_time: 1975-01-01
+  start_time: 1978-01-01
+  end_time: 1985-01-01
+  path: calibration
+  gpus: 0
+  scenario: no-adaptation
+  calibration_targets:
+    KGE_discharge: 1
+  DEAP:
+    use_multiprocessing: true
+    ngen: 10
+    mu: 30
+    lambda_: 12
+    select_best: 10

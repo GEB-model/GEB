@@ -34,6 +34,10 @@ class ReservoirOperators(AgentBaseClass):
         if self.model.in_spinup:
             self.spinup()
 
+        self.reservoir_release_factor = self.model.config["parameters"][
+            "reservoir_release_factor"
+        ]
+
     @property
     def name(self) -> str:
         return "agents.reservoir_operators"
@@ -396,7 +400,7 @@ class ReservoirOperators(AgentBaseClass):
         """https://github.com/gutabeshu/xanthos-wm/blob/updatev1/xanthos-wm/xanthos/reservoirs/WaterManagement.py."""
         # Based on Shin et al. (2019)
         # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
-        M = 0.1
+        M = self.reservoir_release_factor
 
         ratio_long_term_demand_to_inflow = (
             long_term_monthly_irrigation_demand_m3 / long_term_monthly_inflow_m3

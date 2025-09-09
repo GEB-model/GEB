@@ -61,7 +61,9 @@ class Hydrology(Data, Module):
             return
 
         self.dynamic_water_bodies = False
-        self.crop_factor_calibration_factor = 1
+        self.crop_factor_calibration_factor = self.model.config["parameters"][
+            "crop_factor_multiplier"
+        ]
 
         self.potential_evapotranspiration = PotentialEvapotranspiration(
             self.model, self

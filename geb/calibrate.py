@@ -27,6 +27,7 @@ from functools import partial, wraps
 from io import StringIO
 from pathlib import Path
 from subprocess import Popen
+from .workflows.io import open_zarr
 
 import geopandas as gpd
 import joblib
@@ -695,56 +696,81 @@ def KGE_region_diversion(run_directory, individual, config):
     return kge
 
 
-def get_KGE_discharge(run_directory, individual, config, gauges, observed_streamflow):
-    def get_streamflows(gauge, observed_streamflow):
-        # Get the path of the simulated streamflow file
-        Qsim_tss = os.path.join(
-            run_directory,
-            config["calibration"]["scenario"],
-            f"{gauge[0]} {gauge[1]}.csv",
+def KGE_discharge(
+    run_directory,
+    individual,
+    config,
+):
+    path_stations = (
+        Path("input") / "geom/discharge/discharge_snapped_locations.geoparquet"
+    )
+    discharge_stations = pd.read_parquet(path_stations)
+    coordinates_lon_lat = discharge_stations["snapped_grid_pixel_lonlat"].values
+
+    def load_zarr_discharge(config, run_directory, coordinates_lon_lat):
+        points = [(float(p[0]), float(p[1])) for p in coordinates_lon_lat]
+        da = open_zarr(run_directory)
+        cols = {}
+        for lon, lat in points:
+            col_name = f"{lon:.5f}_{lat:.5f}"
+            cols[col_name] = da.sel(
+                x=lon, y=lat, method="nearest"
+            ).to_series()  # index -> time
+
+        df = pd.DataFrame(cols)
+        df.index.name = "time"
+        return df
+
+    scenario_dir = (
+        Path(run_directory)
+        / "report"
+        / config["general"]["name"]
+        / "hydrology.routing"
+        / "discharge_daily.zarr"
+    )
+    data_simulated = load_zarr_discharge(config, scenario_dir, coordinates_lon_lat)
+
+    def prepare_observed(data_observed):
+        # 1) filter to the time range (inclusive)
+        df = data_observed.copy()
+        df.index = pd.to_datetime(df.index)
+
+        # 2) detect frequency -> "daily" | "monthly" | "yearly"
+        f = (pd.infer_freq(df.index) or "").upper()
+        period = (
+            "monthly" if "M" in f else ("yearly" if ("A" in f or "Y" in f) else "daily")
         )
-        # os.path.join(run_directory, 'base/discharge.csv')
 
-        # Check if the simulated streamflow file exists
-        if not os.path.isfile(Qsim_tss):
-            print("run_id: " + str(individual.label) + " File: " + Qsim_tss)
-            raise Exception(
-                "No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!"
-            )
+        return df, period
 
-        # Read the simulated streamflow data from the file
-        simulated_streamflow = pd.read_csv(
-            Qsim_tss, sep=",", parse_dates=True, index_col=0
-        )
+    def resample_simulated_to_period(
+        data_simulated: pd.DataFrame, period: str
+    ) -> pd.DataFrame:
+        if period == "monthly":
+            return data_simulated.resample("MS").mean()  # month start, mean
+        if period == "yearly":
+            return data_simulated.resample("YS").mean()  # year start, mean
+        return data_simulated  # daily -> no change
 
-        # parse the dates in the index
-        # simulated_streamflow.index = pd.date_range(config['calibration']['start_time'] + timedelta(days=1), config['calibration']['end_time'])
+    path_observed = Path("input") / "table/discharge/Q_obs.parquet"
+    data_observed = pd.read_parquet(path_observed)
+    df_obs_slice, period = prepare_observed(data_observed)
 
-        simulated_streamflow_gauge = simulated_streamflow[" ".join(map(str, gauge))]
-        simulated_streamflow_gauge.name = "simulated"
-        observed_streamflow_gauge = observed_streamflow[gauge]
-        observed_streamflow_gauge.name = "observed"
+    data_sim_resampled = resample_simulated_to_period(data_simulated, period)
 
-        # Combine the simulated and observed streamflow data
-        streamflows = pd.concat(
-            [simulated_streamflow_gauge, observed_streamflow_gauge],
-            join="inner",
-            axis=1,
-        )
-
-        # Add a small value to the simulated streamflow to avoid division by zero
-        streamflows["simulated"] += 0.0001
-        return streamflows
-
-    streamflows = [get_streamflows(gauge, observed_streamflow) for gauge in gauges]
-    streamflows = [streamflow for streamflow in streamflows if not streamflow.empty]
-    print(streamflows)
-    if config["calibration"]["monthly"] is True:
-        # Calculate the monthly mean of the streamflow data
-        streamflows = [streamflows.resample("M").mean() for streamflows in streamflows]
+    joined_streamflows = {}
+    ts_obs = df_obs_slice.iloc[:, 0].rename("observed")
+    for coord in coordinates_lon_lat:
+        lon, lat = float(coord[0]), float(coord[1])
+        col_name = f"{lon:.5f}_{lat:.5f}"  # matches data_simulated column naming
+        ts_sim = data_sim_resampled[col_name].rename("simulated")
+        streamflows = pd.concat([ts_sim, ts_obs], axis=1, join="inner")
+        joined_streamflows[col_name] = streamflows
+        pass
 
     KGEs = []
-    for streamflow in streamflows:
+    for station in joined_streamflows:
+        streamflow = joined_streamflows[station]
         streamflow = streamflow.dropna()  # If there are any NaNs values the KGE will become NaN, that's why we drop them before doing the calculation
         KGEs.append(
             KGE_calculation(s=streamflow["simulated"], o=streamflow["observed"])
@@ -761,74 +787,6 @@ def get_KGE_discharge(run_directory, individual, config, gauges, observed_stream
         myfile.write(str(individual.label) + "," + str(kge) + "\n")
 
     return kge
-
-
-def get_NSE_discharge(run_directory, individual, config, gauges, observed_streamflow):
-    def get_streamflows(gauge, observed_streamflow):
-        # Get the path of the simulated streamflow file
-        Qsim_tss = os.path.join(
-            run_directory,
-            config["calibration"]["scenario"],
-            f"{gauge[0]} {gauge[1]}.csv",
-        )
-        # os.path.join(run_directory, 'base/discharge.csv')
-
-        # Check if the simulated streamflow file exists
-        if not os.path.isfile(Qsim_tss):
-            print("run_id: " + str(individual.label) + " File: " + Qsim_tss)
-            raise Exception(
-                "No simulated streamflow found. Is the data exported in the ini-file (e.g., 'OUT_TSS_Daily = var.discharge'). Probably the model failed to start? Check the log files of the run!"
-            )
-
-        # Read the simulated streamflow data from the file
-        simulated_streamflow = pd.read_csv(
-            Qsim_tss, sep=",", parse_dates=True, index_col=0
-        )
-
-        # parse the dates in the index
-        # simulated_streamflow.index = pd.date_range(config['calibration']['start_time'] + timedelta(days=1), config['calibration']['end_time'])
-
-        simulated_streamflow_gauge = simulated_streamflow[" ".join(map(str, gauge))]
-        simulated_streamflow_gauge.name = "simulated"
-        observed_streamflow_gauge = observed_streamflow[gauge]
-        observed_streamflow_gauge.name = "observed"
-
-        # Combine the simulated and observed streamflow data
-        streamflows = pd.concat(
-            [simulated_streamflow_gauge, observed_streamflow_gauge],
-            join="inner",
-            axis=1,
-        )
-
-        # Add a small value to the simulated streamflow to avoid division by zero
-        streamflows["simulated"] += 0.0001
-        return streamflows
-
-    streamflows = [get_streamflows(gauge, observed_streamflow) for gauge in gauges]
-    streamflows = [streamflow for streamflow in streamflows if not streamflow.empty]
-    print(streamflows)
-    if config["calibration"]["monthly"] is True:
-        # Calculate the monthly mean of the streamflow data
-        streamflows = [streamflows.resample("M").mean() for streamflows in streamflows]
-
-    KGEs = []
-    for streamflow in streamflows:
-        streamflow = streamflow.dropna()  # If there are any NaNs values the KGE will become NaN, that's why we drop them before doing the calculation
-        KGEs.append(
-            NSE_calculation(s=streamflow["simulated"], o=streamflow["observed"])
-        )
-
-    assert KGEs  # Check if KGEs is not empty
-    nse = np.mean(KGEs)
-    print(
-        "run_id: " + str(individual.label) + ", NSE_discharge: " + "{0:.3f}".format(nse)
-    )
-    with open(
-        os.path.join(config["calibration"]["path"], "NSE_discharge_log.csv"), "a"
-    ) as myfile:
-        myfile.write(str(individual.label) + "," + str(nse) + "\n")
-
-    return nse
 
 
 def get_KGE_yield_ratio(run_directory, individual, config):
@@ -1389,7 +1347,10 @@ def export_front_history(config, ngen, effmax, effmin, effstd, effavg):
 
 
 @handle_ctrl_c
-def run_model(individual, config, gauges, observed_streamflow):
+def run_model(
+    individual,
+    config,
+):
     """Run the model for an individual in the population.
 
     This function takes an individual from the population and runs the model
@@ -1443,9 +1404,7 @@ def run_model(individual, config, gauges, observed_streamflow):
             template["general"]["start_time"] = config["calibration"]["start_time"]
             template["general"]["end_time"] = config["calibration"]["end_time"]
 
-            template["report"] = {}
-            template["report_cwatm"] = {}
-            template.update(config["calibration"]["target_variables"])
+            template["report"] = config["calibration"]["report"]
 
             # Fill in the individual's parameters
             for parameter, value in individual_parameters.items():
@@ -1482,21 +1441,41 @@ def run_model(individual, config, gauges, observed_streamflow):
                 # env["GFORTRAN_UNBUFFERED_ALL"] = "1"
                 # env["OMP_NUM_THREADS"] = "1"
 
-                conda_env_name = "geb"
                 cli_py_path = os.path.join(os.environ.get("GEB_PACKAGE_DIR"), "cli.py")
-                conda_activate = os.path.join(
-                    "/scistor/ivm/vbl220/miniconda3", "bin", "activate"
-                )
+                venv_activate = config["calibration"]["venv"]
+
+                cpus_per_scenario = int(os.getenv("CPUS_PER_SCENARIO", "1"))
+                thread_cap = str(max(1, cpus_per_scenario))
+                for k in (
+                    "OMP_NUM_THREADS",
+                    "MKL_NUM_THREADS",
+                    "OPENBLAS_NUM_THREADS",
+                    "NUMEXPR_NUM_THREADS",
+                    "VECLIB_MAXIMUM_THREADS",
+                    "BLIS_NUM_THREADS",
+                ):
+                    env[k] = thread_cap
+                env.setdefault("OMP_PROC_BIND", "close")
+                env.setdefault("OMP_PLACES", "cores")
 
                 # Construct the command
                 # Example: GFORTRAN_UNBUFFERED_ALL=1 OMP_NUM_THREADS=1 source activate ...
-                command = (
-                    f"source {conda_activate} {conda_env_name} && "
-                    f"{sys.executable} {cli_py_path} {run_command} --config {config_path}"
+                inner = (
+                    f"source {venv_activate} && "
+                    f"{sys.executable} {cli_py_path} run --config {config_path}"
                 )
 
                 if use_gpu is not False:
-                    command += f" --GPU --gpu_device {use_gpu}"
+                    inner += f" --GPU --gpu_device {use_gpu}"
+                if "SLURM_JOB_ID" in os.environ and cpus_per_scenario > 0:
+                    command = (
+                        "srun --ntasks=1 "
+                        f"--cpus-per-task={cpus_per_scenario} "
+                        "--exclusive --cpu-bind=cores "
+                        f"bash -lc '{inner}'"
+                    )
+                else:
+                    command = f"bash -lc '{inner}'"
 
                 print("Executing command:", command, flush=True)
 
@@ -1633,17 +1612,7 @@ def run_model(individual, config, gauges, observed_streamflow):
     scores = []
     for score in config["calibration"]["calibration_targets"]:
         if score == "KGE_discharge":
-            scores.append(
-                get_KGE_discharge(
-                    run_directory, individual, config, gauges, observed_streamflow
-                )
-            )
-        if score in config["calibration"]["calibration_targets"]:
-            scores.append(
-                get_NSE_discharge(
-                    run_directory, individual, config, gauges, observed_streamflow
-                )
-            )
+            scores.append(KGE_discharge(run_directory, individual, config))
         if score == "KGE_crops":
             scores.append(get_crops_KGE(run_directory, individual, config))
         if score == "KGE_irrigation_method":
@@ -1685,47 +1654,7 @@ def calibrate(config, working_directory):
     mu = calibration_config["DEAP"]["mu"]
     lambda_ = calibration_config["DEAP"]["lambda_"]
     config["calibration"]["scenario"] = calibration_config["scenario"]
-
-    gauges = [tuple(g) for g in config["general"]["gauges"]]
-    observed_streamflow = {}
-    for gauge in gauges:
-        streamflow_path = os.path.join(
-            calibration_config["observed_data"],
-            "streamflow",
-            f"{gauge[0]} {gauge[1]}.csv",
-        )
-        streamflow_data = pd.read_csv(
-            streamflow_path, sep=",", parse_dates=False, index_col=None
-        )
-        print(streamflow_data)
-        df = streamflow_data.reset_index(drop=True)
-        # df.columns = df.iloc[1]
-        # df = df.drop([0, 1]).reset_index(drop=True)
-
-        df["Date"] = pd.to_datetime(
-            df["Date"], errors="coerce", infer_datetime_format=True
-        )
-        df = df.dropna(subset=["Date"])
-        df["flow"] = pd.to_numeric(df["flow"], errors="coerce")
-        # df = df.dropna(subset=["Discharge (ML/Day)"])
-        df = df[["Date", "flow"]].rename(
-            columns={"Date": "date"}
-        )  # df["flow"] = df["flow"] * (1000.0 / 86400.0)  # ML/day to m³/s
-
-        # Make the discharge daily, used to be for every 15 min
-        df = df.set_index("date")
-
-        daily_df = df.resample("D").mean()
-        daily_df.index.name = "time"
-
-        # df["date"] = df["date"].dt.strftime("%Y-%m-%d")
-        # print(df)
-        # df = df.set_index(pd.to_datetime(df["date"]))
-        # print(df)
-        # df.index.name = "time"
-        # print(df)
-        observed_streamflow[gauge] = daily_df["flow"]
-        observed_streamflow[gauge].name = "observed"
+    config["agent_settings"]["farmers"]["ruleset"] = calibration_config["scenario"]
 
     # Create DEAP classes
     creator.create(
@@ -1766,7 +1695,8 @@ def calibrate(config, working_directory):
         return decorator
 
     partial_run_model = partial(
-        run_model, config=config, gauges=gauges, observed_streamflow=observed_streamflow
+        run_model,
+        config=config,
     )
     toolbox.register("evaluate", partial_run_model)
     toolbox.register("mate", tools.cxBlend, alpha=0.15)
@@ -1781,13 +1711,19 @@ def calibrate(config, working_directory):
         manager = multiprocessing.Manager()
         current_gpu_use_count = manager.Value("i", 0)
         manager_lock = manager.Lock()
-        pool_size = int(os.getenv("SLURM_CPUS_PER_TASK") or 3)
+        pool_size = int(os.getenv("SLURM_CPUS_PER_TASK") or 1)
+
+        cpus_per_scenario = int(os.getenv("CPUS_PER_SCENARIO", "1"))
+        worker_procs = max(1, pool_size // max(1, cpus_per_scenario))
+
         print(f"Pool size: {pool_size}")
+        print(f"CPUS_PER_SCENARIO: {cpus_per_scenario}")
+        print(f"Worker processes: {worker_procs}")
 
         # Ignore Ctrl+C in parent, let worker procs handle
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         pool = multiprocessing.Pool(
-            processes=pool_size,
+            processes=worker_procs,
             initializer=init_pool,
             initargs=(
                 current_gpu_use_count,
