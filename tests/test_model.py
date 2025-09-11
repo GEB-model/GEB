@@ -35,11 +35,10 @@ from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 working_directory: Path = tmp_folder / "model"
 
 DEFAULT_BUILD_ARGS: dict[str, Any] = {
-    "data_catalog": [Path(os.getenv("GEB_PACKAGE_DIR")) / "data_catalog.yml"],
+    "data_catalog": Path(os.getenv("GEB_PACKAGE_DIR")) / "data_catalog.yml",
     "config": "model.yml",
     "build_config": "build.yml",
     "working_directory": ".",
-    "custom_model": None,
     "data_provider": None,
     "data_root": str(Path(os.getenv("GEB_DATA_ROOT", ""))),
 }

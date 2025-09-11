@@ -434,7 +434,26 @@ def customize_data_catalog(data_catalog: Path, data_root: None | Path = None) ->
         return data_catalog
 
 
-def get_builder(config, data_catalog, custom_model, data_provider, data_root):
+def get_builder(
+    config: str | Path,
+    data_catalog: str | Path,
+    custom_model: str | None,
+    data_provider: str | None,
+    data_root: str | Path | None,
+) -> GEBModelBuild:
+    """Get model builder.
+
+    Args:
+        config: Path to the model configuration file.
+        data_catalog: Path to the data catalog file.
+        custom_model: Name of the custom model to use. If None, the default GEBModelBuild is used.
+            custom_models are available in the geb.build.custom_models module.
+        data_provider: Data variant to use from data catalog (see hydroMT documentation).
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
+
+    Returns:
+        Instance of the model builder.
+    """
     config = parse_config(config)
     input_folder = Path(config["general"]["input_folder"])
 
@@ -580,7 +599,17 @@ def build_fn(
     data_provider,
     data_root,
 ) -> None:
-    """Build model."""
+    """Build model.
+
+    Args:
+        data_catalog: Path to the data catalog file.
+        config: Path to the model configuration file.
+        build_config: Path to the model build configuration file.
+        working_directory: Working directory for the model.
+        data_provider: Data variant to use from data catalog (see hydroMT documentation).
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
+
+    """
     with WorkingDirectory(working_directory):
         build_config = parse_config(build_config)
         model = get_builder(
@@ -611,7 +640,6 @@ def alter_fn(
     data_catalog,
     config: dict,
     build_config: dict,
-    custom_model,
     working_directory: Path | str,
     from_model: str,
     data_provider,
@@ -646,17 +674,24 @@ def alter_fn(
         with open(input_folder / "files.json", "w") as f:
             json.dump(original_files, f, indent=4)
 
+        build_config = parse_config(build_config)
         model = get_builder(
             config,
             data_catalog,
-            custom_model,
+            build_config["_custom_model"] if "_custom_model" in build_config else None,
             data_provider,
             data_root,
         )
+        methods = {
+            method: args
+            for method, args in build_config.items()
+            if not method.startswith("_")
+        }
+
         model.read()
 
         model.update(
-            methods=parse_config(build_config),
+            methods=methods,
         )
 
 
@@ -678,12 +713,19 @@ def update_fn(
     data_catalog,
     config,
     build_config,
-    custom_model,
     working_directory,
     data_provider,
     data_root,
 ) -> None:
     """Update model.
+
+    Args:
+        data_catalog: Path to the data catalog file.
+        config: Path to the model configuration file.
+        build_config: Path to the model build configuration file or a specific method within the build file using :: syntax, e.g., 'build.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.
+        working_directory: Working directory for the model.
+        data_provider: Data variant to use from data catalog (see hydroMT documentation).
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
 
     Raises:
         FileNotFoundError: if the build config file is not found.
@@ -691,28 +733,24 @@ def update_fn(
         ValueError: if build_config is not a str or dict.
     """
     with WorkingDirectory(working_directory):
-        model = get_builder(
-            config,
-            data_catalog,
-            custom_model,
-            data_provider,
-            data_root,
-        )
-
-        model.read()
-
         if isinstance(build_config, str):
             build_config_list: list[str] = build_config.split("::")
             build_config_file: str = build_config_list[0]
 
             try:
-                methods: dict[Any] = parse_config(build_config_file)
+                build_config: dict[Any] = parse_config(build_config_file)
             except FileNotFoundError:
                 if ":" in build_config_file and "::" not in build_config_file:
                     raise FileNotFoundError(
                         f"Build config file '{build_config_file}' not found. Did you mean '{build_config_file.replace(':', '::')}'?"
                     )
                 raise
+
+            methods = {
+                method: args
+                for method, args in build_config.items()
+                if not method.startswith("_")
+            }
 
             if len(build_config_list) > 1:
                 assert len(build_config_list) == 2
@@ -757,10 +795,24 @@ def update_fn(
                     methods = {build_config_function: methods[build_config_function]}
 
         elif isinstance(build_config, dict):
-            methods = build_config
+            methods = {
+                method: args
+                for method, args in build_config.items()
+                if not method.startswith("_")
+            }
 
         else:
             raise ValueError
+
+        model = get_builder(
+            config,
+            data_catalog,
+            build_config["_custom_model"] if "_custom_model" in build_config else None,
+            data_provider,
+            data_root,
+        )
+
+        model.read()
 
         model.update(methods=methods)
 
