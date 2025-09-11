@@ -241,7 +241,7 @@ class Market(AgentBaseClass):
             index = self._crop_prices[0].get(self.model.current_time)
             observed_price = self._crop_prices[1][index]
             simulated_price = self.get_modelled_crop_prices()
-            final_price = (observed_price + simulated_price) / 2
+            final_price = observed_price * 0.8 + simulated_price * 0.2
             return final_price
         else:
             if self._crop_prices[0] is None:
