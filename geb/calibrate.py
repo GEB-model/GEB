@@ -1346,6 +1346,17 @@ def export_front_history(config, ngen, effmax, effmin, effstd, effavg):
     )
 
 
+def spinup_outputs_ready(run_directory, config, required=("modflow_model", "store")):
+    """Return (ok, root_path, missing_list)."""
+    root = (
+        Path(run_directory)
+        / config["general"]["simulation_root"]
+        / config["general"]["spinup_name"]
+    )
+    missing = [d for d in required if not (root / d).is_dir()]
+    return (len(missing) == 0, root, missing)
+
+
 @handle_ctrl_c
 def run_model(
     individual,
@@ -1396,9 +1407,11 @@ def run_model(
             os.makedirs(run_directory, exist_ok=True)
             template = deepcopy(config)
 
-            template["general"]["output_folder"] = run_directory
-            template["general"]["initial_conditions_folder"] = os.path.join(
-                run_directory, "initial"
+            template["general"]["output_folder"] = os.path.join(
+                run_directory, config["general"]["output_folder"]
+            )
+            template["general"]["simulation_root"] = os.path.join(
+                run_directory, config["general"]["simulation_root"]
             )
             template["general"]["spinup_time"] = config["calibration"]["spinup_time"]
             template["general"]["start_time"] = config["calibration"]["start_time"]
@@ -1462,7 +1475,7 @@ def run_model(
                 # Example: GFORTRAN_UNBUFFERED_ALL=1 OMP_NUM_THREADS=1 source activate ...
                 inner = (
                     f"source {venv_activate} && "
-                    f"{sys.executable} {cli_py_path} run --config {config_path}"
+                    f"{sys.executable} {cli_py_path} {run_command} --config {config_path}"
                 )
 
                 if use_gpu is not False:
@@ -1549,64 +1562,99 @@ def run_model(
                     f"Return code 2/66 received {max_retries} times. See log file for details."
                 )
 
-            if not spinup_completed:
-                template["general"]["export_inital_on_spinup"] = True
+            if spinup_completed:
+                ok, spinup_root, missing = spinup_outputs_ready(run_directory, config)
+                if not ok:
+                    print(
+                        f"Spinup marker exists but outputs are missing at {spinup_root}: {missing}. Forcing re-run."
+                    )
+                    spinup_completed = False
+
+            max_spinup_retries = 3
+            attempt = 0
+            released_gpu = False  # so we don't double-release
+
+            while not spinup_completed and attempt < max_spinup_retries:
+                attempt += 1
+                print(f"Running spinup (attempt {attempt}/{max_spinup_retries})...")
+
+                # (Re)write config for this attempt
                 with open(config_path, "w") as f:
                     yaml.dump(template, f)
 
                 return_code = run_model_scenario("spinup")
-                if return_code == 0:
-                    with open(spinup_done_path, "w") as f:
-                        f.write("spinup done")
-                    spinup_completed = True
-                    with open(config_path, "r") as f:
-                        template = yaml.safe_load(f)
-                    template["general"]["import_inital"] = True
-                    if "export_inital_on_spinup" in template["general"]:
-                        del template["general"]["export_inital_on_spinup"]
-                    with open(config_path, "w") as f:
-                        yaml.dump(template, f)
-                else:
+                if return_code != 0:
+                    print(
+                        f"Spinup run failed with return code {return_code}. Aborting."
+                    )
                     if use_gpu is not False:
                         lock.acquire()
                         current_gpu_use_count.value -= 1
                         lock.release()
+                        released_gpu = True
                         print(
                             f"Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}"
                         )
-                    break
-            else:
-                # If spinup is already done, ensure config has import_inital
-                if not os.path.exists(config_path):
-                    with open(config_path, "r") as f:
-                        template = yaml.safe_load(f)
-                    template["general"]["import_inital"] = True
-                    if "export_inital_on_spinup" in template["general"]:
-                        del template["general"]["export_inital_on_spinup"]
-                    with open(config_path, "w") as f:
-                        yaml.dump(template, f)
+                    break  # fatal failure -> stop retrying
 
-            return_code = run_model_scenario("run")
-            if return_code == 0:
-                if use_gpu is not False:
-                    lock.acquire()
-                    current_gpu_use_count.value -= 1
-                    lock.release()
+                # Post-run integrity check
+                ok, spinup_root, missing = spinup_outputs_ready(run_directory, config)
+                if ok:
+                    with open(spinup_done_path, "w") as f:
+                        f.write("spinup done")
+                    spinup_completed = True
+                    print(f"Spinup completed and verified at {spinup_root}.")
+                else:
                     print(
-                        f"Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}"
+                        f"Spinup reported success but outputs are missing at {spinup_root}: {missing}. "
+                        "Retrying..."
                     )
-                with open(run_done_path, "w") as f:
-                    f.write("done")
-                break
-            else:
-                if use_gpu is not False:
-                    lock.acquire()
-                    current_gpu_use_count.value -= 1
-                    lock.release()
-                    print(
-                        f"Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}"
-                    )
-                break
+                    # Optionally: clean partial outputs here before retrying, if needed.
+                    continue  # loop back to top and try again
+
+            # If we exhausted retries without success, clean up GPU once (if not already released)
+            if not spinup_completed and not released_gpu and use_gpu is not False:
+                lock.acquire()
+                current_gpu_use_count.value -= 1
+                lock.release()
+                print(
+                    f"Released 1 GPU after retries, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}"
+                )
+
+            max_run_retries = 3
+            run_attempt = 0
+            run_completed = False
+
+            while not run_completed and run_attempt < max_run_retries:
+                run_attempt += 1
+                print(
+                    f"Running main scenario (attempt {run_attempt}/{max_run_retries})..."
+                )
+                return_code = run_model_scenario("run")
+
+                if return_code == 0:
+                    with open(run_done_path, "w") as f:
+                        f.write("done")
+                    run_completed = True
+                    print("Main run completed successfully and done.txt written.")
+                else:
+                    print(f"Main run failed with return code {return_code}.")
+                    if run_attempt < max_run_retries:
+                        print("Retrying...")
+                        time.sleep(1)
+                    else:
+                        print("Max retries reached for main run.")
+
+            # Release GPU once after success or final failure (avoid double-release if spinup already released)
+            if use_gpu is not False and not released_gpu:
+                lock.acquire()
+                current_gpu_use_count.value -= 1
+                lock.release()
+                print(
+                    f"Released 1 GPU, current_counter: {current_gpu_use_count.value}/{n_gpu_spots}"
+                )
+
+            break
 
     # Now gather the scores:
     scores = []

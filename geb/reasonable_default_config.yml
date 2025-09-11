@@ -9,6 +9,7 @@ general:
   preprocessing_folder: preprocessing/
   output_folder: output/
   spinup_name: spinup
+  simulation_root: simulation_root
   name: default
   export_inital_on_spinup: true
   simulate_forest: false
