@@ -362,20 +362,13 @@ def click_build_options(build_config="build.yml", build_config_help_extra=None):
             default=build_config,
             help=build_config_help,
         )
-        @click.option(
-            "--custom-model",
-            default=None,
-            type=str,
-            help="name of custom preprocessing model",
-        )
         @working_directory_option
         @click.option(
             "--data-catalog",
             "-d",
             type=str,
-            multiple=True,
-            default=[Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"],
-            help="""A list of paths to the data library YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to data_catalog.yml""",
+            default=Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml",
+            help="""Path to data catalog YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to data_catalog.yml""",
         )
         @click.option(
             "--data-provider",
@@ -413,44 +406,43 @@ def get_model_builder_class(custom_model) -> type:
         return attrgetter(custom_model)(geb_build.custom_models)
 
 
-def customize_data_catalog(data_catalogs, data_root=None):
+def customize_data_catalog(data_catalog: Path, data_root: None | Path = None) -> Path:
     """This functions adds the GEB_DATA_ROOT to the data catalog if it is set as an environment variable.
 
     This enables reading the data catalog from a different location than the location of the yml-file
     without the need to specify root in the meta of the data catalog.
 
     Args:
-        data_catalogs: List of paths to data catalog yml files.
+        data_catalog: List of paths to data catalog yml files.
         data_root: Root folder where the data is located. If None, the data catalog is not modified.
 
     Returns:
         List of paths to data catalog yml files, possibly modified to include the data_root.
     """
     if data_root:
-        customized_data_catalogs = []
-        for data_catalog in data_catalogs:
-            with open(data_catalog, "r") as stream:
-                data_catalog_yml = yaml.load(stream, Loader=yaml.FullLoader)
+        with open(data_catalog, "r") as stream:
+            data_catalog_yml = yaml.load(stream, Loader=yaml.FullLoader)
 
-                if "meta" not in data_catalog_yml:
-                    data_catalog_yml["meta"] = {}
-                data_catalog_yml["meta"]["root"] = str(data_root)
+            if "meta" not in data_catalog_yml:
+                data_catalog_yml["meta"] = {}
+            data_catalog_yml["meta"]["root"] = str(data_root)
 
-            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
-                yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
-                customized_data_catalogs.append(tmp.name)
-        return customized_data_catalogs
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
+            yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
+        return tmp.name
     else:
-        return data_catalogs
+        return data_catalog
 
 
 def get_builder(config, data_catalog, custom_model, data_provider, data_root):
     config = parse_config(config)
     input_folder = Path(config["general"]["input_folder"])
 
+    data_catalog = customize_data_catalog(data_catalog, data_root=data_root)
+
     arguments = {
         "root": input_folder,
-        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
+        "data_catalogs": data_catalog,
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
@@ -584,22 +576,27 @@ def build_fn(
     data_catalog,
     config,
     build_config,
-    custom_model,
     working_directory,
     data_provider,
     data_root,
 ) -> None:
     """Build model."""
     with WorkingDirectory(working_directory):
+        build_config = parse_config(build_config)
         model = get_builder(
             config,
             data_catalog,
-            custom_model,
+            build_config["_custom_model"] if "_custom_model" in build_config else None,
             data_provider,
             data_root,
         )
+        methods = {
+            method: args
+            for method, args in build_config.items()
+            if not method.startswith("_")
+        }
         model.build(
-            methods=parse_config(build_config),
+            methods=methods,
             region=parse_config(config)["general"]["region"],
         )
 
