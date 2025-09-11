@@ -79,8 +79,6 @@ def multi_set(dict_obj, value, *attrs):
 
 def summarize_multirun(
     config,
-    start_time,
-    end_time,
     replicates,
 ):
     # load in data per parameter, summarize, write and do next
@@ -115,9 +113,7 @@ def summarize_multirun(
             da_runs = []
             for run in range(replicates):
                 run_dir = base_directory / str(run) / key / "report" / key / module_name
-                da = open_zarr(
-                    run_dir, param, start_time=start_time, end_time=end_time
-                )  # DataArray (time, agents)
+                da = open_zarr(run_dir, param)  # DataArray (time, agents)
                 da_runs.append(da.transpose("time", "agents"))
 
             da_all = xr.concat(da_runs, dim="run")
@@ -534,9 +530,4 @@ def multi_run(config, working_directory):
     ctrl_c_entered = False
     default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
 
-    from dateutil.relativedelta import relativedelta
-
-    start_time = config["general"]["start_time"]
-    end_time = config["general"]["end_time"] - relativedelta(years=1)
-
-    summarize_multirun(config, start_time, end_time, replicates)
+    summarize_multirun(config, replicates)
