@@ -729,6 +729,27 @@ class CropFarmers(AgentBaseClass):
             fill_value=np.nan,
         )
 
+        self.var.pr_premium = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=0,
+        )
+
+        self.var.index_premium = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=0,
+        )
+
+        self.var.personal_premium = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=0,
+        )
+
         # 0 is input, 1 is microcredit, 2 is adaptation 1 (well), 3 is adaptation 2 (drip irrigation)
         self.var.loan_tracker = DynamicArray(
             n=self.var.n,
@@ -3662,8 +3683,8 @@ class CropFarmers(AgentBaseClass):
                 "profits_no_event_adaptation": profits_no_event_index_insured,
                 "total_profits": total_profits,
                 "risk_perception": self.var.risk_perception.data,
-                "total_annual_costs": total_annual_costs_m2,
-                "adaptation_costs": annual_cost_m2,
+                "total_annual_costs": total_annual_costs_m2.data,
+                "adaptation_costs": annual_cost_m2.data,
                 "adapted": adapted,
                 "time_adapted": self.var.time_adapted[:, adaptation_type].data,
                 "T": np.full(
@@ -4587,6 +4608,12 @@ class CropFarmers(AgentBaseClass):
         self.var.adjusted_yearly_income = (
             self.var.insured_yearly_income / cumulative_inflation[..., None]
         )
+
+        self.var.adjusted_pr_premium = self.var.pr_premium / cumulative_inflation
+        self.var.adjusted_index_premium = self.var.index_premium / cumulative_inflation
+        self.var.adjusted_personal_premium = (
+            self.var.personal_premium / cumulative_inflation
+        )
         pass
 
     def get_value_per_farmer_from_region_id(
@@ -4826,7 +4853,7 @@ class CropFarmers(AgentBaseClass):
                 if self.personal_insurance_adaptation_active:
                     # Now determine the potential (past & current) indemnity payments and recalculate
                     # probability and yield relation
-                    personal_premium = self.premium_personal_insurance(
+                    self.var.personal_premium[:] = self.premium_personal_insurance(
                         potential_insured_loss, government_premium_cap
                     )
                     # Give only the insured agents the relation with covered losses
@@ -4855,14 +4882,16 @@ class CropFarmers(AgentBaseClass):
                     exit_vals = np.round(np.arange(-2, -3.6, -0.2), 2)
                     rate_vals = np.geomspace(10, 5000, 10)
                     # Calculate best strike, exit, rate for chosen contract
-                    strike, exit, rate, index_premium = self.premium_index_insurance(
-                        potential_insured_loss=potential_insured_loss,
-                        history=self.var.yearly_SPEI.data,
-                        gev_params=gev_params,
-                        strike_vals=strike_vals,
-                        exit_vals=exit_vals,
-                        rate_vals=rate_vals,
-                        government_premium_cap=government_premium_cap,
+                    strike, exit, rate, self.var.index_premium[:] = (
+                        self.premium_index_insurance(
+                            potential_insured_loss=potential_insured_loss,
+                            history=self.var.yearly_SPEI.data,
+                            gev_params=gev_params,
+                            strike_vals=strike_vals,
+                            exit_vals=exit_vals,
+                            rate_vals=rate_vals,
+                            government_premium_cap=government_premium_cap,
+                        )
                     )
                     index_insured_farmers_mask = (
                         self.var.adaptations[:, INDEX_INSURANCE_ADAPTATION] > 0
@@ -4888,14 +4917,16 @@ class CropFarmers(AgentBaseClass):
                     # exit_vals = np.round(np.arange(600, 50, -50), 2)
                     rate_vals = np.geomspace(10, 5000, 10)
                     # Calculate best strike, exit, rate for chosen contract
-                    strike, exit, rate, pr_premium = self.premium_index_insurance(
-                        potential_insured_loss=potential_insured_loss,
-                        history=self.var.yearly_pr.data,
-                        gev_params=gev_params,
-                        strike_vals=strike_vals,
-                        exit_vals=exit_vals,
-                        rate_vals=rate_vals,
-                        government_premium_cap=government_premium_cap,
+                    strike, exit, rate, self.var.pr_premium[:] = (
+                        self.premium_index_insurance(
+                            potential_insured_loss=potential_insured_loss,
+                            history=self.var.yearly_pr.data,
+                            gev_params=gev_params,
+                            strike_vals=strike_vals,
+                            exit_vals=exit_vals,
+                            rate_vals=rate_vals,
+                            government_premium_cap=government_premium_cap,
+                        )
                     )
                     pr_insured_farmers_mask = (
                         self.var.adaptations[:, PR_INSURANCE_ADAPTATION] > 0
@@ -4952,7 +4983,11 @@ class CropFarmers(AgentBaseClass):
                                 farmer_yield_probability_relation_insured_index,
                                 farmer_yield_probability_relation_insured_pr,
                             ],
-                            [personal_premium, index_premium, pr_premium],
+                            [
+                                self.var.personal_premium,
+                                self.var.index_premium,
+                                self.var.pr_premium,
+                            ],
                         )
                     elif self.personal_insurance_adaptation_active:
                         self.adapt_insurance(
@@ -4960,7 +4995,7 @@ class CropFarmers(AgentBaseClass):
                             ["Personal"],
                             farmer_yield_probability_relation_base,
                             [farmer_yield_probability_relation_insured_personal],
-                            [personal_premium],
+                            [self.var.personal_premium],
                         )
                         timer.new_split("adapt pers. insurance")
                     elif self.index_insurance_adaptation_active:
@@ -4969,7 +5004,7 @@ class CropFarmers(AgentBaseClass):
                             ["Index"],
                             farmer_yield_probability_relation_base,
                             [farmer_yield_probability_relation_insured_index],
-                            [index_premium],
+                            [self.var.index_premium],
                         )
                         timer.new_split("adapt index insurance")
                     elif self.pr_insurance_adaptation_active:
@@ -4978,7 +5013,7 @@ class CropFarmers(AgentBaseClass):
                             ["Precipitation"],
                             farmer_yield_probability_relation_base,
                             [farmer_yield_probability_relation_insured_pr],
-                            [pr_premium],
+                            [self.var.pr_premium],
                         )
                         timer.new_split("adapt prec. insurance")
                 else:
