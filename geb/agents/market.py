@@ -229,7 +229,7 @@ class Market(AgentBaseClass):
         ):
             self.estimate_price_model()
 
-        self.report(self, locals())
+        self.report(locals())
 
     @property
     def crop_prices(self) -> np.ndarray:

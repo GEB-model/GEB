@@ -48,4 +48,4 @@ class SmallLakesReservoirs(Module):
         pass
 
     def step(self) -> None:
-        self.report(self, locals())
+        self.report(locals())

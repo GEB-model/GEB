@@ -114,6 +114,9 @@ class Forcing(Module):
 
         Returns:
             Forcing data as a numpy array.
+
+        Raises:
+            ValueError: if the data is invalid according to the validation criteria.
         """
         if time is None:
             time: datetime = self.model.current_time

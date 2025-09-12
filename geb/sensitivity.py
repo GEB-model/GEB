@@ -7,15 +7,20 @@ import shutil
 import signal
 import string
 from copy import deepcopy
-from functools import wraps
 from subprocess import PIPE, Popen
 
-import numpy as np
 import yaml
 from SALib.sample import latin as latin_sample, sobol as sobol_sample
 
+from .workflows.methods import multi_set
+from .workflows.multiprocessing import (
+    handle_ctrl_c,
+    init_pool,
+    pool_ctrl_c_handler,
+)
 
-def sensitivity_parameters(parameters, distinct_samples, type="saltelli"):
+
+def sensitivity_parameters(parameters, distinct_samples, type: str = "saltelli"):
     parameters_list = list(parameters.keys())
     bounds = [
         [param_data["min"], param_data["max"]] for param_data in parameters.values()
@@ -30,46 +35,10 @@ def sensitivity_parameters(parameters, distinct_samples, type="saltelli"):
         param_values = sobol_sample.sample(problem, distinct_samples, seed=42)
     elif type == "delta":
         param_values = latin_sample.sample(problem, distinct_samples, seed=42)
+    else:
+        raise ValueError(f"Unknown sensitivity analysis type: {type}")
 
     return param_values
-
-
-def handle_ctrl_c(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        global ctrl_c_entered
-        if not ctrl_c_entered:
-            signal.signal(signal.SIGINT, default_sigint_handler)  # the default
-            try:
-                return func(*args, **kwargs)
-            except KeyboardInterrupt:
-                ctrl_c_entered = True
-                return KeyboardInterrupt
-            finally:
-                signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-        else:
-            return KeyboardInterrupt
-
-    return wrapper
-
-
-def pool_ctrl_c_handler(*args, **kwargs) -> None:
-    global ctrl_c_entered
-    ctrl_c_entered = True
-
-
-def multi_set(dict_obj, value, *attrs) -> None:
-    d = dict_obj
-    for attr in attrs[:-1]:
-        d = d[attr]
-    if attrs[-1] not in d:
-        raise KeyError(f"Key {attrs} does not exist in config file.")
-
-    # Check if the value is a numpy scalar and convert it if necessary
-    if isinstance(value, np.generic):
-        value = value.item()
-
-    d[attrs[-1]] = value
 
 
 @handle_ctrl_c
@@ -136,7 +105,7 @@ def run_model(args) -> None:
             with open(config_path, "w") as f:
                 yaml.dump(template, f)
 
-            def run_model_scenario(scenario):
+            def run_model_scenario(scenario: str):
                 # build the command to run the script, including the use of a GPU if specified
                 command = [
                     "geb",
@@ -202,23 +171,6 @@ def run_model(args) -> None:
                 with open(os.path.join(run_directory, "done.txt"), "w") as f:
                     f.write("done")
                 break
-
-
-def init_pool(
-    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
-) -> None:
-    # set global variable for each process in the pool:
-    global ctrl_c_entered
-    global default_sigint_handler
-    ctrl_c_entered = False
-    default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-
-    global lock
-    global current_gpu_use_count
-    global n_gpu_spots
-    n_gpu_spots = gpus * models_per_gpu
-    lock = manager_lock
-    current_gpu_use_count = manager_current_gpu_use_count
 
 
 def sensitivity_analysis(config, working_directory) -> None:

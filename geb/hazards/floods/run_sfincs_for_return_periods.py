@@ -5,6 +5,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel
@@ -24,17 +25,27 @@ from .sfincs_utils import (
 from .update_model_forcing import update_sfincs_model_forcing_coastal
 
 
-def get_topological_stream_order(rivers):
+def get_topological_stream_order(rivers: gpd.GeoDataFrame) -> npt.NDArray[np.int32]:
     """Calculate the topological stream order for each river segment.
 
     The topological stream order is calculated by following the river rivers upstream
     and each time finding the rivers that connect to the previous segment.
+
+    The first coordinate of the geometry is the start point, the last coordinate is the end point.
+
+    Args:
+        rivers: GeoDataFrame with the river. Start and end points must be connected.
+
+    Returns:
+        Array with the topological stream order for each river segment.
     """
     # find endpoints of each geometry
     startpoint = rivers.geometry.apply(lambda geom: geom.coords[0])
     endpoint = rivers.geometry.apply(lambda geom: geom.coords[-1])
 
-    topological_stream_order = np.full(len(rivers), -1, dtype=np.int32)
+    topological_stream_order: npt.NDArray[np.int32] = np.full(
+        len(rivers), -1, dtype=np.int32
+    )
 
     prev_order_idx = ~endpoint.isin(startpoint)
     topological_stream_order_idx: int = 0
@@ -358,6 +369,8 @@ def run_sfincs_for_return_periods(
         rp_map: xr.DataArray = xr.concat(rp_map, dim="node")
         rp_map: xr.DataArray = rp_map.max(dim="node")
         rp_map.attrs["_FillValue"] = max_depth.attrs["_FillValue"]
+
+        assert rp_map.rio.crs is not None
 
         if export:
             rp_map: xr.DataArray = to_zarr(

@@ -19,7 +19,7 @@ hazards:
   floods:
     simulate: false
     resolution: 150
-    nr_subgrid_pixels: 5
+    nr_subgrid_pixels: 4
     crs: auto
     force_overwrite: true
     return_periods:

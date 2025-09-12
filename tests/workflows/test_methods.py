@@ -1,3 +1,5 @@
+"""Tests for workflow methods."""
+
 from geb.workflows.methods import multi_level_merge
 
 

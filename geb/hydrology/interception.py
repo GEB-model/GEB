@@ -215,5 +215,5 @@ class Interception(Module):
 
         assert not np.isnan(potential_transpiration[bio_area]).any()
 
-        self.report(self, locals())
+        self.report(locals())
         return potential_transpiration, interception_evaporation

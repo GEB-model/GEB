@@ -91,6 +91,9 @@ def get_deficit_between_dates(
 
     Returns:
         Water deficit in m3 between the two dates.
+
+    Raises:
+        ValueError: If deficit is negative.
     """
     if end_index == start_index:
         deficit = 0
@@ -142,6 +145,11 @@ def get_future_deficit(
 
     Returns:
         Future water deficit in m3 for the farmer in the growing season.
+
+    Raises:
+        ValueError: If reset_day_index is not between 0 and 364 inclusive.
+        ValueError: If start_day_index is not between 0 and 364 inclusive.
+        ValueError: If future_water_deficit is negative.
     """
     if reset_day_index >= 365 or reset_day_index < 0:
         raise ValueError("Reset day index must be lower than 365 and greater than -1")
@@ -152,7 +160,7 @@ def get_future_deficit(
         if crop_type != -1 and crop_year_index == crop_rotation_year_index[farmer]:
             start_day_index = crop[1]
             if start_day_index < 0 or start_day_index >= 365:
-                raise ValueError("Start day must be between 0 and 364")
+                raise ValueError("Start day must be lower than 365 and greater than -1")
             growth_length = crop[2]
 
             relative_start_day_index = (start_day_index - reset_day_index) % 365
@@ -944,7 +952,6 @@ def crop_profit_difference_njit_parallel(
     p_droughts,
     past_window,
 ):
-    """Parallelized only over unique crop groups; everything else follows your original logic exactly."""
     n_groups: int = len(unique_crop_groups)
     n_calendars: int = len(unique_crop_calendars)
     n_rotation: int = unique_crop_calendars.shape[1]
@@ -1044,8 +1051,23 @@ def crop_profit_difference_njit_parallel(
 
 
 @njit
-def gev_ppf_scalar(u, c, loc, scale):
-    """Scalar GEV inverse CDF."""
+def gev_ppf_scalar(u: float, c: float, loc: float, scale: float) -> float:
+    """Scalar GEV inverse CDF.
+
+    CDF = Cumulative Distribution Function
+    PPF = Percent Point Function = Inverse CDF
+    GEV = Generalized Extreme Value distribution
+
+    Args:
+        u: A uniform random variable in (0,1).
+        c: GEV shape parameter.
+        loc: GEV location parameter.
+        scale: GEV scale parameter.
+
+    Returns:
+        The inverse CDF value for a given uniform random variable u and GEV parameters c, loc, scale.
+
+    """
     if c != 0.0:
         return loc + scale * ((-np.log(u)) ** (-c) - 1.0) / c
     else:

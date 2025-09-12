@@ -33,6 +33,12 @@ from geb.workflows.methods import multi_level_merge
 
 
 class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
+    """Custom YAML loader that detects duplicate keys in mappings.
+
+    Raises:
+        ValueError: If a duplicate key is found in the YAML mapping.
+    """
+
     def construct_mapping(self, node, deep=False):
         mapping = {}
         for key_node, value_node in node.value:
@@ -46,7 +52,18 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
 def parse_config(
     config_path: dict | Path | str, current_directory: Path | None = None
 ) -> dict[str, Any]:
-    """Parse config."""
+    """Parse config.
+
+    This method recursively parses the config file and resolves any 'inherits' keys.
+
+    Args:
+        config_path: Path to the config file or a dict with the config.
+        current_directory: Current directory to resolve relative paths.
+            If None, the current working directory is used.
+
+    Returns:
+        Full model configuation of the model without any remaining 'inherits' keys.
+    """
     if current_directory is None:
         current_directory = Path.cwd()
 
@@ -124,7 +141,7 @@ def click_config(func):
         help=f"Path of the model configuration file. Defaults to '{default}'.",
     )
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any):
         return func(*args, **kwargs)
 
     return wrapper
@@ -138,7 +155,7 @@ def working_directory_option(func):
         help="Working directory for model. Default is the current directory.",
     )
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any):
         return func(*args, **kwargs)
 
     return wrapper
@@ -176,7 +193,7 @@ def click_run_options():
         )
         @click.option("--timing", is_flag=True, help="Run GEB with timing.")
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any):
             return func(*args, **kwargs)
 
         return wrapper
@@ -197,7 +214,11 @@ def run_model_with_method(
     method_args: dict = {},
     close_after_run=True,
 ) -> GEBModel | None:
-    """Run model."""
+    """Run model with a specific method.
+
+    Returns:
+        GEBModel if gui is False, else None
+    """
     # check if we need to run the model in optimized mode
     # if the model is already running in optimized mode, we don't need to restart it
     # or else we start an infinite loop
@@ -280,20 +301,20 @@ def run_model_with_method(
 
 @cli.command()
 @click_run_options()
-def run(*args, **kwargs) -> None:
+def run(*args: Any, **kwargs: Any) -> None:
     run_model_with_method(method="run", *args, **kwargs)
 
 
 @cli.command()
 @click_run_options()
-def spinup(*args, **kwargs) -> None:
+def spinup(*args: Any, **kwargs: Any) -> None:
     run_model_with_method(method="spinup", *args, **kwargs)
 
 
 @cli.command()
 @click.argument("method", required=True)
 @click_run_options()
-def exec(method, *args, **kwargs) -> None:
+def exec(method, *args: Any, **kwargs: Any) -> None:
     run_model_with_method(method=method, *args, **kwargs)
 
 
@@ -341,20 +362,13 @@ def click_build_options(build_config="build.yml", build_config_help_extra=None):
             default=build_config,
             help=build_config_help,
         )
-        @click.option(
-            "--custom-model",
-            default=None,
-            type=str,
-            help="name of custom preprocessing model",
-        )
         @working_directory_option
         @click.option(
             "--data-catalog",
             "-d",
             type=str,
-            multiple=True,
-            default=[Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"],
-            help="""A list of paths to the data library YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to data_catalog.yml""",
+            default=Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml",
+            help="""Path to data catalog YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to data_catalog.yml""",
         )
         @click.option(
             "--data-provider",
@@ -372,7 +386,7 @@ def click_build_options(build_config="build.yml", build_config_help_extra=None):
             help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: Any, **kwargs: Any):
             return func(*args, **kwargs)
 
         return wrapper
@@ -392,37 +406,62 @@ def get_model_builder_class(custom_model) -> type:
         return attrgetter(custom_model)(geb_build.custom_models)
 
 
-def customize_data_catalog(data_catalogs, data_root=None):
+def customize_data_catalog(data_catalog: Path, data_root: None | Path = None) -> Path:
     """This functions adds the GEB_DATA_ROOT to the data catalog if it is set as an environment variable.
 
     This enables reading the data catalog from a different location than the location of the yml-file
     without the need to specify root in the meta of the data catalog.
+
+    Args:
+        data_catalog: List of paths to data catalog yml files.
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
+
+    Returns:
+        List of paths to data catalog yml files, possibly modified to include the data_root.
     """
     if data_root:
-        customized_data_catalogs = []
-        for data_catalog in data_catalogs:
-            with open(data_catalog, "r") as stream:
-                data_catalog_yml = yaml.load(stream, Loader=yaml.FullLoader)
+        with open(data_catalog, "r") as stream:
+            data_catalog_yml = yaml.load(stream, Loader=yaml.FullLoader)
 
-                if "meta" not in data_catalog_yml:
-                    data_catalog_yml["meta"] = {}
-                data_catalog_yml["meta"]["root"] = str(data_root)
+            if "meta" not in data_catalog_yml:
+                data_catalog_yml["meta"] = {}
+            data_catalog_yml["meta"]["root"] = str(data_root)
 
-            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
-                yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
-                customized_data_catalogs.append(tmp.name)
-        return customized_data_catalogs
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
+            yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
+        return tmp.name
     else:
-        return data_catalogs
+        return data_catalog
 
 
-def get_builder(config, data_catalog, custom_model, data_provider, data_root):
+def get_builder(
+    config: str | Path,
+    data_catalog: str | Path,
+    custom_model: str | None,
+    data_provider: str | None,
+    data_root: str | Path | None,
+) -> GEBModelBuild:
+    """Get model builder.
+
+    Args:
+        config: Path to the model configuration file.
+        data_catalog: Path to the data catalog file.
+        custom_model: Name of the custom model to use. If None, the default GEBModelBuild is used.
+            custom_models are available in the geb.build.custom_models module.
+        data_provider: Data variant to use from data catalog (see hydroMT documentation).
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
+
+    Returns:
+        Instance of the model builder.
+    """
     config = parse_config(config)
     input_folder = Path(config["general"]["input_folder"])
 
+    data_catalog = customize_data_catalog(data_catalog, data_root=data_root)
+
     arguments = {
         "root": input_folder,
-        "data_catalogs": customize_data_catalog(data_catalog, data_root=data_root),
+        "data_catalogs": data_catalog,
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
@@ -452,6 +491,10 @@ def init_fn(
         basin_id:Basin ID(s) to use for the model. Can be a comma-separated list of integers.
             If not set, the basin ID is taken from the config file.
         overwrite: If True, overwrite existing config and build config files. Defaults to False.
+
+    Raises:
+        FileExistsError: If the config or build config file already exists and overwrite is False.
+        FileNotFoundError: If the example folder does not exist.
 
     """
     config: Path = Path(config)
@@ -542,7 +585,7 @@ def init_fn(
     help="If set, overwrite existing config and build config files.",
 )
 @working_directory_option
-def init(*args, **kwargs) -> None:
+def init(*args: Any, **kwargs: Any) -> None:
     """Initialize a new model."""
     # Initialize the model with the given config and build config
     init_fn(*args, **kwargs)
@@ -552,29 +595,44 @@ def build_fn(
     data_catalog,
     config,
     build_config,
-    custom_model,
     working_directory,
     data_provider,
     data_root,
 ) -> None:
-    """Build model."""
+    """Build model.
+
+    Args:
+        data_catalog: Path to the data catalog file.
+        config: Path to the model configuration file.
+        build_config: Path to the model build configuration file.
+        working_directory: Working directory for the model.
+        data_provider: Data variant to use from data catalog (see hydroMT documentation).
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
+
+    """
     with WorkingDirectory(working_directory):
+        build_config = parse_config(build_config)
         model = get_builder(
             config,
             data_catalog,
-            custom_model,
+            build_config["_custom_model"] if "_custom_model" in build_config else None,
             data_provider,
             data_root,
         )
+        methods = {
+            method: args
+            for method, args in build_config.items()
+            if not method.startswith("_")
+        }
         model.build(
-            methods=parse_config(build_config),
+            methods=methods,
             region=parse_config(config)["general"]["region"],
         )
 
 
 @cli.command()
 @click_build_options()
-def build(*args, **kwargs) -> None:
+def build(*args: Any, **kwargs: Any) -> None:
     build_fn(*args, **kwargs)
 
 
@@ -582,7 +640,6 @@ def alter_fn(
     data_catalog,
     config: dict,
     build_config: dict,
-    custom_model,
     working_directory: Path | str,
     from_model: str,
     data_provider,
@@ -617,24 +674,31 @@ def alter_fn(
         with open(input_folder / "files.json", "w") as f:
             json.dump(original_files, f, indent=4)
 
+        build_config = parse_config(build_config)
         model = get_builder(
             config,
             data_catalog,
-            custom_model,
+            build_config["_custom_model"] if "_custom_model" in build_config else None,
             data_provider,
             data_root,
         )
+        methods = {
+            method: args
+            for method, args in build_config.items()
+            if not method.startswith("_")
+        }
+
         model.read()
 
         model.update(
-            methods=parse_config(build_config),
+            methods=methods,
         )
 
 
 @cli.command()
 @click_build_options()
 @click.option("--from-model", default="../base", help="Folder for the existing model.")
-def alter(*args, **kwargs) -> None:
+def alter(*args: Any, **kwargs: Any) -> None:
     """Create alternative version from base model with only changed files.
 
     This command is useful to create a new model based on an existing one, but with
@@ -649,35 +713,44 @@ def update_fn(
     data_catalog,
     config,
     build_config,
-    custom_model,
     working_directory,
     data_provider,
     data_root,
 ) -> None:
-    """Update model."""
+    """Update model.
+
+    Args:
+        data_catalog: Path to the data catalog file.
+        config: Path to the model configuration file.
+        build_config: Path to the model build configuration file or a specific method within the build file using :: syntax, e.g., 'build.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.
+        working_directory: Working directory for the model.
+        data_provider: Data variant to use from data catalog (see hydroMT documentation).
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
+
+    Raises:
+        FileNotFoundError: if the build config file is not found.
+        KeyError: if the specified method is not found in the build config file.
+        ValueError: if build_config is not a str or dict.
+    """
     with WorkingDirectory(working_directory):
-        model = get_builder(
-            config,
-            data_catalog,
-            custom_model,
-            data_provider,
-            data_root,
-        )
-
-        model.read()
-
         if isinstance(build_config, str):
             build_config_list: list[str] = build_config.split("::")
             build_config_file: str = build_config_list[0]
 
             try:
-                methods: dict[Any] = parse_config(build_config_file)
+                build_config: dict[Any] = parse_config(build_config_file)
             except FileNotFoundError:
                 if ":" in build_config_file and "::" not in build_config_file:
                     raise FileNotFoundError(
                         f"Build config file '{build_config_file}' not found. Did you mean '{build_config_file.replace(':', '::')}'?"
                     )
                 raise
+
+            methods = {
+                method: args
+                for method, args in build_config.items()
+                if not method.startswith("_")
+            }
 
             if len(build_config_list) > 1:
                 assert len(build_config_list) == 2
@@ -722,10 +795,24 @@ def update_fn(
                     methods = {build_config_function: methods[build_config_function]}
 
         elif isinstance(build_config, dict):
-            methods = build_config
+            methods = {
+                method: args
+                for method, args in build_config.items()
+                if not method.startswith("_")
+            }
 
         else:
             raise ValueError
+
+        model = get_builder(
+            config,
+            data_catalog,
+            build_config["_custom_model"] if "_custom_model" in build_config else None,
+            data_provider,
+            data_root,
+        )
+
+        model.read()
 
         model.update(methods=methods)
 
@@ -735,7 +822,7 @@ def update_fn(
     build_config="update.yml",
     build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
 )
-def update(*args, **kwargs) -> None:
+def update(*args: Any, **kwargs: Any) -> None:
     update_fn(*args, **kwargs)
 
 
@@ -901,7 +988,7 @@ def share_fn(working_directory, name, include_preprocessing, include_output) -> 
     default=False,
     help="Include output files in the zip file.",
 )
-def share(*args, **kwargs) -> None:
+def share(*args: Any, **kwargs: Any) -> None:
     """Share model as a zip file."""
     share_fn(*args, **kwargs)
 

@@ -428,4 +428,4 @@ class PotentialEvapotranspiration(Module):
         assert self.HRU.var.reference_evapotranspiration_water.dtype == np.float32
 
         self.model.agents.crop_farmers.save_water_deficit()
-        self.report(self, locals())
+        self.report(locals())

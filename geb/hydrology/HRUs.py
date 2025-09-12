@@ -14,6 +14,8 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import cKDTree
 
+from geb.workflows.raster import compress
+
 
 def determine_nearest_river_cell(
     upstream_area: npt.NDArray[np.float32],
@@ -300,7 +302,7 @@ class Grid(BaseVariables):
 
         BaseVariables.__init__(self)
 
-    def full(self, *args, **kwargs) -> np.ndarray:
+    def full(self, *args: Any, **kwargs: Any) -> np.ndarray:
         """Return a full array with size of mask. Takes any other argument normally used in np.full.
 
         Args:
@@ -309,7 +311,7 @@ class Grid(BaseVariables):
         """
         return np.full(self.mask.shape, *args, **kwargs)
 
-    def full_compressed(self, *args, **kwargs) -> np.ndarray:
+    def full_compressed(self, *args: Any, **kwargs: Any) -> np.ndarray:
         """Return a full array with size of compressed array. Takes any other argument normally used in np.full.
 
         Args:
@@ -327,7 +329,7 @@ class Grid(BaseVariables):
         Returns:
             array: Compressed array.
         """
-        return array[..., ~self.mask]
+        return compress(array, self.mask)
 
     def decompress(
         self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float] = None
@@ -529,13 +531,13 @@ class HRUs(BaseVariables):
 
         # get lats and lons for subgrid
         self.lon = np.linspace(
-            self.gt[0] + self.cell_size / 2,
-            self.gt[0] + self.cell_size * submask_width - self.cell_size / 2,
+            self.gt[0] + self.gt[1] / 2,
+            self.gt[0] + self.gt[1] * submask_width - self.gt[1] / 2,
             submask_width,
         )
         self.lat = np.linspace(
-            self.gt[3] + self.cell_size / 2,
-            self.gt[3] + self.cell_size * submask_height - self.cell_size / 2,
+            self.gt[3] + self.gt[5] / 2,
+            self.gt[3] + self.gt[5] * submask_height - self.gt[5] / 2,
             submask_height,
         )
         BaseVariables.__init__(self)
@@ -748,7 +750,7 @@ class HRUs(BaseVariables):
             self.data.farms, land_use_classes, self.data.grid.mask, self.scaling
         )
 
-    def zeros(self, size, dtype, *args, **kwargs) -> np.ndarray:
+    def zeros(self, size, dtype, *args: Any, **kwargs: Any) -> np.ndarray:
         """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
 
         Args:
@@ -762,7 +764,9 @@ class HRUs(BaseVariables):
         """
         return np.zeros(size, dtype, *args, **kwargs)
 
-    def full_compressed(self, fill_value, dtype, *args, **kwargs) -> np.ndarray:
+    def full_compressed(
+        self, fill_value, dtype, *args: Any, **kwargs: Any
+    ) -> np.ndarray:
         """Return a full array with size of number of HRUs. Takes any other argument normally used in np.full.
 
         Args:

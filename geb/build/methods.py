@@ -72,7 +72,13 @@ class _build_method:
         )
 
     def add_tree_edge(self, func: Callable[..., Any], depends_on: str) -> None:
-        """Add an edge to the dependency tree."""
+        """Add an edge to the dependency tree.
+
+        Raises:
+            ValueError: if a method depends on "setup_region" since everything depends on it.
+                "setup_region" should therefore not be included in the dependency tree.
+
+        """
         if depends_on == "setup_region":
             raise ValueError(
                 "Everything depends on setup_region so we don't include it."
@@ -83,10 +89,13 @@ class _build_method:
         """Validate the dependency tree.
 
         Checks if all the node dependencies are present in the tree.
+
+        Raises:
+            ValueError: if a method depends on another method that is not a build function.
         """
         assert nx.is_directed_acyclic_graph(self.tree)
-        for node in self.tree.nodes:
-            depencencies = list(self.tree.predecessors(node))
+        for method in self.tree.nodes:
+            depencencies = list(self.tree.predecessors(method))
             for dependency in depencencies:
                 if (
                     not self.tree.nodes[dependency]
@@ -94,7 +103,7 @@ class _build_method:
                     .get("_function_exists", False)
                 ):
                     raise ValueError(
-                        f"Node {node} depends on {dependency}, "
+                        f"Method {method} depends on {dependency}, "
                         "which is not a build function."
                     )
         self.logger.debug("Builder dependency tree validation passed.")

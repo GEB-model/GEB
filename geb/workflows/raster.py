@@ -1,5 +1,23 @@
+"""Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
+
+from typing import Any
+
 import numpy as np
+import numpy.typing as npt
 import xarray as xr
+
+
+def compress(array: npt.NDArray[Any], mask: npt.NDArray[np.bool_]) -> npt.NDArray[Any]:
+    """Compress an array by applying a mask.
+
+    Args:
+        array: The array to be compressed.
+        mask: The mask to apply. True values are masked out.
+
+    Returns:
+        The compressed array.
+    """
+    return array[..., ~mask]
 
 
 def reclassify(
@@ -16,6 +34,10 @@ def reclassify(
 
     Returns:
         Reclassified array with the same dimensions and coordinates
+
+    Raises:
+        ValueError: If the method is not 'dict' or 'lookup', or in the case of lookup method if keys are not positive integers
+        TypeError: If the input is not an xarray.DataArray or numpy.ndarray
     """
     # create numpy array from dictionary values to get the dtype of the output
     values = np.array(list(remap_dict.values()))

@@ -7,49 +7,15 @@ import shutil
 import signal
 import string
 from copy import deepcopy
-from functools import wraps
 from subprocess import PIPE, Popen
 
-import numpy as np
 import yaml
 
-
-def handle_ctrl_c(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        global ctrl_c_entered
-        if not ctrl_c_entered:
-            signal.signal(signal.SIGINT, default_sigint_handler)  # the default
-            try:
-                return func(*args, **kwargs)
-            except KeyboardInterrupt:
-                ctrl_c_entered = True
-                return KeyboardInterrupt
-            finally:
-                signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-        else:
-            return KeyboardInterrupt
-
-    return wrapper
-
-
-def pool_ctrl_c_handler(*args, **kwargs) -> None:
-    global ctrl_c_entered
-    ctrl_c_entered = True
-
-
-def multi_set(dict_obj, value, *attrs) -> None:
-    d = dict_obj
-    for attr in attrs[:-1]:
-        d = d[attr]
-    if attrs[-1] not in d:
-        raise KeyError(f"Key {attrs} does not exist in config file.")
-
-    # Check if the value is a numpy scalar and convert it if necessary
-    if isinstance(value, np.generic):
-        value = value.item()
-
-    d[attrs[-1]] = value
+from .workflows.multiprocessing import (
+    handle_ctrl_c,
+    init_pool,
+    pool_ctrl_c_handler,
+)
 
 
 @handle_ctrl_c
@@ -157,23 +123,6 @@ def run_model(args) -> None:
                 with open(os.path.join(run_directory, "done.txt"), "w") as f:
                     f.write("done")
                 break
-
-
-def init_pool(
-    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
-) -> None:
-    # set global variable for each process in the pool:
-    global ctrl_c_entered
-    global default_sigint_handler
-    ctrl_c_entered = False
-    default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-
-    global lock
-    global current_gpu_use_count
-    global n_gpu_spots
-    n_gpu_spots = gpus * models_per_gpu
-    lock = manager_lock
-    current_gpu_use_count = manager_current_gpu_use_count
 
 
 def multi_run(config, working_directory) -> None:

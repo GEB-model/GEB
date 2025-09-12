@@ -21,6 +21,8 @@ from ..workflows.farmers import get_farm_locations
 
 
 class Crops:
+    """Contains all build methods for setting up crops for GEB."""
+
     def __init__(self) -> None:
         pass
 
@@ -139,8 +141,7 @@ class Crops:
             A dictionary containing processed crop data in a time series format or as a constant value.
 
         Raises:
-            ValueError
-                If crop_prices is neither a valid file path nor an integer/float.
+            ValueError: If crop_prices is neither a valid file path nor an integer/float.
 
         Notes:
             The function performs the following steps:

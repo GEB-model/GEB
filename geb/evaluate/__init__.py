@@ -1,3 +1,9 @@
+"""
+Evaluation utilities for the GEB model.
+
+Contains the Evaluate class which contains evaluation routines for model runs.
+"""
+
 from pathlib import Path
 
 from .hydrology import Hydrology
