@@ -24,7 +24,8 @@ import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from tqdm import tqdm
-from zarr.codecs import BloscCodec, BytesBytesCodec
+from zarr.abc.codec import BytesBytesCodec
+from zarr.codecs import BloscCodec
 from zarr.codecs.blosc import BloscShuffle
 
 all_async_readers: list = []
@@ -50,6 +51,9 @@ def load_array(fp: Path) -> np.ndarray:
 
     Returns:
         The numpy array.
+
+    Raises:
+        ValueError: If the file format is not supported.
     """
     if fp.suffix == ".npz":
         return np.load(fp)["data"]
@@ -136,7 +140,6 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     The _CRS attribute will be converted to a pyproj CRS object following
     the conventions used by rioxarray. The original _CRS attribute will be removed.
 
-
     Args:
         zarr_folder: The path to the zarr folder.
 
@@ -153,11 +156,13 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     path: Path = Path(zarr_folder)
     if not path.exists():
         raise FileNotFoundError(f"Zarr folder {zarr_folder} does not exist")
-    da: xr.Dataset = xr.open_dataset(
+    ds: xr.Dataset = xr.open_dataset(
         zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
     )
-    assert len(da.data_vars) == 1, "Only one data variable is supported"
-    da: xr.DataArray = da[list(da.data_vars)[0]]
+    if len(ds.data_vars) > 1:
+        raise ValueError("Only one data variable is supported")
+
+    da: xr.DataArray = ds[list(ds.data_vars)[0]]
 
     if da.dtype == bool and "_FillValue" not in da.attrs:
         da.attrs["_FillValue"] = None
