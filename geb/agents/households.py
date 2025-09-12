@@ -1096,22 +1096,22 @@ class Households(AgentBaseClass):
 
         return damages_do_not_adapt, damages_adapt
 
-    def flood(self, flood_map: xr.DataArray) -> float:
+    def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
 
         Args:
-            flood_map: The flood map containing water levels for the flood event.
+            flood_depth: The flood map containing water levels for the flood event [m].
 
         Returns:
             The total flood damages for the event for all assets and land use types.
 
         """
-        flood_map: xr.DataArray = flood_map.compute()
+        flood_depth: xr.DataArray = flood_depth.compute()
         # flood_map = flood_map.chunk({"x": 100, "y": 1000})
 
-        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_map.rio.crs)
+        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_depth.rio.crs)
         household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
-            flood_map.rio.crs
+            flood_depth.rio.crs
         )
 
         assert len(household_points) == self.var.risk_perception.size
@@ -1138,7 +1138,7 @@ class Households(AgentBaseClass):
         category_name: str = "buildings_content"
         filename: str = f"damage_map_{category_name}.gpkg"
 
-        buildings_centroid = household_points.to_crs(flood_map.rio.crs)
+        buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
         buildings_centroid["object_type"] = buildings_centroid[
             "protect_building"
         ].apply(lambda x: "building_protected" if x else "building_unprotected")
@@ -1146,7 +1146,7 @@ class Households(AgentBaseClass):
 
         damages_buildings_content = VectorScanner(
             features=buildings_centroid,
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.buildings_content_curve,
         )
 
@@ -1159,7 +1159,7 @@ class Households(AgentBaseClass):
 
         damages_buildings_structure: pd.Series = VectorScanner(
             features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.buildings_structure_curve,
         )
 
@@ -1178,11 +1178,11 @@ class Households(AgentBaseClass):
         agriculture["object_type"] = "agriculture"
         agriculture["maximum_damage"] = self.var.max_dam_agriculture_m2
 
-        agriculture = agriculture.to_crs(flood_map.rio.crs)
+        agriculture = agriculture.to_crs(flood_depth.rio.crs)
 
         damages_agriculture = VectorScanner(
             features=agriculture,
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.var.agriculture_curve,
         )
         total_damages_agriculture = damages_agriculture.sum()
@@ -1197,29 +1197,29 @@ class Households(AgentBaseClass):
         forest["object_type"] = "forest"
         forest["maximum_damage"] = self.var.max_dam_forest_m2
 
-        forest = forest.to_crs(flood_map.rio.crs)
+        forest = forest.to_crs(flood_depth.rio.crs)
 
         damages_forest = VectorScanner(
             features=forest,
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.var.forest_curve,
         )
         total_damages_forest = damages_forest.sum()
         print(f"damages to forest are: {total_damages_forest}")
 
-        roads = self.roads.to_crs(flood_map.rio.crs)
+        roads = self.roads.to_crs(flood_depth.rio.crs)
         damages_roads = VectorScanner(
             features=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.var.road_curves,
         )
         total_damages_roads = damages_roads.sum()
         print(f"damages to roads are: {total_damages_roads} ")
 
-        rail = self.rail.to_crs(flood_map.rio.crs)
+        rail = self.rail.to_crs(flood_depth.rio.crs)
         damages_rail = VectorScanner(
             features=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.var.rail_curve,
         )
         total_damages_rail = damages_rail.sum()

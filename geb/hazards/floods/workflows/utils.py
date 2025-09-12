@@ -1,6 +1,7 @@
 import os
 import platform
 import subprocess
+from datetime import datetime
 from os.path import isfile, join
 from pathlib import Path
 
@@ -10,10 +11,115 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt.log import setuplog
-from hydromt_sfincs import SfincsModel
+from hydromt_sfincs import SfincsModel, utils
 from pyextremes import EVA
 from shapely.geometry import Point
 from tqdm import tqdm
+
+
+def export_rivers(model_root, segments, postfix="") -> None:
+    segments.to_parquet(model_root / f"segments{postfix}.geoparquet")
+
+
+def import_rivers(model_root, postfix="") -> gpd.GeoDataFrame:
+    return gpd.read_parquet(model_root / f"segments{postfix}.geoparquet")
+
+
+def export_nodes(model_root, nodes) -> None:
+    nodes.to_parquet(model_root / "nodes.geoparquet")
+
+
+def import_nodes(model_root) -> gpd.GeoDataFrame:
+    return gpd.read_parquet(model_root / "nodes.geoparquet")
+
+
+def read_maximum_flood_depth(model_root: Path, simulation_root: Path) -> xr.DataArray:
+    """Read the maximum flood depth from the SFINCS model results.
+
+    If SFINCS was run with subgrid, the flood depth is downscaled to subgrid resolution.
+
+    Notes:
+        If SFINCS was run as a fluvial model, a minimum flood depth of 0.15 m is applied.
+        If SFINCS was run as a pluvial/coastal model, a minimum flood depth of 0.05 m is applied.
+        There are some fundamental issues with the current generation of subgrid maps,
+            especially in steep terrain, see conclusion here: https://doi.org/10.5194/gmd-18-843-2025
+            Here, we use bilinear interpolation as a goodish solution. However, we keep our
+            eyes out for better solutions.
+
+    Args:
+        model_root: The root path of the SFINCS model directory. This should contain the subgrid directory with the depth file.
+        simulation_root: The root path of the SFINCS simulation directory. This should contain the simulation results files.
+
+    Returns:
+        The maximum flood depth downscaled to subgrid resolution.
+    """
+
+    # Read SFINCS model, config and results
+    model: SfincsModel = SfincsModel(
+        str(simulation_root),
+        mode="r",
+    )
+    model.read_config()
+    model.read_results()
+
+    # get maximum water surface elevation (with respect to sea level)
+    water_surface_elevation: xr.DataArray = model.results["zsmax"].max(dim="timemax")
+
+    # to detect whether SFINCS was run with subgrid, we check if the 'sbgfile' key exists in the config
+    # to be extra safe, we also check if the value is not None or has has length > 0
+    if (
+        "sbgfile" in model.config
+        and model.config["sbgfile"] is not None
+        and len(model.config["sbgfile"]) > 0
+    ):
+        # read subgrid elevation
+        surface_elevation: xr.DataArray = xr.open_dataarray(
+            model_root / "subgrid" / "dep_subgrid.tif"
+        ).sel(band=1)
+    else:
+        # the the grid elevation from the model
+        surface_elevation: xr.DataArray = model.grid.get("dep")
+
+    # Detect whether SFINCS was run with or without precipitation
+    # we do this by checking if the 'netamprfile' key exists in the config
+    # to be extra safe, we also check if the value is not None or has has length > 0
+    if (
+        "netamprfile" in model.config
+        and model.config["netamprfile"] is not None
+        and len(model.config["netamprfile"]) > 0
+    ):
+        print("Precipitation input detected, applying minimum flood depth of 0.15 m")
+        minimum_flood_depth: float = 0.15
+    else:
+        print("No precipitation input detected, applying minimum flood depth of 0.05 m")
+        minimum_flood_depth: float = 0.05
+
+    flood_depth_m: xr.DataArray = utils.downscale_floodmap(
+        zsmax=water_surface_elevation,
+        dep=surface_elevation,
+        hmin=minimum_flood_depth,
+        reproj_method="bilinear",  # maybe use "nearest" for coastal
+    )
+    flood_depth_m = flood_depth_m.rio.write_crs(model.crs)
+
+    print(
+        f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "
+        f"Mean flood depth: {float(flood_depth_m.mean().values):.2f} m"
+    )
+
+    return flood_depth_m
+
+
+def to_sfincs_datetime(dt: datetime) -> str:
+    """Convert a datetime object to a string in the format required by SFINCS.
+
+    Args:
+        dt: datetime object to convert.
+
+    Returns:
+        String representation of the datetime in the format "YYYYMMDD HHMMSS".
+    """
+    return dt.strftime("%Y%m%d %H%M%S")
 
 
 def make_relative_paths(config, model_root, new_root, relpath=None):
@@ -141,7 +247,7 @@ def create_hourly_hydrograph(peak_discharge, rising_limb_hours, recession_limb_h
     )
     # Create a pandas DataFrame for the time series
     time_index = pd.date_range(
-        start="2024-01-01 00:00", periods=len(time_hours), freq="H"
+        start="2024-01-01 00:00", periods=len(time_hours), freq="h"
     )
     hydrograph_df = pd.DataFrame({"time": time_index, "discharge": discharge})
     hydrograph_df.set_index("time", inplace=True)
@@ -404,7 +510,7 @@ def assign_return_periods(
     discharge_dataframe: pd.DataFrame,
     return_periods: list[int],
     prefix: str = "Q",
-):
+) -> pd.DataFrame:
     assert isinstance(return_periods, list)
     for i, idx in tqdm(enumerate(rivers.index), total=len(rivers)):
         discharge = discharge_dataframe[idx]
