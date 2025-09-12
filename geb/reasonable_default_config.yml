@@ -33,7 +33,7 @@ hazards:
       - 500
       - 1000
     SFINCS:
-      gpu: false
+      gpu: auto  # True, False, "auto". If "auto", it will check if a GPU is available using nvidia-smi.
   damage:
     simulate: false
   erosion:

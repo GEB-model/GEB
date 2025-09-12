@@ -208,12 +208,12 @@ class Observations:
                         station_dataframe["Q"].values,
                     ),  # Add the 'Q' column as runoff_mean
                     "station_name": ("id", [station_name]),  # Station name
+                    "x": ("id", [station_coords[0]]),  # Longitude
+                    "y": ("id", [station_coords[1]]),  # Latitude
                 },
                 coords={
                     "time": station_dataframe.index,  # Use the index as the time dimension
                     "id": [station_id],  # Assign the station ID
-                    "x": ("id", [station_coords[0]]),
-                    "y": ("id", [station_coords[1]]),
                 },
             )
             # Add the new station to the Q_obs dataset

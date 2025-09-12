@@ -136,24 +136,27 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     The _CRS attribute will be converted to a pyproj CRS object following
     the conventions used by rioxarray. The original _CRS attribute will be removed.
 
+
     Args:
         zarr_folder: The path to the zarr folder.
 
-    Returns:
-        The xarray DataArray.
-
     Raises:
         ValueError: If the zarr file contains multiple data variables.
+        FileNotFoundError: If the zarr folder does not exist.
+
+    Returns:
+        The xarray DataArray.
     """
     # it is rather odd, but in some cases using mask_and_scale=False is necessary
     # or dtypes start changing, seemingly randomly
     # consolidated metadata is off-spec for zarr, therefore we set it to False
+    path: Path = Path(zarr_folder)
+    if not path.exists():
+        raise FileNotFoundError(f"Zarr folder {zarr_folder} does not exist")
     da: xr.Dataset = xr.open_dataset(
         zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
     )
-    if not len(da.data_vars) > 1:
-        raise ValueError("Only one data variable is supported")
-
+    assert len(da.data_vars) == 1, "Only one data variable is supported"
     da: xr.DataArray = da[list(da.data_vars)[0]]
 
     if da.dtype == bool and "_FillValue" not in da.attrs:

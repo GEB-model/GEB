@@ -162,8 +162,38 @@ def check_docker_running() -> bool | None:
         return False
 
 
-def run_sfincs_simulation(model_root, simulation_root, gpu=False) -> int:
-    # Check if we are on Linux or Windows and run the appropriate script
+def run_sfincs_simulation(
+    model_root: Path, simulation_root: Path, gpu: bool | str = "auto"
+) -> int:
+    """Run SFINCS simulation using either Apptainer or Docker.
+
+    Args:
+        model_root: Path to the model root directory.
+        simulation_root: Path to the simulation root directory.
+            Some paths in the configuration will be made relative to this path.
+            The simulation directory must be a subdirectory of the model root directory.
+        gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
+            the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
+
+    Raises:
+        ValueError: If gpu is not True, False, or 'auto'.
+        RuntimeError: If there is an error running the SFINCS simulation.
+
+    Returns:
+        The return code of the SFINCS simulation subprocess.
+    """
+
+    if gpu not in [True, False, "auto"]:
+        raise ValueError("gpu must be True, False, or 'auto'")
+
+    if gpu == "auto":
+        result = subprocess.run(["nvidia-smi"], capture_output=True)
+        gpu = result.returncode == 0
+        if gpu:
+            print("GPU detected, running SFINCS with GPU support.")
+        else:
+            print("No GPU detected, running SFINCS without GPU support.")
+
     if gpu:
         version: str = os.getenv(
             "SFINCS_SIF_GPU", "mvanormondt/sfincs-gpu:coldeze_combo_ccall"
@@ -296,7 +326,9 @@ def get_discharge_and_river_parameters_by_river(
         x=x_points,
         y=y_points,
     ).compute()
-    assert not np.isnan(discharge_per_point).any(), "Discharge values contain NaNs"
+    assert not np.isnan(discharge_per_point.values).any(), (
+        "Discharge values contain NaNs"
+    )
 
     if river_width_alpha is not None:
         river_width_alpha_per_point = river_width_alpha[y_points, x_points]
