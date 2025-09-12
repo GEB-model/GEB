@@ -74,7 +74,9 @@ class SFINCS:
             / f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}"
         )
         if self.model.multiverse_name:
-            folder: Path = folder / self.model.multiverse_name
+            folder: Path = (
+                folder / self.model.forecast_issue_date / self.model.multiverse_name
+            )
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -412,7 +414,13 @@ class SFINCS:
 
         flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         if self.model.multiverse_name:
-            flood_map_name: str = self.model.multiverse_name + " - " + flood_map_name
+            flood_map_name: str = (
+                self.model.forecast_issue_date
+                + " - "
+                + self.model.multiverse_name
+                + " - "
+                + flood_map_name
+            )
         flood_map: xr.DataArray = to_zarr(
             flood_map,
             self.model.output_folder / "flood_maps" / flood_map_name,

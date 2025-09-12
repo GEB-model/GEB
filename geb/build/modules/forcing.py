@@ -340,7 +340,7 @@ def download_forecasts_ECMWF(
         )
     server = ecmwfapi.ECMWFService("mars")
     # preprocess download arguments
-    fc_area_buffer: float = 0.5  # spatial buffer around the forecasts
+    fc_area_buffer: float = 1  # spatial buffer around the forecasts
     bounds = (
         bounds[0] - fc_area_buffer,
         bounds[1] - fc_area_buffer,
@@ -367,6 +367,7 @@ def download_forecasts_ECMWF(
 
         # Generate output filename
         forecast_datetime_str = forecast_date.strftime("%Y%m%dT%H%M%S")
+        forecast_date_str = forecast_date.strftime("%Y-%m-%d")
         output_filename: Path = variable_folder / f"{forecast_datetime_str}.grb"
 
         # Process MARS request parameters
@@ -420,7 +421,7 @@ def download_forecasts_ECMWF(
             "area": mars_area,
         }
         if forecast_model == "pf":  # check
-            mars_request["number"] = "1/to/3"
+            mars_request["number"] = "1/to/50"
 
         # Execute MARS request with preprocessed parameters
         print(f"Requesting data from ECMWF MARS server.. {mars_request}")
@@ -434,14 +435,19 @@ def download_forecasts_ECMWF(
 def process_forecast_ECMWF(
     self,
     preprocessing_folder: Path,
-    target: xr.DataArray,
     bounds: tuple[float, float, float, float],
     forecast_issue_date: date | datetime,
-) -> None | xr.DataArray:
+) -> None | xr.Dataset:
     """Process downloaded ECMWF forecast data.
 
     Args:
-        folder: Path to the folder containing the downloaded ECMWF forecast data.
+        preprocessing_folder: Path to the folder containing the downloaded ECMWF forecast data.
+        bounds: The bounding box in the format (min_lon, min_lat, max_lon,
+                max_lat).
+        forecast_issue_date: The forecast initialization time (date or datetime).
+    Returns:
+        Processed ECMWF forecast data as an xarray Dataset.
+
     """
 
     self.logger.info(
@@ -459,23 +465,9 @@ def process_forecast_ECMWF(
         engine="cfgrib",
     ).rename({"latitude": "y", "longitude": "x", "number": "member"})
 
-    da = da.load()
-
-    # variable specific processing
-    da["tp"] = da["tp"] * 1000  # convert m to mm
-    da["tp"] = da["tp"] / 3600  # convert from mm/hr to mm/s
-
-    # assert that rainfall in the next time step of the xrarray is always equal or larger than the previous time step
-    da["tp"] = da["tp"].diff(dim="time", n=1, label="lower")  # de-accumulate
-    # assert that rainfall is never negative
-    assert (da["tp"] >= 0).all(), "Rainfall is negative after de-accumulation"
-
-    # dataset processing
-    da = da.assign_coords(valid_time=da.time + da.step)
-
-    da = da.swap_dims({"step": "valid_time"})  # make valid_time the new time dimension
-    da = da.drop_vars(["time", "step", "surface"])  # drop unused variables
-    da = da.rename({"valid_time": "time"})  # rename valid_time to time
+    da = (
+        da.load()
+    )  # load the data into memory to avoid issues with closing the file later on
 
     # ensure all the timesteps are hourly
     if not (da.time.diff("time").astype(np.int64) == 3600 * 1e9).all():
@@ -486,13 +478,35 @@ def process_forecast_ECMWF(
             f"Timesteps in the forecast are not hourly, resampling to hourly. Found timesteps: {np.unique(da.time.diff('time').astype(np.int64) / 1e9 / 3600)} hours"
         )
 
-        da = da.resample(time="1H").interpolate("linear")
+        da = da.resample(step="1H").interpolate("linear")
         # convert back to float32
         da = da.astype(np.float32)
     else:
         print("All timesteps are already hourly, no need to resample")
 
-    buffer: float = 0.5
+    # variable specific processing
+    # rainfall
+    da["tp"] = da["tp"] * 1000  # convert m to mm
+    da["tp"] = da["tp"] / 3600  # convert from mm/hr to mm/s
+
+    # assert that rainfall in the next time step of the xrarray is always equal or larger than the previous time step
+    da["tp"] = da["tp"].diff(dim="step", n=1, label="lower")  # de-accumulate
+    # assert that rainfall is never negative
+    da["tp"] = da["tp"].where(da["tp"] >= 0, 0)
+
+    # radiation (from J/m2 to W/m2)
+    da["ssrd"] = da["ssrd"].diff(dim="step", n=1, label="lower")  # de-accumulate
+    da["ssrd"] = da["ssrd"] / 3600  # convert
+    da["strd"] = da["strd"].diff(dim="step", n=1, label="lower")  # de-accumulate
+    da["strd"] = da["strd"] / 3600  # convert
+
+    # dataset processing
+    da = da.assign_coords(valid_time=da.time + da.step)
+    da = da.swap_dims({"step": "valid_time"})  # make valid_time the new time dimension
+    da = da.drop_vars(["time", "step", "surface"])  # drop unused variables
+    da = da.rename({"valid_time": "time"})  # rename valid_time to time
+
+    buffer: float = 1
 
     # Check if region crosses the meridian (longitude=0)
     # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
@@ -546,16 +560,27 @@ def process_forecast_ECMWF(
             "increase the buffer around the forecasts (fc_area_buffer), as probably not "
             "the whole area is downloaded"
         )
-    # Check for NaN values in all variables and interpolate if found
-    has_missing_values: bool = any(
-        da[var].isnull().any().values for var in da.data_vars
-    )
+        # fill the nan values using interpolate_na_along_time_dim and interpolate_na in space
+        if nan_percentage > 0:
+            self.logger.warning(
+                f"Found {nan_percentage:.2f}% missing values for variable '{variable_name}' after regridding. Interpolating missing values."
+            )
+            da = da.interpolate_na(dim=["y", "x"], method="linear")
+            da = da.interpolate_na(dim=["time"], method="linear")
 
-    if has_missing_values:
-        da = da.interpolate_na(dim=["y", "x"], method="nearest")
-        self.logger.warning(
-            "Missing values found after regridding, interpolating missing values in space"
-        )
+            # fill nans in last timesteps (due to de-accumulation) with mean of recent known values
+            recent_mean: xr.DataArray = (
+                da[variable_name]
+                .isel(time=slice(-25, -1))
+                .mean(dim="time", skipna=True, keep_attrs=True)
+            )
+            # Fill any remaining NaNs with the recent mean
+            da[variable_name] = da[variable_name].fillna(recent_mean)
+
+            nan_percentage_after: float = float(
+                da[variable_name].isnull().mean().compute().item() * 100
+            )
+
     return da
 
 
@@ -983,10 +1008,9 @@ class Forcing:
         fp = self.report_dir / (name + "_timeline.png")
         fp.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(fp)
-
         plt.close(fig)
 
-        spatial_data = da.mean(dim="time").compute()
+        spatial_data = da.mean(dim="time")
 
         spatial_data.plot()
 
@@ -1018,6 +1042,11 @@ class Forcing:
         # Calculate spatial averages (exclude masked areas)
         mask = self.grid["mask"]
 
+        # interp to mask, if necessary
+        da_plot = da.copy()
+        if "pr_hourly" in da.name:
+            da_plot = da.interp(x=mask.x, y=mask.y)
+
         # For ensemble data, calculate averages for each member
         n_members: int = da.sizes["member"]
 
@@ -1026,15 +1055,15 @@ class Forcing:
 
         # Calculate spatial mean for each member
         ensemble_data = []
-        for member in da.member:
-            member_da = da.sel(member=member)
+        for member in da_plot.member:
+            member_da = da_plot.sel(member=member)
             member_avg = (
                 (member_da * ~mask).sum(dim=("y", "x")) / (~mask).sum()
             ).compute()
             ensemble_data.append(member_avg)
 
             # Convert data to mm/hour if it's precipitation
-            if "pr" in name.lower() and "kg m-2 s-1" in da.attrs.get("units", ""):
+            if "pr" in name.lower() and "kg m-2 s-1" in da_plot.attrs.get("units", ""):
                 member_plot = member_avg * 3600
             else:
                 member_plot = member_avg
@@ -1051,12 +1080,12 @@ class Forcing:
         ensemble_mean = sum(ensemble_data) / len(ensemble_data)
 
         # Convert ensemble mean to mm/hour if it's precipitation
-        if "pr" in name.lower() and "kg m-2 s-1" in da.attrs.get("units", ""):
+        if "pr" in name.lower() and "kg m-2 s-1" in da_plot.attrs.get("units", ""):
             ensemble_mean_plot = ensemble_mean * 3600
             ylabel = "mm/hour"
         else:
             ensemble_mean_plot = ensemble_mean
-            ylabel = da.attrs.get("units", "")
+            ylabel = da_plot.attrs.get("units", "")
 
         ax_time.plot(
             ensemble_mean.time,
@@ -1082,8 +1111,6 @@ class Forcing:
         n_cols = min(4, n_members)
         n_rows = (n_members + n_cols - 1) // n_cols
 
-        import cartopy.crs as ccrs
-
         # Create figure with cartopy projection
         fig, axes = plt.subplots(
             n_rows,
@@ -1093,24 +1120,24 @@ class Forcing:
         )
         plt.subplots_adjust(hspace=0.4, wspace=0.4)
 
-        vmin = np.min(ensemble_data) * 3600
-        vmax = np.max(ensemble_data) * 3600
-        # fill the subplots with ensemble data
-
-        for i, member in enumerate(da.member):
+        for i, member in enumerate(da_plot.member):
             ax = axes.flatten()[i]
-            member_da = da.sel(member=member)
+            member_da = da_plot.sel(member=member)
 
             # plot maximum
-            spatial_data = member_da.max(dim="time").compute()
+            spatial_data = member_da.max(dim="time")
 
             # Convert spatial data to mm/hour if it's precipitation
-            if "pr" in name.lower() and "kg m-2 s-1" in da.attrs.get("units", ""):
+            if "pr" in name.lower() and "kg m-2 s-1" in da_plot.attrs.get("units", ""):
                 spatial_data_plot = spatial_data * 3600
                 cbar_label = "mm/hour"
+                vmin = np.min(ensemble_data) * 3600
+                vmax = np.max(ensemble_data) * 3600
             else:
                 spatial_data_plot = spatial_data
-                cbar_label = da.attrs.get("units", "")
+                cbar_label = da_plot.attrs.get("units", "")
+                vmin = np.min(ensemble_data)
+                vmax = np.max(ensemble_data)
 
             im = ax.pcolormesh(
                 spatial_data_plot.x,
@@ -1141,6 +1168,12 @@ class Forcing:
             ax.add_feature(cfeature.COASTLINE, linewidth=0.5, color="black")
             ax.add_feature(cfeature.BORDERS, linewidth=0.5, color="gray")
 
+            # add region
+            # Add region shapefile boundary with thick line
+            if hasattr(self, "geom") and "mask" in self.geom:
+                self.geom["mask"].boundary.plot(
+                    ax=ax, color="red", linewidth=3, transform=ccrs.PlateCarree()
+                )
         # add colorbar which applies to all subplots
         fig.subplots_adjust(right=0.85)
         cbar_ax = fig.add_axes((0.87, 0.15, 0.03, 0.7))  # (left, bottom, width, height)
@@ -2751,7 +2784,6 @@ class Forcing:
 
         process_args: dict[str, Any] = {
             "preprocessing_folder": preprocessing_folder,
-            "target": target,
             "bounds": bounds,
         }
 
@@ -2773,7 +2805,7 @@ class Forcing:
             forecast_issue_date_str = forecast_issue_date.strftime("%Y%m%dT%H%M%S")
 
             self.logger.info(f"Processing forecast issued at {forecast_issue_date}...")
-            process_args["forecast_issue_date"] = forecast_issue_date.date()
+            process_args["forecast_issue_date"] = forecast_issue_date
 
             ECMWF_forecast = process_forecast_ECMWF(self, **process_args)
             # hourly precipitation
@@ -2794,9 +2826,7 @@ class Forcing:
                 # daily precipitation
                 pr = pr_hourly.resample(time="D").mean()  # get daily mean
                 pr = resample_like(pr, target, method="conservative")
-                pr = self.set_pr(
-                    pr, f"forecasts/ECMWF/pr_hourly_{forecast_issue_date_str}"
-                )
+                pr = self.set_pr(pr, f"forecasts/ECMWF/pr_{forecast_issue_date_str}")
 
                 # tas avg (average air temperature in Kelvin.)
                 hourly_tas = ECMWF_forecast["t2m"]
