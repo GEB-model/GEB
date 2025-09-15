@@ -116,15 +116,45 @@ class SFINCS:
         """
         sfincs_model = SFINCSRootModel(self.model, name)
         if self.config["force_overwrite"] or not sfincs_model.exists():
-            build_parameters = self.get_build_parameters()
-            if (
-                "simulate_coastal_floods" in self.model.config["general"]
-                and self.model.config["general"]["simulate_coastal_floods"]
-            ):
-                build_parameters["simulate_coastal_floods"] = True
-            sfincs_model.build(**build_parameters)
+            with open(self.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
+                DEM_config = json.load(f)
+                for entry in DEM_config:
+                    entry["elevtn"] = open_zarr(
+                        self.model.files["other"][entry["path"]]
+                    ).to_dataset(name="elevtn")
+
+            sfincs_model.build(
+                region=load_geom(self.model.files["geom"]["routing/subbasins"]),
+                DEMs=DEM_config,
+                rivers=self.rivers,
+                discharge=self.discharge_spinup_ds,
+                waterbody_ids=self.model.hydrology.grid.decompress(
+                    self.model.hydrology.grid.var.waterBodyID
+                ),
+                river_width_alpha=self.model.hydrology.grid.decompress(
+                    self.model.var.river_width_alpha
+                ),
+                river_width_beta=self.model.hydrology.grid.decompress(
+                    self.model.var.river_width_beta
+                ),
+                mannings=self.mannings,
+                resolution=self.config["resolution"],
+                nr_subgrid_pixels=self.config["nr_subgrid_pixels"],
+                crs=self.crs,
+                depth_calculation_method=self.model.config["hydrology"]["routing"][
+                    "river_depth"
+                ]["method"],
+                depth_calculation_parameters=self.model.config["hydrology"]["routing"][
+                    "river_depth"
+                ]["parameters"]
+                if "parameters"
+                in self.model.config["hydrology"]["routing"]["river_depth"]
+                else {},
+                mask_flood_plains=False,  # setting this to True sometimes leads to errors
+            )
         else:
             sfincs_model.read()
+
         return sfincs_model
 
     def set_forcing(
@@ -705,45 +735,3 @@ class SFINCS:
         if crs == "auto":
             crs: str = self.get_utm_zone(self.model.files["geom"]["routing/subbasins"])
         return crs
-
-    def get_build_parameters(self) -> dict[str, Any]:
-        """Get the parameters needed to build the SFINCS model.
-
-        Returns:
-            A dictionary containing the parameters needed to build the SFINCS model.
-        """
-        with open(self.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
-            DEM_config = json.load(f)
-        for entry in DEM_config:
-            entry["elevtn"] = open_zarr(
-                self.model.files["other"][entry["path"]]
-            ).to_dataset(name="elevtn")
-
-        return {
-            "region": load_geom(self.model.files["geom"]["routing/subbasins"]),
-            "DEMs": DEM_config,
-            "rivers": self.rivers,
-            "discharge": self.discharge_spinup_ds,
-            "waterbody_ids": self.model.hydrology.grid.decompress(
-                self.model.hydrology.grid.var.waterBodyID
-            ),
-            "river_width_alpha": self.model.hydrology.grid.decompress(
-                self.model.var.river_width_alpha
-            ),
-            "river_width_beta": self.model.hydrology.grid.decompress(
-                self.model.var.river_width_beta
-            ),
-            "mannings": self.mannings,
-            "resolution": self.config["resolution"],
-            "nr_subgrid_pixels": self.config["nr_subgrid_pixels"],
-            "crs": self.crs,
-            "depth_calculation_method": self.model.config["hydrology"]["routing"][
-                "river_depth"
-            ]["method"],
-            "depth_calculation_parameters": self.model.config["hydrology"]["routing"][
-                "river_depth"
-            ]["parameters"]
-            if "parameters" in self.model.config["hydrology"]["routing"]["river_depth"]
-            else {},
-            "mask_flood_plains": False,  # setting this to True sometimes leads to errors
-        }
