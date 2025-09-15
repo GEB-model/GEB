@@ -34,7 +34,6 @@ dependencies = [
     "hydromt==0.10.1",
     "hydromt-sfincs>=1.2.0",
     "isimip-client>=1.0.1",
-    "nest_asyncio>=1.6.0", # for GUI in
     "networkx",
     "numcodecs>=0.16.2",
     "numba>=0.61.0",

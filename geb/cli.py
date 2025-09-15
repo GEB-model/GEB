@@ -166,22 +166,6 @@ def click_run_options():
         @click_config
         @working_directory_option
         @click.option(
-            "--gui",
-            is_flag=True,
-            help="""The model can be run with a graphical user interface in a browser. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""",
-        )
-        @click.option(
-            "--no-browser",
-            is_flag=True,
-            help="""Run graphical user interface, but serve interface through the server but do not open the browser. You may connect to the server from a browswer. This option is only works in combination with the graphical user interface.""",
-        )
-        @click.option(
-            "--port",
-            type=int,
-            default=8521,
-            help="""Port used for graphical user interface (default: 8521)""",
-        )
-        @click.option(
             "--profiling",
             is_flag=True,
             help="Run GEB with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
@@ -206,18 +190,15 @@ def run_model_with_method(
     profiling: bool,
     config,
     working_directory,
-    gui,
-    no_browser,
-    port,
     timing,
     optimize,
     method_args: dict = {},
     close_after_run=True,
-) -> GEBModel | None:
+) -> GEBModel:
     """Run model with a specific method.
 
     Returns:
-        GEBModel if gui is False, else None
+        Instance of GEBModel
     """
     # check if we need to run the model in optimized mode
     # if the model is already running in optimized mode, we don't need to restart it
@@ -246,57 +227,27 @@ def run_model_with_method(
             "timing": timing,
         }
 
-        if not gui:
-            if profiling:
-                profile = cProfile.Profile()
-                profile.enable()
+        if profiling:
+            profile = cProfile.Profile()
+            profile.enable()
 
-            geb = GEBModel(**model_params)
-            if method is not None:
-                getattr(geb, method)(**method_args)
-            if close_after_run:
-                geb.close()
+        geb = GEBModel(**model_params)
+        if method is not None:
+            getattr(geb, method)(**method_args)
+        if close_after_run:
+            geb.close()
 
-            if profiling:
-                profile.disable()
-                with open("profiling_stats.cprof", "w") as stream:
-                    stats = Stats(profile, stream=stream)
-                    stats.strip_dirs()
-                    stats.sort_stats("cumtime")
-                    stats.dump_stats(".prof_stats")
-                    stats.print_stats()
-                profile.dump_stats("profile.prof")
+        if profiling:
+            profile.disable()
+            with open("profiling_stats.cprof", "w") as stream:
+                stats = Stats(profile, stream=stream)
+                stats.strip_dirs()
+                stats.sort_stats("cumtime")
+                stats.dump_stats(".prof_stats")
+                stats.print_stats()
+            profile.dump_stats("profile.prof")
 
-            return geb
-
-        else:
-            # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
-            # the event loop started for reading data, unless we use nest_asyncio.
-            # so that's what we do here.
-            import nest_asyncio
-
-            nest_asyncio.apply()
-
-            if profiling:
-                print("Profiling not available for browser version")
-            server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
-            if "draw" in config and "plot" in config["draw"] and config["draw"]["plot"]:
-                server_elements = server_elements + [
-                    ChartModule(series) for series in config["draw"]["plot"]
-                ]
-
-            DISPLAY_TIMESTEPS = [1, 10, 100, 1000]
-
-            server = ModularServer(
-                "GEB",
-                GEBModel,
-                server_elements,
-                DISPLAY_TIMESTEPS,
-                model_params=model_params,
-                port=None,
-                initialization_method=method,
-            )
-            server.launch(port=port, browser=no_browser)
+        return geb
 
 
 @cli.command()
@@ -862,9 +813,6 @@ def evaluate(
     include_spinup,
     include_yearly_plots,
     correct_q_obs,
-    port,
-    gui,
-    no_browser,
     profiling,
     optimize,
     timing,
@@ -888,9 +836,6 @@ def evaluate(
         },
         working_directory=working_directory,
         config=config,
-        port=port,
-        gui=gui,
-        no_browser=no_browser,
         profiling=profiling,
         optimize=optimize,
         timing=timing,

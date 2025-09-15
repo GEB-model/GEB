@@ -46,9 +46,6 @@ DEFAULT_BUILD_ARGS: dict[str, Any] = {
 DEFAULT_RUN_ARGS: dict[str, Any] = {
     "config": "model.yml",
     "working_directory": ".",
-    "gui": False,
-    "no_browser": True,
-    "port": None,
     "profiling": False,
     "timing": False,
     "optimize": False,
