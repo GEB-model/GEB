@@ -9,7 +9,6 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
-import networkx as nx
 import numpy as np
 import pandas as pd
 import pytest
@@ -17,6 +16,8 @@ import xarray as xr
 
 from geb.build.methods import build_method
 from geb.cli import (
+    BUILD_DEFAULT,
+    CONFIG_DEFAULT,
     alter_fn,
     build_fn,
     init_fn,
@@ -34,22 +35,8 @@ from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
 working_directory: Path = tmp_folder / "model"
 
-DEFAULT_BUILD_ARGS: dict[str, Any] = {
-    "data_catalog": Path(os.getenv("GEB_PACKAGE_DIR")) / "data_catalog.yml",
-    "config": "model.yml",
-    "build_config": "build.yml",
-    "working_directory": ".",
-    "data_provider": None,
-    "data_root": str(Path(os.getenv("GEB_DATA_ROOT", ""))),
-}
-
-DEFAULT_RUN_ARGS: dict[str, Any] = {
-    "config": "model.yml",
-    "working_directory": ".",
-    "profiling": False,
-    "timing": False,
-    "optimize": False,
-}
+DEFAULT_BUILD_ARGS: dict[str, Any] = {}
+DEFAULT_RUN_ARGS: dict[str, Any] = {}
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -182,9 +169,7 @@ def test_update_with_method(method: str) -> None:
     with WorkingDirectory(working_directory):
         args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
 
-        build_config: dict[str, dict] = parse_config(
-            working_directory / args["build_config"]
-        )
+        build_config: dict[str, dict] = parse_config(BUILD_DEFAULT)
 
         update: dict[str, dict] = {method: build_config[method]}
 
@@ -203,7 +188,7 @@ def test_run() -> None:
     args = DEFAULT_RUN_ARGS.copy()
 
     with WorkingDirectory(working_directory):
-        args["config"] = parse_config(args["config"])
+        args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["report"].update(
             {
                 "_water_circle": True,
@@ -216,7 +201,7 @@ def test_run() -> None:
     if os.getenv("GEB_TEST_GPU", "no") == "yes":
         with WorkingDirectory(working_directory):
             args = DEFAULT_RUN_ARGS.copy()
-            args["config"] = parse_config(args["config"])
+            args["config"] = parse_config(CONFIG_DEFAULT)
             args["config"]["hazards"]["floods"]["SFINCS"]["gpu"] = True
             args["config"]["general"]["name"] = "run_gpu"
             run_model_with_method(method="run", **args)
@@ -229,7 +214,7 @@ def test_SFINCS_run_without_subgrid() -> None:
     args = DEFAULT_RUN_ARGS.copy()
 
     with WorkingDirectory(working_directory):
-        args["config"] = parse_config(args["config"])
+        args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["report"].update(
             {
                 "_water_circle": True,
@@ -246,7 +231,7 @@ def test_SFINCS_with_precipitation_forcing() -> None:
     args = DEFAULT_RUN_ARGS.copy()
 
     with WorkingDirectory(working_directory):
-        args["config"] = parse_config(args["config"])
+        args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["report"].update(
             {
                 "_water_circle": True,
@@ -276,7 +261,7 @@ def test_alter() -> None:
 
         run_args = DEFAULT_RUN_ARGS.copy()
         run_args["working_directory"] = args["working_directory"]
-        run_args["config"] = parse_config(run_args["config"])
+        run_args["config"] = parse_config(CONFIG_DEFAULT)
         run_args["config"]["general"]["start_time"] = run_args["config"]["general"][
             "spinup_time"
         ] + timedelta(days=370)  # run just over a year more is not needed
@@ -310,7 +295,7 @@ def test_evaluate() -> None:
 def test_land_use_change() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
-        config = parse_config(args["config"])
+        config = parse_config(CONFIG_DEFAULT)
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
         config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
             days=370
@@ -349,7 +334,7 @@ def test_land_use_change() -> None:
 def test_run_yearly() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
-        config = parse_config(working_directory / args["config"])
+        config = parse_config(CONFIG_DEFAULT)
         config["general"]["end_time"] = date(2049, 12, 31)
         config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
 
@@ -382,7 +367,7 @@ def test_estimate_return_periods() -> None:
 
         with WorkingDirectory(working_directory):
             args = DEFAULT_RUN_ARGS.copy()
-            args["config"] = parse_config(args["config"])
+            args["config"] = parse_config(CONFIG_DEFAULT)
             args["config"]["hazards"]["floods"]["SFINCS"]["gpu"] = True
             run_model_with_method(method="estimate_return_periods", **args)
 
@@ -415,7 +400,7 @@ def test_multiverse() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
 
-        config = parse_config(args["config"])
+        config = parse_config(CONFIG_DEFAULT)
         config["hazards"]["floods"]["simulate"] = True
 
         forecast_after_n_days = 3

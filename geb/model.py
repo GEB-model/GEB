@@ -15,9 +15,8 @@ from dateutil.relativedelta import relativedelta
 from honeybees.model import Model as ABM_Model
 
 from geb.agents import Agents
-from geb.artists import Artists
 from geb.hazards.driver import HazardDriver
-from geb.hazards.floods.construct_storm_surge_hydrographs import (
+from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
     generate_storm_surge_hydrographs,
 )
 from geb.module import Module
@@ -87,8 +86,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.mask = load_geom(self.files["geom"]["mask"])
 
         self.store = Store(self)
-        self.artists = Artists(self)
-
         self.forcing = Forcing(self)
 
         self.evaluator = Evaluate(self)
