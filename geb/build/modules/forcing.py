@@ -420,6 +420,7 @@ def download_forecasts_ECMWF(
             "grid": mars_grid,
             "area": mars_area,
         }
+
         if forecast_model == "pf":  # check
             mars_request["number"] = "1/to/50"
 
@@ -491,8 +492,6 @@ def process_forecast_ECMWF(
 
     # assert that rainfall in the next time step of the xrarray is always equal or larger than the previous time step
     da["tp"] = da["tp"].diff(dim="step", n=1, label="lower")  # de-accumulate
-    # assert that rainfall is never negative
-    da["tp"] = da["tp"].where(da["tp"] >= 0, 0)
 
     # radiation (from J/m2 to W/m2)
     da["ssrd"] = da["ssrd"].diff(dim="step", n=1, label="lower")  # de-accumulate
@@ -2810,6 +2809,8 @@ class Forcing:
             ECMWF_forecast = process_forecast_ECMWF(self, **process_args)
             # hourly precipitation
             pr_hourly = ECMWF_forecast["tp"]
+            # convert <0 values to 0 (float imprecision issues)
+            pr_hourly = pr_hourly.where(pr_hourly >= 0, 0)
             # ranem dataarray from tp to rainfall
             pr_hourly = pr_hourly.rename("precipitation")
             self.set_pr_hourly(
@@ -2901,9 +2902,9 @@ class Forcing:
                 )
                 # Surface short-wave (solar) radiation downwards
                 hourly_rsds = ECMWF_forecast["ssrd"]
-                rsds = hourly_rsds.resample(time="D").sum() / (
-                    24 * 3600
-                )  # get daily sum and convert from J/m2 to W/m2
+                rsds = hourly_rsds.resample(
+                    time="D"
+                ).mean()  # get average W/m2 over the day
 
                 rsds = resample_like(rsds, target, method="conservative")
                 rsds = rsds.rename("rsds")
@@ -2911,7 +2912,9 @@ class Forcing:
 
                 # Surface long-wave (thermal) radiation downwards
                 hourly_rlds = ECMWF_forecast["strd"]
-                rlds = hourly_rlds.resample(time="D").sum() / (24 * 3600)
+                rlds = hourly_rlds.resample(
+                    time="D"
+                ).mean()  # get average W/m2 over the day
                 rlds = resample_like(rlds, target, method="conservative")
                 rlds = rlds.rename("rlds")
                 self.set_rlds(rlds, f"forecasts/ECMWF/rlds_{forecast_issue_date_str}")
