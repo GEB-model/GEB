@@ -1,12 +1,10 @@
 import json
 from collections import deque
 from pathlib import Path
-from typing import Any
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
 import rasterio
 import xarray as xr

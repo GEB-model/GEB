@@ -30,7 +30,7 @@ from .workflows.utils import (
     get_start_point,
     import_rivers,
     make_relative_paths,
-    read_maximum_flood_depth,
+    read_flood_depth,
     run_sfincs_simulation,
     to_sfincs_datetime,
 )
@@ -77,7 +77,7 @@ class SFINCSRootModel:
         river_width_beta: npt.NDArray[np.float32],
         mannings: xr.DataArray,
         resolution: float | int,
-        nr_subgrid_pixels: int,
+        nr_subgrid_pixels: int | None,
         crs: str,
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
@@ -302,10 +302,20 @@ class SFINCSRootModel:
         sf.write_grid()
         sf.write_geoms()
         sf.write_config()
+        sf.write()
 
         sf.plot_basemap(fn_out="basemap.png")
 
         self.sfincs_model = sf
+
+    @property
+    def area(self) -> float:
+        """Returns the area of the SFINCS model region in square kilometers."""
+        return (
+            self.sfincs_model.grid["msk"].sum().item()
+            * self.sfincs_model.grid["msk"].rio.resolution()[0]
+            * self.sfincs_model.grid["msk"].rio.resolution()[0]
+        )
 
     def estimate_discharge_for_return_periods(
         self,
@@ -371,9 +381,8 @@ class SFINCSRootModel:
 
     def create_simulation(
         self,
-        simulation_name: str,
-        start_time: datetime,
-        end_time: datetime,
+        *args,
+        **kwargs,
     ) -> "SFINCSSimulation":
         """Sets forcing for a SFINCS model based on the provided parameters.
 
@@ -401,9 +410,8 @@ class SFINCSRootModel:
 
         return SFINCSSimulation(
             self,
-            simulation_name,
-            start_time=start_time,
-            end_time=end_time,
+            *args,
+            **kwargs,
         )
 
     def create_simulation_for_return_period(self, return_period: int | float):
@@ -469,7 +477,7 @@ class MultipleSFINCSSimulations:
         for simulation in self.simulations:
             simulation.run(gpu=gpu)
 
-    def read_flood_depth(self) -> xr.DataArray:
+    def read_max_flood_depth(self) -> xr.DataArray:
         """Reads the maximum flood depth map from the simulation output.
 
         Returns:
@@ -477,7 +485,7 @@ class MultipleSFINCSSimulations:
         """
         flood_depths: list[xr.DataArray] = []
         for simulation in self.simulations:
-            flood_depths.append(simulation.read_flood_depth())
+            flood_depths.append(simulation.read_max_flood_depth())
 
         rp_map: xr.DataArray = xr.concat(flood_depths, dim="node")
         rp_map: xr.DataArray = rp_map.max(dim="node")
@@ -485,6 +493,10 @@ class MultipleSFINCSSimulations:
         assert rp_map.rio.crs is not None
 
         return rp_map
+
+    def cleanup(self) -> None:
+        for simulation in self.simulations:
+            simulation.cleanup()
 
 
 class SFINCSSimulation:
@@ -494,8 +506,12 @@ class SFINCSSimulation:
         simulation_name,
         start_time: datetime,
         end_time: datetime,
+        spinup_seconds: int = 86400,
+        write_gis_files: bool = True,
+        write_figures: bool = False,
     ):
         self._name = simulation_name
+        self.write_figures = write_figures
         self.start_time = start_time
         self.end_time = end_time
         self.sfincs_root_model = sfincs_root_model
@@ -507,9 +523,9 @@ class SFINCSSimulation:
         sfincs_model.setup_config(
             alpha=0.5
         )  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
-        sfincs_model.setup_config(tspinup=86400)  # spinup time in seconds
+        sfincs_model.setup_config(tspinup=spinup_seconds)  # spinup time in seconds
         sfincs_model.setup_config(dtout=900)  # output time step in seconds
-        sfincs_model._write_gis = True
+        sfincs_model._write_gis = write_gis_files
         sfincs_model.setup_config(
             tref=to_sfincs_datetime(start_time),
             tstart=to_sfincs_datetime(start_time),
@@ -518,10 +534,10 @@ class SFINCSSimulation:
         sfincs_model.setup_config(
             **make_relative_paths(sfincs_model.config, self.root_path, self.path)
         )
-        sfincs_model.write_config()
-        self.sfincs_model = sfincs_model
 
-        # self.setup_outflow_boundary()
+        sfincs_model.write_config()
+
+        self.sfincs_model = sfincs_model
 
     def set_headwater_forcing_from_grid(
         self,
@@ -565,24 +581,33 @@ class SFINCSSimulation:
             locations=inflow_nodes.to_crs(self.sfincs_model.crs),
             timeseries=discharge_by_river,
         )
-        self.sfincs_model.plot_basemap(fn_out="src_points_check.png")
 
+        self.sfincs_model.write_config()
         self.sfincs_model.write_forcing()
-        self.sfincs_model.plot_forcing(fn_out="forcing.png")
+
+        if self.write_figures:
+            self.sfincs_model.plot_basemap(fn_out="src_points_check.png")
+            self.sfincs_model.plot_forcing(fn_out="forcing.png")
 
     def set_discharge_forcing_from_nodes(self, nodes, timeseries) -> None:
         self.sfincs_model.setup_discharge_forcing(
             locations=nodes,
             timeseries=timeseries,
         )
-        self.sfincs_model.write_forcing()
 
-    def set_precipitation_forcing(
+        self.sfincs_model.write_forcing()
+        self.sfincs_model.write_config()
+
+        if self.write_figures:
+            self.sfincs_model.plot_forcing(fn_out="forcing.png")
+            self.sfincs_model.plot_basemap(fn_out="basemap.png")
+
+    def set_precipitation_forcing_grid(
         self,
-        soil_water_capacity_grid: xr.Dataset,
-        max_water_storage_grid: xr.Dataset,
-        saturated_hydraulic_conductivity_grid: xr.Dataset,
-        precipitation_grid: None | xr.DataArray = None,
+        soil_water_capacity_grid: xr.DataArray,
+        max_water_storage_grid: xr.DataArray,
+        saturated_hydraulic_conductivity_grid: xr.DataArray,
+        precipitation_grid: xr.DataArray,
     ):
         assert precipitation_grid.raster.crs is not None, (
             "precipitation_grid should have a crs"
@@ -600,9 +625,8 @@ class SFINCSSimulation:
             time=slice(self.start_time, self.end_time)
         )
 
-        self.sfincs_model.set_forcing(
-            (precipitation_grid * 3600).to_dataset(name="precip_2d"),
-            name="precip_2d",
+        self.sfincs_model.setup_precip_forcing_from_grid(
+            precip=(precipitation_grid * 3600).to_dataset(name="precip")
         )  # convert from kg/m2/s to mm/h
 
         self._setup_infiltration_capacity(
@@ -610,9 +634,12 @@ class SFINCSSimulation:
             soil_water_capacity=soil_water_capacity_grid,
             saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_grid,
         )
-        self.sfincs_model.write_grid()
         self.sfincs_model.write_forcing()
-        self.sfincs_model.plot_forcing(fn_out="forcing.png")
+        self.sfincs_model.write_config()
+
+        if self.write_figures:
+            self.sfincs_model.plot_basemap(fn_out="basemap.png")
+            self.sfincs_model.plot_forcing(fn_out="forcing.png")
 
     def setup_outflow_boundary(self) -> None:
         # detect whether water level forcing should be set (use this under forcing == coastal) PLot basemap and forcing to check
@@ -650,9 +677,9 @@ class SFINCSSimulation:
 
     def _setup_infiltration_capacity(
         self,
-        max_water_storage: xr.Dataset,
-        soil_water_capacity: xr.Dataset,
-        saturated_hydraulic_conductivity: xr.Dataset,
+        max_water_storage: xr.DataArray,
+        soil_water_capacity: xr.DataArray,
+        saturated_hydraulic_conductivity: xr.DataArray,
     ) -> None:
         """Set up infiltration parameters in the SFINCS model.
 
@@ -667,7 +694,7 @@ class SFINCSSimulation:
         max_water_storage = max_water_storage.raster.reproject_like(
             self.sfincs_model.grid, method="average"
         )
-        max_water_storage = max_water_storage.rename_vars({"max_water_storage": "smax"})
+        max_water_storage = max_water_storage.to_dataset(name="smax")
         max_water_storage.attrs.update(**self.sfincs_model._ATTRS.get("smax", {}))
         self.sfincs_model.set_grid(max_water_storage, name="smax")
         self.sfincs_model.set_config("smaxfile", "sfincs.smax")
@@ -675,9 +702,7 @@ class SFINCSSimulation:
         soil_water_capacity = soil_water_capacity.raster.reproject_like(
             self.sfincs_model.grid, method="average"
         )
-        soil_water_capacity = soil_water_capacity.rename_vars(
-            {"soil_storage_capacity": "seff"}
-        )
+        soil_water_capacity = soil_water_capacity.to_dataset(name="seff")
         soil_water_capacity.attrs.update(**self.sfincs_model._ATTRS.get("seff", {}))
         self.sfincs_model.set_grid(soil_water_capacity, name="seff")
         self.sfincs_model.set_config("sefffile", "sfincs.seff")
@@ -687,8 +712,8 @@ class SFINCSSimulation:
                 self.sfincs_model.grid, method="average"
             )
         )
-        saturated_hydraulic_conductivity = saturated_hydraulic_conductivity.rename_vars(
-            {"saturated_hydraulic_conductivity": "ks"}
+        saturated_hydraulic_conductivity = saturated_hydraulic_conductivity.to_dataset(
+            name="ks"
         )
         saturated_hydraulic_conductivity.attrs.update(
             **self.sfincs_model._ATTRS.get("ks", {})
@@ -696,7 +721,7 @@ class SFINCSSimulation:
         self.sfincs_model.set_grid(saturated_hydraulic_conductivity, name="ks")
         self.sfincs_model.set_config("ksfile", "sfincs.ks")
 
-        self.sfincs_model.write_grid()
+        self.sfincs_model.write_grid(data_vars=["smax", "seff", "ks"])
         self.sfincs_model.write_config()
 
     def run(self, gpu: bool) -> None:
@@ -706,17 +731,52 @@ class SFINCSSimulation:
             gpu=gpu,
         )
 
-    def read_flood_depth(self) -> xr.DataArray:
+    def read_max_flood_depth(self, minimum_flood_depth) -> xr.DataArray:
         """Reads the maximum flood depth map from the simulation output.
 
         Returns:
             An xarray DataArray containing the maximum flood depth.
         """
-        flood_map: xr.DataArray = read_maximum_flood_depth(
+        flood_map: xr.DataArray = read_flood_depth(
             model_root=self.root_path,
             simulation_root=self.path,
+            method="max",
+            minimum_flood_depth=minimum_flood_depth,
         )
         return flood_map
+
+    def read_final_flood_depth(self, minimum_flood_depth) -> xr.DataArray:
+        """Reads the final flood depth map from the simulation output.
+
+        Returns:
+            An xarray DataArray containing the final flood depth.
+        """
+        flood_map: xr.DataArray = read_flood_depth(
+            model_root=self.root_path,
+            simulation_root=self.path,
+            method="final",
+            minimum_flood_depth=minimum_flood_depth,
+        )
+        return flood_map
+
+    def get_flood_volume(self, flood_depth: xr.DataArray) -> float:
+        """Compute the total flood volume from the flood depth map.
+
+        Args:
+            flood_depth: An xarray DataArray containing the flood depth.
+
+        Returns:
+            The total flood volume in cubic meters.
+        """
+        pixel_area = abs(
+            flood_depth.rio.resolution()[0] * flood_depth.rio.resolution()[1]
+        )
+        flood_volume = (flood_depth.where(flood_depth > 0).sum().item()) * pixel_area
+        return flood_volume
+
+    def cleanup(self) -> None:
+        """Cleans up the simulation directory by removing temporary files."""
+        shutil.rmtree(self.path, ignore_errors=True)
 
     @property
     def root_path(self) -> Path:

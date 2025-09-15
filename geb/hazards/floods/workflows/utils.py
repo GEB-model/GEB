@@ -33,7 +33,9 @@ def import_nodes(model_root) -> gpd.GeoDataFrame:
     return gpd.read_parquet(model_root / "nodes.geoparquet")
 
 
-def read_maximum_flood_depth(model_root: Path, simulation_root: Path) -> xr.DataArray:
+def read_flood_depth(
+    model_root: Path, simulation_root: Path, method: str, minimum_flood_depth: float
+) -> xr.DataArray:
     """Read the maximum flood depth from the SFINCS model results.
 
     If SFINCS was run with subgrid, the flood depth is downscaled to subgrid resolution.
@@ -52,6 +54,9 @@ def read_maximum_flood_depth(model_root: Path, simulation_root: Path) -> xr.Data
 
     Returns:
         The maximum flood depth downscaled to subgrid resolution.
+
+    Raises:
+        ValueError: If an unknown method is provided.
     """
 
     # Read SFINCS model, config and results
@@ -62,9 +67,6 @@ def read_maximum_flood_depth(model_root: Path, simulation_root: Path) -> xr.Data
     model.read_config()
     model.read_results()
 
-    # get maximum water surface elevation (with respect to sea level)
-    water_surface_elevation: xr.DataArray = model.results["zsmax"].max(dim="timemax")
-
     # to detect whether SFINCS was run with subgrid, we check if the 'sbgfile' key exists in the config
     # to be extra safe, we also check if the value is not None or has has length > 0
     if (
@@ -72,35 +74,39 @@ def read_maximum_flood_depth(model_root: Path, simulation_root: Path) -> xr.Data
         and model.config["sbgfile"] is not None
         and len(model.config["sbgfile"]) > 0
     ):
+        if method == "max":
+            # get maximum water surface elevation (with respect to sea level)
+            water_surface_elevation: xr.DataArray = model.results["zsmax"].max(
+                dim="timemax"
+            )
+        elif method == "final":
+            # get water surface elevation at the final time step (with respect to sea level)
+            water_surface_elevation: xr.DataArray = model.results["zs"].isel(timemax=-1)
+        else:
+            raise ValueError(f"Unknown method: {method}")
         # read subgrid elevation
         surface_elevation: xr.DataArray = xr.open_dataarray(
             model_root / "subgrid" / "dep_subgrid.tif"
         ).sel(band=1)
-    else:
-        # the the grid elevation from the model
-        surface_elevation: xr.DataArray = model.grid.get("dep")
 
-    # Detect whether SFINCS was run with or without precipitation
-    # we do this by checking if the 'netamprfile' key exists in the config
-    # to be extra safe, we also check if the value is not None or has has length > 0
-    if (
-        "netamprfile" in model.config
-        and model.config["netamprfile"] is not None
-        and len(model.config["netamprfile"]) > 0
-    ):
-        print("Precipitation input detected, applying minimum flood depth of 0.15 m")
-        minimum_flood_depth: float = 0.15
-    else:
-        print("No precipitation input detected, applying minimum flood depth of 0.05 m")
-        minimum_flood_depth: float = 0.05
+        flood_depth_m: xr.DataArray = utils.downscale_floodmap(
+            zsmax=water_surface_elevation,
+            dep=surface_elevation,
+            hmin=minimum_flood_depth,
+            reproj_method="bilinear",  # maybe use "nearest" for coastal
+        )
+        flood_depth_m = flood_depth_m.rio.write_crs(model.crs)
 
-    flood_depth_m: xr.DataArray = utils.downscale_floodmap(
-        zsmax=water_surface_elevation,
-        dep=surface_elevation,
-        hmin=minimum_flood_depth,
-        reproj_method="bilinear",  # maybe use "nearest" for coastal
-    )
-    flood_depth_m = flood_depth_m.rio.write_crs(model.crs)
+    else:
+        surface_elevation = model.grid.get("dep")
+        if method == "max":
+            flood_depth_m = (
+                model.results["zsmax"].max(dim="timemax") - surface_elevation
+            )
+        elif method == "final":
+            flood_depth_m = model.results["zs"].isel(time=-1) - surface_elevation
+        else:
+            raise ValueError(f"Unknown method: {method}")
 
     print(
         f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "
