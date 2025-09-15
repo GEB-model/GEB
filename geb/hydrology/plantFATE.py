@@ -100,10 +100,9 @@ class Model:
         vapour_pressure_deficit,
         photosynthetic_photon_flux_density,
         temperature,  # degrees Celcius, mean temperature
-        net_radiation,
         co2_forcing,
-        topsoil_volumetric_water_content,
         net_radiation,
+        topsoil_volumetric_water_content,
     ) -> None:
         datestart = datetime(tstart.year, tstart.month, tstart.day)
         datediff = datestart - self.time_unit_base
