@@ -17,9 +17,6 @@ from typing import Any
 
 import click
 import yaml
-from honeybees.visualization.canvas import Canvas
-from honeybees.visualization.ModularVisualization import ModularServer
-from honeybees.visualization.modules.ChartVisualization import ChartModule
 
 from geb import __version__
 from geb.build import GEBModel as GEBModelBuild
