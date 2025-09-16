@@ -11,6 +11,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import geopandas as gpd
 import numpy as np
@@ -418,8 +419,8 @@ class SFINCSRootModel:
 
     def create_simulation(
         self,
-        *args,
-        **kwargs,
+        *args: Any,
+        **kwargs: Any,
     ) -> "SFINCSSimulation":
         """Sets forcing for a SFINCS model based on the provided parameters.
 
@@ -568,7 +569,7 @@ class SFINCSSimulation:
         spinup_seconds: int = 86400,
         write_gis_files: bool = True,
         write_figures: bool = False,
-    ):
+    ) -> None:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
 
         Args:
