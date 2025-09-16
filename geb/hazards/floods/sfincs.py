@@ -317,6 +317,7 @@ class SFINCS:
 
     def run_single_event(self, event, start_time, precipitation_scale_factor=1.0):
         sfincs_root_model = self.build("entire_region")
+        sfincs_simulation = sfincs_root_model.create_simulation()
 
         sfincs_simulation = self.set_forcing(
             sfincs_root_model, event, start_time, precipitation_scale_factor

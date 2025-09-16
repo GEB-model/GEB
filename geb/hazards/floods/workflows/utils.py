@@ -51,6 +51,9 @@ def read_flood_depth(
     Args:
         model_root: The root path of the SFINCS model directory. This should contain the subgrid directory with the depth file.
         simulation_root: The root path of the SFINCS simulation directory. This should contain the simulation results files.
+        minimum_flood_depth: The minimum flood depth to apply during downscaling (in meters).
+        method: The method to use for calculating flood depth. Options are 'max' for maximum flood depth
+            and 'final' for flood depth at the final time step.
 
     Returns:
         The maximum flood depth downscaled to subgrid resolution.
@@ -100,11 +103,16 @@ def read_flood_depth(
     else:
         surface_elevation = model.grid.get("dep")
         if method == "max":
-            flood_depth_m = (
-                model.results["zsmax"].max(dim="timemax") - surface_elevation
-            )
+            flood_depth_m = model.results["hmax"].max(dim="timemax")
         elif method == "final":
-            flood_depth_m = model.results["zs"].isel(time=-1) - surface_elevation
+            flood_depth_m_zs = model.results["zs"].isel(time=-1) - surface_elevation
+            flood_depth_m_zs = flood_depth_m_zs.compute()
+
+            flood_depth_m = model.results["h"].isel(time=-1)
+            flood_depth_m = flood_depth_m.compute()
+
+            print("hi")
+
         else:
             raise ValueError(f"Unknown method: {method}")
 
@@ -157,11 +165,28 @@ def make_relative_paths(config, model_root, new_root, relpath=None):
     return config_kwargs
 
 
-def run_sfincs_subprocess(root: Path, cmd: list[str], log_file: Path) -> int:
+def run_sfincs_subprocess(
+    working_directory: Path, cmd: list[str], log_file: Path
+) -> int:
+    """Runs SFINCS model in a subprocess.
+
+    Args:
+        path: The working directory for the subprocess.
+        cmd: The command to run as a list of strings.
+        log_file: The file to write the log output to.
+
+    Returns:
+        The return code of the subprocess.
+
+    """
     print(f"Running SFINCS with: {cmd}")
     with open(log_file, "w") as log:
         process = subprocess.Popen(
-            cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            cmd,
+            cwd=working_directory,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
         # Continuously read lines from stdout and stderr
