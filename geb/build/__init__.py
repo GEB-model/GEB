@@ -1539,7 +1539,7 @@ class GEBModel(
             **kwargs,
         )
 
-    def run_method(self, method, *args: Any, **kwargs: Any):
+    def run_method(self, method, *args: Any, **kwargs: Any) -> None:
         """Log method parameters before running a method.
 
         Args:
