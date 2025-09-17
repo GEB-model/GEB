@@ -8,6 +8,7 @@ import platform
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding
