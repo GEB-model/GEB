@@ -20,7 +20,7 @@ from ...hydrology.HRUs import load_geom
 from ...hydrology.landcover import OPEN_WATER, SEALED
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
-from .sfincs import SFINCSRootModel, SFINCSSimulation
+from .sfincs import MultipleSFINCSSimulations, SFINCSRootModel, SFINCSSimulation
 
 
 class Floods:
@@ -56,7 +56,6 @@ class Floods:
             self.saturated_hydraulic_conductivity_per_timestep = deque(
                 maxlen=self.n_timesteps
             )
-            self.soil_storage_capacity_per_timestep = deque(maxlen=self.n_timesteps)
 
     def get_utm_zone(self, region_file: Path | str) -> str:
         """Determine the UTM zone based on the centroid of the region geometry.
@@ -165,8 +164,8 @@ class Floods:
         Raises:
             ValueError: If the forcing method is unknown.
         """
-        simulation = sfincs_model.create_simulation(
-            simulation_name=f"{start_time.strftime('%Y%m%dT%H%M%S')} - {end_time.strftime('%Y%m%dT%H%M%S')}",
+        simulation: SFINCSSimulation = sfincs_model.create_simulation(
+            simulation_name=f"{start_time.strftime(format='%Y%m%dT%H%M%S')} - {end_time.strftime(format='%Y%m%dT%H%M%S')}",
             start_time=start_time,
             end_time=end_time,
         )
@@ -176,12 +175,14 @@ class Floods:
             discharge_grid = self.hydrology.grid.decompress(
                 np.vstack(self.discharge_per_timestep)
             )
-            first_timestep_of_event = len(self.discharge_per_timestep) - n_timesteps  #
-
-            # when SFINCS starts with high values, this leads to numerical instabilities. Therefore, we first start with very low discharge and then build up slowly to timestep 0
+            first_timestep_of_event: int = (
+                len(self.discharge_per_timestep) - n_timesteps
+            )  # when SFINCS starts with
+            # high values, this leads to numerical instabilities. Therefore, we first start with very
+            # low discharge and then build up slowly to timestep 0
             # TODO: Check if this is a right approach
             discharge_grid = np.vstack(
-                [
+                tup=[
                     np.full_like(
                         discharge_grid[:routing_substeps, :, :], fill_value=np.nan
                     ),
@@ -193,7 +194,7 @@ class Floods:
                 discharge_grid[i] = discharge_grid[i + 1] * 0.3
 
             # convert the discharge grid to an xarray DataArray
-            discharge_grid = xr.DataArray(
+            discharge_grid: xr.DataArray = xr.DataArray(
                 data=discharge_grid,
                 coords={
                     "time": pd.date_range(
@@ -226,95 +227,60 @@ class Floods:
             )
 
         elif self.config["forcing_method"] == "precipitation":
+            first_timestep_of_event: int = (
+                len(self.discharge_per_timestep) - self.n_timesteps
+            )
+
             precipitation_grid: xr.DataArray = self.model.forcing["pr_hourly"]
             assert isinstance(precipitation_grid, xr.DataArray)
             precipitation_grid: xr.DataArray = (
                 precipitation_grid * precipitation_scale_factor
             )
 
-            initial_soil_moisture_grid = xr.Dataset(
-                {
-                    "initial_soil_moisture": (
-                        ["y", "x"],
-                        np.flipud(
-                            self.HRU.decompress(
-                                self.soil_moisture_per_timestep[first_timestep_of_event]
-                            )
-                        ),  # take first time step of soil moisture
-                    )
-                },  # deque
+            current_water_storage_grid: xr.DataArray = xr.DataArray(
+                data=self.HRU.decompress(
+                    self.soil_moisture_per_timestep[first_timestep_of_event]
+                ),
                 coords={
                     "y": self.HRU.lat,
                     "x": self.HRU.lon,
                 },
+                dims=["y", "x"],
+                name="current_water_storage",
             )
 
-            max_water_storage_grid = xr.Dataset(
-                {
-                    "max_water_storage": (
-                        ["y", "x"],
-                        self.HRU.decompress(
-                            self.max_water_storage_per_timestep[
-                                first_timestep_of_event
-                            ],
-                        ),  # take first time step of soil moisture
-                    )
-                },  # deque
+            max_water_storage_grid: xr.DataArray = xr.DataArray(
+                data=self.HRU.decompress(
+                    self.max_water_storage_per_timestep[first_timestep_of_event],
+                ),  # take first time step of soil moisture
                 coords={
                     "y": self.HRU.lat,
                     "x": self.HRU.lon,
                 },
+                dims=["y", "x"],
+                name="max_water_storage",
             )
 
-            soil_storage_capacity_grid = xr.Dataset(
-                {
-                    "soil_storage_capacity": (
-                        ["y", "x"],
-                        self.HRU.decompress(
-                            self.soil_storage_capacity_per_timestep[
-                                first_timestep_of_event
-                            ]
-                        ),  # take first time step of soil moisture
-                    )
-                },  # deque
+            saturated_hydraulic_conductivity_grid: xr.DataArray = xr.DataArray(
+                data=self.HRU.decompress(
+                    self.saturated_hydraulic_conductivity_per_timestep[
+                        first_timestep_of_event
+                    ]
+                ),  # take first time step of soil moisture
                 coords={
                     "y": self.HRU.lat,
                     "x": self.HRU.lon,
                 },
+                dims=["y", "x"],
+                name="saturated_hydraulic_conductivity",
             )
 
-            saturated_hydraulic_conductivity_grid = xr.Dataset(
-                {
-                    "saturated_hydraulic_conductivity": (
-                        ["y", "x"],
-                        self.HRU.decompress(
-                            self.saturated_hydraulic_conductivity_per_timestep[
-                                first_timestep_of_event
-                            ]
-                        ),  # take first time step of soil moisture
-                    )
-                },  # deque
-                coords={
-                    "y": self.HRU.lat,
-                    "x": self.HRU.lon,
-                },
-            )
+            current_water_storage_grid.raster.set_crs(self.model.crs)
+            saturated_hydraulic_conductivity_grid.raster.set_crs(self.model.crs)
+            max_water_storage_grid.raster.set_crs(self.model.crs)
 
-            initial_soil_moisture_grid.raster.set_crs(
-                self.model.crs
-            )  # for soil moisture
-            saturated_hydraulic_conductivity_grid.raster.set_crs(
-                self.model.crs
-            )  # for saturated hydraulic conductivity
-            max_water_storage_grid.raster.set_crs(
-                self.model.crs
-            )  # for max water storage
-            soil_storage_capacity_grid.raster.set_crs(
-                self.model.crs
-            )  # for the soil water storage capacity
-
-            simulation.set_precipitation_forcing(
-                soil_water_capacity_grid=soil_storage_capacity_grid,
+            simulation.set_precipitation_forcing_grid(
+                current_water_storage_grid=current_water_storage_grid,
                 max_water_storage_grid=max_water_storage_grid,
                 saturated_hydraulic_conductivity_grid=saturated_hydraulic_conductivity_grid,
                 precipitation_grid=precipitation_grid,
@@ -347,8 +313,6 @@ class Floods:
         )
 
         sfincs_root_model = self.build("entire_region")
-        sfincs_simulation = sfincs_root_model.create_simulation()
-
         sfincs_simulation = self.set_forcing(
             sfincs_root_model, start_time, end_time, precipitation_scale_factor
         )
@@ -357,11 +321,12 @@ class Floods:
         sfincs_simulation.run(
             gpu=self.config["SFINCS"]["gpu"],
         )
-        flood_depth = sfincs_simulation.read_flood_depth()
-
+        flood_depth: xr.DataArray = sfincs_simulation.read_max_flood_depth(
+            self.config["minimum_flood_depth"]
+        )
         flood_depth: xr.DataArray = to_zarr(
-            flood_depth,
-            self.model.output_folder / "flood_maps" / sfincs_simulation.name,
+            da=flood_depth,
+            path=self.model.output_folder / "flood_maps" / sfincs_simulation.name,
             crs=flood_depth.rio.crs,
         )
         self.model.agents.households.flood(flood_depth=flood_depth)
@@ -476,7 +441,7 @@ class Floods:
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
 
-        sfincs_root_model = self.build("entire_region")
+        sfincs_root_model: SFINCSRootModel = self.build("entire_region")
 
         sfincs_root_model.estimate_discharge_for_return_periods(
             discharge=self.discharge_spinup_ds,
@@ -493,13 +458,17 @@ class Floods:
                 f"Estimated discharge for return period {return_period} years for all rivers."
             )
 
-            simulation = sfincs_root_model.create_simulation_for_return_period(
-                return_period,
+            simulation: MultipleSFINCSSimulations = (
+                sfincs_root_model.create_simulation_for_return_period(
+                    return_period,
+                )
             )
             simulation.run(
                 gpu=self.config["SFINCS"]["gpu"],
             )
-            flood_depth_return_period = simulation.read_flood_depth()
+            flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
+                self.config["minimum_flood_depth"]
+            )
             rp_maps_riverine[return_period] = flood_depth_return_period
 
         if hasattr(self.model, "reporter"):
@@ -630,7 +599,7 @@ class Floods:
             print(f"exptected annual damage is: {expected_annual_damage}")
 
         else:
-            self.run_single_event(event, start_time)
+            self.run_single_event(start_time, end_time)
 
     def save_discharge(self) -> None:
         """Saves the current discharge for the current timestep.

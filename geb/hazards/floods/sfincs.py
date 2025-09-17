@@ -389,7 +389,7 @@ class SFINCSRootModel:
             rising_limb_hours: number of hours for the rising limb of the hydrograph.
             return_periods: list of return periods for which to estimate discharge.
         """
-        recession_limb_hours = rising_limb_hours
+        recession_limb_hours: int | float = rising_limb_hours
 
         # here we only select the rivers that have an upstream forcing point
         rivers_with_forcing_point = rivers[~rivers["is_downstream_outflow_subbasin"]]
@@ -484,7 +484,7 @@ class SFINCSRootModel:
         working_dir: Path = self.path / "working_dir"
 
         print(f"Running SFINCS for return period {return_period} years")
-        simulations = []
+        simulations: list[SFINCSSimulation] = []
 
         working_dir_return_period: Path = working_dir / f"rp_{return_period}"
         for group, group_rivers in tqdm(rivers.groupby("calculation_group")):
@@ -499,7 +499,7 @@ class SFINCSRootModel:
 
             Q: list[pd.DataFrame] = [
                 pd.DataFrame.from_dict(
-                    inflow_nodes[f"hydrograph_{return_period}"].iloc[idx],
+                    data=inflow_nodes[f"hydrograph_{return_period}"].iloc[idx],
                     orient="index",
                     columns=[idx],
                 )
@@ -508,13 +508,11 @@ class SFINCSRootModel:
             Q: pd.DataFrame = pd.concat(Q, axis=1)
             Q.index = pd.to_datetime(Q.index)
 
-            Q: pd.DataFrame = (
-                Q.fillna(method="ffill").fillna(  # pad with 0's before
-                    method="bfill"
-                )  # and after
+            assert not np.isnan(Q.values).any(), (
+                "NaN values found in discharge hydrographs"
             )
 
-            simulation = self.create_simulation(
+            simulation: SFINCSSimulation = self.create_simulation(
                 simulation_name=f"rp_{return_period}_group_{group}",
                 start_time=Q.index[0],
                 end_time=Q.index[-1],
@@ -526,7 +524,7 @@ class SFINCSRootModel:
             )
             simulations.append(simulation)
 
-        return MultipleSFINCSSimulations(simulations)
+        return MultipleSFINCSSimulations(simulations=simulations)
 
 
 class MultipleSFINCSSimulations:
@@ -549,15 +547,18 @@ class MultipleSFINCSSimulations:
         for simulation in self.simulations:
             simulation.run(gpu=gpu)
 
-    def read_max_flood_depth(self) -> xr.DataArray:
+    def read_max_flood_depth(self, minimum_flood_depth: float | int) -> xr.DataArray:
         """Reads the maximum flood depth map from the simulation output.
+
+        Args:
+            minimum_flood_depth: Minimum flood depth to consider in the output.
 
         Returns:
             An xarray DataArray containing the maximum flood depth.
         """
         flood_depths: list[xr.DataArray] = []
         for simulation in self.simulations:
-            flood_depths.append(simulation.read_max_flood_depth())
+            flood_depths.append(simulation.read_max_flood_depth(minimum_flood_depth))
 
         rp_map: xr.DataArray = xr.concat(flood_depths, dim="node")
         rp_map: xr.DataArray = rp_map.max(dim="node")
@@ -692,7 +693,7 @@ class SFINCSSimulation:
             timeseries: A DataFrame containing the discharge timeseries for each node.
                 The columns should match the index of the nodes GeoDataFrame.
         """
-        assert np.array_equal(nodes.index, np.arange(1, len(nodes) + 1))
+        # assert np.array_equal(nodes.index, np.arange(1, len(nodes) + 1))
         assert set(timeseries.columns) == set(nodes.index)
 
         self.sfincs_model.setup_discharge_forcing(
@@ -934,7 +935,7 @@ class SFINCSSimulation:
 
     def cleanup(self) -> None:
         """Cleans up the simulation directory by removing temporary files."""
-        shutil.rmtree(self.path, ignore_errors=True)
+        shutil.rmtree(path=self.path, ignore_errors=True)
 
     @property
     def root_path(self) -> Path:

@@ -29,7 +29,7 @@ from geb.cli import (
 from geb.hydrology.landcover import FOREST, GRASSLAND_LIKE
 from geb.model import GEBModel
 from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
-from geb.workflows.io import WorkingDirectory
+from geb.workflows.io import WorkingDirectory, open_zarr
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
@@ -353,18 +353,19 @@ def test_estimate_return_periods() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_multiverse() -> None:
+    """Test the multiverse functionality with flood events and forecast forcing."""
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
 
-        config = parse_config(CONFIG_DEFAULT)
+        config: dict[str, Any] = parse_config(CONFIG_DEFAULT)
         config["hazards"]["floods"]["simulate"] = True
 
-        forecast_after_n_days = 3
-        forecast_n_days = 5
-        forecast_n_hours = 13
+        forecast_after_n_days: int = 3
+        forecast_n_days: int = 5
+        forecast_n_hours: int = 13
 
-        forecast_date = (
-            datetime.combine(config["general"]["start_time"], time.min)
+        forecast_date: datetime = (
+            datetime.combine(date=config["general"]["start_time"], time=time.min)
             + timedelta(days=forecast_after_n_days)
             + timedelta(hours=forecast_n_hours)
         )
@@ -375,15 +376,14 @@ def test_multiverse() -> None:
             days=int(forecast_n_days) + 5
         )
 
-        input_folder = Path(config["general"]["input_folder"])
-
-        files = input_folder / "files.json"
+        input_folder: Path = Path(config["general"]["input_folder"])
+        files: Path = input_folder / "files.json"
         files = json.loads(files.read_text())
 
-        precipitation = xr.open_dataarray(
-            input_folder / files["other"]["climate/pr_hourly"], consolidated=False
+        precipitation: xr.DataArray = open_zarr(
+            input_folder / files["other"]["climate/pr_hourly"]
         ).drop_encoding()
-        forecast = precipitation.sel(
+        forecast: xr.DataArray = precipitation.sel(
             time=slice(
                 forecast_date,
                 forecast_end_date,
@@ -391,7 +391,7 @@ def test_multiverse() -> None:
         )
 
         # add member dimension
-        forecast = forecast.expand_dims(dim={"member": [0]}, axis=0)
+        forecast: xr.DataArray = forecast.expand_dims(dim={"member": [0]}, axis=0)
 
         forecasts_folder: Path = Path("data") / "forecasts"
         forecasts_folder.mkdir(parents=True, exist_ok=True)
@@ -462,8 +462,8 @@ def test_multiverse() -> None:
         )
 
         np.testing.assert_array_equal(
-            flood_map_first_event.values,
-            flood_map_first_event_multiverse.values,
+            actual=flood_map_first_event.values,
+            desired=flood_map_first_event_multiverse.values,
             err_msg="Flood maps for the first event do not match across multiverse members.",
         )
 

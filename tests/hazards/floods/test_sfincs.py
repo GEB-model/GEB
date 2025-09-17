@@ -326,6 +326,7 @@ def test_SFINCS_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None
         simulation.cleanup()
 
 
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_SFINCS_discharge_grid_forcing(geb_model: GEBModel) -> None:
     """Test SFINCS with discharge forcing from a grid.
 
@@ -396,6 +397,7 @@ def test_SFINCS_discharge_grid_forcing(geb_model: GEBModel) -> None:
         simulation.cleanup()
 
 
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_read(geb_model: GEBModel) -> None:
     """Test reading SFINCS output files.
 

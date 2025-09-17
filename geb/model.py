@@ -180,6 +180,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.multiverse_name = member.item()
 
             pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member)
+            pr_hourly_forecast: xr.DataArray = pr_hourly_forecast.rio.reproject_match(
+                original_pr_hourly
+            )
 
             forecast_end_date = round_up_to_start_of_next_day_unless_midnight(
                 pd.to_datetime(pr_hourly_forecast.time[-1].item()).to_pydatetime()
@@ -198,10 +201,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             )
 
             # Concatenate the original precipitation data with the forecast data
-            pr_hourly_observed_and_forecasted_combined: list[xr.DataArray] = [
-                original_pr_hourly_clipped_to_start_of_forecast,
-                pr_hourly_forecast,
-            ]
+            pr_hourly_observed_and_forecasted_combined: xr.DataArray = xr.concat(
+                [original_pr_hourly_clipped_to_start_of_forecast, pr_hourly_forecast],
+                dim="time",
+            )
 
             # Set the pr_hourly forcing data to the combined data
             self.model.forcing["pr_hourly"] = pr_hourly_observed_and_forecasted_combined

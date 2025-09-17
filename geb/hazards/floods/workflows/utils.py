@@ -2,6 +2,7 @@
 
 import os
 import platform
+import shutil
 import subprocess
 from datetime import datetime
 from os.path import isfile, join
@@ -205,9 +206,9 @@ def run_sfincs_subprocess(
 
     """
     print(f"Running SFINCS with: {cmd}")
-    with open(log_file, "w") as log:
-        process = subprocess.Popen(
-            cmd,
+    with open(file=log_file, mode="w") as log:
+        process: subprocess.Popen[str] = subprocess.Popen(
+            args=cmd,
             cwd=working_directory,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -329,8 +330,15 @@ def run_sfincs_simulation(
         raise ValueError("gpu must be True, False, or 'auto'")
 
     if gpu == "auto":
-        result = subprocess.run(["nvidia-smi"], capture_output=True)
-        gpu = result.returncode == 0
+        # check if nvidia-smi is available, if so, check if a GPU is present
+        if shutil.which(cmd="nvidia-smi") is not None:
+            result: subprocess.CompletedProcess[bytes] = subprocess.run(
+                args=["nvidia-smi"], capture_output=True
+            )
+            gpu: bool = result.returncode == 0
+        else:
+            gpu: bool = False
+
         if gpu:
             print("GPU detected, running SFINCS with GPU support.")
         else:
@@ -338,12 +346,12 @@ def run_sfincs_simulation(
 
     if gpu:
         version: str = os.getenv(
-            "SFINCS_SIF_GPU", "mvanormondt/sfincs-gpu:coldeze_combo_ccall"
+            key="SFINCS_SIF_GPU", default="mvanormondt/sfincs-gpu:coldeze_combo_ccall"
         )
     else:
         version: str = os.getenv(
-            "SFINCS_SIF",
-            "deltares/sfincs-cpu:sfincs-v2.2.0-col-dEze-Release",
+            key="SFINCS_SIF",
+            default="deltares/sfincs-cpu:sfincs-v2.2.0-col-dEze-Release",
         )
 
     if platform.system() == "Linux":
