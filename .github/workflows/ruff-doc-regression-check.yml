@@ -116,7 +116,7 @@ jobs:
               echo "Regression detected for rule: $rule (main branch: $base -> pull request: $pr)"
               echo "More info: https://docs.astral.sh/ruff/rules/$rule"
               echo "To replicate locally, run:"
-              COMMAND="ruff check --select "$rule""
+              COMMAND="ruff check --isolated --select "$rule""
               echo $COMMAND
               echo "PR error lines for rule $rule within changed files:"
               # Convert relative paths to full paths in pr-branch directory
