@@ -18,7 +18,7 @@ general:
 hazards:
   floods:
     simulate: false
-    forcing_method: preciptation  # headwater_points or preciptation
+    forcing_method: headwater_points  # headwater_points or precipitation
     minimum_flood_depth: 0.05
     resolution: 150
     nr_subgrid_pixels: 4
