@@ -1753,8 +1753,8 @@ def calibrate(config, working_directory) -> None:
     toolbox.register("population", tools.initRepeat, list, toolbox.Individual)
 
     def checkBounds(min_val, max_val):
-        def decorator(func):
-            def wrappper(*args: Any, **kwargs: Any):
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            def wrappper(*args: Any, **kwargs: Any) -> Any:
                 offspring = func(*args, **kwargs)
                 for child in offspring:
                     for i in range(len(child)):

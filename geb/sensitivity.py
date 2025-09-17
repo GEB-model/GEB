@@ -34,7 +34,7 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu)
 
 def handle_ctrl_c(func):
     @wraps(func)
-    def wrapper(*args: Any, **kwargs):
+    def wrapper(*args: Any, **kwargs) -> Any:
         global ctrl_c_entered
         if not ctrl_c_entered:
             signal.signal(signal.SIGINT, default_sigint_handler)  # the default
@@ -141,7 +141,7 @@ def run_model(args) -> None:
             with open(config_path, "w") as f:
                 yaml.dump(template, f)
 
-            def run_model_scenario(scenario: str):
+            def run_model_scenario(scenario: str) -> int:
                 # build the command to run the script, including the use of a GPU if specified
                 command = [
                     "geb",
