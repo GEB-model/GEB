@@ -1,3 +1,5 @@
+"""Command line interface for GEB."""
+
 import cProfile
 import functools
 import importlib
@@ -13,7 +15,7 @@ import zipfile
 from operator import attrgetter
 from pathlib import Path
 from pstats import Stats
-from typing import Any
+from typing import Any, Callable
 
 import click
 import yaml
@@ -51,8 +53,25 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
         ValueError: If a duplicate key is found in the YAML mapping.
     """
 
-    def construct_mapping(self, node, deep=False):
+    def construct_mapping(
+        self, node: yaml.nodes.MappingNode, deep: bool = False
+    ) -> dict:
+        """Construct a mapping from a YAML node, checking for duplicate keys.
+
+        Args:
+            node: The YAML node to construct the mapping from.
+            deep: Whether to perform a deep construction of the mapping. Defaults to False.
+
+        Raises:
+            ValueError: If a duplicate key is found in the YAML mapping.
+
+        Returns:
+            dict: The constructed mapping.
+        """
         mapping = {}
+        import pdb
+
+        pdb.set_trace()
         for key_node, value_node in node.value:
             key = self.construct_object(key_node, deep=deep)
             if key in mapping:
@@ -109,7 +128,14 @@ def parse_config(
     return config
 
 
-def create_logger(fp):
+def create_logger(fp: Path) -> logging.Logger:
+    """Create logger with console and file handler.
+
+    Args:
+        fp: Path to the log file.
+    Returns:
+        Logger instance.
+    """
     logger = logging.getLogger("GEB")
     # remove any previous handlers
     for handler in logger.handlers[:]:
@@ -137,13 +163,28 @@ def create_logger(fp):
 @click.group()
 @click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
-def cli(ctx) -> None:  # , quiet, verbose):
-    """Command line interface for GEB."""
-    if ctx.obj is None:
-        ctx.obj = {}
+def cli(context: click.core.Context) -> None:
+    """Command line interface for GEB.
+
+    Args:
+        context: Click context. (Auto-filled by click)
+    """
+    if context.obj is None:
+        context.obj = {}
 
 
-def click_config(func):
+def click_config(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator to add config option to a click command.
+
+    Useful to add the same option to multiple commands.
+
+    Args:
+        func: Function to decorate.
+
+    Returns:
+        Decorated function.
+    """
+
     @click.option(
         "--config",
         "-c",
@@ -151,13 +192,33 @@ def click_config(func):
         help=f"Path of the model configuration file. Defaults to '{CONFIG_DEFAULT}'.",
     )
     @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        """Wrapper function for config option.
+
+        Args:
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
+
+        Returns:
+            The result of the wrapped function.
+        """
         return func(*args, **kwargs)
 
     return wrapper
 
 
-def working_directory_option(func):
+def working_directory_option(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator to add working directory option to a click command.
+
+    Useful to add the same option to multiple commands.
+
+    Args:
+        func: Function to decorate.
+
+    Returns:
+        Decorated function.
+    """
+
     @click.option(
         "--working-directory",
         "-wd",
@@ -165,14 +226,36 @@ def working_directory_option(func):
         help="Working directory for model. Default is the current directory.",
     )
     @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        """Wrapper function for working directory option.
+
+        Returns:
+            The result of the wrapped function.
+        """
         return func(*args, **kwargs)
 
     return wrapper
 
 
-def click_run_options():
-    def decorator(func):
+def click_run_options() -> Any:
+    """Decorator to add run options to a click command.
+
+    Useful to add the same options to multiple commands.
+
+    Returns:
+        Decorator function.
+    """
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        """Decorator function to add run options to a click command.
+
+        Args:
+            func: Function to decorate.
+
+        Returns:
+            Decorated function.
+        """
+
         @click_config
         @working_directory_option
         @click.option(
@@ -194,7 +277,16 @@ def click_run_options():
             help="Run GEB with timing.",
         )
         @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            """Wrapper function for run options.
+
+            Args:
+                *args: Positional arguments.
+                **kwargs: Keyword arguments.
+
+            Returns:
+                The result of the wrapped function.
+            """
             return func(*args, **kwargs)
 
         return wrapper
@@ -292,14 +384,27 @@ def spinup(*args: Any, **kwargs: Any) -> None:
 @cli.command()
 @click.argument("method", required=True)
 @click_run_options()
-def exec(method, *args: Any, **kwargs: Any) -> None:
+def exec(method: str, *args: Any, **kwargs: Any) -> None:
+    """Execute a specific method on the model.
+
+    Args:
+        method: Method to run on the model.
+        *args: Positional arguments to pass to the method.
+        **kwargs: Keyword arguments to pass to the method.
+    """
     run_model_with_method(method=method, *args, **kwargs)
 
 
 @cli.command()
 @click_config
 @working_directory_option
-def calibrate(config, working_directory) -> None:
+def calibrate(config: str | dict[str, Any], working_directory: Path) -> None:
+    """Function to run model calibration.
+
+    Args:
+        config: Path to the model configuration file or a dict with the config.
+        working_directory: Working directory for the model.
+    """
     with WorkingDirectory(working_directory):
         config = parse_config(config)
         geb_calibrate(config, working_directory)
@@ -308,7 +413,13 @@ def calibrate(config, working_directory) -> None:
 @cli.command()
 @click_config
 @working_directory_option
-def sensitivity(config, working_directory) -> None:
+def sensitivity(onfig: str | dict[str, Any], working_directory: Path) -> None:
+    """Function to run sensitivity analysis.
+
+    Args:
+        config: Path to the model configuration file or a dict with the config.
+        working_directory: Working directory for the model.
+    """
     with WorkingDirectory(working_directory):
         config = parse_config(config)
         geb_sensitivity_analysis(config, working_directory)
@@ -317,14 +428,40 @@ def sensitivity(config, working_directory) -> None:
 @cli.command()
 @click_config
 @working_directory_option
-def multirun(config, working_directory) -> None:
+def multirun(onfig: str | dict[str, Any], working_directory: Path) -> None:
+    """Function to run multiple model configurations.
+
+    Args:
+        config: Path to the model configuration file or a dict with the config.
+        working_directory: Working directory for the model.
+    """
     with WorkingDirectory(working_directory):
         config = parse_config(config)
         geb_multi_run(config, working_directory)
 
 
-def click_build_options(build_config=BUILD_DEFAULT, build_config_help_extra=None):
-    def decorator(func):
+def click_build_options(
+    build_config: str = BUILD_DEFAULT, build_config_help_extra: str | None = None
+) -> Any:
+    """Decorator to add build options to a click command.
+
+    Args:
+        build_config: Default path to the build config file.
+        build_config_help_extra: Extra help text for the build config option.
+
+    Returns:
+        Decorator function.
+    """
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        """Decorator function to add build options to a click command.
+
+        Args:
+            func: Function to decorate.
+
+        Returns:
+            Decorated function.
+        """
         build_config_help = (
             f"Path of the model build configuration file. Defaults to '{build_config}'."
         )
@@ -363,7 +500,16 @@ def click_build_options(build_config=BUILD_DEFAULT, build_config_help_extra=None
             help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
         @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            """Wrapper function for build options.
+
+            Args:
+                *args: Positional arguments.
+                **kwargs: Keyword arguments.
+
+            Returns:
+                The result of the wrapped function.
+            """
             return func(*args, **kwargs)
 
         return wrapper
@@ -371,7 +517,20 @@ def click_build_options(build_config=BUILD_DEFAULT, build_config_help_extra=None
     return decorator
 
 
-def get_model_builder_class(custom_model) -> type:
+def get_model_builder_class(custom_model: None | str) -> type:
+    """Get model builder class.
+
+    This is usually the GEBModelBuild class, but can be a custom model builder class
+    from the geb.build.custom_models module. This class would usually
+    specify some custom build methods, but largely re-use the existing GEBModelBuild methods.
+
+    Args:
+        custom_model: Name of the custom model to use. If None, the default GEBModelBuild is used.
+            custom_models are available in the geb.build.custom_models module.
+
+    Returns:
+        Model builder class.
+    """
     if custom_model is None:
         return GEBModelBuild
     else:
