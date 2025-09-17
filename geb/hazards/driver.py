@@ -1,3 +1,5 @@
+"""Module for managing short-lived hazard simulations such as floods."""
+
 import copy
 from datetime import datetime
 
@@ -11,6 +13,11 @@ class HazardDriver:
     """
 
     def __init__(self) -> None:
+        """Initializes the HazardDriver class.
+
+        If flood simulation is enabled in the configuration, it initializes the flood simulation by determining
+        the longest flood event duration and setting up the SFINCS model accordingly.
+        """
         if self.config["hazards"]["floods"]["simulate"]:
             # extract the longest flood event in days
             flood_events = self.config["hazards"]["floods"]["events"]
@@ -37,6 +44,11 @@ class HazardDriver:
         self.sfincs: Floods = Floods(self, n_timesteps=longest_flood_event_in_days)
 
     def step(self) -> None:
+        """Steps the hazard driver.
+
+        If flood simulation is enabled in the configuration, it runs the SFINCS model for each flood event
+        that ends during the current timestep.
+        """
         if self.config["hazards"]["floods"]["simulate"]:
             if self.simulate_hydrology:
                 self.sfincs.save_discharge()
