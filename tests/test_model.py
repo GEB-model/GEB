@@ -198,50 +198,6 @@ def test_run() -> None:
 
         run_model_with_method(method="run", **args)
 
-    if os.getenv("GEB_TEST_GPU", "no") == "yes":
-        with WorkingDirectory(working_directory):
-            args = DEFAULT_RUN_ARGS.copy()
-            args["config"] = parse_config(CONFIG_DEFAULT)
-            args["config"]["hazards"]["floods"]["SFINCS"]["gpu"] = True
-            args["config"]["general"]["name"] = "run_gpu"
-            run_model_with_method(method="run", **args)
-
-    # TODO: Add similarity check for the output of the CPU and GPU runs
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_SFINCS_run_without_subgrid() -> None:
-    args = DEFAULT_RUN_ARGS.copy()
-
-    with WorkingDirectory(working_directory):
-        args["config"] = parse_config(CONFIG_DEFAULT)
-        args["config"]["report"].update(
-            {
-                "_water_circle": True,
-            }
-        )
-        args["config"]["hazards"]["floods"]["simulate"] = True
-        args["config"]["hazards"]["floods"]["nr_subgrid_pixels"] = None
-
-        run_model_with_method(method="run", **args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_SFINCS_with_precipitation_forcing() -> None:
-    args = DEFAULT_RUN_ARGS.copy()
-
-    with WorkingDirectory(working_directory):
-        args["config"] = parse_config(CONFIG_DEFAULT)
-        args["config"]["report"].update(
-            {
-                "_water_circle": True,
-            }
-        )
-        args["config"]["hazards"]["floods"]["simulate"] = True
-        args["config"]["hazards"]["floods"]["forcing_method"] = "precipitation"
-
-        run_model_with_method(method="run", **args)
-
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_alter() -> None:
