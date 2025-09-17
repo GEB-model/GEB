@@ -69,9 +69,6 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
             dict: The constructed mapping.
         """
         mapping = {}
-        import pdb
-
-        pdb.set_trace()
         for key_node, value_node in node.value:
             key = self.construct_object(key_node, deep=deep)
             if key in mapping:
