@@ -1,3 +1,5 @@
+"""Module containing general agent functions and the base class for all agents."""
+
 import math
 from typing import Tuple
 
@@ -102,24 +104,24 @@ def downscale_volume(
 class AgentBaseClass(Module, HoneybeesAgentBaseClass):
     """Base class for all agent classes."""
 
-    def __init__(self, model) -> None:
+    def __init__(self, model: "GEBModel") -> None:
+        """
+
+        Args:
+            model: The GEB model instance.
+        """
         if not hasattr(self, "redundancy"):
             self.redundancy = None  # default redundancy is None
         HoneybeesAgentBaseClass.__init__(self)
         Module.__init__(self, model)
 
-    def get_max_n(self, n):
-        if self.redundancy is None:
-            return n
-        else:
-            max_n = math.ceil(n * (1 + self.redundancy))
-            assert (
-                max_n < 4294967295
-            )  # max value of uint32, consider replacing with uint64
-            return max_n
-
     @property
-    def agent_arrays(self):
+    def agent_arrays(self) -> dict[str, DynamicArray]:
+        """Return a dictionary of all DynamicArray attributes of the agent.
+
+        Raises:
+            AssertionError: If there are duplicate DynamicArray attributes.
+        """
         agent_arrays = {
             name: value
             for name, value in vars(self.var).items()

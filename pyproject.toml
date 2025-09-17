@@ -147,7 +147,7 @@ extend-select = ["I"]
 preview = true
 
 [tool.ruff.lint.extend-per-file-ignores]
-"geb/{agents,build,hydrology,evaluate}/**.py" = [
+"geb/agents/{crop_farmers,decision_module_flood,decision_module,government,households,industry,livestock_farmers,market,reservoir_operators,town_managers}.py" = [
     "ANN001",
     "ANN003",
     "ANN201",
@@ -156,7 +156,25 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/{store,sensitivity,reporter,multirun,module,forcing,data,cli,calibrate,__init__}.py" = [
+"geb/agents/workflows/*.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "D102",
+    "D100",
+    "D107"
+]
+"geb/{build,hydrology,evaluate}/**.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "D102",
+    "D100",
+    "D107"
+]
+"geb/{sensitivity,reporter,multirun,module,data,cli,calibrate}.py" = [
     "ANN001",
     "ANN003",
     "ANN201",

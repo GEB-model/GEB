@@ -108,7 +108,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     _check_tbb_version_compatible()
 
     @njit(parallel=True)
-    def test_threading_layer():
+    def test_threading_layer() -> npt.NDArray[np.int32]:
         array = np.zeros(10, dtype=np.int32)
         """Test function to check if TBB is loaded correctly."""
         for i in prange(10):

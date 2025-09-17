@@ -870,7 +870,12 @@ def evaluate(
     )
 
 
-def share_fn(working_directory, name, include_preprocessing, include_output) -> None:
+def share_fn(
+    working_directory: Path,
+    name: bool,
+    include_preprocessing: bool,
+    include_output: bool,
+) -> None:
     """Share model."""
     with WorkingDirectory(working_directory):
         # create a zip file called model.zip with the folders input, and model files
