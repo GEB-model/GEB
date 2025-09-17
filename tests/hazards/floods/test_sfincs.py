@@ -413,10 +413,7 @@ def test_read(geb_model: GEBModel) -> None:
         assert sfincs_model_build.name == sfincs_model_read.name
         assert sfincs_model_build.cell_area == sfincs_model_read.cell_area
         assert sfincs_model_build.area == sfincs_model_read.area
-        assert sfincs_model_build.crs == sfincs_model_read.crs
-        assert (
-            sfincs_model_build.sfincs_model.path == sfincs_model_read.sfincs_model.path
-        )
+        assert sfincs_model_build.path == sfincs_model_read.path
 
         for key in sfincs_model_build.sfincs_model.config:
             assert (

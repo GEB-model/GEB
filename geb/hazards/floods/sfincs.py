@@ -101,6 +101,7 @@ class SFINCSRootModel:
         if not self.exists():
             raise FileNotFoundError(f"SFINCS model not found in {self.path}")
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
+        self.sfincs_model.read()
         return self
 
     def build(
