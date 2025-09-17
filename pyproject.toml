@@ -192,16 +192,6 @@ combine-as-imports = true
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
-[tool.pyright]
-include = ["geb"]
-exclude = [
-    "**/__pycache__",
-    "**/.venv",
-]
-pythonVersion = "3.13"
-pythonPlatform = "Linux"
-reportAttributeAccessIssue = "none"
-
 [tool.pytest.ini_options]
 norecursedirs = [".venv", "build", "dist", "tmp*"]
 testpaths = ["tests"]
