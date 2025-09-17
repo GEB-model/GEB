@@ -463,7 +463,10 @@ class DynamicArray:
         return self.data.__sizeof__()
 
     def _perform_operation(
-        self, other: "DynamicArray" | np.ndarray, operation: str, inplace: bool = False
+        self,
+        other: Any,
+        operation: str,
+        inplace: bool = False,
     ) -> "DynamicArray":
         """
         Helper to perform binary/unary array operations delegating to NumPy.
@@ -494,7 +497,7 @@ class DynamicArray:
         else:
             return self.__class__(result, max_n=self._data.shape[0])
 
-    def __add__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __add__(self, other: Any) -> "DynamicArray":
         """Addition operator.
 
         Args:
@@ -505,7 +508,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__add__")
 
-    def __radd__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __radd__(self, other: Any) -> "DynamicArray":
         """Right-hand addition operator.
 
         Args:
@@ -516,7 +519,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__radd__")
 
-    def __iadd__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __iadd__(self, other: Any) -> "DynamicArray":
         """In-place addition operator.
 
         Args:
@@ -527,7 +530,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__add__", inplace=True)
 
-    def __sub__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __sub__(self, other: Any) -> "DynamicArray":
         """Subtraction operator.
 
         Args:
@@ -538,7 +541,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__sub__")
 
-    def __rsub__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __rsub__(self, other: Any) -> "DynamicArray":
         """Right-hand subtraction operator.
 
         Args:
@@ -550,7 +553,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rsub__")
 
-    def __isub__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __isub__(self, other: Any) -> "DynamicArray":
         """In-place subtraction operator.
 
         Args:
@@ -562,7 +565,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__sub__", inplace=True)
 
-    def __mul__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __mul__(self, other: Any) -> "DynamicArray":
         """Multiplication operator.
 
         Args:
@@ -574,7 +577,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mul__")
 
-    def __rmul__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __rmul__(self, other: Any) -> "DynamicArray":
         """Right-hand multiplication operator.
 
         Args:
@@ -586,7 +589,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rmul__")
 
-    def __imul__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __imul__(self, other: Any) -> "DynamicArray":
         """In-place multiplication operator.
 
         Args:
@@ -598,7 +601,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mul__", inplace=True)
 
-    def __truediv__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __truediv__(self, other: Any) -> "DynamicArray":
         """True division operator.
 
         Args:
@@ -610,7 +613,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__truediv__")
 
-    def __rtruediv__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __rtruediv__(self, other: Any) -> "DynamicArray":
         """Right-hand true division operator.
 
         Args:
@@ -622,7 +625,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rtruediv__")
 
-    def __itruediv__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __itruediv__(self, other: Any) -> "DynamicArray":
         """In-place true division operator.
 
         Args:
@@ -634,7 +637,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__truediv__", inplace=True)
 
-    def __floordiv__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __floordiv__(self, other: Any) -> "DynamicArray":
         """Floor division operator.
 
         Args:
@@ -646,7 +649,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__floordiv__")
 
-    def __rfloordiv__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __rfloordiv__(self, other: Any) -> "DynamicArray":
         """Right-hand floor division operator.
 
         Args:
@@ -658,7 +661,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rfloordiv__")
 
-    def __ifloordiv__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __ifloordiv__(self, other: Any) -> "DynamicArray":
         """In-place floor division operator.
 
         Args:
@@ -670,7 +673,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__floordiv__", inplace=True)
 
-    def __mod__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __mod__(self, other: Any) -> "DynamicArray":
         """Modulo operator.
 
         Args:
@@ -682,7 +685,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mod__")
 
-    def __rmod__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __rmod__(self, other: Any) -> "DynamicArray":
         """Right-hand modulo operator.
 
         Args:
@@ -694,7 +697,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rmod__")
 
-    def __imod__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __imod__(self, other: Any) -> "DynamicArray":
         """In-place modulo operator.
 
         Args:
@@ -705,7 +708,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mod__", inplace=True)
 
-    def __pow__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __pow__(self, other: Any) -> "DynamicArray":
         """Power operator.
 
         Args:
@@ -716,7 +719,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__")
 
-    def __rpow__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __rpow__(self, other: Any) -> "DynamicArray":
         """Right-hand power operator.
 
         Args:
@@ -727,7 +730,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rpow__")
 
-    def __ipow__(self, other: "DynamicArray" | np.ndarray) -> "DynamicArray":
+    def __ipow__(self, other: Any) -> "DynamicArray":
         """In-place power operator.
 
         Returns:
