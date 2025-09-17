@@ -65,10 +65,11 @@ dependencies = [
     "xclim>=0.56.0",
     "xmipy>=1.5.0",
     "xvec>=0.4.0",
-    "zarr==3.0.10",  # unpin when numcodecs zarr issues are solved
+    "zarr==3.0.10", # unpin when numcodecs zarr issues are solved
     "plotly>=6.2.0",
     "kaleido>=1.0.0",
     "h5netcdf>=1.6.4",
+    "ty>=0.0.1a20",
 ]
 requires-python = ">=3.12, <3.14"
 readme = "README.md"
