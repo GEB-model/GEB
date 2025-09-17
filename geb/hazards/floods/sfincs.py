@@ -46,7 +46,7 @@ from .workflows.utils import (
 class SFINCSRootModel:
     """Builds and updates SFINCS model files for flood hazard modeling."""
 
-    def __init__(self, model: "GEBModel", event_name: str) -> None:
+    def __init__(self, model: "GEBModel", name: str) -> None:
         """Initializes the SFINCSRootModel with a GEBModel and event name.
 
         Sets up the constant parts of the model (grid, mask, rivers, etc.),
@@ -58,7 +58,16 @@ class SFINCSRootModel:
                 Also used to create the path to write the file to disk.
         """
         self.model = model
-        self.event_name = event_name
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        """Gets the name of the SFINCS model.
+
+        Returns:
+            The name of the SFINCS model.
+        """
+        return self._name
 
     @property
     def path(self) -> Path:
@@ -68,7 +77,7 @@ class SFINCSRootModel:
             The path to the SFINCS model root directory.
         """
 
-        folder: Path = self.model.simulation_root / "SFINCS" / self.event_name
+        folder: Path = self.model.simulation_root / "SFINCS" / self.name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -80,8 +89,11 @@ class SFINCSRootModel:
         """
         return Path(self.path / "sfincs.inp").is_file()
 
-    def read(self) -> None:
+    def read(self) -> "SFINCSRootModel":
         """Reads an existing SFINCS model from the model root directory.
+
+        Returns:
+            The SFINCSRootModel instance with the read model.
 
         Raises:
             FileNotFoundError: if the SFINCS model does not exist in the specified path.
@@ -89,6 +101,7 @@ class SFINCSRootModel:
         if not self.exists():
             raise FileNotFoundError(f"SFINCS model not found in {self.path}")
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
+        return self
 
     def build(
         self,
@@ -106,7 +119,7 @@ class SFINCSRootModel:
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
-    ) -> None:
+    ) -> "SFINCSRootModel":
         """Build a SFINCS model.
 
         Notes:
@@ -129,6 +142,9 @@ class SFINCSRootModel:
             depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
+
+        Returns:
+            The SFINCSRootModel instance with the built model.
 
         Raises:
             ValueError: if depth_calculation_method is not 'manning' or 'power_law',
@@ -331,6 +347,7 @@ class SFINCSRootModel:
         sf.plot_basemap(fn_out="basemap.png")
 
         self.sfincs_model = sf
+        return self
 
     @property
     def area(self) -> float | int:

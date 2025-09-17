@@ -134,10 +134,37 @@ select = [
     "DOC202",
     "DOC402",
     "DOC501",
-    "DOC502"
+    "DOC502",
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "D102",
+    "D100",
+    "D107"
 ]
 extend-select = ["I"]
 preview = true
+
+[tool.ruff.lint.extend-per-file-ignores]
+"geb/{agents,build,hydrology,evaluate}/**.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "D102",
+    "D100",
+    "D107"
+]
+"geb/{store,sensitivity,reporter,multirun,module,forcing,data,cli,calibrate,__init__}.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "D102",
+    "D100",
+    "D107"
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]

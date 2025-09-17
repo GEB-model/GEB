@@ -1,3 +1,5 @@
+"""Tests for the SFINCS flood model and its integration in GEB."""
+
 import json
 import math
 import os
@@ -22,10 +24,11 @@ from geb.workflows.io import WorkingDirectory, open_zarr
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
 working_directory: Path = tmp_folder / "model"
+TEST_MODEL_NAME = "test_model"
 
 
 @pytest.fixture
-def geb_model():
+def geb_model() -> GEBModel:
     """A GEB model instance with SFINCS instance.
 
     Returns:
@@ -80,7 +83,7 @@ def build_sfincs(geb_model: GEBModel, nr_subgrid_pixels: int | None) -> SFINCSRo
     Returns:
         A SFINCS model instance with static grids and configuration written.
     """
-    sfincs_model: SFINCSRootModel = SFINCSRootModel(geb_model, "test_model")
+    sfincs_model: SFINCSRootModel = SFINCSRootModel(geb_model, TEST_MODEL_NAME)
     with open(geb_model.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
         DEM_config = json.load(f)
         for entry in DEM_config:
@@ -391,3 +394,32 @@ def test_SFINCS_discharge_grid_forcing(geb_model: GEBModel) -> None:
         )
 
         simulation.cleanup()
+
+
+def test_read(geb_model: GEBModel) -> None:
+    """Test reading SFINCS output files.
+
+    Args:
+        geb_model: A GEB model instance with SFINCS configured.
+    """
+    with WorkingDirectory(working_directory):
+        sfincs_model_build = build_sfincs(geb_model, nr_subgrid_pixels=None)
+        sfincs_model_read: SFINCSRootModel = SFINCSRootModel(
+            geb_model, TEST_MODEL_NAME
+        ).read()
+
+        # assert that both models have the same attributes
+        assert sfincs_model_build.path == sfincs_model_read.path
+        assert sfincs_model_build.name == sfincs_model_read.name
+        assert sfincs_model_build.cell_area == sfincs_model_read.cell_area
+        assert sfincs_model_build.area == sfincs_model_read.area
+        assert sfincs_model_build.crs == sfincs_model_read.crs
+        assert (
+            sfincs_model_build.sfincs_model.path == sfincs_model_read.sfincs_model.path
+        )
+
+        for key in sfincs_model_build.sfincs_model.config:
+            assert (
+                sfincs_model_build.sfincs_model.config[key]
+                == sfincs_model_read.sfincs_model.config[key]
+            )
