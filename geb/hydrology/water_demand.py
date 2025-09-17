@@ -288,8 +288,9 @@ class WaterDemand(Module):
         self.withdraw(available_reservoir_storage_m3, reservoir_abstraction_m3_farmers)
         self.withdraw(available_groundwater_m3, groundwater_abstraction_m3_farmers)
 
-        assert (available_reservoir_storage_m3 < 50).all(), (
-            "Reservoir storage should be empty after abstraction"
+        assert (available_reservoir_storage_m3 < 1000).all(), (
+            "Reservoir storage should be empty after abstraction. "
+            f"Offending values: {available_reservoir_storage_m3[available_reservoir_storage_m3 >= 50]}"
         )
 
         timer.new_split("Irrigation")

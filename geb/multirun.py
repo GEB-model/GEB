@@ -20,12 +20,13 @@ import zarr
 import xarray as xr
 
 SCENARIO_FILES = [
-    "well_combined_insurance.yml",
-    "well_index_insurance.yml",
+    "well_no_insurance.yml",
+    # "well_combined_insurance.yml",
+    # "well_index_insurance.yml",
     "well_precipitation_insurance.yml",
     "well_personal_insurance.yml",
-    "well_no_insurance.yml",
 ]
+SCENARIO_NAMES = [os.path.splitext(f)[0] for f in SCENARIO_FILES]
 
 SCENARIO_DIR = "configs_insurance_multirun"
 
@@ -106,26 +107,51 @@ def summarize_multirun(
     STD_DDOF = 0
     module_name = "agents.crop_farmers"
 
-    for key in SCENARIO_FILES:
+    for key in SCENARIO_NAMES:
+        boolean = False
         for param in params:
             print("Scenario:", key, ", Parameter:", param)
             # --- collect + aggregate runs (same as before) ---
             da_runs = []
+            param_file = param + ".zarr"
             for run in range(replicates):
-                run_dir = base_directory / str(run) / key / "report" / key / module_name
-                da = open_zarr(run_dir, param)  # DataArray (time, agents)
+                run_dir = (
+                    base_directory
+                    / str(run)
+                    / key
+                    / "report"
+                    / key
+                    / module_name
+                    / param_file
+                )
+                da = open_zarr(run_dir)  # DataArray (time, agents)
                 da_runs.append(da.transpose("time", "agents"))
 
             da_all = xr.concat(da_runs, dim="run")
+
+            is_pm1 = da_all.isin([-1, 1]).fillna(True).all()
+            # Make this a plain bool even if it's a dask-backed array
+            is_pm1 = bool(getattr(is_pm1.data, "compute", lambda: is_pm1.data)())
+
+            # Compute mean/std across runs (works for both numeric and ±1 data)
             mean_da = da_all.astype(np.float64).mean("run")
             std_da = da_all.astype(np.float64).std("run", ddof=STD_DDOF)
 
+            # Get numpy arrays (handles eager or dask-backed data)
             mean_np = np.asarray(
                 getattr(mean_da.data, "compute", lambda: mean_da.data)()
             ).astype(np.float32, copy=False)
             std_np = np.asarray(
                 getattr(std_da.data, "compute", lambda: std_da.data)()
             ).astype(np.float32, copy=False)
+
+            # If this parameter is strictly ±1-valued data, binarize the mean to {-1, 1}
+            # Tie-breaking: mean == 0 -> 1 (adjust to >0 if you prefer ties to go to -1 or stay 0)
+            if is_pm1:
+                mean_np = np.where(mean_np >= 0, 1, -1).astype(np.int8, copy=False)
+                if param == "well_adaptation":
+                    pass
+
             T, A = mean_np.shape
 
             # --- TEMPLATE: read from run 0's param.zarr ---
@@ -482,9 +508,9 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu)
 def multi_run(config, working_directory):
     multi_run_config = config["multirun"]
     DEFAULT_CPUS_PER_SCENARIO = int(os.getenv("CPUS_PER_SCENARIO", "1"))
-    pool_size = int(os.getenv("SLURM_CPUS_PER_TASK") or os.cpu_count() or 1)
+    pool_size = int(os.getenv("SLURM_CPUS_PER_TASK") or 1)
     num_scenarios = len(SCENARIO_FILES)
-
+    only_summarize = multi_run_config["only_summarize"]
     # read from config first, fallback to env, then 1
     cpus_per_scenario = int(
         multi_run_config.get("cpus_per_scenario", DEFAULT_CPUS_PER_SCENARIO)
@@ -496,38 +522,44 @@ def multi_run(config, working_directory):
     if replicates * num_scenarios * cpus_per_scenario > pool_size:
         print("[warn] computed replicates oversubscribe CPUs; throttling.", flush=True)
 
-    print(f"Pool size (SLURM_CPUS_PER_TASK): {pool_size}")
-    print(f"CPUs per scenario: {cpus_per_scenario}")
-    print(f"Scenarios per replicate: {num_scenarios}")
-    print(f"Replicates to run (folders 0..{replicates - 1}): {replicates}")
+    if only_summarize:
+        replicates = multi_run_config["nr_replicates"]
+        summarize_multirun(config, replicates)
+    else:
+        print(f"Pool size (SLURM_CPUS_PER_TASK): {pool_size}")
+        print(f"CPUs per scenario: {cpus_per_scenario}")
+        print(f"Scenarios per replicate: {num_scenarios}")
+        print(f"Replicates to run (folders 0..{replicates - 1}): {replicates}")
 
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-    # each arg = one replicate with all scenarios + cpus_per_scenario
-    args = [(config, i, SCENARIO_FILES, cpus_per_scenario) for i in range(replicates)]
+        # each arg = one replicate with all scenarios + cpus_per_scenario
+        args = [
+            (config, i, SCENARIO_FILES, cpus_per_scenario) for i in range(replicates)
+        ]
 
-    manager = multiprocessing.Manager()
-    current_gpu_use_count = manager.Value("i", 0)
-    manager_lock = manager.Lock()
+        manager = multiprocessing.Manager()
+        current_gpu_use_count = manager.Value("i", 0)
+        manager_lock = manager.Lock()
 
-    processes = min(pool_size, len(args)) if len(args) > 0 else 1
+        processes = min(pool_size, len(args)) if len(args) > 0 else 1
 
-    with multiprocessing.Pool(
-        processes=processes,
-        initializer=init_pool,
-        initargs=(
-            current_gpu_use_count,
-            manager_lock,
-            multi_run_config.get("gpus", 0),
-            multi_run_config.get("models_per_gpu", 1),
-        ),
-    ) as pool:
-        pool.map(run_model, args)
+        with multiprocessing.Pool(
+            processes=processes,
+            initializer=init_pool,
+            initargs=(
+                current_gpu_use_count,
+                manager_lock,
+                multi_run_config.get("gpus", 0),
+                multi_run_config.get("models_per_gpu", 1),
+            ),
+        ) as pool:
+            pool.map(run_model, args)
 
-    # no need to pool.close() inside 'with'
+        # no need to pool.close() inside 'with'
 
-    global ctrl_c_entered, default_sigint_handler
-    ctrl_c_entered = False
-    default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
+        global ctrl_c_entered, default_sigint_handler
+        ctrl_c_entered = False
+        default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
 
-    summarize_multirun(config, replicates)
+        summarize_multirun(config, replicates)

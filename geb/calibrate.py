@@ -723,6 +723,7 @@ def KGE_discharge(
 
     scenario_dir = (
         Path(run_directory)
+        / "output"
         / "report"
         / config["general"]["name"]
         / "hydrology.routing"
