@@ -299,7 +299,7 @@ class SFINCSRootModel:
 
             sf.write_subgrid()
         else:
-            print("Skipping SFINCS subgrid...")
+            print("Setting up SFINCS without subgrid")
             # first set up the mannings roughness with the default method
             # (we already have the DEM set up)
             sf.setup_manning_roughness(
@@ -786,7 +786,7 @@ class SFINCSSimulation:
         self.sfincs_model.set_config("smaxfile", "sfincs.smax")
 
         # remaining water storage (seff in SFINCS)
-        remaining_water_storage = current_water_storage.raster.reproject_like(
+        remaining_water_storage = remaining_water_storage.raster.reproject_like(
             self.sfincs_model.grid, method="nearest"
         )
         assert not np.isnan(remaining_water_storage.values[self.active_cells]).any(), (
@@ -798,10 +798,14 @@ class SFINCSSimulation:
 
         # saturated hydraulic conductivity (ks in SFINCS)
         saturated_hydraulic_conductivity = (
-            saturated_hydraulic_conductivity.raster.reproject_like(
-                self.sfincs_model.grid, method="average"
+            (
+                saturated_hydraulic_conductivity.raster.reproject_like(
+                    self.sfincs_model.grid, method="average"
+                )
             )
-        )
+            * 3600
+            * 1000
+        )  # convert from m/s to mm/h for SFINCS
         assert not np.isnan(
             saturated_hydraulic_conductivity.values[self.active_cells]
         ).any(), "saturated_hydraulic_conductivity contains NaN values in active cells"
@@ -810,7 +814,7 @@ class SFINCSSimulation:
             saturated_hydraulic_conductivity.to_dataset(name="ks")
         )
         self.sfincs_model.set_grid(
-            saturated_hydraulic_conductivity * 3600 * 1000, name="ks"
+            saturated_hydraulic_conductivity, name="ks"
         )  # convert from m/s to mm/h
         self.sfincs_model.set_config("ksfile", "sfincs.ks")
 

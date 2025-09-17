@@ -4,33 +4,43 @@ import subprocess
 from datetime import datetime
 from os.path import isfile, join
 from pathlib import Path
+from typing import Any
 
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
-from hydromt.log import setuplog
 from hydromt_sfincs import SfincsModel, utils
 from pyextremes import EVA
 from shapely.geometry import Point
 from tqdm import tqdm
 
 
-def export_rivers(model_root, segments, postfix="") -> None:
-    segments.to_parquet(model_root / f"segments{postfix}.geoparquet")
+def export_rivers(
+    model_root: Path, rivers: gpd.GeoDataFrame, postfix: str = ""
+) -> None:
+    """Export river segments to a GeoParquet file.
+
+    Args:
+        model_root: The root path of the model directory.
+        rivers: The GeoDataFrame containing the river segments.
+        postfix: A postfix to add to the filename. Defaults to "".
+    """
+    rivers.to_parquet(model_root / f"rivers{postfix}.geoparquet")
 
 
-def import_rivers(model_root, postfix="") -> gpd.GeoDataFrame:
-    return gpd.read_parquet(model_root / f"segments{postfix}.geoparquet")
+def import_rivers(model_root: Path, postfix: str = "") -> gpd.GeoDataFrame:
+    """Import river segments from a GeoParquet file.
 
+    Args:
+        model_root: The root path of the model directory.
+        postfix: A postfix to add to the filename. Defaults to "".
 
-def export_nodes(model_root, nodes) -> None:
-    nodes.to_parquet(model_root / "nodes.geoparquet")
-
-
-def import_nodes(model_root) -> gpd.GeoDataFrame:
-    return gpd.read_parquet(model_root / "nodes.geoparquet")
+    Returns:
+        A GeoDataFrame containing the river segments.
+    """
+    return gpd.read_parquet(model_root / f"rivers{postfix}.geoparquet")
 
 
 def read_flood_depth(
@@ -111,8 +121,6 @@ def read_flood_depth(
             flood_depth_m = model.results["h"].isel(time=-1)
             flood_depth_m = flood_depth_m.compute()
 
-            print("hi")
-
         else:
             raise ValueError(f"Unknown method: {method}")
 
@@ -136,19 +144,34 @@ def to_sfincs_datetime(dt: datetime) -> str:
     return dt.strftime("%Y%m%d %H%M%S")
 
 
-def make_relative_paths(config, model_root, new_root, relpath=None):
+def make_relative_paths(
+    config: dict[str, Any],
+    model_root: Path,
+    new_root: Path,
+) -> dict[str, Any]:
     """Return dict with paths to the new model new root.
 
+    Always use POSIX format for paths, to ensure compatibility with Docker.
+
+    Args:
+        config: The configuration dictionary with paths to make relative.
+        model_root: The original model root directory.
+        new_root: The new model root directory.
+
+    Returns:
+        A dictionary with the updated paths relative to the new model root directory.
+
     Raises:
-        ValueError: if model_root and new_root do not have a common path.
+        ValueError: If model_root and new_root do not have a common path.
     """
-    if not relpath:
-        commonpath = ""
-        if os.path.splitdrive(model_root)[0] == os.path.splitdrive(new_root)[0]:
-            commonpath = os.path.commonpath([model_root, new_root])
-        if os.path.basename(commonpath) == "":
-            raise ValueError("model_root and new_root must have a common path")
-        relpath = Path(os.path.relpath(commonpath, new_root))
+
+    commonpath = ""
+    if os.path.splitdrive(model_root)[0] == os.path.splitdrive(new_root)[0]:
+        commonpath = os.path.commonpath([model_root, new_root])
+    if os.path.basename(commonpath) == "":
+        raise ValueError("model_root and new_root must have a common path")
+    relpath = Path(os.path.relpath(commonpath, new_root))
+
     config_kwargs = dict()
     for k, v in config.items():
         if (
@@ -204,65 +227,45 @@ def run_sfincs_subprocess(
     return process.returncode
 
 
-def write_zsmax_tif(
-    root,
-    zsmax_fn,
-) -> None:
-    """Write zsmax to tif."""
-    mod = SfincsModel(root, mode="r")
-    # get maximum waterlevel
-    zsmax = mod.results["zsmax"].max("timemax")
-    zsmax.fillna(-9999).raster.to_raster(
-        zsmax_fn,
-        driver="GTiff",
-        compress="lzw",
-        overwrite=True,
-        nodata=-9999,
-    )
+def get_start_point(geom) -> Point:
+    """Extract the start point from a LineString geometry.
 
+    Args:
+        geom: _description_
 
-def get_logger():
-    return setuplog("sfincs", log_level=10)
-
-
-def get_start_point(geom):
+    Returns:
+        The start point as a Shapely Point object.
+    """
     return Point(geom.coords[0])
 
 
-def get_end_point(geom):
+def get_end_point(geom) -> Point:
+    """Extract the end point from a LineString geometry.
+
+    Args:
+        geom: _description_
+
+    Returns:
+        The end point as a Shapely Point object.
+    """
     return Point(geom.coords[-1])
 
 
-def get_discharge_for_return_periods(
-    discharge, return_periods, minimum_median_discharge=100
-):
-    assert not np.isnan(discharge).any(), "Discharge values contain NaNs"
-    assert not np.isinf(discharge).any(), "Discharge values contain infinite values"
+def create_hourly_hydrograph(
+    peak_discharge: float,
+    rising_limb_hours: float | int,
+    recession_limb_hours: float | int,
+) -> pd.DataFrame:
+    """Create a triangular hydrograph time series.
 
-    # If median discharge is less than threshold, return zeros
-    if (
-        discharge.groupby(discharge.index.year).max().median()
-        < minimum_median_discharge
-    ):
-        return np.zeros_like(return_periods)
+    Args:
+        peak_discharge: The peak discharge of the hydrograph.
+        rising_limb_hours: The duration of the rising limb in hours.
+        recession_limb_hours: The duration of the recession limb in hours.
 
-    # Fit the model and calculate return periods
-    model = EVA(discharge)
-    # Use the Block Maxima method to fit the model
-    model.get_extremes(method="BM", block_size="365.2425D")
-    model.fit_model()
-    discharge_per_return_period = model.get_return_value(return_period=return_periods)[
-        0
-    ]
-    # The Amazon should have a maximum recorded discharge of about 300,000 m3/s
-    # so we check that the discharge values are not too high
-    assert discharge_per_return_period.max() < 1e6, "Discharge values too high"
-    # # Get the summary at the X-year return period
-    return discharge_per_return_period
-
-
-# Function to create and return a hydrograph time series
-def create_hourly_hydrograph(peak_discharge, rising_limb_hours, recession_limb_hours):
+    Returns:
+        A pandas DataFrame with the time series of the hydrograph.
+    """
     total_duration_hours = rising_limb_hours + recession_limb_hours
     # Create a time array with hourly intervals
     time_hours = np.arange(0, total_duration_hours + 1)
@@ -439,7 +442,7 @@ def get_representative_river_points(
 
 def get_discharge_and_river_parameters_by_river(
     river_IDs: list[int],
-    points_per_river,
+    points_per_river: list[list[tuple[int, int]]],
     discharge: xr.DataArray,
     river_width_alpha: npt.NDArray[np.float32] | None = None,
     river_width_beta: npt.NDArray[np.float32] | None = None,
@@ -576,39 +579,3 @@ def assign_return_periods(
                     f"Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}."
                 )
     return rivers
-
-
-def snap_to_grid(ds, reference, relative_tollerance=0.02, ydim="y", xdim="x"):
-    # make sure all datasets have more or less the same coordinates
-    assert np.isclose(
-        ds.coords[ydim].values,
-        reference[ydim].values,
-        atol=abs(ds.rio.resolution()[1] * relative_tollerance),
-        rtol=0,
-    ).all()
-    assert np.isclose(
-        ds.coords[xdim].values,
-        reference[xdim].values,
-        atol=abs(ds.rio.resolution()[0] * relative_tollerance),
-        rtol=0,
-    ).all()
-    return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})
-
-
-def configure_sfincs_model(sf, model_root, simulation_root) -> None:
-    """Helper function to configure SFINCS model with common settings."""
-    sf.setup_config(
-        alpha=0.5
-    )  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
-    sf.setup_config(tspinup=86400)  # spinup time in seconds
-    sf.setup_config(dtout=900)  # output time step in seconds
-    # change root to the output and write
-    sf.set_root(simulation_root, mode="w+")
-    sf._write_gis = True
-    sf.write_grid()
-    sf.write_forcing()
-    # update config
-    sf.setup_config(**make_relative_paths(sf.config, model_root, simulation_root))
-    sf.write_config()
-    sf.plot_basemap(fn_out="src_points_check.png")
-    sf.plot_forcing(fn_out="forcing.png")
