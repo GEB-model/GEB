@@ -266,7 +266,7 @@ class SFINCSRootModel:
             river_parameters["river_width_alpha"][river_width_unknown_mask],
             river_parameters["river_width_beta"][river_width_unknown_mask],
             rivers.loc[river_width_unknown_mask, "Q_2"],
-        )
+        ).astype(np.float64)
 
         rivers["depth"] = get_river_depth(
             rivers,
@@ -867,12 +867,14 @@ class SFINCSSimulation:
         self.sfincs_model.write_grid(data_vars=["smax", "seff", "ks"])
         self.sfincs_model.write_config()
 
-    def run(self, gpu: bool) -> None:
+    def run(self, gpu: bool | str) -> None:
         """Runs the SFINCS simulation.
 
         Args:
-            gpu: Whether to use GPU acceleration for the simulation.
+            gpu: Whether to use GPU acceleration for the simulation. Can be
+                True, False, or 'auto' to automatically detect GPU availability.
         """
+        assert gpu in [True, False, "auto"], "gpu must be True, False, or 'auto'"
         run_sfincs_simulation(
             simulation_root=self.path,
             model_root=self.root_path,
