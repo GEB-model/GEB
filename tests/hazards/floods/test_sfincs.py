@@ -13,7 +13,7 @@ import pytest
 import xarray as xr
 
 from geb.cli import CONFIG_DEFAULT, parse_config, run_model_with_method
-from geb.hazards.floods.model import SFINCSRootModel, SFINCSSimulation
+from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.hydrology.HRUs import load_geom
 from geb.model import GEBModel

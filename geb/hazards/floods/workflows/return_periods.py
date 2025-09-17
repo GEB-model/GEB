@@ -1,3 +1,5 @@
+"""Functions to determine calculation groups for river segments based on their topology."""
+
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
@@ -73,7 +75,7 @@ def assign_calculation_group(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         GeoDataFrame with an additional column 'calculation_group' that assigns the rivers to a calculation group
     """
 
-    def assign(group):
+    def assign(group: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         # There cannot be four rivers with the same endpoint (there must be an outflow point)
         assert len(group) <= 3, "Found more than 3 nodes with the same endpoint"
         # Stream order must be the same for rivers within a group

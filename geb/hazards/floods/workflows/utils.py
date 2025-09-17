@@ -1,3 +1,5 @@
+"""Utility functions for flood hazard workflows."""
+
 import os
 import platform
 import subprocess
@@ -13,7 +15,7 @@ import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel, utils
 from pyextremes import EVA
-from shapely.geometry import Point
+from shapely.geometry import LineString, Point
 from tqdm import tqdm
 
 
@@ -227,11 +229,11 @@ def run_sfincs_subprocess(
     return process.returncode
 
 
-def get_start_point(geom) -> Point:
+def get_start_point(geom: LineString) -> Point:
     """Extract the start point from a LineString geometry.
 
     Args:
-        geom: _description_
+        geom: LineString geometry.
 
     Returns:
         The start point as a Shapely Point object.
@@ -239,11 +241,11 @@ def get_start_point(geom) -> Point:
     return Point(geom.coords[0])
 
 
-def get_end_point(geom) -> Point:
+def get_end_point(geom: LineString) -> Point:
     """Extract the end point from a LineString geometry.
 
     Args:
-        geom: _description_
+        geom: LineString geometry.
 
     Returns:
         The end point as a Shapely Point object.
@@ -387,8 +389,27 @@ def run_sfincs_simulation(
 
 
 def _get_xy(
-    river, waterbody_ids: npt.NDArray[np.int32], up_to_downstream: bool = True
-) -> tuple[int, int] | list:
+    river: pd.Series,
+    waterbody_ids: npt.NDArray[np.int32],
+    up_to_downstream: bool = True,
+) -> tuple[int, int] | None:
+    """Get the first valid xy coordinate from a river's hydrography_xy list.
+
+    Ignore coordinates that fall within a waterbody (waterbody_ids != -1).
+    Starts upstream or downstream based on the up_to_downstream flag.
+
+    Args:
+        river: Series containing river information, including 'hydrography_xy'.
+            This is a list of (x, y) tuples, representing the location of the river
+            in the low-resolution hydrological grid.
+        waterbody_ids: 2D array of waterbody IDs, where -1 indicates no waterbody.
+            Also in the low-resolution hydrological grid.
+        up_to_downstream: Whether to search from upstream to downstream.
+            Defaults to True (starting upstream).
+
+    Returns:
+        A tuple (x, y) of the first valid coordinate, or an empty list if none found.
+    """
     xys = river["hydrography_xy"]
     if not up_to_downstream:
         xys = reversed(xys)  # Reverse the order if not going downstream
@@ -397,7 +418,7 @@ def _get_xy(
         if not is_waterbody:
             return (xy[0], xy[1])
     else:
-        return None  # If no valid xy found, return empty list
+        return None  # If no valid xy found, return None
 
 
 def get_representative_river_points(

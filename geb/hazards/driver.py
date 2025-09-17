@@ -32,17 +32,16 @@ class HazardDriver:
                 last n_timesteps is saved in memory to be used at the start of the flood event.
 
         """
-        from geb.hazards.floods.sfincs import SFINCS
+        from geb.hazards.floods import Floods
 
-        self.sfincs: SFINCS = SFINCS(self, n_timesteps=longest_flood_event_in_days)
+        self.sfincs: Floods = Floods(self, n_timesteps=longest_flood_event_in_days)
 
     def step(self) -> None:
         if self.config["hazards"]["floods"]["simulate"]:
             if self.simulate_hydrology:
                 self.sfincs.save_discharge()
-                self.sfincs.save_soil_moisture()
+                self.sfincs.save_current_soil_moisture()
                 self.sfincs.save_max_soil_moisture()
-                self.sfincs.save_soil_storage_capacity()
                 self.sfincs.save_saturated_hydraulic_conductivity()
 
             for event in self.config["hazards"]["floods"]["events"]:

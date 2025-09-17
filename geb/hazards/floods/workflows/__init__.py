@@ -52,8 +52,18 @@ def get_river_depth(
     return depth.astype(np.float32)
 
 
-def get_river_manning(river_segments):
-    return np.full(len(river_segments), 0.02)
+def get_river_manning(river_segments: gpd.GeoDataFrame) -> npt.NDArray[np.float32]:
+    """Get Manning's n for each river segment.
+
+    Currently, this function returns a constant value for all river segments.
+
+    Args:
+        river_segments: GeoDataFrame with river segments.
+
+    Returns:
+        Array with Manning's n for each river segment.
+    """
+    return np.full(len(river_segments), 0.02, dtype=np.float32)
 
 
 def do_mask_flood_plains(sf: "SfincsModel") -> None:
