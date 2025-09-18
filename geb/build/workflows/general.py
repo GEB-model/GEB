@@ -281,7 +281,23 @@ def get_area_definition(da: xr.DataArray) -> AreaDefinition:
     )
 
 
-def _fill_in_coords(target_coords, source_coords, data_dims):
+def _fill_in_coords(
+    target_coords: xr.core.coordinates.DataArrayCoordinates,
+    source_coords: xr.core.coordinates.DataArrayCoordinates,
+    data_dims: tuple[str, ...],
+):
+    """Fill in missing coordinates that are also dimensions from source except for 'x' and 'y' which are taken from target.
+
+    For example useful to fill the time coordinate
+
+    Args:
+        target_coords: All coordinates from the target DataArray.
+        source_coords: All coordinates from the source DataArray.
+        data_dims: Dimensions to transfer coordinates for. 'x' and 'y' are skipped.
+
+    Returns:
+        A list of coordinates in the order of data_dims.
+    """
     x_coord, y_coord = target_coords["x"], target_coords["y"]
     coords = []
     for key in data_dims:

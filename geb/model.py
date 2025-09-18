@@ -15,9 +15,8 @@ from dateutil.relativedelta import relativedelta
 from honeybees.model import Model as ABM_Model
 
 from geb.agents import Agents
-from geb.artists import Artists
 from geb.hazards.driver import HazardDriver
-from geb.hazards.floods.construct_storm_surge_hydrographs import (
+from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
     generate_storm_surge_hydrographs,
 )
 from geb.module import Module
@@ -87,8 +86,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.mask = load_geom(self.files["geom"]["mask"])
 
         self.store = Store(self)
-        self.artists = Artists(self)
-
         self.forcing = Forcing(self)
 
         self.evaluator = Evaluate(self)
@@ -183,6 +180,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self.multiverse_name = member.item()
 
             pr_hourly_forecast: xr.DataArray = forecasts.sel(member=member)
+            pr_hourly_forecast: xr.DataArray = pr_hourly_forecast.rio.reproject_match(
+                original_pr_hourly
+            )
 
             forecast_end_date = round_up_to_start_of_next_day_unless_midnight(
                 pd.to_datetime(pr_hourly_forecast.time[-1].item()).to_pydatetime()
@@ -201,10 +201,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             )
 
             # Concatenate the original precipitation data with the forecast data
-            pr_hourly_observed_and_forecasted_combined: list[xr.DataArray] = [
-                original_pr_hourly_clipped_to_start_of_forecast,
-                pr_hourly_forecast,
-            ]
+            pr_hourly_observed_and_forecasted_combined: xr.DataArray = xr.concat(
+                [original_pr_hourly_clipped_to_start_of_forecast, pr_hourly_forecast],
+                dim="time",
+            )
 
             # Set the pr_hourly forcing data to the combined data
             self.model.forcing["pr_hourly"] = pr_hourly_observed_and_forecasted_combined
@@ -322,7 +322,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if load_data_from_store:
             self.store.load()
 
-        if not in_spinup:
+        # in spinup mode, save the spinup time range to the store for later verification
+        # in run mode, verify that the spinup time range matches the stored time range
+        if in_spinup:
+            self._store_spinup_time_range()
+        else:
             self._verify_spinup_time_range()
 
         if self.simulate_hydrology:
@@ -466,7 +470,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # }
 
         self.var = self.store.create_bucket("var")
-        self._store_spinup_time_range()
 
         self._initialize(
             create_reporter=True,
@@ -603,6 +606,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @property
     def multiverse_name(self) -> str | None:
         """To explore different model futures, GEB can be run in a multiverse mode.
+
         In this mode, a number of timesteps can be run with different input data (e.g. different precipitation forecasts).
         The multiverse_name is used to identify the different model futures. It is typically set to the forecast member name.
 
@@ -614,6 +618,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @multiverse_name.setter
     def multiverse_name(self, value: str | None) -> None:
         """To explore different model futures, GEB can be run in a multiverse mode.
+
         In this mode, a number of timesteps can be run with different input data (e.g. different precipitation forecasts).
         The multiverse_name is used to identify the different model futures. It is typically set to the forecast member name.
 
@@ -715,7 +720,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 reader.close()
 
     def __enter__(self) -> "GEBModel":
-        """ "Enters the context of the model.
+        """Enters the context of the model.
 
         Returns:
             The model instance itself.

@@ -1,3 +1,5 @@
+"""Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
+
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -23,6 +25,7 @@ class LandSurface:
     """Implements land surface submodel, responsible for land surface characteristics and processes."""
 
     def __init__(self) -> None:
+        """Initialize the LandSurface class."""
         pass
 
     @build_method(depends_on=["setup_regions_and_land_use"])
@@ -83,7 +86,7 @@ class LandSurface:
     @build_method(depends_on=["setup_hydrography"])
     def setup_elevation(
         self,
-        DEMs=[
+        DEMs: list[dict[str, str | float]] = [
             {
                 "name": "fabdem",
                 "zmin": 0.001,
@@ -95,6 +98,11 @@ class LandSurface:
 
         For configuration of DEMs parameters, see
         https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html.
+
+        Args:
+            DEMs: A list of dictionaries containing the names and parameters of the DEMs to use. Each dictionary should have a 'name' key
+                with the name of the DEM, and optionally other keys such as 'zmin' for minimum elevation.
+
         """
         if not DEMs:
             DEMs = []
@@ -346,7 +354,7 @@ class LandSurface:
     @build_method(depends_on=[])
     def setup_land_use_parameters(
         self,
-        land_cover="esa_worldcover_2021_v200",
+        land_cover: str = "esa_worldcover_2021_v200",
     ) -> None:
         """Sets up the land use parameters for the model.
 

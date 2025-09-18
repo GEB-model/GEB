@@ -35,7 +35,6 @@ The figure below shows a schematic overview of some parts of the model, showing 
   Configuration <configuration>
   Creating a model <creating_a_model>
   Running the model <running>
-  Visualisation <visualisation>
   Calibration <calibration>
   ODD protocol <ODD/ODD.rst>
 

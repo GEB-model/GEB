@@ -1,3 +1,5 @@
+"""This module contains the Reporter class, which is used to report data to disk."""
+
 import datetime
 import re
 import shutil
@@ -10,6 +12,7 @@ import pandas as pd
 import zarr
 from honeybees.library.raster import coord_to_pixel
 
+from geb.module import Module
 from geb.store import DynamicArray
 from geb.workflows.methods import multi_level_merge
 
@@ -145,13 +148,28 @@ def create_time_array(
 
 
 class Reporter:
-    """This class is used to report data to disk.
+    """This class is used to report data to disk."""
 
-    Args:
-        model: The GEB model.
-    """
+    def __init__(self, model: "GEBModel", clean: bool) -> None:
+        """The constructor for the Reporter class.
 
-    def __init__(self, model, clean) -> None:
+        Loops over the reporter configuration and creates the necessary files and data structures,
+        that are then used while the model is run to add data to.
+
+        For full documentation of the report configuration, see the documentation.
+
+        There are also several pre-defined report configurations that can be activated by adding
+        special keys to the report configuration. These are:
+        - _discharge_stations: if set to True, discharge at all discharge stations is reported.
+        - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
+
+        Args:
+            model: The GEB model instance.
+            clean: If True, the report folder is cleaned at the start of the model run.
+
+        Raises:
+            ValueError: If the variable type is not recognized.
+        """
         self.model = model
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
@@ -697,7 +715,9 @@ class Reporter:
 
                     df.to_csv(folder / (name + ".csv"))
 
-    def report(self, module, local_variables, module_name) -> None:
+    def report(
+        self, module: Module, local_variables: dict[str, Any], module_name: str
+    ) -> None:
         """This method is in every step function to report data to disk.
 
         Args:
@@ -706,6 +726,9 @@ class Reporter:
                 that calls this one.
             module_name: The name of the module.
         """
+        import pdb
+
+        pdb.set_trace()
         if not self.activated:
             return None
         report = self.model.config["report"].get(module_name, None)

@@ -1,3 +1,1 @@
-"""
-Tests for build-related functionality in GEB.
-"""
+"""Tests for build-related functionality in GEB."""

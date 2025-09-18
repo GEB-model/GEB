@@ -1,3 +1,1 @@
-"""
-Tests for agent-related modules in GEB.
-"""
+"""Tests for agent-related modules in GEB."""

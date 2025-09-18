@@ -1,3 +1,5 @@
+"""Module to handle climate forcing data."""
+
 from datetime import datetime
 from typing import Any, Literal, overload
 
@@ -19,7 +21,20 @@ class Forcing(Module):
         model: The GEB model instance.
     """
 
-    def __init__(self, model) -> None:
+    def __init__(self, model: "GEBModel") -> None:
+        """Initialize the Forcing module.
+
+        The datasets themselves are loaded on demand when accessed via the `__getitem__` method.
+        This is to avoid loading datasets in memory that are not actually used in the simulation,
+        due to specific model configurations.
+
+        Also, sets up the forcing validation functions.
+
+        Notes:
+
+        Args:
+            model: The GEB model instance.
+        """
         self.model = model
         self._forcings = {}
         self.validators = {
@@ -40,6 +55,11 @@ class Forcing(Module):
 
     @property
     def name(self) -> str:
+        """Return the name of the module.
+
+        Returns:
+            The name of the module.
+        """
         return "forcing"
 
     def load_forcing_ds(self, name: str) -> AsyncGriddedForcingReader | xr.DataArray:
@@ -149,7 +169,15 @@ class Forcing(Module):
         return data
 
     def spinup(self) -> None:
+        """Prepare the forcing module for the simulation.
+
+        Does not do anything as no spinup is needed.
+        """
         pass
 
     def step(self) -> None:
+        """Advance the forcing module by one time step.
+
+        Does not do anything as the forcing data is read on demand.
+        """
         pass

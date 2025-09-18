@@ -1,3 +1,5 @@
+"""Storage classes for model data."""
+
 import json
 import shutil
 from datetime import datetime
@@ -29,49 +31,6 @@ class DynamicArray:
     - Supports slicing, arithmetic, in-place operations and comparisons, delegating
         to the underlying array where appropriate.
     - Can be saved to and loaded from disk using the provided save and load helpers.
-
-    Args:
-        input_array: An existing array-like object to initialize from. If provided,
-                the DynamicArray will use its values as the initial contents.
-        n: The initial logical length of the DynamicArray. Required when creating
-                from scratch (i.e. when input_array is not provided).
-        max_n: The maximum capacity (physical size) of the backing buffer. If not
-                provided when initializing from an existing array, the array itself is
-                used as the backing buffer and no extra capacity is allocated.
-        extra_dims: Optional shape for additional trailing dimensions stored for
-                each element (for example, per-element vectors or matrices). When
-                provided, the backing buffer will have shape (max_n, *extra_dims).
-        extra_dims_names: Optional list of names for the extra dimensions. These
-                are preserved and adjusted when slicing across extra dimensions.
-        dtype: Data type to allocate when creating an empty or preallocated array.
-                Mutually exclusive with input_array.
-        fill_value: Optional fill value used to initialize the backing buffer when
-                creating from dtype and max_n.
-
-    Raises:
-            ValueError: If neither input_array nor dtype is provided, or if both are
-            provided, or if requested logical length exceeds capacity.
-
-    Attributes:
-            data: A view of the active portion of the buffer (up to the logical length).
-            n: The logical length of the array (number of active elements).
-            max_n: The capacity of the backing buffer (maximum number of elements).
-            extra_dims_names: Names associated with any extra trailing dimensions.
-            (Internal) _data: The backing buffer storing the raw values.
-
-    Examples:
-            - Create from existing array:
-                    dyn = DynamicArray(input_array=some_array)
-
-            - Create an empty buffer with capacity and logical length:
-                    dyn = DynamicArray(n=5, max_n=100, dtype=some_dtype)
-
-            - Perform NumPy-like operations:
-                    dyn2 = dyn + 3
-                    mask = dyn > 0
-
-            - Slice preserving DynamicArray wrapper across the first axis:
-                    dyn_slice = dyn[:]  # returns a DynamicArray copy
     """
 
     __slots__: list = ["_data", "_n", "_extra_dims_names"]
@@ -86,6 +45,51 @@ class DynamicArray:
         dtype: npt.DTypeLike | None = None,
         fill_value: Any | None = None,
     ) -> None:
+        """Initialize a DynamicArray.
+
+        Args:
+            input_array: An existing array-like object to initialize from. If provided,
+                    the DynamicArray will use its values as the initial contents.
+            n: The initial logical length of the DynamicArray. Required when creating
+                    from scratch (i.e. when input_array is not provided).
+            max_n: The maximum capacity (physical size) of the backing buffer. If not
+                    provided when initializing from an existing array, the array itself is
+                    used as the backing buffer and no extra capacity is allocated.
+            extra_dims: Optional shape for additional trailing dimensions stored for
+                    each element (for example, per-element vectors or matrices). When
+                    provided, the backing buffer will have shape (max_n, *extra_dims).
+            extra_dims_names: Optional list of names for the extra dimensions. These
+                    are preserved and adjusted when slicing across extra dimensions.
+            dtype: Data type to allocate when creating an empty or preallocated array.
+                    Mutually exclusive with input_array.
+            fill_value: Optional fill value used to initialize the backing buffer when
+                    creating from dtype and max_n.
+
+        Raises:
+                ValueError: If neither input_array nor dtype is provided, or if both are
+                provided, or if requested logical length exceeds capacity.
+
+        Attributes:
+                data: A view of the active portion of the buffer (up to the logical length).
+                n: The logical length of the array (number of active elements).
+                max_n: The capacity of the backing buffer (maximum number of elements).
+                extra_dims_names: Names associated with any extra trailing dimensions.
+                (Internal) _data: The backing buffer storing the raw values.
+
+        Examples:
+                - Create from existing array:
+                        dyn = DynamicArray(input_array=some_array)
+
+                - Create an empty buffer with capacity and logical length:
+                        dyn = DynamicArray(n=5, max_n=100, dtype=some_dtype)
+
+                - Perform NumPy-like operations:
+                        dyn2 = dyn + 3
+                        mask = dyn > 0
+
+                - Slice preserving DynamicArray wrapper across the first axis:
+                        dyn_slice = dyn[:]  # returns a DynamicArray copy
+        """
         self.extra_dims_names = np.array(extra_dims_names, dtype=str)
 
         if input_array is None and dtype is None:
@@ -207,7 +211,7 @@ class DynamicArray:
             raise ValueError("n cannot exceed max_n")
         self._n = value
 
-    def __array_finalize__(self, obj) -> None:
+    def __array_finalize__(self, obj: object) -> None:
         """
         Array finalize hook for NumPy interoperability.
 
@@ -220,7 +224,7 @@ class DynamicArray:
         if obj is None:
             return
 
-    def __array__(self, dtype=None) -> np.ndarray:
+    def __array__(self, dtype: type | None = None) -> np.ndarray:
         """
         Return a NumPy array representation of the active data.
 
@@ -298,7 +302,7 @@ class DynamicArray:
             func, modified_types, modified_args, kwargs
         )
 
-    def __setitem__(self, key, value) -> None:
+    def __setitem__(self, key: str, value: Any) -> None:
         """
         Set item(s) in the active portion of the array.
 
@@ -308,7 +312,7 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
-    def __getitem__(self, key) -> "DynamicArray | np.ndarray":
+    def __getitem__(self, key: str) -> "DynamicArray | np.ndarray":
         """
         Retrieve item(s) or a sliced DynamicArray.
 
@@ -425,7 +429,7 @@ class DynamicArray:
         else:
             return getattr(self.data, name)
 
-    def __setattr__(self, name, value) -> None:
+    def __setattr__(self, name: str, value: Any) -> None:
         """
         Set attributes either on the wrapper internals or on the active data.
 
@@ -458,7 +462,12 @@ class DynamicArray:
         """
         return self.data.__sizeof__()
 
-    def _perform_operation(self, other, operation: str, inplace: bool = False):
+    def _perform_operation(
+        self,
+        other: Any,
+        operation: str,
+        inplace: bool = False,
+    ) -> "DynamicArray":
         """
         Helper to perform binary/unary array operations delegating to NumPy.
 
@@ -488,7 +497,7 @@ class DynamicArray:
         else:
             return self.__class__(result, max_n=self._data.shape[0])
 
-    def __add__(self, other) -> "DynamicArray":
+    def __add__(self, other: Any) -> "DynamicArray":
         """Addition operator.
 
         Args:
@@ -499,7 +508,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__add__")
 
-    def __radd__(self, other) -> "DynamicArray":
+    def __radd__(self, other: Any) -> "DynamicArray":
         """Right-hand addition operator.
 
         Args:
@@ -510,7 +519,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__radd__")
 
-    def __iadd__(self, other) -> "DynamicArray":
+    def __iadd__(self, other: Any) -> "DynamicArray":
         """In-place addition operator.
 
         Args:
@@ -521,7 +530,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__add__", inplace=True)
 
-    def __sub__(self, other) -> "DynamicArray":
+    def __sub__(self, other: Any) -> "DynamicArray":
         """Subtraction operator.
 
         Args:
@@ -532,7 +541,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__sub__")
 
-    def __rsub__(self, other) -> "DynamicArray":
+    def __rsub__(self, other: Any) -> "DynamicArray":
         """Right-hand subtraction operator.
 
         Args:
@@ -544,7 +553,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rsub__")
 
-    def __isub__(self, other) -> "DynamicArray":
+    def __isub__(self, other: Any) -> "DynamicArray":
         """In-place subtraction operator.
 
         Args:
@@ -556,7 +565,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__sub__", inplace=True)
 
-    def __mul__(self, other) -> "DynamicArray":
+    def __mul__(self, other: Any) -> "DynamicArray":
         """Multiplication operator.
 
         Args:
@@ -568,7 +577,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mul__")
 
-    def __rmul__(self, other) -> "DynamicArray":
+    def __rmul__(self, other: Any) -> "DynamicArray":
         """Right-hand multiplication operator.
 
         Args:
@@ -580,7 +589,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rmul__")
 
-    def __imul__(self, other) -> "DynamicArray":
+    def __imul__(self, other: Any) -> "DynamicArray":
         """In-place multiplication operator.
 
         Args:
@@ -592,7 +601,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mul__", inplace=True)
 
-    def __truediv__(self, other) -> "DynamicArray":
+    def __truediv__(self, other: Any) -> "DynamicArray":
         """True division operator.
 
         Args:
@@ -604,7 +613,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__truediv__")
 
-    def __rtruediv__(self, other) -> "DynamicArray":
+    def __rtruediv__(self, other: Any) -> "DynamicArray":
         """Right-hand true division operator.
 
         Args:
@@ -616,7 +625,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rtruediv__")
 
-    def __itruediv__(self, other) -> "DynamicArray":
+    def __itruediv__(self, other: Any) -> "DynamicArray":
         """In-place true division operator.
 
         Args:
@@ -628,7 +637,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__truediv__", inplace=True)
 
-    def __floordiv__(self, other) -> "DynamicArray":
+    def __floordiv__(self, other: Any) -> "DynamicArray":
         """Floor division operator.
 
         Args:
@@ -640,7 +649,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__floordiv__")
 
-    def __rfloordiv__(self, other) -> "DynamicArray":
+    def __rfloordiv__(self, other: Any) -> "DynamicArray":
         """Right-hand floor division operator.
 
         Args:
@@ -652,7 +661,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rfloordiv__")
 
-    def __ifloordiv__(self, other) -> "DynamicArray":
+    def __ifloordiv__(self, other: Any) -> "DynamicArray":
         """In-place floor division operator.
 
         Args:
@@ -664,7 +673,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__floordiv__", inplace=True)
 
-    def __mod__(self, other) -> "DynamicArray":
+    def __mod__(self, other: Any) -> "DynamicArray":
         """Modulo operator.
 
         Args:
@@ -676,7 +685,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mod__")
 
-    def __rmod__(self, other) -> "DynamicArray":
+    def __rmod__(self, other: Any) -> "DynamicArray":
         """Right-hand modulo operator.
 
         Args:
@@ -688,7 +697,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rmod__")
 
-    def __imod__(self, other) -> "DynamicArray":
+    def __imod__(self, other: Any) -> "DynamicArray":
         """In-place modulo operator.
 
         Args:
@@ -699,7 +708,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mod__", inplace=True)
 
-    def __pow__(self, other) -> "DynamicArray":
+    def __pow__(self, other: Any) -> "DynamicArray":
         """Power operator.
 
         Args:
@@ -710,7 +719,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__")
 
-    def __rpow__(self, other) -> "DynamicArray":
+    def __rpow__(self, other: Any) -> "DynamicArray":
         """Right-hand power operator.
 
         Args:
@@ -721,7 +730,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rpow__")
 
-    def __ipow__(self, other) -> "DynamicArray":
+    def __ipow__(self, other: Any) -> "DynamicArray":
         """In-place power operator.
 
         Returns:
@@ -855,7 +864,7 @@ class DynamicArray:
         """
         return self._perform_operation(None, "__invert__")
 
-    def save(self, path) -> None:
+    def save(self, path: Path) -> None:
         """
         Save the DynamicArray to disk in a compressed NumPy archive.
 
@@ -868,7 +877,7 @@ class DynamicArray:
         )
 
     @classmethod
-    def load(cls, path) -> "DynamicArray":
+    def load(cls, path: Path) -> "DynamicArray":
         """
         Load a DynamicArray previously saved with `save`.
 
@@ -1078,7 +1087,12 @@ class Store:
     This class is use to store and restore the model's state in a structured way.
     """
 
-    def __init__(self, model) -> None:
+    def __init__(self, model: "GEBModel") -> None:
+        """Initialize the Store with a reference to the model.
+
+        Args:
+            model: The GEBModel instance that this store is associated with.
+        """
         self.model = model
         self.buckets = {}
 
@@ -1104,7 +1118,9 @@ class Store:
         return bucket
 
     def save(self, path: None | Path = None) -> None:
-        """
+        """Save the store data from the model to disk.
+
+        Removes any existing data in the target directory before saving.
 
         Args:
             path: A Path object representing the directory to load the model data from. Defaults to None.
@@ -1112,7 +1128,7 @@ class Store:
                 be useful for special cases such as forecasting and testing.
         """
         if path is None:
-            path = self.path
+            path: Path = self.path
 
         shutil.rmtree(path, ignore_errors=True)
         for name, bucket in self.buckets.items():

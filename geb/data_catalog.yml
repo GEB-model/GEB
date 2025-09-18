@@ -266,22 +266,6 @@ gebco:
     source_version: 2020
     unit: m+MSL
   path: topography/gebco.vrt
-merit_hydro:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  filesystem: local
-  version: default
-  meta:
-    category: topography
-    paper_doi: 10.1029/2019WR024873
-    paper_ref: Yamazaki et al. (2019)
-    source_license: CC-BY-NC 4.0 or ODbL 1.0 (commercial use requires ODbL 1.0 with share-alike)
-    source_url: http://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro
-    source_version: 1.0
-  path: hydrography/merit_hydro_v1.0/{variable}.vrt
-  # path: ../ivm_data_catalog/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
-  # path: /scistor/ivm/data_catalogue/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
 cwatm_soil_5min:
   crs: 4326
   data_type: RasterDataset

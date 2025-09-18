@@ -1,3 +1,5 @@
+"""Module for building groundwater related datasets for GEB."""
+
 import numpy as np
 import xarray as xr
 
@@ -13,6 +15,7 @@ class GroundWater:
     """Contains all build methods for the groundwater for GEB."""
 
     def __init__(self) -> None:
+        """Initialize the GroundWater class."""
         pass
 
     @build_method(depends_on=["setup_elevation"])

@@ -307,7 +307,7 @@ class CropFarmers(AgentBaseClass):
 
         # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy.
         self.var.n = np.unique(farms[farms != -1]).size
-        self.var.max_n = self.get_max_n(self.var.n)
+        self.var.max_n = math.ceil(self.var.n * (1 + self.redundancy))
 
         # The code below obtains the coordinates of the farmers' locations.
         # First the horizontal and vertical indices of the pixels that are not -1 are obtained. Then, for each farmer the

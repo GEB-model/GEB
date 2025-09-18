@@ -725,7 +725,7 @@ class ModFlowSimulation:
         return drainage
 
     @property
-    def _drainage_m(self):
+    def _drainage_m(self) -> npt.NDArray[np.float64]:
         return self.drainage_m3 / self.area
 
     @property
@@ -733,7 +733,7 @@ class ModFlowSimulation:
         return self.mf6.get_var_address("RECHARGE", self.name, "RCH_0")
 
     @property
-    def _recharge_m(self):
+    def _recharge_m(self) -> npt.NDArray[np.float64]:
         recharge = self.mf6.get_value_ptr(self.recharge_tag).copy()
         assert not np.isnan(recharge).any()
         return recharge

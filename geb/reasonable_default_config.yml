@@ -18,6 +18,8 @@ general:
 hazards:
   floods:
     simulate: false
+    forcing_method: headwater_points  # headwater_points or precipitation
+    minimum_flood_depth: 0.05
     resolution: 150
     nr_subgrid_pixels: 4
     crs: auto
@@ -33,7 +35,7 @@ hazards:
       - 500
       - 1000
     SFINCS:
-      gpu: false
+      gpu: auto  # True, False, "auto". If "auto", it will check if a GPU is available using nvidia-smi.
   damage:
     simulate: false
   erosion:

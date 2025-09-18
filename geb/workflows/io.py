@@ -1,3 +1,5 @@
+"""I/O related functions and classes for the GEB project."""
+
 import asyncio
 import datetime
 import os
@@ -22,6 +24,7 @@ import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from tqdm import tqdm
+from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.blosc import BloscShuffle
 
@@ -29,10 +32,29 @@ all_async_readers: list = []
 
 
 def load_table(fp: Path | str) -> pd.DataFrame:
+    """Load a parquet file as a pandas DataFrame.
+
+    Args:
+        fp: The path to the parquet file.
+
+    Returns:
+        The pandas DataFrame.
+    """
     return pd.read_parquet(fp, engine="pyarrow")
 
 
 def load_array(fp: Path) -> np.ndarray:
+    """Load a numpy array from a .npz or .zarr file.
+
+    Args:
+        fp: The path to the .npz or .zarr file.
+
+    Returns:
+        The numpy array.
+
+    Raises:
+        ValueError: If the file format is not supported.
+    """
     if fp.suffix == ".npz":
         return np.load(fp)["data"]
     elif fp.suffix == ".zarr":
@@ -110,14 +132,37 @@ def calculate_scaling(
 
 
 def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
+    """Open a zarr file as an xarray DataArray.
+
+    If the data is a boolean type and does not have a _FillValue attribute,
+    a _FillValue attribute with value None will be added.
+
+    The _CRS attribute will be converted to a pyproj CRS object following
+    the conventions used by rioxarray. The original _CRS attribute will be removed.
+
+    Args:
+        zarr_folder: The path to the zarr folder.
+
+    Raises:
+        ValueError: If the zarr file contains multiple data variables.
+        FileNotFoundError: If the zarr folder does not exist.
+
+    Returns:
+        The xarray DataArray.
+    """
     # it is rather odd, but in some cases using mask_and_scale=False is necessary
     # or dtypes start changing, seemingly randomly
     # consolidated metadata is off-spec for zarr, therefore we set it to False
-    da = xr.open_dataset(
+    path: Path = Path(zarr_folder)
+    if not path.exists():
+        raise FileNotFoundError(f"Zarr folder {zarr_folder} does not exist")
+    ds: xr.Dataset = xr.open_dataset(
         zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
     )
-    assert len(da.data_vars) == 1, "Only one data variable is supported"
-    da = da[list(da.data_vars)[0]]
+    if len(ds.data_vars) > 1:
+        raise ValueError("Only one data variable is supported")
+
+    da: xr.DataArray = ds[list(ds.data_vars)[0]]
 
     if da.dtype == bool and "_FillValue" not in da.attrs:
         da.attrs["_FillValue"] = None
@@ -130,6 +175,17 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
 
 
 def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
+    """Convert a CRS object (pyproj CRS, rasterio CRS or EPSG code) to a WKT string.
+
+    Args:
+        crs_obj: The CRS object to convert.
+
+    Raises:
+        TypeError: If the CRS object is not a pyproj CRS, rasterio CRS or EPSG code.
+
+    Returns:
+        The WKT string representation of the CRS.
+    """
     if isinstance(crs_obj, int):  # EPSG code
         return CRS.from_epsg(crs_obj).to_wkt()
     elif isinstance(crs_obj, CRS):  # Pyproj CRS
@@ -141,6 +197,17 @@ def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
 
 
 def check_attrs(da1: dict[str, Any], da2: dict[str, Any]) -> bool:
+    """Check if the attributes of two xarray DataArrays are equal.
+
+    The _CRS and grid_mapping attributes are ignored in the comparison.
+
+    Args:
+        da1: The first xarray DataArray.
+        da2: The second xarray DataArray.
+
+    Returns:
+        True if the attributes are equal, False otherwise.
+    """
     if "_CRS" in da1.attrs:
         del da1.attrs["_CRS"]
     if "_CRS" in da2.attrs:
@@ -171,12 +238,23 @@ def check_buffer_size(
     chunks_or_shards: dict[str, int],
     max_buffer_size: int = 2147483647,
 ) -> None:
+    """Check if the buffer size for the given chunks or shards is within the maximum allowed size.
+
+    Args:
+        da: The xarray DataArray to check.
+        chunks_or_shards: A dictionary with the chunk or shard sizes for each dimension.
+        max_buffer_size: The maximum allowed buffer size in bytes. Default is 2GB (2147483647 bytes).
+
+    Raises:
+        ValueError: If the buffer size exceeds the maximum allowed size.
+    """
     buffer_size = (
         np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
     )
-    assert buffer_size <= max_buffer_size, (
-        f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
-    )
+    if buffer_size >= max_buffer_size:
+        raise ValueError(
+            f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
+        )
 
 
 def to_zarr(
@@ -189,7 +267,7 @@ def to_zarr(
     time_chunks_per_shard: int | None = 30,
     byteshuffle: bool = True,
     filters: list = [],
-    compressor=None,
+    compressor: None | BytesBytesCodec = None,
     progress: bool = True,
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.

@@ -1,13 +1,29 @@
+"""Load soilgrids data from ISRIC SoilGrids."""
+
+import geopandas as gpd
 import numpy as np
 import rioxarray
 import xarray as xr
+from hydromt.data_catalog import DataCatalog
 
 from geb.workflows.io import get_window
 
 from .general import resample_chunked
 
 
-def load_soilgrids(data_catalog, subgrid, region):
+def load_soilgrids(
+    data_catalog: DataCatalog, subgrid: xr.Dataset, region: gpd.GeoDataFrame
+) -> xr.Dataset:
+    """Load soilgrids data from ISRIC SoilGrids.
+
+    Args:
+        data_catalog: A data catalog with soilgrids data sources.
+        subgrid: The grid to resample to.
+        region: The region of interest, matches with the subgrid.
+
+    Returns:
+        A dataset with soilgrids data.
+    """
     variables = ["bdod", "clay", "silt", "soc"]
     layers = ["0-5cm", "5-15cm", "15-30cm", "30-60cm", "60-100cm", "100-200cm"]
 
