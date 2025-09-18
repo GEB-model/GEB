@@ -46,6 +46,7 @@ from .modules.hydrography import (
 from .workflows.general import (
     repeat_grid,
 )
+from .workflows.merit_hydro import download_merit
 
 # Set environment options for robustness
 GDAL_HTTP_ENV_OPTS = {
@@ -853,15 +854,8 @@ class GEBModel(
         with rasterio.Env(
             GDAL_HTTP_USERPWD=f"{os.environ['MERIT_USERNAME']}:{os.environ['MERIT_PASSWORD']}"
         ):
-            ldd = (
-                xr.open_dataarray(
-                    self.data_catalog.get_source("merit_hydro").path.format(
-                        variable="dir"
-                    ),
-                    mask_and_scale=False,
-                )
-                .sel(band=1, x=slice(xmin, xmax), y=slice(ymax, ymin))
-                .compute()
+            ldd = download_merit(
+                xmin, xmax, ymin, ymax, "dir", self.preprocessing_dir / "merit_hydro"
             )
             ldd.attrs["_FillValue"] = 247
 
@@ -913,15 +907,8 @@ class GEBModel(
                 ldd.attrs["_FillValue"],
             )
 
-            ldd_elevation = (
-                xr.open_dataarray(
-                    self.data_catalog.get_source("merit_hydro").path.format(
-                        variable="elv"
-                    ),
-                    mask_and_scale=False,
-                )
-                .sel(band=1, x=slice(xmin, xmax), y=slice(ymax, ymin))
-                .compute()
+            ldd_elevation = download_merit(
+                xmin, xmax, ymin, ymax, "elv", self.preprocessing_dir / "merit_hydro"
             )
             ldd_elevation.attrs["_FillValue"] = -9999.0
             assert ldd_elevation.shape == ldd.shape == mask.shape

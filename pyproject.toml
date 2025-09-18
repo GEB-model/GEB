@@ -200,7 +200,17 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/build/{custom_models,workflows}/**.py" = [
+"geb/build/{custom_models}/**.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "D103",
+    "D102",
+    "D100",
+    "D107"
+]
+"geb/build/workflows/{general,farmers,crop_calendars}.py" = [
     "ANN001",
     "ANN003",
     "ANN201",
