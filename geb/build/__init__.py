@@ -12,7 +12,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, List, Union
+from typing import Any, Callable, Iterator, List, Union
 
 import geopandas as gpd
 import networkx
@@ -61,14 +61,18 @@ XY_CHUNKSIZE = 3000  # chunksize for xy coordinates
 os.environ["AWS_NO_SIGN_REQUEST"] = "YES"
 
 
-def convert_timestamp_to_string(timestamp):
-    return timestamp.isoformat()
-
-
 @contextmanager
-def suppress_logging_warning(logger):
-    """A context manager to suppress logging warning messages temporarily."""
-    current_level = logger.getEffectiveLevel()
+def suppress_logging_warning(logger: logging.Logger) -> Iterator[None]:
+    """A context manager to suppress logging warning messages temporarily.
+
+    Args:
+        logger: The logger to suppress warnings for.
+
+    Yields:
+        None
+
+    """
+    current_level: int = logger.getEffectiveLevel()
     logger.setLevel(logging.ERROR)  # Set level to ERROR to suppress WARNING messages
     try:
         yield
@@ -83,7 +87,17 @@ class PathEncoder(json.JSONEncoder):
     All files should be posix format to ensure compatibility across different operating systems.
     """
 
-    def default(self, obj):
+    def default(self, obj: object) -> Any:
+        """Convert Path objects to strings for JSON serialization.
+
+        Ottherwise, use the default serialization.
+
+        Args:
+            obj: Object to serialize.
+
+        Returns:
+            The serialized object. For Path objects, this is a string.
+        """
         if isinstance(obj, Path):
             obj = obj.as_posix()
             return str(obj)
@@ -237,8 +251,16 @@ def clip_region(
     return clipped_mask, *clipped_arrays
 
 
-def get_river_graph(data_catalog):
-    river_network = pd.read_parquet(
+def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
+    """Create a directed graph for the river network.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+
+    Returns:
+        A directed graph where nodes are COMID values and edges point downstream.
+    """
+    river_network: pd.DataFrame = pd.read_parquet(
         data_catalog.get_source("MERIT_Basins_riv").path,
         columns=["COMID", "NextDownID"],
     ).set_index("COMID")
@@ -247,7 +269,7 @@ def get_river_graph(data_catalog):
     )
 
     # create a directed graph for the river network
-    river_graph = networkx.DiGraph()
+    river_graph: networkx.DiGraph = networkx.DiGraph()
 
     # add rivers with downstream connection
     river_network_with_downstream_connection = river_network[
@@ -266,7 +288,22 @@ def get_river_graph(data_catalog):
     return river_graph
 
 
-def get_subbasin_id_from_coordinate(data_catalog, lon, lat):
+def get_subbasin_id_from_coordinate(
+    data_catalog: DataCatalog, lon: float, lat: float
+) -> int:
+    """Find the subbasin ID for a given coordinate.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        lon: Longitude of the point.
+        lat: Latitude of the point.
+
+    Returns:
+        The COMID value for the subbasin containing the point.
+
+    Raises:
+        ValueError: If the point is not in a basin or in multiple basins.
+    """
     # we select the basin that contains the point. To do so
     # we use a bounding box with the point coordinates, thus
     # xmin == xmax and ymin == ymax
@@ -289,7 +326,24 @@ def get_subbasin_id_from_coordinate(data_catalog, lon, lat):
     return COMID.index.values[0]
 
 
-def get_sink_subbasin_id_for_geom(data_catalog, geom, river_graph):
+def get_sink_subbasin_id_for_geom(
+    data_catalog: DataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
+) -> list[int]:
+    """Find all sink subbasins that intersect with the given geometry.
+
+    This can be coastal basins, but also inland basins where the river
+    flows out of the geometry. For example, if the geometry is a country
+    boundary, all basins that intersect with the country boundary and
+    have no downstream basin within the country are returned.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        geom: GeoDataFrame containing the geometry to find the sink subbasins for.
+        river_graph: The river graph containing all subbasins and their connections.
+
+    Returns:
+        A list of COMID values for the sink subbasins.
+    """
     subbasins = gpd.read_parquet(
         data_catalog.get_source("MERIT_Basins_cat").path,
         bbox=tuple([float(c) for c in geom.total_bounds]),
@@ -306,7 +360,7 @@ def get_sink_subbasin_id_for_geom(data_catalog, geom, river_graph):
 
     # get all subbasins with no downstream subbasin (out degree is 0)
     # in the subgraph. These are the sink subbasins
-    sink_nodes = [
+    sink_nodes: list[int] = [
         COMID_ID
         for COMID_ID, out_degree in region_river_graph.out_degree(
             region_river_graph.nodes
@@ -317,9 +371,20 @@ def get_sink_subbasin_id_for_geom(data_catalog, geom, river_graph):
     return sink_nodes
 
 
-def get_touching_subbasins(data_catalog, subbasins):
+def get_touching_subbasins(
+    data_catalog: DataCatalog, subbasins: gpd.GeoDataFrame
+) -> gpd.GeoDataFrame:
+    """Find all subbasins that touch the given subbasins.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        subbasins: GeoDataFrame containing the subbasins to find touching subbasins for.
+
+    Returns:
+        A GeoDataFrame containing all subbasins that touch the given subbasins.
+    """
     bbox = subbasins.total_bounds
-    buffer = 0.1
+    buffer: float = 0.1
     buffered_bbox = (
         bbox[0] - buffer,
         bbox[1] - buffer,
@@ -341,7 +406,19 @@ def get_touching_subbasins(data_catalog, subbasins):
     return touching_subbasins.set_index("COMID")
 
 
-def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
+def get_coastline_nodes(
+    coastline_graph: networkx.Graph, STUDY_AREA_OUTFLOW: int, NEARBY_OUTFLOW: int
+) -> set:
+    """Get all coastline nodes that are part of the coastline for the study area.
+
+    Args:
+        coastline_graph: The graph containing all coastline nodes.
+        STUDY_AREA_OUTFLOW: The outflow type value for outflows within the study area.
+        NEARBY_OUTFLOW: The outflow type value for outflows outside the study area, but close enough to influence the coastline.
+
+    Returns:
+        A set of all coastline nodes that are part of the coastline for the study area.
+    """
     coastline_nodes = set()
 
     for island in networkx.connected_components(coastline_graph):
@@ -495,11 +572,35 @@ def get_coastline_nodes(coastline_graph, STUDY_AREA_OUTFLOW, NEARBY_OUTFLOW):
     return coastline_nodes
 
 
-def full_like(data, fill_value, nodata, attrs=None, *args: Any, **kwargs: Any):
-    ds = xr.full_like(data, fill_value, *args, **kwargs)
-    ds.attrs = attrs or {}
-    ds.attrs["_FillValue"] = nodata
-    return ds
+def full_like(
+    data: xr.DataArray,
+    fill_value: int | float | bool,
+    nodata: int | float | bool,
+    attrs: None | dict = None,
+    *args: Any,
+    **kwargs: Any,
+) -> xr.DataArray:
+    """Create a new xarray DataArray with the same shape and coordinates as the input data.
+
+    The new DataArray is filled with the specified fill_value and has the specified nodata value.
+
+    Args:
+        data: The input DataArray to use as a template.
+        fill_value: The value to fill the new DataArray with.
+        nodata: The nodata value to set in the attributes of the new DataArray.
+        attrs: Optional dictionary of attributes to set in the new DataArray.
+        *args: Additional positional arguments to pass to xr.full_like.
+        **kwargs: Additional keyword arguments to pass to xr.full_like.
+
+    Returns:
+        A new DataArray with the same shape and coordinates as the input data,
+        filled with the specified fill_value and with the specified nodata value in the attributes.
+    """
+    assert isinstance(data, xr.DataArray)
+    da: xr.DataArray = xr.full_like(data, fill_value, *args, **kwargs)
+    da.attrs = attrs or {}
+    da.attrs["_FillValue"] = nodata
+    return da
 
 
 def create_riverine_mask(
@@ -571,6 +672,11 @@ class DelayedReader(dict):
     """
 
     def __init__(self, reader: Any) -> None:
+        """Initialize the DelayedReader with a reader function.
+
+        Args:
+            reader: A function that takes a file path and returns the data.
+        """
         self.reader: Any = reader
 
     def __getitem__(self, key: str) -> Any:
@@ -618,13 +724,22 @@ class GEBModel(
         self,
         logger: logging.Logger,
         root: str | None = None,
-        data_catalogs: List[str] | None = None,
-        epsg=4326,
+        data_catalog: str | None = None,
+        epsg: int = 4326,
         data_provider: str = "default",
     ) -> None:
+        """Initialize the GEB build model.
+
+        Args:
+            logger: Logger to use for logging.
+            root: Root directory for the model build. If None, the current working directory is used.
+            data_catalog: List of data catalogs to use. If None, the default data catalogs are used.
+            epsg: EPSG code for the model grid. Default is 4326 (WGS84).
+            data_provider: Data provider to use for the data catalog. Default is "default".
+        """
         self.logger = logger
         self.data_catalog = DataCatalog(
-            data_libs=data_catalogs, logger=self.logger, fallback_lib=None
+            data_libs=[data_catalog], logger=self.logger, fallback_lib=None
         )
 
         Hydrography.__init__(self)
@@ -655,7 +770,7 @@ class GEBModel(
         )
         self.other: DelayedReader = DelayedReader(reader=open_zarr)
 
-        self.files: dict = self.read_file_library()
+        self.files: dict = self.read_or_create_file_library()
 
     @build_method
     def setup_region(
@@ -845,7 +960,26 @@ class GEBModel(
 
         self.create_subgrid(subgrid_factor)
 
-    def extend_mask_to_coastal_area(self, ldd, riverine_mask, subbasins):
+    def extend_mask_to_coastal_area(
+        self,
+        ldd: xr.DataArray,
+        riverine_mask: xr.DataArray,
+        subbasins: gpd.GeoDataFrame,
+    ) -> xr.DataArray:
+        """Extend the riverine mask to include coastal areas.
+
+        This is done by finding all coastal basins between the outlets within the study area
+        and half the distance to the nearest outlet outside the study area. All cells upstream of these
+        coastal basins will be included in the riverine mask.
+
+        Args:
+            ldd: The local drainage direction (ldd) data array.
+            riverine_mask: The initial riverine mask, which will be extended to the coastal area.
+            subbasins: The subbasins used to create the initial riverine mask.
+
+        Returns:
+            The extended riverine mask.
+        """
         flow_raster: pyflwdir.FlwdirRaster = pyflwdir.from_array(
             ldd.values,
             ftype="d8",
@@ -972,7 +1106,24 @@ class GEBModel(
         # return the combination of the riverine mask and the coastal mask
         return riverine_mask | coastal_mask
 
-    def derive_mask(self, d8_original, transform, resolution_arcsec) -> None:
+    def derive_mask(
+        self,
+        d8_original: xr.DataArray,
+        transform: Affine,
+        target_resolution_arcsec: int,
+    ) -> None:
+        """Derives the model grid mask from the original D8 flow directions.
+
+        The model grid mask is derived by upscaling the original D8 flow directions
+        to the model resolution using the IHU method (Iterative Hydrography Upscaling).
+        The model grid mask is True for all cells that are part of the upscaled flow
+        directions, and False for all other cells.
+
+        Args:
+            d8_original: The original D8 flow directions.
+            transform: The affine transform of the original D8 flow directions.
+            target_resolution_arcsec: The resolution of the target low resolution model grid in arcseconds.
+        """
         assert d8_original.dtype == np.uint8
 
         d8_original_data = d8_original.values
@@ -985,7 +1136,8 @@ class GEBModel(
             != d8_original.attrs["_FillValue"],  # this mask is True within study area
         )
 
-        scale_factor = resolution_arcsec // 3
+        # the original resolution is 3 arcseconds, thus we divide by 3
+        scale_factor: int = target_resolution_arcsec // 3
 
         self.logger.info("Coarsening hydrography")
         # IHU = Iterative hydrography upscaling method, see https://doi.org/10.5194/hess-25-5287-2021
@@ -1050,13 +1202,22 @@ class GEBModel(
         idxs_out_da.data = idxs_out
         self.set_grid(idxs_out_da, name="idxs_outflow")
 
-    def create_subgrid(self, subgrid_factor) -> None:
-        mask = self.grid["mask"]
-        dst_transform = mask.rio.transform(recalc=True) * Affine.scale(
+    def create_subgrid(self, subgrid_factor: int) -> None:
+        """Creates the model subgrid.Affine
+
+        The model subgrid is a higher resolution grid that is used for representing
+        subgrid processes, such as different land uses within a grid cell, and
+        unique agents.
+
+        Args:
+            subgrid_factor: The factor by which the subgrid is smaller than the original grid.
+        """
+        mask: xr.DataArray = self.grid["mask"]
+        dst_transform: Affine = mask.rio.transform(recalc=True) * Affine.scale(
             1 / subgrid_factor
         )
 
-        submask = xr.DataArray(
+        submask: xr.DataArray = xr.DataArray(
             data=repeat_grid(mask.data, subgrid_factor),
             coords={
                 "y": dst_transform.f
@@ -1067,10 +1228,20 @@ class GEBModel(
             attrs={"_FillValue": None},
         )
 
-        submask = self.set_subgrid(submask, name="mask")
+        self.set_subgrid(submask, name="mask")
 
     @build_method
-    def set_time_range(self, start_date, end_date) -> None:
+    def set_time_range(self, start_date: datetime, end_date: datetime) -> None:
+        """Sets the time range for the build model.
+
+        This time range is used to ensure that all datasets with a time dimension
+        cover at least this time range.
+
+        Args:
+            start_date: The start date of the model.
+            end_date: The end date of the model.
+
+        """
         assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
             {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
@@ -1078,22 +1249,46 @@ class GEBModel(
         )
 
     @property
-    def start_date(self):
+    def start_date(self) -> datetime:
+        """Gets the start date of the build model.
+
+        All datasets with a time dimension should cover at least from this date.
+
+        Returns:
+            The start date of the model.
+        """
         return datetime.fromisoformat(self.dict["model_time_range"]["start_date"])
 
     @property
-    def end_date(self):
+    def end_date(self) -> datetime:
+        """Gets the end date of the build model.
+
+        All datasets with a time dimension should cover at least until this date.
+
+        Returns:
+            The end date of the model.
+        """
         return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
 
     @build_method
     def set_ssp(self, ssp: str) -> None:
+        """Sets the SSP name for the model.
+
+        Args:
+            ssp: The SSP name. Supported SSPs are: ssp1, ssp3, ssp5.
+        """
         assert ssp in ["ssp1", "ssp3", "ssp5"], (
             f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
         )
         self.set_dict({"ssp": ssp}, name="ssp")
 
     @property
-    def ssp(self):
+    def ssp(self) -> str:
+        """Gets the SSP name that was set using set_ssp, or the default SSP of "ssp3".
+
+        Returns:
+            The SSP name. If no SSP was set, returns "ssp3" (middle of the road).
+        """
         return self.dict["ssp"]["ssp"] if "ssp" in self.dict else "ssp3"
 
     @property
@@ -1120,6 +1315,24 @@ class GEBModel(
         ydim: str = "y",
         xdim: str = "x",
     ) -> xr.Dataset | xr.DataArray:
+        """Snaps the coordinates of a dataset to a reference dataset.
+
+        Some datasets have a slightly different grid than the model grid, usually
+        because of different rounding errors when creating the grid, and floating
+        point precision issues. This method checks if the coordinates are more or
+        less the same, and if so, snaps the coordinates of the dataset to the
+        reference dataset.
+
+        Args:
+            ds: The dataset to snap.
+            reference: The reference dataset.
+            relative_tollerance: The relative tolerance for snapping.
+            ydim: The name of the y dimension.
+            xdim: The name of the x dimension.
+
+        Returns:
+            The snapped dataset.
+        """
         # make sure all datasets have more or less the same coordinates
         assert np.isclose(
             ds.coords[ydim].values,
@@ -1138,6 +1351,11 @@ class GEBModel(
     def setup_coastal_water_levels(
         self,
     ) -> None:
+        """Sets up coastal water level data from the GTSM dataset.
+
+        Filters the dataset to include only stations within the model bounds,
+        and ensures that the time dimension is consistent.
+        """
         water_levels = self.data_catalog.get_dataset("GTSM")
         assert (
             water_levels.time.diff("time").astype(np.int64)
@@ -1170,7 +1388,30 @@ class GEBModel(
         )
 
     @build_method
-    def setup_damage_parameters(self, parameters) -> None:
+    def setup_damage_parameters(
+        self,
+        parameters: dict[
+            str, dict[str, dict[str, dict[str, list[tuple[float, float]] | float]]]
+        ],
+    ) -> None:
+        """Sets up damage parameters for different hazards and asset types.
+
+        Args:
+            parameters: A nested dictionary containing damage parameters. The structure is:
+                {
+                    "hazard_type": {
+                        "asset_type": {
+                            "component": {
+                                "curve": [(severity, damage_ratio), ...],
+                                "maximum_damage": float
+                            },
+                            ...
+                        },
+                        ...
+                    },
+                    ...
+                }
+        """
         for hazard, hazard_parameters in parameters.items():
             for asset_type, asset_parameters in hazard_parameters.items():
                 for component, asset_compontents in asset_parameters.items():
@@ -1194,14 +1435,28 @@ class GEBModel(
 
     @build_method
     def setup_precipitation_scaling_factors_for_return_periods(
-        self, risk_scaling_factors
+        self, risk_scaling_factors: list[tuple[float, float]]
     ) -> None:
-        risk_scaling_factors = pd.DataFrame(
+        """Sets up precipitation scaling factors for different return periods.
+
+        Args:
+            risk_scaling_factors: A list of tuples containing the exceedance probability
+                and the corresponding scaling factor.
+        """
+        risk_scaling_factors_df = pd.DataFrame(
             risk_scaling_factors, columns=["exceedance_probability", "scaling_factor"]
         )
-        self.set_table(risk_scaling_factors, name="precipitation_scaling_factors")
+        self.set_table(risk_scaling_factors_df, name="precipitation_scaling_factors")
 
-    def set_table(self, table, name, write=True) -> None:
+    def set_table(self, table: pd.DataFrame, name: str, write: bool = True) -> None:
+        """Set a table and save it to disk.
+
+        Args:
+            table: The table to save.
+            name: The name of the table.
+            write: Whether to write the table to disk. If False, the table
+                is only added to the file library, but not written to disk.
+        """
         fp: Path = Path("table") / (name + ".parquet")
         fp_with_root: Path = Path(self.root, fp)
         if write:
@@ -1220,7 +1475,16 @@ class GEBModel(
 
         self.table[name] = fp_with_root
 
-    def set_array(self, data, name, write=True) -> None:
+    def set_array(self, data: npt.NDArray[Any], name: str, write: bool = True) -> None:
+        """Set an array and save it to disk.
+
+        Args:
+            data: The array to save.
+            name: The name of the array.
+            write: Whether to write the array to disk. If False, the array
+                is only added to the file library, but not written to disk.
+        """
+        assert isinstance(data, np.ndarray)
         fp: Path = Path("array") / (name + ".zarr")
         fp_with_root: Path = Path(self.root, fp)
 
@@ -1232,7 +1496,15 @@ class GEBModel(
 
         self.array[name] = fp_with_root
 
-    def set_dict(self, data, name, write=True) -> None:
+    def set_dict(self, data: dict, name: str, write: bool = True) -> None:
+        """Set a dictionary and save it to disk.
+
+        Args:
+            data: The dictionary to save.
+            name: The name of the dictionary.
+            write: Whether to write the dictionary to disk. If False, the dictionary
+                is only added to the file library, but not written to disk.
+        """
         fp: Path = Path("dict") / (name + ".json")
         fp_with_root: Path = Path(self.root) / fp
         fp_with_root.parent.mkdir(parents=True, exist_ok=True)
@@ -1242,11 +1514,20 @@ class GEBModel(
             self.files["dict"][name] = fp
 
             with open(fp_with_root, "w") as f:
-                json.dump(data, f, default=convert_timestamp_to_string)
+                json.dump(data, f, default=lambda o: o.isoformat(), indent=4)
 
         self.dict[name] = fp_with_root
 
-    def set_geom(self, geom, name, write=True) -> None:
+    def set_geom(self, geom: gpd.GeoDataFrame, name: str, write: bool = True) -> None:
+        """Set a geometry and save it to disk.
+
+        Args:
+            geom: The geometry to save.
+            name: The name of the geometry.
+            write: Whether to write the geometry to disk. If False, the geometry
+                is only added to the file library, but not written to disk.
+        """
+        assert isinstance(geom, gpd.GeoDataFrame)
         fp: Path = Path("geom") / (name + ".geoparquet")
         fp_with_root: Path = self.root / fp
         if write:
@@ -1269,7 +1550,14 @@ class GEBModel(
         return Path(self.root, "files.json")
 
     def write_file_library(self) -> None:
-        file_library: dict = self.read_file_library()
+        """Writes the file library to disk.
+
+        Rather than overwriting the file library, we read the existing
+        file library from disk and merge it with the new files, prioritizing
+        the new files. This way, if another process has added files to the
+        file library, we don't overwrite them.
+        """
+        file_library: dict = self.read_or_create_file_library()
         # merge file library from disk with new files, prioritizing new files
         for type_name, type_files in self.files.items():
             if type_name not in file_library:
@@ -1280,7 +1568,15 @@ class GEBModel(
         with open(self.files_path, "w") as f:
             json.dump(file_library, f, indent=4, cls=PathEncoder)
 
-    def read_file_library(self) -> dict:
+    def read_or_create_file_library(self) -> dict:
+        """Reads the file library from disk.
+
+        If the file library does not exist, an empty file library is returned, but
+        with all expected categories.
+
+        Returns:
+            A dictionary with the file library.
+        """
         fp: Path = Path(self.root, "files.json")
         if not fp.exists():
             return {
@@ -1305,45 +1601,53 @@ class GEBModel(
         return files
 
     def read_geom(self) -> None:
+        """Reads all geometries from disk based on the file library."""
         for name, fn in self.files["geom"].items():
             self.geom[name] = Path(self.root, fn)
 
     def read_array(self) -> None:
+        """Reads all arrays from disk based on the file library."""
         for name, fn in self.files["array"].items():
             self.array[name] = Path(self.root, fn)
 
     def read_table(self) -> None:
+        """Reads all tables from disk based on the file library."""
         for name, fn in self.files["table"].items():
             self.table[name] = Path(self.root, fn)
 
     def read_dict(self) -> None:
+        """Reads all dictionaries from disk based on the file library."""
         for name, fn in self.files["dict"].items():
             self.dict[name] = Path(self.root, fn)
 
-    def _read_grid(self, fn) -> xr.DataArray:
-        da: xr.DataArray = open_zarr(Path(self.root) / fn)
-        return da
-
     def read_grid(self) -> None:
+        """Reads all grid data arrays from disk based on the file library."""
         for name, fn in self.files["grid"].items():
-            data: xr.DataArray = self._read_grid(fn)
+            data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_grid(data, name=name, write=False)
 
     def read_subgrid(self) -> None:
+        """Reads all subgrid data arrays from disk based on the file library."""
         for name, fn in self.files["subgrid"].items():
-            data: xr.DataArray = self._read_grid(fn)
+            data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_subgrid(data, name=name, write=False)
 
     def read_region_subgrid(self) -> None:
+        """Reads all region subgrid data arrays from disk based on the file library."""
         for name, fn in self.files["region_subgrid"].items():
-            data: xr.DataArray = self._read_grid(fn)
+            data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_region_subgrid(data, name=name, write=False)
 
     def read_other(self) -> None:
+        """Reads all "other" data arrays from disk based on the file library."""
         for name, fn in self.files["other"].items():
             self.other[name] = Path(self.root, fn)
 
     def read(self) -> None:
+        """Reads all data from disk based on the file library.
+
+        Useful when continuing a build from an existing folder.
+        """
         with suppress_logging_warning(self.logger):
             self.read_geom()
             self.read_array()
@@ -1366,7 +1670,30 @@ class GEBModel(
         time_chunksize: int = 1,
         *args: Any,
         **kwargs: Any,
-    ):
+    ) -> xr.DataArray:
+        """Set a data array that does not fit into other categories.
+
+        The data array is saved to disk as a zarr file. Unlike the other gridded
+        methods, this category does not assume any specific coordinate system
+        or dimension order, and does not combine multiple layers into a single dataset.
+
+        Args:
+            da: The data array to set.
+            name: The name of the data array.
+            write: If True, write the data array to disk. Defaults to True.
+            x_chunksize: The chunk size in the x dimension for writing to zarr.
+                Defaults to XY_CHUNKSIZE.
+            y_chunksize: The chunk size in the y dimension for writing to zarr.
+                Defaults to XY_CHUNKSIZE.
+            time_chunksize: The chunk size in the time dimension for writing to zarr.
+                Defaults to 1.
+            *args: Additional arguments to pass to to_zarr.
+            **kwargs: Additional keyword arguments to pass to to_zarr.
+
+        Returns:
+            The data array that was set. If write=True, this is the data array read from
+            disk, so it is not the same object as the input data array.
+        """
         assert isinstance(da, xr.DataArray)
 
         if write:
@@ -1398,7 +1725,7 @@ class GEBModel(
         write: bool,
         x_chunksize: int = XY_CHUNKSIZE,
         y_chunksize: int = XY_CHUNKSIZE,
-    ):
+    ) -> xr.Dataset:
         """Add data to grid dataset.
 
         All layers of grid must have identical spatial coordinates.
@@ -1456,23 +1783,66 @@ class GEBModel(
         grid[name] = data
         return grid
 
-    def set_grid(
-        self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, write=True
-    ) -> None:
+    def set_grid(self, data: xr.DataArray, name: str, write: bool = True) -> None:
+        """Set a new grid layer.
+
+        When the first layer is added to the grid, it must be the mask layer.
+        This layer is used to define the spatial extent of the grid and set
+        the active cells.
+
+        Args:
+            data: The data to add to the grid. Must have the same spatial coordinates
+            name: The name of the layer to add to the grid.
+            write: If True, write the data to disk. Defaults to True.
+
+        Returns:
+            The added grid layer. The returned layer is read from disk if write=True, so
+            it is not the same object as the input data.
+        """
         self._set_grid("grid", self.grid, data, write=write, name=name)
         return self.grid[name]
 
-    def set_subgrid(
-        self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, write=True
-    ) -> None:
+    def set_subgrid(self, data: xr.DataArray, name: str, write: bool = True) -> None:
+        """Set a new subgrid layer.
+
+        When the first layer is added to the subgrid, it must be the mask layer.
+        This layer is used to define the spatial extent of the subgrid and set
+        the active cells.
+
+        Args:
+            data: The data to add to the subgrid. Must have the same spatial coordinates
+                as the existing subgrid.
+            name: The name of the layer to add to the subgrid.
+            write: If True, write the data to disk. Defaults to True.
+
+        Returns:
+            The added subgrid layer. The returned layer is read from disk if write=True, so
+            it is not the same object as the input data.
+        """
         self.subgrid = self._set_grid(
             "subgrid", self.subgrid, data, write=write, name=name
         )
         return self.subgrid[name]
 
     def set_region_subgrid(
-        self, data: Union[xr.DataArray, xr.Dataset, np.ndarray], name: str, write=True
+        self, data: xr.DataArray, name: str, write: bool = True
     ) -> None:
+        """Set a new region subgrid layer.
+
+        When the first layer is added to the region subgrid, it must be the mask layer.
+        This layer is used to define the spatial extent of the region subgrid and set
+        the active cells.
+
+        Args:
+            data: The data to add to the region subgrid. Must have the same spatial coordinates
+                as the existing region subgrid.
+            name: The name of the layer to add to the region subgrid.
+            write: If True, write the data to disk. Defaults to True.
+
+        Returns:
+            The added region subgrid layer. The returned layer is read from disk if write=True, so
+            it is not the same object as the input data.
+        """
         self.region_subgrid = self._set_grid(
             "region_subgrid",
             self.region_subgrid,
@@ -1484,13 +1854,22 @@ class GEBModel(
 
     @property
     def subgrid_factor(self) -> int:
-        """The factor by which the subgrid is smaller than the original grid."""
+        """The factor by which the subgrid is smaller than the original grid.
+
+        Returns:
+            The subgrid factor as an integer.
+        """
         subgrid_factor: int = self.subgrid.dims["x"] // self.grid.dims["x"]
         assert subgrid_factor == self.subgrid.dims["y"] // self.grid.dims["y"]
         return subgrid_factor
 
     @property
     def ldd_scale_factor(self) -> int:
+        """The factor by which the original D8 flow directions are higher resolution than the model grid.
+
+        Returns:
+            The scale factor as an integer.
+        """
         scale_factor: int = (
             self.other["drainage/original_d8_flow_directions"].shape[0]
             // self.grid["mask"].shape[0]
@@ -1502,36 +1881,89 @@ class GEBModel(
         return scale_factor
 
     @property
-    def region(self):
+    def region(self) -> gpd.GeoDataFrame:
+        """Get the region geometry.
+
+        Returns:
+            The region geometry as a GeoDataFrame.
+        """
         return self.geom["mask"]
 
     @property
-    def bounds(self):
+    def bounds(self) -> tuple[float, float, float, float]:
+        """Get the bounds of the model grid.
+
+        Returns:
+            The bounds of the model grid as a tuple (minx, miny, maxx, maxy).
+        """
         return self.grid.rio.bounds(recalc=True)
 
     @property
-    def root(self):
+    def root(self) -> Path:
+        """Get the root directory for the model.
+
+        Returns:
+            The root directory path.
+        """
         return self._root
 
     @root.setter
-    def root(self, root) -> None:
+    def root(self, root: Path) -> None:
+        """Set the root directory for the model.
+
+        Makes the path absolute.
+
+        Args:
+            root: The root directory path.
+        """
         self._root = Path(root).absolute()
 
     @property
     def preprocessing_dir(self) -> Path:
+        """Directory where preprocessing data is stored.
+
+        Used for caching data.
+
+        Returns:
+            Directory path
+        """
         return Path(self.root).parent / "preprocessing"
 
     @property
     def report_dir(self) -> Path:
+        """Directory to save reports to for logging and checking.
+
+        Returns:
+            Directory path
+        """
         path: Path = Path(self.root).parent / "output" / "build"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def full_like(
-        self, data, fill_value, nodata, attrs=None, *args: Any, **kwargs: Any
-    ):
+        self,
+        data: xr.DataArray,
+        fill_value: int | float | bool,
+        nodata: int | float | bool,
+        attrs: dict | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> xr.DataArray:
+        """Create a DataArray full of a specified value, with the same shape and coordinates as another DataArray.
+
+        Args:
+            data: The DataArray to use as a template.
+            fill_value: The value to fill the new DataArray with.
+            nodata: The value to use for no data in the new DataArray.
+            attrs: Optional dictionary of attributes to set on the new DataArray.
+            *args: Additional positional arguments to pass to xr.full_like.
+            **kwargs: Additional keyword arguments to pass to xr.full_like.
+
+        Returns:
+            A new DataArray with the same shape and coordinates as `data`, filled with `fill_value` and with `nodata` set.
+        """
         return full_like(
-            data,
+            data=data,
             fill_value=fill_value,
             nodata=nodata,
             attrs=attrs,
@@ -1539,7 +1971,7 @@ class GEBModel(
             **kwargs,
         )
 
-    def run_method(self, method, *args: Any, **kwargs: Any) -> None:
+    def run_method(self, method: str, *args: Any, **kwargs: Any) -> None:
         """Log method parameters before running a method.
 
         Args:
@@ -1567,7 +1999,7 @@ class GEBModel(
         # call the method
         func(*args, **kwargs)
 
-    def run_methods(self, methods, validate_order: bool = True) -> None:
+    def run_methods(self, methods: dict[str, Any], validate_order: bool = True) -> None:
         """Run methods in the order specified in the methods dictionary.
 
         Args:
@@ -1601,10 +2033,21 @@ class GEBModel(
         self,
         methods: dict,
     ) -> None:
+        """This function updates an already existing model by running the specified methods.
+
+        Args:
+            methods: A dictionary with method names as keys and their parameters as values.
+
+        Raises:
+            ValueError: If "setup_region" is in methods, as this can only be called when
+                building a new model.
+        """
         methods = methods or {}
 
         if "setup_region" in methods:
-            raise ValueError('"setup_region" can only be called when building a model.')
+            raise ValueError(
+                '"setup_region" can only be called when starting a new model.'
+            )
 
         self.run_methods(methods, validate_order=False and type(self) is GEBModel)
 

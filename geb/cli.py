@@ -594,7 +594,7 @@ def get_builder(
 
     arguments = {
         "root": input_folder,
-        "data_catalogs": data_catalog,
+        "data_catalog": data_catalog,
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
