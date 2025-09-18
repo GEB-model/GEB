@@ -510,20 +510,20 @@ class Households(AgentBaseClass):
 
         return ensemble_damage_maps
 
-    def create_flood_probability_maps(self):
+    def create_flood_probability_maps(self, strategy=1):
         """Creates flood probability maps based on the ensemble of flood maps for different warning strategies."""
         # Load the ensemble of flood maps
         ensemble_flood_maps = self.load_ensemble_flood_maps()
 
         days = self.model.config["general"]["forecasts"]["days"]
         crs = self.model.config["hazards"]["floods"]["crs"]
-        strategy = self.model.config["general"]["forecasts"]["strategy"]
+        # strategy = self.model.config["general"]["forecasts"]["strategy"]
 
-        prob_folder = os.path.join(self.model.output_folder, "prob_maps")
-        os.makedirs(prob_folder, exist_ok=True)
+        prob_folder = self.model.output_folder / "prob_maps"
+        prob_folder.mkdir(exist_ok=True, parents=True)
 
         if strategy == 1:
-            # Water level ranges used for warning strategy 1 (based on water levels)
+            # Water level ranges associated to specific measures (based on "impact" scale)
             ranges = [
                 (1, 0.1, 1.0),
                 (2, 1.0, 2.0),
@@ -531,8 +531,12 @@ class Households(AgentBaseClass):
             ]  # Need to change it later to the actual json dictionary
 
         elif strategy == 2:
-            # Water level ranges for strategy 2 (based on critical infrastructure hits)
+            # Water level range for energy substations (based on critical hit)
             ranges = [(1, 0.3, None)]
+
+        else:
+            # Water level range for vulnerable and emergency facilities (flooded or not)
+            ranges = [(1, 0.1, None)]
 
         probability_maps = {}
 
@@ -546,10 +550,9 @@ class Households(AgentBaseClass):
                 probability = condition.sum(dim="member") / condition.sizes["member"]
 
                 file_name = f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}_strategy{strategy}.tif"
-                file_path = self.model.output_folder / "prob_maps" / file_name
-                # NEED TO CREATE A FOLDER FOR THOSE WHO WILL RUN THIS BUT DO NOT HAVE A FOLDER
+                file_path = prob_folder / file_name
 
-                # SOMETHING IS WRONG WHEN WRITING THE TIFF FILE, THE Y AXIS IS FLIPPED, IDWK WHY, so doing this to fix it for now
+                # SOMETHING IS WRONG WHEN WRITING THE TIFF FILE, THE Y AXIS IS FLIPPED, IDWK WHY, so doing this to fix it for now -- need to fix it
                 if probability.y.values[0] < probability.y.values[-1]:
                     print("flipping y axis")
                     probability = probability.sortby("y", ascending=False)
@@ -569,9 +572,11 @@ class Households(AgentBaseClass):
         # Damage ranges for the probability map
         damage_ranges = [
             (1, 0, 1),
-            (2, 0, 1500000),
-            (3, 1500000, 7500000),
-            (4, 7500000, None),
+            (2, 0, 15000),
+            (3, 15000, 30000),
+            (4, 30000, 45000),
+            (5, 45000, 60000),
+            (6, 60000, None),
         ]
         # Later need to create a json dictionary with the right damage ranges
 
@@ -710,8 +715,8 @@ class Households(AgentBaseClass):
         pd.DataFrame(warnings_log).to_csv(path, index=False)
 
     def get_critical_infrastructure(self):
-        # Maybe this need to be run only once when loading the assets
-        """Extract critical infrastructure elements from OSM using the catchment polygon as boundary."""
+        # I think this should only be run once, when loading the assets
+        """Extract critical infrastructure elements (vulnerable and emergency facilities) from OSM using the catchment polygon as boundary."""
         catchment_boundary = gpd.read_parquet(
             self.model.files["geoms"]["catchment_boundary"]
         )
@@ -807,8 +812,6 @@ class Households(AgentBaseClass):
                 col for col in common_cols if col not in ("geometry", "index_right")
             ]
 
-            print("testing common columns")
-
             # Replace only where there was a match in the column name
             for col in common_cols:
                 col_fac = f"{col}_fac"
@@ -817,41 +820,79 @@ class Households(AgentBaseClass):
 
         return buildings
 
-    def critical_infrastructure_warning_strategy(self, prob_threshold=0.6):
-        """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations."""
-        # Load postal codes
-        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
-        substations = gpd.read_parquet(
-            self.model.files["geoms"]["assets/energy_substations"]
-        )
-
-        # Get the forecast start date from the config (to know to which forecast day the warnings are associated to)
-        day = self.model.config["general"]["forecasts"]["days"][0]
-
-        # Create flood probability maps for critical substation hit (config needs to be set as strategy 2)
-        self.create_flood_probability_maps()
-
-        # Assign substations to postal codes based on distance -- Need to improve this with Thiessen polygons or similar
+    def assign_energy_substations_to_postal_codes(self, substations, pc4):
+        # -- Need to improve this with Thiessen polygons or similar
         PC4_with_substations = gpd.sjoin_nearest(
-            PC4, substations[["fid", "geometry"]], how="left", distance_col="distance"
+            pc4, substations[["fid", "geometry"]], how="left", distance_col="distance"
         )
         # Rename the fid_right column for clarity
         PC4_with_substations.rename(
             columns={"fid_right": "substation_id"},
             inplace=True,
         )
+        return PC4_with_substations
 
-        # Get the household points
-        households = self.var.household_points.copy()
-
-        # Get the probability map for the specific day and strategy
-        prob_tif_path = (
-            self.model.output_folder
-            / "prob_maps"
-            / f"prob_map_range1_forecast{day.strftime('%Y-%m-%d')}_strategy2.tif"
+    def assign_critical_facilities_to_postal_codes(self, critical_facilities, pc4):
+        # Use the centroid of the critical facilities to assign them to postal codes
+        critical_facilities_centroid = critical_facilities.copy()
+        critical_facilities_centroid["geometry"] = (
+            critical_facilities_centroid.geometry.centroid
         )
 
-        prob_map = rasterio.open(prob_tif_path)
+        PC6_with_critical_facilities = gpd.sjoin(
+            pc4,
+            critical_facilities_centroid[["fid", "geometry"]],
+            how="left",
+            predicate="contains",
+        )
+
+        # Rename the fid_right column for clarity (need to check if it is indeed fid_right)
+        PC6_with_critical_facilities.rename(
+            columns={"fid_right": "facility_id"},
+            inplace=True,
+        )
+        return PC6_with_critical_facilities
+
+    def critical_infrastructure_warning_strategy(self, prob_threshold=0.6):
+        """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities."""
+        ## Load inputs -- This should only be done once when loading the assets in the model
+        # Get the household points, needed to issue warnings -- need to check how this combines with the warning comm. efficiency
+        households = self.var.household_points.copy()
+
+        # Get the forecast start date from the config (to know to which forecast day the warnings are associated to)
+        # Before commiting NEED to change days to times and remove the filter for days[0]
+        day = self.model.config["general"]["forecasts"]["days"][0]
+
+        # Load postal codes, energy substations and vulnerable/emergency facilities
+        substations = gpd.read_parquet(
+            self.model.files["geoms"]["assets/energy_substations"]
+        )
+        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        critical_facilities = gpd.read_file(
+            os.path.join(self.model.output_folder, "vulnerable_facilities.gpkg")
+        )  # need to get from the folder where get_critical_infrastructure (which should only run once) function saves it
+
+        ## For energy substations:
+        strategy_id = 2
+
+        # Assign substations to postal codes based on distance  -- This should only be done once when loading the assets in the model
+        PC4_with_substations = self.assign_energy_substations_to_postal_codes(
+            substations, PC4
+        )
+
+        # Create flood probability maps associated to the critical hit of energy substations
+        # Need to give the number (id) of strategy as argument
+        self.create_flood_probability_maps(strategy=strategy_id)
+        prob_maps_directory = self.model.output_folder / "prob_maps"
+
+        # Get the probability map for the specific day and strategy
+        prob_energy_hit_path = (
+            prob_maps_directory
+            / f"prob_map_range1_forecast{day.strftime('%Y-%m-%d')}_strategy{strategy_id}.tif"
+        )
+
+        # Should I open this with "with rasterio.open()..."?
+        prob_map = rasterio.open(prob_energy_hit_path)
         prob_array = prob_map.read(1)
         affine = prob_map.transform
 
@@ -862,51 +903,120 @@ class Households(AgentBaseClass):
         substations["probability"] = sampled_probs
 
         # Filter substations that have a flood hit probability > threshold
-        critical_hits = substations[substations["probability"] >= prob_threshold]
+        critical_hits_energy = substations[substations["probability"] >= prob_threshold]
 
         # If there are critical hits, issue warnings
-        if not critical_hits.empty:
-            print(f"Critical hits found: {len(critical_hits)}")
+        if not critical_hits_energy.empty:
+            print(f"Critical hits for energy substations: {len(critical_hits_energy)}")
 
             # Get the postcodes that will be affected by the critical hits
-            affected_postcodes = PC4_with_substations[
-                PC4_with_substations["substation_id"].isin(critical_hits["fid"])
+            affected_postcodes_energy = PC4_with_substations[
+                PC4_with_substations["substation_id"].isin(critical_hits_energy["fid"])
             ]["postcode"].unique()
 
-            warning_log = []
+        ## For vulnerable and emergency facilities:
+        strategy_id = 3
 
-            # Issue warnings to the households in the affected postcodes
-            for postal_code in affected_postcodes:
-                affected_households = households[households["postcode"] == postal_code]
-                n_warned_households = self.warning_communication(
-                    target_households=affected_households
-                )
-                # need to give the warning communication function the range measures
-                # Need to think about how to deal with the communication efficiency for the two different strategies
+        # Assign critical facilities to postal codes based on intersection -- This should only be done once when loading the assets
+        PC4_with_critical_facilities = self.assign_critical_facilities_to_postal_codes(
+            critical_facilities, PC4
+        )
 
-                print(
-                    f"Warning issued to postal code {postal_code} on {day} for critical substation hit."
-                )
-                warning_log.append(
-                    {
-                        "day": day,
-                        "postcode": postal_code,
-                        "n_warned_households": n_warned_households,
-                        "critical_substation_hits": len(critical_hits),
-                    }
-                )
+        # Create flood probability map for vulnerable and emergency facilities
+        self.create_flood_probability_maps(strategy=strategy_id)
 
-            # Save log
-            path = os.path.join(self.model.output_folder, "warning_log_energy.csv")
-            pd.DataFrame(warning_log).to_csv(path, index=False)
+        # Get the probability map for the specific day and strategy
+        prob_tif_path = (
+            prob_maps_directory
+            / f"prob_map_range1_forecast{day.strftime('%Y-%m-%d')}_strategy{strategy_id}.tif"
+        )
+
+        # Sample the probability map at the vulnerable facilities locations using their centroid (can be improved later to use whole area of the polygon)
+        critical_facilities = critical_facilities.copy()
+
+        sampled_probs = point_query(
+            critical_facilities.geometry.centroid,
+            prob_array,
+            affine=affine,
+            interpolate="nearest",
+        )
+        critical_facilities["probability"] = sampled_probs
+
+        # Filter substations that have a flood hit probability > threshold
+        critical_hits_facilities = critical_facilities[
+            critical_facilities["probability"] >= prob_threshold
+        ]
+
+        # If there are critical hits, issue warnings
+        if not critical_hits_facilities.empty:
+            print(
+                f"Critical hits for vulnerable/emergency facilities: {len(critical_hits_facilities)}"
+            )
+
+            # Get the postcodes that will be affected by the critical hits
+            affected_postcodes_facilities = PC4_with_critical_facilities[
+                PC4_with_critical_facilities["facility_id"].isin(
+                    critical_hits_facilities["fid"]
+                )
+            ]["postcode"].unique()
+
+        # Function to keep track of what triggered the warning for each postal code
+        def trigger_label(postcode):
+            e = postcode in affected_postcodes_energy
+            f = postcode in affected_postcodes_facilities
+            if e and f:
+                return "energy_and_facilities"
+            elif e:
+                return "energy"
+            elif f:
+                return "facilities"
+
+        # Combine affected_postcodes from both strategies and remove duplicates
+        affected_postcodes = np.unique(
+            np.concatenate(
+                (affected_postcodes_energy, affected_postcodes_facilities), axis=0
+            )
+        )
+
+        # Create an empty log to store the warnings
+        warning_log = []
+
+        # Issue warnings to the households in the affected postcodes
+        for postcode in affected_postcodes:
+            affected_households = households[households["postcode"] == postal_code]
+            n_warned_households = self.warning_communication(
+                target_households=affected_households
+            )
+            # need to give the warning communication function the range measures
+            trigger = trigger_label(postcode)
+
+            print(
+                f"Evacuation warning issued to postal code {postcode} on {day} (trigger: {trigger})"
+            )
+            warning_log.append(
+                {
+                    "day": day,
+                    "postcode": postcode,
+                    "n_warned_households": n_warned_households,
+                    "critical_hits": len(critical_hits),
+                    "trigger": trigger,
+                }
+            )
+
+        # Save log
+        path = os.path.join(
+            self.model.output_folder, "warning_log_critical_infrastructure.csv"
+        )
+        pd.DataFrame(warning_log).to_csv(path, index=False)
 
         # NEED TO ADD A CHECK IF THE LEADTIME IS < THAN 48H TO DO THIS STRATEGY
 
     def warning_communication(self, target_households, range_id, warning_range=0.35):
         # need to get the range measures from the other functions
         """Communicates a warning to households based on the communication efficiency.
+
         changes risk perception --> to be moved to the update risk perception function;
-        and return the number of households that were warned. need to describe what each argument in the function is
+        and return the number of households that were warned. need to describe what each argument in the function is.
         """
         print("Communicating the warning...")
 
@@ -969,10 +1079,13 @@ class Households(AgentBaseClass):
         # Need to add the evacuation warning from second warning strategy in case the leadtime is <48h and there is no evacuation warning coming from the first strategy
 
     def household_decision_making(self, responsive_ratio=0.7):
-        """This function simulates the decision-making process of households that received warnings,
+        """Summary.
+
+        This function simulates the decision-making process of households that received warnings,
         based on recommended measures, lead time, and implementation times.
         """
         print("Running emergency response decision-making for households...")
+        # Need to fix description of functions
 
         # Initialize an empty list to log actions taken
         actions_log = []
