@@ -284,6 +284,7 @@ def test_SFINCS_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None
 
     Args:
         geb_model: A GEB model instance with SFINCS configured.
+        use_gpu: Whether to use the GPU for the simulation.
     """
     with WorkingDirectory(working_directory):
         start_time: datetime = datetime(2000, 1, 1, 0)

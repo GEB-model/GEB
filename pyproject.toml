@@ -129,8 +129,6 @@ select = [
     "ANN204",
     "ANN205",
     "ANN206",
-    "D101",
-    "D104",
     "DOC201",
     "DOC202",
     "DOC402",
@@ -140,9 +138,33 @@ select = [
     "ANN003",
     "ANN201",
     "ANN202",
-    "D102",
     "D100",
-    "D107"
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D106",
+    "D107",
+    "D200",
+    "D201",
+    "D202",
+    "D204",
+    "D205",
+    "D206",
+    "D207",
+    "D208",
+    "D209",
+    "D210",
+    "D211",
+    "D300",
+    "D400",
+    "D405",
+    "D406",
+    "D415",
+    "D416",
+    "D417",
+    "D419"
 ]
 extend-select = ["I"]
 preview = true
@@ -154,6 +176,7 @@ preview = true
     "ANN201",
     "ANN202",
     "D102",
+    "D103",
     "D100",
     "D107"
 ]
@@ -163,14 +186,36 @@ preview = true
     "ANN201",
     "ANN202",
     "D102",
+    "D103",
     "D100",
     "D107"
 ]
-"geb/{build,hydrology,evaluate}/**.py" = [
+"geb/{hydrology,evaluate}/**.py" = [
     "ANN001",
     "ANN003",
     "ANN201",
     "ANN202",
+    "D102",
+    "D103",
+    "D100",
+    "D107"
+]
+"geb/build/{custom_models,workflows}/**.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "D103",
+    "D102",
+    "D100",
+    "D107"
+]
+"geb/build/modules/{agents,crops,forcing,hydrography,observations}.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "D103",
     "D102",
     "D100",
     "D107"
@@ -180,6 +225,17 @@ preview = true
     "ANN003",
     "ANN201",
     "ANN202",
+    "D103",
+    "D102",
+    "D100",
+    "D107"
+]
+"tests/**.py" = [
+    "ANN001",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+    "D103",
     "D102",
     "D100",
     "D107"

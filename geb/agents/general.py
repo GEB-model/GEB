@@ -22,6 +22,20 @@ def downscale_volume(
     downscale_mask: npt.NDArray[np.bool_],
     HRU_land_size: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
+    """Downscale a gridded volume to HRU level using area-weighted averaging.
+
+    Args:
+        data_gt: Geotransform of the data to be downscaled.
+        model_gt: Geotransform of the model (target) decompressed HRU grid.
+        data: 2D array of data to be downscaled.
+        mask: 2D boolean array where True indicates no data (e.g., water bodies).
+        grid_to_HRU_uncompressed: 1D array mapping each grid cell to an HRU index.
+        downscale_mask: 1D boolean array where True indicates HRUs to be excluded from downscaling.
+        HRU_land_size: 1D array of land area for each HRU.
+
+    Returns:
+        1D array of downscaled data at HRU level.
+    """
     xoffset = (model_gt[0] - data_gt[0]) / model_gt[1]
     assert 0.0001 > xoffset - round(xoffset) > -0.0001
     xoffset = round(xoffset)
@@ -105,7 +119,7 @@ class AgentBaseClass(Module, HoneybeesAgentBaseClass):
     """Base class for all agent classes."""
 
     def __init__(self, model: "GEBModel") -> None:
-        """
+        """Initialize the agent base class.
 
         Args:
             model: The GEB model instance.

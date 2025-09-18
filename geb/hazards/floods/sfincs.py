@@ -54,7 +54,7 @@ class SFINCSRootModel:
 
         Args:
             model: An instance of GEBModel containing hydrological and geographical data.
-            event_name: A string representing the name of the event (e.g., "flood_event_2023").
+            name: A string representing the name of the event (e.g., "flood_event_2023").
                 Also used to create the path to write the file to disk.
         """
         self.model = model
@@ -76,7 +76,6 @@ class SFINCSRootModel:
         Returns:
             The path to the SFINCS model root directory.
         """
-
         folder: Path = self.model.simulation_root / "SFINCS" / self.name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
@@ -462,7 +461,6 @@ class SFINCSRootModel:
         self, return_period: int | float
     ) -> "MultipleSFINCSSimulations":
         """Creates multiple SFINCS simulations for a specified return period.
-
 
         The method groups rivers by their calculation group and creates a separate
         simulation for each group. Each simulation is configured with discharge

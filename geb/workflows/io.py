@@ -1,4 +1,4 @@
-""" "I/O related functions and classes for the GEB project."""
+"""I/O related functions and classes for the GEB project."""
 
 import asyncio
 import datetime

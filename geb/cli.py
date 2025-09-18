@@ -369,12 +369,30 @@ def run_model_with_method(
 @cli.command()
 @click_run_options()
 def run(*args: Any, **kwargs: Any) -> None:
+    """Run model.
+
+    Can be run after model spinup.
+
+    Args:
+        *args: Positional arguments to pass to the run function.
+        **kwargs: Keyword arguments to pass to the run function.
+
+    """
     run_model_with_method(method="run", *args, **kwargs)
 
 
 @cli.command()
 @click_run_options()
 def spinup(*args: Any, **kwargs: Any) -> None:
+    """Run model spinup.
+
+    Can be run after model build.
+
+    Args:
+        *args: Positional arguments to pass to the spinup function.
+        **kwargs: Keyword arguments to pass to the spinup function.
+
+    """
     run_model_with_method(method="spinup", *args, **kwargs)
 
 
@@ -410,7 +428,7 @@ def calibrate(config: str | dict[str, Any], working_directory: Path) -> None:
 @cli.command()
 @click_config
 @working_directory_option
-def sensitivity(onfig: str | dict[str, Any], working_directory: Path) -> None:
+def sensitivity(config: str | dict[str, Any], working_directory: Path) -> None:
     """Function to run sensitivity analysis.
 
     Args:
@@ -425,7 +443,7 @@ def sensitivity(onfig: str | dict[str, Any], working_directory: Path) -> None:
 @cli.command()
 @click_config
 @working_directory_option
-def multirun(onfig: str | dict[str, Any], working_directory: Path) -> None:
+def multirun(config: str | dict[str, Any], working_directory: Path) -> None:
     """Function to run multiple model configurations.
 
     Args:
@@ -766,6 +784,15 @@ def build_fn(
 @cli.command()
 @click_build_options()
 def build(*args: Any, **kwargs: Any) -> None:
+    """Build model with configuration file.
+
+    This command reads the model configuration file and the build configuration file
+    and executes the build methods specified in the build configuration file.
+
+    Args:
+        *args: Positional arguments to pass to the build function.
+        **kwargs: Keyword arguments to pass to the build function.
+    """
     build_fn(*args, **kwargs)
 
 
@@ -778,6 +805,22 @@ def alter_fn(
     data_provider: str = DATA_PROVIDER_DEFAULT,
     data_root: str = DATA_ROOT_DEFAULT,
 ) -> None:
+    """Create alternative version from base model with only changed files.
+
+    This function is useful to create a new model based on an existing one, but with
+    only a few changes. It will copy the base model and overwrite the files that are
+    specified in the config and build config files. The rest of the files will be
+    linked to the original model to reduce disk space.
+
+    Args:
+        data_catalog: Path to the data catalog file.
+        config: Path to the model configuration file.
+        build_config: Path to the model build configuration file.
+        working_directory: Working directory for the model.
+        from_model: Folder for the existing model.
+        data_provider: Data variant to use from data catalog (see hydroMT documentation).
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
+    """
     from_model: Path = Path(from_model)
 
     with WorkingDirectory(working_directory):
@@ -960,6 +1003,12 @@ def update_fn(
     build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
 )
 def update(*args: Any, **kwargs: Any) -> None:
+    """Update model with configuration file.
+
+    Args:
+        *args: Positional arguments to pass to the update function.
+        **kwargs: Keyword arguments to pass to the update function.
+    """
     update_fn(*args, **kwargs)
 
 
@@ -1003,6 +1052,23 @@ def evaluate(
     optimize: bool = OPTIMIZE_DEFAULT,
     timing: bool = TIMING_DEFAULT,
 ) -> None:
+    """Evaluate model, for example by comparing observed and simulated discharge.
+
+    Args:
+        methods: Comma-seperated list of methods to evaluate. Currently supported methods: '
+            'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.
+        spinup_name: Name of the evaluation run.
+        run_name: Name of the run to evaluate.
+        include_spinup: Include spinup in evaluation.
+        include_yearly_plots: Create yearly plots in evaluation.
+        correct_q_obs: correct_Q_obs can be flagged to correct the Q_obs discharge timeseries
+            for the difference in upstream area between the Q_obs station and the simulated discharge.
+        working_directory: Working directory for the model.
+        config: Path to the model configuration file or a dict with the config.
+        profiling: If True, run the model with profiling.
+        optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
+        timing: If True, run the model with timing, printing the time taken for specific methods
+    """
     # If no methods are provided, pass None to run_model_with_method
     methods_list: list[str] = methods.split(",")
     methods_list: list[str] = [

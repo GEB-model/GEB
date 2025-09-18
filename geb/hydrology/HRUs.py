@@ -308,6 +308,9 @@ class Grid(BaseVariables):
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            array: Full array of mask size.
         """
         return np.full(self.mask.shape, *args, **kwargs)
 
@@ -317,6 +320,9 @@ class Grid(BaseVariables):
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            array: Full array of compressed size.
         """
         return np.full(self.compressed_size, *args, **kwargs)
 

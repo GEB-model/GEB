@@ -750,15 +750,6 @@ class Crops:
         translate_crop_names: Optional[Dict[str, str]] = None,
         adjust_currency=False,
     ) -> None:
-        """Sets up the cultivation costs for the model.
-
-        Parameters
-        ----------
-        cultivation_costs : str or int or float, optional
-            The file path or integer of cultivation costs. If a file path is provided, the file is loaded and parsed as JSON.
-            The dictionary should have a 'time' key with a list of time steps, and a 'crops' key with a dictionary of crop
-            IDs and their cultivation costs. If .
-        """
         cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
             translate_crop_names=translate_crop_names,
@@ -781,15 +772,6 @@ class Crops:
         translate_crop_names: Optional[Dict[str, str]] = None,
         adjust_currency=False,
     ) -> None:
-        """Sets up the crop prices for the model.
-
-        Parameters
-        ----------
-        crop_prices : str or int or float, optional
-            The file path or integer of crop prices. If a file path is provided, the file is loaded and parsed as JSON.
-            The dictionary should have a 'time' key with a list of time steps, and a 'crops' key with a dictionary of crop
-            IDs and their prices.
-        """
         crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,

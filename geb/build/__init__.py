@@ -1203,7 +1203,7 @@ class GEBModel(
         self.set_grid(idxs_out_da, name="idxs_outflow")
 
     def create_subgrid(self, subgrid_factor: int) -> None:
-        """Creates the model subgrid.Affine
+        """Creates the model subgrid.Affine.
 
         The model subgrid is a higher resolution grid that is used for representing
         subgrid processes, such as different land uses within a grid cell, and

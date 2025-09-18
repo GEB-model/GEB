@@ -1118,7 +1118,9 @@ class Store:
         return bucket
 
     def save(self, path: None | Path = None) -> None:
-        """
+        """Save the store data from the model to disk.
+
+        Removes any existing data in the target directory before saving.
 
         Args:
             path: A Path object representing the directory to load the model data from. Defaults to None.
@@ -1126,7 +1128,7 @@ class Store:
                 be useful for special cases such as forecasting and testing.
         """
         if path is None:
-            path = self.path
+            path: Path = self.path
 
         shutil.rmtree(path, ignore_errors=True)
         for name, bucket in self.buckets.items():

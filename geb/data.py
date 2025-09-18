@@ -58,7 +58,12 @@ class DateIndex:
         return np.searchsorted(self.dates, date, side="right").item() - 1
 
     def __len__(self) -> int:
-        """Return the number of dates in the index."""
+        """Return the number of dates in the index.
+
+        Returns:
+            The number of dates in the index.
+
+        """
         return self.dates.size
 
 
@@ -142,6 +147,14 @@ def parse_dates(
 
 
 def load_economic_data(fp: str) -> tuple[DateIndex, dict[int, np.ndarray]]:
+    """Load economic data from a json file, such as crop prices and inflation.
+
+    Args:
+        fp: File path to the json file.
+
+    Returns:
+        A tuple containing a DateIndex object and a dictionary mapping region IDs to numpy arrays of values.
+    """
     with open(fp, "r") as f:
         data = json.load(f)
     dates = parse_dates(data["time"])

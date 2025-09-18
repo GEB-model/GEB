@@ -606,6 +606,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @property
     def multiverse_name(self) -> str | None:
         """To explore different model futures, GEB can be run in a multiverse mode.
+
         In this mode, a number of timesteps can be run with different input data (e.g. different precipitation forecasts).
         The multiverse_name is used to identify the different model futures. It is typically set to the forecast member name.
 
@@ -617,6 +618,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @multiverse_name.setter
     def multiverse_name(self, value: str | None) -> None:
         """To explore different model futures, GEB can be run in a multiverse mode.
+
         In this mode, a number of timesteps can be run with different input data (e.g. different precipitation forecasts).
         The multiverse_name is used to identify the different model futures. It is typically set to the forecast member name.
 
@@ -718,7 +720,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 reader.close()
 
     def __enter__(self) -> "GEBModel":
-        """ "Enters the context of the model.
+        """Enters the context of the model.
 
         Returns:
             The model instance itself.

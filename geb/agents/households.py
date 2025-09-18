@@ -692,7 +692,7 @@ class Households(AgentBaseClass):
         and return the number of households that were warned.
 
         Args:
-            The households that are targeted to receive the warning.
+            target_households: The households that are targeted to receive the warning.
 
         Returns:
             The number of households that received the warning.
@@ -1264,7 +1264,6 @@ class Households(AgentBaseClass):
         Raises:
             ValueError: If the water demand method in the configuration is invalid.
         """
-
         assert (self.var.water_efficiency_per_household == 1).all(), (
             "if not 1, code must be updated to account for water efficiency in water demand"
         )

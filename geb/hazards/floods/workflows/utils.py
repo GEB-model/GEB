@@ -74,7 +74,6 @@ def read_flood_depth(
     Raises:
         ValueError: If an unknown method is provided.
     """
-
     # Read SFINCS model, config and results
     model: SfincsModel = SfincsModel(
         str(simulation_root),
@@ -167,7 +166,6 @@ def make_relative_paths(
     Raises:
         ValueError: If model_root and new_root do not have a common path.
     """
-
     commonpath = ""
     if os.path.splitdrive(model_root)[0] == os.path.splitdrive(new_root)[0]:
         commonpath = os.path.commonpath([model_root, new_root])
@@ -197,7 +195,7 @@ def run_sfincs_subprocess(
     """Runs SFINCS model in a subprocess.
 
     Args:
-        path: The working directory for the subprocess.
+        working_directory: The working directory for the subprocess.
         cmd: The command to run as a list of strings.
         log_file: The file to write the log output to.
 
@@ -292,6 +290,12 @@ def create_hourly_hydrograph(
 
 
 def check_docker_running() -> bool | None:
+    """Check if Docker is installed and running.
+
+    Returns:
+        True if Docker is installed and running, False otherwise.
+
+    """
     try:
         subprocess.run(
             ["docker", "info"],
@@ -325,7 +329,6 @@ def run_sfincs_simulation(
     Returns:
         The return code of the SFINCS simulation subprocess.
     """
-
     if gpu not in [True, False, "auto"]:
         raise ValueError("gpu must be True, False, or 'auto'")
 
@@ -432,6 +435,25 @@ def _get_xy(
 def get_representative_river_points(
     river_ID: set, rivers: pd.DataFrame, waterbody_ids: npt.NDArray[np.int32]
 ) -> list[tuple[float, float]]:
+    """Get representative river points for a given river ID.
+
+    If the river is represented in the low-resolution hydrological grid, its
+    representative point is used. If not, the function traverses upstream to find
+    rivers that are represented in the grid and uses their representative points.
+
+    Moreover, if a point in the river falls within a waterbody (waterbody_ids != -1),
+    it is ignored and the next point in the river's hydrography_xy list is checked until
+    a valid point is found or the list is exhausted in which case an empty list is returned.
+
+    Args:
+        river_ID: The ID of the river for which to find representative points.
+        rivers: DataFrame containing river information, including 'represented_in_grid' and 'hydrography_xy'.
+        waterbody_ids: 2D array of waterbody IDs, where -1 indicates no waterbody.
+
+    Returns:
+        A list of tuples (x, y) representing the coordinates of the representative points.
+        If no valid points are found, an empty list is returned.
+    """
     river = rivers.loc[river_ID]
     if river["represented_in_grid"]:
         xy = _get_xy(river, waterbody_ids, up_to_downstream=True)
@@ -476,6 +498,29 @@ def get_discharge_and_river_parameters_by_river(
     river_width_alpha: npt.NDArray[np.float32] | None = None,
     river_width_beta: npt.NDArray[np.float32] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Extract discharge time series and river parameters for each river.
+
+    When rivers are represented in the low-resolution hydrological grid, rivers
+    should have only one point in the points_per_river list. When rivers are not
+    represented in the low-resolution hydrological grid, the river is represented
+    by its upstream rivers, which can be multiple. In that case, the discharge
+    time series for the river is the sum of the discharge time series of all its
+    representative points.
+
+    Args:
+        river_IDs: List of river IDs.
+        points_per_river: List of lists of (x, y) tuples representing the points for each river.
+        discharge: xarray DataArray containing discharge values with dimensions (time, y, x).
+        river_width_alpha: 2D array of river width alpha parameters, same shape as discharge y and x dimensions.
+            If None, river width alpha will not be extracted. Defaults to None.
+        river_width_beta: 2D array of river width beta parameters, same shape as discharge y and x dimensions.
+            If None, river width beta will not be extracted. Defaults to None.
+
+    Returns:
+        A tuple containing:
+            - A pandas DataFrame with discharge time series for each river (columns are river IDs).
+            - A pandas DataFrame with river parameters (index is river IDs, columns are 'river_width_alpha' and 'river_width_beta').
+    """
     xs: list[int] = []
     ys: list[int] = []
     for points in points_per_river:
@@ -574,6 +619,21 @@ def assign_return_periods(
     return_periods: list[int],
     prefix: str = "Q",
 ) -> pd.DataFrame:
+    """Assign return periods to rivers based on discharge data.
+
+    Args:
+        rivers: DataFrame containing river information. Here only the index is used.
+        discharge_dataframe: DataFrame containing discharge time series for each river.
+            The column names must match the index of the rivers DataFrame.
+        return_periods: List of return periods to calculate (in years).
+        prefix: Prefix for the return period columns in the output DataFrame. Defaults to "Q".
+
+    Returns:
+        DataFrame with return period discharge values added as new columns.
+
+    Raises:
+        ValueError: If discharge values are unrealistically high.
+    """
     assert isinstance(return_periods, list)
     for i, idx in tqdm(enumerate(rivers.index), total=len(rivers)):
         discharge = discharge_dataframe[idx]

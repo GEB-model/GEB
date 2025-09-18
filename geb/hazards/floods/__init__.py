@@ -307,7 +307,6 @@ class Floods:
             end_time: The end time of the flood event.
             precipitation_scale_factor: Scale factor for precipitation (default is 1.0).
         """
-
         assert precipitation_scale_factor >= 0, (
             "Precipitation scale factor must be non-negative."
         )

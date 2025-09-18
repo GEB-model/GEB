@@ -1,1 +1,1 @@
-"""Tests for flood hazard modules"""
+"""Tests for flood hazard modules."""

@@ -13,6 +13,22 @@ def get_river_depth(
     parameters: dict[str, float | int],
     bankfull_column: str,
 ) -> npt.NDArray[np.float32]:
+    """Get river depth for each river segment.
+
+    Args:
+        river_segments: GeoDataFrame with river segments. Must contain columns 'slope', 'width', and the bankfull discharge column.
+        method: Method to calculate river depth. Options are 'manning' and 'power_law'.
+        parameters: Parameters for the chosen method.
+            For 'manning', no parameters are needed.
+            For 'power_law', parameters 'c' and 'd' are needed.
+        bankfull_column: Name of the column in river_segments that contains the bankfull discharge.
+
+    Returns:
+        Array with river depth for each river segment.
+
+    Raises:
+        ValueError: If an unknown method is provided.
+    """
     if method == "manning":
         # Set a minimum value for 'rivslp'
         min_rivslp = 1e-5
@@ -67,6 +83,7 @@ def get_river_manning(river_segments: gpd.GeoDataFrame) -> npt.NDArray[np.float3
 
 
 def do_mask_flood_plains(sf: "SfincsModel") -> None:
+    """Create a floodplain mask using pyflwdir and add it to the SfincsModel as a mask."""
     elevation, d8 = pyflwdir.dem.fill_depressions(sf.grid.dep.values)
 
     flw = pyflwdir.from_array(

@@ -1,3 +1,1 @@
-"""
-Tests for workflow utilities in the GEB project.
-"""
+"""Tests for workflow utilities in the GEB project."""

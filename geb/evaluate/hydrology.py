@@ -1010,7 +1010,6 @@ class Hydrology:
             *args: ignored.
             **kwargs: ignored.
         """
-
         import plotly.io as pio
 
         # auto install chrome if not available

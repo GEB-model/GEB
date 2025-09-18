@@ -31,7 +31,7 @@ def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu)
 
 def handle_ctrl_c(func):
     @wraps(func)
-    def wrapper(*args: Any, **kwargs) -> Any:
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
         global ctrl_c_entered
         if not ctrl_c_entered:
             signal.signal(signal.SIGINT, default_sigint_handler)  # the default
@@ -48,7 +48,7 @@ def handle_ctrl_c(func):
     return wrapper
 
 
-def pool_ctrl_c_handler(*args: Any, **kwargs):
+def pool_ctrl_c_handler(*args: Any, **kwargs: Any) -> None:
     global ctrl_c_entered
     ctrl_c_entered = True
 
