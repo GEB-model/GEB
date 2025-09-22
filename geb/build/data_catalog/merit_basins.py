@@ -156,6 +156,24 @@ class MeritBasins(Adapter):
         self.variable = variable
         super().__init__(*args, **kwargs)
 
+    def check_quota(self, text: str, file_path: Path | None = None) -> None:
+        """Check if the Google Drive quota has been exceeded.
+
+        Args:
+            text: The HTML text to check.
+            file_path: The path to the file. If the quota is exceeded, the file will be deleted.
+                If None, no file will be deleted.
+
+        Raises:
+            ValueError: If the quota has been exceeded.
+        """
+        if "Google Drive - Quota exceeded" in text:
+            if file_path and file_path.exists():
+                file_path.unlink()  # remove the incomplete file
+            raise ValueError(
+                "Too many users have viewed or downloaded this file recently. Please try accessing the file again later. If the file you are trying to access is particularly large or is shared with many people, it may take up to 24 hours to be able to view or download the file."
+            )
+
     def processor(self, url: str) -> Path:
         """Process HydroLAKES zip file to extract and convert to parquet.
 
@@ -183,8 +201,9 @@ class MeritBasins(Adapter):
                     if not file_path.exists():
                         response = session.get(
                             f"https://drive.google.com/uc?export=download&id={file_id}",
-                            stream=True,
                         )
+
+                        self.check_quota(response.text)
 
                         # Case 1: small file → direct content
                         if (
@@ -194,9 +213,7 @@ class MeritBasins(Adapter):
                         ):
                             # Just write the file
                             with open(file_path, "wb") as f:
-                                for chunk in response.iter_content(32768):
-                                    if chunk:
-                                        f.write(chunk)
+                                f.write(response.content)
 
                         else:
                             # Case 2: large file → parse HTML form
@@ -221,6 +238,14 @@ class MeritBasins(Adapter):
                                     params=inputs,
                                     session=session,
                                 )
+
+                                # if file is less than 100KB, it is probably an error page
+                                if file_path.stat().st_size < 100_000:
+                                    with open(file_path, "r") as f:
+                                        text = f.read()
+                                    if "Google Drive - Quota exceeded" in text:
+                                        self.check_quota(text, file_path)
+
                     if ext == "shp":
                         downloaded_shp_files.append(file_path)
                     all_downloaded_files.append(file_path)
