@@ -142,7 +142,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         ),
         "url": "https://zenodo.org/records/10013982/files/SWORD_v16_gpkg.zip",
         "source": {
-            "name": "MERIT-SWORD",
+            "name": "SWORD",
             "version": "v16",
             "license": "Creative Commons Attribution 4.0 International",
             "url": "doi.org/10.5281/zenodo.14727521",
