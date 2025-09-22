@@ -246,7 +246,7 @@ class LandSurface:
             {"ISO3": {"XKO": "XKX"}}, inplace=True
         )  # XKO is a deprecated code for Kosovo, XKX is the new code
 
-        self.logger.info(f"Renamed XKO to XKX in regions: {regions.columns}")
+        self.logger.info(f"Renamed XKO to XKX in regions")
 
         self.set_geom(regions, name="regions")
 
