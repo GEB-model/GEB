@@ -64,8 +64,12 @@ def load_array(fp: Path) -> np.ndarray:
 
 
 def calculate_scaling(
-    min_value: float, max_value: float, precision: float, offset: float | int = 0.0
-) -> tuple[float, str]:
+    da: xr.DataArray,
+    min_value: float,
+    max_value: float,
+    precision: float,
+    offset: float | int = 0.0,
+) -> tuple[float, str, str]:
     """This function calculates the scaling factor and output dtype for a fixed scale and offset codec.
 
     The expected minimum and maximum values along with the precision are used to determine the number
@@ -79,6 +83,7 @@ def calculate_scaling(
     become slighly imprecise.
 
     Args:
+        da: The input xarray DataArray to be encoded.
         min_value: The minimum expected value of the original data. Outside this range
             the data may start to behave unexpectedly.
         max_value: The maximum expected value of the original data. Outside this range
@@ -128,7 +133,9 @@ def calculate_scaling(
     else:
         raise ValueError("Too many bits required for precision and range")
 
-    return scaling_factor, out_dtype
+    in_dtype: str = da.dtype.name
+
+    return scaling_factor, in_dtype, out_dtype
 
 
 def open_zarr(zarr_folder: Path | str) -> xr.DataArray:

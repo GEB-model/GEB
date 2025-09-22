@@ -59,7 +59,8 @@ def encode_decode(
     """
     assert data.dtype == np.float32
 
-    scaling_factor, out_dtype = calculate_scaling(
+    scaling_factor, in_dtype, out_dtype = calculate_scaling(
+        data,
         min_value=min_value,
         max_value=max_value,
         precision=precision,
@@ -72,7 +73,7 @@ def encode_decode(
             message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations",
         )
         codec = FixedScaleOffset(
-            offset=offset, scale=scaling_factor, dtype="float32", astype=out_dtype
+            offset=offset, scale=scaling_factor, dtype=in_dtype, astype=out_dtype
         )
         da = xr.DataArray(data)
         da.name = "data"
@@ -135,6 +136,7 @@ def test_calculate_scaling() -> None:
         ValueError, match="Too many bits required for precision and range"
     ):
         calculate_scaling(
+            data,
             min_value=0,
             max_value=1e10,
             precision=1e-12,
@@ -145,6 +147,7 @@ def test_calculate_scaling() -> None:
         ValueError, match="Too many bits required for precision and range"
     ):
         calculate_scaling(
+            data,
             min_value=-1e10,
             max_value=0,
             precision=1e-12,
