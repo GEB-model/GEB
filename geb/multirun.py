@@ -14,7 +14,9 @@ from typing import Any
 import yaml
 
 
-def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu) -> None:
+def init_pool(
+    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
+) -> None:
     """Initialize the global variables for the process pool."""
     global ctrl_c_entered
     global default_sigint_handler

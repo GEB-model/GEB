@@ -42,7 +42,9 @@ from sklearn.model_selection import KFold
 from .workflows.methods import multi_set
 
 
-def init_pool(manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu) -> None:
+def init_pool(
+    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
+) -> None:
     """Initialize the global variables for the process pool."""
     global ctrl_c_entered
     global default_sigint_handler
