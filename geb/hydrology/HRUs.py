@@ -2,7 +2,7 @@ import math
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Union
+from typing import Any, Union
 
 import geopandas as gpd
 import numpy as np

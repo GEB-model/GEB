@@ -23,10 +23,10 @@ from geb.agents.crop_farmers import (
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
+from geb.workflows.raster import repeat_grid
 
 from ...workflows.io import open_zarr
 from .. import GEBModel
-from ..workflows.general import repeat_grid
 
 
 class Survey:

@@ -770,6 +770,56 @@ def get_infiltration_capacity(
     return saturated_hydraulic_conductivity[0]
 
 
+@njit(cache=True, inline="always")
+def get_mean_unsaturated_hydraulic_conductivity(
+    unsaturated_hydraulic_conductivity_1: np.float32,
+    unsaturated_hydraulic_conductivity_2: np.float32,
+) -> np.float32:
+    """Calculate the mean unsaturated hydraulic conductivity between two soil layers using the geometric mean.
+
+    Args:
+        unsaturated_hydraulic_conductivity_1: Unsaturated hydraulic conductivity of the first soil layer.
+        unsaturated_hydraulic_conductivity_2: Unsaturated hydraulic conductivity of the second soil layer.
+
+    Returns:
+        The mean unsaturated hydraulic conductivity between the two soil layers.
+    """
+    # harmonic mean
+    # mean_unsaturated_hydraulic_conductivity = (
+    #     2
+    #     * unsaturated_hydraulic_conductivity_1
+    #     * unsaturated_hydraulic_conductivity_2
+    #     / (unsaturated_hydraulic_conductivity_1 + unsaturated_hydraulic_conductivity_2)
+    # )
+    # geometric mean
+    mean_unsaturated_hydraulic_conductivity = np.sqrt(
+        unsaturated_hydraulic_conductivity_1 * unsaturated_hydraulic_conductivity_2
+    )
+    # ensure that there is some minimum flow is possible
+    mean_unsaturated_hydraulic_conductivity = max(
+        mean_unsaturated_hydraulic_conductivity, np.float32(1e-9)
+    )
+    return mean_unsaturated_hydraulic_conductivity
+
+
+@njit(cache=True, inline="always")
+def get_flux(mean_unsaturated_hydraulic_conductivity, psi_lower, psi_upper, delta_z):
+    """Calculate the flux between two soil layers using Darcy's law.
+
+    Args:
+        mean_unsaturated_hydraulic_conductivity: Mean unsaturated hydraulic conductivity between the two soil layers.
+        psi_lower: Soil water potential of the lower soil layer.
+        psi_upper: Soil water potential of the upper soil layer.
+        delta_z: Distance between the two soil layers.
+
+    Returns:
+        The flux between the two soil layers.
+    """
+    return -mean_unsaturated_hydraulic_conductivity * (
+        (psi_lower - psi_upper) / delta_z - np.float32(1)
+    )
+
+
 # Do NOT use fastmath here. This leads to unexpected behaviour with NaNs
 @njit(cache=True, parallel=True, fastmath=False)
 def vertical_water_transport(
@@ -883,17 +933,22 @@ def vertical_water_transport(
         for layer in range(
             N_SOIL_LAYERS - 2, -1, -1
         ):  # From top (0) to bottom (N_SOIL_LAYERS - 1)
-            # Compute the geometric mean of the conductivities
-            unsaturated_hydraulic_conductivity_avg = np.sqrt(
-                unsaturated_hydraulic_conductivity[layer + 1, i]
-                * unsaturated_hydraulic_conductivity[layer, i],
+            # Compute the mean of the conductivities
+            mean_unsaturated_hydraulic_conductivity: np.float32 = (
+                get_mean_unsaturated_hydraulic_conductivity(
+                    unsaturated_hydraulic_conductivity[layer + 1, i],
+                    unsaturated_hydraulic_conductivity[layer, i],
+                )
             )
 
             # Compute flux using Darcy's law. The -1 accounts for gravity.
             # Positive flux is downwards; see minus sign in the equation, which negates
             # the -1 of gravity and other terms.
-            flux = -unsaturated_hydraulic_conductivity_avg * (
-                (psi[layer + 1, i] - psi[layer, i]) / delta_z[layer, i] - np.float32(1)
+            flux: np.float32 = get_flux(
+                mean_unsaturated_hydraulic_conductivity,
+                psi[layer + 1, i],
+                psi[layer, i],
+                delta_z[layer, i],
             )
 
             # Determine the positive flux and source/sink layers without if statements

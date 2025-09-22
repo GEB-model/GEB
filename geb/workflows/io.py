@@ -17,7 +17,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyproj
-import rasterio.crs
+import rasterio
 import requests
 import xarray as xr
 import zarr
@@ -196,7 +196,7 @@ def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
         raise TypeError("Unsupported CRS type")
 
 
-def check_attrs(da1: dict[str, Any], da2: dict[str, Any]) -> bool:
+def check_attrs(da1: xr.DataArray, da2: xr.DataArray) -> bool:
     """Check if the attributes of two xarray DataArrays are equal.
 
     The _CRS and grid_mapping attributes are ignored in the comparison.
@@ -762,11 +762,14 @@ class WorkingDirectory:
 
 def fetch_and_save(
     url: str,
-    file_path: str | Path,
+    file_path: Path,
     overwrite: bool = False,
     max_retries: int = 3,
     delay: float | int = 5,
     chunk_size: int = 16384,
+    session: requests.Session | None = None,
+    params: None | dict[str, Any] = None,
+    timeout: float | int = 30,
 ) -> bool:
     """Fetches data from a URL and saves it to a temporary file, with a retry mechanism.
 
@@ -780,6 +783,9 @@ def fetch_and_save(
         max_retries: maximum number of retries in case of failure. Default is 3.
         delay: delay between retries in seconds. Default is 5 seconds.
         chunk_size: size of the chunks to read from the response.
+        session: Optional requests.Session object to use for the download. If None, a new session will be created.
+        params: Optional dictionary of query parameters to include in the request.
+        timeout: Timeout for the request in seconds. Default is 30 seconds.
 
     Returns:
         Returns True if the file was downloaded successfully and saved to the specified path.
@@ -789,6 +795,9 @@ def fetch_and_save(
         RuntimeError: If all attempts to download the file fail.
 
     """
+    if not session:
+        session = requests.Session()
+
     if not overwrite and file_path.exists():
         return True
 
@@ -799,7 +808,7 @@ def fetch_and_save(
         try:
             print(f"Downloading {url} to {file_path}")
             # Attempt to make the request
-            response = requests.get(url, stream=True)
+            response = session.get(url, stream=True, params=params, timeout=timeout)
             response.raise_for_status()  # Raises HTTPError for bad status codes
 
             # Create a temporary file

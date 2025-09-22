@@ -1,6 +1,5 @@
 import json
 import math
-import os
 from datetime import datetime
 
 import geopandas as gpd

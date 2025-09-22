@@ -1,20 +1,18 @@
 """Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
+from geb.workflows.raster import rasterize_like, repeat_grid
 
-from ..workflows.conversions import (
-    COUNTRY_NAME_TO_ISO3,
-)
 from ..workflows.general import (
     bounds_are_within,
     calculate_cell_area,
     pad_xy,
-    repeat_grid,
     resample_chunked,
     resample_like,
 )
@@ -202,27 +200,25 @@ class LandSurface:
             land use data is reclassified into five classes and set as a grid in the model. Finally, the cultivated land is
             identified and set as a grid in the model.
         """
-        regions = self.data_catalog.get_geodataframe(
-            region_database,
-            geom=self.region,
-            predicate="intersects",
-        ).rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
-
-        # save global countries and their centroids (used for calculating euclidian distances)
-        global_countries = self.data_catalog.get_geodataframe("GADM_level0").rename(
-            columns={"GID_0": "ISO3"}
+        regions: gpd.GeoDataFrame = (
+            self.new_data_catalog.get(region_database)
+            .read(geom=self.region.union_all())
+            .rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
         )
+
+        global_countries: gpd.GeoDataFrame = (
+            self.new_data_catalog.get("GADM_level0")
+            .read()
+            .rename(columns={"GID_0": "ISO3"})
+        )
+
         global_countries["geometry"] = global_countries.centroid
+        # Renaming XKO to XKX
+        self.logger.info("Renaming XKO to XKX in global countries")
         global_countries["ISO3"] = global_countries["ISO3"].replace(
             {"XKO": "XKX"}
         )  # XKO is a deprecated code for Kosovo, XKX is the new code
         global_countries = global_countries.set_index("ISO3")
-
-        # Renaming XKO to XKX
-        global_countries = global_countries.rename(columns={"XKO": "XKX"})
-        self.logger.info(
-            f"Renamed XKO to XKX in global countries: {global_countries.columns}"
-        )
 
         self.set_geom(global_countries, name="global_countries")
 
@@ -290,11 +286,11 @@ class LandSurface:
             .isel(band=0)
         )
 
-        reprojected_land_use = resample_chunked(
+        reprojected_land_use: xr.DataArray = resample_chunked(
             land_use, region_mask.chunk({"x": 1000, "y": 1000}), method="nearest"
         )
 
-        reprojected_land_use = self.set_region_subgrid(
+        reprojected_land_use: xr.DataArray = self.set_region_subgrid(
             reprojected_land_use,
             name="landsurface/original_land_use",
         )
@@ -305,7 +301,17 @@ class LandSurface:
             all_touched=True,
         )
         region_ids.attrs["_FillValue"] = -1
-        region_ids = self.set_region_subgrid(region_ids, name="region_ids")
+
+        region_ids_: xr.DataArray = rasterize_like(
+            gpd=self.geom["regions"],
+            column="region_id",
+            raster=region_mask,
+            dtype=np.int32,
+            nodata=0,
+        ).compute()
+        region_ids: xr.DataArray = self.set_region_subgrid(
+            region_ids, name="region_ids"
+        )
 
         full_region_land_use_classes = reprojected_land_use.raster.reclassify(
             pd.DataFrame.from_dict(

@@ -12,7 +12,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator, List, Union
+from typing import Any, Callable, Iterator
 
 import geopandas as gpd
 import networkx
@@ -28,7 +28,9 @@ from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
 from shapely.geometry import Point
 
+from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
+from geb.workflows.raster import full_like, repeat_grid
 
 from ..workflows.io import open_zarr, to_zarr
 from .modules import (
@@ -43,10 +45,6 @@ from .modules import (
 from .modules.hydrography import (
     create_river_raster_from_river_lines,
 )
-from .workflows.general import (
-    repeat_grid,
-)
-from .workflows.merit_hydro import download_merit
 
 # Set environment options for robustness
 GDAL_HTTP_ENV_OPTS = {
@@ -261,10 +259,11 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
     Returns:
         A directed graph where nodes are COMID values and edges point downstream.
     """
-    river_network: pd.DataFrame = pd.read_parquet(
-        data_catalog.get_source("MERIT_Basins_riv").path,
-        columns=["COMID", "NextDownID"],
-    ).set_index("COMID")
+    river_network: pd.DataFrame = (
+        data_catalog.get("merit_basins_rivers")
+        .read(columns=["COMID", "NextDownID"])
+        .set_index("COMID")
+    )
     assert river_network.index.name == "COMID", (
         "The index of the river network is not the COMID column"
     )
@@ -310,6 +309,13 @@ def get_subbasin_id_from_coordinate(
     # xmin == xmax and ymin == ymax
     # geoparquet uses < and >, not <= and >=, so we need to add
     # a small value to the coordinates to avoid missing the point
+    COMID: gpd.GeoDataFrame = (
+        data_catalog.get("merit_basins_catchments")
+        .read(
+            bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
+        )
+        .set_index("COMID")
+    )
     COMID = gpd.read_parquet(
         data_catalog.get_source("MERIT_Basins_cat").path,
         bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
@@ -573,37 +579,6 @@ def get_coastline_nodes(
     return coastline_nodes
 
 
-def full_like(
-    data: xr.DataArray,
-    fill_value: int | float | bool,
-    nodata: int | float | bool,
-    attrs: None | dict = None,
-    *args: Any,
-    **kwargs: Any,
-) -> xr.DataArray:
-    """Create a new xarray DataArray with the same shape and coordinates as the input data.
-
-    The new DataArray is filled with the specified fill_value and has the specified nodata value.
-
-    Args:
-        data: The input DataArray to use as a template.
-        fill_value: The value to fill the new DataArray with.
-        nodata: The nodata value to set in the attributes of the new DataArray.
-        attrs: Optional dictionary of attributes to set in the new DataArray.
-        *args: Additional positional arguments to pass to xr.full_like.
-        **kwargs: Additional keyword arguments to pass to xr.full_like.
-
-    Returns:
-        A new DataArray with the same shape and coordinates as the input data,
-        filled with the specified fill_value and with the specified nodata value in the attributes.
-    """
-    assert isinstance(data, xr.DataArray)
-    da: xr.DataArray = xr.full_like(data, fill_value, *args, **kwargs)
-    da.attrs = attrs or {}
-    da.attrs["_FillValue"] = nodata
-    return da
-
-
 def create_riverine_mask(
     ldd: xr.DataArray, ldd_network: pyflwdir.FlwdirRaster, geom: gpd.GeoDataFrame
 ) -> xr.DataArray:
@@ -623,7 +598,7 @@ def create_riverine_mask(
         fill_value=True,
         nodata=False,
         dtype=bool,
-    )
+    ).compute()
 
     riverine_mask = riverine_mask.rio.clip([geom.union_all()], drop=False)
 
@@ -754,6 +729,7 @@ class GEBModel(
         self.root = root
         self.epsg = epsg
         self.data_provider = data_provider
+        self.new_data_catalog = NewDataCatalog()
 
         # the grid, subgrid, and region subgrids are all datasets, which should
         # have exactly matching coordinates
@@ -810,7 +786,7 @@ class GEBModel(
         assert subgrid_factor >= 2
 
         self.logger.info("Loading river network.")
-        river_graph = get_river_graph(self.data_catalog)
+        river_graph = get_river_graph(self.new_data_catalog)
 
         self.logger.info("Finding sinks in river network of requested region.")
         if "subbasin" in region:
@@ -821,7 +797,7 @@ class GEBModel(
         elif "outflow" in region:
             lat, lon = region["outflow"]["lat"], region["outflow"]["lon"]
             sink_subbasin_ids = [
-                get_subbasin_id_from_coordinate(self.data_catalog, lon, lat)
+                get_subbasin_id_from_coordinate(self.new_data_catalog, lon, lat)
             ]
         elif "geom" in region:
             regions = self.data_catalog.get_geodataframe(region["geom"]["source"])
@@ -851,99 +827,96 @@ class GEBModel(
         xmax += buffer
         ymax += buffer
 
-        with rasterio.Env(
-            GDAL_HTTP_USERPWD=f"{os.environ['MERIT_USERNAME']}:{os.environ['MERIT_PASSWORD']}"
-        ):
-            ldd = download_merit(
-                xmin, xmax, ymin, ymax, "dir", self.preprocessing_dir / "merit_hydro"
-            )
-            ldd.attrs["_FillValue"] = 247
+        ldd: xr.DataArray = self.new_data_catalog.get(
+            "merit_hydro_dir",
+            xmin=xmin,
+            xmax=xmax,
+            ymin=ymin,
+            ymax=ymax,
+        ).read()
 
-            ldd_network = pyflwdir.from_array(
-                ldd.values,
-                ftype="d8",
-                transform=ldd.rio.transform(recalc=True),
-                latlon=True,
-            )
+        ldd_network = pyflwdir.from_array(
+            ldd.values,
+            ftype="d8",
+            transform=ldd.rio.transform(recalc=True),
+            latlon=True,
+        )
 
-            self.logger.info("Preparing 2D grid.")
-            if "outflow" in region:
-                # get basin geometry
-                riverine_mask = full_like(
-                    ldd,
-                    fill_value=False,
-                    nodata=False,
-                    dtype=bool,
-                )
-                riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
-            elif "subbasin" in region or "geom" in region:
-                geom = gpd.GeoDataFrame(
-                    geometry=[subbasins_without_outflow_basin.union_all()],
-                    crs=subbasins_without_outflow_basin.crs,
-                )
-                # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
-                # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
-                # usable between 86°S and 86°N.
-                self.logger.info(
-                    f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
-                )
-
-                riverine_mask = create_riverine_mask(ldd, ldd_network, geom)
-                assert not riverine_mask.attrs["_FillValue"]
-            else:
-                raise ValueError(f"Region {region} not understood.")
-
-            if include_coastal_area and subbasins["is_coastal_basin"].any():
-                mask = self.extend_mask_to_coastal_area(ldd, riverine_mask, subbasins)
-            else:
-                mask = riverine_mask
-
-            mask.attrs["_FillValue"] = None
-            self.set_other(mask, name="drainage/mask")
-
-            ldd = xr.where(
-                mask,
+        self.logger.info("Preparing 2D grid.")
+        if "outflow" in region:
+            # get basin geometry
+            riverine_mask = full_like(
                 ldd,
-                ldd.attrs["_FillValue"],
+                fill_value=False,
+                nodata=False,
+                dtype=bool,
+            )
+            riverine_mask.values[ldd_network.basins(xy=(lon, lat)) > 0] = True
+        elif "subbasin" in region or "geom" in region:
+            geom = gpd.GeoDataFrame(
+                geometry=[subbasins_without_outflow_basin.union_all()],
+                crs=subbasins_without_outflow_basin.crs,
+            )
+            # ESPG 6933 (WGS 84 / NSIDC EASE-Grid 2.0 Global) is an equal area projection
+            # while thhe shape of the polygons becomes vastly different, the area is preserved mostly.
+            # usable between 86°S and 86°N.
+            self.logger.info(
+                f"Approximate riverine basin size: {round(geom.to_crs(epsg=6933).area.sum() / 1e6, 2)} km2"
             )
 
-            ldd_elevation = download_merit(
-                xmin, xmax, ymin, ymax, "elv", self.preprocessing_dir / "merit_hydro"
+            riverine_mask = create_riverine_mask(ldd, ldd_network, geom)
+            assert not riverine_mask.attrs["_FillValue"]
+        else:
+            raise ValueError(f"Region {region} not understood.")
+
+        if include_coastal_area and subbasins["is_coastal_basin"].any():
+            mask: xr.DataArray = self.extend_mask_to_coastal_area(
+                ldd, riverine_mask, subbasins
             )
-            ldd_elevation.attrs["_FillValue"] = -9999.0
-            assert ldd_elevation.shape == ldd.shape == mask.shape
+        else:
+            mask: xr.DataArray = riverine_mask
 
-            ldd_elevation = xr.where(
-                mask,
-                ldd_elevation,
-                ldd_elevation.attrs["_FillValue"],
-            )
+        mask.attrs["_FillValue"] = None
+        self.set_other(mask, name="drainage/mask")
 
-            mask, ldd, ldd_elevation = clip_region(
-                mask, ldd, ldd_elevation, align=30 / 60 / 60
-            )
+        ldd: xr.DataArray = xr.where(
+            mask,
+            ldd,
+            ldd.attrs["_FillValue"],
+        )
 
-            ldd.attrs["_FillValue"] = 247
-            ldd = xr.where(
-                mask,
-                ldd,
-                ldd.attrs["_FillValue"],
-                keep_attrs=True,
-            )
-            ldd = self.set_other(ldd, name="drainage/original_d8_flow_directions")
+        ldd_elevation: xr.DataArray = self.new_data_catalog.get(
+            "merit_hydro_elv",
+            xmin=xmin,
+            xmax=xmax,
+            ymin=ymin,
+            ymax=ymax,
+        ).read()
 
-            ldd_elevation.attrs["_FillValue"] = -9999.0
-            ldd_elevation = xr.where(
-                mask,
-                ldd_elevation,
-                ldd_elevation.attrs["_FillValue"],
-                keep_attrs=True,
-            )
-            ldd_elevation = ldd_elevation.raster.mask_nodata()
+        assert ldd_elevation.shape == ldd.shape == mask.shape
 
-            self.set_other(ldd_elevation, name="drainage/original_d8_elevation")
+        ldd_elevation = xr.where(
+            mask,
+            ldd_elevation,
+            ldd_elevation.attrs["_FillValue"],
+        )
 
-            self.derive_mask(ldd, ldd.rio.transform(), resolution_arcsec)
+        mask, ldd, ldd_elevation = clip_region(
+            mask, ldd, ldd_elevation, align=30 / 60 / 60
+        )
+        self.set_other(ldd_elevation, name="drainage/original_d8_elevation")
+
+        ldd: xr.DataArray = xr.where(
+            mask,
+            ldd,
+            ldd.attrs["_FillValue"],
+            keep_attrs=True,
+        )
+        ldd: xr.DataArray = self.set_other(
+            ldd, name="drainage/original_d8_flow_directions"
+        )
+
+        self.derive_mask(ldd, ldd.rio.transform(), resolution_arcsec)
 
         self.create_subgrid(subgrid_factor)
 
@@ -977,11 +950,16 @@ class GEBModel(
         STUDY_AREA_OUTFLOW: int = 1
         NEARBY_OUTFLOW: int = 2
 
-        rivers: gpd.GeoDataFrame = gpd.read_parquet(
-            self.data_catalog.get_source("MERIT_Basins_riv").path,
-            columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
-            bbox=ldd.rio.bounds(),
-        ).set_index("COMID")
+        rivers: gpd.GeoDataFrame = (
+            self.new_data_catalog.get(
+                "merit_basins_rivers",
+            )
+            .read(
+                columns=["COMID", "lengthkm", "uparea", "maxup", "geometry"],
+                bbox=ldd.rio.bounds(),
+            )
+            .set_index("COMID")
+        )
 
         rivers["outflow_type"] = rivers.apply(
             lambda row: STUDY_AREA_OUTFLOW
@@ -1770,7 +1748,9 @@ class GEBModel(
         grid[name] = data
         return grid
 
-    def set_grid(self, data: xr.DataArray, name: str, write: bool = True) -> None:
+    def set_grid(
+        self, data: xr.DataArray, name: str, write: bool = True
+    ) -> xr.DataArray:
         """Set a new grid layer.
 
         When the first layer is added to the grid, it must be the mask layer.
@@ -1789,7 +1769,9 @@ class GEBModel(
         self._set_grid("grid", self.grid, data, write=write, name=name)
         return self.grid[name]
 
-    def set_subgrid(self, data: xr.DataArray, name: str, write: bool = True) -> None:
+    def set_subgrid(
+        self, data: xr.DataArray, name: str, write: bool = True
+    ) -> xr.DataArray:
         """Set a new subgrid layer.
 
         When the first layer is added to the subgrid, it must be the mask layer.
@@ -1813,7 +1795,7 @@ class GEBModel(
 
     def set_region_subgrid(
         self, data: xr.DataArray, name: str, write: bool = True
-    ) -> None:
+    ) -> xr.DataArray:
         """Set a new region subgrid layer.
 
         When the first layer is added to the region subgrid, it must be the mask layer.
