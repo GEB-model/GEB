@@ -277,11 +277,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Test with a high variable for now
-        self.var.total_spinup_time = max(
-            self.model.config["general"]["start_time"].year
-            - self.model.config["general"]["spinup_time"].year,
-            30,
-        )
+        self.var.total_spinup_time = 20
 
         self.HRU.var.actual_evapotranspiration_crop_life = self.HRU.full_compressed(
             0, dtype=np.float32
@@ -504,7 +500,13 @@ class CropFarmers(AgentBaseClass):
             fill_value=np.nan,  # m3
         )
         # set the remaining irrigation limit to the irrigation limit
-        self.var.remaining_irrigation_limit_m3 = DynamicArray(
+        self.var.remaining_irrigation_limit_m3_reservoir = DynamicArray(
+            n=self.var.n, max_n=self.var.max_n, fill_value=np.nan, dtype=np.float32
+        )
+        self.var.remaining_irrigation_limit_m3_channel = DynamicArray(
+            n=self.var.n, max_n=self.var.max_n, fill_value=np.nan, dtype=np.float32
+        )
+        self.var.remaining_irrigation_limit_m3_groundwater = DynamicArray(
             n=self.var.n, max_n=self.var.max_n, fill_value=np.nan, dtype=np.float32
         )
         self.var.irrigation_limit_reset_day_index = DynamicArray(
@@ -1130,48 +1132,72 @@ class CropFarmers(AgentBaseClass):
             gross_irrigation_demand_m3: gross irrigation demand in m3 for each farmer
             gross_potential_irrigation_m3_limit_adjusted: adjusted gross potential irrigation in m3 limit for each farmer
         """
-        gross_irrigation_demand_m3, gross_potential_irrigation_m3_limit_adjusted = (
-            get_gross_irrigation_demand_m3(
-                day_index=self.model.current_day_of_year - 1,
-                n=self.var.n,
-                currently_irrigated_fields=self.currently_irrigated_fields,
-                field_indices_by_farmer=self.var.field_indices_by_farmer.data,
-                field_indices=self.var.field_indices,
-                irrigation_efficiency=self.var.irrigation_efficiency.data,
-                fraction_irrigated_field=self.var.fraction_irrigated_field.data,
-                cell_area=self.model.hydrology.HRU.var.cell_area,
-                crop_map=self.HRU.var.crop_map,
-                topwater=self.HRU.var.topwater,
-                available_infiltration=available_infiltration,
-                potential_evapotranspiration=potential_evapotranspiration,
-                root_depth=self.HRU.var.root_depth,
-                soil_layer_height=self.HRU.var.soil_layer_height,
-                field_capacity=self.HRU.var.wfc,
-                wilting_point=self.HRU.var.wwp,
-                w=self.HRU.var.w,
-                ws=self.HRU.var.ws,
-                arno_beta=self.HRU.var.arno_beta,
-                saturated_hydraulic_conductivity=self.HRU.var.saturated_hydraulic_conductivity,
-                remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
-                irrigation_limit_reset_day_index=self.var.irrigation_limit_reset_day_index.data,
-                cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
-                crop_calendar=self.var.crop_calendar.data,
-                crop_group_numbers=self.var.crop_data[
-                    "crop_group_number"
-                ].values.astype(np.float32),
-                paddy_irrigated_crops=self.var.crop_data["is_paddy"].values,
-                current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
-                max_paddy_water_level=self.var.max_paddy_water_level.data,
-                minimum_effective_root_depth=np.float32(
-                    self.model.hydrology.soil.var.minimum_effective_root_depth
-                ),
-            )
+        (
+            gross_potential_irrigation_m3,
+            gross_potential_irrigation_m3_limit_adjusted_reservoir,
+            gross_potential_irrigation_m3_limit_adjusted_channel,
+            gross_potential_irrigation_m3_limit_adjusted_groundwater,
+        ) = get_gross_irrigation_demand_m3(
+            day_index=self.model.current_day_of_year - 1,
+            n=self.var.n,
+            currently_irrigated_fields=self.currently_irrigated_fields,
+            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
+            field_indices=self.var.field_indices,
+            irrigation_efficiency=self.var.irrigation_efficiency.data,
+            fraction_irrigated_field=self.var.fraction_irrigated_field.data,
+            cell_area=self.model.hydrology.HRU.var.cell_area,
+            crop_map=self.HRU.var.crop_map,
+            topwater=self.HRU.var.topwater,
+            available_infiltration=available_infiltration,
+            potential_evapotranspiration=potential_evapotranspiration,
+            root_depth=self.HRU.var.root_depth,
+            soil_layer_height=self.HRU.var.soil_layer_height,
+            field_capacity=self.HRU.var.wfc,
+            wilting_point=self.HRU.var.wwp,
+            w=self.HRU.var.w,
+            ws=self.HRU.var.ws,
+            arno_beta=self.HRU.var.arno_beta,
+            saturated_hydraulic_conductivity=self.HRU.var.saturated_hydraulic_conductivity,
+            remaining_irrigation_limit_m3_reservoir=self.var.remaining_irrigation_limit_m3_reservoir.data,
+            remaining_irrigation_limit_m3_channel=self.var.remaining_irrigation_limit_m3_channel.data,
+            remaining_irrigation_limit_m3_groundwater=self.var.remaining_irrigation_limit_m3_groundwater.data,
+            irrigation_limit_reset_day_index=self.var.irrigation_limit_reset_day_index.data,
+            cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,
+            crop_calendar=self.var.crop_calendar.data,
+            crop_group_numbers=self.var.crop_data["crop_group_number"].values.astype(
+                np.float32
+            ),
+            paddy_irrigated_crops=self.var.crop_data["is_paddy"].values,
+            current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
+            max_paddy_water_level=self.var.max_paddy_water_level.data,
+            minimum_effective_root_depth=np.float32(
+                self.model.hydrology.soil.var.minimum_effective_root_depth
+            ),
         )
 
         assert (
-            gross_irrigation_demand_m3 < self.model.hydrology.HRU.var.cell_area
+            gross_potential_irrigation_m3 < self.model.hydrology.HRU.var.cell_area
         ).all()
-        return gross_irrigation_demand_m3, gross_potential_irrigation_m3_limit_adjusted
+        return (
+            gross_potential_irrigation_m3,
+            gross_potential_irrigation_m3_limit_adjusted_reservoir,
+            gross_potential_irrigation_m3_limit_adjusted_channel,
+            gross_potential_irrigation_m3_limit_adjusted_groundwater,
+        )
+
+    @property
+    def irrigation_limit_groundwater(self):
+        hourly_irrigation_maximum = 79.93 * (self.groundwater_depth + 0.01) ** -0.728
+        crop_growth_lengths = self.var.crop_calendar[:, :, 2].data
+        crop_growth_lengths = np.where(
+            crop_growth_lengths == -1, 0, crop_growth_lengths
+        )
+        kharif_total = crop_growth_lengths[:, 0] * 4
+        rabi_total = crop_growth_lengths[:, 0] * 3
+        summer_total = crop_growth_lengths[:, 0] * 3
+        total_growth_hours = kharif_total + rabi_total + summer_total
+        yearly_irrigation_total = hourly_irrigation_maximum * total_growth_hours
+        return yearly_irrigation_total
 
     @property
     def surface_irrigated(self):
@@ -1194,7 +1220,15 @@ class CropFarmers(AgentBaseClass):
     def abstract_water(
         self,
         gross_irrigation_demand_m3_per_field: npt.NDArray[np.float32],
-        gross_irrigation_demand_m3_per_field_limit_adjusted: npt.NDArray[np.float32],
+        gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir: npt.NDArray[
+            np.float32
+        ],
+        gross_irrigation_demand_m3_per_field_limit_adjusted_channel: npt.NDArray[
+            np.float32
+        ],
+        gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater: npt.NDArray[
+            np.float32
+        ],
         available_channel_storage_m3: npt.NDArray[np.float32],
         available_groundwater_m3: npt.NDArray[np.float64],
         groundwater_depth: npt.NDArray[np.float64],
@@ -1230,18 +1264,35 @@ class CropFarmers(AgentBaseClass):
         assert (available_groundwater_m3 >= 0).all()
         assert (available_reservoir_storage_m3 >= 0).all()
 
-        gross_irrigation_demand_m3_per_farmer_limit_adjusted = self.field_to_farmer(
-            gross_irrigation_demand_m3_per_field_limit_adjusted
+        gross_irrigation_demand_m3_per_farmer_limit_adjusted_reservoir = (
+            self.field_to_farmer(
+                gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir
+            )
         )
 
         maximum_abstraction_reservoir_m3_by_farmer = (
             self.agents.reservoir_operators.get_maximum_abstraction_m3_by_farmer(
-                self.command_area, gross_irrigation_demand_m3_per_farmer_limit_adjusted
+                self.command_area,
+                gross_irrigation_demand_m3_per_farmer_limit_adjusted_reservoir,
             )
+        )
+        maximum_abstraction_channel_m3_by_farmer = self.field_to_farmer(
+            gross_irrigation_demand_m3_per_field_limit_adjusted_channel
+        )
+        maximum_abstraction_groundwater_m3_by_farmer = self.field_to_farmer(
+            gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater
         )
 
         if __debug__:
-            irrigation_limit_pre = self.var.remaining_irrigation_limit_m3.copy()
+            irrigation_limit_pre_reservoir = (
+                self.var.remaining_irrigation_limit_m3_reservoir.copy()
+            )
+            irrigation_limit_pre_channel = (
+                self.var.remaining_irrigation_limit_m3_channel.copy()
+            )
+            irrigation_limit_pre_groundwater = (
+                self.var.remaining_irrigation_limit_m3_groundwater.copy()
+            )
             available_channel_storage_m3_pre = available_channel_storage_m3.copy()
         (
             self.var.channel_abstraction_m3_by_farmer[:],
@@ -1267,16 +1318,20 @@ class CropFarmers(AgentBaseClass):
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
-            maximum_abstraction_reservoir_m3_by_farmer=maximum_abstraction_reservoir_m3_by_farmer,
             groundwater_depth=groundwater_depth,
             command_area_by_farmer=self.command_area,
             return_fraction=self.model.config["agent_settings"]["farmers"][
                 "return_fraction"
             ],
             well_depth=self.var.well_depth.data,
-            remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
+            remaining_irrigation_limit_m3_reservoir=self.var.remaining_irrigation_limit_m3_reservoir.data,
+            remaining_irrigation_limit_m3_channel=self.var.remaining_irrigation_limit_m3_channel.data,
+            remaining_irrigation_limit_m3_groundwater=self.var.remaining_irrigation_limit_m3_groundwater.data,
+            maximum_abstraction_reservoir_m3_by_farmer=maximum_abstraction_reservoir_m3_by_farmer,
+            maximum_abstraction_channel_m3_by_farmer=maximum_abstraction_channel_m3_by_farmer,
+            maximum_abstraction_groundwater_m3_by_farmer=maximum_abstraction_groundwater_m3_by_farmer,
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
-            gross_irrigation_demand_m3_per_field_limit_adjusted=gross_irrigation_demand_m3_per_field_limit_adjusted,
+            # gross_irrigation_demand_m3_per_field_limit_adjusted=gross_irrigation_demand_m3_per_field_limit_adjusted,
         )
 
         assert (water_withdrawal_m < 1).all()
@@ -1332,21 +1387,37 @@ class CropFarmers(AgentBaseClass):
                 how="sum",
                 outfluxes=(
                     self.var.channel_abstraction_m3_by_farmer[
-                        ~np.isnan(self.var.remaining_irrigation_limit_m3)
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
                     ].astype(np.float64),
                     self.var.reservoir_abstraction_m3_by_farmer[
-                        ~np.isnan(self.var.remaining_irrigation_limit_m3)
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
                     ].astype(np.float64),
                     self.var.groundwater_abstraction_m3_by_farmer[
-                        ~np.isnan(self.var.remaining_irrigation_limit_m3)
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
                     ].astype(np.float64),
                 ),
-                prestorages=irrigation_limit_pre[
-                    ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                ].astype(np.float64),
-                poststorages=self.var.remaining_irrigation_limit_m3[
-                    ~np.isnan(self.var.remaining_irrigation_limit_m3)
-                ].astype(np.float64),
+                prestorages=(
+                    irrigation_limit_pre_reservoir[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
+                    ].astype(np.float64),
+                    irrigation_limit_pre_channel[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
+                    ].astype(np.float64),
+                    irrigation_limit_pre_groundwater[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
+                    ].astype(np.float64),
+                ),
+                poststorages=(
+                    self.var.remaining_irrigation_limit_m3_channel[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
+                    ].astype(np.float64),
+                    self.var.remaining_irrigation_limit_m3_reservoir[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
+                    ].astype(np.float64),
+                    self.var.remaining_irrigation_limit_m3_groundwater[
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
+                    ].astype(np.float64),
+                ),
                 tollerance=50,
             )
 
@@ -3127,7 +3198,7 @@ class CropFarmers(AgentBaseClass):
 
         # Determine for which agents it is beneficial to switch crops
         SEUT_adaptation_decision = (
-            (best_option_SEUT > (SEUT_do_nothing)) & (new_id_temp != -1)
+            (best_option_SEUT > (SEUT_do_nothing * 1.5)) & (new_id_temp != -1)
         )  # Filter out crops chosen due to small diff in do_nothing and adapt SEUT calculation
 
         # Adjust the intention threshold based on whether neighbors already have similar crop
@@ -3144,7 +3215,10 @@ class CropFarmers(AgentBaseClass):
 
         # Increase intention factor if someone in network has crop
         intention_factor_adjusted = self.var.intention_factor.copy()
-        intention_factor_adjusted[network_has_rotation] += 0.333
+        intention_factor_adjusted = np.clip(
+            self.var.intention_factor.data - 0.3, 0.05, 0.2
+        )
+        intention_factor_adjusted[network_has_rotation] += 4
 
         # Determine whether it passed the intention threshold
         random_values = np.random.rand(*intention_factor_adjusted.shape)
@@ -4750,9 +4824,14 @@ class CropFarmers(AgentBaseClass):
             if self.model.current_time.year - 1 > self.model.spinup_start.year:
                 # reset the irrigation limit, but only if a full year has passed already. Otherwise
                 # the cumulative water deficit is not year completed.
-                self.var.remaining_irrigation_limit_m3[:] = 0
-                self.var.remaining_irrigation_limit_m3[:] = (
+                self.var.remaining_irrigation_limit_m3_reservoir[:] = (
                     self.var.irrigation_limit_m3[:]
+                )
+                self.var.remaining_irrigation_limit_m3_channel[:] = (
+                    self.var.irrigation_limit_m3[:]
+                )
+                self.var.remaining_irrigation_limit_m3_groundwater[:] = (
+                    self.irrigation_limit_groundwater
                 )
 
                 # Save SPEI after 1 year, otherwise doesnt line up with harvests
