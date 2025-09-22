@@ -1,6 +1,5 @@
 """Module containing general agent functions and the base class for all agents."""
 
-import math
 from typing import Tuple
 
 import numpy as np
