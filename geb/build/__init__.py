@@ -747,8 +747,6 @@ class GEBModel(
         )
         self.other: DelayedReader = DelayedReader(reader=open_zarr)
 
-        self.files: dict = self.read_or_create_file_library()
-
     @build_method
     def setup_region(
         self,
@@ -1542,7 +1540,7 @@ class GEBModel(
         Returns:
             A dictionary with the file library.
         """
-        fp: Path = Path(self.root, "files.json")
+        fp: Path = Path(self.files_path)
         if not fp.exists():
             return {
                 "geom": {},
@@ -1555,7 +1553,7 @@ class GEBModel(
                 "other": {},
             }
         else:
-            with open(Path(self.root, "files.json"), "r") as f:
+            with open(Path(self.files_path), "r") as f:
                 files: dict[str, dict[str, str]] = json.load(f)
 
             # geoms was renamed to geom in the file library. To upgrade old models,
@@ -1978,15 +1976,10 @@ class GEBModel(
         # then loop over other methods
         # TODO: Allow validate order for custom models
         build_method.validate_methods(methods, validate_order=validate_order)
+        self.files = self.read_or_create_file_library()
         for method in methods:
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
-
-            # if the method is "setup_region", we start an entirely new model
-            # ant therefore delete the files save path
-            if method == "setup_region":
-                self.files_path.unlink(missing_ok=True)
-
             self.write_file_library()
 
         self.logger.info("Finished!")
@@ -1995,6 +1988,7 @@ class GEBModel(
         """Build the model with the specified region and methods."""
         methods: dict[str:Any] = methods or {}
         methods["setup_region"].update(region=region)
+        self.files_path.unlink(missing_ok=True)
 
         self.run_methods(methods, validate_order=True and type(self) is GEBModel)
 
