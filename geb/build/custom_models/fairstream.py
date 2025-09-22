@@ -23,10 +23,78 @@ from geb.agents.crop_farmers import (
 )
 from geb.build.methods import build_method
 
-from ...workflows.io import open_zarr
+from ...workflows.io import open_zarr, load_array
 from .. import GEBModel
 from ..workflows.general import repeat_grid
 
+
+# Manual replacement of certain crops
+def replace_crop(crop_calendar_per_farmer, crop_values, replaced_crop_values):
+    # Find the most common crop value among the given crop_values
+    crop_instances = crop_calendar_per_farmer[:, :, 0][
+        np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
+    ]
+
+    # if none of the crops are present, no need to replace anything
+    if crop_instances.size == 0:
+        return crop_calendar_per_farmer
+
+    crops, crop_counts = np.unique(crop_instances, return_counts=True)
+    most_common_crop = crops[np.argmax(crop_counts)]
+
+    # Determine if there are multiple cropping versions of this crop and assign it to the most common
+    new_crop_types = crop_calendar_per_farmer[
+        (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
+        :,
+        :,
+    ]
+    unique_rows, counts = np.unique(new_crop_types, axis=0, return_counts=True)
+    max_index = np.argmax(counts)
+    crop_replacement = unique_rows[max_index]
+
+    crop_replacement_only_crops = crop_replacement[
+        crop_replacement[:, -1] != -1
+    ]
+    if crop_replacement_only_crops.shape[0] > 1:
+        assert (
+            np.unique(crop_replacement_only_crops[:, [1, 3]], axis=0).shape[0]
+            == crop_replacement_only_crops.shape[0]
+        )
+
+    for replaced_crop in replaced_crop_values:
+        # Check where to be replaced crop is
+        crop_mask = (crop_calendar_per_farmer[:, :, 0] == replaced_crop).any(
+            axis=1
+        )
+        # Replace the crop
+        crop_calendar_per_farmer[crop_mask] = crop_replacement
+
+    return crop_calendar_per_farmer
+
+def unify_crop_variants(crop_calendar_per_farmer, target_crop):
+    # Create a mask for all entries whose first value == target_crop
+    mask = crop_calendar_per_farmer[..., 0] == target_crop
+
+    # If the crop does not appear at all, nothing to do
+    if not np.any(mask):
+        return crop_calendar_per_farmer
+
+    # Extract only the rows/entries that match the target crop
+    crop_entries = crop_calendar_per_farmer[mask]
+
+    # Among these crop rows, find unique variants and their counts
+    # (axis=0 ensures we treat each row/entry as a unit)
+    unique_variants, variant_counts = np.unique(
+        crop_entries, axis=0, return_counts=True
+    )
+
+    # The most common variant is the unique variant with the highest count
+    most_common_variant = unique_variants[np.argmax(variant_counts)]
+
+    # Replace all the target_crop rows with the most common variant
+    crop_calendar_per_farmer[mask] = most_common_variant
+
+    return crop_calendar_per_farmer
 
 class Survey:
     def __init__(self) -> None:
@@ -1148,6 +1216,31 @@ class fairSTREAMModel(GEBModel):
             crop_calendar_rotation_years,
             name="agents/farmers/crop_calendar_rotation_years",
         )
+
+    @build_method(depends_on="setup_farmer_crop_calendar")
+    def adjust_crop_calendar(self,):
+        BAJRA = 0
+        GROUNDNUT = 1
+        JOWAR = 2
+        PADDY = 3
+        SUGARCANE = 4
+        WHEAT = 5
+        GRAM = 6
+        MAIZE = 7
+        MOONG = 8
+        RAGI = 9
+        SUNFLOWER = 10
+        TUR = 11
+        import zarr
+        crop_calendar = zarr.load("/net/sys/pscst001/export/BETA-IVM-BAZIS/mka483/GEB_p3/GEB_models/models/bhima/base/input/array/agents/farmers/crop_calendar.zarr")
+        crop_calendar_rotation_years = zarr.load("/net/sys/pscst001/export/BETA-IVM-BAZIS/mka483/GEB_p3/GEB_models/models/bhima/base/input/array/agents/farmers/crop_calendar_rotation_years.zarr")
+        most_common_check = [TUR, MOONG, GRAM]
+        replaced_value = [TUR, MOONG, GRAM]
+        crop_calendar_per_farmer = replace_crop(
+            crop_calendar, most_common_check, replaced_value
+        )
+
+        self.set_array(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
 
     @build_method(depends_on=["setup_create_farms", "setup_cell_area"])
     def setup_farmer_characteristics(
