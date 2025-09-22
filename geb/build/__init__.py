@@ -1611,6 +1611,7 @@ class GEBModel(
 
         Useful when continuing a build from an existing folder.
         """
+        self.files = self.read_or_create_file_library()
         with suppress_logging_warning(self.logger):
             self.read_geom()
             self.read_array()
