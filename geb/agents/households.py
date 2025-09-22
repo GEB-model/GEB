@@ -222,12 +222,22 @@ class Households(AgentBaseClass):
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
-        # initiate array for warning range [0 = not warned, 1 = warned]
+        # initiate array for warning state [0 = not warned, 1 = warned]
         self.var.warning_reached = DynamicArray(
             np.zeros(self.n, np.int32), max_n=self.max_n
         )
 
+        # initiate array for warning level [0 = no warning, 1 = measures, 2 = evacuate]
+        self.var.warning_level = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
+        )
+
+        # initiate array for warning source (set of sources that issued the warning)
+        # testing without being numpy array -- need to fix this later
+        self.var.warning_source = [set() for _ in range(self.n)]
+
         # initiate array for response probability (between 0 and 1)
+        # using a fixed seed for reproducibility
         rng = np.random.default_rng(42)
         self.var.response_probability = DynamicArray(
             rng.random(self.n), max_n=self.max_n
@@ -239,11 +249,11 @@ class Households(AgentBaseClass):
         # initiate array for storing the recommended measures received with the warnings
         # self.var.recommended_measures = DynamicArray(
         #     np.empty(self.n, dtype=object), max_n=self.max_n
-        # ) --> assert error, cannot be dtype cannot be object --> not dynamic for now
+        # ) --> assert error, dtype cannot be object --> not dynamic array for now, need to fix it later
         self.var.recommended_measures = np.array([set() for _ in range(self.n)])
 
         # initiate array for storing the actions taken by the household
-        # --> assert error, cannot be dtype cannot be object --> not dynamic for now
+        # --> assert error, dtype cannot be object --> not dynamic for now, need to fix it later
         self.var.actions_taken = np.array([set() for _ in range(self.n)])
 
         # initiate array with risk perception [dummy data for now]
@@ -693,10 +703,17 @@ class Households(AgentBaseClass):
                             households["postcode"] == pc4_code
                         ]
 
+                        # Get the measures and evacuation flag from the json dictionary to use in the warning communication function
+                        measures = self.var.wlranges_and_measures[range_id]["measure"]
+                        evacuate = self.var.wlranges_and_measures[range_id]["evacuate"]
+
                         # Communicate the warning to the target households
                         # This function should return the number of households that were warned
                         n_warned_households = self.warning_communication(
-                            affected_households, range_id
+                            target_households=affected_households,
+                            measures=measures,
+                            evacuate=evacuate,
+                            source="water_levels",
                         )
 
                         warnings_log.append(
@@ -709,6 +726,7 @@ class Households(AgentBaseClass):
                                 "percentage_above_threshold": percentage,
                             }
                         )
+                        # Need to change day to time later
 
         # Save the warnings log to a csv file
         path = os.path.join(self.model.output_folder, "warnings_log_water_levels.csv")
@@ -867,8 +885,8 @@ class Households(AgentBaseClass):
 
     def critical_infrastructure_warning_strategy(self, prob_threshold=0.6):
         """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities."""
-        ## Load inputs -- This should only be done once when loading the assets in the model
-        # Get the household points, needed to issue warnings -- need to check how this combines with the warning comm. efficiency
+        ## Load inputs -- This should only be done once when loading the assets in the model, need to fix it later
+        # Get the household points, needed to issue warnings
         households = self.var.household_points.copy()
 
         # Get the forecast start date from the config (to know to which forecast day the warnings are associated to)
@@ -905,7 +923,7 @@ class Households(AgentBaseClass):
             / f"prob_map_range1_forecast{day.strftime('%Y-%m-%d')}_strategy{strategy_id}.tif"
         )
 
-        # Should I open this with "with rasterio.open()..."?
+        # Should I open this with "with rasterio.open()..."? -- need to check
         prob_map = rasterio.open(prob_energy_hit_path)
         prob_array = prob_map.read(1)
         affine = prob_map.transform
@@ -926,7 +944,7 @@ class Households(AgentBaseClass):
         if not critical_hits_energy.empty:
             print(f"Critical hits for energy substations: {len(critical_hits_energy)}")
 
-            # Get the postcodes that will be affected by the critical hits
+            # Get the postcodes that will be affected by the critical hits of energy substations
             affected_postcodes_energy = PC4_with_substations[
                 PC4_with_substations["substation_id"].isin(critical_hits_energy["fid"])
             ]["postcode"].unique()
@@ -934,7 +952,7 @@ class Households(AgentBaseClass):
         ## For vulnerable and emergency facilities:
         strategy_id = 3
 
-        # Assign critical facilities to postal codes based on intersection -- This should only be done once when loading the assets
+        # Assign critical facilities to postal codes based on intersection -- This should only be done once when loading the assets, need to fix it
         critical_facilities_with_PC6 = self.assign_critical_facilities_to_postal_codes(
             critical_facilities, PC4
         )
@@ -948,12 +966,12 @@ class Households(AgentBaseClass):
             / f"prob_map_range1_forecast{day.strftime('%Y-%m-%d')}_strategy{strategy_id}.tif"
         )
 
-        # Should I open this with "with rasterio.open()..."?
+        # Should I open this with "with rasterio.open()..."? -- need to check
         prob_map = rasterio.open(prob_critical_facilities_hit_path)
         prob_array = prob_map.read(1)
         affine = prob_map.transform
 
-        # Sample the probability map at the vulnerable facilities locations using their centroid (can be improved later to use whole area of the polygon)
+        # Sample the probability map at the facilities locations using their centroid (can be improved later to use whole area of the polygon)
         critical_facilities = critical_facilities.copy()
 
         sampled_probs = point_query(
@@ -964,7 +982,7 @@ class Households(AgentBaseClass):
         )
         critical_facilities["probability"] = sampled_probs
 
-        # Filter substations that have a flood hit probability > threshold
+        # Filter facilities that have a flood hit probability > threshold
         critical_hits_facilities = critical_facilities[
             critical_facilities["probability"] >= prob_threshold
         ]
@@ -977,7 +995,7 @@ class Households(AgentBaseClass):
                 f"Critical hits for vulnerable/emergency facilities: {len(critical_hits_facilities)}"
             )
 
-            # Get the postcodes that will be affected by the critical hits
+            # Get the postcodes that will be affected by the critical hits of facilities
             affected_postcodes_facilities = critical_facilities_with_PC6[
                 critical_facilities_with_PC6["facility_id"].isin(
                     critical_hits_facilities["id"]
@@ -1008,8 +1026,12 @@ class Households(AgentBaseClass):
         # Issue warnings to the households in the affected postcodes
         for postcode in affected_postcodes:
             affected_households = households[households["postcode"] == postcode]
-            # n_warned_households = self.warning_communication(target_households=affected_households)
-            # need to give the warning communication function the range measures
+            n_warned_households = self.warning_communication(
+                target_households=affected_households,
+                measures=set(),
+                evacuate=True,
+                source="critical_infrastructure",
+            )
             trigger = trigger_label(postcode)
 
             print(
@@ -1019,11 +1041,21 @@ class Households(AgentBaseClass):
                 {
                     "day": day,
                     "postcode": postcode,
-                    "n_warned_households": len(affected_households),
+                    "n_warned_households": n_warned_households,
                     "trigger": trigger,
                 }
             )
-        # need to change affected_households to n_warned_households
+
+            # need to add this to the warning_log:
+            # "critical_hits_energy": len(
+            #             critical_hits_energy[
+            #                 critical_hits_energy["postcode"] == postcode
+            #             ]
+            #         ),
+            #         "critical_hits_facilities": len(
+            #             critical_hits_facilities[
+            #                 critical_hits_facilities["postcode"] == postcode
+            #             ]
 
         # Save log
         path = os.path.join(
@@ -1031,11 +1063,83 @@ class Households(AgentBaseClass):
         )
         pd.DataFrame(warning_log).to_csv(path, index=False)
 
-        print("test")
+    def warning_communication(
+        self,
+        target_households: gpd.GeoDataFrame,
+        measures: set[str],
+        evacuate: bool,
+        source: str,
+        communication_efficiency: float = 0.35,
+        lt_threshold_evacuation: int = 48,
+    ):
+        """Send warnings to a subset of target households according to communication_efficiency.
 
-        # NEED TO ADD A CHECK IF THE LEADTIME IS < THAN 48H TO DO THIS STRATEGY
+        Enforces single-message rule and allows only upward escalation:
+        none -> measures -> evacuate
+        Evacuation only sent if evacuate is True *and* lead_time <= 48h.
+        """
+        n_target_households = len(target_households)
+        if n_target_households == 0:
+            return 0
 
-    def warning_communication(self, target_households, range_id, warning_range=0.35):
+        # Get lead time in hours -- need to check if this works correctly
+        start_time = self.model.config["hazards"]["floods"]["events"][0][
+            "start_time"
+        ].date()
+        current_time = self.model.current_time.date()
+        lead_time = (start_time - current_time).total_seconds() / 3600
+
+        # Determine the desired level of warning (0 = no warning, 1 = measures, 2 = evacuate)
+        desired_level = 2 if (evacuate and lead_time <= lt_threshold_evacuation) else (1 if measures else 0)  # fmt: skip
+
+        if desired_level == 0:
+            return 0
+
+        # Get household indices of those who can receive the warning based on comm. efficiency (randomly selected)
+        n_feasible_warnings = int(n_target_households * communication_efficiency)
+        if n_feasible_warnings == 0:
+            return 0
+
+        position_indices = np.random.choice(
+            n_target_households, n_feasible_warnings, replace=False
+        )
+        selected_households = target_households.iloc[position_indices]
+
+        n_warned_households = 0
+        for _, row in selected_households.iterrows():
+            household_id = row["pointid"]
+
+            # Skip already evacuated
+            if self.var.evacuated[household_id] == 1:
+                continue
+
+            current_level = int(self.var.warning_level[household_id])
+
+            # Only send a warning if the warning level is lower than the desired level
+            if desired_level > current_level:
+                # Apply the new warning
+                if desired_level >= 1 and measures:
+                    self.var.recommended_measures[household_id].update(measures)
+
+                if desired_level == 2:
+                    # Add 'evacuate' to the set of recommendations
+                    self.var.recommended_measures[household_id].add("evacuate")
+            else:
+                continue
+
+            # Mark warning delivered & record provenance
+            self.var.warning_level[household_id] = desired_level
+            self.var.warning_reached[household_id] = 1
+            self.var.warning_source[household_id] = source
+            # -- need to figure out how to add this
+            n_warned_households += 1
+
+        print(f"Warning targeted to reach {n_target_households} households")
+        print(f"Warning reached {n_warned_households} households")
+
+        return n_warned_households
+
+    def warning_communication2(self, target_households, range_id, warning_range=0.35):
         # need to get the range measures from the other functions
         """Communicates a warning to households based on the communication efficiency.
 
@@ -1114,7 +1218,7 @@ class Households(AgentBaseClass):
         # Initialize an empty list to log actions taken
         actions_log = []
 
-        # Get lead time in hours
+        # Get lead time in hours -- need to create a helper function for this
         start_time = self.model.config["hazards"]["floods"]["events"][0][
             "start_time"
         ].date()
@@ -1508,8 +1612,8 @@ class Households(AgentBaseClass):
             self.change_household_locations()  # ideally this should be done in the setup_population when building the model
         self.get_critical_infrastructure()
         self.critical_infrastructure_warning_strategy()
-        # self.water_level_warning_strategy()
-        # self.household_decision_making()
+        self.water_level_warning_strategy()
+        self.household_decision_making()
 
         print("test")
 
