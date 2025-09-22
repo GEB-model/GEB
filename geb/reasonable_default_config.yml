@@ -59,6 +59,7 @@ agent_settings:
     warning_response: false
     water_demand:
       method: default
+    adjust_demand_factor: 1
     expected_utility:
       flood_risk_calculations:
         risk_perception:

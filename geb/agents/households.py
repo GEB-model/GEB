@@ -1247,7 +1247,7 @@ class Households(AgentBaseClass):
                 self.var.municipal_water_demand_per_capita_m3_baseline
                 * self.var.sizes
                 * water_demand_multiplier_per_household
-            )
+            ) / self.config["adjust_demand_factor"]
         elif self.config["water_demand"]["method"] == "custom_value":
             # Function to set a custom_value for household water demand. All households have the same demand.
             custom_value = self.config["water_demand"]["custom_value"]["value"]
