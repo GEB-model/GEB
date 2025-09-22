@@ -35,7 +35,6 @@ dependencies = [
     "hydromt-sfincs>=1.2.0",
     "isimip-client>=1.0.1",
     "networkx",
-    "numcodecs>=0.16.2",
     "numba>=0.61.0",
     "numpy>=2.1",
     "openpyxl>=3.1.2",
@@ -65,7 +64,7 @@ dependencies = [
     "xclim>=0.56.0",
     "xmipy>=1.5.0",
     "xvec>=0.4.0",
-    "zarr==3.0.10", # unpin when numcodecs zarr issues are solved
+    "zarr>=3.1.3",
     "plotly>=6.2.0",
     "kaleido>=1.0.0",
     "h5netcdf>=1.6.4",
@@ -164,13 +163,14 @@ select = [
     "D415",
     "D416",
     "D417",
-    "D419"
+    "D419",
+    "F401"
 ]
 extend-select = ["I"]
 preview = true
 
 [tool.ruff.lint.extend-per-file-ignores]
-"geb/agents/{crop_farmers,decision_module_flood,decision_module,government,households,industry,livestock_farmers,market,reservoir_operators,town_managers}.py" = [
+"geb/agents/{crop_farmers,decision_module_flood,decision_module,households,industry,livestock_farmers,market,reservoir_operators,town_managers}.py" = [
     "ANN001",
     "ANN003",
     "ANN201",
@@ -220,7 +220,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/build/modules/{agents,crops,forcing,hydrography,observations}.py" = [
+"geb/build/modules/{agents,crops,forcing,observations}.py" = [
     "ANN001",
     "ANN003",
     "ANN201",
