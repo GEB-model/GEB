@@ -59,7 +59,7 @@ class Adapter:
             ValueError: If the cache attribute is not 'global' or 'local'.
         """
         if self.cache == "global":
-            geb_data_root: str | None = os.getenv(key="GEB_DATA_ROOT_", default=None)
+            geb_data_root: str | None = os.getenv(key="GEB_DATA_ROOT", default=None)
             if geb_data_root:
                 catalog_root = Path(geb_data_root) / ".." / "data"
             else:
