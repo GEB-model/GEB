@@ -353,7 +353,7 @@ class Agents:
         cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         oecd_idd = oecd_idd[cols_to_keep]
         # only done to check countries in region, could probably be done more efficiently
-        countries = self.new_data_catalog.get("GADM_level0").read(
+        countries = self.new_data_catalog.fetch("GADM_level0").read(
             geom=self.region.union_all(),
         )
         # setup donor countries for country missing in oecd data

@@ -16,20 +16,44 @@ class Adapter:
     """Base class for data adapters in the GEB data catalog."""
 
     def __init__(
-        self, folder: Path, local_version: int, filename: Path, cache: str
+        self,
+        folder: Path | None = None,
+        filename: Path | None = None,
+        local_version: int | None = None,
+        cache: str | None = None,
     ) -> None:
-        """Initialize the cache directory.
+        """Initialize the data adapter.
+
+        Each adapter manages a specific dataset, handling its download, processing, and storage.
+
+        Either all or none of folder, filename, local_version, and cache must be provided.
 
         The cache directory is determined by the GEB_DATA_ROOT environment variable,
         or defaults to ~/.geb_cache if the variable is not set.
 
         Args:
             folder: The subfolder within the cache directory for this dataset.
-            local_version: The local version number of the dataset.
             filename: The filename for the processed dataset.
+            local_version: The local version number of the dataset.
             cache: Either 'global' or 'local'. 'global' uses the GEB_DATA_ROOT or ~/.geb_cache,
                    'local' uses a local cache directory within the model directory.
+
+        Raises:
+            ValueError: If only some of folder, filename, local_version, and cache are provided
+                        instead of all or none.
         """
+        if (
+            folder is None or filename is None or local_version is None or cache is None
+        ) and (
+            folder is not None
+            or filename is not None
+            or local_version is not None
+            or cache is not None
+        ):
+            raise ValueError(
+                "Either all of folder, filename, local_version, and cache must be provided, or none."
+            )
+
         self.folder = folder
         self.local_version = local_version
         self.filename = filename
@@ -87,7 +111,7 @@ class Adapter:
             )
         return is_ready
 
-    def processor(self) -> "Adapter":
+    def fetch(self) -> "Adapter":
         """Process the data after downloading.
 
         Returns:
@@ -120,5 +144,7 @@ class Adapter:
                 return read_parquet_with_geom(path=self.path, **kwargs)
         elif self.path.suffix == ".gpkg":
             return gpd.read_file(self.path, **kwargs)
+        elif self.path.suffix == ".vrt":
+            return xr.open_dataarray(self.path, **kwargs)
         else:
             raise ValueError("Unsupported file format for reading data.")

@@ -3,6 +3,7 @@
 from typing import Any
 
 from .base import Adapter
+from .esa_worldcover import ESAWorldCover
 from .gadm import GADM
 from .hydrolakes import HydroLakes
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
@@ -11,6 +12,26 @@ from .merit_sword import MeritSword
 from .sword import Sword
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "esa_worldcover_2020": {
+        "adapter": ESAWorldCover(),
+        "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2020_AWS_V1",
+        "source": {
+            "name": "ESA WorldCover",
+            "author": "European Space Agency (ESA)",
+            "version": "v100",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
+    "esa_worldcover_2021": {
+        "adapter": ESAWorldCover(),
+        "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2021_AWS_V2",
+        "source": {
+            "name": "ESA WorldCover",
+            "author": "European Space Agency (ESA)",
+            "version": "v200",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
     "hydrolakes": {
         "adapter": HydroLakes(
             folder="hydrolakes",
@@ -158,18 +179,18 @@ class NewDataCatalog:
         """Initialize the data catalog with predefined entries."""
         self.catalog = data_catalog
 
-    def get(self, name: str, *args: Any, **kwargs: Any) -> Adapter:
+    def fetch(self, name: str, *args: Any, **kwargs: Any) -> Adapter:
         """Get a data catalog entry by name.
 
         Args:
             name: The name of the data entry to retrieve.
-            *args: Additional positional arguments to pass to the processor.
-            **kwargs: Additional keyword arguments to pass to the processor.
+            *args: Additional positional arguments to pass to the fetcher.
+            **kwargs: Additional keyword arguments to pass to the fetcher.
 
         Returns:
             The data catalog entry as a dictionary.
         """
-        return self.catalog[name]["adapter"].processor(
+        return self.catalog[name]["adapter"].fetch(
             url=self.catalog[name]["url"],
             *args,
             **kwargs,

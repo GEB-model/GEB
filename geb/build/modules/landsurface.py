@@ -201,13 +201,13 @@ class LandSurface:
             identified and set as a grid in the model.
         """
         regions: gpd.GeoDataFrame = (
-            self.new_data_catalog.get(region_database)
+            self.new_data_catalog.fetch(region_database)
             .read(geom=self.region.union_all())
             .rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
         )
 
         global_countries: gpd.GeoDataFrame = (
-            self.new_data_catalog.get("GADM_level0")
+            self.new_data_catalog.fetch("GADM_level0")
             .read()
             .rename(columns={"GID_0": "ISO3"})
         )
@@ -360,7 +360,7 @@ class LandSurface:
     @build_method(depends_on=[])
     def setup_land_use_parameters(
         self,
-        land_cover: str = "esa_worldcover_2021_v200",
+        land_cover: str = "esa_worldcover_2020",
     ) -> None:
         """Sets up the land use parameters for the model.
 
@@ -393,20 +393,17 @@ class LandSurface:
         """
         bounds = self.geom["routing/subbasins"].total_bounds
         buffer = 0.1
-        landcover_classification = (
-            xr.open_dataarray(
-                self.data_catalog.get_source(land_cover).path,
-                chunks={"x": 3000, "y": 3000},
-                mask_and_scale=False,
-            )
-            .sel(
-                x=slice(bounds[0] - buffer, bounds[2] + buffer),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-            )
-            .isel(band=0)
-        )
 
-        self.set_other(
+        xmin = bounds[0] - buffer
+        ymin = bounds[1] - buffer
+        xmax = bounds[2] + buffer
+        ymax = bounds[3] + buffer
+
+        landcover_classification: xr.DataArray = self.new_data_catalog.fetch(
+            land_cover
+        ).read(xmin, ymin, xmax, ymax)
+
+        landcover_classification = self.set_other(
             landcover_classification,
             name="landcover/classification",
         )

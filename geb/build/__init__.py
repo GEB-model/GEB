@@ -825,7 +825,7 @@ class GEBModel(
         xmax += buffer
         ymax += buffer
 
-        ldd: xr.DataArray = self.new_data_catalog.get(
+        ldd: xr.DataArray = self.new_data_catalog.fetch(
             "merit_hydro_dir",
             xmin=xmin,
             xmax=xmax,
@@ -883,7 +883,7 @@ class GEBModel(
             ldd.attrs["_FillValue"],
         )
 
-        ldd_elevation: xr.DataArray = self.new_data_catalog.get(
+        ldd_elevation: xr.DataArray = self.new_data_catalog.fetch(
             "merit_hydro_elv",
             xmin=xmin,
             xmax=xmax,
@@ -949,7 +949,7 @@ class GEBModel(
         NEARBY_OUTFLOW: int = 2
 
         rivers: gpd.GeoDataFrame = (
-            self.new_data_catalog.get(
+            self.new_data_catalog.fetch(
                 "merit_basins_rivers",
             )
             .read(

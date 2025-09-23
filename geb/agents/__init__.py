@@ -14,7 +14,6 @@ from .industry import Industry
 from .livestock_farmers import LiveStockFarmers
 from .market import Market
 from .reservoir_operators import ReservoirOperators
-from .town_managers import TownManagers
 
 
 class Agents(Module):
@@ -35,7 +34,6 @@ class Agents(Module):
         self.livestock_farmers = LiveStockFarmers(model, self, 0.1)
         self.industry = Industry(model, self)
         self.reservoir_operators = ReservoirOperators(model, self)
-        self.town_managers = TownManagers(model, self)
         self.government = Government(model, self)
         self.market = Market(model, self)
 
@@ -45,7 +43,6 @@ class Agents(Module):
             self.livestock_farmers,
             self.industry,
             self.reservoir_operators,
-            self.town_managers,
             self.government,
             self.market,
         ]

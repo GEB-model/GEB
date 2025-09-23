@@ -19,6 +19,7 @@ import pandas as pd
 import pyproj
 import rasterio
 import requests
+import s3fs
 import xarray as xr
 import zarr
 from dask.diagnostics import ProgressBar
@@ -808,49 +809,90 @@ def fetch_and_save(
     if not overwrite and file_path.exists():
         return True
 
-    attempts = 0
-    temp_file = None
+    if url.startswith("s3://"):
+        # Fetch from S3 without authentication
+        fs = s3fs.S3FileSystem(anon=True)
+        attempts = 0
+        temp_file = None
 
-    while attempts < max_retries:
-        try:
-            print(f"Downloading {url} to {file_path}")
-            # Attempt to make the request
-            response = session.get(url, stream=True, params=params, timeout=timeout)
-            response.raise_for_status()  # Raises HTTPError for bad status codes
+        while attempts < max_retries:
+            try:
+                print(f"Downloading {url} to {file_path}")
+                # Create a temporary file
+                temp_file = tempfile.NamedTemporaryFile(delete=False)
+                temp_file.close()
 
-            # Create a temporary file
-            temp_file = tempfile.NamedTemporaryFile(delete=False)
+                # Download from S3
+                fs.get(url, temp_file.name)
 
-            # Write to the temporary file
-            total_size = int(response.headers.get("content-length", 0))
-            progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-            for data in response.iter_content(chunk_size=chunk_size):
-                temp_file.write(data)
-                progress_bar.update(len(data))
-            progress_bar.close()
+                # Move the temporary file to the destination
+                shutil.move(temp_file.name, file_path)
+                return True
 
-            # Close the temporary file
-            temp_file.close()
+            except Exception as e:
+                # Log the error
+                print(
+                    f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
+                )
 
-            # Move the temporary file to the destination
-            shutil.move(temp_file.name, file_path)
+                # Remove the temporary file if it exists
+                if temp_file is not None and os.path.exists(temp_file.name):
+                    os.remove(temp_file.name)
 
-            return True  # Exit the function after successful write
+                # Increment the attempt counter and wait before retrying
+                attempts += 1
+                if attempts < max_retries:
+                    time.sleep(delay)
 
-        except requests.RequestException as e:
-            # Log the error
-            print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+        # If all attempts fail, raise an exception
+        raise RuntimeError(
+            f"Failed to download '{url}' from S3 to '{file_path}' after {max_retries} attempts."
+        )
 
-            # Remove the temporary file if it exists
-            if temp_file is not None and os.path.exists(temp_file.name):
-                os.remove(temp_file.name)
+    elif url.startswith("http://") or url.startswith("https://"):
+        attempts = 0
+        temp_file = None
 
-            # Increment the attempt counter and wait before retrying
-            attempts += 1
-            time.sleep(delay)
+        while attempts < max_retries:
+            try:
+                print(f"Downloading {url} to {file_path}")
+                # Attempt to make the request
+                response = session.get(url, stream=True, params=params, timeout=timeout)
+                response.raise_for_status()  # Raises HTTPError for bad status codes
 
-    # If all attempts fail, raise an exception
-    raise RuntimeError(
-        f"Failed to download '{url}' to '{file_path}' after {max_retries} attempts. "
-        "Please check the URL, network connectivity, and destination permissions."
-    )
+                # Create a temporary file
+                temp_file = tempfile.NamedTemporaryFile(delete=False)
+
+                # Write to the temporary file
+                total_size = int(response.headers.get("content-length", 0))
+                progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
+                for data in response.iter_content(chunk_size=chunk_size):
+                    temp_file.write(data)
+                    progress_bar.update(len(data))
+                progress_bar.close()
+
+                # Close the temporary file
+                temp_file.close()
+
+                # Move the temporary file to the destination
+                shutil.move(temp_file.name, file_path)
+
+                return True  # Exit the function after successful write
+
+            except requests.RequestException as e:
+                # Log the error
+                print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+
+                # Remove the temporary file if it exists
+                if temp_file is not None and os.path.exists(temp_file.name):
+                    os.remove(temp_file.name)
+
+                # Increment the attempt counter and wait before retrying
+                attempts += 1
+                time.sleep(delay)
+
+        # If all attempts fail, raise an exception
+        raise RuntimeError(
+            f"Failed to download '{url}' to '{file_path}' after {max_retries} attempts. "
+            "Please check the URL, network connectivity, and destination permissions."
+        )

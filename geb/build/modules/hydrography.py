@@ -612,7 +612,7 @@ class Hydrography:
             the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
             with any custom reservoir capacity data from the data catalog.
         """
-        waterbodies: gpd.GeoDataFrame = self.new_data_catalog.get("hydrolakes").read(
+        waterbodies: gpd.GeoDataFrame = self.new_data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
             columns=[
                 "waterbody_id",

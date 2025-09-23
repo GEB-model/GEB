@@ -267,7 +267,7 @@ class MeritHydro(Adapter):
         da: xr.DataArray = merge.merge_arrays(das)
         return da
 
-    def processor(
+    def fetch(
         self,
         xmin: float,
         xmax: float,
@@ -548,7 +548,7 @@ class MeritHydroDir(MeritHydro):
         """
         super().__init__(variable="dir", *args, **kwargs)
 
-    def processor(self, *args: Any, **kwargs: Any) -> None:
+    def fetch(self, *args: Any, **kwargs: Any) -> None:
         """Process and download flow direction data with specific fill value.
 
         Args:
@@ -576,7 +576,7 @@ class MeritHydroElv(MeritHydro):
         """
         super().__init__(variable="elv", *args, **kwargs)
 
-    def processor(self, *args: Any, **kwargs: Any) -> None:
+    def fetch(self, *args: Any, **kwargs: Any) -> None:
         """Process and download elevation data with specific fill value.
 
         Args:

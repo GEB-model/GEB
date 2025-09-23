@@ -69,6 +69,10 @@ dependencies = [
     "kaleido>=1.0.0",
     "h5netcdf>=1.6.4",
     "ty>=0.0.1a20",
+    "pystac>=1.14.1",
+    "xpystac>=0.4.0",
+    "odc-stac>=0.4.0",
+    "pystac-client>=0.9.0",
 ]
 requires-python = ">=3.12, <3.14"
 readme = "README.md"
@@ -170,7 +174,7 @@ extend-select = ["I"]
 preview = true
 
 [tool.ruff.lint.extend-per-file-ignores]
-"geb/agents/{crop_farmers,decision_module_flood,decision_module,households,industry,livestock_farmers,market,reservoir_operators,town_managers}.py" = [
+"geb/agents/{crop_farmers,decision_module_flood,decision_module,households,industry,livestock_farmers,market,reservoir_operators}.py" = [
     "ANN001",
     "ANN003",
     "ANN201",

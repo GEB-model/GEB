@@ -1312,6 +1312,7 @@ dependencies = [
     { name = "networkx" },
     { name = "numba" },
     { name = "numpy" },
+    { name = "odc-stac" },
     { name = "openpyxl" },
     { name = "pandas" },
     { name = "permetrics" },
@@ -1321,6 +1322,8 @@ dependencies = [
     { name = "pyflwdir" },
     { name = "pyogrio" },
     { name = "pyresample" },
+    { name = "pystac" },
+    { name = "pystac-client" },
     { name = "pytest" },
     { name = "pytest-dependency" },
     { name = "python-dotenv" },
@@ -1340,6 +1343,7 @@ dependencies = [
     { name = "xarray-regrid", extra = ["accel"] },
     { name = "xclim" },
     { name = "xmipy" },
+    { name = "xpystac" },
     { name = "xvec" },
     { name = "zarr" },
 ]
@@ -1396,6 +1400,7 @@ requires-dist = [
     { name = "networkx" },
     { name = "numba", specifier = "==0.61.2" },
     { name = "numpy", specifier = ">=2.1" },
+    { name = "odc-stac", specifier = ">=0.4.0" },
     { name = "openpyxl", specifier = ">=3.1.2" },
     { name = "opt-einsum", marker = "extra == 'fairstream'", specifier = ">=3.3.0" },
     { name = "pandas", specifier = ">=2.3.0" },
@@ -1408,6 +1413,8 @@ requires-dist = [
     { name = "pyflwdir", specifier = ">=0.5.9" },
     { name = "pyogrio", specifier = ">=0.9.0" },
     { name = "pyresample", specifier = ">=1.32.0" },
+    { name = "pystac", specifier = ">=1.14.1" },
+    { name = "pystac-client", specifier = ">=0.9.0" },
     { name = "pytest" },
     { name = "pytest-dependency" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
@@ -1428,6 +1435,7 @@ requires-dist = [
     { name = "xarray-regrid", extras = ["accel"], specifier = ">=0.4.1" },
     { name = "xclim", specifier = ">=0.56.0" },
     { name = "xmipy", specifier = ">=1.5.0" },
+    { name = "xpystac", specifier = ">=0.4.0" },
     { name = "xvec", specifier = ">=0.4.0" },
     { name = "zarr", specifier = ">=3.1.3" },
 ]
@@ -3051,6 +3059,60 @@ wheels = [
 ]
 
 [[package]]
+name = "odc-geo"
+version = "0.4.10"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "affine" },
+    { name = "cachetools" },
+    { name = "numpy" },
+    { name = "pyproj" },
+    { name = "shapely" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/53/f6/f22d9728ed1652f092bdb8e0f04cf68f7212d273ad118225a252fc8cbfb4/odc_geo-0.4.10.tar.gz", hash = "sha256:5670a797c4243e9379b20905ea37ff23ad287e7fa37c672dc53546923daf6d52", size = 192809, upload-time = "2025-03-03T04:12:24.077Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/99/e2/311fb383d9534eef7bfbe858fad931b6e3dbe85843c50592f50063c3bc83/odc_geo-0.4.10-py3-none-any.whl", hash = "sha256:ab5f26f56883a11286a9583c04d30190e35a2702e8aa72fa3b4b438bea851b19", size = 155067, upload-time = "2025-03-03T04:12:22.114Z" },
+]
+
+[[package]]
+name = "odc-loader"
+version = "0.5.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dask", extra = ["array"] },
+    { name = "numpy" },
+    { name = "odc-geo" },
+    { name = "rasterio" },
+    { name = "xarray" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/99/c6/fd9dbf40aaf94bf3c9712a9ffdd0a791599764c3e4b80b5917aaf6280ec8/odc_loader-0.5.1.tar.gz", hash = "sha256:bf3adf53b10248bbab3bb1fcb043995c12e204dbde4f9a751cd3331b1c6a1212", size = 41616, upload-time = "2025-04-03T00:14:03.126Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/48/d45d414b8228325051b0a09f68322ef26717eb9b6517579ae395adf2fbfc/odc_loader-0.5.1-py3-none-any.whl", hash = "sha256:fbe505e2f0e8ac4db2542935bdf5f706e6147817d818073a8a98d3226bd6470f", size = 50717, upload-time = "2025-04-03T00:14:01.687Z" },
+]
+
+[[package]]
+name = "odc-stac"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "affine" },
+    { name = "dask", extra = ["array"] },
+    { name = "numpy" },
+    { name = "odc-geo" },
+    { name = "odc-loader" },
+    { name = "pandas" },
+    { name = "pystac" },
+    { name = "rasterio" },
+    { name = "toolz" },
+    { name = "typing-extensions" },
+    { name = "xarray" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7f/2e/b5f29cd12f8a5b23f499d7da716cb6d0c55f9542d805111a1e6d92347a31/odc_stac-0.4.0.tar.gz", hash = "sha256:3535767940840e8c3ec2e3dda15ac36e30de0e51624dcc82e1052e19a7dab091", size = 114343, upload-time = "2025-05-01T05:20:51.33Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ef/21/05c243c9b563519ae5b7442a73424ad0537c7d312cf8969bdf9d0fa31c00/odc_stac-0.4.0-py3-none-any.whl", hash = "sha256:a76b9d96d7aea53cabcd7ba99b0cf467a6eab6d2ad6a52802af36b5c407c5952", size = 44259, upload-time = "2025-05-01T05:20:49.632Z" },
+]
+
+[[package]]
 name = "openpyxl"
 version = "3.1.5"
 source = { registry = "https://pypi.org/simple" }
@@ -3841,6 +3903,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/41/bf/e0d6f143b878a16f2117f24ba73f19a482d081d691bc086a9354b6e0ef24/pystac-1.14.1.tar.gz", hash = "sha256:4def289ab2168d67492ed0b5a3bd738d3dfa42390a50563776bfd1558af38d53", size = 163434, upload-time = "2025-09-18T15:13:49.091Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c0/01/eb465e19137b36ba683417e982907aa9c7df1fb0b968e1424e5d678ba0dc/pystac-1.14.1-py3-none-any.whl", hash = "sha256:19d73306d8fb94fbd66b7945ee5510e3574c8d48462f86e1e91e3f257b79722b", size = 207710, upload-time = "2025-09-18T15:13:47.189Z" },
+]
+
+[package.optional-dependencies]
+validation = [
+    { name = "jsonschema" },
+]
+
+[[package]]
+name = "pystac-client"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pystac", extra = ["validation"] },
+    { name = "python-dateutil" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c5/8d/b98aeffd325fc208e1624cf586d0c4dfb927bc7a2bce20d3b58ee80d2483/pystac_client-0.9.0.tar.gz", hash = "sha256:3908951583bcc6a3aaaf2828024a8e03764e6ca9d9f9f1d8149df587e14dd744", size = 52339, upload-time = "2025-07-18T15:44:41.1Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5d/d2/5f6367b14c9f250d1a6725d18bd1e9584f5ab1587e292f3a847e59189598/pystac_client-0.9.0-py3-none-any.whl", hash = "sha256:eed146b5980f93646aaa3a59080f11f1dcab6000b0bfbc28b1d0c6fd0a61eda1", size = 41826, upload-time = "2025-07-18T15:44:40.197Z" },
 ]
 
 [[package]]
@@ -5217,6 +5298,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/48/33/8c2bcceedfa13122916b6a582eedf9581682dbee329d95bcfb4c69542ade/xproj-0.2.1.tar.gz", hash = "sha256:d520c7a0df402f6a5922108ed614c8ea0ce6b04bec12c91aceb75fe3c1d3c5c3", size = 31781, upload-time = "2025-07-07T09:05:48.022Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/05/b9/b6a9cf72aef69c3e6db869dcc130e19452a658366dac9377f9cd32a76b80/xproj-0.2.1-py3-none-any.whl", hash = "sha256:d762c540c1bc4abc5955b4034b409b9b2f7733c3e49285f3aeb71f9a2dd6bf34", size = 23837, upload-time = "2025-07-07T09:05:46.889Z" },
+]
+
+[[package]]
+name = "xpystac"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pystac" },
+    { name = "xarray" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/53/7bc08e103de9a6a3016eca4e62aa2c4f1783a3ccced94943cd49aa28d7b2/xpystac-0.4.0.tar.gz", hash = "sha256:9b26273198f550bc09b3f16512b560d37916a32417bb9c69919ec1e578efcfc1", size = 155503, upload-time = "2025-09-18T19:47:24.17Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4d/f9/dfa302752810a0c76bc58df4ed11ec0914918e46ebf26e3989639d1fdb16/xpystac-0.4.0-py3-none-any.whl", hash = "sha256:88714d138bdba930f1be7c1ac9e833b9f8cba525a141e9269c2c564a369dc058", size = 10394, upload-time = "2025-09-18T19:47:20.155Z" },
 ]
 
 [[package]]
