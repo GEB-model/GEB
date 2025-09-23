@@ -107,7 +107,7 @@ class Adapter:
         is_ready = self.path.exists()
         if not is_ready:
             print(
-                f"Data not found at {self.path}, downloading and processing may take a while..."
+                f"Data not found at {self.path}, downloading and/or processing may take a while..."
             )
         return is_ready
 

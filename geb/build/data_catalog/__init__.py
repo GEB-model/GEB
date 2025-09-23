@@ -5,6 +5,7 @@ from typing import Any
 from .base import Adapter
 from .esa_worldcover import ESAWorldCover
 from .gadm import GADM
+from .global_data_lab import GlobalDataLabShapefile
 from .hydrolakes import HydroLakes
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
@@ -13,6 +14,21 @@ from .sword import Sword
 from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "GDL_regions_v4": {
+        "adapter": GlobalDataLabShapefile(
+            folder="global_data_lab",
+            local_version=1,
+            filename="gdl_regions_v4.parquet",
+            cache="global",
+        ),
+        "url": "https://globaldatalab.org/mygdl/downloads/shapefiles/",
+        "source": {
+            "name": "Global Data Lab",
+            "author": "Radboud University",
+            "license": "https://globaldatalab.org/termsofuse/",
+            "url": "https://globaldatalab.org/mygdl/downloads/shapefiles/",
+        },
+    },
     "wb_inflation_rate": {
         "adapter": WorldBankData(
             folder="world_bank_inflation_rate",
