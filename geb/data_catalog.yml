@@ -234,16 +234,6 @@ india_cencus:
   data_type: GeoDataFrame
   driver: vector
   path: project_data/fairstream/census/tehsils.geojson
-GDL_regions_v4:
-  data_type: GeoDataFrame
-  driver: vector
-  path: "admin/GDL_regions_v4.gpkg"
-  meta:
-    category: geography
-    source_author: Global Data Lab
-    source_url: https://globaldatalab.org/
-    source_version: 4
-    source_license: https://globaldatalab.org/termsofuse/
 GLOPOP-S:
   data_type: Dataset
   path: population/GLOPOP-S/synthpop_{region}_grid.dat.gz

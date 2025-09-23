@@ -1476,12 +1476,11 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
-    def setup_buildings(self):
+    def setup_buildings(self) -> None:
         output = {}
-        GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4", geom=self.region, variables=["GDLcode", "iso_code"]
+        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "geometry"]
         )
-        GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
 
         fp_buildings = self.files["geom"]["assets/buildings"]
         buildings = gpd.read_parquet(f"{self.root}/{fp_buildings}")[
@@ -1532,14 +1531,9 @@ class Agents:
         all_buildings_model_region = self.setup_buildings()
 
         # load GDL region within model domain
-        GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4",
-            geom=self.region,
-            variables=["GDLcode", "iso_code"],
+        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
         )
-        GDL_regions = GDL_regions[
-            GDL_regions["GDLcode"] != "NA"
-        ]  # remove regions without GDL code
 
         # create list of attibutes to include (and include name to store to)
         rename = {
@@ -1588,9 +1582,7 @@ class Agents:
                 continue
 
             # load table with income distribution data
-            national_income_distribution = pd.read_parquet(
-                "input" / self.files["table"]["income/national_distribution"]
-            )
+            national_income_distribution = self.table["income/national_distribution"]
 
             # construct national income distribution
 
@@ -1918,12 +1910,9 @@ class Agents:
         )  # convert locations to geodataframe
 
         # GLOPOP-S uses the GDL regions. So we need to get the GDL region for each farmer using their location
-        GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
+        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "geometry"]
         )
-        if (GDL_regions["GDLcode"] == "NA").any():
-            self.logger.warning("GDL region has a 'NA', these rows will be deleted.")
-            GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
 
         # assign GDL region to each farmer based on their location. This is a heavy operation, so we include a progress bar to monitor progress.
         self.logger.info("Assigning GDL region to each farmer based on their location.")
