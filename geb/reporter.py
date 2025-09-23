@@ -726,9 +726,6 @@ class Reporter:
                 that calls this one.
             module_name: The name of the module.
         """
-        import pdb
-
-        pdb.set_trace()
         if not self.activated:
             return None
         report = self.model.config["report"].get(module_name, None)
