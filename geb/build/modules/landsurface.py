@@ -176,7 +176,7 @@ class LandSurface:
         region_database: str = "GADM_level1",
         unique_region_id: str = "GID_1",
         ISO3_column: str = "GID_0",
-        land_cover: str = "esa_worldcover_2021_v200",
+        land_cover: str = "esa_worldcover_2021",
     ) -> None:
         """Sets up the (administrative) regions and land use data for GEB.
 
@@ -189,7 +189,7 @@ class LandSurface:
             unique_region_id: The name of a column in the region database that contains a unique region ID. Default is 'UID',
                 which is the unique identifier for the GADM database.
             ISO3_column: The name of a column in the region database that contains the ISO3 code for the region. Default is 'ISO3'.
-            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021_v200'.
+            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021'.
 
         Notes:
             This method sets up the regions and land use data for GEB. It first retrieves the region data from
@@ -276,14 +276,12 @@ class LandSurface:
         region_mask = self.set_region_subgrid(region_mask, name="mask")
 
         bounds = self.geom["regions"].total_bounds
-        land_use = (
-            xr.open_dataarray(
-                self.data_catalog.get_source(land_cover).path,
-                chunks={"x": 1000, "y": 1000},
-                mask_and_scale=False,
-            )
-            .sel(x=slice(bounds[0], bounds[2]), y=slice(bounds[3], bounds[1]))
-            .isel(band=0)
+        xmin = bounds[0] - 0.1
+        ymin = bounds[1] - 0.1
+        xmax = bounds[2] + 0.1
+        ymax = bounds[3] + 0.1
+        land_use: xr.DataArray = self.new_data_catalog.fetch(land_cover).read(
+            xmin, ymin, xmax, ymax
         )
 
         reprojected_land_use: xr.DataArray = resample_chunked(
@@ -360,12 +358,12 @@ class LandSurface:
     @build_method(depends_on=[])
     def setup_land_use_parameters(
         self,
-        land_cover: str = "esa_worldcover_2020",
+        land_cover: str = "esa_worldcover_2021",
     ) -> None:
         """Sets up the land use parameters for the model.
 
         Args:
-            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021_v200'.
+            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021'.
 
         Notes:
             This method sets up the land use parameters for the model by retrieving land use data from the CWATM dataset and

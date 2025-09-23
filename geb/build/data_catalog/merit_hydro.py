@@ -552,11 +552,11 @@ class MeritHydroDir(MeritHydro):
         """Process and download flow direction data with specific fill value.
 
         Args:
-            *args: Positional arguments passed to the base class processor.
-            **kwargs: Keyword arguments passed to the base class processor.
+            *args: Positional arguments passed to the base class fetcher.
+            **kwargs: Keyword arguments passed to the base class fetcher.
 
         """
-        return super().processor(*args, **kwargs, source_nodata=247, target_nodata=247)
+        return super().fetch(*args, **kwargs, source_nodata=247, target_nodata=247)
 
 
 class MeritHydroElv(MeritHydro):
@@ -580,10 +580,10 @@ class MeritHydroElv(MeritHydro):
         """Process and download elevation data with specific fill value.
 
         Args:
-            *args: Positional arguments passed to the base class processor.
-            **kwargs: Keyword arguments passed to the base class processor.
+            *args: Positional arguments passed to the base class fetcher.
+            **kwargs: Keyword arguments passed to the base class fetcher.
 
         """
-        return super().processor(
+        return super().fetch(
             *args, **kwargs, source_nodata=-9999.0, target_nodata=np.nan
         )

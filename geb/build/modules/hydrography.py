@@ -84,7 +84,7 @@ def get_subbasins_geometry(
         A GeoDataFrame containing the subbasins geometry for the given subbasin IDs.
             The index of the GeoDataFrame is the subbasin ID (COMID).
     """
-    subbasins: gpd.GeoDataFrame = data_catalog.get("merit_basins_catchments").read(
+    subbasins: gpd.GeoDataFrame = data_catalog.fetch("merit_basins_catchments").read(
         filters=[
             ("COMID", "in", subbasin_ids),
         ],
@@ -108,7 +108,7 @@ def get_rivers(
         A GeoDataFrame containing the rivers for the given subbasin IDs.
     """
     rivers: gpd.GeoDataFrame = (
-        data_catalog.get("merit_basins_rivers")
+        data_catalog.fetch("merit_basins_rivers")
         .read(
             columns=[
                 "COMID",
@@ -201,7 +201,7 @@ def get_SWORD_translation_IDs_and_lenghts(
             and M is the number of rivers. Each element is the length of the SWORD reach for that river.
     """
     MERIT_Basins_to_SWORD: xr.Dataset = (
-        data_catalog.get("merit_sword").read().sel(mb=rivers.index.tolist())
+        data_catalog.fetch("merit_sword").read().sel(mb=rivers.index.tolist())
     )
 
     SWORD_reach_IDs = np.full((40, len(rivers)), dtype=np.int64, fill_value=-1)
@@ -239,7 +239,7 @@ def get_SWORD_river_widths(
     unique_SWORD_reach_ids = np.unique(SWORD_reach_IDs[SWORD_reach_IDs != -1])
 
     SWORD = (
-        data_catalog.get("sword")
+        data_catalog.fetch("sword")
         .read(
             sql=f"""SELECT * FROM sword WHERE reach_id IN ({",".join([str(ID) for ID in unique_SWORD_reach_ids])})"""
         )

@@ -260,7 +260,7 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
         A directed graph where nodes are COMID values and edges point downstream.
     """
     river_network: pd.DataFrame = (
-        data_catalog.get("merit_basins_rivers")
+        data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "NextDownID"])
         .set_index("COMID")
     )
@@ -310,7 +310,7 @@ def get_subbasin_id_from_coordinate(
     # geoparquet uses < and >, not <= and >=, so we need to add
     # a small value to the coordinates to avoid missing the point
     COMID: gpd.GeoDataFrame = (
-        data_catalog.get("merit_basins_catchments")
+        data_catalog.fetch("merit_basins_catchments")
         .read(
             bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
         )
