@@ -198,6 +198,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             mean_discharge: dict[Any, float] = {}
 
         self.forecast_issue_date = forecast_issue_datetime.strftime("%Y%m%dT%H%M%S")
+
         for member in forecasts.member:
             print(member)
             self.multiverse_name = member.item()
@@ -214,6 +215,14 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 )
 
                 forecast_member: xr.DataArray = forecasts.sel(member=member)
+
+                # check if the x and y dimensions of the forecast data is exactly the same as the original data
+                if not np.array_equal(
+                    forecasts.x, original_data[var].x
+                ) or not np.array_equal(forecasts.y, original_data[var].y):
+                    raise ValueError(
+                        f"The x and y dimensions of the forecast data for variable {var} are not the same as the original data. Cannot run multiverse."
+                    )
 
                 # Clip the original precipitation data to the start of the forecast
                 # Therefore we take the start of the forecast and subtract one second

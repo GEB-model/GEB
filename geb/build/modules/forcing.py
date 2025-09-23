@@ -299,7 +299,6 @@ def download_forecasts_ECMWF(
     forecast_resolution: float,
     forecast_horizon: int,
     forecast_timestep: int,
-    forecast_frequency: int,
 ) -> None:
     """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
@@ -320,7 +319,6 @@ def download_forecasts_ECMWF(
         forecast_resolution: The spatial resolution of the forecast data (degrees).
         forecast_horizon: The forecast horizon in hours.
         forecast_timestep: The forecast timestep in hours.
-        forecast_frequency: The frequency at which forecasts are initialized (hours).
 
     Raises:
         ImportError: If ECMWF_API_KEY is not found in environment variables.
@@ -349,9 +347,7 @@ def download_forecasts_ECMWF(
     )
     bounds_str: str = f"{bounds[3]}/{bounds[0]}/{bounds[1]}/{bounds[2]}"  # setup bounds -- > bounds should be in North/West/South/East
     # check if other values than 00 or 12 are present in the list of forecast_frequency
-    forecast_date_list = pd.date_range(
-        forecast_start, forecast_end, freq=f"{forecast_frequency}H"
-    )
+    forecast_date_list = pd.date_range(forecast_start, forecast_end, freq="24H")
 
     # Date validation: only allow forecasts after 2010-01-01
     earliest_allowed_date = date(2010, 1, 1)
@@ -422,7 +418,7 @@ def download_forecasts_ECMWF(
         }
 
         if forecast_model == "pf":  # check
-            mars_request["number"] = "1/to/50"
+            mars_request["number"] = "1/to/3"
 
         # Execute MARS request with preprocessed parameters
         print(f"Requesting data from ECMWF MARS server.. {mars_request}")
@@ -466,10 +462,6 @@ def process_forecast_ECMWF(
         engine="cfgrib",
     ).rename({"latitude": "y", "longitude": "x", "number": "member"})
 
-    da = (
-        da.load()
-    )  # load the data into memory to avoid issues with closing the file later on
-
     # ensure all the timesteps are hourly
     if not (da.time.diff("time").astype(np.int64) == 3600 * 1e9).all():
         # convert to hourly timesteps
@@ -486,18 +478,18 @@ def process_forecast_ECMWF(
         print("All timesteps are already hourly, no need to resample")
 
     # variable specific processing
-    # rainfall
     da["tp"] = da["tp"] * 1000  # convert m to mm
     da["tp"] = da["tp"] / 3600  # convert from mm/hr to mm/s
 
     # assert that rainfall in the next time step of the xrarray is always equal or larger than the previous time step
     da["tp"] = da["tp"].diff(dim="step", n=1, label="lower")  # de-accumulate
 
-    # radiation (from J/m2 to W/m2)
-    da["ssrd"] = da["ssrd"].diff(dim="step", n=1, label="lower")  # de-accumulate
-    da["ssrd"] = da["ssrd"] / 3600  # convert
-    da["strd"] = da["strd"].diff(dim="step", n=1, label="lower")  # de-accumulate
-    da["strd"] = da["strd"] / 3600  # convert
+    if len(list(da.data_vars)) > 1:
+        # radiation (from J/m2 to W/m2)
+        da["ssrd"] = da["ssrd"].diff(dim="step", n=1, label="lower")  # de-accumulate
+        da["ssrd"] = da["ssrd"] / 3600  # convert
+        da["strd"] = da["strd"].diff(dim="step", n=1, label="lower")  # de-accumulate
+        da["strd"] = da["strd"] / 3600  # convert
 
     # dataset processing
     da = da.assign_coords(valid_time=da.time + da.step)
@@ -525,13 +517,21 @@ def process_forecast_ECMWF(
         da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
     else:
         # Regular case - doesn't cross meridian
-        da: xr.DataArray = da.sel(
-            y=slice(bounds[3] + buffer, bounds[1] - buffer),
-            x=slice(
-                ((bounds[0] - buffer) + 360) % 360,
-                ((bounds[2] + buffer) + 360) % 360,
-            ),
-        )
+        if (
+            da.x.min() >= 0 and da.x.max() <= 360
+        ):  # probably the case when using grib 2 files
+            da: xr.DataArray = da.sel(
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                x=slice(
+                    ((bounds[0] - buffer) + 360) % 360,
+                    ((bounds[2] + buffer) + 360) % 360,
+                ),
+            )
+        else:  # the case when using grib 1 files with longitudes between -180 and 180
+            da: xr.DataArray = da.sel(
+                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                x=slice(bounds[0] - buffer, bounds[2] + buffer),
+            )
 
     # Reorder x to be between -180 and 180 degrees
     da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
@@ -546,6 +546,19 @@ def process_forecast_ECMWF(
 
     da = da.rio.write_crs(4326)
     da.raster.set_crs(4326)
+
+    # make sure forecasts are in same grid as original data
+    forcing_da = xr.open_dataarray(
+        "input" + "/" + self.files["other"]["climate/pr_hourly"]
+    )
+
+    da = da.interp(
+        x=forcing_da.x,
+        y=forcing_da.y,
+        method="linear",
+    )
+    # convert back to float32
+    da = da.astype(np.float32)
 
     # Check that % of nan values is less than 5% for each variable
     for variable_name in da.data_vars:
@@ -564,8 +577,8 @@ def process_forecast_ECMWF(
             self.logger.warning(
                 f"Found {nan_percentage:.2f}% missing values for variable '{variable_name}' after regridding. Interpolating missing values."
             )
-            da = da.interpolate_na(dim=["y", "x"], method="linear")
-            da = da.interpolate_na(dim=["time"], method="linear")
+            da = da.interpolate_na(dim=["y", "x"], method="nearest")
+            da = da.interpolate_na(dim=["time"], method="nearest")
 
             # fill nans in last timesteps (due to de-accumulation) with mean of recent known values
             recent_mean: xr.DataArray = (
@@ -578,6 +591,10 @@ def process_forecast_ECMWF(
 
             nan_percentage_after: float = float(
                 da[variable_name].isnull().mean().compute().item() * 100
+            )
+            assert nan_percentage_after == 0, (
+                f"Failed to interpolate all missing values for variable '{variable_name}'. "
+                f"{nan_percentage_after:.2f}% missing values remain."
             )
 
     return da
@@ -2691,7 +2708,6 @@ class Forcing:
         forecast_resolution: float,
         forecast_horizon: int,
         forecast_timestep: int,
-        forecast_frequency: int,
     ):
         """Sets up forecast data for the model based on configuration.
 
@@ -2704,7 +2720,6 @@ class Forcing:
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep: The forecast timestep in hours.
-            forecast_frequency: The frequency at which forecasts are initialized (hours).
         """
 
         if forecast_provider == "ECMWF":
@@ -2716,7 +2731,6 @@ class Forcing:
                 forecast_resolution,
                 forecast_horizon,
                 forecast_timestep,
-                forecast_frequency,
             )
         # process downloaded forecast data and set as forcing
 
@@ -2729,7 +2743,6 @@ class Forcing:
         forecast_resolution: float,
         forecast_horizon: int,
         forecast_timestep: int,
-        forecast_frequency: int,
     ) -> None:
         """Sets up the folder structure for ECMWF forecast data.
 
@@ -2742,7 +2755,6 @@ class Forcing:
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep: The forecast timestep in hours.
-            forecast_frequency: The frequency at which forecasts are initialized (hours).
         """
         # setup folder structure
         preprocessing_folder = self.preprocessing_dir / "forecasts" / "ECMWF"
@@ -2778,7 +2790,6 @@ class Forcing:
             "forecast_resolution": forecast_resolution,
             "forecast_horizon": forecast_horizon,
             "forecast_timestep": forecast_timestep,
-            "forecast_frequency": forecast_frequency,
         }
 
         process_args: dict[str, Any] = {
@@ -2797,7 +2808,7 @@ class Forcing:
         forecast_issue_dates = pd.date_range(
             start=forecast_start,
             end=forecast_end,
-            freq=f"{forecast_frequency}H",
+            freq="24H",
         )
 
         for forecast_issue_date in forecast_issue_dates:

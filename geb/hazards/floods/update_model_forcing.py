@@ -119,17 +119,12 @@ def update_sfincs_model_forcing(
     segments = import_rivers(model_root)
 
     if precipitation_grid is not None:
-        if not isinstance(precipitation_grid, list):
-            assert isinstance(precipitation_grid, xr.DataArray), (
-                "precipitation_grid should be a list or an xr.DataArray"
-            )
-            precipitation_grid: list[xr.DataArray] = [precipitation_grid]
-
-        precipitation_grid: list[xr.DataArray] = [
-            pr.raster.reproject_like(sf.grid) for pr in precipitation_grid
-        ]
-
-        precipitation_grid: xr.DataArray = xr.concat(precipitation_grid, dim="time")
+        # precipitation_grid: list[xr.DataArray] = [
+        #     pr.raster.reproject_like(sf.grid) for pr in precipitation_grid
+        # ]
+        precipitation_grid = precipitation_grid.compute()
+        precipitation_grid = precipitation_grid.raster.reproject_like(sf.grid)
+        # precipitation_grid: xr.DataArray = xr.concat(precipitation_grid, dim="time")
 
         assert precipitation_grid.raster.crs is not None, (
             "precipitation_grid should have a crs"
