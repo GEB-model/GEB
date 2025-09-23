@@ -66,7 +66,7 @@ class ESAWorldCover(Adapter):
         )
 
         # List all STAC items found in the search result
-        item_list = list(search_result.get_items())
+        item_list = list(search_result.items())
         assert len(item_list) > 0, "No items found for the specified bounding box."
 
         # The STAC items don't have resolution and crs information, so we need to open one asset to get it
