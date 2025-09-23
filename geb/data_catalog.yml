@@ -220,52 +220,6 @@ oecd_idd:
     socioeconomic/OECD/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0+.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR..csv
   driver: csv
   data_type: DataFrame
-wb_inflation_rate:
-  meta:
-    category: economics
-    source_author: World Bank
-    source_license: CC-BY-4.0
-    source_url: https://data.worldbank.org/indicator/FP.CPI.TOTL.ZG
-    sorce_version: 5551656
-  path: socioeconomic/WB inflation rates/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_402281.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    skiprows: 4
-wb_lending_rate:
-  meta:
-    category: economics
-    source_author: World Bank
-    source_license: CC-BY-4.0
-    source_url: https://data.worldbank.org/indicator/FR.INR.LEND
-    sorce_version: 5553913
-  path: socioeconomic/WB lending interest rates/API_FR.INR.LEND_DS2_en_csv_v2_3789.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    skiprows: 4
-world_bank_price_ratio:
-  meta:
-    category: economics
-    source_author: World Bank
-    source_license: CC-BY-4.0
-    source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
-  path: socioeconomic/price_ratio/API_PA.NUS.PPPC.RF_DS2_en_csv_v2_4549.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    skiprows: 4
-wb_LCU_per_USD:
-  meta:
-    category: economics
-    source_author: World Bank
-    source_license: CC-BY-4.0
-    source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
-  path: socioeconomic/currency_conversion/API_PA.NUS.FCRF_DS2_en_csv_v2_399523.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    skiprows: 4
 gcam_electricity_rates:
   meta:
     category: economics

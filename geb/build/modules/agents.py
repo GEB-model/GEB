@@ -420,11 +420,10 @@ class Agents:
             The resulting lending rates and inflation rates data are set as forcing data in the model with names of the form
             'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
         """
-        # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
-        inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
+        inflation_rates = self.new_data_catalog.fetch("wb_inflation_rate").read()
         inflation_rates_country_index = inflation_rates.set_index("Country Code")
-        price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
-        LCU_per_USD = self.data_catalog.get_dataframe("wb_LCU_per_USD")
+        price_ratio = self.new_data_catalog.fetch("world_bank_price_ratio").read()
+        LCU_per_USD = self.new_data_catalog.fetch("world_bank_LCU_per_USD").read()
 
         def filter_and_rename(df, additional_cols):
             # Select columns: 'Country Name', 'Country Code', and columns containing "YR"

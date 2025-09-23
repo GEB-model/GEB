@@ -10,8 +10,53 @@ from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .sword import Sword
+from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "wb_inflation_rate": {
+        "adapter": WorldBankData(
+            folder="world_bank_inflation_rate",
+            local_version=1,
+            filename="wb_inflation_rate.csv",
+            cache="global",
+        ),
+        "url": "https://api.worldbank.org/v2/en/indicator/FP.CPI.TOTL.ZG?downloadformat=csv",
+        "source": {
+            "name": "World Bank Inflation Data",
+            "author": "The World Bank",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
+    "world_bank_price_ratio": {
+        "adapter": WorldBankData(
+            folder="world_bank_price_ratio",
+            local_version=1,
+            filename="world_bank_price_ratio.csv",
+            cache="global",
+        ),
+        "url": "https://api.worldbank.org/v2/en/indicator/PA.NUS.PPPC.RF?downloadformat=csv",
+        "source": {
+            "name": "Official exchange rate (LCU per US$, period average)",
+            "author": "The World Bank",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "url": "https://data.worldbank.org/indicator/PA.NUS.PPPC.RF",
+        },
+    },
+    "world_bank_LCU_per_USD": {
+        "adapter": WorldBankData(
+            folder="world_bank_LCU_per_USD",
+            local_version=1,
+            filename="world_bank_LCU_per_USD.csv",
+            cache="global",
+        ),
+        "url": "https://api.worldbank.org/v2/en/indicator/PA.NUS.FCRF?downloadformat=csv",
+        "source": {
+            "name": "World Bank Local Currency Unit per US Dollar Data",
+            "author": "The World Bank",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "url": "https://data.worldbank.org/indicator/PA.NUS.FCRF",
+        },
+    },
     "esa_worldcover_2020": {
         "adapter": ESAWorldCover(),
         "url": "https://services.terrascope.be/stac/collections/urn:eop:VITO:ESA_WorldCover_10m_2020_AWS_V1",

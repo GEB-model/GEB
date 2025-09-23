@@ -146,5 +146,9 @@ class Adapter:
             return gpd.read_file(self.path, **kwargs)
         elif self.path.suffix == ".vrt":
             return xr.open_dataarray(self.path, **kwargs)
+        elif self.path.suffix == ".csv":
+            return pd.read_csv(self.path, **kwargs)
+        elif self.path.suffix == ".xlsx":
+            return pd.read_excel(self.path, **kwargs)
         else:
             raise ValueError("Unsupported file format for reading data.")
