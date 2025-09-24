@@ -809,7 +809,7 @@ def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
 
     spatial_average = (
         (da_plot * ~mask).sum(dim=("y", "x")) / (~mask).sum()
-    ).compute()  # Area-weighted average
+    ).compute()  # Area-weighted average (only over the catchment area)
 
     ensemble_data = []  # Store ensemble member data
     for i, member in enumerate(spatial_average.member):  # Iterate over ensemble members
