@@ -61,40 +61,42 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         Raises:
             ValueError: If the mode is not 'r' or 'w'.
         """
-        self.timing = timing
-        self.mode = mode
+        self.timing = timing  # whether to log timing of modules
+        self.mode = mode  # mode of the model, either 'r' (read) or 'w' (write)
         if self.mode not in ["r", "w"]:
-            raise ValueError("Mode must be either 'r' (read) or 'w' (write)")
+            raise ValueError(
+                "Mode must be either 'r' (read) or 'w' (write)"
+            )  # validate mode
 
-        Module.__init__(self, self, create_var=False)
+        Module.__init__(self, self, create_var=False)  # initialize the Module class
 
-        self._multiverse_name = None
+        self._multiverse_name = None  # name of the multiverse, if any
 
-        self.config = config
+        self.config = config  # model configuration
 
-        # make a deep copy to avoid issues when the model is initialized multiple times
-        self.files = copy.deepcopy(files)
+        self.files = copy.deepcopy(
+            files
+        )  # make a deep copy to avoid issues when the model is initialized multiple times
         if "geoms" in self.files:
             # geoms was renamed to geom in the file library. To upgrade old models,
             # we check if "geoms" is in the files and rename it to "geom"
             # this line can be removed in august 2026 (also in geb/build/__init__.py)
-            self.files["geom"] = self.files.pop("geoms")
+            self.files["geom"] = self.files.pop("geoms")  # upgrade old models
 
         for data in self.files.values():
             for key, value in data.items():
-                data[key] = self.input_folder / value
+                data[key] = self.input_folder / value  # make paths absolute
 
-        self.mask = load_geom(self.files["geom"]["mask"])
+        self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
 
-        self.store = Store(self)
-        self.artists = Artists(self)
+        self.store = Store(self)  # initialize the store
+        self.artists = Artists(self)  # initialize the artists
 
-        self.forcing = Forcing(self)
+        self.forcing = Forcing(self)  # initialize the forcing
 
-        self.evaluator = Evaluate(self)
+        self.evaluator = Evaluate(self)  # initialize the evaluator
 
-        # Empty list to hold plantFATE models. If forests are not used, this will be empty
-        self.plantFATE = []
+        self.plantFATE = []  # Empty list to hold plantFATE models. If forests are not used, this will be empty
 
     def restore(
         self, store_location: str | Path, timestep: int, n_timesteps: int
@@ -160,17 +162,22 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         Returns:
             If `return_mean_discharge` is True, a dictionary with the mean discharge for each forecast member is returned.
             Otherwise, None is returned.
+
+        Raises:
+            ValueError: If the x and y dimensions of the forecast data are not the same as the original data.
+
         """
         # copy current state of timestep and time
-        store_timestep: int = copy.copy(self.current_timestep)
-        store_n_timesteps: int = copy.copy(self.n_timesteps)
+        store_timestep: int = copy.copy(self.current_timestep)  # store current timestep
+        store_n_timesteps: int = copy.copy(self.n_timesteps)  # store n_timesteps
 
         # set a folder to store the initial state of the multiverse
-        store_location: Path = self.simulation_root / "multiverse" / "forecast"
-        self.store.save(store_location)
+        store_location: Path = (
+            self.simulation_root / "multiverse" / "forecast"
+        )  # create a temporary folder for the multiverse
+        self.store.save(store_location)  # save the current state of the model
 
-        # self.multiverse_name = None
-        forecasts: xr.DataArray = open_zarr(
+        forecasts: xr.DataArray = open_zarr(  # open the forecast data
             self.input_folder
             / "other"
             / "forecasts"
@@ -179,42 +186,53 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )
         forecast_lead_time = pd.to_datetime(forecasts.time[-1].item()) - pd.to_datetime(
             forecasts.time[0].item()
-        )
+        )  # calculate the lead time of the forecast
 
         forecast_end_date = round_up_to_start_of_next_day_unless_midnight(
             pd.to_datetime(forecasts.time[-1].item()).to_pydatetime()
-        ).date()
-        self.n_timesteps = (forecast_end_date - self.start_time.date()).days
+        ).date()  # calculate the end date of the forecast
+        self.n_timesteps = (
+            forecast_end_date - self.start_time.date()
+        ).days  # set the number of timesteps to the end of the forecast
         print(
             f"Hydrological model run starts at {self.start_time}. SFINCS and forecasts will be active from {forecast_issue_datetime} with max. lead time of {forecast_lead_time} days"
         )
 
-        # Save original data arrays for all variables to restore later
-        original_data: dict[str, xr.DataArray] = {}
+        original_data: dict[
+            str, xr.DataArray
+        ] = {}  # Save original data arrays for all variables to restore later
         for var in variables:
-            original_data[var] = self.forcing[var]
+            original_data[var] = self.forcing[var]  # store original forcing data
 
         if return_mean_discharge:
-            mean_discharge: dict[Any, float] = {}
+            mean_discharge: dict[
+                Any, float
+            ] = {}  # dictionary to store mean discharge for each member
 
-        self.forecast_issue_date = forecast_issue_datetime.strftime("%Y%m%dT%H%M%S")
+        self.forecast_issue_date = forecast_issue_datetime.strftime(
+            "%Y%m%dT%H%M%S"
+        )  # set the forecast issue date
 
-        for member in forecasts.member:
+        for member in forecasts.member:  # loop over all forecast members
             print(member)
-            self.multiverse_name = member.item()
+            self.multiverse_name = (
+                member.item()
+            )  # set the multiverse name to the member name
             for var in variables:
                 print(
                     f"Entering the multiverse space for member {member.item()} and variable {var}"
-                )
+                )  # debugging print
                 forecasts: xr.DataArray = open_zarr(
                     self.input_folder
                     / "other"
                     / "forecasts"
                     / "ECMWF"
                     / f"{var}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
-                )
+                )  # open the forecast data for the variable
 
-                forecast_member: xr.DataArray = forecasts.sel(member=member)
+                forecast_member: xr.DataArray = forecasts.sel(
+                    member=member
+                )  # select the forecast member
 
                 # check if the x and y dimensions of the forecast data is exactly the same as the original data
                 if not np.array_equal(
@@ -222,7 +240,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 ) or not np.array_equal(forecasts.y, original_data[var].y):
                     raise ValueError(
                         f"The x and y dimensions of the forecast data for variable {var} are not the same as the original data. Cannot run multiverse."
-                    )
+                    )  # raise an error if the dimensions are not the same
 
                 # Clip the original precipitation data to the start of the forecast
                 # Therefore we take the start of the forecast and subtract one second
@@ -233,46 +251,51 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                             None, (forecast_member.time[0] - pd.Timedelta(seconds=1))
                         )
                     )
-                )
+                )  # clip the original data to the start of the forecast
 
-                # Concatenate the original forcing data with the forecast data along time dimension
                 observed_and_forecasted_combined: xr.DataArray = xr.concat(
                     [original_data_clipped_to_start_of_forecast, forecast_member],
                     dim="time",
+                )  # Concatenate the original forcing data with the forecast data along time dimension
+
+                self.model.forcing[var] = (
+                    observed_and_forecasted_combined  # set the forcing data to the combined data
                 )
 
-                # Set the forcing data to the combined data
-                self.model.forcing[var] = observed_and_forecasted_combined
-
-            print(f"Running forecast member {member.item()}")
+            print(f"Running forecast member {member.item()}")  # debugging print
             self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
 
             if return_mean_discharge:
                 mean_discharge[member.item()] = (
                     self.hydrology.routing.grid.var.discharge_m3_s.mean()
-                ).item()
+                ).item()  # calculate the mean discharge for the member
 
-            # restore the initial state of the multiverse
             self.restore(
                 store_location=store_location,
                 timestep=store_timestep,
                 n_timesteps=store_n_timesteps,
-            )
+            )  # restore the initial state of the multiverse
 
-        print("Forecast finished, restoring all conditions...")
+        print("Forecast finished, restoring all conditions...")  # debugging print
 
-        # restore the forcing data arrays, step out of the multiverse
         for var in variables:
-            self.forcing[var] = original_data[var]
-        self.multiverse_name: None = None
+            self.forcing[var] = original_data[
+                var
+            ]  # restore the forcing data arrays, step out of the multiverse
+        self.multiverse_name: None = None  # reset the multiverse name
 
         if return_mean_discharge:
-            return mean_discharge
+            return mean_discharge  # return the mean discharge for each member
         else:
-            return None
+            return None  # nothing to return
 
     def step(self) -> None:
-        """Forward the model by one timestep."""
+        """Forward the model by one timestep.
+
+        If configured, this function will also run the model in multiverse mode
+        for the current timestep, using forecast data if available.
+
+        """
         # only if forecasts is used, and if we are not already in multiverse (avoiding infinite recursion)
         # and if the current date is in the list of forecast days
         if (
@@ -281,30 +304,34 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             is None  # only start multiverse if not already in one
             and self.current_time.date()
         ):
-            # get files from the model input folder
-            # Get forecast files and extract datetimes from filenames
             forecast_files: list[Path] = list(
                 (self.input_folder / "other" / "forecasts" / "ECMWF").glob("*.zarr")
-            )
-            # ...existing code...
-            forecast_issue_dates: list[datetime.date] = []
+            )  # get all forecast files in the input folder
+            forecast_issue_dates: list[
+                datetime.date
+            ] = []  # list to store forecast issue dates
             for f in forecast_files:
-                datetime_str = f.stem.split("_")[-1]
-                # Check if datetime string contains only digits, T, and colons (valid format)
-                if datetime_str.replace("T", "").replace(":", "").isdigit():
-                    dt = datetime.datetime.strptime(datetime_str, "%Y%m%dT%H%M%S")
-                    forecast_issue_dates.append(dt)
+                datetime_str = f.stem.split("_")[
+                    -1
+                ]  # extract the datetime string from the filename
+                if (
+                    datetime_str.replace("T", "").replace(":", "").isdigit()
+                ):  # Check if datetime string contains only digits, T, and colons (valid format)
+                    dt = datetime.datetime.strptime(
+                        datetime_str, "%Y%m%dT%H%M%S"
+                    )  # convert the string to a datetime object
+                    forecast_issue_dates.append(dt)  # append the date to the list
                 else:
                     print(
                         f"Warning: Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'. Skipping this file."
-                    )
+                    )  # print a warning if the format is invalid
 
             forecast_issue_dates = list(
                 set(forecast_issue_dates)
             )  # only keep unique dates
 
             if self.config["general"]["forecasts"]["only_rainfall"]:
-                variables = ["pr_hourly"]
+                variables = ["pr_hourly"]  # only rainfall is currently implemented
             else:
                 print("Other variables than rainfall not yet implemented.")
 
@@ -320,29 +347,29 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                         variables=variables,
                         forecast_issue_datetime=forecast_datetime,
                         return_mean_discharge=True,
-                    )
+                    )  # run the multiverse for the current timestep
 
-            # If the multiverse function is called and we want to simulate a warning response afterwards,
             if self.config["agent_settings"]["households"]["warning_response"]:
                 self.agents.households.warning_strategy_1()
+                # simulate household response to warning
                 # self.agents.households.infrastructure_warning_strategy()
 
-        t0 = time()
-        self.agents.step()
+        t0 = time()  # start timing
+        self.agents.step()  # step the agents
         if self.simulate_hydrology:
-            self.hydrology.step()
+            self.hydrology.step()  # step the hydrology
 
-        HazardDriver.step(self)
+        HazardDriver.step(self)  # step the hazards
 
-        self.report(locals())
+        self.report(locals())  # report the current state of the model
 
-        t1 = time()
+        t1 = time()  # end timing
         print(
             f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}finished {self.current_time} ({round(t1 - t0, 4)}s)",
             flush=True,
-        )
+        )  # print the time taken for the step
 
-        self.current_timestep += 1
+        self.current_timestep += 1  # increment the timestep
 
     def _initialize(
         self,
