@@ -15,9 +15,8 @@ from dateutil.relativedelta import relativedelta
 from honeybees.model import Model as ABM_Model
 
 from geb.agents import Agents
-from geb.artists import Artists
 from geb.hazards.driver import HazardDriver
-from geb.hazards.floods.construct_storm_surge_hydrographs import (
+from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
     generate_storm_surge_hydrographs,
 )
 from geb.module import Module
@@ -89,10 +88,8 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
 
-        self.store = Store(self)  # initialize the store
-        self.artists = Artists(self)  # initialize the artists
-
-        self.forcing = Forcing(self)  # initialize the forcing
+        self.store = Store(self)
+        self.forcing = Forcing(self)
 
         self.evaluator = Evaluate(self)  # initialize the evaluator
 
@@ -419,7 +416,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if load_data_from_store:
             self.store.load()
 
-        if not in_spinup:
+        # in spinup mode, save the spinup time range to the store for later verification
+        # in run mode, verify that the spinup time range matches the stored time range
+        if in_spinup:
+            self._store_spinup_time_range()
+        else:
             self._verify_spinup_time_range()
 
         if self.simulate_hydrology:
@@ -563,7 +564,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # }
 
         self.var = self.store.create_bucket("var")
-        self._store_spinup_time_range()
 
         self._initialize(
             create_reporter=True,
@@ -700,6 +700,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @property
     def multiverse_name(self) -> str | None:
         """To explore different model futures, GEB can be run in a multiverse mode.
+
         In this mode, a number of timesteps can be run with different input data (e.g. different precipitation forecasts).
         The multiverse_name is used to identify the different model futures. It is typically set to the forecast member name.
 
@@ -711,6 +712,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @multiverse_name.setter
     def multiverse_name(self, value: str | None) -> None:
         """To explore different model futures, GEB can be run in a multiverse mode.
+
         In this mode, a number of timesteps can be run with different input data (e.g. different precipitation forecasts).
         The multiverse_name is used to identify the different model futures. It is typically set to the forecast member name.
 
@@ -727,7 +729,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             Forecast issue date as a string in the format YYYYMMDD. If None, the model
             is not in multiverse mode.
         """
-
         return self._forecast_issue_date
 
     @forecast_issue_date.setter
@@ -834,7 +835,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 reader.close()
 
     def __enter__(self) -> "GEBModel":
-        """ "Enters the context of the model.
+        """Enters the context of the model.
 
         Returns:
             The model instance itself.

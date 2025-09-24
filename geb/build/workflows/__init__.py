@@ -1,3 +1,1 @@
-"""
-Workflow helpers used in the GEB build process.
-"""
+"""Workflow helpers used in the GEB build process."""

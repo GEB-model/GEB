@@ -1,3 +1,1 @@
-"""
-Tests for hydrology components in the GEB project.
-"""
+"""Tests for hydrology components in the GEB project."""

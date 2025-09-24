@@ -1,3 +1,5 @@
+"""Tests for damage scanner workflow."""
+
 import math
 
 import geopandas as gpd
@@ -75,7 +77,12 @@ def vulnerability_curves() -> pd.DataFrame:
 
 
 @pytest.mark.parametrize("clip", [False, True])
-def test_vector_scanner(flood_raster, buildings, vulnerability_curves, clip) -> None:
+def test_vector_scanner(
+    flood_raster: xr.DataArray,
+    buildings: gpd.GeoDataFrame,
+    vulnerability_curves: pd.DataFrame,
+    clip: bool,
+) -> None:
     if clip:
         flood_raster = flood_raster.rio.clip(
             [Polygon([(1, 1), (1, 9), (9, 9), (9, 1)])]
@@ -117,7 +124,9 @@ def test_vector_scanner(flood_raster, buildings, vulnerability_curves, clip) -> 
 
 
 def test_vector_scanner_missing_data(
-    flood_raster, buildings, vulnerability_curves
+    flood_raster: xr.DataArray,
+    buildings: gpd.GeoDataFrame,
+    vulnerability_curves: pd.DataFrame,
 ) -> None:
     # Test missing 'maximum_damage' column
     buildings_missing_damage = buildings.drop(columns=["maximum_damage"])

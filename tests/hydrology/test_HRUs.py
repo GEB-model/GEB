@@ -1,3 +1,9 @@
+"""Tests for the HRU functions.
+
+The HRUs are hydrological response units, which are subdivisions of grid cells. There are
+several utility functions to go from grid to HRU and back again.
+"""
+
 import numpy as np
 import numpy.typing as npt
 import pytest
@@ -44,26 +50,77 @@ def test_determine_nearest_river_cell() -> None:
 
 
 @pytest.fixture
-def common_data() -> tuple[
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.int32],
-    npt.NDArray[np.float32],
-]:
-    grid_data = np.array([1, 2, 3], dtype=np.float32)
-    HRU_data = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=np.float32)
-    HRU_data_with_nan = np.array([1, np.nan, 3, 4, 5, 6, 7, 8, 9], dtype=np.float32)
-    grid_to_HRU = np.array([1, 4, 9], dtype=np.int32)
-    land_use_ratio = np.array(
-        [1, 0.2, 0.4, 0.4, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32
-    )
-    return grid_data, HRU_data, HRU_data_with_nan, grid_to_HRU, land_use_ratio
+def grid_data() -> npt.NDArray[np.float32]:
+    """Test data for data that could be on the grid used in GEB.
+
+    Because it is compressed, it is a 1D array.
+
+    Returns:
+        An array with hypothetical grid data. Corresponds with other fixutes in this file.
+    """
+    return np.array([1, 2, 3], dtype=np.float32)
 
 
-def test_to_grid(common_data) -> None:
-    grid_data, HRU_data, HRU_data_with_nan, grid_to_HRU, land_use_ratio = common_data
+@pytest.fixture
+def HRU_data() -> npt.NDArray[np.float32]:
+    """Test data for data that could be on the HRUs used in GEB.
 
+    Returns:
+        An array with hypothetical HRU data. Corresponds with other fixutes in this file.
+    """
+    return np.array([1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=np.float32)
+
+
+@pytest.fixture
+def HRU_data_with_nan() -> npt.NDArray[np.float32]:
+    """Test data for data that could be on the HRUs used in GEB, with a NaN value.
+
+    Returns:
+        An array with hypothetical HRU data including a NaN. Corresponds with other fixutes in this file.
+    """
+    return np.array([1, np.nan, 3, 4, 5, 6, 7, 8, 9], dtype=np.float32)
+
+
+@pytest.fixture
+def grid_to_HRU() -> npt.NDArray[np.int32]:
+    """The indexes that map grid cells to HRUs.
+
+    Each value maps to the index of the first unit of the next cell.
+
+    Returns:
+        Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
+            Corresponds with other fixutes in this file.
+    """
+    return np.array([1, 4, 9], dtype=np.int32)
+
+
+@pytest.fixture
+def land_use_ratio() -> npt.NDArray[np.float32]:
+    """The land use ratio for each HRU, as a fraction of the grid cell.
+
+    The size of this array is the number of HRUs. The size of the land use in one grid cell
+    is multiple HRUs that sum to 1.
+
+    Returns:
+        An array with hypothetical land use ratios for each HRU. Corresponds with other fixutes in this file.
+    """
+    return np.array([1, 0.2, 0.4, 0.4, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
+
+
+def test_to_grid(
+    HRU_data: npt.NDArray[np.float32],
+    HRU_data_with_nan: npt.NDArray[np.float32],
+    grid_to_HRU: npt.NDArray[np.int32],
+    land_use_ratio: npt.NDArray[np.float32],
+) -> None:
+    """Test the to_grid function with various aggregation methods for going from HRU to grid.
+
+    Args:
+        HRU_data: Hypothetical data on the HRUs.
+        HRU_data_with_nan: Hypothetical data on the HRUs with a NaN value.
+        grid_to_HRU: The indexes that map grid cells to HRUs.
+        land_use_ratio: The land use ratio (of a grid cell) for each HRU.
+    """
     np.testing.assert_almost_equal(
         to_grid(HRU_data, grid_to_HRU, land_use_ratio),
         np.array([1.0, 3.2, 7.0], dtype=np.float32),
@@ -131,9 +188,18 @@ def test_to_grid(common_data) -> None:
     )
 
 
-def test_to_HRU(common_data) -> None:
-    grid_data, HRU_data, HRU_data_with_nan, grid_to_HRU, land_use_ratio = common_data
+def test_to_HRU(
+    grid_data: npt.NDArray[np.float32],
+    grid_to_HRU: npt.NDArray[np.int32],
+    land_use_ratio: npt.NDArray[np.float32],
+) -> None:
+    """Test the to_HRU function with various methods for going from grid to HRU.
 
+    Args:
+        grid_data: Hypothetical data on the grid.
+        grid_to_HRU: The indexes that map grid cells to HRUs.
+        land_use_ratio: The land use ratio (of a grid cell) for each HRU.
+    """
     data = np.array([1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0], dtype=np.float32)
 
     out = np.zeros((*data.shape[:-1], land_use_ratio.size), dtype=data.dtype)

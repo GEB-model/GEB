@@ -7,17 +7,55 @@ import shutil
 import signal
 import string
 from copy import deepcopy
+from functools import wraps
 from subprocess import PIPE, Popen
+from typing import Any
 
 import yaml
 from SALib.sample import latin as latin_sample, sobol as sobol_sample
 
 from .workflows.methods import multi_set
-from .workflows.multiprocessing import (
-    handle_ctrl_c,
-    init_pool,
-    pool_ctrl_c_handler,
-)
+
+
+def init_pool(
+    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
+) -> None:
+    """Initialize the global variables for the process pool."""
+    global ctrl_c_entered
+    global default_sigint_handler
+    ctrl_c_entered = False
+    default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
+
+    global lock
+    global current_gpu_use_count
+    global n_gpu_spots
+    n_gpu_spots = gpus * models_per_gpu
+    lock = manager_lock
+    current_gpu_use_count = manager_current_gpu_use_count
+
+
+def handle_ctrl_c(func):
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        global ctrl_c_entered
+        if not ctrl_c_entered:
+            signal.signal(signal.SIGINT, default_sigint_handler)  # the default
+            try:
+                return func(*args, **kwargs)
+            except KeyboardInterrupt:
+                ctrl_c_entered = True
+                return KeyboardInterrupt
+            finally:
+                signal.signal(signal.SIGINT, pool_ctrl_c_handler)
+        else:
+            return KeyboardInterrupt
+
+    return wrapper
+
+
+def pool_ctrl_c_handler(*args: Any, **kwargs: Any) -> None:
+    global ctrl_c_entered
+    ctrl_c_entered = True
 
 
 def sensitivity_parameters(parameters, distinct_samples, type: str = "saltelli"):
@@ -105,7 +143,7 @@ def run_model(args) -> None:
             with open(config_path, "w") as f:
                 yaml.dump(template, f)
 
-            def run_model_scenario(scenario):
+            def run_model_scenario(scenario: str) -> int:
                 # build the command to run the script, including the use of a GPU if specified
                 command = [
                     "geb",

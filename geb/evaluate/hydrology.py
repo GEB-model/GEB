@@ -254,7 +254,7 @@ class Hydrology:
                 ID
             ].Q_obs_to_GEB_upstream_area_ratio
 
-            def create_validation_df():
+            def create_validation_df() -> pd.DataFrame:
                 """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station.
 
                 Returns:
@@ -302,7 +302,7 @@ class Hydrology:
             if validation_df.empty:
                 continue
 
-            def calculate_validation_metrics():
+            def calculate_validation_metrics() -> tuple[float, float, float]:
                 """Calculate the validation metrics for the current station.
 
                 Returns:
@@ -660,7 +660,7 @@ class Hydrology:
 
         plot_validation_map()
 
-        def create_folium_map(evaluation_gdf):
+        def create_folium_map(evaluation_gdf) -> folium.Map:
             """Create a Folium map with evaluation results and station markers.
 
             Returns:
@@ -1016,7 +1016,6 @@ class Hydrology:
             *args: ignored.
             **kwargs: ignored.
         """
-
         import plotly.io as pio
 
         # auto install chrome if not available
@@ -1283,19 +1282,19 @@ class Hydrology:
             FileNotFoundError: If the flood map folder does not exist in the output directory.
         """
 
-        def calculate_hit_rate(model, observations):
+        def calculate_hit_rate(model, observations) -> float:
             miss = np.sum(((model == 0) & (observations == 1)).values)
             hit = np.sum(((model == 1) & (observations == 1)).values)
             hit_rate = hit / (hit + miss)
             return float(hit_rate)
 
-        def calculate_false_alarm_ratio(model, observations):
+        def calculate_false_alarm_ratio(model, observations) -> float:
             false_alarm = np.sum(((model == 1) & (observations == 0)).values)
             hit = np.sum(((model == 1) & (observations == 1)).values)
             false_alarm_ratio = false_alarm / (false_alarm + hit)
             return float(false_alarm_ratio)
 
-        def calculate_critical_success_index(model, observations):
+        def calculate_critical_success_index(model, observations) -> float:
             hit = np.sum(((model == 1) & (observations == 1)).values)
             false_alarm = np.sum(((model == 1) & (observations == 0)).values)
             miss = np.sum(((model == 0) & (observations == 1)).values)
@@ -1303,7 +1302,7 @@ class Hydrology:
             return float(csi)
 
         # Main function for the peformance metrics
-        def calculate_performance_metrics(observation, flood_map_path):
+        def calculate_performance_metrics(observation, flood_map_path) -> None:
             # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)
             obs = rxr.open_rasterio(observation)
@@ -1483,8 +1482,6 @@ class Hydrology:
                     f.write(f"Critical Success Index (CSI) (C): {csi}\n")
                     f.write(f"Number of flooded pixels: {flooded_pixels}\n")
                     f.write(f"Flooded area (km2): {flooded_area_km2}")
-
-                return performance_numbers
 
         self.config = self.model.config["hazards"]
 

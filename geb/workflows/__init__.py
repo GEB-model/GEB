@@ -1,6 +1,4 @@
-"""
-Workflow helpers used in the GEB.
-"""
+"""Workflow helpers used in the GEB."""
 
 from time import time
 
@@ -10,12 +8,17 @@ import numpy as np
 class TimingModule:
     """A timing module to measure the time taken for different parts of a workflow."""
 
-    def __init__(self, name) -> None:
+    def __init__(self, name: str) -> None:
+        """Initializes the TimingModule with a name and starts the timer.
+
+        Args:
+            name: The name of the timing module. Will be used when printing the timing results.
+        """
         self.name = name
         self.times = [time()]
         self.split_names = []
 
-    def finish_split(self, name) -> None:
+    def finish_split(self, name: str) -> None:
         """Finish split with with name given.
 
         Appends the current time and the name of the split to their respective lists, which will be
@@ -61,6 +64,31 @@ def balance_check(
     error_identifiers: dict = {},
     raise_on_error: bool = False,
 ) -> bool:
+    """Check the balance of a system, usually for water.
+
+    Essentially checks that influxes + prestorages = outfluxes + poststorages,
+    within a given tollerance.
+
+    Args:
+        name: Name of the balance check, used for printing.
+        how: Method to use for balance check, either 'cellwise' or 'sum'.
+        influxes: List of influx arrays.
+        outfluxes: List of outflux arrays.
+        prestorages: List of pre-storage arrays.
+        poststorages: List of post-storage arrays.
+        tollerance: Tollerance for the balance check.
+        error_identifiers: Dictionary of identifiers to help locate errors, e.g. {'x': x_array, 'y': y_array}.
+            Can only be used with how='cellwise'.
+            When an error is found, the values of these identifiers at the location of the maximum error will be printed.
+        raise_on_error: Whether to raise an error if the balance check fails.
+
+    Returns:
+        True if the balance check passes, False otherwise.
+
+    Raises:
+        ValueError: If NaN values are found in the balance calculation.
+        AssertionError: If the balance check fails and raise_on_error is True.
+    """
     income = 0
     out = 0
     store = 0

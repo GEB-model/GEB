@@ -1,3 +1,12 @@
+"""Configuration for tests.
+
+A temporary folder is created in the tests directory of the GEB package for the test output.
+
+IN_GITHUB_ACTIONS is a flag that is used to turn on or off test cases in the Github Actions environment.
+This is useful for tests that are too memory or data intensive to run in the limited Github Actions environment.
+
+"""
+
 import os
 from pathlib import Path
 

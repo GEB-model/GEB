@@ -25,8 +25,8 @@ import xclim.indices as xci
 from cartopy.mpl.geoaxes import GeoAxes
 from dateutil.relativedelta import relativedelta
 from isimip_client.client import ISIMIPClient
-from numcodecs.zarr3 import FixedScaleOffset
 from tqdm import tqdm
+from zarr.codecs.numcodecs import FixedScaleOffset
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
@@ -1380,15 +1380,15 @@ class Forcing:
         max_value = 500 / 3600  # convert to kg/m2/s
         precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
 
-        scaling_factor, out_dtype = calculate_scaling(
-            0, max_value, offset=offset, precision=precision
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, max_value, offset=offset, precision=precision
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1427,14 +1427,14 @@ class Forcing:
         precision: float = 0.01 / 3600  # 0.01 mm in kg/m2/s
 
         offset: int = 0
-        scaling_factor, out_dtype = calculate_scaling(
-            0, max_value, offset=offset, precision=precision
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, max_value, offset=offset, precision=precision
         )
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1463,14 +1463,14 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = 0
-        scaling_factor, out_dtype = calculate_scaling(
-            0, 1361, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, 1361, offset=offset, precision=0.1
         )
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1499,14 +1499,14 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = 0
-        scaling_factor, out_dtype = calculate_scaling(
-            0, 1361, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, 1361, offset=offset, precision=0.1
         )
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1536,15 +1536,15 @@ class Forcing:
 
         K_to_C = 273.15
         offset = -15 - K_to_C  # average temperature on earth
-        scaling_factor, out_dtype = calculate_scaling(
-            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1576,15 +1576,15 @@ class Forcing:
 
         K_to_C = 273.15
         offset = -15 - K_to_C  # average temperature on earth
-        scaling_factor, out_dtype = calculate_scaling(
-            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1615,15 +1615,15 @@ class Forcing:
 
         K_to_C = 273.15
         offset = -15 - K_to_C  # average temperature on earth
-        scaling_factor, out_dtype = calculate_scaling(
-            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1653,15 +1653,15 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = -50
-        scaling_factor, out_dtype = calculate_scaling(
-            0, 100, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, 100, offset=offset, precision=0.1
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1707,15 +1707,15 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = -100_000
-        scaling_factor, out_dtype = calculate_scaling(
-            30_000, 120_000, offset=offset, precision=10
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 30_000, 120_000, offset=offset, precision=10
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1745,14 +1745,14 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = 0
-        scaling_factor, out_dtype = calculate_scaling(
-            0, 120, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, 120, offset=offset, precision=0.1
         )
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1788,15 +1788,15 @@ class Forcing:
         da = da.clip(min=min_SPEI, max=max_SPEI)
 
         offset = 0
-        scaling_factor, out_dtype = calculate_scaling(
-            min_SPEI, max_SPEI, offset=offset, precision=0.001
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, min_SPEI, max_SPEI, offset=offset, precision=0.001
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
