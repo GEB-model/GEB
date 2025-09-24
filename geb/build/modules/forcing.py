@@ -716,21 +716,6 @@ def process_forecast_ECMWF(
     return da
 
 
-def _plot_data(self, da: xr.DataArray, name: str) -> None:
-    """Plot data using appropriate method based on data type.
-
-    Uses plot_forecasts if 'forecast' is in the name, otherwise uses plot_forcing.
-
-    Args:
-        da: Data to plot.
-        name: Name for the plots and file outputs.
-    """
-    if "forecast" in name.lower():
-        self.plot_forecasts(da, name)  # plot forecasts
-    else:
-        self.plot_forcing(da, name)  # plot historical forcing data
-
-
 def plot_forcing(self, da, name) -> None:
     """Plot forcing data with a temporal (timeline) plot and a spatial plot.
     Args:
@@ -951,6 +936,21 @@ def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
     spatial_fp: Path = self.report_dir / (name + "_ensemble_spatial.png")  # File path
     plt.savefig(spatial_fp, dpi=300, bbox_inches="tight")  # Save figure
     plt.close(fig)  # Close figure to free memory
+
+
+def _plot_data(self, da: xr.DataArray, name: str) -> None:
+    """Plot data using appropriate method based on data type.
+
+    Uses plot_forecasts if 'forecast' is in the name, otherwise uses plot_forcing.
+
+    Args:
+        da: Data to plot.
+        name: Name for the plots and file outputs.
+    """
+    if "forecast" in name.lower():
+        plot_forecasts(self, da, name)  # plot forecasts
+    else:
+        plot_forcing(self, da, name)  # plot historical forcing data
 
 
 def plot_timeline(
