@@ -313,15 +313,6 @@ fan_initial_groundwater_depth_{continent}:
   nodata: 2
   placeholders:
     continent: ['Eurasia', 'Africa', 'North_America', 'Oceania', 'South_America']
-GLOBIOM_regions_59:
-  data_type: DataFrame
-  driver: excel
-  path: GLOBIOM/Region_Country_Mapping.xlsx
-  meta:
-    source_url: https://iiasa.ac.at/models-tools-data/globiom
-    source_license: Creative Commons Attribution-NonCommercial 4.0 International
-  driver_kwargs:
-    sheet_name: Region59
 GLOBIOM_regions_37:
   data_type: DataFrame
   driver: excel
