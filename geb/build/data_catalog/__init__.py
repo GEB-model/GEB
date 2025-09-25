@@ -8,6 +8,7 @@ from .fao import GMIA
 from .gadm import GADM
 from .global_data_lab import GlobalDataLabShapefile
 from .globgm import GlobGM, GlobGMDEM
+from .grdc import GRDC
 from .hydrolakes import HydroLakes
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
@@ -16,6 +17,20 @@ from .sword import Sword
 from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "GRDC": {
+        "adapter": GRDC(
+            folder="grdc",
+            local_version=1,
+            filename="GRDC.zip",
+            cache="global",
+        ),
+        "url": "https://portal.grdc.bafg.de/applications/public.html?publicuser=PublicUser#dataDownload/Stations",
+        "source": {
+            "name": "Global Runoff Data Centre",
+            "author": "Global Runoff Data Centre",
+            "license": "https://grdc.bafg.de/downloads/policy_guidelines.pdf",
+        },
+    },
     "global_irrigation_area_groundwater": {
         "adapter": GMIA(
             folder="global_irrigation_area_groundwater",

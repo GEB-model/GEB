@@ -1,6 +1,4 @@
-import io
 import os
-import zipfile
 from pathlib import Path
 
 import cartopy.crs as ccrs
@@ -161,28 +159,7 @@ class Observations:
         region_mask = self.geom["mask"]
 
         # Load Q_obs dataset
-        Q_obs_source = self.data_catalog.get_source("GRDC")
-
-        if str(Q_obs_source.path).endswith(".zip"):
-            # Handle zip file containing single .nc file
-            with zipfile.ZipFile(Q_obs_source.path, "r") as zip_file:
-                self.logger.info(
-                    f"Loading global GRDC discharge observations : {Q_obs_source.path}"
-                )
-                # Get the .nc file from the zip
-                nc_filename = [f for f in zip_file.namelist() if f.endswith(".nc")][0]
-                # Read file content into memory
-                with zip_file.open(nc_filename) as file:
-                    file_content = file.read()
-
-            # Open dataset from memory buffer
-            Q_obs = xr.open_dataset(io.BytesIO(file_content), engine="h5netcdf")
-
-            # rename geo_x and geo_y to x and y
-            Q_obs = Q_obs.rename({"geo_x": "x", "geo_y": "y"})
-        else:
-            # Fallback to original method if not a zip file
-            Q_obs = self.data_catalog.get_geodataset("GRDC")  # is already renamed
+        Q_obs = self.new_data_catalog.fetch("GRDC").read()
 
         # create folders
         snapping_discharge_folder = (
