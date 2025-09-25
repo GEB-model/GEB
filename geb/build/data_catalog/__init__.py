@@ -15,11 +15,24 @@ from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
+from .soilgrids import SoilGrids
 from .sword import Sword
 from .why_map import WhyMap
 from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "soilgrids": {
+        "adapter": SoilGrids(),
+        "url": "https://files.isric.org/soilgrids/latest/data/{variable}/{variable}_{depth}_mean.vrt",
+        "source": {
+            "name": "SoilGrids",
+            "author": "ISRIC - World Soil Information",
+            "license": "CC BY 4.0",
+            "url": "https://soilgrids.org",
+            "version": "2020",
+            "paper_doi": "10.5194/soil-2020-65",
+        },
+    },
     "why_map": {
         "adapter": WhyMap(
             folder="why_map",

@@ -313,27 +313,6 @@ fan_initial_groundwater_depth_{continent}:
   nodata: 2
   placeholders:
     continent: ['Eurasia', 'Africa', 'North_America', 'Oceania', 'South_America']
-soilgrids_2020_{variable}_{depth}:
-  data_type: RasterDataset
-  driver: raster
-  path: https://files.isric.org/soilgrids/latest/data/{variable}/{variable}_{depth}_mean.vrt
-  meta:
-    category: soil
-    notes: "soilthickness is based on 1) soilgrids (global) and 2) dataset for Eurasia\
-      \ (ESDAC, 2004; Panagos et al., 2012): ESDAC, 2004. The european soil database\
-      \ distribution version 2.0, european commission and the European soil bureau\
-      \ network.  esdac.jrc.ec.europa.eu, accessed: 2017-11-17.  Panagos, P., Van\
-      \ Liedekerke, M., Jones, A., Montanarella, L., 2012. European soil data centre:\
-      \ Response to european policy support  and public data requirements. Land Use\
-      \ Policy 29 (2), 329\xE2\u20AC\u201C338. \n"
-    paper_doi: https://doi.org/10.5194/soil-2020-65
-    paper_ref: de Sousa et al. (2020)
-    source_license: CC BY 4.0
-    source_url: https://www.isric.org/explore/soilgrids/soilgrids-access
-    source_version: 2020
-  placeholders:
-    depth: ['0-5cm', '5-15cm', '15-30cm', '30-60cm', '60-100cm', '100-200cm']
-    variable: ['bdod', 'cec', 'cfvo', 'clay', 'nitrogen', 'ocd', 'ocs', 'phh2o', 'sand', 'silt', 'soc']
 soilgrids_2017_{variable}:
   data_type: RasterDataset
   driver: raster

@@ -498,7 +498,9 @@ class LandSurface:
             form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
             with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
         """
-        ds = load_soilgrids(self.data_catalog, self.subgrid, self.region)
+        ds: xr.Dataset = load_soilgrids(
+            self.new_data_catalog, self.subgrid["mask"], self.region
+        )
 
         self.set_subgrid(ds["silt"], name="soil/silt")
         self.set_subgrid(ds["clay"], name="soil/clay")
