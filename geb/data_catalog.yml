@@ -188,11 +188,6 @@ gcam_electricity_rates:
   path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
   driver: csv
   data_type: DataFrame
-india_cencus:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: project_data/fairstream/census/tehsils.geojson
 GLOPOP-S:
   data_type: Dataset
   path: population/GLOPOP-S/synthpop_{region}_grid.dat.gz
