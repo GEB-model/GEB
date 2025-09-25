@@ -243,38 +243,6 @@ global_wind_atlas:
     category: climate
     source_license: CC BY 4.0
     source_url: https://globalwindatlas.info/
-lowder_farm_sizes:
-  data_type: DataFrame
-  driver: excel
-  driver_kwargs:
-    sheet_name: WEB table 3
-    skiprows: 4
-    skipfooter: 2
-    header: null
-    names: 
-      - Country
-      - Census Year
-      - Holdings/ agricultural area
-      - Total
-      - < 1 Ha
-      - 1 - 2 Ha
-      - 2 - 5 Ha
-      - 5 - 10 Ha
-      - 10 - 20 Ha
-      - 20 - 50 Ha
-      - 50 - 100 Ha
-      - 100 - 200 Ha
-      - 200 - 500 Ha
-      - 500 - 1000 Ha
-      - "> 1000 Ha"
-      - empty
-      - income class
-  path: socioeconomic/farm_sizes/1-s2.0-S0305750X15002703-mmc1.xlsx
-  meta:
-    paper_doi: https://doi.org/10.1016/j.worlddev.2015.10.041
-    paper_ref: Lowder Sarah K. et al. 2016
-    source_license: CC BY-NC-ND 4.0
-    source_url: https://doi.org/10.1016/j.worlddev.2015.10.041
 preferences_individual:
   path: socioeconomic/social/cleaned_individual_data.csv
   driver: csv
