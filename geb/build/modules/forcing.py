@@ -1941,6 +1941,11 @@ class Forcing:
         assert np.array_equal(
             self.other["climate/pr"].y, self.other["climate/tasmax"].y
         )
+
+        assert calibration_period_start < calibration_period_end, (
+            f"Start date {calibration_period_start} must be earlier than end date {calibration_period_end}."
+        )
+
         if not self.other[
             "climate/pr"
         ].time.min().dt.date <= calibration_period_start and self.other[

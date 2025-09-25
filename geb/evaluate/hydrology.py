@@ -17,10 +17,13 @@ import plotly.graph_objects as go
 import rioxarray as rxr
 import xarray as xr
 from matplotlib.colors import LightSource
+from matplotlib.lines import Line2D
 
 # from matplotlib_scalebar.scalebar import ScaleBar
 from permetrics.regression import RegressionMetric
 from rasterio.crs import CRS
+from shapely.geometry import MultiPolygon, Polygon
+from shapely.ops import unary_union
 from tqdm import tqdm
 
 from geb.workflows.io import open_zarr, to_zarr
@@ -1362,8 +1365,13 @@ class Hydrology:
 
             # Step 5: Mask water depth values
             hmin = 0.15
+            sim_extra_clipped = sim_extra_clipped.raster.reproject_like(obs_region)
             simulation_final = sim_extra_clipped > hmin
             observation_final = obs_region > 0
+
+            xmin, ymin, xmax, ymax = observation_final.rio.bounds()
+            extent = [xmin, xmax, ymin, ymax]
+            print("extent:", extent)
 
             # Step 6: Calculate performance metrics
             # Compute the arrays first to get concrete values
@@ -1398,16 +1406,155 @@ class Hydrology:
             ls = LightSource(azdeg=315, altdeg=45)
             hillshade = ls.hillshade(elevation_array, vert_exag=1, dx=1, dy=1)
 
+            # Catchment borders
+            target_crs = obs_region.rio.crs
+            catchment_borders = region.boundary
+
             if simulation_final.sum() > 0:
                 misses = (observation_final == 1) & (simulation_final == 0)
                 simulation_masked = simulation_final.where(simulation_final == 1)
                 hits = simulation_masked.where(observation_final)
                 misses_masked = misses.where(misses == 1)
 
+                # Ensure all arrays have the same shape by squeezing extra dimensions
+                simulation_final = simulation_final.squeeze()
+                observation_final = observation_final.squeeze()
+                misses = misses.squeeze()
+                hits = hits.squeeze()
+                simulation_masked = simulation_masked.squeeze()
+                misses_masked = misses_masked.squeeze()
+
                 green_cmap = mcolors.ListedColormap(["green"])  # Hits
                 orange_cmap = mcolors.ListedColormap(["orange"])  # False alarms
                 red_cmap = mcolors.ListedColormap(["red"])  # Misses
                 blue_cmap = mcolors.ListedColormap(["#72c1db"])  # No observation data
+
+                margin = 3000
+                fig, ax = plt.subplots(figsize=(10, 10))
+
+                # clipped_out_raster.plot(
+                #     ax=ax, cmap=blue_cmap, add_colorbar=False, add_labels=False
+                # )
+
+                ax.imshow(
+                    simulation_masked,  # False alarms
+                    extent=extent,
+                    # origin="lower",
+                    cmap="Wistia",
+                    vmin=0,
+                    vmax=1,
+                    interpolation="none",
+                    zorder=1,
+                )
+                ax.imshow(
+                    misses_masked,  # Misses
+                    extent=extent,
+                    # origin="lower",
+                    cmap="autumn_r",
+                    vmin=0,
+                    vmax=1,
+                    interpolation="none",
+                    zorder=2,
+                )
+
+                ax.imshow(
+                    hits,
+                    extent=extent,
+                    # origin="lower",
+                    cmap="brg",
+                    vmin=0,
+                    vmax=1,
+                    interpolation="none",
+                    zorder=3,
+                )
+
+                catchment_borders.plot(
+                    ax=ax,
+                    color="black",
+                    linestyle="--",
+                    linewidth=1.5,
+                    zorder=4,
+                    alpha=0.5,
+                )
+                # Add a base map
+                ctx.add_basemap(
+                    ax,
+                    crs=target_crs,
+                    source="OpenStreetMap.Mapnik",
+                    zoom=12,
+                    zorder=0,
+                    alpha=0.9,
+                )
+
+                ax.set_title("Validation of the Predicted Flood Areas", fontsize=14)
+                ax.set_xlabel("x [°E]")
+                ax.set_ylabel("y [°N]")
+
+                # Set the extent based on the raster bounds
+                ax.set_xlim(extent[0] - margin, extent[1] + margin)
+                ax.set_ylim(extent[2] - margin, extent[3] + margin)
+                ax.set_aspect("equal", adjustable="box")
+
+                green_patch = mpatches.Patch(color="#94f944", label="Hits")
+                orange_patch = mpatches.Patch(color="orange", label="False Alarms")
+                red_patch = mpatches.Patch(color="red", label="Misses")
+
+                catchment_patch = Line2D(
+                    [0],
+                    [0],
+                    color="black",
+                    linestyle="--",
+                    linewidth=1.5,
+                    label="Catchment Border",
+                )
+                legend = ax.legend(
+                    handles=[
+                        green_patch,
+                        orange_patch,
+                        red_patch,
+                        catchment_patch,
+                    ]
+                )
+
+                # Add a comment about the metrics in the plot
+                legend_bbox = legend.get_window_extent(
+                    renderer=fig.canvas.get_renderer()
+                )
+                legend_bbox_ax = legend_bbox.transformed(ax.transAxes.inverted())
+
+                # Add text below legend using axes coordinates
+                ax.annotate(
+                    f"Validation Metrics:\n"
+                    f"HR    = {hit_rate:.2f}\n"
+                    f"FAR   = {false_rate:.2f}\n"
+                    f"CSI   = {csi:.2f}\n"
+                    f"CRS   = {target_crs.to_string()}",
+                    xy=(legend_bbox_ax.x0 + 0.1, legend_bbox_ax.y0 - 0.05),
+                    xycoords="axes fraction",
+                    fontsize=10,
+                    bbox=dict(
+                        facecolor="white",
+                        edgecolor="grey",
+                        boxstyle="round,pad=0.4",
+                        alpha=0.9,
+                    ),
+                    verticalalignment="top",
+                    horizontalalignment="left",
+                    zorder=5,
+                )
+
+                simulation_filename = os.path.splitext(
+                    os.path.basename(flood_map_path)
+                )[0]
+                fig.savefig(
+                    eval_hydrodynamics_folders
+                    / f"{simulation_filename} Validation_floodmap_plot.png",
+                    dpi=300,
+                    bbox_inches="tight",
+                )
+                print(
+                    f"Figure saved as: {eval_hydrodynamics_folders / f'{simulation_filename} Validation_floodmap_plot.png'}"
+                )
 
                 fig, ax = plt.subplots(figsize=(10, 10))
 
@@ -1490,6 +1637,16 @@ class Hydrology:
         if not (self.model.output_folder / "flood_maps").exists():
             raise FileNotFoundError(
                 "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
+            )
+        # check if observation file exists, if not, raise an error
+
+        if not Path(self.config["floods"]["event_observation_file"]).exists():
+            raise FileNotFoundError(
+                f"Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
+            )
+        if Path(self.config["floods"]["event_observation_file"]).suffix != ".tif":
+            raise ValueError(
+                f"Flood observation file is not in the correct format. Please provide a .tif file."
             )
 
         # Calculate performance metrics for every event in config file
