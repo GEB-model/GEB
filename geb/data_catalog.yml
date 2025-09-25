@@ -313,21 +313,6 @@ fan_initial_groundwater_depth_{continent}:
   nodata: 2
   placeholders:
     continent: ['Eurasia', 'Africa', 'North_America', 'Oceania', 'South_America']
-soilgrids_2017_{variable}:
-  data_type: RasterDataset
-  driver: raster
-  path: https://files.isric.org/soilgrids/former/2017-03-10/data/{variable}_M_250m_ll.tif
-  meta:
-    category: soil
-    paper_doi: https://doi.org/10.1371/journal.pone.0169748
-    paper_ref: de Sousa et al. (2020)
-    source_license: CC BY 4.0
-    source_url: https://www.isric.org/explore/soilgrids
-    source_version: 2017
-  placeholders:
-    variable: ["BDTICM"]
-  unit_mult:
-    BDTICM_M_250m_ll: 0.01
 GLOBIOM_regions_59:
   data_type: DataFrame
   driver: excel
