@@ -80,7 +80,8 @@ class GlobGMDEM(GlobGM):
         """
         if not self.is_ready:
             download_path = self.root / url.split("/")[-1]
-            fetch_and_save(url=url, file_path=self.path)
+            fetch_and_save(url=url, file_path=download_path)
+            ds = xr.open_dataset(download_path)
             da = ds["dem_average"]
             da.to_netcdf(self.path)
             download_path.unlink()  # Remove the downloaded file
