@@ -6,6 +6,7 @@ from .base import Adapter
 from .esa_worldcover import ESAWorldCover
 from .fao import GMIA
 from .gadm import GADM
+from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
 from .globgm import GlobGM, GlobGMDEM
 from .grdc import GRDC
@@ -17,6 +18,22 @@ from .sword import Sword
 from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "gebco": {
+        "adapter": GEBCO(
+            folder="gebco",
+            local_version=1,
+            filename="gebco.zarr",
+            cache="global",
+        ),
+        "url": "https://www.bodc.ac.uk/data/open_download/gebco/gebco_2024/geotiff/",
+        "source": {
+            "name": "GEBCO",
+            "author": "Weatherall et al (2020)",
+            "license": "https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use",
+            "url": "https://www.gebco.net/",
+            "paper_doi": "10.5285/a29c5465-b138-234d-e053-6c86abc040b9",
+        },
+    },
     "GRDC": {
         "adapter": GRDC(
             folder="grdc",
@@ -43,7 +60,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "name": "Global Map of Irrigation Areas",
             "author": "Siebert et al. (2010)",
             "paper_doi": "10.5194/hess-14-1863-2010",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
             "url": "https://www.fao.org/aquastat/en/geospatial-information/global-maps-irrigated-areas/latest-version/",
         },
     },
@@ -59,7 +76,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "name": "Global Map of Irrigation Areas",
             "author": "Siebert et al. (2010)",
             "paper_doi": "10.5194/hess-14-1863-2010",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
             "url": "https://www.fao.org/aquastat/en/geospatial-information/global-maps-irrigated-areas/latest-version/",
         },
     },
@@ -75,7 +92,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "specific_yield_aquifer_globgm": {
@@ -90,7 +107,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "water_table_depth_globgm": {
@@ -105,7 +122,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/output/version_1.0/steady-state/",
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "head_lower_layer_globgm": {
@@ -120,7 +137,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/output/version_1.0/steady-state/",
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "head_upper_layer_globgm": {
@@ -135,7 +152,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/output/version_1.0/steady-state/",
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "recession_coefficient_globgm": {
@@ -150,7 +167,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "thickness_confining_layer_globgm": {
@@ -165,7 +182,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "total_groundwater_thickness_globgm": {
@@ -180,7 +197,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "dem_globgm": {
@@ -195,7 +212,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
             "author": "Verkaik et al. (2024)",
             "paper_doi": "10.5194/gmd-17-275-2024",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "GDL_regions_v4": {
@@ -224,7 +241,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "source": {
             "name": "World Bank Inflation Data",
             "author": "The World Bank",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "world_bank_price_ratio": {
@@ -238,7 +255,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "source": {
             "name": "Official exchange rate (LCU per US$, period average)",
             "author": "The World Bank",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
             "url": "https://data.worldbank.org/indicator/PA.NUS.PPPC.RF",
         },
     },
@@ -253,7 +270,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "source": {
             "name": "World Bank Local Currency Unit per US Dollar Data",
             "author": "The World Bank",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
             "url": "https://data.worldbank.org/indicator/PA.NUS.FCRF",
         },
     },
@@ -264,7 +281,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "name": "ESA WorldCover",
             "author": "European Space Agency (ESA)",
             "version": "v100",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "esa_worldcover_2021": {
@@ -274,7 +291,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "name": "ESA WorldCover",
             "author": "European Space Agency (ESA)",
             "version": "v200",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "license": "CC BY 4.0",
         },
     },
     "hydrolakes": {
@@ -289,7 +306,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "name": "HydroLAKES",
             "author": "Arjen Haag",
             "version": "v10.0",
-            "license": "Creative Commons Attribution (CC-BY) 4.0 International License",
+            "license": "CC BY 4.0",
         },
     },
     "GADM_level0": {
@@ -336,7 +353,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
             "version": "2019",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0) or Open Database License (ODbL 1.0)",
+            "license": "CC BY 4.0 or ODbL 1.0",
         },
     },
     "merit_hydro_elv": {
@@ -351,7 +368,7 @@ data_catalog: dict[str, dict[str, Any]] = {
             "name": "MERIT Hydro",
             "author": "Yamazaki et al.",
             "version": "2019",
-            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0) or Open Database License (ODbL 1.0)",
+            "license": "CC BY 4.0 or ODbL 1.0",
         },
     },
     "merit_basins_catchments": {
@@ -395,7 +412,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "source": {
             "name": "MERIT-SWORD",
             "version": "v0.4",
-            "license": "Creative Commons Attribution Non Commercial Share Alike 4.0 International",
+            "license": "CC BY-NC-SA 4.0",
             "url": "doi.org/10.5281/zenodo.14675925",
         },
     },
@@ -410,7 +427,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "source": {
             "name": "SWORD",
             "version": "v16",
-            "license": "Creative Commons Attribution 4.0 International",
+            "license": "CC BY 4.0",
             "url": "doi.org/10.5281/zenodo.14727521",
         },
     },
@@ -441,9 +458,7 @@ class NewDataCatalog:
             **kwargs,
         )
 
-    def size_on_disk(
-        self, name: str | None = None, format: str | None = None
-    ) -> int | str:
+    def size(self, name: str | None = None, format: str | None = "GB") -> int | str:
         """Calculate the total size on disk for specified data entries.
 
         Args:
@@ -463,10 +478,9 @@ class NewDataCatalog:
 
         total_size: int = 0
         for name in names:
-            path = self.catalog[name]["adapter"].processor(
-                url=self.catalog[name]["url"],
-            )
-            total_size += path.stat().st_size
+            adapter = self.catalog[name]["adapter"]
+            if adapter.cache is not None and adapter.path.exists():
+                total_size += adapter.path.stat().st_size
 
         if format is None:
             return total_size
@@ -482,3 +496,30 @@ class NewDataCatalog:
         divisor = valid_formats[format]
         formatted_size = total_size / divisor
         return f"{formatted_size:.2f} {format}"
+
+    def print_licenses(self, name: str | None = None) -> None:
+        """Print the licence information for specified data entries.
+
+        Args:
+            name: Name of the data entry to check. If None, prints for all entries.
+        """
+        if name is None:
+            names: list[str] = list(self.catalog.keys())
+        else:
+            names: list[str] = [name]
+
+        # Collect license data for table formatting
+        license_data = []
+        for name in names:
+            source = self.catalog[name].get("source", {})
+            name = source.get("name", name)
+            license_info = source.get("license", "N/A")
+            license_data.append((name, license_info))
+
+        # Print table header
+        print(f"{'Name':<50} {'License'}")
+        print("-" * 80)
+
+        # Print each row
+        for name, license_info in license_data:
+            print(f"{name:<50} {license_info}")

@@ -7,7 +7,7 @@ import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
-from geb.workflows.raster import rasterize_like, repeat_grid
+from geb.workflows.raster import convert_nodata, rasterize_like, repeat_grid
 
 from ..workflows.general import (
     bounds_are_within,
@@ -135,11 +135,16 @@ class LandSurface:
             if DEM["name"] == "fabdem":
                 DEM_raster = fabdem
             else:
-                DEM_raster = xr.open_dataarray(
-                    self.data_catalog.get_source(DEM["name"]).path,
-                )
+                if DEM["name"] == "gebco":
+                    DEM_raster = self.new_data_catalog.fetch("gebco").read()
+                else:
+                    DEM_raster = xr.open_dataarray(
+                        self.data_catalog.get_source(DEM["name"]).path,
+                    )
+                if "bands" in DEM_raster.dims:
+                    DEM_raster = DEM_raster.isel(band=0)
+
                 DEM_raster = DEM_raster.isel(
-                    band=0,
                     **get_window(
                         DEM_raster.x,
                         DEM_raster.y,
@@ -152,9 +157,9 @@ class LandSurface:
                         raise_on_out_of_bounds=False,
                         raise_on_buffer_out_of_bounds=False,
                     ),
-                ).raster.mask_nodata()
+                )
 
-            DEM_raster = DEM_raster.astype(np.float32)
+            DEM_raster = convert_nodata(DEM_raster.astype(np.float32), np.nan)
             self.set_other(
                 DEM_raster,
                 name=f"DEM/{DEM['name']}",

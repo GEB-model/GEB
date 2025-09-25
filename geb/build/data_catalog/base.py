@@ -69,7 +69,7 @@ class Adapter:
         return self.root / self.filename
 
     @property
-    def root(self) -> Path:
+    def root(self) -> Path | None:
         """Root directory for the dataset.
 
         If the directory does not exist, it will be created.
@@ -94,6 +94,8 @@ class Adapter:
             return root
         elif self.cache == "local":
             return Path("cache") / self.folder / f"v{self.local_version}"
+        elif self.cache is None:
+            return None
         else:
             raise ValueError("Cache must be either 'global' or 'local'")
 
