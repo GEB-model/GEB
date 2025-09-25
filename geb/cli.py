@@ -22,6 +22,7 @@ import yaml
 
 from geb import __version__
 from geb.build import GEBModel as GEBModelBuild
+from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
@@ -1191,6 +1192,17 @@ def share_fn(
 def share(*args: Any, **kwargs: Any) -> None:
     """Share model as a zip file."""
     share_fn(*args, **kwargs)
+
+
+@cli.command()
+@click.argument("method", required=True)
+def data_catalog(method: str) -> None:
+    """Method to interact directly with the data catalog."""
+    data_catalog = NewDataCatalog()
+    if method == "size":
+        print("Total size of data catalog:", data_catalog.size())
+    elif method == "license":
+        data_catalog.print_licenses()
 
 
 if __name__ == "__main__":
