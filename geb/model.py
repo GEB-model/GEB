@@ -214,7 +214,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )  # set the forecast issue date
 
         for member in forecasts.member:  # loop over all forecast members
-            print(member)
             self.multiverse_name = (
                 member.item()
             )  # set the multiverse name to the member name

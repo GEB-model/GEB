@@ -341,7 +341,7 @@ class Floods:
         )  # read the flood depth results
 
         filename = (
-            self.model.output_folder / "flood_maps" / sfincs_simulation.name + ".zarr"
+            self.model.output_folder / "flood_maps" / (sfincs_simulation.name + ".zarr")
         )
 
         flood_depth: xr.DataArray = to_zarr(
