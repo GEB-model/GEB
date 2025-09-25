@@ -16,9 +16,25 @@ from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
 from .sword import Sword
+from .why_map import WhyMap
 from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "why_map": {
+        "adapter": WhyMap(
+            folder="why_map",
+            local_version=1,
+            filename="whymap.parquet",
+            cache="global",
+        ),
+        "url": "https://download.bgr.de/bgr/grundwasser/whymap/shp/WHYMAP_GWR_v1.zip",
+        "source": {
+            "name": "WHYMAP",
+            "author": "BGR (Federal Institute for Geosciences and Natural Resources)",
+            "license": "CC BY-SA",
+            "url": "https://www.whymap.org/whymap/EN/Maps_Data/Gwr/gwr_node_en.html",
+        },
+    },
     "lowder_farm_size_distribution": {
         "adapter": Lowder(
             folder="lowder_farm_size_distribution",

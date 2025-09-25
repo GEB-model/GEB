@@ -7,6 +7,7 @@ import numpy as np
 import numpy.typing as npt
 import xarray as xr
 from rasterio.features import rasterize
+from shapely.geometry import Polygon
 
 
 def compress(array: npt.NDArray[Any], mask: npt.NDArray[np.bool_]) -> npt.NDArray[Any]:
@@ -184,9 +185,12 @@ def rasterize_like(
         name=column,
     )
     geoms: gpd.Geoseries = gpd.geometry
+
+    assert da.rio.crs == gpd.crs, "CRS of raster and GeoDataFrame must match"
+
     values: list[Any] = gpd[column].tolist()
-    shapes = list(zip(geoms, values))
-    rasterize(
+    shapes: list[tuple[Polygon, int | float]] = list(zip(geoms, values, strict=True))
+    out = rasterize(
         shapes,
         out_shape=raster.rio.shape,
         fill=nodata,
@@ -195,6 +199,7 @@ def rasterize_like(
         all_touched=all_touched,
         **kwargs,
     )
+    da.values = out
     return da
 
 

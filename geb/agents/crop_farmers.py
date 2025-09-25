@@ -3983,7 +3983,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Initialize the well unit cost array with zeros
-        well_unit_cost = np.zeros_like(self.var.why_class, dtype=np.float32)
+        well_unit_cost = np.full_like(self.var.why_class, np.nan, dtype=np.float32)
 
         # Assign unit costs to each agent based on their well class using boolean indexing
         well_unit_cost[self.var.why_class == 1] = well_cost_class_1[
@@ -3995,6 +3995,10 @@ class CropFarmers(AgentBaseClass):
         well_unit_cost[self.var.why_class == 3] = well_cost_class_3[
             self.var.why_class == 3
         ]
+
+        assert not np.isnan(well_unit_cost).any(), (
+            "Some agents have undefined well unit costs."
+        )
 
         # Get electricity costs per agent based on their region and current time
         electricity_costs = self.get_value_per_farmer_from_region_id(

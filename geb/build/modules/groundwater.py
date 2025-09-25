@@ -1,11 +1,12 @@
 """Module for building groundwater related datasets for GEB."""
 
+import geopandas as gpd
 import numpy as np
 import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
-from geb.workflows.raster import convert_nodata
+from geb.workflows.raster import convert_nodata, rasterize_like
 
 from ..workflows.general import (
     resample_like,
@@ -187,25 +188,22 @@ class GroundWater:
             specific_yield = specific_yield.expand_dims(layer=["upper"])
         self.set_grid(specific_yield, name="groundwater/specific_yield")
 
-        # load aquifer classification from why_map and write it as a grid
-        why_map = xr.open_dataarray(self.data_catalog.get_source("why_map").path)
-        why_map = why_map.isel(
-            band=0, **get_window(why_map.x, why_map.y, self.bounds, buffer=5)
-        )
+        why_map: gpd.GeoDataFrame = self.new_data_catalog.fetch("why_map").read()
+        why_map: gpd.GeoDataFrame = why_map[
+            why_map["HYGEO2"] != 88
+        ]  # remove areas under continuous ice cover
+        why_map["aquifer_classification"] = why_map["HYGEO2"] // 10
 
-        why_map.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
-        why_map.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
-        why_map.attrs["_FillValue"] = np.nan
+        why_map_grid: xr.DataArray = rasterize_like(
+            why_map,
+            "aquifer_classification",
+            raster=aquifer_top_elevation,
+            dtype=np.int16,
+            nodata=-1,
+            all_touched=False,
+        ).raster.interpolate_na()
 
-        original_dtype = why_map.dtype
-        why_interpolated = resample_like(
-            why_map.astype(np.float64),
-            aquifer_top_elevation,
-            method="nearest",
-        )
-        why_interpolated = why_interpolated.astype(original_dtype)
-
-        self.set_grid(why_interpolated, name="groundwater/why_map")
+        self.set_grid(why_map_grid, name="groundwater/why_map")
 
         if intial_heads_source == "GLOBGM":
             # the GLOBGM DEM has a slight offset, which we fix here before loading it

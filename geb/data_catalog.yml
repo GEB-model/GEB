@@ -304,17 +304,6 @@ FAO_crop_price:
     Item: crop
   unit_mult:
     price_per_kg: 0.001  # tonne to kg
-why_map:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  meta:
-    category: groundwater
-    paper_doi: https://doi.org/10.1007/978-90-481-3426-7_10
-    paper_ref: Richts et al. (2011)
-    source_url: https://www.whymap.org/whymap/EN/Maps_Data/Gwr/gwr_node_en.html
-    source_license: Creative Commons Attribution-ShareAlike Licence (CC BY-SA)
-  path: groundwater/why_map.tif
 fan_initial_groundwater_depth_{continent}:
   crs: 4326
   data_type: RasterDataset
