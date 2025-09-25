@@ -123,20 +123,6 @@ COAST_RP_stations:
       category: station ids
       paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
       paper_ref: Dullaart et al. (2023)
-gebco:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  filesystem: local
-  meta:
-    category: topography
-    paper_doi: 10.5285/a29c5465-b138-234d-e053-6c86abc040b9
-    paper_ref: Weatherall et al (2020)
-    source_license: Public domain (free for any use including commercial)
-    source_url: https://www.bodc.ac.uk/data/open_download/gebco/gebco_2024/geotiff/
-    source_version: 2020
-    unit: m+MSL
-  path: topography/gebco.vrt
 cwatm_soil_5min:
   crs: 4326
   data_type: RasterDataset
