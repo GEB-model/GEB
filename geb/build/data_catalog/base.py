@@ -137,6 +137,10 @@ class Adapter:
         """
         if self.path.suffix == ".zarr":
             return open_zarr(self.path)
+        elif self.path.suffix == ".nc":
+            return xr.open_dataarray(self.path, **kwargs)
+        elif self.path.suffix == ".tif":
+            return xr.open_dataarray(self.path, **kwargs)
         elif self.path.suffix == ".parquet":
             if "columns" in kwargs and "geometry" not in kwargs["columns"]:
                 return pd.read_parquet(path=self.path, **kwargs)

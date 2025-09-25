@@ -6,6 +6,7 @@ from .base import Adapter
 from .esa_worldcover import ESAWorldCover
 from .gadm import GADM
 from .global_data_lab import GlobalDataLabShapefile
+from .globgm import GlobGM, GlobGMDEM
 from .hydrolakes import HydroLakes
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
@@ -14,6 +15,141 @@ from .sword import Sword
 from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "hydraulic_conductivity_globgm": {
+        "adapter": GlobGM(
+            folder="hydraulic_conductivity_globgm",
+            local_version=1,
+            filename="hydraulic_conductivity_globgm.nc",
+            cache="global",
+        ),
+        "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/k_conductivity_aquifer_filled_30sec.nc",
+        "source": {
+            "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
+            "author": "Verkaik et al. (2024)",
+            "paper_doi": "10.5194/gmd-17-275-2024",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
+    "specific_yield_aquifer_globgm": {
+        "adapter": GlobGM(
+            folder="specific_yield_aquifer_globgm",
+            local_version=1,
+            filename="specific_yield_aquifer_globgm.nc",
+            cache="global",
+        ),
+        "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/specific_yield_aquifer_filled_30sec.nc",
+        "source": {
+            "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
+            "author": "Verkaik et al. (2024)",
+            "paper_doi": "10.5194/gmd-17-275-2024",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
+    "water_table_depth_globgm": {
+        "adapter": GlobGM(
+            folder="water_table_depth_globgm",
+            local_version=1,
+            filename="water_table_depth_globgm.tif",
+            cache="global",
+        ),
+        "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/output/version_1.0/steady-state/globgm-wtd-ss.tif",
+        "source": {
+            "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/output/version_1.0/steady-state/",
+            "author": "Verkaik et al. (2024)",
+            "paper_doi": "10.5194/gmd-17-275-2024",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
+    "head_lower_layer_globgm": {
+        "adapter": GlobGM(
+            folder="head_lower_layer_globgm",
+            local_version=1,
+            filename="head_lower_layer_globgm.tif",
+            cache="global",
+        ),
+        "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/output/version_1.0/steady-state/globgm-heads-lower-layer-ss.tif",
+        "source": {
+            "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/output/version_1.0/steady-state/",
+            "author": "Verkaik et al. (2024)",
+            "paper_doi": "10.5194/gmd-17-275-2024",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
+    "head_upper_layer_globgm": {
+        "adapter": GlobGM(
+            folder="head_upper_layer_globgm",
+            local_version=1,
+            filename="head_upper_layer_globgm.tif",
+            cache="global",
+        ),
+        "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/output/version_1.0/steady-state/globgm-heads-upper-layer-ss.tif",
+        "source": {
+            "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/output/version_1.0/steady-state/",
+            "author": "Verkaik et al. (2024)",
+            "paper_doi": "10.5194/gmd-17-275-2024",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
+    "recession_coefficient_globgm": {
+        "adapter": GlobGM(
+            folder="recession_coefficient_globgm",
+            local_version=1,
+            filename="recession_coefficient_globgm.nc",
+            cache="global",
+        ),
+        "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/recession_coefficient_30sec.nc",
+        "source": {
+            "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
+            "author": "Verkaik et al. (2024)",
+            "paper_doi": "10.5194/gmd-17-275-2024",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
+    "thickness_confining_layer_globgm": {
+        "adapter": GlobGM(
+            folder="thickness_confining_layer_globgm",
+            local_version=1,
+            filename="thickness_confining_layer_globgm.nc",
+            cache="global",
+        ),
+        "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/confining_layer_thickness_version_2016_remapbil_to_30sec.nc",
+        "source": {
+            "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
+            "author": "Verkaik et al. (2024)",
+            "paper_doi": "10.5194/gmd-17-275-2024",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
+    "total_groundwater_thickness_globgm": {
+        "adapter": GlobGM(
+            folder="total_groundwater_thickness_globgm",
+            local_version=1,
+            filename="total_groundwater_thickness_globgm.nc",
+            cache="global",
+        ),
+        "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/thickness_05min_remapbil_to_30sec_filled_with_pcr_correct_lat.nc",
+        "source": {
+            "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
+            "author": "Verkaik et al. (2024)",
+            "paper_doi": "10.5194/gmd-17-275-2024",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
+    "dem_globgm": {
+        "adapter": GlobGMDEM(
+            folder="dem_globgm",
+            local_version=1,
+            filename="dem_globgm.nc",
+            cache="global",
+        ),
+        "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/topography_parameters_30sec_february_2021_global_covered_with_zero.nc",
+        "source": {
+            "url": "https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/",
+            "author": "Verkaik et al. (2024)",
+            "paper_doi": "10.5194/gmd-17-275-2024",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        },
+    },
     "GDL_regions_v4": {
         "adapter": GlobalDataLabShapefile(
             folder="global_data_lab",
