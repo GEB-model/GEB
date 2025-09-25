@@ -139,7 +139,7 @@ class Adapter:
             return open_zarr(self.path)
         elif self.path.suffix == ".nc":
             return xr.open_dataarray(self.path, **kwargs)
-        elif self.path.suffix == ".tif":
+        elif self.path.suffix in (".tif", ".asc"):
             return xr.open_dataarray(self.path, **kwargs)
         elif self.path.suffix == ".parquet":
             if "columns" in kwargs and "geometry" not in kwargs["columns"]:

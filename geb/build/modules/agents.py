@@ -2350,15 +2350,11 @@ class Agents:
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
     def setup_farmer_irrigation_source(self, irrigating_farmers, year) -> None:
-        fraction_sw_irrigation = "aeisw"
+        fraction_sw_irrigation_data = self.new_data_catalog.fetch(
+            "global_irrigation_area_surface_water"
+        ).read()
 
-        fraction_sw_irrigation_data = xr.open_dataarray(
-            self.data_catalog.get_source(
-                f"global_irrigation_area_{fraction_sw_irrigation}",
-            ).path
-        )
         fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
-            band=0,
             **get_window(
                 fraction_sw_irrigation_data.x,
                 fraction_sw_irrigation_data.y,
@@ -2367,14 +2363,11 @@ class Agents:
             ),
         ).raster.interpolate_na()
 
-        fraction_gw_irrigation = "aeigw"
-        fraction_gw_irrigation_data = xr.open_dataarray(
-            self.data_catalog.get_source(
-                f"global_irrigation_area_{fraction_gw_irrigation}",
-            ).path
-        )
+        fraction_gw_irrigation_data = self.new_data_catalog.fetch(
+            "global_irrigation_area_groundwater"
+        ).read()
+
         fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
-            band=0,
             **get_window(
                 fraction_gw_irrigation_data.x,
                 fraction_gw_irrigation_data.y,

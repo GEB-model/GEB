@@ -4,6 +4,7 @@ from typing import Any
 
 from .base import Adapter
 from .esa_worldcover import ESAWorldCover
+from .fao import GMIA
 from .gadm import GADM
 from .global_data_lab import GlobalDataLabShapefile
 from .globgm import GlobGM, GlobGMDEM
@@ -15,6 +16,38 @@ from .sword import Sword
 from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "global_irrigation_area_groundwater": {
+        "adapter": GMIA(
+            folder="global_irrigation_area_groundwater",
+            local_version=1,
+            filename="global_irrigation_area_groundwater.asc",
+            cache="global",
+        ),
+        "url": "https://firebasestorage.googleapis.com/v0/b/fao-aquastat.appspot.com/o/GIS%2Fgmia_v5_aeigw_pct_aei_asc.zip?alt=media",
+        "source": {
+            "name": "Global Map of Irrigation Areas",
+            "author": "Siebert et al. (2010)",
+            "paper_doi": "10.5194/hess-14-1863-2010",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "url": "https://www.fao.org/aquastat/en/geospatial-information/global-maps-irrigated-areas/latest-version/",
+        },
+    },
+    "global_irrigation_area_surface_water": {
+        "adapter": GMIA(
+            folder="global_irrigation_area_surface_water",
+            local_version=1,
+            filename="global_irrigation_area_surface_water.asc",
+            cache="global",
+        ),
+        "url": "https://firebasestorage.googleapis.com/v0/b/fao-aquastat.appspot.com/o/GIS%2Fgmia_v5_aeisw_pct_aei_asc.zip?alt=media",
+        "source": {
+            "name": "Global Map of Irrigation Areas",
+            "author": "Siebert et al. (2010)",
+            "paper_doi": "10.5194/hess-14-1863-2010",
+            "license": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+            "url": "https://www.fao.org/aquastat/en/geospatial-information/global-maps-irrigated-areas/latest-version/",
+        },
+    },
     "hydraulic_conductivity_globgm": {
         "adapter": GlobGM(
             folder="hydraulic_conductivity_globgm",

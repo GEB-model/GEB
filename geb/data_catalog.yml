@@ -89,19 +89,6 @@ MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
     resolution: ['5-arcminute', '30-arcminute']
     crop: ['Barley', 'Cassava', 'Cocoa', 'Coffee', 'Cotton', 'Fodder', 'Groundnuts', 'Maize', 'Millet', 'Oil_palm', 'Others_annual', 'Others_perennial', 'Potatoes', 'Pulses', 'Rapeseed', 'Rice', 'Rye', 'Sorghum', 'Soybeans', 'Sugar_beet', 'Sugar_cane', 'Sunflower', 'Wheat']
     ir_or_rf: [ir, rf]
-global_irrigation_area_{irrigation_type}:
-  data_type: RasterDataset
-  driver: raster
-  path: irrigation/gmia_v5_{irrigation_type}_pct_aei.asc
-  crs: 4326
-  meta:
-    paper_doi: 10.5194/hess-14-1863-2010
-    paper_ref: Siebert et al. (2010)
-    source_license: CC BY 4.0
-    source_url: https://www.fao.org/aquastat/en/geospatial-information/global-maps-irrigated-areas/latest-version/
-    source_version: 5
-  placeholders:
-    irrigation_type: [aei, aai, aeisw, aeigw]
 GTSM:
   data_type: Dataset
   path: GTSM/reanalysis_waterlevel_10min_{}_{}_v1.nc
