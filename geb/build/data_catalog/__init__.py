@@ -540,3 +540,15 @@ class NewDataCatalog:
         # Print each row
         for name, license_info in license_data:
             print(f"{name:<50} {license_info}")
+
+    def fetch_global(self) -> None:
+        """Fetch all data entries with global cache setting."""
+        for name, entry in self.catalog.items():
+            adapter = entry["adapter"]
+            if adapter.cache == "global":
+                if not adapter.is_ready:
+                    print(f"Fetching {name}...")
+                    adapter.fetch(url=entry["url"])
+                    print(f"Fetched {name} to {adapter.path}")
+
+        print("All global data fetched, catalog size:", self.size(format="GB"))

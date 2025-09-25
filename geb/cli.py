@@ -1195,14 +1195,26 @@ def share(*args: Any, **kwargs: Any) -> None:
 
 
 @cli.command()
-@click.argument("method", required=True)
+@click.argument(
+    "method",
+    required=True,
+    type=click.Choice(["size", "license", "fetch"], case_sensitive=True),
+)
 def data_catalog(method: str) -> None:
-    """Method to interact directly with the data catalog."""
+    """Method to interact directly with the data catalog.
+
+    Raises:
+        ValueError: If the method is not recognized.
+    """
     data_catalog = NewDataCatalog()
     if method == "size":
         print("Total size of data catalog:", data_catalog.size())
     elif method == "license":
         data_catalog.print_licenses()
+    elif method == "fetch":
+        data_catalog.fetch_global()
+    else:
+        raise ValueError(f"Unknown method '{method}'.")
 
 
 if __name__ == "__main__":
