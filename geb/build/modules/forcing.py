@@ -4,7 +4,6 @@ import shutil
 import tempfile
 import time
 import zipfile
-from ast import Raise
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -14,7 +13,6 @@ from urllib.parse import urlparse
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import ecmwfapi
-import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -22,7 +20,6 @@ import requests
 import rioxarray as rxr
 import xarray as xr
 import xclim.indices as xci
-from cartopy.mpl.geoaxes import GeoAxes
 from dateutil.relativedelta import relativedelta
 from isimip_client.client import ISIMIPClient
 from tqdm import tqdm
@@ -122,7 +119,6 @@ def download_ERA5(
     Returns:
         da: Downloaded ERA5 data as an xarray DataArray.
     """
-
     output_fn = folder / f"{variable}.zarr"
     if output_fn.exists():
         da: xr.DataArray = open_zarr(output_fn)
@@ -316,10 +312,11 @@ def download_forecasts_ECMWF(
     MARS data archive: https://apps.ecmwf.int/mars-catalogue/
     Extra Documentation: https://confluence.ecmwf.int/display/UDOC/MARS+content
 
-
     Args:
+        self: The class instance.
+        forecast_variables: List of ECMWF parameter codes to download (see ECMWF documentation).
+        preprocessing_folder: Path to the folder where downloaded forecast files will be stored.
         bounds: The bounding box in the format (min_lon, min_lat, max_lon, max_lat).
-        forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
         forecast_start: The forecast initialization time (date or datetime).
         forecast_end: The forecast end time (date or datetime).
         forecast_model: The ECMWF forecast model to use (e.g., "pf" or "cf").
@@ -331,7 +328,6 @@ def download_forecasts_ECMWF(
         ImportError: If ECMWF_API_KEY is not found in environment variables.
         ValueError: If forecast dates are before 2010-01-01.
     """
-
     self.logger.info(
         f"Downloading forecast variables {forecast_variables}"
     )  # Log the forecast variables being downloaded
@@ -477,6 +473,7 @@ def process_forecast_ECMWF(
     We process forecasts for each initialization time separately. The forecast file can contain all variables needed for GEB, or only rainfall (if only_rainfall is True in build.yml).
 
     Args:
+        self: The class instance.
         preprocessing_folder: Path to the folder containing the downloaded ECMWF forecast data.
         bounds: The bounding box in the format (min_lon, min_lat, max_lon,
                 max_lat).
@@ -486,7 +483,6 @@ def process_forecast_ECMWF(
         da: processed ECMWF forecast data as an xarray Dataset.
 
     """
-
     self.logger.info(
         f"Processing ECMWF forecasts from {preprocessing_folder}"
     )  # Log the processing folder path
@@ -718,7 +714,9 @@ def process_forecast_ECMWF(
 
 def plot_forcing(self, da, name) -> None:
     """Plot forcing data with a temporal (timeline) plot and a spatial plot.
+
     Args:
+        self: The class instance.
         da: The xarray DataArray containing the forcing data. Must have dimensions 'time',
         name: The name of the variable being plotted, used for titles and filenames.
     """
@@ -777,6 +775,7 @@ def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
     Handles only ensemble forecasts for now. Makes a spatial plot for every single ensemble member.
 
     Args:
+        self: The class instance.
         da: The xarray DataArray containing the forecast data. Must have dimensions 'time', 'y', 'x', and 'member'.
         name: The name of the variable being plotted, used for titles and filenames.
 
@@ -944,6 +943,7 @@ def _plot_data(self, da: xr.DataArray, name: str) -> None:
     Uses plot_forecasts if 'forecast' is in the name, otherwise uses plot_forcing.
 
     Args:
+        self: The class instance.
         da: Data to plot.
         name: Name for the plots and file outputs.
     """
@@ -2845,6 +2845,7 @@ class Forcing:
         """Sets up forecast data for the model based on configuration.
 
         Args:
+            only_rainfall: If True, only download rainfall forecasts.
             forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
@@ -2854,7 +2855,6 @@ class Forcing:
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep: The forecast timestep in hours.
         """
-
         if (
             forecast_provider == "ECMWF"
         ):  # Check if ECMWF is the selected forecast provider
@@ -2890,7 +2890,6 @@ class Forcing:
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep: The forecast timestep in hours.
         """
-
         preprocessing_folder = (
             self.preprocessing_dir / "forecasts" / "ECMWF"
         )  # Set up forecast data path

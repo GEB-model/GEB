@@ -120,6 +120,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @overload
     def multiverse(
         self,
+        variables: list[str],
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: Literal[True],
     ) -> dict[Any, float]: ...
@@ -127,6 +128,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @overload
     def multiverse(
         self,
+        variables: list[str],
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: Literal[False],
     ) -> None: ...
@@ -152,6 +154,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         All other dimensions should be the same as the original forcing data. Units are also expected to be the same.
 
         Args:
+            variables: List of variables to use in the multiverse. Currently, only `pr_hourly` is supported.
             forecast_issue_datetime: Datetime that the forecast was issued.
             return_mean_discharge: Whether to return the mean discharge for each forecast member. This is
                 mostly useful for testing purposes.
@@ -170,7 +173,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         # set a folder to store the initial state of the multiverse
         store_location: Path = (
-            self.simulation_root / "multiverse" / "forecast"
+            self.simulation_root / "multiverse" / "forecast_initial_state"
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
@@ -724,18 +727,23 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @property
     def forecast_issue_date(self) -> str | None:
         """Get the forecast issue date as a string in the format YYYYMMDD.
+
         This is used to identify the forecast data used in the multiverse mode.
+
         Returns:
             Forecast issue date as a string in the format YYYYMMDD. If None, the model
             is not in multiverse mode.
+
         """
         return self._forecast_issue_date
 
     @forecast_issue_date.setter
     def forecast_issue_date(self, value: str | None) -> None:
         """To explore different model futures, GEB can be run in a multiverse mode.
+
         In this mode, a number of timesteps can be run with different input data (e.g. different precipitation forecasts).
         The forecast_issue_date is used to identify the forecast data used in the multiverse mode.
+
         Args:
             value: Forecast issue date as a string in the format YYYYMMDD. If None,
             the model is not in multiverse mode.
