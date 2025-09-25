@@ -1,6 +1,7 @@
 """Tests for I/O workflow functions."""
 
 import shutil
+import warnings
 from datetime import date
 from pathlib import Path
 from time import sleep, time
@@ -12,7 +13,7 @@ import pytest
 import xarray as xr
 import zarr
 import zarr.storage
-from numcodecs import FixedScaleOffset
+from zarr.codecs.numcodecs import FixedScaleOffset
 
 from geb.workflows.io import (
     AsyncGriddedForcingReader,
@@ -58,21 +59,36 @@ def encode_decode(
     """
     assert data.dtype == np.float32
 
-    scaling_factor, out_dtype = calculate_scaling(
+    scaling_factor, in_dtype, out_dtype = calculate_scaling(
+        data,
         min_value=min_value,
         max_value=max_value,
         precision=precision,
         offset=offset,
     )
-    codec = FixedScaleOffset(
-        offset=offset, scale=scaling_factor, dtype=np.float32, astype=out_dtype
-    )
 
-    encoded_data = codec.encode(data)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations",
+        )
+        codec = FixedScaleOffset(
+            offset=offset, scale=scaling_factor, dtype=in_dtype, astype=out_dtype
+        )
+        da = xr.DataArray(data)
+        da.name = "data"
+        da.to_zarr(
+            tmp_folder / "test.zarr",
+            mode="w",
+            encoding={"data": {"filters": [codec]}},
+            consolidated=False,
+        )
 
-    decoded_data = codec.decode(encoded_data)
+        decoded_data = xr.open_zarr(tmp_folder / "test.zarr", consolidated=False)[
+            "data"
+        ].values
 
-    diff = data - decoded_data
+    diff: npt.NDArray[np.float32] = data - decoded_data
 
     assert np.all(np.abs(diff) <= precision * 1.05), (
         f"max diff: {diff.max()}; min diff: {diff.min()}"
@@ -120,6 +136,7 @@ def test_calculate_scaling() -> None:
         ValueError, match="Too many bits required for precision and range"
     ):
         calculate_scaling(
+            data,
             min_value=0,
             max_value=1e10,
             precision=1e-12,
@@ -130,6 +147,7 @@ def test_calculate_scaling() -> None:
         ValueError, match="Too many bits required for precision and range"
     ):
         calculate_scaling(
+            data,
             min_value=-1e10,
             max_value=0,
             precision=1e-12,
@@ -298,6 +316,14 @@ def test_get_window() -> None:
 
 
 def zarr_file(varname: str) -> Path:
+    """Create a temporary zarr file with a single variable for testing.
+
+    Args:
+        varname: Name of the variable to create.
+
+    Returns:
+        Path to the created zarr file.
+    """
     size: int = 1000
     # Create a temporary zarr file for testing
     file_path: Path = tmp_folder / f"{varname}.zarr"
@@ -330,6 +356,21 @@ def zarr_file(varname: str) -> Path:
 
 
 def test_read_timestep() -> None:
+    """Test the AsyncGriddedForcingReader class.
+
+    This test creates three temporary zarr files with a single variable each.
+    It then creates three AsyncGriddedForcingReader instances to read the data from these
+    files. The test reads several timesteps from the first reader, with varying wait times
+    in between to simulate processing time. It also reads timesteps from the other two readers
+    to ensure that they work correctly. Finally, it cleans up the temporary files.
+
+    Reading a previous timestep should be slow, as it needs to be loaded from disk.
+    Reading the same timestep should be quick, as it is already in the cache.
+    Reading the next timestep after a long wait should be quick, as it is already in the cache.
+    Reading the next timestep after a short wait should be semi-quick, as it is already being
+    loaded in the cache but not yet ready.
+
+    """
     temperature_file: Path = zarr_file("temperature")
     precipitation_file: Path = zarr_file("precipitation")
     pressure_file: Path = zarr_file("pressure")

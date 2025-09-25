@@ -5,7 +5,6 @@ import math
 import numpy as np
 
 from geb.hydrology.potential_evapotranspiration import (
-    PET,
     W_m2_to_MJ_m2_day,
     adjust_wind_speed,
     get_actual_vapour_pressure,

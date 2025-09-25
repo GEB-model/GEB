@@ -38,9 +38,17 @@ To run SFINCS (the hydrodynamic model), you also need to install Docker (on Wind
 
 ## Development installation and setup
 
-To contribute to GEB, we recommend first cloning the repository from this repo using `git clone`, and then use uv to install the dependencies. Therefore, first install [git](https://git-scm.com/) and uv (see above)
+To contribute to GEB, we recommend first cloning the repository from this repo using git clone. A couple of steps are necessary before you can clone. First, first install [git](https://git-scm.com/). Make sure you are a [member of the GEB-model](https://github.com/orgs/GEB-model/people/) and put the right user credentials in your git, by pasting the following in your git bash shell or VS code terminal:
 
-Also create a folder where you would like to store the code and model, we call this the *working directory*. Note that this folder should *NOT* be placed into a cloud synchonized folder (e.g., OneDrive). In this *working directory*, create a folder called *model*, and place the model input files in this folder. The directory structure should look like this:
+```bash
+git config --global user.name "USERNAME"
+git config --global user.email "GITHUB EMAIL"
+```
+
+We need to connect to Github through SSH before we can clone the repo. For this, carefully follow all the steps to generate a SSH key and to [add this SSH key to your GitHub account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent?platform=windows). Select the right operator system (Max, Windows or Linux). See “Notes when installing on a HPC cluster” for instructions on how to do this on a remote machine. 
+After this, you are ready to clone the GEB repository! 
+
+Create a main GEB folder on your machine. Within this folder, create a folder where you would like to store the code and model, we call this the *working directory*. Note that this folder should NOT be placed into a cloud synchronized folder (e.g., OneDrive). In this *working directory*, create a folder called *model*, and place the model input files in this folder. The directory structure should look like this:
 
 ```
 working directory
@@ -74,30 +82,49 @@ working directory
 Then proceed with the following commands:
 
 ```bash
-cd GEB  # switch the terminal to GEB code folder
+cd GEB  # switch the terminal to GEB code folder (../GEB/GEB)
 git switch main  # switch to the main development branch by default, but may be changed to another branch
+```
+
+Now, install uv using the command as listed above, in “Installation (not for development)”. Then, execute:  
+
+```bash
 uv sync --dev  # install all dependencies using uv
 ```
 
-You will now have a virtual environment (`.venv`) in the GEB folder with the right Python installation and all packages you need.
+You will now have a virtual environment (.venv) in the GEB folder with the right Python installation and all packages you need.
 
-Now open Visual Studio Code in the GEB folder (or use the "File -> Open Folder" dialog in Visual Studio Code).
+Now open a new Visual Studio Code window in the GEB code folder, “../GEB/GEB” (or use the "File -> Open Folder" dialog in Visual Studio Code). 
 
 ```bash
 code .
 ```
 
-Visual Studio code should now prompts you to install the recommended extensions, which we recommend you do. After installing the Python extension VS Code should also automatically use the environment you created earlier. To test this, open a terminal in Visusal Studio Code (`Terminal -> New Terminal`) and run:
+Visual Studio code should now prompts you to install the recommended extensions, which we recommend you do. After installing the Python extension VS Code should also automatically use the environment you created earlier. To test this, open a terminal in VS Code (Terminal -> New Terminal) and run:
 
 ```bash
 geb --help
 ```
 
-We have also prepared a configuration for the debugger in `.vscode/launch.json.sample` and a settings file in `.vscode/settings.json.sample` with some useful default settings. To activate these files, copy (i.e., not remove or rename) the files to `.vscode/launch.json` and `.vscode/settings.json` respectively. 
+If this doesn’t work, press "Ctrl+Shift+P", search for “Select Interpreter”, and choose the .venv environment (probably “./.venv/bin/python”). 
 
-The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`). You may need to adjust the paths in  `.vscode/launch.json` to match your setup.
+We have also prepared a configuration for the debugger in `.vscode/launch.json.sample` and a settings file in `.vscode/settings.json.sample` with some useful default settings. To activate these files, duplicate (i.e., not remove or rename) the files and rename to `.vscode/launch.json` and `.vscode/settings.json` respectively. 
 
-Happy gebbing! Let us know when you run into issues, and any contributions to GEB are more than welcome. You can find a list of active and past contributors at the bottom of this file.
+The debugger assumes that you have the data files for the model located in `../model` (i.e., your `model.yml` is in `..model/`). You may need to adjust the paths in  `.vscode/launch.json` to match your setup. If the debugger doesn’t work, ensure that your VS Code is opened in the `../GEB/GEB` folder (not in the parent folder `../GEB`).
+
+Happy gebbing! Explore the GEB documentation to [setup a model](https://docs.geb.sh/ ).  Let us know when you run into issues, and any contributions to GEB are more than welcome. You can find a list of active and past contributors at the bottom of this file.
+
+## Installation on a remote High Performance Computer (HPC) 
+When working with GEB on a High Performance Computing (HPC) cluster, you can follow the same steps as above, but instead on a local terminal you need to use a terminal connected to the HPC Cluster. You need to connect VS Code (or another code editor) to the cluster, for example with a tunnel or SSH connection (see these instructions for the [VU ADA HPC](https://ada-hpc.readthedocs.io/en/latest/login/#connecting-with-ssh-vs-code-editor). Moreover, you need to take some additional aspects into account.
+
+- We recommend [WinSCP](https://winscp.net/eng/index.php) as a file manager. Ensure to show hidden files (which include the .ssh folder) by going to `preferences`,`panels`, and then `show hidden files`.
+- To ensure VS Code can find git software, put the following in your .bashrc file: 
+
+```bash
+module load shared 2025 git/2.45.1-GCCcore-13.3.0
+```
+
+- To connect to Github with a SSH from the cluster, follow [this same link as above](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent?platform=linux), but choose “Linux” and execute the steps on a terminal connected to the cluster (for example, from an SSH connected VS code terminal). As a result, the .ssh folder and the ssh key will be made inside your cluster folder. 
 
 ## Cite as
 

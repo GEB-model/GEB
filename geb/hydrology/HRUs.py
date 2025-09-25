@@ -2,7 +2,7 @@ import math
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Union
+from typing import Any, Union
 
 import geopandas as gpd
 import numpy as np
@@ -308,6 +308,9 @@ class Grid(BaseVariables):
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            array: Full array of mask size.
         """
         return np.full(self.mask.shape, *args, **kwargs)
 
@@ -317,6 +320,9 @@ class Grid(BaseVariables):
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            array: Full array of compressed size.
         """
         return np.full(self.compressed_size, *args, **kwargs)
 

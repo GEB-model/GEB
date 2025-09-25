@@ -14,8 +14,8 @@ import numpy as np
 import pandas as pd
 import scipy.signal as ss
 
-from ...hydrology.HRUs import load_geom
-from ...workflows.io import load_table
+from ....hydrology.HRUs import load_geom
+from ....workflows.io import load_table
 
 warnings.filterwarnings("ignore")
 

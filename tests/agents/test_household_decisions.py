@@ -10,7 +10,7 @@ from geb.agents.decision_module_flood import (
 
 @fixture
 def decision_template() -> None:
-    """This function creates a decision template for the decision module"""
+    """This function creates a decision template for the decision module."""
     geom_id = "<GeoID>"
     n_agents = 100
     return_periods = np.array([10, 50])

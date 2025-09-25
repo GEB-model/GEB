@@ -307,7 +307,7 @@ class CropFarmers(AgentBaseClass):
 
         # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy.
         self.var.n = np.unique(farms[farms != -1]).size
-        self.var.max_n = self.get_max_n(self.var.n)
+        self.var.max_n = math.ceil(self.var.n * (1 + self.redundancy))
 
         # The code below obtains the coordinates of the farmers' locations.
         # First the horizontal and vertical indices of the pixels that are not -1 are obtained. Then, for each farmer the
@@ -914,9 +914,11 @@ class CropFarmers(AgentBaseClass):
     def update_field_indices(self) -> None:
         """Creates `field_indices_by_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer."""
         (
-            self.var.field_indices_by_farmer,
+            field_indices_by_farmer,
             self.var.field_indices,
         ) = self.update_field_indices_numba(self.HRU.var.land_owners)
+
+        self.var.field_indices_by_farmer[:] = field_indices_by_farmer
 
     def set_social_network(self) -> None:
         """Determines for each farmer a group of neighbors which constitutes their social network."""
@@ -1234,7 +1236,7 @@ class CropFarmers(AgentBaseClass):
             groundwater_abstraction_m3,
         ) = abstract_water(
             activation_order=self.activation_order_by_elevation.data,
-            field_indices_by_farmer=self.var.field_indices_by_farmer,
+            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
             field_indices=self.var.field_indices,
             irrigation_efficiency=self.var.irrigation_efficiency.data,
             surface_irrigated=self.surface_irrigated.data,
