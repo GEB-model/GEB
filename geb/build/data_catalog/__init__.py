@@ -11,6 +11,7 @@ from .global_data_lab import GlobalDataLabShapefile
 from .globgm import GlobGM, GlobGMDEM
 from .grdc import GRDC
 from .hydrolakes import HydroLakes
+from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
@@ -18,6 +19,22 @@ from .sword import Sword
 from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "lowder_farm_size_distribution": {
+        "adapter": Lowder(
+            folder="lowder_farm_size_distribution",
+            local_version=1,
+            filename="lowder_farm_size_distribution.xlsx",
+            cache="global",
+        ),
+        "url": "https://ars.els-cdn.com/content/image/1-s2.0-S0305750X15002703-mmc1.xlsx",
+        "source": {
+            "name": "The Number, Size, and Distribution of Farms, Smallholder Farms, and Family Farms Worldwide",
+            "author": "Lowder et al. (2016)",
+            "paper_doi": "10.1016/j.worlddev.2015.10.041",
+            "license": "CC BY-NC-ND 4.0",
+            "url": "https://doi.org/10.1016/j.worlddev.2015.10.041",
+        },
+    },
     "gebco": {
         "adapter": GEBCO(
             folder="gebco",

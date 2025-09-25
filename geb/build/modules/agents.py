@@ -1067,26 +1067,9 @@ class Agents:
                 f"Region database must contain {country_iso3_column} column ({self.data_catalog['GADM_level1'].path})"
             )
 
-            farm_sizes_per_region = (
-                self.data_catalog.get_dataframe("lowder_farm_sizes")
-                .dropna(subset=["Total"], axis=0)
-                .drop(["empty", "income class"], axis=1)
-            )
-            farm_sizes_per_region["Country"] = farm_sizes_per_region["Country"].ffill()
-            # Remove preceding and trailing white space from country names
-            farm_sizes_per_region["Country"] = farm_sizes_per_region[
-                "Country"
-            ].str.strip()
-            farm_sizes_per_region["Census Year"] = farm_sizes_per_region[
-                "Country"
-            ].ffill()
-
-            farm_sizes_per_region["ISO3"] = farm_sizes_per_region["Country"].map(
-                COUNTRY_NAME_TO_ISO3
-            )
-            assert not farm_sizes_per_region["ISO3"].isna().any(), (
-                f"Found {farm_sizes_per_region['ISO3'].isna().sum()} countries without ISO3 code"
-            )
+            farm_sizes_per_region = self.new_data_catalog.fetch(
+                "lowder_farm_size_distribution"
+            ).read()
 
             farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
             farm_size_donor_country = setup_donor_countries(self, farm_countries_list)
