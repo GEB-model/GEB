@@ -175,6 +175,19 @@ class NewDataCatalog:
             **kwargs,
         )
 
+    def get_source(self, name: str, *args: Any, **kwargs: Any) -> Adapter:
+        """Get a data catalog entry by name (compatibility method for hydromt DataCatalog interface).
+
+        Args:
+            name: The name of the data entry to retrieve.
+            *args: Additional positional arguments to pass to the processor.
+            **kwargs: Additional keyword arguments to pass to the processor.
+
+        Returns:
+            The data catalog entry as an Adapter with .path property.
+        """
+        return self.get(name, *args, **kwargs)
+
     def size_on_disk(
         self, name: str | None = None, format: str | None = None
     ) -> int | str:

@@ -1193,5 +1193,285 @@ def share(*args: Any, **kwargs: Any) -> None:
     share_fn(*args, **kwargs)
 
 
+def init_multiple_fn(
+    config: str | Path,
+    build_config: str | Path,
+    update_config: str | Path,
+    working_directory: str | Path,
+    from_example: str,
+    geometry_bounds: str,
+    target_area_km2: float = 817000.0,
+    area_tolerance: float = 0.3,
+    cluster_prefix: str = "cluster",
+    overwrite: bool = True,
+    data_catalog: str | Path = DATA_CATALOG_DEFAULT,
+    data_provider: str = DATA_PROVIDER_DEFAULT,
+    save_geoparquet: str | Path | None = None,
+    save_map: str | Path | None = None,
+) -> None:
+    """Create multiple models from a geometry by clustering downstream subbasins.
+
+    Args:
+        config: Path to the base model configuration file.
+        build_config: Path to the base model build configuration file.
+        update_config: Path to the base model update configuration file.
+        working_directory: Working directory for the models.
+        from_example: Name of the example to use as a base for the models.
+        geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
+        target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
+        area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
+        cluster_prefix: Prefix for cluster directory names.
+        overwrite: If True, overwrite existing directories and files.
+        data_catalog: Path to the data catalog file.
+        data_provider: Data provider to use.
+        save_geoparquet: Path to save clusters as geoparquet file. If None, no file is saved.
+        save_map: Path to save visualization map as PNG file. If None, no map is created.
+
+    Raises:
+        FileExistsError: If directories already exist and overwrite is False.
+        FileNotFoundError: If the example folder does not exist.
+        ValueError: If geometry_bounds format is invalid.
+    """
+    from geb.build import (
+        cluster_subbasins_by_area_and_proximity,
+        create_cluster_visualization_map,
+        create_multi_basin_configs,
+        get_all_downstream_subbasins_in_geom,
+        get_river_graph,
+        save_clusters_to_geoparquet,
+    )
+    from geb.build.data_catalog import NewDataCatalog
+
+    config: Path = Path(config)
+    build_config: Path = Path(build_config)
+    update_config: Path = Path(update_config)
+    working_directory: Path = Path(working_directory)
+
+    # Create the models/large_scale directory structure
+    models_dir = Path.cwd().parent / "models"
+    large_scale_dir = models_dir / "large_scale"
+    if not large_scale_dir.exists():
+        large_scale_dir.mkdir(parents=True, exist_ok=True)
+
+    # Always create geoparquet and map files in models directory if not specified
+    if save_geoparquet is None:
+        save_geoparquet = models_dir / "clusters.geoparquet"
+    if save_map is None:
+        save_map = models_dir / "clusters_map.png"
+
+    # Parse geometry bounds
+    try:
+        bounds = [float(x.strip()) for x in geometry_bounds.split(",")]
+        if len(bounds) != 4:
+            raise ValueError
+        xmin, ymin, xmax, ymax = bounds
+    except ValueError:
+        raise ValueError(
+            "geometry_bounds must be in format 'xmin,ymin,xmax,ymax' with numeric values"
+        )
+
+    # Create a geometry from the bounding box
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    bbox_geom = gpd.GeoDataFrame(
+        geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
+    )
+
+    # Initialize data catalog
+    data_catalog_instance = NewDataCatalog()
+
+    print("Loading river network...")
+    river_graph = get_river_graph(data_catalog_instance)
+
+    print("Finding downstream subbasins in geometry...")
+    downstream_subbasins = get_all_downstream_subbasins_in_geom(
+        data_catalog_instance, bbox_geom, river_graph
+    )
+
+    if not downstream_subbasins:
+        raise ValueError("No downstream subbasins found in the specified geometry")
+
+    print(f"Found {len(downstream_subbasins)} downstream subbasins")
+
+    print("Clustering subbasins by area and proximity...")
+    clusters = cluster_subbasins_by_area_and_proximity(
+        data_catalog_instance,
+        downstream_subbasins,
+        target_area_km2=target_area_km2,
+        area_tolerance=area_tolerance,
+    )
+
+    print(f"Created {len(clusters)} clusters")
+
+    # Check for existing directories if not overwriting
+    if not overwrite:
+        for i in range(len(clusters)):
+            cluster_dir = large_scale_dir / f"{cluster_prefix}_{i:03d}"
+            if cluster_dir.exists():
+                raise FileExistsError(
+                    f"Cluster directory {cluster_dir} already exists. Remove --no-overwrite flag to overwrite."
+                )
+
+    # Verify example folder exists
+    example_folder: Path = (
+        Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / "examples" / from_example
+    )
+    if not example_folder.exists():
+        raise FileNotFoundError(
+            f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
+        )
+
+    # Create cluster configurations
+    cluster_directories = create_multi_basin_configs(
+        clusters=clusters,
+        base_config_path=example_folder / CONFIG_DEFAULT,
+        base_build_config_path=example_folder / BUILD_DEFAULT,
+        base_update_config_path=example_folder / UPDATE_DEFAULT,
+        working_directory=large_scale_dir,
+        cluster_prefix=cluster_prefix,
+    )
+
+    # Save clusters to geoparquet (always create)
+    save_clusters_to_geoparquet(
+        clusters=clusters,
+        data_catalog=data_catalog_instance,
+        output_path=save_geoparquet,
+        cluster_prefix=cluster_prefix,
+    )
+
+    # Create visualization map (always create)
+    create_cluster_visualization_map(
+        clusters=clusters,
+        data_catalog=data_catalog_instance,
+        output_path=save_map,
+        cluster_prefix=cluster_prefix,
+    )
+
+    print(f"\nSuccessfully created {len(cluster_directories)} model configurations:")
+    for cluster_dir in cluster_directories:
+        print(f"  {cluster_dir.relative_to(large_scale_dir)}")
+
+    print(f"\nTo build all models, run:")
+    print(f"  cd {large_scale_dir}")
+    print(f"  for dir in {cluster_prefix}_*/; do")
+    print(f"    echo 'Building model in $dir'")
+    print(f"    cd $dir && geb build && cd ..")
+    print(f"  done")
+
+
+@cli.command()
+@click_config
+@click.option(
+    "--build-config",
+    "-b",
+    default=BUILD_DEFAULT,
+    help=f"Path of the model build configuration file. Defaults to '{BUILD_DEFAULT}'.",
+)
+@click.option(
+    "--update-config",
+    "-u",
+    default=UPDATE_DEFAULT,
+    help="Path of the model update configuration file.",
+)
+@click.option(
+    "--from-example",
+    default="geul",
+    help="Name of the example to use as a base for the models. Defaults to 'geul'.",
+)
+@click.option(
+    "--geometry-bounds",
+    default="-5.0, 47.0, 15.0, 58.0",
+    required=True,
+    type=str,
+    help="Bounding box as 'xmin,ymin,xmax,ymax' to select subbasins (e.g., '5.0,50.0,15.0,55.0' for parts of Europe).",
+)
+@click.option(
+    "--target-area-km2",
+    default=817000.0,
+    type=float,
+    help="Target cumulative upstream area per cluster in km2. Defaults to Danube basin area (~817,000 km2).",
+)
+@click.option(
+    "--area-tolerance",
+    default=0.3,
+    type=float,
+    help="Tolerance for target area as fraction (0.3 = 30% tolerance).",
+)
+@click.option(
+    "--cluster-prefix",
+    default="cluster",
+    help="Prefix for cluster directory names. Defaults to 'cluster'.",
+)
+@click.option(
+    "--no-overwrite",
+    is_flag=True,
+    default=False,
+    help="If set, do not overwrite existing cluster directories and files.",
+)
+@click.option(
+    "--data-catalog",
+    default=DATA_CATALOG_DEFAULT,
+    help="Path to the data catalog file.",
+)
+@click.option(
+    "--data-provider",
+    default=DATA_PROVIDER_DEFAULT,
+    help="Data provider to use.",
+)
+@click.option(
+    "--save-geoparquet",
+    type=click.Path(),
+    help="Save clusters to geoparquet file at this path. If not specified, saves to 'models/clusters.geoparquet'.",
+)
+@click.option(
+    "--save-map",
+    type=click.Path(),
+    help="Save visualization map to PNG file at this path. If not specified, saves to 'models/clusters_map.png'.",
+)
+@working_directory_option
+def init_multiple(
+    config: str,
+    build_config: str,
+    update_config: str,
+    working_directory: Path,
+    from_example: str,
+    geometry_bounds: str,
+    target_area_km2: float,
+    area_tolerance: float,
+    cluster_prefix: str,
+    no_overwrite: bool,
+    data_catalog: str,
+    data_provider: str,
+    save_geoparquet: str | None,
+    save_map: str | None,
+) -> None:
+    """Initialize multiple models by clustering downstream subbasins in a geometry.
+
+    This command identifies all downstream subbasins (outlets) within a specified
+    bounding box, clusters them by proximity and cumulative upstream area, and
+    creates separate model configurations for each cluster.
+
+    Example for parts of Europe:
+        geb init_multiple --geometry-bounds="5.0,50.0,15.0,55.0"
+    """
+    init_multiple_fn(
+        config=config,
+        build_config=build_config,
+        update_config=update_config,
+        working_directory=working_directory,
+        from_example=from_example,
+        geometry_bounds=geometry_bounds,
+        target_area_km2=target_area_km2,
+        area_tolerance=area_tolerance,
+        cluster_prefix=cluster_prefix,
+        overwrite=not no_overwrite,
+        data_catalog=data_catalog,
+        data_provider=data_provider,
+        save_geoparquet=save_geoparquet,
+        save_map=save_map,
+    )
+
+
 if __name__ == "__main__":
     cli()

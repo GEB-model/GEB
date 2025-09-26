@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import os
+import shutil
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ import pandas as pd
 import pyflwdir
 import rasterio
 import xarray as xr
+import yaml
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
@@ -259,6 +261,8 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
     Returns:
         A directed graph where nodes are COMID values and edges point downstream.
     """
+    print("Loading MERIT basins river network...")
+
     river_network: pd.DataFrame = (
         data_catalog.get("merit_basins_rivers")
         .read(columns=["COMID", "NextDownID"])
@@ -268,6 +272,8 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
         "The index of the river network is not the COMID column"
     )
 
+    print(f"Processing {len(river_network)} river segments...")
+
     # create a directed graph for the river network
     river_graph: networkx.DiGraph = networkx.DiGraph()
 
@@ -275,6 +281,10 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
     river_network_with_downstream_connection = river_network[
         river_network["NextDownID"] != 0
     ]
+    print(
+        f"Adding {len(river_network_with_downstream_connection)} rivers with downstream connections..."
+    )
+
     river_network_with_downstream_connection = (
         river_network_with_downstream_connection.itertuples(index=True, name=None)
     )
@@ -283,7 +293,14 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
     river_network_without_downstream_connection = river_network[
         river_network["NextDownID"] == 0
     ]
+    print(
+        f"Adding {len(river_network_without_downstream_connection)} terminal rivers (outlets)..."
+    )
     river_graph.add_nodes_from(river_network_without_downstream_connection.index)
+
+    print(
+        f"River graph created with {river_graph.number_of_nodes()} nodes and {river_graph.number_of_edges()} edges"
+    )
 
     return river_graph
 
@@ -309,15 +326,8 @@ def get_subbasin_id_from_coordinate(
     # xmin == xmax and ymin == ymax
     # geoparquet uses < and >, not <= and >=, so we need to add
     # a small value to the coordinates to avoid missing the point
-    COMID: gpd.GeoDataFrame = (
-        data_catalog.get("merit_basins_catchments")
-        .read(
-            bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
-        )
-        .set_index("COMID")
-    )
     COMID = gpd.read_parquet(
-        data_catalog.get_source("MERIT_Basins_cat").path,
+        data_catalog.get("merit_basins_catchments").path,
         bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
     ).set_index("COMID")
 
@@ -326,7 +336,7 @@ def get_subbasin_id_from_coordinate(
 
     if len(COMID) == 0:
         raise ValueError(
-            f"The point is not in a basin. Note, that there are some holes in the MERIT basins dataset ({data_catalog.get_source('MERIT_Basins_cat').path}), ensure that the point is in a basin."
+            f"The point is not in a basin. Note, that there are some holes in the MERIT basins dataset ({data_catalog.get('merit_basins_catchments').path}), ensure that the point is in a basin."
         )
     assert len(COMID) == 1, "The point is not in a single basin"
     # get the COMID value from the GeoDataFrame
@@ -352,7 +362,7 @@ def get_sink_subbasin_id_for_geom(
         A list of COMID values for the sink subbasins.
     """
     subbasins = gpd.read_parquet(
-        data_catalog.get_source("MERIT_Basins_cat").path,
+        data_catalog.get("merit_basins_catchments").path,
         bbox=tuple([float(c) for c in geom.total_bounds]),
     ).set_index("COMID")
 
@@ -378,6 +388,539 @@ def get_sink_subbasin_id_for_geom(
     return sink_nodes
 
 
+def get_all_downstream_subbasins_in_geom(
+    data_catalog: DataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
+) -> list[int]:
+    """Find all downstream subbasins (with NextDownID = 0) that intersect with the given geometry.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        geom: GeoDataFrame containing the geometry to find the downstream subbasins for.
+        river_graph: The river graph containing all subbasins and their connections.
+
+    Returns:
+        A list of COMID values for all downstream subbasins in the geometry.
+    """
+    print("Finding subbasins that intersect with geometry...")
+
+    # Get all subbasins that intersect with the geometry
+    subbasins = gpd.read_parquet(
+        data_catalog.get("merit_basins_catchments").path,
+        bbox=tuple([float(c) for c in geom.total_bounds]),
+    ).set_index("COMID")
+
+    subbasins = subbasins.iloc[
+        subbasins.sindex.query(geom.union_all(), predicate="intersects")
+    ]
+
+    assert len(subbasins) > 0, "The geometry does not intersect with any subbasin."
+
+    print(f"Found {len(subbasins)} subbasins intersecting with geometry")
+    print("Loading river network data...")
+
+    # Get river network data to find downstream basins (NextDownID = 0)
+    river_network: pd.DataFrame = (
+        data_catalog.get("merit_basins_rivers")
+        .read(columns=["COMID", "NextDownID", "uparea"])
+        .set_index("COMID")
+    )
+
+    print("Filtering for downstream subbasins (NextDownID = 0)...")
+
+    # Filter for subbasins that are within the geometry and are downstream (NextDownID = 0)
+    intersecting_subbasins = subbasins.index.intersection(river_network.index)
+    downstream_subbasins = river_network.loc[intersecting_subbasins]
+    downstream_subbasins = downstream_subbasins[downstream_subbasins["NextDownID"] == 0]
+
+    print(f"Found {len(downstream_subbasins)} downstream subbasins (outlets)")
+
+    return downstream_subbasins.index.tolist()
+
+
+def get_subbasin_upstream_areas(
+    data_catalog: DataCatalog, subbasin_ids: list[int]
+) -> dict[int, float]:
+    """Get upstream areas for a list of subbasins.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        subbasin_ids: List of COMID values to get upstream areas for.
+
+    Returns:
+        Dictionary mapping COMID to upstream area in km2.
+    """
+    # Use filters to only read the rows we need - much faster than reading all data
+    river_network: pd.DataFrame = (
+        data_catalog.get("merit_basins_rivers")
+        .read(columns=["COMID", "uparea"], filters=[("COMID", "in", subbasin_ids)])
+        .set_index("COMID")
+    )
+
+    # Convert to dict for faster lookup and handle missing values
+    upstream_areas = river_network["uparea"].to_dict()
+
+    # Fill in any missing subbasins with 0.0 area
+    for subbasin_id in subbasin_ids:
+        if subbasin_id not in upstream_areas:
+            upstream_areas[subbasin_id] = 0.0
+
+    return upstream_areas
+
+
+def cluster_subbasins_by_area_and_proximity(
+    data_catalog: DataCatalog,
+    subbasin_ids: list[int],
+    target_area_km2: float = 817000.0,  # Approximate Danube basin area
+    area_tolerance: float = 0.3,
+) -> list[list[int]]:
+    """Cluster subbasins by proximity and cumulative upstream area.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        subbasin_ids: List of downstream COMID values to cluster.
+        target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
+        area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
+
+    Returns:
+        List of clusters, where each cluster is a list of COMID values.
+    """
+    print(f"Loading geometries for {len(subbasin_ids)} subbasins...")
+
+    # Get subbasin geometries and upstream areas
+    subbasins = gpd.read_parquet(
+        data_catalog.get("merit_basins_catchments").path,
+        filters=[("COMID", "in", subbasin_ids)],
+    ).set_index("COMID")
+
+    print("Getting upstream areas...")
+    upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasin_ids)
+
+    # Sort subbasins by upstream area (largest first)
+    sorted_subbasins = sorted(
+        subbasin_ids, key=lambda x: upstream_areas.get(x, 0), reverse=True
+    )
+
+    print(
+        f"Starting clustering with target area: {target_area_km2:,.0f} km² ± {area_tolerance * 100:.0f}%"
+    )
+    print(
+        f"Area range: {target_area_km2 * (1 - area_tolerance):,.0f} - {target_area_km2 * (1 + area_tolerance):,.0f} km²"
+    )
+
+    # Pre-compute expensive operations for performance
+    print("Pre-computing spatial relationships...")
+
+    # Build spatial index for fast neighbor finding
+    subbasins_sindex = subbasins.sindex
+
+    # Pre-compute centroids for all subbasins (avoid repeated calculations)
+    centroids = {}
+    for subbasin_id in subbasin_ids:
+        centroids[subbasin_id] = subbasins.loc[subbasin_id].geometry.centroid
+
+    # Pre-compute touching relationships using spatial index
+    print("Computing adjacency matrix...")
+    touching_pairs = set()
+
+    for subbasin_id in subbasin_ids:
+        geom = subbasins.loc[subbasin_id].geometry
+        # Use spatial index to find potential neighbors (much faster than checking all)
+        possible_matches_idx = list(subbasins_sindex.intersection(geom.bounds))
+        possible_matches = subbasins.iloc[possible_matches_idx]
+
+        for neighbor_id in possible_matches.index:
+            if neighbor_id != subbasin_id and neighbor_id in subbasin_ids:
+                # Check if they actually touch
+                if geom.touches(possible_matches.loc[neighbor_id].geometry):
+                    # Store as sorted pair to avoid duplicates
+                    pair = tuple(sorted([subbasin_id, neighbor_id]))
+                    touching_pairs.add(pair)
+
+    # Convert to adjacency dict for O(1) lookup
+    adjacency = {}
+    for subbasin_id in subbasin_ids:
+        adjacency[subbasin_id] = set()
+
+    for id1, id2 in touching_pairs:
+        adjacency[id1].add(id2)
+        adjacency[id2].add(id1)
+
+    print(f"Found {len(touching_pairs)} touching relationships")
+
+    clusters = []
+    used_subbasins = set()
+
+    # Progress tracking
+    total_subbasins = len(subbasin_ids)
+
+    for i, subbasin_id in enumerate(sorted_subbasins):
+        if subbasin_id in used_subbasins:
+            continue
+
+        # Progress update
+        progress_percent = (len(used_subbasins) / total_subbasins) * 100
+        print(
+            f"Progress: {len(used_subbasins)}/{total_subbasins} subbasins processed ({progress_percent:.1f}%) - Creating cluster {len(clusters) + 1}"
+        )
+
+        # Start a new cluster with this subbasin
+        current_cluster = [subbasin_id]
+        current_area = upstream_areas.get(subbasin_id, 0)
+        used_subbasins.add(subbasin_id)
+
+        # Keep track of cluster neighbors for fast expansion
+        cluster_neighbors = adjacency[subbasin_id].copy()
+
+        print(
+            f"  Starting cluster {len(clusters) + 1} with subbasin {subbasin_id} (area: {current_area:,.0f} km²)"
+        )
+
+        # Try to add neighboring subbasins until we reach the target area
+        min_area_threshold = target_area_km2 * (1 - area_tolerance)
+        max_area_threshold = target_area_km2 * (1 + area_tolerance)
+
+        expansion_attempts = 0
+
+        while current_area < min_area_threshold and len(used_subbasins) < len(
+            subbasin_ids
+        ):
+            expansion_attempts += 1
+            if expansion_attempts % 10 == 0:
+                print(
+                    f"    Cluster expansion attempt {expansion_attempts}, current area: {current_area:,.0f} km² (target: {min_area_threshold:,.0f}-{max_area_threshold:,.0f} km²)"
+                )
+
+            # Find unused subbasins that touch the current cluster (using pre-computed adjacency)
+            touching_candidates = []
+
+            for candidate_id in cluster_neighbors:
+                if candidate_id not in used_subbasins:
+                    candidate_area = upstream_areas.get(candidate_id, 0)
+                    touching_candidates.append((candidate_id, candidate_area))
+
+            # If no touching candidates, find the closest unused subbasin using pre-computed centroids
+            if not touching_candidates:
+                remaining_subbasins = [
+                    s for s in sorted_subbasins if s not in used_subbasins
+                ]
+                if not remaining_subbasins:
+                    break
+
+                # Find closest remaining subbasin using pre-computed centroids
+                cluster_centroid = (
+                    subbasins.loc[current_cluster].geometry.centroid.iloc[0]
+                    if len(current_cluster) == 1
+                    else subbasins.loc[current_cluster].geometry.union_all().centroid
+                )
+                min_distance = float("inf")
+                closest_subbasin = None
+
+                for candidate_id in remaining_subbasins[
+                    : min(50, len(remaining_subbasins))
+                ]:  # Limit search for performance
+                    distance = cluster_centroid.distance(centroids[candidate_id])
+                    if distance < min_distance:
+                        min_distance = distance
+                        closest_subbasin = candidate_id
+
+                if closest_subbasin:
+                    candidate_area = upstream_areas.get(closest_subbasin, 0)
+                    touching_candidates = [(closest_subbasin, candidate_area)]
+
+            if not touching_candidates:
+                break
+
+            # Sort by area (largest first) and pick the best candidate
+            touching_candidates.sort(key=lambda x: x[1], reverse=True)
+
+            # Select the best candidate that doesn't exceed max threshold
+            best_candidate = None
+            for candidate_id, candidate_area in touching_candidates:
+                if current_area + candidate_area <= max_area_threshold:
+                    best_candidate = candidate_id
+                    break
+
+            # If no candidate fits within threshold, take the smallest one if we're still below min
+            if best_candidate is None and current_area < min_area_threshold:
+                best_candidate = touching_candidates[-1][0]  # Smallest area
+
+            if best_candidate is None:
+                break
+
+            # Add the best candidate to the cluster
+            current_cluster.append(best_candidate)
+            candidate_area = upstream_areas.get(best_candidate, 0)
+            current_area += candidate_area
+            used_subbasins.add(best_candidate)
+
+            # Update cluster neighbors efficiently
+            cluster_neighbors.discard(best_candidate)  # Remove the added subbasin
+            cluster_neighbors.update(adjacency[best_candidate])  # Add its neighbors
+            cluster_neighbors -= used_subbasins  # Remove already used subbasins
+
+            if expansion_attempts <= 5 or expansion_attempts % 5 == 0:
+                print(
+                    f"    Added subbasin {best_candidate} (area: {candidate_area:,.0f} km²), cluster total: {current_area:,.0f} km²"
+                )
+
+        clusters.append(current_cluster)
+        final_area = sum(upstream_areas.get(sid, 0) for sid in current_cluster)
+        print(
+            f"  Completed cluster {len(clusters)} with {len(current_cluster)} subbasins, total area: {final_area:,.0f} km²"
+        )
+        print()
+
+    print(
+        f"Clustering completed! Created {len(clusters)} clusters from {len(subbasin_ids)} subbasins"
+    )
+    for i, cluster in enumerate(clusters):
+        cluster_area = sum(upstream_areas.get(sid, 0) for sid in cluster)
+        print(f"  Cluster {i + 1}: {len(cluster)} subbasins, {cluster_area:,.0f} km²")
+
+    return clusters
+
+
+def save_clusters_to_geoparquet(
+    clusters: list[list[int]],
+    data_catalog: DataCatalog,
+    output_path: str | Path,
+    cluster_prefix: str = "cluster",
+) -> None:
+    """Save clusters to a geoparquet file with cluster IDs.
+
+    Args:
+        clusters: List of clusters, where each cluster is a list of COMID values.
+        data_catalog: Data catalog containing the MERIT basins.
+        output_path: Path where to save the geoparquet file.
+        cluster_prefix: Prefix for cluster names.
+    """
+    print(f"Saving clusters to geoparquet: {output_path}")
+    
+    # Get all subbasin IDs
+    all_subbasin_ids = [sid for cluster in clusters for sid in cluster]
+    
+    # Load subbasin geometries
+    subbasins = gpd.read_parquet(
+        data_catalog.get("merit_basins_catchments").path,
+        filters=[("COMID", "in", all_subbasin_ids)],
+    ).set_index("COMID")
+    
+    # Get upstream areas for display
+    upstream_areas = get_subbasin_upstream_areas(data_catalog, all_subbasin_ids)
+    
+    # Create cluster assignments
+    cluster_data = []
+    for cluster_idx, cluster_subbasins in enumerate(clusters):
+        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
+        cluster_area = sum(upstream_areas.get(sid, 0) for sid in cluster_subbasins)
+        
+        for subbasin_id in cluster_subbasins:
+            cluster_data.append({
+                'COMID': subbasin_id,
+                'cluster_id': cluster_id,
+                'cluster_number': cluster_idx,
+                'cluster_area_km2': cluster_area,
+                'subbasin_area_km2': upstream_areas.get(subbasin_id, 0),
+                'geometry': subbasins.loc[subbasin_id].geometry
+            })
+    
+    # Create GeoDataFrame
+    cluster_gdf = gpd.GeoDataFrame(cluster_data, crs=subbasins.crs)
+    
+    # Save to geoparquet
+    cluster_gdf.to_parquet(output_path)
+    print(f"Saved {len(cluster_data)} subbasins in {len(clusters)} clusters to {output_path}")
+
+
+def create_cluster_visualization_map(
+    clusters: list[list[int]],
+    data_catalog: DataCatalog,
+    output_path: str | Path,
+    cluster_prefix: str = "cluster",
+    figsize: tuple[int, int] = (16, 12),
+) -> None:
+    """Create a visualization map of the clusters with satellite background.
+
+    Args:
+        clusters: List of clusters, where each cluster is a list of COMID values.
+        data_catalog: Data catalog containing the MERIT basins.
+        output_path: Path where to save the PNG file.
+        cluster_prefix: Prefix for cluster names.
+        figsize: Figure size in inches (width, height).
+    """
+    import contextily as ctx
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+    
+    print(f"Creating visualization map: {output_path}")
+    
+    # Get all subbasin IDs
+    all_subbasin_ids = [sid for cluster in clusters for sid in cluster]
+    
+    # Load subbasin geometries
+    subbasins = gpd.read_parquet(
+        data_catalog.get("merit_basins_catchments").path,
+        filters=[("COMID", "in", all_subbasin_ids)],
+    ).set_index("COMID")
+    
+    # Create cluster assignments with colors
+    cluster_data = []
+    colors = plt.cm.Set3(np.linspace(0, 1, len(clusters)))  # Generate distinct colors
+    
+    for cluster_idx, cluster_subbasins in enumerate(clusters):
+        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
+        color = colors[cluster_idx]
+        
+        for subbasin_id in cluster_subbasins:
+            cluster_data.append({
+                'COMID': subbasin_id,
+                'cluster_id': cluster_id,
+                'cluster_number': cluster_idx,
+                'color': color,
+                'geometry': subbasins.loc[subbasin_id].geometry
+            })
+    
+    # Create GeoDataFrame
+    cluster_gdf = gpd.GeoDataFrame(cluster_data, crs=subbasins.crs)
+    
+    # Convert to Web Mercator for contextily
+    cluster_gdf_mercator = cluster_gdf.to_crs(epsg=3857)
+    
+    # Create the plot
+    fig, ax = plt.subplots(1, 1, figsize=figsize)
+    
+    # Plot each cluster with different colors
+    for cluster_idx, (cluster_id, group) in enumerate(cluster_gdf_mercator.groupby('cluster_id')):
+        group.plot(
+            ax=ax,
+            color=colors[cluster_idx],
+            alpha=0.3,  # Transparent fill
+            edgecolor='blue',
+            linewidth=0.8,
+            label=f'{cluster_id} ({len(group)} subbasins)'
+        )
+        
+        # Add cluster labels at centroids
+        centroid = group.geometry.union_all().centroid
+        ax.annotate(
+            f'{cluster_idx}',
+            (centroid.x, centroid.y),
+            fontsize=12,
+            fontweight='bold',
+            ha='center',
+            va='center',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8)
+        )
+    
+    # Add satellite background
+    try:
+        ctx.add_basemap(
+            ax,
+            crs=cluster_gdf_mercator.crs.to_string(),
+            source=ctx.providers.Esri.WorldImagery,
+            zoom='auto'
+        )
+        print("Added satellite background from Esri WorldImagery")
+    except Exception as e:
+        print(f"Could not add satellite background: {e}")
+        print("Using OpenStreetMap background instead")
+        try:
+            ctx.add_basemap(
+                ax,
+                crs=cluster_gdf_mercator.crs.to_string(),
+                source=ctx.providers.OpenStreetMap.Mapnik,
+                zoom='auto'
+            )
+        except Exception as e2:
+            print(f"Could not add any background: {e2}")
+    
+    # Customize the plot
+    ax.set_title(f'GEB Multi-Basin Clusters - {len(clusters)} Clusters', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Longitude', fontsize=12)
+    ax.set_ylabel('Latitude', fontsize=12)
+    
+    # Add legend
+    legend_elements = [
+        Patch(facecolor=colors[i], alpha=0.3, edgecolor='blue', 
+              label=f'Cluster {i} ({len([sid for cluster in [clusters[i]] for sid in cluster])} subbasins)')
+        for i in range(len(clusters))
+    ]
+    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.02, 1))
+    
+    # Remove axes ticks for cleaner look
+    ax.set_xticks([])
+    ax.set_yticks([])
+    
+    # Tight layout to prevent legend cutoff
+    plt.tight_layout()
+    
+    # Save the figure
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Saved visualization map to {output_path}")
+
+
+def create_multi_basin_configs(
+    clusters: list[list[int]],
+    base_config_path: Path,
+    base_build_config_path: Path,
+    base_update_config_path: Path,
+    working_directory: Path,
+    cluster_prefix: str = "cluster",
+) -> list[Path]:
+    """Create separate config files and directories for each cluster of subbasins.
+
+    Args:
+        clusters: List of clusters, where each cluster is a list of COMID values.
+        base_config_path: Path to the base model config file.
+        base_build_config_path: Path to the base build config file.
+        base_update_config_path: Path to the base update config file.
+        working_directory: Working directory for the models.
+        cluster_prefix: Prefix for cluster directory names.
+
+    Returns:
+        List of paths to created cluster directories.
+    """
+    print(f"Creating configuration files for {len(clusters)} clusters...")
+
+    cluster_directories = []
+
+    # Load the base configuration
+    print("Loading base configuration files...")
+    with open(base_config_path, "r") as f:
+        base_config = yaml.load(f, Loader=yaml.SafeLoader)
+
+    for i, cluster in enumerate(clusters):
+        print(
+            f"Creating cluster {i + 1}/{len(clusters)}: {cluster_prefix}_{i:03d} ({len(cluster)} subbasins)"
+        )
+
+        # Create cluster directory
+        cluster_dir = working_directory / f"{cluster_prefix}_{i:03d}"
+        cluster_dir.mkdir(parents=True, exist_ok=True)
+        cluster_directories.append(cluster_dir)
+
+        # Modify config for this cluster
+        cluster_config = base_config.copy()
+        cluster_config["general"]["region"]["subbasin"] = cluster
+
+        # Write cluster config files
+        cluster_config_path = cluster_dir / "model.yml"
+        with open(cluster_config_path, "w") as f:
+            yaml.dump(cluster_config, f, default_flow_style=False, sort_keys=False)
+
+        # Copy build and update configs
+        shutil.copy(base_build_config_path, cluster_dir / "build.yml")
+        shutil.copy(base_update_config_path, cluster_dir / "update.yml")
+
+    print(
+        f"Successfully created {len(clusters)} cluster configurations in {working_directory}"
+    )
+
+    return cluster_directories
+
+
 def get_touching_subbasins(
     data_catalog: DataCatalog, subbasins: gpd.GeoDataFrame
 ) -> gpd.GeoDataFrame:
@@ -399,7 +942,7 @@ def get_touching_subbasins(
         bbox[3] + buffer,
     )
     potentially_touching_basins = gpd.read_parquet(
-        data_catalog.get_source("MERIT_Basins_cat").path,
+        data_catalog.get("merit_basins_catchments").path,
         bbox=buffered_bbox,
         filters=[
             ("COMID", "not in", subbasins.index.tolist()),
@@ -1962,6 +2505,7 @@ class GEBModel(
                 v: Any = kwargs.get(k, v.default)
                 if len(args) > i:
                     v: Any = args[i]
+
                 params[k] = v
 
         # call the method
