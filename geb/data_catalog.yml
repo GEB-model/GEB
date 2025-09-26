@@ -102,13 +102,6 @@ GTSM_surge:
     source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/sis-water-level-change-timeseries-cmip6?tab=overview
     source_version: 1.0
     unit: m+MSL
-COAST_HG:
-  path: COAST_RP/COAST-HG_RP100.nc
-  data_type: GeoDataset
-  meta:
-    category: extreme water levels
-    paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
-    paper_ref: Dullaart et al. (2023)
 COAST_RP:
   path: COAST_RP/COAST-RP.pkl
   data_type: Dataset
@@ -116,13 +109,6 @@ COAST_RP:
     category: extreme water levels
     paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
     paper_ref: Dullaart et al. (2023)
-COAST_RP_stations:
-  path: COAST_RP/pxyn_coastal_points.xyn
-  data_type: Dataset
-  meta:
-      category: station ids
-      paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
-      paper_ref: Dullaart et al. (2023)
 cwatm_soil_5min:
   crs: 4326
   data_type: RasterDataset
