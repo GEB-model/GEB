@@ -7,6 +7,7 @@ and read simulation results.
 """
 
 import json
+import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -164,6 +165,19 @@ class SFINCSRootModel:
             "power_law",
         ], "Method should be 'manning' or 'power_law'"
 
+        logger = logging.getLogger(__name__)
+
+        # Configure HydroMT logging to capture internal logs
+        for logger_name in ["hydromt", "hydromt_sfincs", "hydromt_sfincs.workflows"]:
+            hydromt_logger = logging.getLogger(logger_name)
+            hydromt_logger.setLevel(logging.INFO)
+            hydromt_logger.propagate = True
+
+        # Get the main HydroMT-SFINCS logger for level adjustments
+        hydromt_logger = logging.getLogger("hydromt_sfincs")
+
+        logger.info("Starting SFINCS model build...")
+
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+")
 
@@ -185,12 +199,23 @@ class SFINCSRootModel:
                 region, zmin=-21, reset_mask=True
             )  # TODO: Improve mask setup
 
-        # Setup river inflow points
+        # Temporarily set HydroMT logging to DEBUG to capture detailed internal logs
+        hydromt_logger.setLevel(logging.DEBUG)
+
         sf.setup_river_inflow(
             rivers=rivers,
             keep_rivers_geom=True,
             river_upa=0,
             river_len=0,
+        )
+
+        sf.setup_river_outflow(
+            rivers=rivers,
+            keep_rivers_geom=True,
+            river_upa=0,
+            river_len=0,
+            reverse_river_geom=True,
+            btype="waterlevel",
         )
 
         # find outflow points and save for later use
@@ -289,7 +314,9 @@ class SFINCSRootModel:
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
         # including mannings roughness.
         if nr_subgrid_pixels is not None:
-            print("Setting up SFINCS subgrid...")
+            logger.info(
+                f"Setting up SFINCS subgrid with {nr_subgrid_pixels} subgrid pixels..."
+            )
             sf.setup_subgrid(
                 datasets_dep=DEMs,
                 datasets_rgh=[
@@ -313,7 +340,9 @@ class SFINCSRootModel:
 
             sf.write_subgrid()
         else:
-            print("Setting up SFINCS without subgrid")
+            logger.info(
+                "Setting up SFINCS without subgrid - burning rivers into main grid..."
+            )
             # first set up the mannings roughness with the default method
             # (we already have the DEM set up)
             sf.setup_manning_roughness(
