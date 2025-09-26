@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -201,20 +202,24 @@ class SFINCSRootModel:
 
         # Temporarily set HydroMT logging to DEBUG to capture detailed internal logs
         hydromt_logger.setLevel(logging.DEBUG)
+        # in one plot plot the region boundary as well as the rivers and save to file
+        fig, ax = plt.subplots(figsize=(10, 10))
+        region.boundary.plot(ax=ax, color="black")
+        rivers.plot(ax=ax, color="blue")
+        plt.savefig(self.path / "gis" / "rivers.png")
 
         sf.setup_river_inflow(
-            rivers=rivers,
+            rivers=rivers.to_crs(sf.crs),
             keep_rivers_geom=True,
             river_upa=0,
             river_len=0,
         )
 
         sf.setup_river_outflow(
-            rivers=rivers,
+            rivers=rivers.to_crs(sf.crs),
             keep_rivers_geom=True,
             river_upa=0,
             river_len=0,
-            reverse_river_geom=True,
             btype="waterlevel",
         )
 
