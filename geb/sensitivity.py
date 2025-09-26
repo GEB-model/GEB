@@ -9,34 +9,34 @@ import string
 from copy import deepcopy
 from functools import wraps
 from subprocess import PIPE, Popen
+from typing import Any
 
-import numpy as np
 import yaml
 from SALib.sample import latin as latin_sample, sobol as sobol_sample
 
+from .workflows.methods import multi_set
 
-def sensitivity_parameters(parameters, distinct_samples, type="saltelli"):
-    parameters_list = list(parameters.keys())
-    bounds = [
-        [param_data["min"], param_data["max"]] for param_data in parameters.values()
-    ]
 
-    problem = {"num_vars": len(parameters), "names": parameters_list, "bounds": bounds}
+def init_pool(
+    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
+) -> None:
+    """Initialize the global variables for the process pool."""
+    global ctrl_c_entered
+    global default_sigint_handler
+    ctrl_c_entered = False
+    default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
 
-    # Set the nr of samples
-    distinct_samples = distinct_samples  # N results in N * (2D + 2) total samples
-    if type == "saltelli":
-        # Sample the values
-        param_values = sobol_sample.sample(problem, distinct_samples, seed=42)
-    elif type == "delta":
-        param_values = latin_sample.sample(problem, distinct_samples, seed=42)
-
-    return param_values
+    global lock
+    global current_gpu_use_count
+    global n_gpu_spots
+    n_gpu_spots = gpus * models_per_gpu
+    lock = manager_lock
+    current_gpu_use_count = manager_current_gpu_use_count
 
 
 def handle_ctrl_c(func):
     @wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
         global ctrl_c_entered
         if not ctrl_c_entered:
             signal.signal(signal.SIGINT, default_sigint_handler)  # the default
@@ -53,23 +53,30 @@ def handle_ctrl_c(func):
     return wrapper
 
 
-def pool_ctrl_c_handler(*args, **kwargs) -> None:
+def pool_ctrl_c_handler(*args: Any, **kwargs: Any) -> None:
     global ctrl_c_entered
     ctrl_c_entered = True
 
 
-def multi_set(dict_obj, value, *attrs) -> None:
-    d = dict_obj
-    for attr in attrs[:-1]:
-        d = d[attr]
-    if attrs[-1] not in d:
-        raise KeyError(f"Key {attrs} does not exist in config file.")
+def sensitivity_parameters(parameters, distinct_samples, type: str = "saltelli"):
+    parameters_list = list(parameters.keys())
+    bounds = [
+        [param_data["min"], param_data["max"]] for param_data in parameters.values()
+    ]
 
-    # Check if the value is a numpy scalar and convert it if necessary
-    if isinstance(value, np.generic):
-        value = value.item()
+    problem = {"num_vars": len(parameters), "names": parameters_list, "bounds": bounds}
 
-    d[attrs[-1]] = value
+    # Set the nr of samples
+    distinct_samples = distinct_samples  # N results in N * (2D + 2) total samples
+    if type == "saltelli":
+        # Sample the values
+        param_values = sobol_sample.sample(problem, distinct_samples, seed=42)
+    elif type == "delta":
+        param_values = latin_sample.sample(problem, distinct_samples, seed=42)
+    else:
+        raise ValueError(f"Unknown sensitivity analysis type: {type}")
+
+    return param_values
 
 
 @handle_ctrl_c
@@ -136,7 +143,7 @@ def run_model(args) -> None:
             with open(config_path, "w") as f:
                 yaml.dump(template, f)
 
-            def run_model_scenario(scenario):
+            def run_model_scenario(scenario: str) -> int:
                 # build the command to run the script, including the use of a GPU if specified
                 command = [
                     "geb",
@@ -202,23 +209,6 @@ def run_model(args) -> None:
                 with open(os.path.join(run_directory, "done.txt"), "w") as f:
                     f.write("done")
                 break
-
-
-def init_pool(
-    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
-) -> None:
-    # set global variable for each process in the pool:
-    global ctrl_c_entered
-    global default_sigint_handler
-    ctrl_c_entered = False
-    default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-
-    global lock
-    global current_gpu_use_count
-    global n_gpu_spots
-    n_gpu_spots = gpus * models_per_gpu
-    lock = manager_lock
-    current_gpu_use_count = manager_current_gpu_use_count
 
 
 def sensitivity_analysis(config, working_directory) -> None:

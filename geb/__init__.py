@@ -8,6 +8,7 @@ import platform
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding
@@ -37,6 +38,9 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
 
     Args:
         version: version of TBB to use, default is "2022.1.0".
+
+    Raises:
+        RuntimeError: If the platform is not supported.
 
     """
     version = "2022.1.0"
@@ -105,7 +109,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     _check_tbb_version_compatible()
 
     @njit(parallel=True)
-    def test_threading_layer():
+    def test_threading_layer() -> npt.NDArray[np.int32]:
         array = np.zeros(10, dtype=np.int32)
         """Test function to check if TBB is loaded correctly."""
         for i in prange(10):

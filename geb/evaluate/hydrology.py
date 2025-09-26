@@ -32,7 +32,9 @@ class Hydrology:
     def __init__(self) -> None:
         pass
 
-    def plot_discharge(self, run_name: str = "default", *args, **kwargs) -> None:
+    def plot_discharge(
+        self, run_name: str = "default", *args: Any, **kwargs: Any
+    ) -> None:
         """Plot the mean discharge from the GEB model as a spatial map.
 
         Creates a spatial visualization of mean discharge values over time from the GEB model
@@ -252,8 +254,12 @@ class Hydrology:
                 ID
             ].Q_obs_to_GEB_upstream_area_ratio
 
-            def create_validation_df():
-                """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station."""
+            def create_validation_df() -> pd.DataFrame:
+                """Create a validation dataframe with the Q_obs discharge observations and the GEB discharge simulation for the selected station.
+
+                Returns:
+                    DataFrame with the Q_obs discharge observations and the GEB discharge simulation for the selected station.
+                """
                 # select data closest to meerssen point
                 GEB_discharge_station = GEB_discharge.isel(
                     x=snapped_xy_coords[0], y=snapped_xy_coords[1]
@@ -296,8 +302,14 @@ class Hydrology:
             if validation_df.empty:
                 continue
 
-            def calculate_validation_metrics():
-                """Calculate the validation metrics for the current station."""
+            def calculate_validation_metrics() -> tuple[float, float, float]:
+                """Calculate the validation metrics for the current station.
+
+                Returns:
+                    KGE: Kling-Gupta Efficiency
+                    NSE: Nash-Sutcliffe Efficiency
+                    R: Pearson correlation coefficient
+                """
                 # calculate kupta coefficient
                 y_true = validation_df["Q_obs"].values
                 y_pred = validation_df["Q_sim"].values
@@ -648,8 +660,12 @@ class Hydrology:
 
         plot_validation_map()
 
-        def create_folium_map(evaluation_gdf):
-            """Create a Folium map with evaluation results and station markers."""
+        def create_folium_map(evaluation_gdf) -> folium.Map:
+            """Create a Folium map with evaluation results and station markers.
+
+            Returns:
+                Folium Map object with evaluation results.
+            """
             # Create a Folium map centered on the mean coordinates of the stations
             map_center = [
                 evaluation_gdf.geometry.y.mean(),
@@ -975,14 +991,16 @@ class Hydrology:
         run_name: str,
         include_spinup: bool,
         spinup_name: str,
-        *args,
-        export=True,
-        **kwargs,
+        *args: Any,
+        export: bool = True,
+        **kwargs: Any,
     ) -> None:
         """Create a water circle plot for the GEB model.
 
         Adapted from: https://github.com/mikhailsmilovic/flowplot
         Also see the paper: https://doi.org/10.1088/1748-9326/ad18de
+
+        This method installs a headless version of Chrome if not already available,
 
         Args:
             run_name: Name of the run to evaluate.
@@ -992,6 +1010,11 @@ class Hydrology:
             *args: ignored.
             **kwargs: ignored.
         """
+        import plotly.io as pio
+
+        # auto install chrome if not available
+        pio.get_chrome()
+
         folder = self.model.output_folder / "report" / run_name
 
         def read_csv_with_date_index(
@@ -1236,7 +1259,7 @@ class Hydrology:
         return water_circle
 
     def evaluate_hydrodynamics(
-        self, run_name: str = "default", *args, **kwargs
+        self, run_name: str = "default", *args: Any, **kwargs: Any
     ) -> None:
         """Evaluate hydrodynamic model performance against flood observations.
 
@@ -1253,19 +1276,19 @@ class Hydrology:
             FileNotFoundError: If the flood map folder does not exist in the output directory.
         """
 
-        def calculate_hit_rate(model, observations):
+        def calculate_hit_rate(model, observations) -> float:
             miss = np.sum(((model == 0) & (observations == 1)).values)
             hit = np.sum(((model == 1) & (observations == 1)).values)
             hit_rate = hit / (hit + miss)
             return float(hit_rate)
 
-        def calculate_false_alarm_ratio(model, observations):
+        def calculate_false_alarm_ratio(model, observations) -> float:
             false_alarm = np.sum(((model == 1) & (observations == 0)).values)
             hit = np.sum(((model == 1) & (observations == 1)).values)
             false_alarm_ratio = false_alarm / (false_alarm + hit)
             return float(false_alarm_ratio)
 
-        def calculate_critical_success_index(model, observations):
+        def calculate_critical_success_index(model, observations) -> float:
             hit = np.sum(((model == 1) & (observations == 1)).values)
             false_alarm = np.sum(((model == 1) & (observations == 0)).values)
             miss = np.sum(((model == 0) & (observations == 1)).values)
@@ -1273,7 +1296,7 @@ class Hydrology:
             return float(csi)
 
         # Main function for the peformance metrics
-        def calculate_performance_metrics(observation, flood_map_path):
+        def calculate_performance_metrics(observation, flood_map_path) -> None:
             # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)
             obs = rxr.open_rasterio(observation)
@@ -1453,8 +1476,6 @@ class Hydrology:
                     f.write(f"Critical Success Index (CSI) (C): {csi}\n")
                     f.write(f"Number of flooded pixels: {flooded_pixels}\n")
                     f.write(f"Flooded area (km2): {flooded_area_km2}")
-
-                return performance_numbers
 
         self.config = self.model.config["hazards"]
 

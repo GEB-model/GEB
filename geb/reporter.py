@@ -1,3 +1,5 @@
+"""This module contains the Reporter class, which is used to report data to disk."""
+
 import datetime
 import re
 import shutil
@@ -10,6 +12,7 @@ import pandas as pd
 import zarr
 from honeybees.library.raster import coord_to_pixel
 
+from geb.module import Module
 from geb.store import DynamicArray
 from geb.workflows.methods import multi_level_merge
 
@@ -110,6 +113,9 @@ def create_time_array(
 
     Returns:
         time: The time array.
+
+    Raises:
+        ValueError: If the frequency is not recognized.
     """
     if "frequency" not in conf:
         frequency = {"every": "day"}
@@ -142,13 +148,28 @@ def create_time_array(
 
 
 class Reporter:
-    """This class is used to report data to disk.
+    """This class is used to report data to disk."""
 
-    Args:
-        model: The GEB model.
-    """
+    def __init__(self, model: "GEBModel", clean: bool) -> None:
+        """The constructor for the Reporter class.
 
-    def __init__(self, model, clean) -> None:
+        Loops over the reporter configuration and creates the necessary files and data structures,
+        that are then used while the model is run to add data to.
+
+        For full documentation of the report configuration, see the documentation.
+
+        There are also several pre-defined report configurations that can be activated by adding
+        special keys to the report configuration. These are:
+        - _discharge_stations: if set to True, discharge at all discharge stations is reported.
+        - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
+
+        Args:
+            model: The GEB model instance.
+            clean: If True, the report folder is cleaned at the start of the model run.
+
+        Raises:
+            ValueError: If the variable type is not recognized.
+        """
         self.model = model
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
@@ -235,6 +256,13 @@ class Reporter:
             config: The configuration for the variable.
             module_name: The name of the module to which the variable belongs.
             name: The name of the variable.
+
+        Returns:
+            zarr_store: The zarr store for the variable, or an empty list if the
+                variable is a scalar or has an aggregation function.
+
+        Raises:
+            ValueError: If the variable type is not recognized.
         """
         if config["type"] == "scalar":
             assert "function" not in config or config["function"] is None, (
@@ -415,6 +443,11 @@ class Reporter:
             local_variables: A dictionary of local variables from the function
                 that calls this one.
             config: Configuration for saving the file. Contains options such a file format, and whether to export the data or save the data in the model.
+
+        Raises:
+            ValueError: If the frequency is not recognized.
+            KeyError: If the variable is not found in the local variables or module attributes.
+            AttributeError: If the attribute is not found in the module.
         """
         # here we return None if the value is not to be reported on this timestep
         if "frequency" in config:
@@ -494,6 +527,11 @@ class Reporter:
             name: Name of the value to be exported.
             value: The array itself.
             config: Configuration for saving the file. Contains options such a file format, and whether to export the array in this timestep at all.
+
+        Raises:
+            ValueError: If the function is not recognized,
+                or if the variable type is not recognized.
+            IndexError: If the coordinate is in sample_lon_lat is outside the model domain.
         """
         if config["type"] in ("grid", "HRU"):
             if config["function"] is None:
@@ -656,7 +694,6 @@ class Reporter:
             self.variables[module_name][name] = []
 
         self.variables[module_name][name].append((self.model.current_time, value))
-        return None
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
@@ -678,7 +715,9 @@ class Reporter:
 
                     df.to_csv(folder / (name + ".csv"))
 
-    def report(self, module, local_variables, module_name) -> None:
+    def report(
+        self, module: Module, local_variables: dict[str, Any], module_name: str
+    ) -> None:
         """This method is in every step function to report data to disk.
 
         Args:

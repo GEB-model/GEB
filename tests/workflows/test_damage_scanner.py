@@ -1,3 +1,5 @@
+"""Tests for damage scanner workflow."""
+
 import math
 
 import geopandas as gpd
@@ -13,7 +15,7 @@ from geb.workflows.damage_scanner import VectorScanner
 
 
 @fixture
-def flood_raster():
+def flood_raster() -> xr.DataArray:
     x = np.zeros((10, 10), dtype=np.float32)
     x[:5, :5] = 0.5
     x[:5, 5:] = 3
@@ -33,7 +35,7 @@ def flood_raster():
 
 
 @fixture
-def buildings():
+def buildings() -> gpd.GeoDataFrame:
     data = {
         "object_type": [
             "residential",
@@ -64,7 +66,7 @@ def buildings():
 
 
 @fixture
-def vulnerability_curves():
+def vulnerability_curves() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "residential": [0.0, 0.2, 0.3],
@@ -75,7 +77,12 @@ def vulnerability_curves():
 
 
 @pytest.mark.parametrize("clip", [False, True])
-def test_vector_scanner(flood_raster, buildings, vulnerability_curves, clip) -> None:
+def test_vector_scanner(
+    flood_raster: xr.DataArray,
+    buildings: gpd.GeoDataFrame,
+    vulnerability_curves: pd.DataFrame,
+    clip: bool,
+) -> None:
     if clip:
         flood_raster = flood_raster.rio.clip(
             [Polygon([(1, 1), (1, 9), (9, 9), (9, 1)])]
@@ -117,7 +124,9 @@ def test_vector_scanner(flood_raster, buildings, vulnerability_curves, clip) -> 
 
 
 def test_vector_scanner_missing_data(
-    flood_raster, buildings, vulnerability_curves
+    flood_raster: xr.DataArray,
+    buildings: gpd.GeoDataFrame,
+    vulnerability_curves: pd.DataFrame,
 ) -> None:
     # Test missing 'maximum_damage' column
     buildings_missing_damage = buildings.drop(columns=["maximum_damage"])

@@ -1,6 +1,5 @@
 import json
 import math
-import os
 from datetime import datetime
 
 import geopandas as gpd
@@ -64,6 +63,10 @@ class Agents:
             monthly time step, but is assumed to be constant over the year.
 
             The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
+
+        Raises:
+            ValueError: If required data is missing in the data sources.
+
         """
         start_model_time = self.start_date.year
         end_model_time = self.end_date.year
@@ -350,14 +353,24 @@ class Agents:
         cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         oecd_idd = oecd_idd[cols_to_keep]
         # only done to check countries in region, could probably be done more efficiently
-        countries = self.data_catalog.get_geodataframe(
-            "GADM_level0",
-            geom=self.region,
+        countries = self.new_data_catalog.get("GADM_level0").read(
+            geom=self.region.union_all(),
         )
+        # setup donor countries for country missing in oecd data
+        donor_countries = setup_donor_countries(self, oecd_idd["REF_AREA"])
+
         for country in countries["GID_0"]:
             income_distribution_parameters[country] = {}
             income_distributions[country] = {}
-            oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
+            if country not in oecd_idd["REF_AREA"].values:
+                donor = donor_countries[country]
+                self.logger.info(
+                    f"Missing income distribution data for {country}, using donor country {donor}"
+                )
+                oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == donor]
+            else:
+                oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
+
             # take the most recent year
             most_recent_year = oecd_widd_country[
                 oecd_widd_country["TIME_PERIOD"]
@@ -1018,6 +1031,11 @@ class Agents:
             data_source: The source of the farm size data. Default is 'lowder', which uses the Lowder et al. (2016) dataset.
             size_class_boundaries: The boundaries for the size classes of farms. For the Lowder et al. (2016) dataset, this must be None
                 because the boundaries are defined in the dataset itself.
+
+        Raises:
+            ValueError: If the data_source is 'lowder' and size_class_boundaries is not None.
+            ValueError: If the data_source is not 'lowder' and size_class_boundaries is None.
+            ValueError: If required data is missing in the data sources.
         """
         if data_source == "lowder":
             assert size_class_boundaries is None, (
@@ -2510,6 +2528,10 @@ class Agents:
             feature_types: The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
             source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
             use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
+
+        Raises:
+            ValueError: If an unknown source is provided.
+            ValueError: When an unknown feature type is provided.
         """
         if isinstance(feature_types, str):
             feature_types = [feature_types]

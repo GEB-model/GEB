@@ -21,13 +21,13 @@ from .landcover import (
 
 
 def calculate_soil_water_potential_MPa(
-    soil_moisture,  # [m]
-    soil_moisture_wilting_point,  # [m]
-    soil_moisture_field_capacity,  # [m]
-    soil_tickness,  # [m]
-    wilting_point=-1500,  # kPa
-    field_capacity=-33,  # kPa
-):
+    soil_moisture: npt.NDArray[np.float32],  # [m]
+    soil_moisture_wilting_point: npt.NDArray[np.float32],  # [m]
+    soil_moisture_field_capacity: npt.NDArray[np.float32],  # [m]
+    soil_tickness: npt.NDArray[np.float32],  # [m]
+    wilting_point: float | int = -1500,  # kPa
+    field_capacity: float | int = -33,  # kPa
+) -> npt.NDArray[np.float32]:
     # https://doi.org/10.1016/B978-0-12-374460-9.00007-X (eq. 7.16)
     soil_moisture_fraction = soil_moisture / soil_tickness
     # assert (soil_moisture_fraction >= 0).all() and (soil_moisture_fraction <= 1).all()
@@ -93,35 +93,42 @@ def calculate_photosynthetic_photon_flux_density(shortwave_radiation, xi=0.5):
     inline="always",
 )
 def get_soil_moisture_at_pressure(
-    capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
-):
+    capillary_suction: np.float32,
+    bubbling_pressure_cm: npt.NDArray[np.float32],
+    thetas: npt.NDArray[np.float32],
+    thetar: npt.NDArray[np.float32],
+    lambda_: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Calculates the soil moisture content at a given soil water potential (capillary suction) using the van Genuchten model.
 
     Args:
-        capillary_suction : np.ndarray
-            The soil water potential (capillary suction) (m)
-        bubbling_pressure_cm : np.ndarray
-            The bubbling pressure (cm)
-        thetas : np.ndarray
-            The saturated soil moisture content (m³/m³)
-        thetar : np.ndarray
-            The residual soil moisture content (m³/m³)
-        lambda_ : np.ndarray
-            The van Genuchten parameter lambda (1/m)
+        capillary_suction: The soil water potential (capillary suction) (m)
+        bubbling_pressure_cm: The bubbling pressure (cm)
+        thetas: The saturated soil moisture content (m³/m³)
+        thetar: The residual soil moisture content (m³/m³)
+        lambda_: The van Genuchten parameter lambda (1/m)
+
+    Returns:
+        The soil moisture content at the given soil water potential (m³/m³)
     """
-    alpha = np.float32(1) / bubbling_pressure_cm
-    n = lambda_ + np.float32(1)
-    m = np.float32(1) - np.float32(1) / n
-    phi = -capillary_suction
+    alpha: npt.NDArray[np.float32] = np.float32(1) / bubbling_pressure_cm
+    n: npt.NDArray[np.float32] = lambda_ + np.float32(1)
+    m: npt.NDArray[np.float32] = np.float32(1) - np.float32(1) / n
+    phi: np.float32 = -capillary_suction
 
-    water_retention_curve = (np.float32(1) / (np.float32(1) + (alpha * phi) ** n)) ** m
+    water_retention_curve: npt.NDArray[np.float32] = (
+        np.float32(1) / (np.float32(1) + (alpha * phi) ** n)
+    ) ** m
 
-    theta = water_retention_curve * (thetas - thetar) + thetar
-    return theta
+    return water_retention_curve * (thetas - thetar) + thetar
 
 
 @njit(cache=True, inline="always")
-def get_critical_soil_moisture_content(p, wfc, wwp):
+def get_critical_soil_moisture_content(
+    p: npt.NDArray[np.float32],
+    wfc: npt.NDArray[np.float32],
+    wwp: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Calculate the critical soil moisture content.
 
     The critical soil moisture content is defined as the quantity of stored soil moisture below
@@ -133,6 +140,15 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
     extract water from the soil at a lower soil moisture content. Thus when p is 1 the critical
     soil moisture content is equal to the wilting point, and when p is 0 the critical soil moisture
     content is equal to the field capacity.
+
+    Args:
+        p: The fraction of easily available soil water, between 0 and 1.
+        wfc: The field capacity in m.
+        wwp: The wilting point in m.
+
+    Returns:
+        The critical soil moisture content in m.
+
     """
     return (np.float32(1) - p) * (wfc - wwp) + wwp
 
@@ -754,6 +770,56 @@ def get_infiltration_capacity(
     return saturated_hydraulic_conductivity[0]
 
 
+@njit(cache=True, inline="always")
+def get_mean_unsaturated_hydraulic_conductivity(
+    unsaturated_hydraulic_conductivity_1: np.float32,
+    unsaturated_hydraulic_conductivity_2: np.float32,
+) -> np.float32:
+    """Calculate the mean unsaturated hydraulic conductivity between two soil layers using the geometric mean.
+
+    Args:
+        unsaturated_hydraulic_conductivity_1: Unsaturated hydraulic conductivity of the first soil layer.
+        unsaturated_hydraulic_conductivity_2: Unsaturated hydraulic conductivity of the second soil layer.
+
+    Returns:
+        The mean unsaturated hydraulic conductivity between the two soil layers.
+    """
+    # harmonic mean
+    # mean_unsaturated_hydraulic_conductivity = (
+    #     2
+    #     * unsaturated_hydraulic_conductivity_1
+    #     * unsaturated_hydraulic_conductivity_2
+    #     / (unsaturated_hydraulic_conductivity_1 + unsaturated_hydraulic_conductivity_2)
+    # )
+    # geometric mean
+    mean_unsaturated_hydraulic_conductivity = np.sqrt(
+        unsaturated_hydraulic_conductivity_1 * unsaturated_hydraulic_conductivity_2
+    )
+    # ensure that there is some minimum flow is possible
+    mean_unsaturated_hydraulic_conductivity = max(
+        mean_unsaturated_hydraulic_conductivity, np.float32(1e-9)
+    )
+    return mean_unsaturated_hydraulic_conductivity
+
+
+@njit(cache=True, inline="always")
+def get_flux(mean_unsaturated_hydraulic_conductivity, psi_lower, psi_upper, delta_z):
+    """Calculate the flux between two soil layers using Darcy's law.
+
+    Args:
+        mean_unsaturated_hydraulic_conductivity: Mean unsaturated hydraulic conductivity between the two soil layers.
+        psi_lower: Soil water potential of the lower soil layer.
+        psi_upper: Soil water potential of the upper soil layer.
+        delta_z: Distance between the two soil layers.
+
+    Returns:
+        The flux between the two soil layers.
+    """
+    return -mean_unsaturated_hydraulic_conductivity * (
+        (psi_lower - psi_upper) / delta_z - np.float32(1)
+    )
+
+
 # Do NOT use fastmath here. This leads to unexpected behaviour with NaNs
 @njit(cache=True, parallel=True, fastmath=False)
 def vertical_water_transport(
@@ -867,17 +933,22 @@ def vertical_water_transport(
         for layer in range(
             N_SOIL_LAYERS - 2, -1, -1
         ):  # From top (0) to bottom (N_SOIL_LAYERS - 1)
-            # Compute the geometric mean of the conductivities
-            unsaturated_hydraulic_conductivity_avg = np.sqrt(
-                unsaturated_hydraulic_conductivity[layer + 1, i]
-                * unsaturated_hydraulic_conductivity[layer, i],
+            # Compute the mean of the conductivities
+            mean_unsaturated_hydraulic_conductivity: np.float32 = (
+                get_mean_unsaturated_hydraulic_conductivity(
+                    unsaturated_hydraulic_conductivity[layer + 1, i],
+                    unsaturated_hydraulic_conductivity[layer, i],
+                )
             )
 
             # Compute flux using Darcy's law. The -1 accounts for gravity.
             # Positive flux is downwards; see minus sign in the equation, which negates
             # the -1 of gravity and other terms.
-            flux = -unsaturated_hydraulic_conductivity_avg * (
-                (psi[layer + 1, i] - psi[layer, i]) / delta_z[layer, i] - np.float32(1)
+            flux: np.float32 = get_flux(
+                mean_unsaturated_hydraulic_conductivity,
+                psi[layer + 1, i],
+                psi[layer, i],
+                delta_z[layer, i],
             )
 
             # Determine the positive flux and source/sink layers without if statements
@@ -1069,7 +1140,11 @@ def get_bubbling_pressure(
     return bubbling_pressure
 
 
-def get_pore_size_index_brakensiek(sand, thetas, clay):
+def get_pore_size_index_brakensiek(
+    sand: npt.NDArray[np.float32],
+    thetas: npt.NDArray[np.float32],
+    clay: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Determine Brooks-Corey pore size distribution index [-].
 
     Thetas is equal to porosity (Φ) in this case.
@@ -1604,8 +1679,25 @@ class Soil(Module):
         return topsoil_volumetric_content
 
     def calculate_net_radiation(
-        self, shortwave_radiation_downwelling, longwave_radiation_net, albedo
-    ):
+        self,
+        shortwave_radiation_downwelling: npt.NDArray[np.float32],
+        longwave_radiation_net: npt.NDArray[np.float32],
+        albedo: npt.NDArray[np.float32] | float | np.float32,
+    ) -> npt.NDArray[np.float32]:
+        """Calculate net radiation in W/m2.
+
+        Obtained by subtracting the reflected shortwave radiation
+        (calculated using albedo) from the downwelling shortwave radiation,
+        and adding the net longwave radiation.
+
+        Args:
+            shortwave_radiation_downwelling: Downwelling shortwave radiation [W/m2].
+            longwave_radiation_net: Net longwave radiation [W/m2].
+            albedo: Albedo [-].
+
+        Returns:
+            Net radiation [W/m2].
+        """
         net_radiation = (
             shortwave_radiation_downwelling * (1 - albedo) + longwave_radiation_net
         )  # W/m2
@@ -1733,12 +1825,28 @@ class Soil(Module):
         potential_evapotranspiration,
         natural_available_water_infiltration,
         actual_irrigation_consumption,
-    ):
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
         """Dynamic part of the soil module.
 
         For each of the land cover classes the vertical water transport is simulated
         Distribution of water holding capiacity in 3 soil layers based on saturation excess overland flow
-        Dependend on soil depth, soil hydraulic parameters
+        Dependend on soil depth, soil hydraulic parameters.
+
+        Returns:
+            interflow: lateral flow from the soil to the stream [m/day]
+            runoff: surface runoff [m/day]
+            groundwater_recharge: recharge to the groundwater [m/day]
+            open_water_evaporation: open water evaporation.
+                In this module, added are evaporation from padies, and from sealed areas (recent rainfall) [m/day]
+            transpiration: actual transpiration [m/day]
+            actual_bare_soil_evaporation: actual bare soil evaporation [m/day]
         """
         timer = TimingModule("Soil")
 
@@ -1886,7 +1994,7 @@ class Soil(Module):
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
-        timer.new_split("Vertical transport")
+        timer.finish_split("Vertical transport")
 
         if __debug__:
             assert balance_check(
@@ -1926,7 +2034,7 @@ class Soil(Module):
         assert not np.isnan(runoff).any()
         assert runoff.dtype == np.float32
 
-        timer.new_split("Evapotranspiration")
+        timer.finish_split("Evapotranspiration")
 
         mask_soil_evaporation = self.HRU.var.land_use_type < SEALED
         mask_transpiration = self.HRU.var.land_use_type < SEALED
@@ -2135,7 +2243,7 @@ class Soil(Module):
                     },
                 )
 
-        timer.new_split("Finalizing")
+        timer.finish_split("Finalizing")
         if self.model.timing:
             print(timer)
 
@@ -2204,7 +2312,7 @@ class Soil(Module):
                 HRU_data=groundwater_recharge_forest_plantFATE_HRU, fn="weightednanmean"
             )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return (
             interflow,

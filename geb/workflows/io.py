@@ -1,4 +1,7 @@
+"""I/O related functions and classes for the GEB project."""
+
 import asyncio
+import datetime
 import os
 import shutil
 import tempfile
@@ -6,19 +9,22 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 import cftime
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import pyproj
-import rasterio.crs
+import rasterio
 import requests
 import xarray as xr
 import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from tqdm import tqdm
+from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.blosc import BloscShuffle
 
@@ -26,10 +32,29 @@ all_async_readers: list = []
 
 
 def load_table(fp: Path | str) -> pd.DataFrame:
+    """Load a parquet file as a pandas DataFrame.
+
+    Args:
+        fp: The path to the parquet file.
+
+    Returns:
+        The pandas DataFrame.
+    """
     return pd.read_parquet(fp, engine="pyarrow")
 
 
 def load_array(fp: Path) -> np.ndarray:
+    """Load a numpy array from a .npz or .zarr file.
+
+    Args:
+        fp: The path to the .npz or .zarr file.
+
+    Returns:
+        The numpy array.
+
+    Raises:
+        ValueError: If the file format is not supported.
+    """
     if fp.suffix == ".npz":
         return np.load(fp)["data"]
     elif fp.suffix == ".zarr":
@@ -39,8 +64,12 @@ def load_array(fp: Path) -> np.ndarray:
 
 
 def calculate_scaling(
-    min_value: float, max_value: float, precision: float, offset=0.0
-) -> tuple[float, str]:
+    da: xr.DataArray,
+    min_value: float,
+    max_value: float,
+    precision: float,
+    offset: float | int = 0.0,
+) -> tuple[float, str, str]:
     """This function calculates the scaling factor and output dtype for a fixed scale and offset codec.
 
     The expected minimum and maximum values along with the precision are used to determine the number
@@ -54,6 +83,7 @@ def calculate_scaling(
     become slighly imprecise.
 
     Args:
+        da: The input xarray DataArray to be encoded.
         min_value: The minimum expected value of the original data. Outside this range
             the data may start to behave unexpectedly.
         max_value: The maximum expected value of the original data. Outside this range
@@ -65,6 +95,10 @@ def calculate_scaling(
     Returns:
         scaling_factor: The scaling factor to apply to the original data.
         out_dtype: The output dtype to use for the fixed scale and offset codec.
+
+    Raises:
+        ValueError: If more than 64 bits are required for the given precision and range
+            and thus the data cannot be represented with a fixed scale and offset codec.
     """
     assert min_value < max_value, "min_value must be less than max_value"
     assert precision > 0, "precision must be greater than 0"
@@ -99,18 +133,43 @@ def calculate_scaling(
     else:
         raise ValueError("Too many bits required for precision and range")
 
-    return scaling_factor, out_dtype
+    in_dtype: str = da.dtype.name
+
+    return scaling_factor, in_dtype, out_dtype
 
 
 def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
+    """Open a zarr file as an xarray DataArray.
+
+    If the data is a boolean type and does not have a _FillValue attribute,
+    a _FillValue attribute with value None will be added.
+
+    The _CRS attribute will be converted to a pyproj CRS object following
+    the conventions used by rioxarray. The original _CRS attribute will be removed.
+
+    Args:
+        zarr_folder: The path to the zarr folder.
+
+    Raises:
+        ValueError: If the zarr file contains multiple data variables.
+        FileNotFoundError: If the zarr folder does not exist.
+
+    Returns:
+        The xarray DataArray.
+    """
     # it is rather odd, but in some cases using mask_and_scale=False is necessary
     # or dtypes start changing, seemingly randomly
     # consolidated metadata is off-spec for zarr, therefore we set it to False
-    da = xr.open_dataset(
+    path: Path = Path(zarr_folder)
+    if not path.exists():
+        raise FileNotFoundError(f"Zarr folder {zarr_folder} does not exist")
+    ds: xr.Dataset = xr.open_dataset(
         zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
     )
-    assert len(da.data_vars) == 1, "Only one data variable is supported"
-    da = da[list(da.data_vars)[0]]
+    if len(ds.data_vars) > 1:
+        raise ValueError("Only one data variable is supported")
+
+    da: xr.DataArray = ds[list(ds.data_vars)[0]]
 
     if da.dtype == bool and "_FillValue" not in da.attrs:
         da.attrs["_FillValue"] = None
@@ -123,6 +182,17 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
 
 
 def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
+    """Convert a CRS object (pyproj CRS, rasterio CRS or EPSG code) to a WKT string.
+
+    Args:
+        crs_obj: The CRS object to convert.
+
+    Raises:
+        TypeError: If the CRS object is not a pyproj CRS, rasterio CRS or EPSG code.
+
+    Returns:
+        The WKT string representation of the CRS.
+    """
     if isinstance(crs_obj, int):  # EPSG code
         return CRS.from_epsg(crs_obj).to_wkt()
     elif isinstance(crs_obj, CRS):  # Pyproj CRS
@@ -133,7 +203,18 @@ def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
         raise TypeError("Unsupported CRS type")
 
 
-def check_attrs(da1: dict[str, Any], da2: dict[str, Any]) -> bool:
+def check_attrs(da1: xr.DataArray, da2: xr.DataArray) -> bool:
+    """Check if the attributes of two xarray DataArrays are equal.
+
+    The _CRS and grid_mapping attributes are ignored in the comparison.
+
+    Args:
+        da1: The first xarray DataArray.
+        da2: The second xarray DataArray.
+
+    Returns:
+        True if the attributes are equal, False otherwise.
+    """
     if "_CRS" in da1.attrs:
         del da1.attrs["_CRS"]
     if "_CRS" in da2.attrs:
@@ -164,12 +245,23 @@ def check_buffer_size(
     chunks_or_shards: dict[str, int],
     max_buffer_size: int = 2147483647,
 ) -> None:
+    """Check if the buffer size for the given chunks or shards is within the maximum allowed size.
+
+    Args:
+        da: The xarray DataArray to check.
+        chunks_or_shards: A dictionary with the chunk or shard sizes for each dimension.
+        max_buffer_size: The maximum allowed buffer size in bytes. Default is 2GB (2147483647 bytes).
+
+    Raises:
+        ValueError: If the buffer size exceeds the maximum allowed size.
+    """
     buffer_size = (
         np.prod([size for size in chunks_or_shards.values()]) * da.dtype.itemsize
     )
-    assert buffer_size <= max_buffer_size, (
-        f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
-    )
+    if buffer_size >= max_buffer_size:
+        raise ValueError(
+            f"Buffer size exceeds maximum size, current shards or chunks are {chunks_or_shards}"
+        )
 
 
 def to_zarr(
@@ -182,7 +274,7 @@ def to_zarr(
     time_chunks_per_shard: int | None = 30,
     byteshuffle: bool = True,
     filters: list = [],
-    compressor=None,
+    compressor: None | BytesBytesCodec = None,
     progress: bool = True,
 ) -> xr.DataArray:
     """Save an xarray DataArray to a zarr file.
@@ -348,6 +440,12 @@ def get_window(
 
     Returns:
         A dictionary with slices for the x and y coordinates, e.g. {"x": slice(start, stop), "y": slice(start, stop)}.
+
+    Raises:
+        ValueError: If the bounds are invalid or out of range,
+            or if the buffer is invalid,
+            or if x or y are empty,
+            or the resulting slices are invalid.
     """
     if not isinstance(buffer, int):
         raise ValueError("buffer must be an integer")
@@ -455,7 +553,13 @@ class AsyncGriddedForcingReader:
     multiple timesteps sequentially.
     """
 
-    def __init__(self, filepath, variable_name) -> None:
+    def __init__(self, filepath: Path, variable_name: str) -> None:
+        """Initializes the AsyncGriddedForcingReader.
+
+        Args:
+            filepath: The path to the zarr file.
+            variable_name: The name of the variable to read from the zarr file.
+        """
         self.variable_name = variable_name
         self.filepath = filepath
 
@@ -485,20 +589,55 @@ class AsyncGriddedForcingReader:
         self.loop = asyncio.new_event_loop()
         self.executor = ThreadPoolExecutor(max_workers=1)
 
-    def load(self, index):
+    def load(self, index: int) -> npt.NDArray[Any]:
+        """Load the data for the given index from the zarr file.
+
+        Args:
+            index: The index of the timestep to load in the zarr file, along the time dimension.
+
+        Returns:
+            The data for the given index from the zarr file.
+        """
         data = self.var[index, :]
         return data
 
-    async def load_await(self, index):
+    async def load_await(self, index: int) -> npt.NDArray[Any]:
+        """Load the data for the given index from the zarr file asynchronously.
+
+        Args:
+            index: The index of the timestep to read in the zarr file, along the time dimension.
+
+        Returns:
+            An awaitable that resolves to the data for the given index from the zarr file.
+        """
         return await self.loop.run_in_executor(self.executor, lambda: self.load(index))
 
-    async def preload_next(self, index):
+    async def preload_next(self, index: int) -> None | npt.NDArray[Any]:
+        """Preload the next timestep asynchronously.
+
+        Args:
+            index: The index of the timestep to read in the zarr file, along the time dimension.
+
+        Returns:
+            An awaitable that resolves to the data for the next index, or None if there is no next index.
+        """
         # Preload the next timestep asynchronously
         if index + 1 < self.time_size:
             return await self.load_await(index + 1)
         return None
 
-    async def read_timestep_async(self, index):
+    async def read_timestep_async(self, index: int) -> npt.NDArray[Any]:
+        """Read the data for the given index from the zarr file asynchronously.
+
+        Also preloads the next timestep asynchronously so that it is ready when needed.
+
+        Args:
+            index: The index of the timestep to read in the zarr file, along the time dimension.
+
+        Returns:
+            The data for the given index from the zarr file.
+
+        """
         assert index < self.time_size, "Index out of bounds."
         assert index >= 0, "Index out of bounds."
         # Check if the requested data is already preloaded, if so, just return that data
@@ -517,11 +656,20 @@ class AsyncGriddedForcingReader:
         self.current_data = data
         return data
 
-    def get_index(self, date):
-        # convert datetime object to dtype of time coordinate. There is a very high probability
-        # that the dataset is the same as the previous one or the next one in line,
-        # so we can just check the current index and the next one. Only if those do not match
-        # we have to search for the correct index.
+    def get_index(self, date: datetime.datetime) -> int:
+        """Convert datetime object to dtype of time coordinate.
+
+        There is a very high probability that the dataset is the same as
+        the previous one or the next one in line, so we can just check the current
+        index and the next one. Only if those do not match we have to search for the correct index.
+
+        Args:
+            date: The date to convert.
+
+        Returns:
+            The index of the given date in the zarr file.
+
+        """
         numpy_date: np.datetime64 = np.datetime64(date, "ns")
         if self.datetime_index[self.current_index] == numpy_date:
             return self.current_index
@@ -534,7 +682,21 @@ class AsyncGriddedForcingReader:
             )
             return indices.argmax()
 
-    def read_timestep(self, date, asynchronous=False):
+    def read_timestep(
+        self, date: datetime.datetime, asynchronous: bool = False
+    ) -> npt.NDArray[Any]:
+        """Read the data for the given date from the zarr file.
+
+        Args:
+            date: The date of the timestep to read.
+            asynchronous: If True, the data is read asynchronously. Defaults to False.
+
+        Note:
+            The asynchronous mode is currently broken.
+
+        Returns:
+            The data for the given date from the zarr file.
+        """
         if asynchronous:
             index = self.get_index(date)
             fn = self.read_timestep_async(index)
@@ -546,6 +708,7 @@ class AsyncGriddedForcingReader:
             return data
 
     def close(self) -> None:
+        """Close the reader and clean up resources."""
         # cancel the preloading of the next timestep
         if self.preloaded_data_future is not None:
             self.preloaded_data_future.cancel()
@@ -563,16 +726,21 @@ class WorkingDirectory:
             # Code executed here will have the new directory as the CWD
     """
 
-    def __init__(self, new_path) -> None:
+    def __init__(self, new_path: Path) -> None:
         """Initializes the context manager with the path to change to.
 
         Args:
-            new_path (str): The path to the directory to change into.
+            new_path: The path to the directory to change into.
         """
         self._new_path = new_path
         self._original_path = None  # To store the original path
 
-    def __enter__(self):
+    def __enter__(self) -> "WorkingDirectory":
+        """Enters the context, changing the current working directory.
+
+        Returns:
+            The context manager instance.
+        """
         # Store the current working directory
         self._original_path = os.getcwd()
 
@@ -582,18 +750,33 @@ class WorkingDirectory:
         # Return self (optional, but common)
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Exits the context, reverting to the original working directory.
+
+        Args:
+            exc_type: The type of exception raised (if any).
+            exc_val: The exception instance raised (if any).
+            exc_tb: The traceback of the exception raised (if any).
+        """
         # Change back to the original directory
         os.chdir(self._original_path)
 
 
 def fetch_and_save(
     url: str,
-    file_path: str | Path,
+    file_path: Path,
     overwrite: bool = False,
     max_retries: int = 3,
     delay: float | int = 5,
     chunk_size: int = 16384,
+    session: requests.Session | None = None,
+    params: None | dict[str, Any] = None,
+    timeout: float | int = 30,
 ) -> bool:
     """Fetches data from a URL and saves it to a temporary file, with a retry mechanism.
 
@@ -607,12 +790,21 @@ def fetch_and_save(
         max_retries: maximum number of retries in case of failure. Default is 3.
         delay: delay between retries in seconds. Default is 5 seconds.
         chunk_size: size of the chunks to read from the response.
+        session: Optional requests.Session object to use for the download. If None, a new session will be created.
+        params: Optional dictionary of query parameters to include in the request.
+        timeout: Timeout for the request in seconds. Default is 30 seconds.
 
     Returns:
         Returns True if the file was downloaded successfully and saved to the specified path.
         Raises an exception if all attempts to download the file fail.
 
+    Raises:
+        RuntimeError: If all attempts to download the file fail.
+
     """
+    if not session:
+        session = requests.Session()
+
     if not overwrite and file_path.exists():
         return True
 
@@ -623,7 +815,7 @@ def fetch_and_save(
         try:
             print(f"Downloading {url} to {file_path}")
             # Attempt to make the request
-            response = requests.get(url, stream=True)
+            response = session.get(url, stream=True, params=params, timeout=timeout)
             response.raise_for_status()  # Raises HTTPError for bad status codes
 
             # Create a temporary file
@@ -658,4 +850,7 @@ def fetch_and_save(
             time.sleep(delay)
 
     # If all attempts fail, raise an exception
-    raise Exception("All attempts to download the file have failed.")
+    raise RuntimeError(
+        f"Failed to download '{url}' to '{file_path}' after {max_retries} attempts. "
+        "Please check the URL, network connectivity, and destination permissions."
+    )

@@ -1,8 +1,11 @@
+"""Tests for plantFATE model functions."""
+
 import math
 
-from .modules.plantFATE import Model
+import pytest
 
 
+@pytest.mark.skip(reason="plantFATE model not included in package.")
 def test_soil_water_potential() -> None:
     model = Model("tests/p_daily.ini")
     wilting_point = -1500  # kPa
@@ -57,6 +60,7 @@ def test_soil_water_potential() -> None:
     # plt.savefig('swp.png')
 
 
+@pytest.mark.skip(reason="plantFATE model not included in package.")
 def test_vapour_pressure_deficit() -> None:
     model = Model("tests/p_daily.ini")
     assert (
@@ -67,6 +71,7 @@ def test_vapour_pressure_deficit() -> None:
     )
 
 
+@pytest.mark.skip(reason="plantFATE model not included in package.")
 def test_calculate_photosynthetic_photon_flux_density() -> None:
     model = Model("tests/p_daily.ini")
     assert math.isclose(

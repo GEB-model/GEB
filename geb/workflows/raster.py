@@ -1,5 +1,38 @@
+"""Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
+
+from typing import Any
+
+import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import xarray as xr
+from rasterio.features import rasterize
+
+
+def compress(array: npt.NDArray[Any], mask: npt.NDArray[np.bool_]) -> npt.NDArray[Any]:
+    """Compress an array by applying a mask.
+
+    Args:
+        array: The array to be compressed.
+        mask: The mask to apply. True values are masked out.
+
+    Returns:
+        The compressed array.
+    """
+    return array[..., ~mask]
+
+
+def repeat_grid(data: npt.NDArray[Any], factor: int) -> npt.NDArray[Any]:
+    """Repeat a 2D grid by a given factor in both dimensions.
+
+    Args:
+        data: The input 2D array to be repeated.
+        factor: The number of times to repeat the array in both dimensions.
+
+    Returns:
+        The repeated 2D array.
+    """
+    return data.repeat(factor, axis=-2).repeat(factor, axis=-1)
 
 
 def reclassify(
@@ -16,6 +49,10 @@ def reclassify(
 
     Returns:
         Reclassified array with the same dimensions and coordinates
+
+    Raises:
+        ValueError: If the method is not 'dict' or 'lookup', or in the case of lookup method if keys are not positive integers
+        TypeError: If the input is not an xarray.DataArray or numpy.ndarray
     """
     # create numpy array from dictionary values to get the dtype of the output
     values = np.array(list(remap_dict.values()))
@@ -76,3 +113,110 @@ def reclassify(
         raise TypeError("Input must be either xarray.DataArray or numpy.ndarray")
 
     return result
+
+
+def full_like(
+    data: xr.DataArray,
+    fill_value: int | float | bool,
+    nodata: int | float | bool,
+    attrs: None | dict = None,
+    name: str | None = None,
+    *args: Any,
+    **kwargs: Any,
+) -> xr.DataArray:
+    """Create a new xarray DataArray with the same shape and coordinates as the input data.
+
+    The new DataArray is filled with the specified fill_value and has the specified nodata value.
+
+    Args:
+        data: The input DataArray to use as a template.
+        fill_value: The value to fill the new DataArray with.
+        nodata: The nodata value to set in the attributes of the new DataArray.
+        attrs: Optional dictionary of attributes to set in the new DataArray.
+        name: Optional name for the new DataArray.
+        *args: Additional positional arguments to pass to xr.full_like.
+        **kwargs: Additional keyword arguments to pass to xr.full_like.
+
+    Returns:
+        A new DataArray with the same shape and coordinates as the input data,
+        filled with the specified fill_value and with the specified nodata value in the attributes.
+    """
+    assert isinstance(data, xr.DataArray)
+    da: xr.DataArray = xr.full_like(data, fill_value, *args, **kwargs)
+    if name is not None:
+        da.name = name
+    da.attrs = attrs or {}
+    da.attrs["_FillValue"] = nodata
+    return da
+
+
+def rasterize_like(
+    gpd: gpd.GeoDataFrame,
+    column: str,
+    raster: xr.DataArray,
+    dtype: type,
+    nodata: float | int | bool,
+    all_touched: bool = False,
+    **kwargs: Any,
+) -> xr.DataArray:
+    """Rasterize a geometry to match the spatial properties of a given raster.
+
+    Args:
+        gpd: The geodataframe containing geometries to rasterize
+        column: The column in the GeoDataFrame to use for rasterization values
+        raster: The reference raster DataArray to match spatial properties
+        dtype: The data type of the output rasterized array
+        nodata: The nodata value to use in the output array
+        all_touched: If True, all pixels touched by geometries will be burned in
+        **kwargs: Additional keyword arguments to pass to rasterio.features.rasterize
+
+    Returns:
+        A new DataArray with the rasterized geometry, matching the spatial properties of the input raster.
+            The name of the DataArray will be set to the provided column name.
+
+    """
+    da: xr.DataArray = full_like(
+        data=raster,
+        fill_value=nodata,
+        nodata=nodata,
+        attrs=raster.attrs,
+        dtype=dtype,
+        name=column,
+    )
+    geoms: gpd.Geoseries = gpd.geometry
+    values: list[Any] = gpd[column].tolist()
+    shapes = list(zip(geoms, values))
+    rasterize(
+        shapes,
+        out_shape=raster.rio.shape,
+        fill=nodata,
+        transform=raster.rio.transform(),
+        out=da.values,
+        all_touched=all_touched,
+        **kwargs,
+    )
+    return da
+
+
+def convert_nodata(
+    da: xr.DataArray,
+    new_nodata: float | int | bool,
+) -> xr.DataArray:
+    """Convert the nodata value of a DataArray to a new nodata value.
+
+    Args:
+        da: The input DataArray.
+        new_nodata: The new nodata value to set in the DataArray.
+
+    Returns:
+        A new DataArray with the same data, but with the nodata values converted to the new nodata value.
+
+    Raises:
+        ValueError: If the input DataArray does not have a '_FillValue' attribute.
+    """
+    if "_FillValue" not in da.attrs:
+        raise ValueError("Input DataArray must have a '_FillValue' attribute")
+    da_new = da.where(da != da.attrs["_FillValue"], new_nodata)
+    da_new.attrs = da.attrs.copy()
+    da_new.attrs["_FillValue"] = new_nodata
+    return da_new

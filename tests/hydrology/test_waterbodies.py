@@ -1,3 +1,5 @@
+"""Tests for lake and reservoir functions in GEB."""
+
 import math
 
 import matplotlib.pyplot as plt

@@ -94,7 +94,7 @@ class GroundWater(Module):
 
         self.initial_water_table_depth = 2
 
-        def get_initial_head():
+        def get_initial_head() -> npt.NDArray[np.float64]:
             heads = self.hydrology.grid.load(
                 self.model.files["grid"]["groundwater/heads"], layer=None
             ).astype(np.float64)  # modflow is an exception, it needs double precision
@@ -182,7 +182,7 @@ class GroundWater(Module):
             data=np.float32(self.grid.var.capillar > 0)
         )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return baseflow
 

@@ -1,7 +1,11 @@
+"""Tests for storage objects in GEB."""
+
 import os
 
 import numpy as np
+import numpy.typing as npt
 import pytest
+from numba import njit
 
 from geb.store import DynamicArray
 
@@ -293,7 +297,8 @@ def test_dynamic_array_operations() -> None:
     assert np.array_equal(a, np.array([42, 42, 42, 42]))
 
     # test that numba edits data in-place
-    def numba_function(data) -> None:
+    @njit
+    def numba_function(data: npt.NDArray[np.integer]) -> None:
         data[:] = -99
 
     numba_function(a.data)
@@ -312,41 +317,83 @@ def test_dynamic_array_operations() -> None:
 
 
 @pytest.fixture
-def array():
+def array() -> DynamicArray:
+    """Fixture that provides a DynamicArray for testing.
+
+    Returns:
+        A DynamicArray instance with sample data.
+    """
     return DynamicArray(np.array([1, 2, 3, 4, 5]), max_n=10)
 
 
-def test_add_ufunc(array) -> None:
+def test_add_ufunc(array: DynamicArray) -> None:
+    """Test add ufunc on DynamicArray.
+
+    Args:
+        array: The DynamicArray to be tested.
+    """
     result = np.add(array, 1)
     np.testing.assert_array_equal(result.data, np.array([2, 3, 4, 5, 6]))
 
 
-def test_subtract_ufunc(array) -> None:
+def test_subtract_ufunc(array: DynamicArray) -> None:
+    """Test subtract ufunc on DynamicArray.
+
+    Args:
+        array: The DynamicArray to be tested.
+    """
     result = np.subtract(array, 1)
     np.testing.assert_array_equal(result.data, np.array([0, 1, 2, 3, 4]))
 
 
-def test_multiply_ufunc(array) -> None:
+def test_multiply_ufunc(array: DynamicArray) -> None:
+    """Test multiply ufunc on DynamicArray.
+
+    Args:
+        array: The DynamicArray to be tested.
+    """
     result = np.multiply(array, 2)
     np.testing.assert_array_equal(result.data, np.array([2, 4, 6, 8, 10]))
 
 
-def test_divide_ufunc(array) -> None:
+def test_divide_ufunc(array: DynamicArray) -> None:
+    """Test divide ufunc on DynamicArray.
+
+    Args:
+        array: The DynamicArray to be tested.
+    """
     result = np.divide(array, 2)
     np.testing.assert_array_equal(result.data, np.array([0.5, 1.0, 1.5, 2.0, 2.5]))
 
 
-def test_power_ufunc(array) -> None:
+def test_power_ufunc(array: DynamicArray) -> None:
+    """Test power ufunc on DynamicArray.
+
+    Args:
+        array: The DynamicArray to be tested.
+    """
     result = np.power(array, 2)
     np.testing.assert_array_equal(result.data, np.array([1, 4, 9, 16, 25]))
 
 
-def test_reduce_ufunc(array) -> None:
+def test_reduce_ufunc(array: DynamicArray) -> None:
+    """Test reduction ufuncs on DynamicArray.
+
+    Args:
+        array: The DynamicArray to be tested.
+    """
     result = np.add.reduce(array)
     assert result == 15
 
 
-def test_save_and_restore(array) -> None:
+def test_save_and_restore(array: DynamicArray) -> None:
+    """Test saving to disk and restoring a DynamicArray.
+
+    Makes a round trip to disk and checks for equality.
+
+    Args:
+        array: The DynamicArray to be saved and restored.
+    """
     array.save(tmp_folder / "test")
     array2 = DynamicArray.load(tmp_folder / "test.storearray.npz")
     assert np.array_equal(array, array2)
@@ -355,7 +402,3 @@ def test_save_and_restore(array) -> None:
     assert array.n == array2.n
     assert (array.extra_dims_names == array2.extra_dims_names).all()
     os.remove(tmp_folder / "test.storearray.npz")
-
-
-if __name__ == "__main__":
-    pass

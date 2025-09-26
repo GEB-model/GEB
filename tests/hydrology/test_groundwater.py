@@ -1,11 +1,18 @@
+"""Tests for the groundwater module of GEB.
+
+The groundwater module uses MODFLOW to simulate groundwater flow and interactions
+with surface water and the unsaturated zone.
+"""
+
 import math
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 from affine import Affine
 
 from geb.build.workflows.general import calculate_cell_area
@@ -15,11 +22,23 @@ from geb.hydrology.groundwater.model import (
     get_groundwater_storage_m,
     get_water_table_depth,
 )
+from geb.workflows.raster import compress
 
 from ..testconfig import output_folder, tmp_folder
 
 
-def decompress(array, mask):
+def decompress(
+    array: npt.NDArray[Any], mask: npt.NDArray[np.bool_]
+) -> npt.NDArray[Any]:
+    """Decompress an array using the basin mask.
+
+    Args:
+        array: The array to decompress.
+        mask: The basin mask.
+
+    Returns:
+        The decompressed array.
+    """
     if array.ndim == 1:
         out = np.full(mask.shape, np.nan)
     elif array.ndim == 2:
@@ -54,10 +73,6 @@ gt: tuple[float, float, float, float, float, float] = (
 cell_area = calculate_cell_area(Affine.from_gdal(*gt), (YSIZE, XSIZE))
 
 
-def compress(array, mask):
-    return array[..., ~mask]
-
-
 layer_boundary_elevation = np.full((NLAY + 1, YSIZE, XSIZE), np.nan, dtype=np.float32)
 layer_boundary_elevation[0] = topography
 for layer in range(1, NLAY + 1):
@@ -74,9 +89,18 @@ class DummyGrid:
     """A dummy grid class to simulate the grid structure."""
 
     def __init__(self) -> None:
+        """Initializes a DummyGrid instance of the GEB grid with required attributes for the MODFLOW simulation to work."""
         pass
 
-    def decompress(self, array):
+    def decompress(self, array: npt.NDArray[Any]) -> npt.NDArray[Any]:
+        """Decompress an array from 1D to 2D using the basin mask.
+
+        Args:
+            array: The compressed array.
+
+        Returns:
+            The decompressed array.
+        """
         return decompress(array, basin_mask)
 
 
@@ -84,6 +108,7 @@ class DummyHydrology:
     """A dummy hydrology class to simulate the hydrology structure."""
 
     def __init__(self) -> None:
+        """Initializes a DummyHydrology instance of the GEB hydrology with required attributes for the MODFLOW simulation to work."""
         self.grid = DummyGrid()
 
 
@@ -91,11 +116,20 @@ class DummyModel:
     """A dummy model class to simulate the MODFLOW model structure."""
 
     def __init__(self) -> None:
+        """Initializes a DummyModel instance of the GEB model with required attributes for the MODFLOW simulation to work.
+
+        For testing purposes only.
+        """
         self.simulation_root_spinup = tmp_folder / "modflow"
         self.hydrology = DummyHydrology()
 
     @property
     def bin_folder(self) -> Path:
+        """Gets the folder where MODFLOW binaries are stored.
+
+        Returns:
+            Path to the folder with MODFLOW binaries.
+        """
         return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
 
@@ -268,7 +302,18 @@ def test_wells() -> None:
     sim.finalize()
 
 
-def visualize_modflow_results(sim, axes) -> None:
+def visualize_modflow_results(
+    sim: ModFlowSimulation, axes: npt.NDArray[plt.Axes]
+) -> None:
+    """This function is used to visualize the current state of a ModFlowSimulation.
+
+    Plots the topography, groundwater head, groundwater depth, and drainage, on
+    axes 1 to 5 respectively.
+
+    Args:
+        sim: The ModFlowSimulation object. This contains the current state of the simulation.
+        axes: An array of matplotlib axes to plot on. Should be of shape (5,).
+    """
     (ax1, ax2, ax3, ax4, ax5) = axes
 
     # Plot topography

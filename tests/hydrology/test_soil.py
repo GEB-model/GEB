@@ -1,8 +1,11 @@
+"""Tests for soil functions in GEB."""
+
 import math
 from time import time
 
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import pytest
 
 import geb.hydrology.soil
@@ -15,8 +18,9 @@ from geb.hydrology.landcover import (
 from geb.hydrology.soil import (
     add_water_to_topwater_and_evaporate_open_water,
     get_critical_soil_moisture_content,
+    get_flux,
     get_fraction_easily_available_soil_water,
-    get_infiltration_capacity,
+    get_mean_unsaturated_hydraulic_conductivity,
     get_root_mass_ratios,
     get_root_ratios,
     get_saturated_area_fraction,
@@ -31,6 +35,103 @@ from ..testconfig import output_folder
 
 output_folder_soil = output_folder / "soil"
 output_folder_soil.mkdir(exist_ok=True)
+
+
+def test_vertical_flow_stability() -> None:
+    lower_layer_w = np.linspace(0.1, 0.4, 1000, dtype=np.float32)
+    upper_layer_w = np.full_like(lower_layer_w, 0.4, dtype=np.float32)
+
+    upper_layer_wres = np.full_like(lower_layer_w, 0.1, dtype=np.float32)
+    lower_layer_wres = np.full_like(lower_layer_w, 0.1, dtype=np.float32)
+
+    upper_layer_ws = np.full_like(lower_layer_w, 0.4, dtype=np.float32)
+    lower_layer_ws = np.full_like(lower_layer_w, 0.4, dtype=np.float32)
+
+    upper_layer_lambda = np.full_like(lower_layer_w, 0.5, dtype=np.float32)
+    lower_layer_lambda = np.full_like(lower_layer_w, 0.5, dtype=np.float32)
+
+    upper_layer_saturated_hydraulic_conductivity = np.full_like(
+        lower_layer_w, 0.1, dtype=np.float32
+    )
+    lower_layer_saturated_hydraulic_conductivity = np.full_like(
+        lower_layer_w, 0.1, dtype=np.float32
+    )
+
+    upper_layer_bubbing_pressure_cm = np.full_like(lower_layer_w, 20, dtype=np.float32)
+    lower_layer_bubbing_pressure_cm = np.full_like(lower_layer_w, 20, dtype=np.float32)
+
+    delta_z = np.full_like(lower_layer_w, 1.0, dtype=np.float32)
+
+    upper_psi, upper_unsaturated_hydraulic_conductivity = (
+        get_soil_water_flow_parameters(
+            w=upper_layer_w,
+            ws=upper_layer_ws,
+            wres=upper_layer_wres,
+            lambda_=upper_layer_lambda,
+            saturated_hydraulic_conductivity=upper_layer_saturated_hydraulic_conductivity,
+            bubbling_pressure_cm=upper_layer_bubbing_pressure_cm,
+        )
+    )
+
+    lower_psi, lower_unsaturated_hydraulic_conductivity = (
+        get_soil_water_flow_parameters(
+            w=lower_layer_w,
+            ws=lower_layer_ws,
+            wres=lower_layer_wres,
+            lambda_=lower_layer_lambda,
+            saturated_hydraulic_conductivity=lower_layer_saturated_hydraulic_conductivity,
+            bubbling_pressure_cm=lower_layer_bubbing_pressure_cm,
+        )
+    )
+
+    mean_unsaturated_hydraulic_conductivity = np.array(
+        [
+            get_mean_unsaturated_hydraulic_conductivity(
+                lower_unsaturated_hydraulic_conductivity[i],
+                upper_unsaturated_hydraulic_conductivity[i],
+            )
+            for i in range(lower_unsaturated_hydraulic_conductivity.size)
+        ],
+        dtype=np.float32,
+    )
+
+    assert (
+        mean_unsaturated_hydraulic_conductivity
+        <= lower_layer_saturated_hydraulic_conductivity
+    ).all()
+    assert (
+        mean_unsaturated_hydraulic_conductivity
+        <= upper_layer_saturated_hydraulic_conductivity
+    ).all()
+
+    flux = np.array(
+        [
+            get_flux(
+                mean_unsaturated_hydraulic_conductivity[i],
+                lower_psi[i],
+                upper_psi[i],
+                delta_z[i],
+            )
+            for i in range(mean_unsaturated_hydraulic_conductivity.size)
+        ],
+        dtype=np.float32,
+    )
+
+    fig, (ax0, ax1) = plt.subplots(1, 2)
+
+    ax0.plot(lower_layer_w, flux, label="flux")
+    ax0.set_ylabel("Flux (cm/day)")
+    ax0.set_xlabel("Lower layer soil moisture content (m3/m3)")
+
+    ax1.plot(
+        lower_layer_w,
+        flux / (lower_layer_w - lower_layer_wres),
+        label="flux / (w - wres)",
+    )
+    ax1.set_xlabel("Lower layer soil moisture content (m3/m3)")
+    ax1.set_ylabel("Flux / (w - wres) (cm/day)")
+
+    plt.savefig(output_folder_soil / "vertical_flow_stability.png")
 
 
 def test_get_root_ratios() -> None:
@@ -458,7 +559,21 @@ def test_get_soil_water_flow_parameters_potential() -> None:
 
 
 @pytest.mark.parametrize("pf_value", [2.0, 4.2])
-def test_soil_moisture_potential_inverse(pf_value) -> None:
+def test_soil_moisture_potential_inverse(pf_value: float) -> None:
+    """Test whether soil moisture potential and its inverse are consistent.
+
+    In GEB, we use pF values (log10 of capillary suction in cm) to get the soil moisture
+    content at various levels of soil suction. Inversely, we can also calculate the
+    capillary suction from a given soil moisture content. This test checks whether
+    these two functions are consistent with each other by converting a pF value to
+    capillary suction, calculating the corresponding soil moisture content, and then
+    converting it back to capillary suction. The original and calculated capillary
+    suctions should be approximately equal within a small tolerance.
+
+    Args:
+        pf_value: The pF value to test (e.g., 2.0 for field capacity, 4.2 for wilting point).
+
+    """
     # Convert pF value to capillary suction in cm (h)
     capillary_suction_cm = np.array(
         [-(10**pf_value)], dtype=np.float32
@@ -641,7 +756,28 @@ def test_get_unsaturated_hydraulic_conductivity() -> None:
     plt.savefig(output_folder / "unsaturated_hydraulic_conductivity.png")
 
 
-def plot_soil_layers(ax, soil_thickness, w, wres, ws, fluxes=None) -> None:
+def plot_soil_layers(
+    ax: plt.Axes,
+    soil_thickness: npt.NDArray[np.floating],
+    w: npt.NDArray[np.floating],
+    wres: npt.NDArray[np.floating],
+    ws: npt.NDArray[np.floating],
+    fluxes: npt.NDArray[np.floating] | None = None,
+) -> None:
+    """Plot a number of soil columns with their moisture content, and potentially fluxes.
+
+    All inputs except ax and fluxes should be 2D arrays with shape (n_layers, n_columns).
+
+    Args:
+        ax: The Matplotlib axis to plot on.
+        soil_thickness: The thickness of the soil layers [m].
+        w: The soil moisture content [m]. Cannot be larger than soil_thickness.
+        wres: The residual soil moisture content [m].
+        ws: The saturated soil moisture content [m].
+        fluxes: Fluxes between soil layers if given. The first row is the flux between
+            the top layer, and the layer below. Etc. Number of rows is n_layers -1. In
+            case fluxes is None, no fluxes are plotted. Defaults to None.
+    """
     n_soil_columns = soil_thickness.shape[1]
     for column in range(n_soil_columns):
         current_depth = 0
@@ -766,7 +902,14 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
 
 
 @pytest.mark.parametrize("capillary_rise_from_groundwater", [0.0, 0.01])
-def test_vertical_water_transport(capillary_rise_from_groundwater) -> None:
+def test_vertical_water_transport(capillary_rise_from_groundwater: float) -> None:
+    """Test vertical water transport through the soil column.
+
+    Makes several plots to visualize the soil moisture in the soil column.
+
+    Args:
+        capillary_rise_from_groundwater: The capillary rise from the groundwater (cm/day).
+    """
     ncols = 11
 
     soil_layer_height = np.array(

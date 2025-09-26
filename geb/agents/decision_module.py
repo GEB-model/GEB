@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 from numba import njit, prange
 
@@ -202,7 +204,6 @@ class DecisionModule:
         discount_rate: float,
         sigma: float,
         subjective: bool = True,
-        **kwargs,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
@@ -447,7 +448,11 @@ class DecisionModule:
         extra_constraint: np.ndarray,
         total_profits: np.ndarray,
     ) -> np.ndarray:
-        """Vectorized version of the calcEU_adapt function without @njit."""
+        """Vectorized version of the calcEU_adapt function without @njit.
+
+        Returns:
+            Array containing the time-discounted subjective utility of adapting for each agent.
+        """
         # Preallocate arrays
         EU_adapt = np.full(n_agents, -np.inf, dtype=np.float32)
 

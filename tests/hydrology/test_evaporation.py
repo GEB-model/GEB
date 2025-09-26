@@ -1,4 +1,4 @@
-import numpy as np
+"""Tests for evaporation functions."""
 
 from geb.hydrology.evaporation import get_CO2_induced_crop_factor_adustment
 

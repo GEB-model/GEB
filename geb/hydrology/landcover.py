@@ -255,7 +255,7 @@ class LandCover(Module):
             self.HRU.var.reference_evapotranspiration_grass, snow_melt, crop_factor
         )
 
-        timer.new_split("PET")
+        timer.finish_split("PET")
 
         (
             potential_transpiration_minus_interception_evaporation,
@@ -268,7 +268,7 @@ class LandCover(Module):
 
         del potential_transpiration
 
-        timer.new_split("Interception")
+        timer.finish_split("Interception")
 
         (
             groundwater_abstraction_m3,
@@ -278,7 +278,7 @@ class LandCover(Module):
             total_water_demand_loss_m3,
         ) = self.hydrology.water_demand.step(potential_evapotranspiration)
 
-        timer.new_split("Demand")
+        timer.finish_split("Demand")
 
         # Soil for forest, grassland, and irrigated land
         capillar = self.hydrology.to_HRU(data=self.grid.var.capillar, fn=None)
@@ -299,7 +299,7 @@ class LandCover(Module):
             actual_irrigation_consumption=self.HRU.var.actual_irrigation_consumption,
         )
         assert (runoff >= 0).all()
-        timer.new_split("Soil")
+        timer.finish_split("Soil")
 
         self.HRU.var.actual_evapotranspiration = (
             actual_bare_soil_evaporation
@@ -437,12 +437,12 @@ class LandCover(Module):
         groundwater_recharge = self.hydrology.to_grid(
             HRU_data=groundwater_recharge, fn="weightedmean"
         )
-        timer.new_split("Waterbody exchange")
+        timer.finish_split("Waterbody exchange")
 
         if self.model.timing:
             print(timer)
 
-        self.report(self, locals())
+        self.report(locals())
 
         return (
             self.hydrology.to_grid(HRU_data=interflow, fn="weightedmean"),

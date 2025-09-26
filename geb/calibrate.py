@@ -27,6 +27,7 @@ from functools import partial, wraps
 from io import StringIO
 from pathlib import Path
 from subprocess import Popen
+from typing import Any
 
 import geopandas as gpd
 import joblib
@@ -37,6 +38,49 @@ import yaml
 from deap import algorithms, base, creator, tools
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold
+
+from .workflows.methods import multi_set
+
+
+def init_pool(
+    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
+) -> None:
+    """Initialize the global variables for the process pool."""
+    global ctrl_c_entered
+    global default_sigint_handler
+    ctrl_c_entered = False
+    default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
+
+    global lock
+    global current_gpu_use_count
+    global n_gpu_spots
+    n_gpu_spots = gpus * models_per_gpu
+    lock = manager_lock
+    current_gpu_use_count = manager_current_gpu_use_count
+
+
+def handle_ctrl_c(func):
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        global ctrl_c_entered
+        if not ctrl_c_entered:
+            signal.signal(signal.SIGINT, default_sigint_handler)  # the default
+            try:
+                return func(*args, **kwargs)
+            except KeyboardInterrupt:
+                ctrl_c_entered = True
+                return KeyboardInterrupt
+            finally:
+                signal.signal(signal.SIGINT, pool_ctrl_c_handler)
+        else:
+            return KeyboardInterrupt
+
+    return wrapper
+
+
+def pool_ctrl_c_handler(*args: Any, **kwargs: Any) -> None:
+    global ctrl_c_entered
+    ctrl_c_entered = True
 
 
 def KGE_calculation(s, o):
@@ -148,39 +192,6 @@ def get_observed_well_ratio(config):
         total_holdings_with_well_observed / total_holdings_observed
     )
     return ratio_holdings_with_well_observed
-
-
-def handle_ctrl_c(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        global ctrl_c_entered
-        if not ctrl_c_entered:
-            signal.signal(signal.SIGINT, default_sigint_handler)  # the default
-            try:
-                return func(*args, **kwargs)
-            except KeyboardInterrupt:
-                ctrl_c_entered = True
-                return KeyboardInterrupt
-            finally:
-                signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-        else:
-            return KeyboardInterrupt
-
-    return wrapper
-
-
-def pool_ctrl_c_handler(*args, **kwargs) -> None:
-    global ctrl_c_entered
-    ctrl_c_entered = True
-
-
-def multi_set(dict_obj, value, *attrs) -> None:
-    d = dict_obj
-    for attr in attrs[:-1]:
-        d = d[attr]
-    if attrs[-1] not in d:
-        raise KeyError(f"Key {attrs} does not exist in config file.")
-    d[attrs[-1]] = value
 
 
 def get_irrigation_wells_score(run_directory, individual, config):
@@ -1395,6 +1406,9 @@ def run_model(individual, config, gauges, observed_streamflow):
     This function takes an individual from the population and runs the model
     with the corresponding parameters in a subfolder. Then it returns the
     fitness scores (KGE, irrigation wells score, etc.) for that run.
+
+    Returns:
+        The fitness scores as a tuple for the selected calibration targets.
     """
     os.makedirs(config["calibration"]["path"], exist_ok=True)
     runs_path = os.path.join(config["calibration"]["path"], "runs")
@@ -1472,10 +1486,16 @@ def run_model(individual, config, gauges, observed_streamflow):
                 )
             lock.release()
 
-            def run_model_scenario(run_command):
+            def run_model_scenario(run_command: str) -> int:
                 """Run the shell command for spinup or run scenario.
 
                 stdout/stderr are redirected to their own log files.
+
+                Returns:
+                    int: The return code of the process.
+
+                Raises:
+                    ValueError: If the return code is unexpected or if maximum retries are exceeded.
                 """
                 env = os.environ.copy()
                 # Already set globally, but we can re-ensure here:
@@ -1660,23 +1680,6 @@ def run_model(individual, config, gauges, observed_streamflow):
     return tuple(scores)
 
 
-def init_pool(
-    manager_current_gpu_use_count, manager_lock, gpus, models_per_gpu
-) -> None:
-    """Initialize the global variables for the process pool."""
-    global ctrl_c_entered
-    global default_sigint_handler
-    ctrl_c_entered = False
-    default_sigint_handler = signal.signal(signal.SIGINT, pool_ctrl_c_handler)
-
-    global lock
-    global current_gpu_use_count
-    global n_gpu_spots
-    n_gpu_spots = gpus * models_per_gpu
-    lock = manager_lock
-    current_gpu_use_count = manager_current_gpu_use_count
-
-
 def calibrate(config, working_directory) -> None:
     calibration_config = config["calibration"]
 
@@ -1752,9 +1755,9 @@ def calibrate(config, working_directory) -> None:
     toolbox.register("population", tools.initRepeat, list, toolbox.Individual)
 
     def checkBounds(min_val, max_val):
-        def decorator(func):
-            def wrappper(*args, **kargs):
-                offspring = func(*args, **kargs)
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            def wrappper(*args: Any, **kwargs: Any) -> Any:
+                offspring = func(*args, **kwargs)
                 for child in offspring:
                     for i in range(len(child)):
                         if child[i] > max_val:

@@ -18,13 +18,16 @@ from .town_managers import TownManagers
 
 
 class Agents(Module):
-    """This class initalizes all agent classes, and is used to activate the agents each timestep.
+    """This class initalizes all agent classes, and is used to activate the agents each timestep."""
 
-    Args:
-        model: The GEB model
-    """
+    def __init__(self, model: "GEBModel") -> None:
+        """Initialize the Agents module.
 
-    def __init__(self, model) -> None:
+        Initalizes all agent classes and stores them in a list to be activated each timestep.
+
+        Args:
+            model: The GEB model instance.
+        """
         Module.__init__(self, model)
 
         self.households = Households(model, self, 0.1)
@@ -49,9 +52,14 @@ class Agents(Module):
 
     @property
     def name(self) -> str:
+        """Return the name of the module."""
         return "agents"
 
     def spinup(self) -> None:
+        """This function is called during model spinup.
+
+        Does not do anything as no spinup is needed.
+        """
         pass
 
     def step(self) -> None:
@@ -60,9 +68,9 @@ class Agents(Module):
 
         for agent_type in self.agents:
             agent_type.step()
-            timer.new_split(agent_type.name)
+            timer.finish_split(agent_type.name)
 
         if self.model.timing:
             print(timer)
 
-        self.report(self, locals())
+        self.report(locals())
