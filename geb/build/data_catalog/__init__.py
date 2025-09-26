@@ -3,6 +3,7 @@
 from typing import Any
 
 from .base import Adapter
+from .destination_earth import DestinationEarth
 from .esa_worldcover import ESAWorldCover
 from .fao import GMIA
 from .gadm import GADM
@@ -21,6 +22,14 @@ from .why_map import WhyMap
 from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "era5": {
+        "adapter": DestinationEarth(),
+        "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
+        "source": {
+            "name": "ERA5",
+            "author": "ECMWF",
+        },
+    },
     "soilgrids": {
         "adapter": SoilGrids(),
         "url": "https://files.isric.org/soilgrids/latest/data/{variable}/{variable}_{depth}_mean.vrt",

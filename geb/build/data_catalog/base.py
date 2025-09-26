@@ -17,8 +17,8 @@ class Adapter:
 
     def __init__(
         self,
-        folder: Path | None = None,
-        filename: Path | None = None,
+        folder: Path | str | None = None,
+        filename: Path | str | None = None,
         local_version: int | None = None,
         cache: str | None = None,
     ) -> None:
