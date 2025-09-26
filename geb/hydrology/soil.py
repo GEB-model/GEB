@@ -1,25 +1,3 @@
-# --------------------------------------------------------------------------------
-# This file contains code that has been adapted from an original source available
-# in a public repository under the GNU General Public License. The original code
-# has been modified to fit the specific needs of this project.
-#
-# Original source repository: https://github.com/iiasa/CWatM
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
-# --------------------------------------------------------------------------------
-
-
 import platform
 from pathlib import Path
 
@@ -43,13 +21,13 @@ from .landcover import (
 
 
 def calculate_soil_water_potential_MPa(
-    soil_moisture,  # [m]
-    soil_moisture_wilting_point,  # [m]
-    soil_moisture_field_capacity,  # [m]
-    soil_tickness,  # [m]
-    wilting_point=-1500,  # kPa
-    field_capacity=-33,  # kPa
-):
+    soil_moisture: npt.NDArray[np.float32],  # [m]
+    soil_moisture_wilting_point: npt.NDArray[np.float32],  # [m]
+    soil_moisture_field_capacity: npt.NDArray[np.float32],  # [m]
+    soil_tickness: npt.NDArray[np.float32],  # [m]
+    wilting_point: float | int = -1500,  # kPa
+    field_capacity: float | int = -33,  # kPa
+) -> npt.NDArray[np.float32]:
     # https://doi.org/10.1016/B978-0-12-374460-9.00007-X (eq. 7.16)
     soil_moisture_fraction = soil_moisture / soil_tickness
     # assert (soil_moisture_fraction >= 0).all() and (soil_moisture_fraction <= 1).all()
@@ -115,35 +93,42 @@ def calculate_photosynthetic_photon_flux_density(shortwave_radiation, xi=0.5):
     inline="always",
 )
 def get_soil_moisture_at_pressure(
-    capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
-):
+    capillary_suction: np.float32,
+    bubbling_pressure_cm: npt.NDArray[np.float32],
+    thetas: npt.NDArray[np.float32],
+    thetar: npt.NDArray[np.float32],
+    lambda_: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Calculates the soil moisture content at a given soil water potential (capillary suction) using the van Genuchten model.
 
     Args:
-        capillary_suction : np.ndarray
-            The soil water potential (capillary suction) (m)
-        bubbling_pressure_cm : np.ndarray
-            The bubbling pressure (cm)
-        thetas : np.ndarray
-            The saturated soil moisture content (m³/m³)
-        thetar : np.ndarray
-            The residual soil moisture content (m³/m³)
-        lambda_ : np.ndarray
-            The van Genuchten parameter lambda (1/m)
+        capillary_suction: The soil water potential (capillary suction) (m)
+        bubbling_pressure_cm: The bubbling pressure (cm)
+        thetas: The saturated soil moisture content (m³/m³)
+        thetar: The residual soil moisture content (m³/m³)
+        lambda_: The van Genuchten parameter lambda (1/m)
+
+    Returns:
+        The soil moisture content at the given soil water potential (m³/m³)
     """
-    alpha = np.float32(1) / bubbling_pressure_cm
-    n = lambda_ + np.float32(1)
-    m = np.float32(1) - np.float32(1) / n
-    phi = -capillary_suction
+    alpha: npt.NDArray[np.float32] = np.float32(1) / bubbling_pressure_cm
+    n: npt.NDArray[np.float32] = lambda_ + np.float32(1)
+    m: npt.NDArray[np.float32] = np.float32(1) - np.float32(1) / n
+    phi: np.float32 = -capillary_suction
 
-    water_retention_curve = (np.float32(1) / (np.float32(1) + (alpha * phi) ** n)) ** m
+    water_retention_curve: npt.NDArray[np.float32] = (
+        np.float32(1) / (np.float32(1) + (alpha * phi) ** n)
+    ) ** m
 
-    theta = water_retention_curve * (thetas - thetar) + thetar
-    return theta
+    return water_retention_curve * (thetas - thetar) + thetar
 
 
 @njit(cache=True, inline="always")
-def get_critical_soil_moisture_content(p, wfc, wwp):
+def get_critical_soil_moisture_content(
+    p: npt.NDArray[np.float32],
+    wfc: npt.NDArray[np.float32],
+    wwp: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Calculate the critical soil moisture content.
 
     The critical soil moisture content is defined as the quantity of stored soil moisture below
@@ -155,6 +140,15 @@ def get_critical_soil_moisture_content(p, wfc, wwp):
     extract water from the soil at a lower soil moisture content. Thus when p is 1 the critical
     soil moisture content is equal to the wilting point, and when p is 0 the critical soil moisture
     content is equal to the field capacity.
+
+    Args:
+        p: The fraction of easily available soil water, between 0 and 1.
+        wfc: The field capacity in m.
+        wwp: The wilting point in m.
+
+    Returns:
+        The critical soil moisture content in m.
+
     """
     return (np.float32(1) - p) * (wfc - wwp) + wwp
 
@@ -461,46 +455,70 @@ def get_transpiration_factor_per_layer(
 
 @njit(cache=True, parallel=True)
 def evapotranspirate(
-    wwp,
-    wfc,
-    wres,
-    soil_layer_height,
-    land_use_type,
-    root_depth,
-    crop_map,
-    natural_crop_groups,
-    potential_transpiration,
-    potential_bare_soil_evaporation,
-    potential_evapotranspiration,
-    frost_index,
-    crop_group_number_per_group,
-    w,
-    topwater,
-    open_water_evaporation,
+    wwp: npt.NDArray[np.float32],
+    wfc: npt.NDArray[np.float32],
+    wres: npt.NDArray[np.float32],
+    soil_layer_height: npt.NDArray[np.float32],
+    land_use_type: npt.NDArray[np.int32],
+    root_depth: npt.NDArray[np.float32],
+    crop_map: npt.NDArray[np.int32],
+    natural_crop_groups: npt.NDArray[np.float32],
+    potential_transpiration: npt.NDArray[np.float32],
+    potential_bare_soil_evaporation: npt.NDArray[np.float32],
+    potential_evapotranspiration: npt.NDArray[np.float32],
+    frost_index: npt.NDArray[np.float32],
+    crop_group_number_per_group: npt.NDArray[np.float32],
+    w: npt.NDArray[np.float32],
+    topwater: npt.NDArray[np.float32],
+    open_water_evaporation: npt.NDArray[np.float32],
     minimum_effective_root_depth: float,
-    mask_transpiration,
-    mask_soil_evaporation,
-):
+    mask_transpiration: npt.NDArray[np.bool_],
+    mask_soil_evaporation: npt.NDArray[np.bool_],
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
     """Evapotranspiration calculation for the soil module.
 
-    Parameters
-    ----------
-    mask_transpiration : np.ndarray
-        A mask indicating which pixels are valid for transpiration calculation. This is
-        useful when transpiration is calculated by an external module.
-    mask_soil_evaporation : np.ndarray
-        A mask indicating which pixels are valid for evapotranspiration calculation.
-    """
-    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
+    Args:
+        wwp: Residual soil water content in each layer in meters.
+        wfc: Field capacity in each layer in meters.
+        wres: Residual soil water content in each layer in meters.
+        soil_layer_height: Height of each soil layer in meters.
+        land_use_type: Land use type of the hydrological response unit.
+        root_depth: The root depth in meters.
+        crop_map: Crop map indicating the crop type for each hydrological response unit. -1 indicates no crop.
+        natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
+        potential_transpiration: Potential transpiration in meters.
+        potential_bare_soil_evaporation: Potential bare soil evaporation in meters.
+        potential_evapotranspiration: Potential evapotranspiration in meters.
+        frost_index: Frost index indicating whether the soil is frozen.
+        crop_group_number_per_group: Crop group numbers for each crop type.
+        w: Soil water content in each layer in meters.
+        topwater: Topwater in meters, which is the water available for evaporation and transpiration for paddy irrigated fields.
+        open_water_evaporation: Open water evaporation in meters, which is the water evaporated
+            from open water areas.
+        minimum_effective_root_depth: Minimum effective root depth in meters, used to ensure that the
+            effective root depth is not less than this value. Crops can extract water up to this depth.
+        mask_transpiration: A mask indicating which pixels are valid for transpiration calculation.
+        mask_soil_evaporation: A mask indicating which pixels are valid for evapotranspration calculation.
 
-    transpiration = np.zeros_like(land_use_type, dtype=np.float32)
-    actual_bare_soil_evaporation = np.zeros_like(land_use_type, dtype=np.float32)
+    Returns:
+        A tuple containing:
+            - transpiration: The actual transpiration in meters for each hydrological response unit.
+            - actual_bare_soil_evaporation: The actual bare soil evaporation in meters for each hydrological response unit.
+    """
+    soil_is_frozen: npt.NDArray[np.bool_] = frost_index > FROST_INDEX_THRESHOLD
+
+    transpiration: npt.NDArray[np.float32] = np.zeros_like(
+        land_use_type, dtype=np.float32
+    )
+    actual_bare_soil_evaporation: npt.NDArray[np.float32] = np.zeros_like(
+        land_use_type, dtype=np.float32
+    )
 
     for i in prange(land_use_type.size):
         if mask_transpiration[i]:
-            remaining_potential_transpiration = potential_transpiration[i]
+            remaining_potential_transpiration: np.float32 = potential_transpiration[i]
             if land_use_type[i] == PADDY_IRRIGATED:
-                transpiration_from_topwater = min(
+                transpiration_from_topwater: np.float32 = min(
                     topwater[i], remaining_potential_transpiration
                 )
                 remaining_potential_transpiration -= transpiration_from_topwater
@@ -510,35 +528,39 @@ def evapotranspirate(
             if not soil_is_frozen[i]:
                 # get group group numbers for natural areas
                 if land_use_type[i] == FOREST or land_use_type[i] == GRASSLAND_LIKE:
-                    crop_group_number = natural_crop_groups[i]
+                    crop_group_number: np.float32 = natural_crop_groups[i]
                 else:  #
-                    crop_group_number = crop_group_number_per_group[crop_map[i]]
+                    crop_group_number: np.float32 = crop_group_number_per_group[
+                        crop_map[i]
+                    ]
 
                 # vegetation-specific factor for easily available soil water
-                fraction_easily_available_soil_water = (
+                fraction_easily_available_soil_water: np.float32 = (
                     get_fraction_easily_available_soil_water(
                         crop_group_number, potential_evapotranspiration[i]
                     )
                 )
 
-                effective_root_depth = np.maximum(
+                effective_root_depth: np.float32 = np.maximum(
                     np.float32(minimum_effective_root_depth), root_depth[i]
                 )
                 fraction_easily_available_soil_water = np.float32(
                     fraction_easily_available_soil_water
                 )
 
-                transpiration_factor_per_layer = get_transpiration_factor_per_layer(
-                    soil_layer_height[:, i],
-                    effective_root_depth,
-                    w[:, i],
-                    wfc[:, i],
-                    wwp[:, i],
-                    fraction_easily_available_soil_water,
+                transpiration_factor_per_layer: npt.NDArray[np.float32] = (
+                    get_transpiration_factor_per_layer(
+                        soil_layer_height[:, i],
+                        effective_root_depth,
+                        w[:, i],
+                        wfc[:, i],
+                        wwp[:, i],
+                        fraction_easily_available_soil_water,
+                    )
                 )
 
                 for layer in range(N_SOIL_LAYERS):
-                    transpiration_layer = (
+                    transpiration_layer: np.float32 = (
                         remaining_potential_transpiration
                         * transpiration_factor_per_layer[layer]
                     )
@@ -748,6 +770,56 @@ def get_infiltration_capacity(
     return saturated_hydraulic_conductivity[0]
 
 
+@njit(cache=True, inline="always")
+def get_mean_unsaturated_hydraulic_conductivity(
+    unsaturated_hydraulic_conductivity_1: np.float32,
+    unsaturated_hydraulic_conductivity_2: np.float32,
+) -> np.float32:
+    """Calculate the mean unsaturated hydraulic conductivity between two soil layers using the geometric mean.
+
+    Args:
+        unsaturated_hydraulic_conductivity_1: Unsaturated hydraulic conductivity of the first soil layer.
+        unsaturated_hydraulic_conductivity_2: Unsaturated hydraulic conductivity of the second soil layer.
+
+    Returns:
+        The mean unsaturated hydraulic conductivity between the two soil layers.
+    """
+    # harmonic mean
+    # mean_unsaturated_hydraulic_conductivity = (
+    #     2
+    #     * unsaturated_hydraulic_conductivity_1
+    #     * unsaturated_hydraulic_conductivity_2
+    #     / (unsaturated_hydraulic_conductivity_1 + unsaturated_hydraulic_conductivity_2)
+    # )
+    # geometric mean
+    mean_unsaturated_hydraulic_conductivity = np.sqrt(
+        unsaturated_hydraulic_conductivity_1 * unsaturated_hydraulic_conductivity_2
+    )
+    # ensure that there is some minimum flow is possible
+    mean_unsaturated_hydraulic_conductivity = max(
+        mean_unsaturated_hydraulic_conductivity, np.float32(1e-9)
+    )
+    return mean_unsaturated_hydraulic_conductivity
+
+
+@njit(cache=True, inline="always")
+def get_flux(mean_unsaturated_hydraulic_conductivity, psi_lower, psi_upper, delta_z):
+    """Calculate the flux between two soil layers using Darcy's law.
+
+    Args:
+        mean_unsaturated_hydraulic_conductivity: Mean unsaturated hydraulic conductivity between the two soil layers.
+        psi_lower: Soil water potential of the lower soil layer.
+        psi_upper: Soil water potential of the upper soil layer.
+        delta_z: Distance between the two soil layers.
+
+    Returns:
+        The flux between the two soil layers.
+    """
+    return -mean_unsaturated_hydraulic_conductivity * (
+        (psi_lower - psi_upper) / delta_z - np.float32(1)
+    )
+
+
 # Do NOT use fastmath here. This leads to unexpected behaviour with NaNs
 @njit(cache=True, parallel=True, fastmath=False)
 def vertical_water_transport(
@@ -861,17 +933,22 @@ def vertical_water_transport(
         for layer in range(
             N_SOIL_LAYERS - 2, -1, -1
         ):  # From top (0) to bottom (N_SOIL_LAYERS - 1)
-            # Compute the geometric mean of the conductivities
-            unsaturated_hydraulic_conductivity_avg = np.sqrt(
-                unsaturated_hydraulic_conductivity[layer + 1, i]
-                * unsaturated_hydraulic_conductivity[layer, i],
+            # Compute the mean of the conductivities
+            mean_unsaturated_hydraulic_conductivity: np.float32 = (
+                get_mean_unsaturated_hydraulic_conductivity(
+                    unsaturated_hydraulic_conductivity[layer + 1, i],
+                    unsaturated_hydraulic_conductivity[layer, i],
+                )
             )
 
             # Compute flux using Darcy's law. The -1 accounts for gravity.
             # Positive flux is downwards; see minus sign in the equation, which negates
             # the -1 of gravity and other terms.
-            flux = -unsaturated_hydraulic_conductivity_avg * (
-                (psi[layer + 1, i] - psi[layer, i]) / delta_z[layer, i] - np.float32(1)
+            flux: np.float32 = get_flux(
+                mean_unsaturated_hydraulic_conductivity,
+                psi[layer + 1, i],
+                psi[layer, i],
+                delta_z[layer, i],
             )
 
             # Determine the positive flux and source/sink layers without if statements
@@ -1063,7 +1140,11 @@ def get_bubbling_pressure(
     return bubbling_pressure
 
 
-def get_pore_size_index_brakensiek(sand, thetas, clay):
+def get_pore_size_index_brakensiek(
+    sand: npt.NDArray[np.float32],
+    thetas: npt.NDArray[np.float32],
+    clay: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Determine Brooks-Corey pore size distribution index [-].
 
     Thetas is equal to porosity (Φ) in this case.
@@ -1247,7 +1328,7 @@ class Soil(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -1258,10 +1339,10 @@ class Soil(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.soil"
 
-    def spinup(self):
+    def spinup(self) -> None:
         # use a minimum root depth of 25 cm, following AQUACROP recommendation
         # see: Reference manual for AquaCrop v7.1 – Chapter 3
         self.var.minimum_effective_root_depth = 0.25  # m
@@ -1424,7 +1505,7 @@ class Soil(Module):
         ]  # calibration parameter
         self.HRU.var.arno_beta = np.clip(self.HRU.var.arno_beta, 0.01, 0.5)
 
-    def initiate_plantfate(self):
+    def initiate_plantfate(self) -> None:
         # plantFATE only runs on Linux, so we check if the system is Linux
         assert platform.system() == "Linux", (
             "plantFATE only runs on Linux. Please run the model on a Linux system."
@@ -1505,7 +1586,7 @@ class Soil(Module):
         # print(self.model.plantFATE[0:10])
         # print(all(v is None for v in self.model.plantFATE))
 
-    def plant_new_forest(self, indx):
+    def plant_new_forest(self, indx) -> None:
         assert not self.model.in_spinup
 
         from . import plantFATE
@@ -1598,8 +1679,25 @@ class Soil(Module):
         return topsoil_volumetric_content
 
     def calculate_net_radiation(
-        self, shortwave_radiation_downwelling, longwave_radiation_net, albedo
-    ):
+        self,
+        shortwave_radiation_downwelling: npt.NDArray[np.float32],
+        longwave_radiation_net: npt.NDArray[np.float32],
+        albedo: npt.NDArray[np.float32] | float | np.float32,
+    ) -> npt.NDArray[np.float32]:
+        """Calculate net radiation in W/m2.
+
+        Obtained by subtracting the reflected shortwave radiation
+        (calculated using albedo) from the downwelling shortwave radiation,
+        and adding the net longwave radiation.
+
+        Args:
+            shortwave_radiation_downwelling: Downwelling shortwave radiation [W/m2].
+            longwave_radiation_net: Net longwave radiation [W/m2].
+            albedo: Albedo [-].
+
+        Returns:
+            Net radiation [W/m2].
+        """
         net_radiation = (
             shortwave_radiation_downwelling * (1 - albedo) + longwave_radiation_net
         )  # W/m2
@@ -1614,7 +1712,7 @@ class Soil(Module):
         plantfate_biomass,
         plantfate_co2,
         plantfate_num_ind,
-    ):
+    ) -> None:
         if self.plantFATE_forest_RUs[indx]:
             plantFATE_model = self.model.plantFATE[indx]
             if plantFATE_model is not None:
@@ -1708,7 +1806,7 @@ class Soil(Module):
                     #     + str(plantfate_transpiration_by_layer[:, indx])
                     # )
 
-    def set_global_variables(self):
+    def set_global_variables(self) -> None:
         # set number of soil layers as global variable for numba
         global N_SOIL_LAYERS
         N_SOIL_LAYERS = self.HRU.var.soil_layer_height.shape[0]
@@ -1727,12 +1825,28 @@ class Soil(Module):
         potential_evapotranspiration,
         natural_available_water_infiltration,
         actual_irrigation_consumption,
-    ):
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
         """Dynamic part of the soil module.
 
         For each of the land cover classes the vertical water transport is simulated
         Distribution of water holding capiacity in 3 soil layers based on saturation excess overland flow
-        Dependend on soil depth, soil hydraulic parameters
+        Dependend on soil depth, soil hydraulic parameters.
+
+        Returns:
+            interflow: lateral flow from the soil to the stream [m/day]
+            runoff: surface runoff [m/day]
+            groundwater_recharge: recharge to the groundwater [m/day]
+            open_water_evaporation: open water evaporation.
+                In this module, added are evaporation from padies, and from sealed areas (recent rainfall) [m/day]
+            transpiration: actual transpiration [m/day]
+            actual_bare_soil_evaporation: actual bare soil evaporation [m/day]
         """
         timer = TimingModule("Soil")
 
@@ -1880,7 +1994,7 @@ class Soil(Module):
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
-        timer.new_split("Vertical transport")
+        timer.finish_split("Vertical transport")
 
         if __debug__:
             assert balance_check(
@@ -1920,7 +2034,7 @@ class Soil(Module):
         assert not np.isnan(runoff).any()
         assert runoff.dtype == np.float32
 
-        timer.new_split("Evapotranspiration")
+        timer.finish_split("Evapotranspiration")
 
         mask_soil_evaporation = self.HRU.var.land_use_type < SEALED
         mask_transpiration = self.HRU.var.land_use_type < SEALED
@@ -2129,7 +2243,7 @@ class Soil(Module):
                     },
                 )
 
-        timer.new_split("Finalizing")
+        timer.finish_split("Finalizing")
         if self.model.timing:
             print(timer)
 
@@ -2198,7 +2312,7 @@ class Soil(Module):
                 HRU_data=groundwater_recharge_forest_plantFATE_HRU, fn="weightednanmean"
             )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return (
             interflow,

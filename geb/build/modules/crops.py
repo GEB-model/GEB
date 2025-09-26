@@ -21,7 +21,9 @@ from ..workflows.farmers import get_farm_locations
 
 
 class Crops:
-    def __init__(self):
+    """Contains all build methods for setting up crops for GEB."""
+
+    def __init__(self) -> None:
         pass
 
     @build_method(depends_on=[])
@@ -29,7 +31,7 @@ class Crops:
         self,
         crop_data: dict,
         type: str = "MIRCA2000",
-    ):
+    ) -> None:
         assert type in ("MIRCA2000", "GAEZ")
         for crop_id, crop_values in crop_data.items():
             assert "name" in crop_values
@@ -92,7 +94,7 @@ class Crops:
         self,
         source: Union[str, None] = "MIRCA2000",
         crop_specifier: Union[str, None] = None,
-    ):
+    ) -> None:
         """Sets up the crops data for the model."""
         self.logger.info("Preparing crops data")
 
@@ -139,8 +141,7 @@ class Crops:
             A dictionary containing processed crop data in a time series format or as a constant value.
 
         Raises:
-            ValueError
-                If crop_prices is neither a valid file path nor an integer/float.
+            ValueError: If crop_prices is neither a valid file path nor an integer/float.
 
         Notes:
             The function performs the following steps:
@@ -602,20 +603,23 @@ class Crops:
 
         return data_out
 
-    def assign_crop_price_inflation(self, costs, unique_regions):
+    def assign_crop_price_inflation(
+        self, costs: pd.DataFrame, unique_regions: pd.DataFrame
+    ) -> pd.DataFrame:
         """Determines the price inflation of all crops in the region and adds a column that describes this inflation.
 
         If there is no data for a certain year, the inflation rate is taken from the socioeconomics data.
 
-        Parameters
-        ----------
-        costs : DataFrame
-            A DataFrame containing the cost data for different regions. The DataFrame should be indexed by region IDs.
+        Args:
+            costs: A DataFrame containing crop prices for different regions. The DataFrame should be indexed by region IDs.
+            unique_regions: A DataFrame containing unique regions with their IDs and other attributes.
 
         Returns:
-        -------
-        DataFrame
             The updated DataFrame with a new column 'changes' that contains the average price changes for each region.
+
+        To Do:
+            Is it possible to use the regions from the costs DataFrame instead of the unique_regions DataFrame?
+
         """
         costs["_crop_price_inflation"] = np.nan
         costs["_crop_price_LCU_USD"] = np.nan
@@ -666,26 +670,26 @@ class Crops:
     def inter_and_extrapolate_prices(self, data, unique_regions, adjust_currency=False):
         """Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
 
-        Parameters
-        ----------
-        data : DataFrame
-            A DataFrame containing crop price data for different regions. The DataFrame should be indexed by region IDs
+        Args:
+            data: A DataFrame containing crop price data for different regions. The DataFrame should be indexed by region IDs
             and have columns corresponding to different crops.
+            unique_regions: A DataFrame containing unique regions with their IDs and other attributes.
+            adjust_currency: If True, adjusts the crop prices based on currency conversion rates.
 
         Returns:
-        -------
-        DataFrame
-            The updated DataFrame with interpolated and extrapolated crop prices. Columns for 'others perennial' and 'others annual'
-            crops are also added.
+            Updated DataFrame with interpolated and extrapolated crop prices. Columns for 'others perennial' and 'others annual'
+                crops are also added.
 
         Notes:
-        -----
-        The function performs the following steps:
-        1. Extracts crop names from the internal crop data dictionary.
-        2. Defines additional crops that fall under 'others perennial' and 'others annual' categories.
-        3. Processes the data to compute average prices for these additional crops.
-        4. Filters and updates the original data with the computed averages.
-        5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
+            The function performs the following steps:
+                1. Extracts crop names from the internal crop data dictionary.
+                2. Defines additional crops that fall under 'others perennial' and 'others annual' categories.
+                3. Processes the data to compute average prices for these additional crops.
+                4. Filters and updates the original data with the computed averages.
+                5. Interpolates and extrapolates missing prices for each crop in each region based on the 'changes' column.
+
+        To Do:
+            Ensure adjust_currency is better explained and used correctly.
         """
         # Interpolate and extrapolate missing prices for each crop in each region based on the 'changes' column
         for _, region in unique_regions.iterrows():
@@ -745,16 +749,7 @@ class Crops:
         cultivation_costs: Optional[Union[str, int, float]] = 0,
         translate_crop_names: Optional[Dict[str, str]] = None,
         adjust_currency=False,
-    ):
-        """Sets up the cultivation costs for the model.
-
-        Parameters
-        ----------
-        cultivation_costs : str or int or float, optional
-            The file path or integer of cultivation costs. If a file path is provided, the file is loaded and parsed as JSON.
-            The dictionary should have a 'time' key with a list of time steps, and a 'crops' key with a dictionary of crop
-            IDs and their cultivation costs. If .
-        """
+    ) -> None:
         cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
             translate_crop_names=translate_crop_names,
@@ -776,16 +771,7 @@ class Crops:
         crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
         translate_crop_names: Optional[Dict[str, str]] = None,
         adjust_currency=False,
-    ):
-        """Sets up the crop prices for the model.
-
-        Parameters
-        ----------
-        crop_prices : str or int or float, optional
-            The file path or integer of crop prices. If a file path is provided, the file is loaded and parsed as JSON.
-            The dictionary should have a 'time' key with a list of time steps, and a 'crops' key with a dictionary of crop
-            IDs and their prices.
-        """
+    ) -> None:
         crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,
@@ -795,7 +781,7 @@ class Crops:
         self.set_dict(crop_prices, name="crops/cultivation_costs")
 
     @build_method(depends_on=[])
-    def determine_crop_area_fractions(self, resolution="5-arcminute"):
+    def determine_crop_area_fractions(self, resolution="5-arcminute") -> None:
         output_folder = "plot/mirca_crops"
         os.makedirs(output_folder, exist_ok=True)
 
@@ -937,7 +923,7 @@ class Crops:
         reduce_crops=False,
         replace_base=False,
         export=False,
-    ):
+    ) -> None:
         years = [2000, 2005, 2010, 2015]
         nr_runs = 20
 
@@ -955,7 +941,7 @@ class Crops:
         replace_base=False,
         minimum_area_ratio=0.01,
         replace_crop_calendar_unit_code={},
-    ):
+    ) -> None:
         n_farmers = self.array["agents/farmers/id"].size
 
         MIRCA_unit_grid = xr.open_dataarray(
@@ -1101,7 +1087,7 @@ class Crops:
                     ]
                     all_farmers_assigned.append(farmer_idx)
 
-        def check_crop_calendar(crop_calendar_per_farmer):
+        def check_crop_calendar(crop_calendar_per_farmer) -> None:
             # this part asserts that the crop calendar is correctly set up
             # particulary that no two crops are planted at the same time
             for farmer_crop_calender in crop_calendar_per_farmer:

@@ -1,24 +1,34 @@
+"""This module is based on the HGRAPHER and COAST-RP modeling frameworks.
+
+Source code can be found on https://doi.org/10.5281/zenodo.7912730.
+"""
+
 import itertools
 import os
 import warnings
 from datetime import datetime, timedelta
+from typing import Any, Tuple
 
-import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.signal as ss
 
-from ...hydrology.HRUs import load_geom
-from ...workflows.io import load_table
+from ....hydrology.HRUs import load_geom
+from ....workflows.io import load_table
 
 warnings.filterwarnings("ignore")
 
 
-def generate_storm_surge_hydrographs(model, make_plot=True):
-    gtsm_folder = model.input_folder / "other" / "gtsm"
+def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> None:
+    """Generate storm surge hydrographs for a given GEB model.
+
+    Args:
+        model: The GEB model instance.
+        make_plot: Whether to create plots of the hydrographs.
+    """
     # read geojson file to get station ids
-    station_ids = load_geom(model.files["geoms"]["gtsm/stations_coast_rp"])
+    station_ids = load_geom(model.files["geom"]["gtsm/stations_coast_rp"])
     os.makedirs("plot/gtsm", exist_ok=True)
     percentile = 0.99
     offset = 0
@@ -59,7 +69,7 @@ def generate_storm_surge_hydrographs(model, make_plot=True):
             )
 
     # save storm tide hydrograph (normal tide)
-    export_folder = gtsm_folder / "hydrographs"
+    export_folder = model.output_folder / "hydrographs"
     os.makedirs(export_folder, exist_ok=True)
     export = {}
     for station, rp in df_event.items():
@@ -88,13 +98,20 @@ def generate_storm_surge_hydrographs(model, make_plot=True):
             export_folder / f"gtsm_spring_tide_hydrograph_rp{rp:04d}.csv"
         )
 
-    # df_event_to_file = df_event["twl"].to_frame(name=station)
-    # normal_tide = pd.concat([normal_tide, df_event_to_file], axis=1)
-    # df_event_spring_to_file = df_event_spring["twl"].to_frame(name=station)
-    # spring_tide = pd.concat([spring_tide, df_event_spring_to_file], axis=1)
 
+def generate_tide_signals(
+    station: int, tidepd: pd.Series, make_plot: bool = True
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Generate tidal signals for a given station.
 
-def generate_tide_signals(station, tidepd, make_plot=True):
+    Args:
+        station: The station ID.
+        tidepd: The tidal data for the station.
+        make_plot: Whether to create a plot of the tidal signals.
+
+    Returns:
+        A tuple containing the average and spring tidal signals.
+    """
     tidepd = tidepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
     tidepd = tidepd.dropna()  # drop NaN values
     # tidepd = tidepd.set_index("time")
@@ -255,7 +272,20 @@ def generate_tide_signals(station, tidepd, make_plot=True):
     return average_tide_signal, spring_tide_signal
 
 
-def generate_surge_hydrograph(station, surgepd, percentile, make_plot):
+def generate_surge_hydrograph(
+    station: int, surgepd: pd.Series, percentile: float, make_plot: bool
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Generate storm surge hydrographs for a given GEB model.
+
+    Args:
+        station: The station ID.
+        surgepd: The surge data for the station.
+        percentile: The percentile to use for peak selection.
+        make_plot: Whether to create plots of the hydrographs.
+
+    Returns:
+        A tuple containing the average and peak surge hydrographs arrays.
+    """
     # read surge data
     surgepd = surgepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
     surgepd = surgepd.dropna()  # drop NaN values
@@ -423,19 +453,39 @@ def generate_surge_hydrograph(station, surgepd, percentile, make_plot):
 
 
 def generate_storm_tide_hydrograph(
-    rps,
-    station,
-    tidepd,
-    surgepd,
-    average_tide_signal,
-    spring_tide_signal,
-    surge_hydrograph_duration_mean,
-    surge_hydrograph_height,
-    percentile,
-    rp,
-    offset,
-    make_plot,
-):
+    rps: pd.DataFrame,
+    station: int,
+    tidepd: pd.DataFrame,
+    surgepd: pd.DataFrame,
+    average_tide_signal: np.ndarray,
+    spring_tide_signal: np.ndarray,
+    surge_hydrograph_duration_mean: np.ndarray,
+    surge_hydrograph_height: np.ndarray,
+    percentile: float,
+    rp: int,
+    offset: int,
+    make_plot: bool,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """This function generates storm tide hydrographs for a given station.
+
+    Args:
+        rps: A DataFrame containing return period statistics.
+        station: The station ID.
+        tidepd: A DataFrame containing tide predictions.
+        surgepd: A DataFrame containing surge predictions.
+        average_tide_signal: An array containing the average tide signal.
+        spring_tide_signal: An array containing the spring tide signal.
+        surge_hydrograph_duration_mean: An array containing the mean duration of the surge hydrograph.
+        surge_hydrograph_height: An array containing the height of the surge hydrograph.
+        percentile: The percentile to use for the hydrograph.
+        rp: The return period.
+        offset: The offset for the hydrograph.
+        make_plot: Whether to create a plot.
+
+    Returns:
+        A tuple containing the DataFrames with the tide and surge hydrographs.
+
+    """
     surgepd = surgepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
     tidepd = tidepd[datetime(1980, 1, 1) : datetime(2017, 12, 31, 23, 50)]
 

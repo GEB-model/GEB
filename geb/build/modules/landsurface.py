@@ -1,18 +1,18 @@
+"""Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
+
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
+from geb.workflows.raster import rasterize_like, repeat_grid
 
-from ..workflows.conversions import (
-    COUNTRY_NAME_TO_ISO3,
-)
 from ..workflows.general import (
     bounds_are_within,
     calculate_cell_area,
     pad_xy,
-    repeat_grid,
     resample_chunked,
     resample_like,
 )
@@ -20,15 +20,15 @@ from ..workflows.soilgrids import load_soilgrids
 
 
 class LandSurface:
-    def __init__(self):
+    """Implements land surface submodel, responsible for land surface characteristics and processes."""
+
+    def __init__(self) -> None:
+        """Initialize the LandSurface class."""
         pass
 
     @build_method(depends_on=["setup_regions_and_land_use"])
     def setup_cell_area(self) -> None:
         """Sets up the cell area map for the model.
-
-        Raises:
-            ValueError: If the grid mask is not available.
 
         Notes:
             This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
@@ -84,18 +84,23 @@ class LandSurface:
     @build_method(depends_on=["setup_hydrography"])
     def setup_elevation(
         self,
-        DEMs=[
+        DEMs: list[dict[str, str | float]] = [
             {
                 "name": "fabdem",
                 "zmin": 0.001,
             },
             {"name": "gebco"},
         ],
-    ):
+    ) -> None:
         """Sets up the elevation data for the model.
 
         For configuration of DEMs parameters, see
         https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html.
+
+        Args:
+            DEMs: A list of dictionaries containing the names and parameters of the DEMs to use. Each dictionary should have a 'name' key
+                with the name of the DEM, and optionally other keys such as 'zmin' for minimum elevation.
+
         """
         if not DEMs:
             DEMs = []
@@ -156,69 +161,64 @@ class LandSurface:
                 byteshuffle=True,
             )
             DEM["path"] = f"DEM/{DEM['name']}"
-        lecz = DEM_raster < 10
-        lecz.values = lecz.values.astype(np.float32)
+        low_elevation_coastal_zone = DEM_raster < 10
+        low_elevation_coastal_zone.values = low_elevation_coastal_zone.values.astype(
+            np.float32
+        )
         self.set_other(
-            lecz, name="landsurface/low_elevation_coastal_zone"
+            low_elevation_coastal_zone, name="landsurface/low_elevation_coastal_zone"
         )  # Maybe remove this
         self.set_dict(DEMs, name="hydrodynamics/DEM_config")
 
     @build_method(depends_on=[])
     def setup_regions_and_land_use(
         self,
-        region_database="GADM_level1",
-        unique_region_id="GID_1",
-        ISO3_column="GID_0",
-        land_cover="esa_worldcover_2021_v200",
-    ):
+        region_database: str = "GADM_level1",
+        unique_region_id: str = "GID_1",
+        ISO3_column: str = "GID_0",
+        land_cover: str = "esa_worldcover_2021_v200",
+    ) -> None:
         """Sets up the (administrative) regions and land use data for GEB.
 
         The regions can be used for multiple purposes, for example for creating the
         agents in the model, assigning unique crop prices and other economic variables
         per region and for aggregating the results.
 
-        Parameters
-        ----------
-        region_database : str, optional
-            The name of the region database to use. Default is 'GADM_level1'.
-        unique_region_id : str, optional
-            The name of the column in the region database that contains the unique region ID. Default is 'UID',
-            which is the unique identifier for the GADM database.
+        Args:
+            region_database: The name of the region database to use. Default is 'GADM_level1'.
+            unique_region_id: The name of a column in the region database that contains a unique region ID. Default is 'UID',
+                which is the unique identifier for the GADM database.
+            ISO3_column: The name of a column in the region database that contains the ISO3 code for the region. Default is 'ISO3'.
+            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021_v200'.
 
         Notes:
-        -----
-        This method sets up the regions and land use data for GEB. It first retrieves the region data from
-        the specified region database and sets it as a geometry in the model. It then pads the subgrid to cover the entire
-        region and retrieves the land use data from the ESA WorldCover dataset. The land use data is reprojected to the
-        padded subgrid and the region ID is rasterized onto the subgrid. The cell area for each region is calculated and
-        set as a grid in the model. The MERIT dataset is used to identify rivers, which are set as a grid in the model. The
-        land use data is reclassified into five classes and set as a grid in the model. Finally, the cultivated land is
-        identified and set as a grid in the model.
-
-        The resulting grids are set as attributes of the model with names of the form '{grid_name}' or
-        'landsurface/{grid_name}'.
+            This method sets up the regions and land use data for GEB. It first retrieves the region data from
+            the specified region database and sets it as a geometry in the model. It then pads the subgrid to cover the entire
+            region and retrieves the land use data from the ESA WorldCover dataset. The land use data is reprojected to the
+            padded subgrid and the region ID is rasterized onto the subgrid. The cell area for each region is calculated and
+            set as a grid in the model. The MERIT dataset is used to identify rivers, which are set as a grid in the model. The
+            land use data is reclassified into five classes and set as a grid in the model. Finally, the cultivated land is
+            identified and set as a grid in the model.
         """
-        regions = self.data_catalog.get_geodataframe(
-            region_database,
-            geom=self.region,
-            predicate="intersects",
-        ).rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
-
-        # save global countries and their centroids (used for calculating euclidian distances)
-        global_countries = self.data_catalog.get_geodataframe("GADM_level0").rename(
-            columns={"GID_0": "ISO3"}
+        regions: gpd.GeoDataFrame = (
+            self.new_data_catalog.get(region_database)
+            .read(geom=self.region.union_all())
+            .rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
         )
+
+        global_countries: gpd.GeoDataFrame = (
+            self.new_data_catalog.get("GADM_level0")
+            .read()
+            .rename(columns={"GID_0": "ISO3"})
+        )
+
         global_countries["geometry"] = global_countries.centroid
+        # Renaming XKO to XKX
+        self.logger.info("Renaming XKO to XKX in global countries")
         global_countries["ISO3"] = global_countries["ISO3"].replace(
             {"XKO": "XKX"}
         )  # XKO is a deprecated code for Kosovo, XKX is the new code
         global_countries = global_countries.set_index("ISO3")
-
-        # Renaming XKO to XKX
-        global_countries = global_countries.rename(columns={"XKO": "XKX"})
-        self.logger.info(
-            f"Renamed XKO to XKX in global countries: {global_countries.columns}"
-        )
 
         self.set_geom(global_countries, name="global_countries")
 
@@ -246,7 +246,7 @@ class LandSurface:
             {"ISO3": {"XKO": "XKX"}}, inplace=True
         )  # XKO is a deprecated code for Kosovo, XKX is the new code
 
-        self.logger.info(f"Renamed XKO to XKX in regions: {regions.columns}")
+        self.logger.info(f"Renamed XKO to XKX in regions")
 
         self.set_geom(regions, name="regions")
 
@@ -286,11 +286,11 @@ class LandSurface:
             .isel(band=0)
         )
 
-        reprojected_land_use = resample_chunked(
+        reprojected_land_use: xr.DataArray = resample_chunked(
             land_use, region_mask.chunk({"x": 1000, "y": 1000}), method="nearest"
         )
 
-        reprojected_land_use = self.set_region_subgrid(
+        reprojected_land_use: xr.DataArray = self.set_region_subgrid(
             reprojected_land_use,
             name="landsurface/original_land_use",
         )
@@ -301,7 +301,17 @@ class LandSurface:
             all_touched=True,
         )
         region_ids.attrs["_FillValue"] = -1
-        region_ids = self.set_region_subgrid(region_ids, name="region_ids")
+
+        region_ids_: xr.DataArray = rasterize_like(
+            gpd=self.geom["regions"],
+            column="region_id",
+            raster=region_mask,
+            dtype=np.int32,
+            nodata=0,
+        ).compute()
+        region_ids: xr.DataArray = self.set_region_subgrid(
+            region_ids, name="region_ids"
+        )
 
         full_region_land_use_classes = reprojected_land_use.raster.reclassify(
             pd.DataFrame.from_dict(
@@ -350,7 +360,7 @@ class LandSurface:
     @build_method(depends_on=[])
     def setup_land_use_parameters(
         self,
-        land_cover="esa_worldcover_2021_v200",
+        land_cover: str = "esa_worldcover_2021_v200",
     ) -> None:
         """Sets up the land use parameters for the model.
 
@@ -473,24 +483,20 @@ class LandSurface:
     def setup_soil_parameters(self) -> None:
         """Sets up the soil parameters for the model.
 
-        Parameters
-        ----------
-
         Notes:
-        -----
-        This method sets up the soil parameters for the model by retrieving soil data from the CWATM dataset and interpolating
-        the data to the model grid. It first retrieves the soil dataset from the `data_catalog`, and
-        then retrieves the soil parameters and storage depth data for each soil layer. It then interpolates the data to the
-        model grid using the specified interpolation method and sets the resulting grids as attributes of the model.
+            This method sets up the soil parameters for the model by retrieving soil data from the CWATM dataset and interpolating
+            the data to the model grid. It first retrieves the soil dataset from the `data_catalog`, and
+            then retrieves the soil parameters and storage depth data for each soil layer. It then interpolates the data to the
+            model grid using the specified interpolation method and sets the resulting grids as attributes of the model.
 
-        Additionally, this method sets up the percolation impeded and crop group data by retrieving the corresponding data
-        from the soil dataset and interpolating it to the model grid.
+            Additionally, this method sets up the percolation impeded and crop group data by retrieving the corresponding data
+            from the soil dataset and interpolating it to the model grid.
 
-        The resulting soil parameters are set as attributes of the model with names of the form 'soil/{parameter}{soil_layer}',
-        where {parameter} is the name of the soil parameter (e.g. 'alpha', 'ksat', etc.) and {soil_layer} is the index of the
-        soil layer (1-3; 1 is the top layer). The storage depth data is set as attributes of the model with names of the
-        form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
-        with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
+            The resulting soil parameters are set as attributes of the model with names of the form 'soil/{parameter}{soil_layer}',
+            where {parameter} is the name of the soil parameter (e.g. 'alpha', 'ksat', etc.) and {soil_layer} is the index of the
+            soil layer (1-3; 1 is the top layer). The storage depth data is set as attributes of the model with names of the
+            form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
+            with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
         """
         ds = load_soilgrids(self.data_catalog, self.subgrid, self.region)
 

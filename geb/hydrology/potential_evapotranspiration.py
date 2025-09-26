@@ -374,7 +374,7 @@ def PET(
 class PotentialEvapotranspiration(Module):
     """Calculate potential evapotranspiration from climate data mainly based on FAO 56."""
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -385,13 +385,13 @@ class PotentialEvapotranspiration(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.potential_evapotranspiration"
 
-    def spinup(self):
+    def spinup(self) -> None:
         pass
 
-    def step(self):
+    def step(self) -> None:
         """Dynamic part of the potential evaporation module.
 
         Caluclation is based on Penman Monteith - FAO 56.
@@ -428,4 +428,4 @@ class PotentialEvapotranspiration(Module):
         assert self.HRU.var.reference_evapotranspiration_water.dtype == np.float32
 
         self.model.agents.crop_farmers.save_water_deficit()
-        self.report(self, locals())
+        self.report(locals())

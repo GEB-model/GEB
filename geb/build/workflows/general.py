@@ -20,10 +20,6 @@ from scipy.interpolate import griddata
 from tqdm import tqdm
 
 
-def repeat_grid(data, factor):
-    return data.repeat(factor, axis=-2).repeat(factor, axis=-1)
-
-
 def calculate_cell_area(affine_transform: Affine, shape: tuple[int, int]) -> np.ndarray:
     RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
     distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
@@ -54,7 +50,7 @@ def clip_with_grid(ds, mask):
     return ds.isel(bounds), bounds
 
 
-def bounds_are_within(small_bounds, large_bounds, tollerance=0):
+def bounds_are_within(small_bounds, large_bounds, tollerance=0) -> bool:
     assert small_bounds[0] + tollerance >= large_bounds[0], "Region bounds do not match"
     assert small_bounds[1] + tollerance >= large_bounds[1], "Region bounds do not match"
     assert small_bounds[2] <= large_bounds[2] + tollerance, "Region bounds do not match"
@@ -217,6 +213,9 @@ def resample_like(
     Returns:
         A new DataArray that has been resampled to match the target's grid.
 
+    Raises:
+        ValueError: if the method is not 'bilinear', 'nearest', or 'conservative'.
+
     """
     source_spatial_ref: Any = source.spatial_ref
 
@@ -278,7 +277,23 @@ def get_area_definition(da: xr.DataArray) -> AreaDefinition:
     )
 
 
-def _fill_in_coords(target_coords, source_coords, data_dims):
+def _fill_in_coords(
+    target_coords: xr.core.coordinates.DataArrayCoordinates,
+    source_coords: xr.core.coordinates.DataArrayCoordinates,
+    data_dims: tuple[str, ...],
+):
+    """Fill in missing coordinates that are also dimensions from source except for 'x' and 'y' which are taken from target.
+
+    For example useful to fill the time coordinate
+
+    Args:
+        target_coords: All coordinates from the target DataArray.
+        source_coords: All coordinates from the source DataArray.
+        data_dims: Dimensions to transfer coordinates for. 'x' and 'y' are skipped.
+
+    Returns:
+        A list of coordinates in the order of data_dims.
+    """
     x_coord, y_coord = target_coords["x"], target_coords["y"]
     coords = []
     for key in data_dims:
@@ -352,49 +367,3 @@ def resample_chunked(
     )
     da.rio.set_crs(source.rio.crs)
     return da
-
-
-def validate_farm_size_data(
-    agricultural_area_db_ha: pd.Series,
-    region_n_holdings: pd.Series,
-    size_class_boundaries: dict,
-    ISO3: str,
-    tolerance: float = 0.3,
-) -> None:
-    """Validate that agricultural area is consistent with farm size class boundaries.
-
-    Args:
-        agricultural_area_db_ha: Agricultural area in hectares per size class.
-        region_n_holdings: Number of holdings per size class.
-        size_class_boundaries: Dictionary mapping size class names to (min, max) boundaries in m².
-        ISO3: ISO3 country code for the region.
-        tolerance: Tolerance for validation (default: 0.3 = 30%).
-
-    Raises:
-        ValueError: If agricultural area falls outside expected range for any size class.
-    """
-    for size_class in agricultural_area_db_ha.index:
-        actual_area = agricultural_area_db_ha[size_class]
-
-        # Get the size class boundaries for validation
-        min_size_ha, max_size_ha = size_class_boundaries[size_class]
-        # Convert from m² to ha
-        min_size_ha = min_size_ha / 10000
-        max_size_ha = max_size_ha / 10000 if max_size_ha != np.inf else np.inf
-
-        # Calculate expected area range based on class boundaries
-        min_expected_area = region_n_holdings[size_class] * min_size_ha
-        max_expected_area = region_n_holdings[size_class] * max_size_ha
-
-        # Check if actual area falls within reasonable bounds
-        if not (
-            min_expected_area * (1 - tolerance)
-            <= actual_area
-            <= max_expected_area * (1 + tolerance)
-        ):
-            raise ValueError(
-                f"Incorrect farm size data for region {ISO3}. "
-                f"Size class {size_class}: agricultural area ({actual_area:.1f} ha) outside expected range "
-                f"[{min_expected_area * (1 - tolerance):.1f}, {max_expected_area * (1 + tolerance):.1f}] ha "
-                f" Check the farm size data and correct the data, Tim can help."
-            )

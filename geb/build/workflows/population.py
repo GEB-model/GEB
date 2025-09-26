@@ -1,24 +1,27 @@
+"""Load GLOPOP-S population data."""
+
 import gzip
 import zipfile
 
 import numpy as np
 import pandas as pd
 import rioxarray
+import xarray as xr
+from hydromt.data_catalog import DataCatalog
 
 
-def load_GHS_OBAT(data_catalog, iso3):
-    GHS_OBAT = data_catalog.get_source("GHS_OBAT")
-    data = pd.read_csv(GHS_OBAT.path.format(iso3=iso3))[
-        ["id", "lon", "lat", "height", "use", "area"]
-    ]
-    # only use residential (for now)
-    data = data[data["use"] == 1]
+def load_GLOPOP_S(
+    data_catalog: DataCatalog, GDL_region: str
+) -> tuple[pd.DataFrame, xr.DataArray]:
+    """Load GLOPOP-S data for a given GDL region.
 
-    return data
+    Args:
+        data_catalog: A data catalog with GLOPOP-S data sources.
+        GDL_region: The GDL region to load data for.
 
-
-def load_GLOPOP_S(data_catalog, GDL_region):
-    # Load GLOPOP-S data. This is a binary file and has no proper loading in hydromt. So we use the data catalog to get the path and format the path with the regions and load it with NumPy
+    Returns:
+        A tuple with a DataFrame containing the GLOPOP-S data and a DataArray with the GLOPOP grid.
+    """
     GLOPOP_S_attribute_names = [
         "HID",
         "RELATE_HEAD",
@@ -38,6 +41,7 @@ def load_GLOPOP_S(data_catalog, GDL_region):
         "GRID_CELL",  # CHECK WHAT THE NEW COLUMN IS (ASK MARIJN)
     ]
 
+    # Load GLOPOP-S data. This is a binary file and has no proper loading in hydromt. So we use the data catalog to get the path and format the path with the regions and load it with NumPy
     GLOPOP_SG = data_catalog.get_source("GLOPOP-SG")
 
     # load the GLOPOP files for the specified GDL region

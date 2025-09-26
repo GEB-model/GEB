@@ -15,7 +15,7 @@ class LiveStockFarmers(AgentBaseClass):
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
 
-    def __init__(self, model, agents, reduncancy):
+    def __init__(self, model, agents, reduncancy) -> None:
         super().__init__(model)
 
         if self.model.simulate_hydrology:
@@ -33,7 +33,7 @@ class LiveStockFarmers(AgentBaseClass):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "agents.livestock_farmers"
 
     def spinup(self) -> None:
@@ -107,4 +107,4 @@ class LiveStockFarmers(AgentBaseClass):
 
     def step(self) -> None:
         """This function is run each timestep."""
-        self.report(self, locals())
+        self.report(locals())

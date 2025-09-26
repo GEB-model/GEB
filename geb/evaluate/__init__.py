@@ -1,3 +1,9 @@
+"""
+Evaluation utilities for the GEB model.
+
+Contains the Evaluate class which contains evaluation routines for model runs.
+"""
+
 from pathlib import Path
 
 from .hydrology import Hydrology
@@ -10,7 +16,7 @@ class Evaluate(Hydrology):
         model: The GEB model instance.
     """
 
-    def __init__(self, model):
+    def __init__(self, model) -> None:
         self.model = model
 
     def run(
@@ -34,11 +40,7 @@ class Evaluate(Hydrology):
             correct_Q_obs: If True, corrects the observed discharge values.
 
         Raises:
-            AssertionError: If methods is not a list or tuple, or if any method is not a string.
             ValueError: If a specified method is not implemented in the Evaluate class.
-
-        Returns:
-            None
         """
         if methods is None:
             methods: list = [

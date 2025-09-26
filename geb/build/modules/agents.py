@@ -1,6 +1,5 @@
 import json
 import math
-import os
 from datetime import datetime
 
 import geopandas as gpd
@@ -31,12 +30,14 @@ from ..workflows.conversions import (
     setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
-from ..workflows.general import clip_with_grid, validate_farm_size_data
+from ..workflows.general import clip_with_grid
 from ..workflows.population import load_GLOPOP_S
 
 
 class Agents:
-    def __init__(self):
+    """Contains all build methods for the agents for GEB."""
+
+    def __init__(self) -> None:
         pass
 
     @build_method(
@@ -47,7 +48,7 @@ class Agents:
             "setup_household_characteristics",
         ]
     )
-    def setup_water_demand(self):
+    def setup_water_demand(self) -> None:
         """Sets up the water demand data for GEB.
 
         Notes:
@@ -62,6 +63,10 @@ class Agents:
             monthly time step, but is assumed to be constant over the year.
 
             The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
+
+        Raises:
+            ValueError: If required data is missing in the data sources.
+
         """
         start_model_time = self.start_date.year
         end_model_time = self.end_date.year
@@ -270,7 +275,7 @@ class Agents:
 
         self.logger.info("Setting up other water demands")
 
-        def set_demand(file, variable, name, ssp):
+        def set_demand(file, variable, name, ssp) -> None:
             ds_historic = xr.open_dataset(
                 self.data_catalog.get_source(f"cwatm_{file}_historical_year").path,
                 decode_times=False,
@@ -328,10 +333,14 @@ class Agents:
         )
 
     @build_method
-    def setup_income_distribution_parameters(self):
+    def setup_income_distribution_parameters(self) -> None:
         """Sets up the income distributions for GEB.
 
-        This function used WID data on income distributions to generate income distribution profiles for each region.
+        Notes:
+            This function used WID data on income distributions to generate income distribution profiles for each region.
+            It retrieves the OECD income distribution data, processes it to extract mean and median income values for each country,
+            and generates synthetic income distributions based on these parameters assuming a log-normal distribution. The resulting
+            distributions are set as tables (be mindful for models outside of the EU that we do not yet account for currencies).
         """
         income_distribution_parameters = {}
         income_distributions = {}
@@ -344,14 +353,24 @@ class Agents:
         cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         oecd_idd = oecd_idd[cols_to_keep]
         # only done to check countries in region, could probably be done more efficiently
-        countries = self.data_catalog.get_geodataframe(
-            "GADM_level0",
-            geom=self.region,
+        countries = self.new_data_catalog.get("GADM_level0").read(
+            geom=self.region.union_all(),
         )
+        # setup donor countries for country missing in oecd data
+        donor_countries = setup_donor_countries(self, oecd_idd["REF_AREA"])
+
         for country in countries["GID_0"]:
             income_distribution_parameters[country] = {}
             income_distributions[country] = {}
-            oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
+            if country not in oecd_idd["REF_AREA"].values:
+                donor = donor_countries[country]
+                self.logger.info(
+                    f"Missing income distribution data for {country}, using donor country {donor}"
+                )
+                oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == donor]
+            else:
+                oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
+
             # take the most recent year
             most_recent_year = oecd_widd_country[
                 oecd_widd_country["TIME_PERIOD"]
@@ -386,7 +405,7 @@ class Agents:
         self.set_table(income_distributions_pd, "income/national_distribution")
 
     @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
-    def setup_economic_data(self):
+    def setup_economic_data(self) -> None:
         """Sets up the economic data for GEB.
 
         Notes:
@@ -608,7 +627,7 @@ class Agents:
         self.set_dict(lcu_dict, name="socioeconomics/LCU_per_USD")
 
     @build_method
-    def setup_irrigation_sources(self, irrigation_sources):
+    def setup_irrigation_sources(self, irrigation_sources) -> None:
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
 
     @build_method(depends_on=["set_time_range", "setup_economic_data"])
@@ -621,36 +640,29 @@ class Agents:
         capital_cost_sprinkler: float,
         capital_cost_drip: float,
         reference_year: int,
-        start_year: int,
-        end_year: int,
-    ):
+    ) -> None:
         """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
 
-        Parameters
-        ----------
-        well_price : float
-            The price of a well in the reference year.
-        upkeep_price_per_m2 : float
-            The upkeep price per square meter of a well in the reference year.
-        reference_year : int
-            The reference year for the well prices and upkeep prices.
-        start_year : int
-            The start year for the well prices and upkeep prices.
-        end_year : int
-            The end year for the well prices and upkeep prices.
+        Args:
+            operation_surface: The operation cost for surface irrigation in the reference year.
+            operation_sprinkler: The operation cost for sprinkler irrigation in the reference year.
+            operation_drip: The operation cost for drip irrigation in the reference year.
+            capital_cost_surface: The capital cost for surface irrigation in the reference year.
+            capital_cost_sprinkler: The capital cost for sprinkler irrigation in the reference year.
+            capital_cost_drip: The capital cost for drip irrigation in the reference year.
+            reference_year: The reference year for the well prices and upkeep prices.
 
         Notes:
-        -----
-        This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
-        store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
-        data dimension.
+            This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
+            retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
+            store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
+            data dimension.
 
-        The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
-        resulting prices are stored in the dictionaries with the region ID as the key.
+            The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
+            resulting prices are stored in the dictionaries with the region ID as the key.
 
-        The resulting well prices and upkeep prices data are set as dictionary with names of the form
-        'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
+            The resulting well prices and upkeep prices data are set as dictionary with names of the form
+            'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
@@ -665,6 +677,9 @@ class Agents:
             "capital_cost_sprinkler": capital_cost_sprinkler,
             "capital_cost_drip": capital_cost_drip,
         }
+
+        start_year = self.start_date.year
+        end_year = self.end_date.year
 
         # Iterate over each price type and calculate the prices across years for each region
         for price_type, initial_price in price_types.items():
@@ -703,30 +718,26 @@ class Agents:
         WHY_20: float,
         WHY_30: float,
         reference_year: int,
-    ):
+    ) -> None:
         """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
 
-        Parameters
-        ----------
-        well_price : float
-            The price of a well in the reference year.
-        upkeep_price_per_m2 : float
-            The upkeep price per square meter of a well in the reference year.
-        reference_year : int
-            The reference year for the well prices and upkeep prices.
+        Args:
+            WHY_10: the price for a well in WHY_10 in the reference year.
+            WHY_20: the price for a well in WHY_20 in the reference year.
+            WHY_30: the price for a well in WHY_30 in the reference year.
+            reference_year: The reference year for the well prices and upkeep prices.
 
         Notes:
-        -----
-        This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
-        store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
-        data dimension.
+            This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
+            retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
+            store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
+            data dimension.
 
-        The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
-        resulting prices are stored in the dictionaries with the region ID as the key.
+            The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
+            resulting prices are stored in the dictionaries with the region ID as the key.
 
-        The resulting well prices and upkeep prices data are set as dictionary with names of the form
-        'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
+            The resulting well prices and upkeep prices data are set as dictionary with names of the form
+            'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
@@ -838,26 +849,19 @@ class Agents:
         reference_year: int,
         start_year: int,
         end_year: int,
-    ):
+    ) -> None:
         """Sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year.
 
-        Parameters
-        ----------
-        drip_irrigation_price : float
-            The price of a drip_irrigation in the reference year.
+        Args:
+            drip_irrigation_price: The price of a drip_irrigation in the reference year.
 
-        reference_year : int
-            The reference year for the drip_irrigation prices and upkeep prices.
-        start_year : int
-            The start year for the drip_irrigation prices and upkeep prices.
-        end_year : int
-            The end year for the drip_irrigation prices and upkeep prices.
+            reference_year: The reference year for the drip_irrigation prices and upkeep prices.
+            start_year: The start year for the drip_irrigation prices and upkeep prices.
+            end_year: The end year for the drip_irrigation prices and upkeep prices.
 
         Notes:
-        -----
-        The drip_irrigation prices are calculated by applying the inflation rates to the reference year prices. The
-        resulting prices are stored in the dictionaries with the region ID as the key.
-
+            The drip_irrigation prices are calculated by applying the inflation rates to the reference year prices. The
+            resulting prices are stored in the dictionaries with the region ID as the key.
         """
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
@@ -898,40 +902,33 @@ class Agents:
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
-    def setup_farmers(self, farmers):
+    def set_farmers_and_create_farms(self, farmers: pd.DataFrame) -> None:
         """Sets up the farmers data for GEB.
 
-        Parameters
-        ----------
-        farmers : pandas.DataFrame
-            A DataFrame containing the farmer data.
-        irrigation_sources : dict, optional
-            A dictionary mapping irrigation source names to IDs.
-        n_seasons : int, optional
-            The number of seasons to simulate.
+        Args:
+            farmers: A DataFrame containing the farmer data.
 
         Notes:
-        -----
-        This method sets up the farmers data for GEB. It first retrieves the region data from the
-        `regions` and `subgrid` grids. It then creates a `farms` grid with the same shape as the
-        `region_subgrid` grid, with a value of -1 for each cell.
+            This method sets up the farmers data for GEB. It first retrieves the region data from the
+            `regions` and `subgrid` grids. It then creates a `farms` grid with the same shape as the
+            `region_subgrid` grid, with a value of -1 for each cell.
 
-        For each region, the method clips the `cultivated_land` grid to the region and creates farms for the region using
-        the `create_farms` function, using these farmlands as well as the dataframe of farmer agents. The resulting farms
-        whose IDs correspondd to the IDs in the farmer dataframe are added to the `farms` grid for the region.
+            For each region, the method clips the `cultivated_land` grid to the region and creates farms for the region using
+            the `create_farms` function, using these farmlands as well as the dataframe of farmer agents. The resulting farms
+            whose IDs correspondd to the IDs in the farmer dataframe are added to the `farms` grid for the region.
 
-        The method then removes any farms that are outside the study area by using the `region_mask` grid. It then remaps
-        the farmer IDs to a contiguous range of integers starting from 0.
+            The method then removes any farms that are outside the study area by using the `region_mask` grid. It then remaps
+            the farmer IDs to a contiguous range of integers starting from 0.
 
-        The resulting farms data is set as agents data in the model with names of the form 'agents/farmers/farms'. The
-        crop names are mapped to IDs using the `crop_name_to_id` dictionary that was previously created. The resulting
-        crop IDs are stored in the `season_#_crop` columns of the `farmers` DataFrame.
+            The resulting farms data is set as agents data in the model with names of the form 'agents/farmers/farms'. The
+            crop names are mapped to IDs using the `crop_name_to_id` dictionary that was previously created. The resulting
+            crop IDs are stored in the `season_#_crop` columns of the `farmers` DataFrame.
 
-        If `irrigation_sources` is provided, the method sets the `irrigation_source` column of the `farmers` DataFrame to
-        the corresponding IDs.
+            If `irrigation_sources` is provided, the method sets the `irrigation_source` column of the `farmers` DataFrame to
+            the corresponding IDs.
 
-        Finally, the method sets the array data for each column of the `farmers` DataFrame as agents data in the model
-        with names of the form 'agents/farmers/{column}'.
+            Finally, the method sets the array data for each column of the `farmers` DataFrame as agents data in the model
+            with names of the form 'agents/farmers/{column}'.
         """
         regions = self.geom["regions"]
         region_ids = self.region_subgrid["region_ids"]
@@ -1011,57 +1008,39 @@ class Agents:
         self.set_array(farmers.index.values, name="agents/farmers/id")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
-    def setup_farmers_from_csv(self, path=None):
-        """Sets up the farmers data for GEB from a CSV file.
-
-        Parameters
-        ----------
-        path : str
-            The path to the CSV file containing the farmer data.
-
-        Notes:
-        -----
-        This method sets up the farmers data for GEB from a CSV file. It first reads the farmer data from
-        the CSV file using the `pandas.read_csv` method.
-
-        See the `setup_farmers` method for more information on how the farmer data is set up in the model.
-        """
-        if path is None:
-            path = self.preprocessing_dir / "agents" / "farmers" / "farmers.csv"
-        farmers = pd.read_csv(path, index_col=0)
-        self.setup_farmers(farmers)
-
     @build_method(depends_on=["setup_regions_and_land_use", "setup_cell_area"])
     def setup_create_farms(
         self,
-        region_id_column="region_id",
-        country_iso3_column="ISO3",
-        data_source="lowder",
+        region_id_column: str = "region_id",
+        country_iso3_column: str = "ISO3",
+        data_source: str = "lowder",
         size_class_boundaries=None,
-    ):
+    ) -> None:
         """Sets up the farmers for GEB.
 
-        Parameters
-        ----------
-        region_id_column : str, optional
-            The name of the column in the region database that contains the region IDs. Default is 'UID'.
-        country_iso3_column : str, optional
-            The name of the column in the region database that contains the country ISO3 codes. Default is 'ISO3'.
-        farm_size_donor_countries : dict, optional
-            Dictionary with key, value pairs of ISO3 codes. The value-country is used as donor for the key-country.
-            Default is None.
-
-
-        Notes:
-        -----
         This method sets up the farmers for GEB. This is a simplified method that generates an example set of agent data.
         It first calculates the number of farmers and their farm sizes for each region based on the agricultural data for
         that region based on the amount of farm land and data from a global database on farm sizes per country. It then
         randomly assigns crops, irrigation sources, household sizes, and daily incomes and consumption levels to each farmer.
 
         A paper that reports risk aversion values for 75 countries is this one: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2646134
+
+        Args:
+            region_id_column: The name of the column in the region database that contains the region IDs. Default is 'UID'.
+            country_iso3_column: The name of the column in the region database that contains the country ISO3 codes. Default is 'ISO3'.
+            data_source: The source of the farm size data. Default is 'lowder', which uses the Lowder et al. (2016) dataset.
+            size_class_boundaries: The boundaries for the size classes of farms. For the Lowder et al. (2016) dataset, this must be None
+                because the boundaries are defined in the dataset itself.
+
+        Raises:
+            ValueError: If the data_source is 'lowder' and size_class_boundaries is not None.
+            ValueError: If the data_source is not 'lowder' and size_class_boundaries is None.
+            ValueError: If required data is missing in the data sources.
         """
         if data_source == "lowder":
+            assert size_class_boundaries is None, (
+                "size_class_boundaries must be None when using Lowder et al. (2016) dataset"
+            )
             size_class_boundaries = {
                 "< 1 Ha": (0, 10000),
                 "1 - 2 Ha": (10000, 20000),
@@ -1266,16 +1245,83 @@ class Agents:
                 agricultural_area_db_ha = agricultural_area_db_ha[region_n_holdings > 0]
                 region_n_holdings = region_n_holdings[region_n_holdings > 0]
 
-                if ISO3 == "ROU":
-                    # Romania has an error in the farm size data source for class '100 - 200 Ha'
-                    agricultural_area_db_ha["100 - 200 Ha"] = (
-                        region_n_holdings["100 - 200 Ha"] * 150
-                    )  # 150 Ha
-                    self.logger.info(
-                        f"new agricultural area for Romania: {agricultural_area_db_ha['100 - 200 Ha']}"
-                    )
+                def correct_farm_size_data(
+                    agricultural_area_db_ha: pd.Series,
+                    region_n_holdings: pd.Series,
+                    size_class_boundaries: dict,
+                    ISO3: str,
+                    tolerance: float = 0.3,
+                ) -> pd.Series:
+                    """Checks if agricultural area is consistent with farm size class boundaries. If not, it corrects the data.
+
+                    Args:
+                        agricultural_area_db_ha: Agricultural area in hectares per size class.
+                        region_n_holdings: Number of holdings per size class.
+                        size_class_boundaries: Dictionary mapping size class names to (min, max) boundaries in m².
+                        ISO3: ISO3 country code for the region.
+                        tolerance: Tolerance for validation (default: 0.3 = 30%).
+
+                    Returns:
+                        Corrected agricultural area data as a pandas Series.
+                    """
+                    for size_class in agricultural_area_db_ha.index:
+                        actual_area = agricultural_area_db_ha.loc[size_class]
+
+                        # Get the size class boundaries for validation
+                        min_size_ha, max_size_ha = size_class_boundaries[size_class]
+                        # Convert from m² to ha
+                        min_size_ha = min_size_ha / 10000
+                        max_size_ha = (
+                            max_size_ha / 10000 if max_size_ha != np.inf else np.inf
+                        )
+
+                        # Calculate expected area range based on class boundaries
+                        min_expected_area = (
+                            region_n_holdings.loc[size_class] * min_size_ha
+                        )
+                        max_expected_area = (
+                            region_n_holdings.loc[size_class] * max_size_ha
+                        )
+
+                        # Check if actual area falls within reasonable bounds
+                        if not (
+                            min_expected_area * (1 - tolerance)
+                            <= actual_area
+                            <= max_expected_area * (1 + tolerance)
+                        ):
+                            # Correct farmsize data by adjusting to the nearest valid boundary
+                            self.logger.info(
+                                f"farm sizes correction for: {ISO3} - Size class '{size_class}' area ({actual_area:.2f} ha) "
+                                f"outside expected range [{min_expected_area * (1 - tolerance):.2f}, "
+                                f"{max_expected_area * (1 + tolerance):.2f}] ha. Correcting..."
+                            )
+
+                            corrected_area = (
+                                actual_area.copy()
+                            )  # Initialize with current value
+
+                            if max_expected_area != np.inf:
+                                # corrected area is average of min and max expected area
+                                corrected_area = (
+                                    min_expected_area + max_expected_area
+                                ) / 2
+                            else:
+                                # If max is infinite, just set to min expected area
+                                corrected_area = min_expected_area.copy()
+
+                            self.logger.info(
+                                f"corrected agri area from {actual_area:.2f} ha to {corrected_area:.2f} ha for size class '{size_class}' in {ISO3}"
+                            )
+
+                            # Apply the correction if it changed
+                            if corrected_area != actual_area:
+                                agricultural_area_db_ha[size_class] = corrected_area
+
+                    return agricultural_area_db_ha
+
                 # Validate that holdings * average farm size approximately equals agricultural area
-                validate_farm_size_data(
+
+                correct_farm_size_data(
                     agricultural_area_db_ha,
                     region_n_holdings,
                     size_class_boundaries,
@@ -1429,7 +1475,7 @@ class Agents:
             all_agents.append(region_agents)
 
         farmers = pd.concat(all_agents, ignore_index=True)
-        self.setup_farmers(farmers)
+        self.set_farmers_and_create_farms(farmers)
 
     def setup_buildings(self):
         output = {}
@@ -1479,8 +1525,13 @@ class Agents:
             output[gdl_name] = buildings_gdl
         return output
 
-    @build_method
-    def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
+    @build_method(depends_on="setup_assets")
+    def setup_household_characteristics(
+        self, maximum_age: int = 85, skip_countries_ISO3: list = []
+    ) -> None:
+        # setup buildings in region for household allocation
+        all_buildings_model_region = self.setup_buildings()
+
         # load GDL region within model domain
         GDL_regions = self.data_catalog.get_geodataframe(
             "GDL_regions_v4",
@@ -1524,7 +1575,6 @@ class Agents:
 
         allocated_agents = pd.DataFrame()
         households_not_allocated = 0
-        all_buildings_model_region = self.setup_buildings()
         # iterate over regions and sample agents from GLOPOP-S
         for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
             GDL_code = GDL_region["GDLcode"]
@@ -1836,7 +1886,7 @@ class Agents:
             )
 
     @build_method(depends_on=["setup_create_farms"])
-    def setup_farmer_household_characteristics(self, maximum_age=85):
+    def setup_farmer_household_characteristics(self, maximum_age=85) -> None:
         n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
@@ -2124,7 +2174,7 @@ class Agents:
     def setup_farmer_characteristics(
         self,
         interest_rate=0.05,
-    ):
+    ) -> None:
         n_farmers = self.array["agents/farmers/id"].size
 
         preferences_global = self.create_preferences()
@@ -2311,7 +2361,7 @@ class Agents:
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
-    def setup_farmer_irrigation_source(self, irrigating_farmers, year):
+    def setup_farmer_irrigation_source(self, irrigating_farmers, year) -> None:
         fraction_sw_irrigation = "aeisw"
 
         fraction_sw_irrigation_data = xr.open_dataarray(
@@ -2466,17 +2516,22 @@ class Agents:
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
     @build_method(depends_on=[])
-    def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
+    def setup_assets(
+        self,
+        feature_types: str | list[str],
+        source: str = "geofabrik",
+        use_cache: bool = True,
+    ) -> None:
         """Get assets from OpenStreetMap (OSM) data.
 
-        Parameters
-        ----------
-        feature_types : str or list of str
-            The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
-        source : str, optional
-            The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
-        overwrite : bool, optional
-            Whether to overwrite existing files. Default is False.
+        Args:
+            feature_types: The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
+            source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
+            use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
+
+        Raises:
+            ValueError: If an unknown source is provided.
+            ValueError: When an unknown feature type is provided.
         """
         if isinstance(feature_types, str):
             feature_types = [feature_types]
@@ -2489,7 +2544,7 @@ class Agents:
             fetch_and_save(
                 "https://download.geofabrik.de/index-v1.json",
                 index_file,
-                overwrite=overwrite,
+                overwrite=not use_cache,
             )
 
             index = gpd.read_file(index_file)
@@ -2538,7 +2593,7 @@ class Agents:
         all_features = {}
         for url in tqdm(urls):
             filepath = OSM_data_dir / url.split("/")[-1]
-            fetch_and_save(url, filepath, overwrite=overwrite)
+            fetch_and_save(url, filepath, overwrite=not use_cache)
             for feature_type in feature_types:
                 if feature_type not in all_features:
                     all_features[feature_type] = []

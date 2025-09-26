@@ -2,7 +2,7 @@ import math
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Union
+from typing import Any, Union
 
 import geopandas as gpd
 import numpy as np
@@ -13,6 +13,8 @@ import zarr
 from affine import Affine
 from numba import njit
 from scipy.spatial import cKDTree
+
+from geb.workflows.raster import compress
 
 
 def determine_nearest_river_cell(
@@ -228,7 +230,7 @@ def to_HRU(data, grid_to_HRU, land_use_ratio, output_data, fn=None):
 class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @property
@@ -260,7 +262,7 @@ class Grid(BaseVariables):
     Then, the mask is compressed by removing all masked cells, resulting in a compressed array.
     """
 
-    def __init__(self, data, model):
+    def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
         self.var = self.model.store.create_bucket("hydrology.grid.var")
@@ -300,21 +302,27 @@ class Grid(BaseVariables):
 
         BaseVariables.__init__(self)
 
-    def full(self, *args, **kwargs) -> np.ndarray:
+    def full(self, *args: Any, **kwargs: Any) -> np.ndarray:
         """Return a full array with size of mask. Takes any other argument normally used in np.full.
 
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            array: Full array of mask size.
         """
         return np.full(self.mask.shape, *args, **kwargs)
 
-    def full_compressed(self, *args, **kwargs) -> np.ndarray:
+    def full_compressed(self, *args: Any, **kwargs: Any) -> np.ndarray:
         """Return a full array with size of compressed array. Takes any other argument normally used in np.full.
 
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            array: Full array of compressed size.
         """
         return np.full(self.compressed_size, *args, **kwargs)
 
@@ -327,7 +335,7 @@ class Grid(BaseVariables):
         Returns:
             array: Compressed array.
         """
-        return array[..., ~self.mask]
+        return compress(array, self.mask)
 
     def decompress(
         self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float] = None
@@ -375,7 +383,7 @@ class Grid(BaseVariables):
 
     def plot_compressed(
         self, array: np.ndarray, fillvalue: Union[np.ufunc, int, float] = None
-    ):
+    ) -> None:
         """Plot compressed array.
 
         Args:
@@ -529,13 +537,13 @@ class HRUs(BaseVariables):
 
         # get lats and lons for subgrid
         self.lon = np.linspace(
-            self.gt[0] + self.cell_size / 2,
-            self.gt[0] + self.cell_size * submask_width - self.cell_size / 2,
+            self.gt[0] + self.gt[1] / 2,
+            self.gt[0] + self.gt[1] * submask_width - self.gt[1] / 2,
             submask_width,
         )
         self.lat = np.linspace(
-            self.gt[3] + self.cell_size / 2,
-            self.gt[3] + self.cell_size * submask_height - self.cell_size / 2,
+            self.gt[3] + self.gt[5] / 2,
+            self.gt[3] + self.gt[5] * submask_height - self.gt[5] / 2,
             submask_height,
         )
         BaseVariables.__init__(self)
@@ -543,7 +551,7 @@ class HRUs(BaseVariables):
         if self.model.in_spinup:
             self.spinup()
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.var = self.model.store.create_bucket(
             "hydrology.HRU.var",
             validator=lambda x: isinstance(x, np.ndarray)
@@ -748,7 +756,7 @@ class HRUs(BaseVariables):
             self.data.farms, land_use_classes, self.data.grid.mask, self.scaling
         )
 
-    def zeros(self, size, dtype, *args, **kwargs) -> np.ndarray:
+    def zeros(self, size, dtype, *args: Any, **kwargs: Any) -> np.ndarray:
         """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
 
         Args:
@@ -762,7 +770,9 @@ class HRUs(BaseVariables):
         """
         return np.zeros(size, dtype, *args, **kwargs)
 
-    def full_compressed(self, fill_value, dtype, *args, **kwargs) -> np.ndarray:
+    def full_compressed(
+        self, fill_value, dtype, *args: Any, **kwargs: Any
+    ) -> np.ndarray:
         """Return a full array with size of number of HRUs. Takes any other argument normally used in np.full.
 
         Args:
@@ -797,7 +807,9 @@ class HRUs(BaseVariables):
 
     @staticmethod
     @njit(cache=True)
-    def compress_numba(array, unmerged_HRU_indices, outarray, nodatavalue, method):
+    def compress_numba(
+        array, unmerged_HRU_indices, outarray, nodatavalue, method
+    ) -> np.ndarray:
         array = array.ravel()
         unmerged_HRU_indices = unmerged_HRU_indices.ravel()
         if method == "last":
@@ -858,7 +870,7 @@ class HRUs(BaseVariables):
             raise NotImplementedError
         return output_data
 
-    def plot(self, HRU_array: np.ndarray, ax=None, show: bool = True):
+    def plot(self, HRU_array: np.ndarray, ax=None, show: bool = True) -> None:
         """Function to plot HRU data.
 
         Args:
@@ -924,7 +936,7 @@ class HRUs(BaseVariables):
 class Modflow(BaseVariables):
     """This class is to store data for the MODFLOW model. It inherits from `BaseVariables` and initializes the variables needed for the MODFLOW model."""
 
-    def __init__(self, data, model):
+    def __init__(self, data, model) -> None:
         self.data = data
         self.model = model
 
@@ -938,7 +950,7 @@ class Data:
         model: The GEB model.
     """
 
-    def __init__(self, model):
+    def __init__(self, model) -> None:
         self.model = model
 
         self.farms = load_grid(self.model.files["subgrid"]["agents/farmers/farms"])
@@ -952,12 +964,12 @@ class Data:
 
         self.load_water_demand()
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.HRU.var.cell_area = self.to_HRU(
             data=self.grid.var.cell_area, fn="weightedsplit"
         )
 
-    def load_water_demand(self):
+    def load_water_demand(self) -> None:
         self.model.industry_water_consumption_ds = load_water_demand_xr(
             self.model.files["other"]["water_demand/industry_water_consumption"]
         )

@@ -19,6 +19,8 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+"""Hydrology submodule for the GEB model. Holds all hydrology related submodules."""
+
 import numpy as np
 
 from geb.hydrology.HRUs import Data
@@ -52,7 +54,7 @@ class Hydrology(Data, Module):
         model: The GEB model instance.
     """
 
-    def __init__(self, model):
+    def __init__(self, model) -> None:
         """Create the hydrology module."""
         Data.__init__(self, model)
         Module.__init__(self, model)
@@ -105,7 +107,7 @@ class Hydrology(Data, Module):
             + self.groundwater.groundwater_content_m3.astype(np.float64).sum()
         )
 
-    def step(self):
+    def step(self) -> None:
         timer: TimingModule = TimingModule("Hydrology")
 
         if __debug__:
@@ -121,13 +123,13 @@ class Hydrology(Data, Module):
             ).sum()
 
         self.potential_evapotranspiration.step()
-        timer.new_split("PET")
+        timer.finish_split("PET")
 
         self.lakes_reservoirs.step()
-        timer.new_split("Waterbodies")
+        timer.finish_split("Waterbodies")
 
         snow, rain, snow_melt = self.snowfrost.step()
-        timer.new_split("Snow and frost")
+        timer.finish_split("Snow and frost")
 
         (
             interflow,
@@ -171,7 +173,7 @@ class Hydrology(Data, Module):
                 / 3,  # increase tollerance for large models
             )
 
-        timer.new_split("Landcover")
+        timer.finish_split("Landcover")
 
         baseflow = self.groundwater.step(
             groundwater_recharge, groundwater_abstraction_m3
@@ -207,13 +209,13 @@ class Hydrology(Data, Module):
                 / 3,  # increase tollerance for large models
             )
 
-        timer.new_split("GW")
+        timer.finish_split("GW")
 
         total_runoff = self.runoff_concentration.step(interflow, baseflow, runoff)
-        timer.new_split("Runoff concentration")
+        timer.finish_split("Runoff concentration")
 
         self.lakes_res_small.step()
-        timer.new_split("Small waterbodies")
+        timer.finish_split("Small waterbodies")
 
         routing_loss_m3, over_abstraction_m3 = self.routing.step(
             total_runoff, channel_abstraction_m3, return_flow
@@ -251,15 +253,15 @@ class Hydrology(Data, Module):
                 / 3,  # increase tollerance for large models
             )
 
-        timer.new_split("Routing")
+        timer.finish_split("Routing")
 
         self.hillslope_erosion.step()
-        timer.new_split("Hill slope erosion")
+        timer.finish_split("Hill slope erosion")
 
         if self.model.timing:
             print(timer)
 
-        self.report(self, locals())
+        self.report(locals())
 
     def finalize(self) -> None:
         """Finalize the model."""
@@ -295,5 +297,5 @@ class Hydrology(Data, Module):
         )
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology"

@@ -20,6 +20,7 @@
 # --------------------------------------------------------------------------------
 
 import numpy as np
+import numpy.typing as npt
 
 from geb.module import Module
 
@@ -166,19 +167,22 @@ def get_mannings_tillaged_soil(surface_roughness_parameter_tillage):
     return np.exp(-2.1132 + 0.0349 * surface_roughness_parameter_tillage)
 
 
-def get_flow_velocity(manning, water_depth, slope, minimum_slope=1e-5):
+def get_flow_velocity(
+    manning: npt.NDArray[np.float32],
+    water_depth: npt.NDArray[np.float32],
+    slope: npt.NDArray[np.float32],
+    minimum_slope: float = 1e-5,
+) -> npt.NDArray[np.float32]:
     """Use the Manning's equation to calculate the flow velocity.
 
-    Parameters
-    ----------
-    manning : float
-        Manning's coefficient
-    water_depth : float
-        Water depth
-    slope : float
-        Slope
-    minimum_slope : float, optional
-        Minimum slope, by default 1e-5
+    Args:
+        manning: Manning's coefficient
+        water_depth: Water depth [m]
+        slope: Slope in m/m
+        minimum_slope:  Minimum slope, by default 1e-5
+
+    Returns:
+        Flow velocity [m/s]
     """
     return (
         1 / manning * water_depth ** (2 / 3) * np.maximum(slope, minimum_slope) ** 0.5
@@ -194,7 +198,7 @@ class HillSlopeErosion(Module):
     particles separately.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -207,10 +211,10 @@ class HillSlopeErosion(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.hillslope_erosion"
 
-    def spinup(self):
+    def spinup(self) -> None:
         if not self.simulate:
             return None
 
@@ -485,6 +489,6 @@ class HillSlopeErosion(Module):
 
         self.var.total_erosion += transported_material_kg.sum()
 
-        self.report(self, locals())
+        self.report(locals())
 
         return transported_material

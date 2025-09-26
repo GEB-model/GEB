@@ -1,3 +1,5 @@
+"""Module for building groundwater related datasets for GEB."""
+
 import numpy as np
 import xarray as xr
 
@@ -10,7 +12,10 @@ from ..workflows.general import (
 
 
 class GroundWater:
-    def __init__(self):
+    """Contains all build methods for the groundwater for GEB."""
+
+    def __init__(self) -> None:
+        """Initialize the GroundWater class."""
         pass
 
     @build_method(depends_on=["setup_elevation"])
@@ -20,7 +25,7 @@ class GroundWater:
         maximum_thickness_confined_layer: int | float = 1000,
         intial_heads_source: str = "GLOBGM",
         force_one_layer: bool = True,
-    ):
+    ) -> None:
         """Sets up the MODFLOW grid for GEB.
 
         This code is adopted from the GLOBGM model (https://github.com/UU-Hydro/GLOBGM). Also see ThirdPartyNotices.txt.

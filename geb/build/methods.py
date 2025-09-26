@@ -1,31 +1,36 @@
+"""Contains classes and methods for building the dependency tree of build methods, verification etc."""
+
 import functools
 import inspect
 import logging
+from logging import Logger
 from typing import Any, Callable
 
 import matplotlib.pyplot as plt
 import networkx as nx
 
-logger = logging.getLogger("GEB")
+logger: Logger = logging.getLogger("GEB")
 
-__all__ = ["build_method"]
+__all__: list[str] = ["build_method"]
 
 
 class _build_method:
-    def __init__(self, logger: logging.Logger):
+    def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
         self.tree = nx.DiGraph()
 
     def __call__(
-        self, func: Callable[..., Any] | None = None, depends_on: None = None
+        self,
+        func: Callable[..., Any] | None = None,
+        depends_on: str | list[str] | None = None,
     ) -> Callable[..., Any]:
-        def partial_decorator(func):
+        def partial_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 self.logger.info(f"Running {func.__name__}")
                 for key, value in kwargs.items():
                     self.logger.debug(f"{func.__name__}.{key}: {value}")
-                value = func(*args, **kwargs)
+                value: Any = func(*args, **kwargs)
                 self.logger.info(f"Completed {func.__name__}")
                 return value
 
@@ -46,10 +51,10 @@ class _build_method:
         if func is None:
             return partial_decorator
         else:
-            f = partial_decorator(func)
+            f: Callable[..., Any] = partial_decorator(func)
             return f
 
-    def add_tree_node(self, func: Callable[..., Any]):
+    def add_tree_node(self, func: Callable[..., Any]) -> None:
         """Add a node to the dependency tree."""
         parameters = inspect.signature(func).parameters
         required_parameters = [
@@ -71,22 +76,31 @@ class _build_method:
             },
         )
 
-    def add_tree_edge(self, func: Callable[..., Any], depends_on: str):
-        """Add an edge to the dependency tree."""
+    def add_tree_edge(self, func: Callable[..., Any], depends_on: str) -> None:
+        """Add an edge to the dependency tree.
+
+        Raises:
+            ValueError: if a method depends on "setup_region" since everything depends on it.
+                "setup_region" should therefore not be included in the dependency tree.
+
+        """
         if depends_on == "setup_region":
             raise ValueError(
                 "Everything depends on setup_region so we don't include it."
             )
         self.tree.add_edge(depends_on, func.__name__)
 
-    def validate_tree(self):
+    def validate_tree(self) -> None:
         """Validate the dependency tree.
 
         Checks if all the node dependencies are present in the tree.
+
+        Raises:
+            ValueError: if a method depends on another method that is not a build function.
         """
         assert nx.is_directed_acyclic_graph(self.tree)
-        for node in self.tree.nodes:
-            depencencies = list(self.tree.predecessors(node))
+        for method in self.tree.nodes:
+            depencencies = list(self.tree.predecessors(method))
             for dependency in depencencies:
                 if (
                     not self.tree.nodes[dependency]
@@ -94,7 +108,7 @@ class _build_method:
                     .get("_function_exists", False)
                 ):
                     raise ValueError(
-                        f"Node {node} depends on {dependency}, "
+                        f"Method {method} depends on {dependency}, "
                         "which is not a build function."
                     )
         self.logger.debug("Builder dependency tree validation passed.")
@@ -171,7 +185,7 @@ class _build_method:
                     f"optional parameters are {optional_parameters}."
                 )
 
-    def export_tree(self):
+    def export_tree(self) -> None:
         pos = nx.spring_layout(self.tree)
         nx.draw(self.tree, pos, with_labels=True, arrows=True)
         plt.savefig("dependency_graph.png")
@@ -209,8 +223,12 @@ class _build_method:
         ]
 
     @property
-    def methods(self):
-        """Return the methods in the dependency tree."""
+    def methods(self) -> list[str]:
+        """Return the methods in the dependency tree, sorted alphabetically.
+
+        Returns:
+            A alphabetically sorted list of method names in the dependency tree.
+        """
         return sorted(list(self.tree.nodes))
 
 
