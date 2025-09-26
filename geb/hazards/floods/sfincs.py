@@ -45,6 +45,73 @@ from .workflows.utils import (
 )
 
 
+def set_river_outflow_boundary_condition(
+    sf: "SfincsModel",
+    model_root: Path,
+    simulation_root: Path,
+    write_figures: bool = True,
+) -> None:
+    """Set up river outflow boundary condition with constant elevation.
+
+    This function reads the outflow point and elevation from the model setup,
+    creates a constant water level time series, and applies it as a boundary condition.
+
+    Args:
+        sf: The SFINCS model instance.
+        model_root: Path to the model root directory.
+        simulation_root: Path to the simulation directory.
+        write_figures: Whether to generate and save forcing plots. Defaults to True.
+    """
+    outflow = gpd.read_file(model_root / "gis/outflow_points.gpkg")
+    # only one point location is expected
+    assert len(outflow) == 1, "Only one outflow point is expected"
+
+    # before changing root read dem value from gis folder from .json file
+    dem_json_path = model_root / "gis" / "outflow_elevation.json"
+    with open(dem_json_path, "r") as f:
+        dem_values = json.load(f)
+    elevation = dem_values.get("outflow_elevation", None)
+
+    if elevation is None or elevation == 0:
+        assert False, (
+            "Elevation should have positive value to set up outflow waterlevel boundary"
+        )
+
+    # Get the model's start and stop time using the get_model_time function
+    tstart, tstop = sf.get_model_time()
+
+    # Define the time range (e.g., 1 month of hourly data)
+    time_range = pd.date_range(start=tstart, end=tstop, freq="H")
+
+    # Create DataFrame with constant elevation value
+    elevation_time_series_constant = pd.DataFrame(
+        data={"water_level": elevation},  # Use extracted elevation value
+        index=time_range,
+    )
+
+    # Extract a unique index from the outflow point. Here, we use 1 as an example.
+    outflow_index = 1  # This should be the index or a suitable ID of the outflow point
+    elevation_time_series_constant.columns = [
+        outflow_index
+    ]  # Use an integer as column name
+
+    # Ensure outflow has the correct index as well
+    outflow["index"] = outflow_index  # Set the matching index to outflow location
+
+    # Now set the water level forcing
+    sf.setup_waterlevel_forcing(
+        timeseries=elevation_time_series_constant,  # Constant time series
+        locations=outflow,  # Outflow point
+    )
+    sf.set_root(simulation_root, mode="w+")
+
+    sf.write_forcing()
+
+    if write_figures:
+        sf.plot_forcing(fn_out="waterlevel_forcing.png")
+        sf.plot_basemap(fn_out="basemap.png")
+
+
 class SFINCSRootModel:
     """Builds and updates SFINCS model files for flood hazard modeling."""
 
@@ -554,6 +621,15 @@ class SFINCSRootModel:
                 nodes=inflow_nodes.to_crs(self.sfincs_model.crs),
                 timeseries=Q,
             )
+
+            # Set up river outflow boundary condition for this simulation
+            set_river_outflow_boundary_condition(
+                sf=simulation.sfincs_model,
+                model_root=self.path,
+                simulation_root=simulation.path,
+                write_figures=simulation.write_figures,
+            )
+
             simulations.append(simulation)
 
         return MultipleSFINCSSimulations(simulations=simulations)
@@ -736,10 +812,6 @@ class SFINCSSimulation:
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
 
-        if self.write_figures:
-            self.sfincs_model.plot_forcing(fn_out="forcing.png")
-            self.sfincs_model.plot_basemap(fn_out="basemap.png")
-
     def set_precipitation_forcing_grid(
         self,
         current_water_storage_grid: xr.DataArray,
@@ -782,10 +854,6 @@ class SFINCSSimulation:
         )
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
-
-        if self.write_figures:
-            self.sfincs_model.plot_basemap(fn_out="basemap.png")
-            self.sfincs_model.plot_forcing(fn_out="forcing.png")
 
     # def setup_outflow_boundary(self) -> None:
     #     # detect whether water level forcing should be set (use this under forcing == coastal) PLot basemap and forcing to check
