@@ -1,5 +1,3 @@
-from typing import Any
-
 import numpy as np
 from numba import njit, prange
 
@@ -38,7 +36,6 @@ class DecisionModule:
         Returns:
             NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
         """
-
         NPV_t0 = (wealth + income + amenity_value).astype(
             np.float32
         )  # no flooding in t=0
@@ -94,7 +91,6 @@ class DecisionModule:
         Returns:
             NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
         """
-
         # Iterate through all droughts
         for i, index in enumerate(np.arange(1, n_events + 3)):
             # Check if we are in the last iterations
@@ -156,6 +152,7 @@ class DecisionModule:
             expected_damages: array containing the expected damages of each household under all events i
             total_profits: array containing the total profits of each household under all events i
             profits_no_event: array containing the profits of each household under the no flood event
+            mode: either 'flood' or 'drought', indicating which type of event to iterate through
 
         Returns:
             NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
