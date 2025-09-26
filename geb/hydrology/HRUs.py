@@ -14,6 +14,7 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import cKDTree
 
+from geb.workflows.io import open_zarr
 from geb.workflows.raster import compress
 
 
@@ -433,16 +434,16 @@ class Grid(BaseVariables):
         return self.compress(self.model.forcing.load("tas"))
 
     @property
-    def tasmin(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("tasmin"))
+    def dewpoint_tas(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("dewpoint_tas"))
 
     @property
-    def tasmax(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("tasmax"))
+    def wind_u10m(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("wind_u10m"))
 
     @property
-    def sfcWind(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("sfcwind"))
+    def wind_v10m(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("wind_v10m"))
 
     @property
     def spei_uncompressed(self) -> npt.NDArray[np.float32]:
@@ -474,23 +475,26 @@ class Grid(BaseVariables):
             # Check if we ran out of SPEI data. If we did, revert to using the last month
             if (
                 np.datetime64(spei_time, "ns")
-                > self.model.forcing["SPEI"].datetime_index[-1]
+                > self.model.forcing["SPEI"].reader.datetime_index[-1]
             ):
                 spei_time: datetime = current_time.replace(day=1)
 
-        return self.model.forcing.load("SPEI", time=spei_time)
+        spei = self.model.forcing.load("SPEI", time=spei_time)
+        assert spei.ndim == 3 and spei.shape[0] == 1
+        spei = spei[0]
+        return spei
 
     @property
     def gev_c(self):
-        return load_grid(self.model.files["grid"]["climate/gev_c"])
+        return open_zarr(self.model.files["other"]["climate/gev_c"])
 
     @property
     def gev_loc(self):
-        return load_grid(self.model.files["grid"]["climate/gev_loc"])
+        return open_zarr(self.model.files["other"]["climate/gev_loc"])
 
     @property
     def gev_scale(self):
-        return load_grid(self.model.files["grid"]["climate/gev_scale"])
+        return open_zarr(self.model.files["other"]["climate/gev_scale"])
 
     @property
     def pr_gev_c(self):
@@ -918,19 +922,19 @@ class HRUs(BaseVariables):
         return self.data.to_HRU(data=tas, fn=None)
 
     @property
-    def tasmin(self) -> npt.NDArray[np.float32]:
-        tasmin: npt.NDArray[np.float32] = self.data.grid.tasmin
-        return self.data.to_HRU(data=tasmin, fn=None)
+    def dewpoint_tas(self) -> npt.NDArray[np.float32]:
+        dewpoint_tas: npt.NDArray[np.float32] = self.data.grid.dewpoint_tas
+        return self.data.to_HRU(data=dewpoint_tas, fn=None)
 
     @property
-    def tasmax(self) -> npt.NDArray[np.float32]:
-        tasmax: npt.NDArray[np.float32] = self.data.grid.tasmax
-        return self.data.to_HRU(data=tasmax, fn=None)
+    def wind_u10m(self) -> npt.NDArray[np.float32]:
+        wind_u10m: npt.NDArray[np.float32] = self.data.grid.wind_u10m
+        return self.data.to_HRU(data=wind_u10m, fn=None)
 
     @property
-    def sfcWind(self) -> npt.NDArray[np.float32]:
-        sfcWind: npt.NDArray[np.float32] = self.data.grid.sfcWind
-        return self.data.to_HRU(data=sfcWind, fn=None)
+    def wind_v10m(self) -> npt.NDArray[np.float32]:
+        wind_v10m: npt.NDArray[np.float32] = self.data.grid.wind_v10m
+        return self.data.to_HRU(data=wind_v10m, fn=None)
 
 
 class Modflow(BaseVariables):

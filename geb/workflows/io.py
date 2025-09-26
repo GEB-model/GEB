@@ -585,16 +585,17 @@ class AsyncGriddedForcingReader:
         self.loop = asyncio.new_event_loop()
         self.executor = ThreadPoolExecutor(max_workers=1)
 
-    def load(self, index: int) -> npt.NDArray[Any]:
+    def load(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
         """Load the data for the given index from the zarr file.
 
         Args:
-            index: The index of the timestep to load in the zarr file, along the time dimension.
+            start_index: The start index of the timestep to load in the zarr file, along the time dimension.
+            end_index: The final index of the timestep to load in the zarr file, along the time dimension.
 
         Returns:
             The data for the given index from the zarr file.
         """
-        data = self.var[index, :]
+        data: npt.NDArray[Any] = self.var[start_index:end_index, :]
         return data
 
     async def load_await(self, index: int) -> npt.NDArray[Any]:
@@ -679,7 +680,7 @@ class AsyncGriddedForcingReader:
             return indices.argmax()
 
     def read_timestep(
-        self, date: datetime.datetime, asynchronous: bool = False
+        self, date: datetime.datetime, n=1, asynchronous: bool = False
     ) -> npt.NDArray[Any]:
         """Read the data for the given date from the zarr file.
 
@@ -699,8 +700,9 @@ class AsyncGriddedForcingReader:
             data = self.loop.run_until_complete(fn)
             return data
         else:
-            index = self.get_index(date)
-            data = self.load(index)
+            start_index = self.get_index(date)
+            end_index = start_index + n
+            data = self.load(start_index, end_index)
             return data
 
     def close(self) -> None:
@@ -712,6 +714,24 @@ class AsyncGriddedForcingReader:
         self.executor.shutdown(wait=False)
 
         self.loop.call_soon_threadsafe(self.loop.stop)
+
+    @property
+    def x(self) -> npt.NDArray[Any]:
+        """Get the x coordinates of the variable.
+
+        Returns:
+            The x coordinates of the variable.
+        """
+        return self.ds["x"][:]
+
+    @property
+    def y(self) -> npt.NDArray[Any]:
+        """Get the y coordinates of the variable.
+
+        Returns:
+            The y coordinates of the variable.
+        """
+        return self.ds["y"][:]
 
 
 class WorkingDirectory:

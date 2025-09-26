@@ -1271,47 +1271,6 @@ class GEBModel(
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
 
-    def snap_to_grid(
-        self,
-        ds: xr.DataArray | xr.Dataset,
-        reference: xr.DataArray | xr.Dataset,
-        relative_tollerance: float = 0.02,
-        ydim: str = "y",
-        xdim: str = "x",
-    ) -> xr.Dataset | xr.DataArray:
-        """Snaps the coordinates of a dataset to a reference dataset.
-
-        Some datasets have a slightly different grid than the model grid, usually
-        because of different rounding errors when creating the grid, and floating
-        point precision issues. This method checks if the coordinates are more or
-        less the same, and if so, snaps the coordinates of the dataset to the
-        reference dataset.
-
-        Args:
-            ds: The dataset to snap.
-            reference: The reference dataset.
-            relative_tollerance: The relative tolerance for snapping.
-            ydim: The name of the y dimension.
-            xdim: The name of the x dimension.
-
-        Returns:
-            The snapped dataset.
-        """
-        # make sure all datasets have more or less the same coordinates
-        assert np.isclose(
-            ds.coords[ydim].values,
-            reference[ydim].values,
-            atol=abs(ds.rio.resolution()[1] * relative_tollerance),
-            rtol=0,
-        ).all()
-        assert np.isclose(
-            ds.coords[xdim].values,
-            reference[xdim].values,
-            atol=abs(ds.rio.resolution()[0] * relative_tollerance),
-            rtol=0,
-        ).all()
-        return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})
-
     def setup_coastal_water_levels(
         self,
     ) -> None:

@@ -12,6 +12,7 @@ from .global_data_lab import GlobalDataLabShapefile
 from .globgm import GlobGM, GlobGMDEM
 from .grdc import GRDC
 from .hydrolakes import HydroLakes
+from .isimip import ISIMIPCO2
 from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
@@ -22,6 +23,17 @@ from .why_map import WhyMap
 from .world_bank import WorldBankData
 
 data_catalog: dict[str, dict[str, Any]] = {
+    "isimip_co2": {
+        "adapter": ISIMIPCO2(),
+        "url": "https://files.isimip.org",
+        "source": {
+            "name": "ISIMIP CO2",
+            "author": "Matthias Büchner, Christopher P.O. Reyer",
+            "url": "https://data.isimip.org",
+            "license": "CC BY-SA 4.0",
+            "paper_doi": "10.1007/s10584-011-0156-z",
+        },
+    },
     "era5": {
         "adapter": DestinationEarth(),
         "url": "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",

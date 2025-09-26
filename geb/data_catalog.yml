@@ -195,30 +195,6 @@ AQUASTAT_municipal_withdrawal:
   path: water_demand/AQUASTAT_municipal_withdrawal.xlsx
   meta:
     source_license: CC BY 4.0
-CHELSA-BIOCLIM+_monthly_{variable}_{month}_{year}:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  placeholders:
-    variable: [clt, cmi, hurs, pet, pr, rsds, sfcWind, tas, tasmax, tasmin, vpd]
-    year: ['1979', '1980', '1981', '1982', '1983', '1984', '1985', '1986', '1987', '1988', '1989', '1990', '1991', '1992', '1993', '1994', '1995', '1996', '1997', '1998', '1999', '2000', '2001', '2002', '2003', '2004', '2005', '2006', '2007', '2008', '2009', '2010', '2011', '2012', '2013', '2014', '2015', '2016', '2017', '2018']
-    month: ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
-  driver_kwargs:
-    mask_nodata: true
-  meta:
-    category: climate
-    source_license: CC0 1.0
-    source_url: https://www.doi.org/10.16904/envidat.332
-  path: https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/monthly/{variable}/CHELSA_{variable}_{month}_{year}_V.2.1.tif
-global_wind_atlas:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: https://globalwindatlas.info/api/gis/global/wind-speed/10
-  meta:
-    category: climate
-    source_license: CC BY 4.0
-    source_url: https://globalwindatlas.info/
 preferences_individual:
   path: socioeconomic/social/cleaned_individual_data.csv
   driver: csv
@@ -303,11 +279,3 @@ GLOBIOM_regions_37:
     source_license: Creative Commons Attribution-NonCommercial 4.0 International
   driver_kwargs:
     sheet_name: Region37
-ISIMIP:
-  data_type: Dataset
-  path: "placeholder"
-  meta:
-    category: climate
-    source_author: ISIMIP
-    source_license: CC BY 4.0
-    source_url: https://www.isimip.org

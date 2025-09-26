@@ -246,9 +246,9 @@ class SnowFrost(Module):
             0, dtype=np.float32
         )
 
-        tas_C: npt.NDArray[np.float32] = self.HRU.tas - 273.15
-        precipitation_m_day: npt.NDArray[np.float32] = (
-            0.001 * 86400.0 * self.HRU.pr
+        tas_C: npt.NDArray[np.float32] = self.HRU.tas.mean(axis=0) - 273.15
+        precipitation_m_day: npt.NDArray[np.float32] = self.HRU.pr.mean(axis=0) * (
+            24 * 3600 / 1000
         )  # kg/m2/s to m/day
 
         for i in range(self.var.numberSnowLayers):

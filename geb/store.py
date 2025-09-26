@@ -1019,7 +1019,7 @@ class Bucket:
                     compression="gzip",
                     compression_level=9,
                 )
-            elif isinstance(value, (list, dict)):
+            elif isinstance(value, (list, dict, float, int)):
                 with open((path / name).with_suffix(".json"), "w") as f:
                     json.dump(value, f)
             elif isinstance(value, str):

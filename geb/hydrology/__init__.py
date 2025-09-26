@@ -113,10 +113,7 @@ class Hydrology(Data, Module):
         if __debug__:
             prev_storage: np.float64 = self.get_current_storage()
             influx: np.float64 = (
-                self.HRU.pr.astype(np.float64)
-                * 0.001
-                * 86400.0
-                * self.HRU.var.cell_area
+                self.HRU.pr.astype(np.float64) * 0.001 * 3600.0 * self.HRU.var.cell_area
             ).sum()  # m3
             influx += (
                 self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area

@@ -778,7 +778,9 @@ class CropFarmers(AgentBaseClass):
         for i, varname in enumerate(["gev_c", "gev_loc", "gev_scale"]):
             GEV_grid = getattr(self.grid, varname)
             self.var.GEV_parameters[:, i] = sample_from_map(
-                GEV_grid, self.var.locations.data, self.grid.gt
+                GEV_grid.values,
+                self.var.locations.data,
+                GEV_grid.rio.transform().to_gdal(),
             )
 
         assert not np.all(np.isnan(self.var.GEV_parameters))
@@ -1030,7 +1032,8 @@ class CropFarmers(AgentBaseClass):
         return self.command_area != -1
 
     def save_pr(self) -> None:
-        pr = self.HRU.pr * (24 * 3600)  # mm / day
+        # take mean pr for day and convert to mm/day
+        pr = self.HRU.pr.mean(axis=0) * (24 * 3600)  # mm / day
 
         pr_day_mm_per_farmer = np.bincount(
             self.HRU.var.land_owners[self.HRU.var.land_owners != -1],
@@ -1045,8 +1048,11 @@ class CropFarmers(AgentBaseClass):
             self.var.cumulative_pr_mm[:, 365] = self.var.cumulative_pr_mm[:, 364]
 
     def save_water_deficit(self, discount_factor=0.2) -> None:
+        pr: npt.NDArray[np.float32] = self.HRU.pr.mean(axis=0) * (
+            3600 * 24 / 1000
+        )  # m / day
         water_deficit_day_m3 = (
-            self.HRU.var.reference_evapotranspiration_grass - self.HRU.pr
+            self.HRU.var.reference_evapotranspiration_grass - pr
         ) * self.HRU.var.cell_area
         water_deficit_day_m3[water_deficit_day_m3 < 0] = 0
 
@@ -2277,8 +2283,9 @@ class CropFarmers(AgentBaseClass):
         Note:
             This method updates the `monthly_SPEI` attribute in place.
         """
+        spei = self.model.hydrology.grid.spei_uncompressed
         current_SPEI_per_farmer = sample_from_map(
-            array=self.model.hydrology.grid.spei_uncompressed,
+            array=spei,
             coords=self.var.locations[harvesting_farmers],
             gt=self.grid.gt,
         )

@@ -5,8 +5,6 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import xarray as xr
-import xclim.indices as xci
 from pgmpy.estimators import BayesianEstimator, HillClimbSearch, K2Score
 from pgmpy.factors.discrete import State
 from pgmpy.models import BayesianNetwork
@@ -25,7 +23,6 @@ from geb.agents.crop_farmers import (
 from geb.build.methods import build_method
 from geb.workflows.raster import repeat_grid
 
-from ...workflows.io import open_zarr
 from .. import GEBModel
 
 
@@ -668,34 +665,6 @@ class fairSTREAMModel(GEBModel):
         mean_cell_size = self.subgrid["cell_area"].mean().compute().item()
         farm_size_m2 = farm_size_n_cells * mean_cell_size
         return farm_size_m2
-
-    @build_method(depends_on=["setup_forcing"])
-    def setup_pr_GEV(self) -> None:
-        pr: xr.DataArray = open_zarr(
-            Path("input/other/climate/pr.zarr"),
-        ) * (24 * 3600)
-        pr_monthly: xr.DataArray = pr.resample(time="M").sum(dim="time", skipna=True)
-
-        pr_yearly_max = (
-            pr_monthly.groupby("time.year")
-            .max(dim="time", skipna=True)
-            .rename({"year": "time"})
-            .chunk({"time": -1})
-            .compute()
-        )
-
-        gev_pr = xci.stats.fit(pr_yearly_max, dist="genextreme").compute()
-
-        self.set_grid(
-            gev_pr.sel(dparams="c").astype(np.float32), name="climate/pr_gev_c"
-        )
-        self.set_grid(
-            gev_pr.sel(dparams="loc").astype(np.float32), name="climate/pr_gev_loc"
-        )
-        self.set_grid(
-            gev_pr.sel(dparams="scale").astype(np.float32),
-            name="climate/pr_gev_scale",
-        )
 
     @build_method(depends_on=["setup_create_farms", "setup_regions_and_land_use"])
     def setup_farmer_crop_calendar(

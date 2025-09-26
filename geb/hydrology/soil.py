@@ -2071,18 +2071,18 @@ class Soil(Module):
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
-        self.grid.vapour_pressure_deficit_KPa = (
-            self.calculate_vapour_pressure_deficit_kPa(
-                temperature_K=self.grid.tas,
-                relative_humidity=self.grid.hurs,
-            )
-        )
-        self.grid.photosynthetic_photon_flux_density_umol_m2_s = (
-            self.calculate_photosynthetic_photon_flux_density(
-                shortwave_radiation=self.grid.rsds,
-                xi=0.5,
-            )
-        )
+        # self.grid.vapour_pressure_deficit_KPa = (
+        #     self.calculate_vapour_pressure_deficit_kPa(
+        #         temperature_K=self.grid.tas,
+        #         relative_humidity=self.grid.hurs,
+        #     )
+        # )
+        # self.grid.photosynthetic_photon_flux_density_umol_m2_s = (
+        #     self.calculate_photosynthetic_photon_flux_density(
+        #         shortwave_radiation=self.grid.rsds,
+        #         xi=0.5,
+        #     )
+        # )
 
         w_forest = self.HRU.var.w.sum(axis=0)
         w_forest[self.HRU.var.land_use_type != FOREST] = np.nan

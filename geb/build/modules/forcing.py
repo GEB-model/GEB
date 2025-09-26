@@ -1,5 +1,5 @@
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -9,6 +9,7 @@ import cartopy.feature as cfeature
 import ecmwfapi
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import xarray as xr
 import xclim.indices as xci
 from dateutil.relativedelta import relativedelta
@@ -22,224 +23,6 @@ from ...workflows.io import calculate_scaling, to_zarr
 from ..workflows.general import (
     resample_like,
 )
-
-
-def reproject_and_apply_lapse_rate_temperature(
-    T, elevation_forcing, elevation_target, lapse_rate=-0.0065
-) -> xr.DataArray:
-    assert (T.x.values == elevation_forcing.x.values).all()
-    assert (T.y.values == elevation_forcing.y.values).all()
-
-    t_at_sea_level = T - elevation_forcing * lapse_rate
-    t_at_sea_level_reprojected = resample_like(
-        t_at_sea_level, elevation_target, method="conservative"
-    )
-
-    T_grid = t_at_sea_level_reprojected + lapse_rate * elevation_target
-    T_grid.name = T.name
-    T_grid.attrs = T.attrs
-    return T_grid
-
-
-def get_pressure_correction_factor(DEM, g, Mo, lapse_rate):
-    return (288.15 / (288.15 + lapse_rate * DEM)) ** (g * Mo / (8.3144621 * lapse_rate))
-
-
-def reproject_and_apply_lapse_rate_pressure(
-    pressure: xr.DataArray,
-    elevation_forcing: xr.DataArray,
-    elevation_target: xr.DataArray,
-    g: float = 9.80665,
-    Mo: float = 0.0289644,
-    lapse_rate: float = -0.0065,
-) -> xr.DataArray:
-    """Pressure correction based on elevation lapse_rate.
-
-    Args:
-        pressure: Pressure data to reproject and apply lapse rate to [Pa].
-        elevation_forcing: Elevation data for the forcing grid [m].
-        elevation_target: Elevation data for the target grid [m].
-        g: gravitational constant [m s-2]
-        Mo: molecular weight of gas [kg / mol]
-        lapse_rate: lapse rate of temperature [C m-1]
-
-    Returns:
-        press_fact : xarray.DataArray
-            pressure correction factor
-    """
-    assert (pressure.x.values == elevation_forcing.x.values).all()
-    assert (pressure.y.values == elevation_forcing.y.values).all
-    pressure_at_sea_level = pressure / get_pressure_correction_factor(
-        elevation_forcing, g, Mo, lapse_rate
-    )  # divide by pressure factor to get pressure at sea level
-    pressure_at_sea_level_reprojected = resample_like(
-        pressure_at_sea_level, elevation_target, method="conservative"
-    )
-    pressure_grid = (
-        pressure_at_sea_level_reprojected
-        * get_pressure_correction_factor(elevation_target, g, Mo, lapse_rate)
-    )  # multiply by pressure factor to get pressure at DEM grid, corrected for elevation
-    pressure_grid.name = pressure.name
-    pressure_grid.attrs = pressure.attrs
-
-    return pressure_grid
-
-
-def download_ERA5(
-    folder: Path,
-    variable: str,
-    start_date: datetime,
-    end_date: datetime,
-    bounds: tuple[float, float, float, float],
-    logger: logging.Logger,
-) -> xr.DataArray:
-    """Download ERA5 data for a specific variable and time period and save it as a zarr file.
-
-    If the data is already downloaded, it will be opened from the local zarr file.
-
-    Args:
-        folder: Folder to store the downloaded data
-        variable: Short name of the variable to download (e.g., "t2m"). Codes can be found here: https://codes.ecmwf.int/grib/param-db/
-        start_date: Start date of the time period to download
-        end_date: End date of the time period to download
-        bounds: Bounding box in the format (min_lon, min_lat, max_lon, max_lat)
-        logger: Logger to use for logging
-
-    Returns:
-        da: Downloaded ERA5 data as an xarray DataArray.
-    """
-    output_fn = folder / f"{variable}.zarr"
-    if output_fn.exists():
-        da: xr.DataArray = open_zarr(output_fn)
-
-        # check if entire time range is available. If available, return the cached data
-        # otherwise, slice the data to the requested time range and return it
-        if start_date >= pd.to_datetime(
-            da.time[0].values
-        ) and end_date <= pd.to_datetime(da.time[-1].values):
-            logger.debug(
-                f"Using cached ERA5 {variable} data from {output_fn} for time range {start_date} to {end_date}"
-            )
-            da: xr.DataArray = da.sel(
-                time=slice(start_date, end_date),
-            )
-            return da
-        else:
-            # remove the existing zarr folder
-            logger.debug(
-                f"Removing existing zarr folder {output_fn} as it does not contain the requested time range"
-            )
-            shutil.rmtree(output_fn)
-
-    folder.mkdir(parents=True, exist_ok=True)
-    da: xr.DataArray = xr.open_dataset(
-        "https://data.earthdatahub.destine.eu/era5/reanalysis-era5-land-no-antartica-v0.zarr",
-        storage_options={"client_kwargs": {"trust_env": True}},
-        chunks={},
-        engine="zarr",
-    )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
-
-    da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
-
-    buffer: float = 0.5
-
-    # Check if region crosses the meridian (longitude=0)
-    # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
-    if bounds[0] < 0 and bounds[2] > 0:
-        # Need to handle the split across the meridian
-        # Get western hemisphere part (longitude < 0)
-        west_da: xr.DataArray = da.sel(
-            time=slice(start_date, end_date),
-            y=slice(bounds[3] + buffer, bounds[1] - buffer),
-            x=slice(((bounds[0] - buffer) + 360) % 360, 360),
-        )
-        # Get eastern hemisphere part (longitude > 0)
-        east_da: xr.DataArray = da.sel(
-            time=slice(start_date, end_date),
-            y=slice(bounds[3] + buffer, bounds[1] - buffer),
-            x=slice(0, ((bounds[2] + buffer) + 360) % 360),
-        )
-        # Combine the two parts
-        da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
-    else:
-        # Regular case - doesn't cross meridian
-        da: xr.DataArray = da.sel(
-            time=slice(start_date, end_date),
-            y=slice(bounds[3] + buffer, bounds[1] - buffer),
-            x=slice(
-                ((bounds[0] - buffer) + 360) % 360,
-                ((bounds[2] + buffer) + 360) % 360,
-            ),
-        )
-
-    # Reorder x to be between -180 and 180 degrees
-    da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
-
-    logger.info(f"Downloading ERA5 {variable} to {output_fn}")
-    da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
-    da: xr.DataArray = da.raster.mask_nodata()
-    da: xr.DataArray = to_zarr(
-        da,
-        output_fn,
-        time_chunksize=get_chunk_size(da, target=1e7),
-        crs=4326,
-    )
-    return da
-
-
-def process_ERA5(
-    variable: str,
-    folder: Path,
-    start_date: datetime,
-    end_date: datetime,
-    bounds: tuple[float, float, float, float],
-    logger: logging.Logger,
-) -> xr.DataArray:
-    """Process ERA5 data for a given variable and time period.
-
-    Downloads the data from the Climate Data Store (CDS) if not already available,
-    processes it to ensure it is in the correct format, and applies de-accumulation
-    for accumulated variables and interpolation of missing values.
-
-    Args:
-        variable: short name of the variable to process (e.g., "t2m"). Codes can be found here: https://codes.ecmwf.int/grib/param-db/
-        folder: folder to store the downloaded data
-        start_date: start date of the time period to process
-        end_date: end date of the time period to process
-        bounds:  bounding box in the format (min_lon, min_lat, max_lon, max_lat)
-        logger:  logger to use for logging
-
-    Raises:
-        NotImplementedError: If the step type of the data is not "accum" or "instant".
-
-    Returns:
-        da: Processed ERA5 data as an xarray DataArray.
-    """
-    da: xr.DataArray = download_ERA5(
-        folder, variable, start_date, end_date, bounds, logger
-    )
-    # assert that time is monotonically increasing with a constant step size
-    assert (
-        da.time.diff("time").astype(np.int64)
-        == (da.time[1] - da.time[0]).astype(np.int64)
-    ).all(), "time is not monotonically increasing with a constant step size"
-    if da.attrs["GRIB_stepType"] == "accum":
-        da: xr.DataArray = xr.where(
-            da.isel(time=slice(1, None)).time.dt.hour == 1,
-            da.isel(time=slice(1, None)),
-            da.diff(dim="time", n=1),
-        )
-
-    elif da.attrs["GRIB_stepType"] == "instant":
-        pass
-    else:
-        raise NotImplementedError
-
-    da: xr.DataArray = da.rio.write_crs(4326)
-    da.raster.set_crs(4326)
-    da: xr.DataArray = interpolate_na_along_time_dim(da)
-
-    return da
 
 
 def generate_forecast_steps(forecast_date: datetime) -> str:
@@ -713,10 +496,7 @@ def plot_forcing(self, da, name) -> None:
         4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5}
     )  # Create 4 subplots stacked vertically
 
-    mask = self.grid["mask"]  # get the GEB grid
-    data = (
-        (da * ~mask).sum(dim=("y", "x")) / (~mask).sum()
-    ).compute()  # Area-weighted average
+    data = (da.mean(dim=("y", "x"))).compute()  # Area-weighted average
     assert not np.isnan(data.values).any(), (
         "data contains NaN values"
     )  # ensure no NaNs in data
@@ -767,9 +547,6 @@ def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
         self: The class instance.
         da: The xarray DataArray containing the forecast data. Must have dimensions 'time', 'y', 'x', and 'member'.
         name: The name of the variable being plotted, used for titles and filenames.
-
-    Returns: None
-
     """
     # pre-processing of plotting data
     mask = self.grid["mask"]  # get the GEB grid
@@ -1274,8 +1051,11 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = 0
+        # wind can be both positive and negative
+        # we assume a maximum wind speed of 120 m/s (432 km/h), which is a stronger
+        # than the strongest wind gust ever recorded on earth (113 m/s)
         scaling_factor, in_dtype, out_dtype = calculate_scaling(
-            da, 0, 120, offset=offset, precision=0.1
+            da, -120, 120, offset=offset, precision=0.1
         )
         filters: list = [
             FixedScaleOffset(
@@ -1387,35 +1167,25 @@ class Forcing:
         v_wind: xr.DataArray = era5_loader("v10")
         self.set_wind(v_wind, direction="v")
 
-        elevation_grid = self.get_elevation_forcing_and_grid(pr_hourly)
+        elevation_forcing: xr.DataArray = self.get_elevation_forcing(
+            pr_hourly
+        ).compute()
+        self.set_other(
+            elevation_forcing,
+            name="climate/elevation_forcing",
+        )
 
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forcing(
         self,
         forcing: str = "ERA5",
-        resolution_arcsec: int | None = None,
-        model: str | None = None,
     ) -> None:
         """Sets up the forcing data for GEB.
 
         Args:
-            forcing: The data source to use for the forcing data. Can be ERA5 or ISIMIP. Default is 'era5'.
-            resolution_arcsec: The resolution of the data in arcseconds. Only used for ISIMIP. Supported values are 30 and 1800.
-            model: The name of the forcing data to use within the dataset. Only required for ISIMIP data.
-                For ISIMIP, this can be 'chelsa-w5e5' for 30 arcsec resolution
-                or 'ipsl-cm6a-lr', 'gfdl-esm4', 'mpi-esm1-2-hr', 'mri-esm2-0', or 'mri-esm2-0' for 1800 arcsec resolution.
+            forcing: The data source to use for the forcing data. Currently only ERA5 is supported.
 
-        Notes:
-            This method sets up the forcing data for GEB. It first downloads the high-resolution variables
-            (precipitation, surface solar radiation, air temperature, maximum air temperature, and minimum air temperature) from
-            the ISIMIP dataset for the specified time period.
-
-            The method then sets up the relative humidity, longwave radiation, pressure, and wind data for the model. The
-            relative humidity data is downloaded from the ISIMIP dataset using the `setup_hurs_isimip_30arcsec` method. The longwave radiation
-            data is calculated using the air temperature and relative humidity data and the `calculate_longwave` function. The
-            pressure data is downloaded from the ISIMIP dataset using the `setup_pressure_isimip_30arcsec` method. The wind data is downloaded
-            from the ISIMIP dataset using the `setup_wind_isimip_30arcsec` method. All these data are first downscaled to the model grid.
-
+        Sets:
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
 
         Raises:
@@ -1434,9 +1204,7 @@ class Forcing:
         elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
         else:
-            raise ValueError(
-                f"Unknown data source: {forcing}, supported are 'ISIMIP' and 'ERA5'"
-            )
+            raise ValueError(f"Unknown data source: {forcing}, supported are 'ERA5'")
 
     @build_method(depends_on=["setup_forcing"])
     def setup_SPEI(
@@ -1474,18 +1242,13 @@ class Forcing:
         )
 
         # assert input data have the same coordinates
-        assert np.array_equal(
-            self.other["climate/pr"].x, self.other["climate/tasmin"].x
-        )
-        assert np.array_equal(
-            self.other["climate/pr"].x, self.other["climate/tasmax"].x
-        )
-        assert np.array_equal(
-            self.other["climate/pr"].y, self.other["climate/tasmin"].y
-        )
-        assert np.array_equal(
-            self.other["climate/pr"].y, self.other["climate/tasmax"].y
-        )
+        tasmin = self.other["climate/tas"].resample(time="D").min()
+        tasmax = self.other["climate/tas"].resample(time="D").max()
+        pr = self.other["climate/pr"].resample(time="D").mean()
+
+        assert np.array_equal(self.other["climate/pr"].x, tasmin.x)
+        assert np.array_equal(self.other["climate/pr"].y, tasmin.y)
+
         if not self.other[
             "climate/pr"
         ].time.min().dt.date <= calibration_period_start and self.other[
@@ -1499,8 +1262,8 @@ class Forcing:
             )
 
         pet = xci.potential_evapotranspiration(
-            tasmin=self.other["climate/tasmin"],
-            tasmax=self.other["climate/tasmax"],
+            tasmin=tasmin,
+            tasmax=tasmax,
             # hurs=self.other["climate/hurs"],
             # rsds=self.other["climate/rsds"],
             # rlds=self.other["climate/rlds"],
@@ -1521,7 +1284,7 @@ class Forcing:
         ).astype(np.float32)
 
         # Compute the potential evapotranspiration
-        water_budget = xci.water_budget(pr=self.other["climate/pr"], evspsblpot=pet)
+        water_budget = xci.water_budget(pr=pr, evspsblpot=pet)
 
         water_budget = water_budget.resample(time="MS").mean(keep_attrs=True)
         water_budget.attrs["_FillValue"] = np.nan
@@ -1567,7 +1330,9 @@ class Forcing:
             ).astype(np.float32)
 
             # remove all nan values as a result of the sliding window
-            SPEI: xr.DataArray = SPEI.isel(time=slice(window_months - 1, None))
+            SPEI: xr.DataArray = SPEI.isel(
+                time=slice(window_months - 1, None)
+            ).compute()
 
             with tempfile.TemporaryDirectory() as tmp_spei_folder:
                 tmp_spei_file = Path(tmp_spei_folder) / "tmp_spei_file.zarr"
@@ -1599,30 +1364,51 @@ class Forcing:
 
                 GEV = xci.stats.fit(SPEI_yearly_min, dist="genextreme").compute()
 
-                self.set_grid(
+                self.set_other(
                     GEV.sel(dparams="c").astype(np.float32), name="climate/gev_c"
                 )
-                self.set_grid(
+                self.set_other(
                     GEV.sel(dparams="loc").astype(np.float32), name="climate/gev_loc"
                 )
-                self.set_grid(
+                self.set_other(
                     GEV.sel(dparams="scale").astype(np.float32),
                     name="climate/gev_scale",
                 )
 
-    def get_elevation_forcing_and_grid(
-        self, forcing_grid: xr.DataArray
-    ) -> xr.DataArray:
+    @build_method(depends_on=["setup_forcing"])
+    def setup_pr_GEV(self) -> None:
+        pr: xr.DataArray = self.other["climate/pr"] * 3600  # convert to mm/hour
+        pr_monthly: xr.DataArray = pr.resample(time="M").sum(dim="time", skipna=True)
+
+        pr_yearly_max = (
+            pr_monthly.groupby("time.year")
+            .max(dim="time", skipna=True)
+            .rename({"year": "time"})
+            .chunk({"time": -1})
+            .compute()
+        )
+
+        gev_pr = xci.stats.fit(pr_yearly_max, dist="genextreme").compute()
+
+        self.set_other(
+            gev_pr.sel(dparams="c").astype(np.float32), name="climate/pr_gev_c"
+        )
+        self.set_other(
+            gev_pr.sel(dparams="loc").astype(np.float32), name="climate/pr_gev_loc"
+        )
+        self.set_other(
+            gev_pr.sel(dparams="scale").astype(np.float32),
+            name="climate/pr_gev_scale",
+        )
+
+    def get_elevation_forcing(self, forcing_grid: xr.DataArray) -> xr.DataArray:
         """Gets elevation maps for both the normal grid (target of resampling) and the forcing grid.
 
         Args:
-            grid: the normal grid to which the forcing data is resampled
             forcing_grid: grid of the forcing data
-            forcing_name: name of the forcing data, used to determine the file paths for caching
 
         Returns:
             elevation data for the forcing grid and the normal grid
-
         """
         elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
         elevation = elevation.isel(
@@ -1639,20 +1425,20 @@ class Forcing:
         elevation_forcing = resample_like(elevation, target, method="bilinear")
         elevation_forcing = elevation_forcing.chunk({"x": -1, "y": -1})
 
+        elevation_forcing = elevation_forcing.rio.write_crs(4326)
+
         return elevation_forcing
 
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_CO2_concentration(self) -> None:
         """Aquires the CO2 concentration data for the specified SSP in ppm."""
-        da: xr.DataArray = self.construct_ISIMIP_variable(
-            variable_name="co2",
-            forcing=None,
-            ssp=self.ISIMIP_ssp,
-        ).astype(np.float32)
-        self.set_other(
-            da,
-            name="climate/CO2_ppm",
+        df: pd.DataFrame = self.new_data_catalog.fetch("isimip_co2").read(
+            scenario=self.ISIMIP_ssp
         )
+        df: pd.DataFrame = df[
+            (df.index >= self.start_date.year) & (df.index <= self.end_date.year)
+        ]
+        self.set_table(df, name="climate/CO2_ppm")
 
     @build_method(depends_on=["set_ssp", "set_time_range"])
     def setup_forecasts(
@@ -1999,58 +1785,3 @@ class Forcing:
                 self.set_sfcwind(  # Store surface wind speed
                     wind_speed, f"forecasts/ECMWF/sfcwind_{forecast_issue_date_str}"
                 )
-
-    def setup_forcing_ISIMIP(self, resolution_arcsec: int, model: str) -> None:
-        """Sets up the forcing data for GEB using ISIMIP data.
-
-        Args:
-            resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
-            model: The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
-                and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
-        Raises:
-            ValueError: If the resolution is not 30 or 1800 arcseconds, or
-                if the model is not supported for the given resolution.
-
-        """
-        if resolution_arcsec == 30:
-            assert model == "chelsa-w5e5", (
-                "Only chelsa-w5e5 is supported for 30 arcsec resolution"
-            )
-            # download source data from ISIMIP
-            self.logger.info("setting up forcing data")
-            high_res_variables: list = ["pr", "rsds", "tas", "tasmax", "tasmin"]
-            self.setup_30arcsec_variables_isimip(high_res_variables)
-            self.logger.info("setting up relative humidity...")
-            self.setup_hurs_isimip_30arcsec()
-            self.logger.info("setting up longwave radiation...")
-            self.setup_longwave_isimip_30arcsec()
-            self.logger.info("setting up pressure...")
-            self.setup_pressure_isimip_30arcsec()
-            self.logger.info("setting up wind...")
-            self.setup_wind_isimip_30arcsec()
-        elif resolution_arcsec == 1800:
-            assert model in (
-                "ipsl-cm6a-lr",
-                "gfdl-esm4",
-                "mpi-esm1-2-hr",
-                "mri-esm2-0",
-                "ukesm1-0-ll",
-            ), (
-                "Only ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0 and ukesm1-0-ll are supported for 1800 arcsec resolution"
-            )
-            variables = [
-                "pr",
-                "rsds",
-                "tas",
-                "tasmax",
-                "tasmin",
-                "hurs",
-                "rlds",
-                "ps",
-                "sfcwind",
-            ]
-            self.setup_1800arcsec_variables_isimip(model, variables)
-        else:
-            raise ValueError(
-                "Only 30 arcsec and 1800 arcsec resolution is supported for ISIMIP data"
-            )

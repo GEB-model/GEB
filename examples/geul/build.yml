@@ -360,6 +360,8 @@ setup_SPEI:
   calibration_period_start: 2011-01-01
   calibration_period_end: 2021-12-31
 
+setup_pr_GEV:
+
 setup_discharge_observations:
   custom_river_stations: null
 

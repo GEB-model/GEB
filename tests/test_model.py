@@ -164,6 +164,7 @@ def test_update_with_dict() -> None:
     "method",
     [
         "setup_forcing",
+        "setup_SPEI",
         "setup_soil_parameters",
         "setup_create_farms",
         "setup_groundwater",
@@ -488,40 +489,6 @@ def test_multiverse() -> None:
             flood_map_folder
             / f"0 - {events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {forecast_end_date.strftime('%Y%m%dT%H%M%S')}.zarr"
         )
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_ISIMIP_forcing_low_res() -> None:
-    """Test the ISIMIP forcing update function.
-
-    This is a special case that requires a specific setup.
-    """
-    with WorkingDirectory(working_directory):
-        args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
-
-        build_config: dict[str, Any] = parse_config(args["build_config"])
-
-        original_time_range: dict[str, date] = build_config["set_time_range"]
-
-        args["build_config"] = {
-            "set_time_range": {
-                "start_date": date(2001, 1, 1),
-                "end_date": date(2024, 12, 31),
-            },
-            "setup_forcing": {
-                "forcing": "ISIMIP",
-                "resolution_arcsec": 1800,
-                "model": "gfdl-esm4",
-            },
-        }
-        update_fn(**args)
-
-        # Reset the time range to the original one
-        args["build_config"] = {
-            "set_time_range": original_time_range,
-        }
-
-        update_fn(**args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

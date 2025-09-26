@@ -12,29 +12,29 @@ from geb.hydrology.potential_evapotranspiration import (
     get_net_solar_radiation,
     get_psychrometric_constant,
     get_reference_evapotranspiration,
-    get_saturated_vapour_pressure,
     get_slope_of_saturation_vapour_pressure_curve,
     get_upwelling_long_wave_radiation,
+    get_vapour_pressure,
     get_vapour_pressure_deficit,
 )
 
 
-def test_get_saturated_vapour_pressure() -> None:
+def test_get_vapour_pressure() -> None:
     """See example 3: https://www.fao.org/4/X0490E/x0490e07.htm."""
-    saturated_vapour_pressure = get_saturated_vapour_pressure(
+    saturated_vapour_pressure = get_vapour_pressure(
         temperature_C=15,
     )
     assert math.isclose(saturated_vapour_pressure, 1.705, abs_tol=1e-2)
-    saturated_vapour_pressure = get_saturated_vapour_pressure(temperature_C=24.5)
+    saturated_vapour_pressure = get_vapour_pressure(temperature_C=24.5)
     assert math.isclose(saturated_vapour_pressure, 3.075, abs_tol=1e-2)
 
 
 def test_get_actual_vapour_pressure() -> None:
     """See example 5: https://www.fao.org/4/X0490E/x0490e07.htm."""
-    saturated_vapour_pressure_min = get_saturated_vapour_pressure(
+    saturated_vapour_pressure_min = get_vapour_pressure(
         temperature_C=18,
     )
-    saturated_vapour_pressure_max = get_saturated_vapour_pressure(
+    saturated_vapour_pressure_max = get_vapour_pressure(
         temperature_C=25,
     )
     actual_vapour_pressure_deficit = get_actual_vapour_pressure(
@@ -100,7 +100,7 @@ def test_get_slope_of_saturation_vapour_pressure_curve() -> None:
 
     expected_value = (
         np.float32(4098.0)
-        * get_saturated_vapour_pressure(temperature_C=temperature_C)
+        * get_vapour_pressure(temperature_C=temperature_C)
         / ((temperature_C + np.float32(237.3)) ** 2)
     )
     assert math.isclose(slope, expected_value, rel_tol=1e-6)

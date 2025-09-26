@@ -8,10 +8,10 @@ from .landcover import FOREST
 
 
 @njit(cache=True, inline="always")
-def get_saturated_vapour_pressure(
+def get_vapour_pressure(
     temperature_C: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
-    """Calculate the saturated vapour pressure based on minimum and maximum temperature.
+    """Calculate the vapour pressure based on temperature.
 
     Args:
         temperature_C: Temperature in Celsius.
@@ -155,7 +155,7 @@ def get_slope_of_saturation_vapour_pressure_curve(
     """
     return (
         np.float32(4098.0)
-        * get_saturated_vapour_pressure(temperature_C=temperature_C)
+        * get_vapour_pressure(temperature_C=temperature_C)
         / ((temperature_C + np.float32(237.3)) ** 2)
     )
 
@@ -244,11 +244,12 @@ def PET(
     tas: npt.NDArray[np.float32],
     tasmin: npt.NDArray[np.float32],
     tasmax: npt.NDArray[np.float32],
-    hurs: npt.NDArray[np.float32],
+    dewpoint_tas: npt.NDArray[np.float32],
     ps_pascal: npt.NDArray[np.float32],
     rlds: npt.NDArray[np.float32],
     rsds: npt.NDArray[np.float32],
-    sfcWind: npt.NDArray[np.float32],
+    wind_u10m: npt.NDArray[np.float32],
+    wind_v10m: npt.NDArray[np.float32],
     albedo_canopy=np.float32(0.13),
     albedo_water=np.float32(0.05),
 ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
@@ -280,7 +281,7 @@ def PET(
         tas: average air temperature in Kelvin.
         tasmin: minimum air temperature in Kelvin.
         tasmax: maximum air temperature in Kelvin.
-        hurs: relative humidity in percentage.
+        dewpoint_tas: dew point temperature in Kelvin.
         ps_pascal: surface pressure in Pascals.
         rlds: long wave downward surface radiation fluxes in W/m^2.
         rsds: short wave downward surface radiation fluxes in W/m^2.
@@ -296,11 +297,26 @@ def PET(
     tas_C = tas - np.float32(273.15)
     tasmin_C = tasmin - np.float32(273.15)
     tasmax_C = tasmax - np.float32(273.15)
+    dewpoint_tas_C = dewpoint_tas - np.float32(273.15)
 
-    saturated_vapour_pressure_min = get_saturated_vapour_pressure(
+    water_vapour_pressure: npt.NDArray[np.float32] = get_vapour_pressure(
+        temperature_C=dewpoint_tas_C
+    )
+    saturated_vapour_pressure: npt.NDArray[np.float32] = get_vapour_pressure(
+        temperature_C=tas_C
+    )
+    hurs: npt.NDArray[np.float32] = np.minimum(
+        np.maximum(
+            np.float32(100.0) * water_vapour_pressure / saturated_vapour_pressure,
+            np.float32(0.0),
+        ),
+        np.float32(100.0),
+    )
+
+    saturated_vapour_pressure_min = get_vapour_pressure(
         temperature_C=tasmin_C,
     )
-    saturated_vapour_pressure_max = get_saturated_vapour_pressure(
+    saturated_vapour_pressure_max = get_vapour_pressure(
         temperature_C=tasmax_C,
     )
     actual_vapour_pressure = get_actual_vapour_pressure(
@@ -344,7 +360,8 @@ def PET(
         get_slope_of_saturation_vapour_pressure_curve(temperature_C=tas_C)
     )
 
-    wind_2m = adjust_wind_speed(sfcWind)
+    wind_10m: npt.NDArray[np.float32] = np.sqrt(wind_u10m**2 + wind_v10m**2)
+    wind_2m: npt.NDArray[np.float32] = adjust_wind_speed(wind_10m)
 
     # latent heat of vaporization [MJ/kg] -> joules required to evaporate 1 kg of water
     latent_heat_of_vaporarization = get_latent_heat_of_vaporization(
@@ -394,21 +411,28 @@ class PotentialEvapotranspiration(Module):
     def step(self) -> None:
         """Dynamic part of the potential evaporation module.
 
-        Caluclation is based on Penman Monteith - FAO 56.
+        Calculation is based on Penman Monteith - FAO 56.
         """
+        tas: npt.NDArray[np.float32] = self.HRU.tas
+        tasavg: npt.NDArray[np.float32] = tas.mean(axis=0)
+        tasmin: npt.NDArray[np.float32] = tas.min(axis=0)
+        tasmax: npt.NDArray[np.float32] = tas.max(axis=0)
+
+        dewpoint_tas = self.HRU.dewpoint_tas.mean(axis=0)
         (
             self.HRU.var.reference_evapotranspiration_grass,
             self.HRU.var.reference_evapotranspiration_water,
             net_absorbed_radiation_vegetation_MJ_m2_day,
         ) = PET(
-            tas=self.HRU.tas,
-            tasmin=self.HRU.tasmin,
-            tasmax=self.HRU.tasmax,
-            hurs=self.HRU.hurs,
-            ps_pascal=self.HRU.ps,
-            rlds=self.HRU.rlds,
-            rsds=self.HRU.rsds,
-            sfcWind=self.HRU.sfcWind,
+            tas=tasavg,
+            dewpoint_tas=dewpoint_tas,
+            tasmin=tasmin,
+            tasmax=tasmax,
+            ps_pascal=self.HRU.ps.mean(axis=0),
+            rlds=self.HRU.rlds.mean(axis=0),
+            rsds=self.HRU.rsds.mean(axis=0),
+            wind_u10m=self.HRU.wind_u10m.mean(axis=0),
+            wind_v10m=self.HRU.wind_v10m.mean(axis=0),
         )
 
         self.grid.var.reference_evapotranspiration_water = self.hydrology.to_grid(
