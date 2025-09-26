@@ -982,6 +982,15 @@ wheels = [
 ]
 
 [[package]]
+name = "ecmwf-api-client"
+version = "1.6.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/14/b5/837fa2daee28118c592cd003b910433894008d5a1f9e3bed9f2c3cabe34b/ecmwf_api_client-1.6.5.tar.gz", hash = "sha256:1fc0eba27163686b7fba5da027cc5dc0a361f75b652508fa7805f50599368b1c", size = 12974, upload-time = "2025-03-10T10:27:25.057Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/f3/7a5832d5fb8e16db4d1f3be58fcb2537e68ccffea1270bff8b65de7c85b5/ecmwf_api_client-1.6.5-py3-none-any.whl", hash = "sha256:82678c2c18083b44be74b23e2a7e82d2343061966c0bf3a895272b9e9a802836", size = 13495, upload-time = "2025-03-10T10:27:24.215Z" },
+]
+
+[[package]]
 name = "ecmwf-datastores-client"
 version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1300,6 +1309,7 @@ dependencies = [
     { name = "damagescanner" },
     { name = "dask" },
     { name = "deap" },
+    { name = "ecmwf-api-client" },
     { name = "flopy" },
     { name = "folium" },
     { name = "geopandas" },
@@ -1387,6 +1397,7 @@ requires-dist = [
     { name = "damagescanner", specifier = "==0.9b21" },
     { name = "dask" },
     { name = "deap", specifier = ">=1.4.1" },
+    { name = "ecmwf-api-client", specifier = ">=1.6.5" },
     { name = "flopy", specifier = ">=3.8.0" },
     { name = "folium", specifier = ">=0.19.6" },
     { name = "geopandas", specifier = ">=1.0.1" },

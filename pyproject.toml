@@ -73,6 +73,7 @@ dependencies = [
     "xpystac>=0.4.0",
     "odc-stac>=0.4.0",
     "pystac-client>=0.9.0",
+    "ecmwf-api-client>=1.6.5",
 ]
 requires-python = ">=3.12, <3.14"
 readme = "README.md"

@@ -342,17 +342,12 @@ def to_zarr(
                 }
             )
             da.attrs["_CRS"] = {"wkt": to_wkt(crs)}
-
         if "time" in da.dims:
             chunks.update({"time": min(time_chunksize, da.sizes["time"])})
             if time_chunks_per_shard is not None:
                 shards = chunks.copy()
-                shards["time"] = time_chunks_per_shard * time_chunksize
+                shards["time"] = time_chunks_per_shard * chunks["time"]
 
-        # currently we are in a conondrum, where gdal does not yet support zarr version 3.
-        # support seems recently merged, and we need to wait for the 3.11 release, and
-        # subsequent QGIS support for GDAL 3.11. See https://github.com/OSGeo/gdal/pull/11787
-        # For anything with a shard, we opt for zarr version 3, for anything without, we use version 2.
         if compressor is None:
             compressor: BloscCodec = BloscCodec(
                 cname="zstd",

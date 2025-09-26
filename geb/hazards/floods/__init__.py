@@ -164,8 +164,22 @@ class Floods:
         Raises:
             ValueError: If the forcing method is unknown.
         """
+        # Save the flood depth to a zarr file
+        if (
+            self.model.multiverse_name
+        ):  # in case of multiverse simulations, save in subfolder
+            sfincs_simulation_name = (
+                self.model.forecast_issue_date
+                + " - "
+                + self.model.multiverse_name
+                + " - "
+                + f"{start_time.strftime(format='%Y%m%dT%H%M%S')} - {end_time.strftime(format='%Y%m%dT%H%M%S')}"
+            )
+        else:
+            sfincs_simulation_name = f"{start_time.strftime(format='%Y%m%dT%H%M%S')} - {end_time.strftime(format='%Y%m%dT%H%M%S')}"
+
         simulation: SFINCSSimulation = sfincs_model.create_simulation(
-            simulation_name=f"{start_time.strftime(format='%Y%m%dT%H%M%S')} - {end_time.strftime(format='%Y%m%dT%H%M%S')}",
+            simulation_name=sfincs_simulation_name,
             start_time=start_time,
             end_time=end_time,
         )
@@ -309,25 +323,33 @@ class Floods:
         """
         assert precipitation_scale_factor >= 0, (
             "Precipitation scale factor must be non-negative."
-        )
+        )  # negative scale factors would lead to negative precipitation
 
-        sfincs_root_model = self.build("entire_region")
-        sfincs_simulation = self.set_forcing(
+        sfincs_root_model = self.build("entire_region")  # build or read the model
+        sfincs_simulation = self.set_forcing(  # set the forcing
             sfincs_root_model, start_time, end_time, precipitation_scale_factor
         )
-        self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
+        self.model.logger.info(
+            f"Running SFINCS for {self.model.current_time}..."
+        )  # log the start of the simulation
 
         sfincs_simulation.run(
             gpu=self.config["SFINCS"]["gpu"],
-        )
+        )  # run the simulation
         flood_depth: xr.DataArray = sfincs_simulation.read_max_flood_depth(
             self.config["minimum_flood_depth"]
+        )  # read the flood depth results
+
+        filename = (
+            self.model.output_folder / "flood_maps" / (sfincs_simulation.name + ".zarr")
         )
+
         flood_depth: xr.DataArray = to_zarr(
             da=flood_depth,
-            path=self.model.output_folder / "flood_maps" / sfincs_simulation.name,
+            path=filename,
             crs=flood_depth.rio.crs,
-        )
+        )  # save the flood depth to a zarr file
+
         self.model.agents.households.flood(flood_depth=flood_depth)
 
     def build_mask_for_coastal_sfincs(self) -> gpd.GeoDataFrame:
