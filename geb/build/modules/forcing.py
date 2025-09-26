@@ -859,7 +859,7 @@ def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
         subplot_kw={"projection": ccrs.PlateCarree()},
     )  # Create subplots with cartopy projection
     plt.subplots_adjust(
-        hspace=0.2, wspace=0.2, top=0.95, bottom=0.05, left=0.05, right=0.85
+        hspace=0.2, wspace=0.2, bottom=0.05, left=0.05, right=0.85
     )  # Tighter spacing
 
     custom_cmap = plt.cm.Blues  # Use simple Blues colormap
