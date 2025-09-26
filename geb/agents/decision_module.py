@@ -420,7 +420,7 @@ class DecisionModule:
 
         return EU_adapt
 
-    def calcEU_adapt_drought(self, **kwargs):
+    def calcEU_adapt_drought(self, **kwargs: dict):
         assert kwargs["adapted"].dtype == bool
         return self.calcEU_adapt_drought_numba(**kwargs)
 
@@ -602,7 +602,7 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
         sigma: float,
-        **kwargs,
+        **kwargs: dict,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
@@ -718,7 +718,7 @@ class DecisionModule:
         T: np.ndarray,
         r: float,
         sigma: float,
-        **kwargs,
+        **kwargs: dict,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 
