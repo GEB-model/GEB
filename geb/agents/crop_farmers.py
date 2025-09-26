@@ -127,7 +127,7 @@ class CropFarmers(AgentBaseClass):
             self.grid = model.hydrology.grid
 
         self.redundancy = reduncancy
-        self.decision_module = DecisionModule(self)
+        self.decision_module = DecisionModule(self, model=None)
 
         self.inflation_rate = load_economic_data(
             self.model.files["dict"]["socioeconomics/inflation_rates"]
@@ -3069,7 +3069,9 @@ class CropFarmers(AgentBaseClass):
         }
 
         # Determine the SEUT of the current crop
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
+            **decision_params
+        )
 
         # Determine the SEUT of the other crop options
         SEUT_crop_options = np.full(
@@ -3102,7 +3104,7 @@ class CropFarmers(AgentBaseClass):
                     "adaptation_costs": cost_difference_adaptation,
                 }
             )
-            SEUT_crop_options[:, idx] = self.decision_module.calcEU_adapt(
+            SEUT_crop_options[:, idx] = self.decision_module.calcEU_adapt_drought(
                 **decision_params_option
             )
 
@@ -3275,8 +3277,10 @@ class CropFarmers(AgentBaseClass):
         }
 
         # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
-        SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
+            **decision_params
+        )
+        SEUT_adapt = self.decision_module.calcEU_adapt_drought(**decision_params)
 
         assert (SEUT_do_nothing != -1).any() or (SEUT_adapt != -1).any()
 
@@ -3427,8 +3431,10 @@ class CropFarmers(AgentBaseClass):
         }
 
         # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
-        SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
+            **decision_params
+        )
+        SEUT_adapt = self.decision_module.calcEU_adapt_drought(**decision_params)
 
         assert (SEUT_do_nothing != -1).any() or (SEUT_adapt != -1).any()
 
@@ -3549,8 +3555,10 @@ class CropFarmers(AgentBaseClass):
         }
 
         # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
-        SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
+            **decision_params
+        )
+        SEUT_adapt = self.decision_module.calcEU_adapt_drought(**decision_params)
 
         assert (SEUT_do_nothing != -1).any or (SEUT_adapt != -1).any()
 
@@ -3687,12 +3695,14 @@ class CropFarmers(AgentBaseClass):
                 "extra_constraint": extra_constraint,
             }
 
-            SEUT_insurance_options[:, idx] = self.decision_module.calcEU_adapt(
+            SEUT_insurance_options[:, idx] = self.decision_module.calcEU_adapt_drought(
                 **decision_params
             )
 
         # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
+            **decision_params
+        )
 
         assert (SEUT_do_nothing != -1).any() or (SEUT_insurance_options != -1).any()
 
