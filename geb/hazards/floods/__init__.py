@@ -168,6 +168,7 @@ class Floods:
             simulation_name=f"{start_time.strftime(format='%Y%m%dT%H%M%S')} - {end_time.strftime(format='%Y%m%dT%H%M%S')}",
             start_time=start_time,
             end_time=end_time,
+            write_figures=self.config.get("write_figures", False),
         )
         if self.config["forcing_method"] == "headwater_points":
             n_timesteps: int = min(self.n_timesteps, len(self.discharge_per_timestep))
