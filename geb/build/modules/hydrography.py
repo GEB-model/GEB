@@ -894,7 +894,7 @@ class Hydrography:
         """Sets up the coastal return period data for the model."""
         self.logger.info("Setting up coastal return period data")
         stations = gpd.read_parquet(
-            os.path.join("input", self.files["geoms"]["gtsm/stations"])
+            os.path.join("input", self.files["geom"]["gtsm/stations"])
         )
 
         fp_coast_rp = self.data_catalog.get_source("COAST_RP").path
