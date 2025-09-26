@@ -311,11 +311,3 @@ ISIMIP:
     source_author: ISIMIP
     source_license: CC BY 4.0
     source_url: https://www.isimip.org
-ERA5_hourly:
-  data_type: Dataset
-  path: "placeholder"
-  meta:
-    category: climate
-    source_author: ECMWF
-    source_license: CC-BY licence
-    source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels
