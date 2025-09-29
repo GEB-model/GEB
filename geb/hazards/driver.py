@@ -3,8 +3,6 @@
 import copy
 from datetime import datetime
 
-import pandas as pd
-
 
 class HazardDriver:
     """Class that manages the simulation of short-lived hazards such as floods.
@@ -85,13 +83,10 @@ class HazardDriver:
                     and self.current_timestep == self.n_timesteps - 1
                 ):
                     event = copy.deepcopy(event)
-                    if isinstance(self.model.forcing["pr_hourly"], list):
-                        final_forcing_dataset = self.model.forcing["pr_hourly"][-1]
-                    else:
-                        final_forcing_dataset = self.model.forcing["pr_hourly"]
-                    end_of_forcing_date: datetime = pd.to_datetime(
-                        final_forcing_dataset.time[-1].item()
-                    ).to_pydatetime()
+
+                    end_of_forcing_date = self.model.forcing[
+                        "pr"
+                    ].reader.datetime_index[-1]
                     if event["end_time"] > end_of_forcing_date:
                         print(
                             f"Warning: Flood event {event} ends after the model end time {self.end_time}. Simulating only part of flood event."
