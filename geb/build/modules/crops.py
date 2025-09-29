@@ -177,10 +177,6 @@ class Crops:
             GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(
                 GLOBIOM_NAME_TO_ISO3
             )
-            # For my personal branch
-            GLOBIOM_regions.loc[
-                GLOBIOM_regions["Country"] == "Switzerland", "Region37"
-            ] = "EU_MidWest"
             assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
             ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
