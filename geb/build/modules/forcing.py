@@ -493,8 +493,8 @@ def plot_forcing(self, da, name) -> None:
         name: The name of the variable being plotted, used for titles and filenames.
     """
     fig, axes = plt.subplots(
-        4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5}
-    )  # Create 4 subplots stacked vertically
+        7, 1, figsize=(35, 10), gridspec_kw={"hspace": 0.5}
+    )  # Create 7 subplots stacked vertically
 
     data = (da.mean(dim=("y", "x"))).compute()  # Area-weighted average
     assert not np.isnan(data.values).any(), (
@@ -514,6 +514,20 @@ def plot_forcing(self, da, name) -> None:
                 data.sel(time=da.time.dt.year == year),  # data for that year
                 f"{name} - {year.item()}",  # title
                 axes[i + 1],  # axis to plot on
+            )
+
+    # plot three weeks in the last year on separate axes
+    last_year = data.time[-1].dt.year
+    for i in range(3):
+        start_date = pd.Timestamp(f"{last_year.item()}-{i * 3 + 1}-01")
+        end_date = start_date + pd.Timedelta(days=7)
+        week_data = data.sel(time=slice(start_date, end_date))
+        if week_data.size > 0:
+            plot_timeline(
+                da,
+                week_data,
+                f"{name} - {start_date.date()} to {end_date.date()}",
+                axes[i + 4],
             )
 
     fp = self.report_dir / (
@@ -761,54 +775,18 @@ class Forcing:
     def __init__(self) -> None:
         pass
 
-    def plot_forcing(self, da, name) -> None:
-        fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
-
-        mask = self.grid["mask"]
-        data = ((da * ~mask).sum(dim=("y", "x")) / (~mask).sum()).compute()
-        assert not np.isnan(data.values).any(), "data contains NaN values"
-
-        # plot entire timeline on the first axis
-        plot_timeline(da, data, name, axes[0])
-
-        # plot the first three years on separate axes
-        for i in range(0, 3):
-            year = data.time[0].dt.year + i
-            year_data = data.sel(time=data.time.dt.year == year)
-            if year_data.size > 0:
-                plot_timeline(
-                    da,
-                    data.sel(time=da.time.dt.year == year),
-                    f"{name} - {year.item()}",
-                    axes[i + 1],
-                )
-
-        fp = self.report_dir / (name + "_timeline.png")
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(fp)
-
-        plt.close(fig)
-
-        spatial_data = da.mean(dim="time").compute()
-
-        spatial_data.plot()
-
-        plt.title(name)
-        plt.xlabel("Longitude")
-        plt.ylabel("Latitude")
-
-        spatial_fp: Path = self.report_dir / (name + "_spatial.png")
-        plt.savefig(spatial_fp)
-
-        plt.close()
-
     def set_xy_attrs(self, da: xr.DataArray) -> None:
         """Set CF-compliant attributes for the x and y coordinates of a DataArray."""
         da.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
         da.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
 
-    def set_pr(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
-        name: str = "climate/pr"
+    def set_pr_kg_per_m2_per_s(
+        self,
+        da: xr.DataArray,
+        name: str = "climate/pr_kg_per_m2_per_s",
+        *args: Any,
+        **kwargs: Any,
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "precipitation_flux",
             "long_name": "Precipitation",
@@ -849,8 +827,12 @@ class Forcing:
         _plot_data(self, da, name)
         return da
 
-    def set_rsds(
-        self, da: xr.DataArray, name: str = "climate/rsds", *args: Any, **kwargs: Any
+    def set_rsds_W_per_m2(
+        self,
+        da: xr.DataArray,
+        name: str = "climate/rsds_W_per_m2",
+        *args: Any,
+        **kwargs: Any,
     ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "surface_downwelling_shortwave_flux_in_air",
@@ -885,8 +867,12 @@ class Forcing:
         _plot_data(self, da, name)
         return da
 
-    def set_rlds(
-        self, da: xr.DataArray, name: str = "climate/rlds", *args: Any, **kwargs: Any
+    def set_rlds_W_per_m2(
+        self,
+        da: xr.DataArray,
+        name: str = "climate/rlds_W_per_m2",
+        *args: Any,
+        **kwargs: Any,
     ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "surface_downwelling_longwave_flux_in_air",
@@ -921,8 +907,12 @@ class Forcing:
         _plot_data(self, da, name)
         return da
 
-    def set_tas(
-        self, da: xr.DataArray, name: str = "climate/tas", *args: Any, **kwargs: Any
+    def set_tas_2m_K(
+        self,
+        da: xr.DataArray,
+        name: str = "climate/tas_2m_K",
+        *args: Any,
+        **kwargs: Any,
     ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "air_temperature",
@@ -961,10 +951,10 @@ class Forcing:
         _plot_data(self, da, name)
         return da
 
-    def set_dewpoint_tas(
+    def set_dewpoint_tas_2m_K(
         self, da: xr.DataArray, *args: Any, **kwargs: Any
     ) -> xr.DataArray:
-        name: str = "climate/dewpoint_tas"
+        name: str = "climate/dewpoint_tas_2m_K"
         da.attrs = {
             "standard_name": "air_temperature_dow_point",
             "long_name": "Hourly Near-Surface Dewpoint Temperature",
@@ -1001,8 +991,13 @@ class Forcing:
         _plot_data(self, da, name)
         return da
 
-    def set_ps(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
-        name: str = "climate/ps"
+    def set_ps_pascal(
+        self,
+        da: xr.DataArray,
+        name: str = "climate/ps_pascal",
+        *args: Any,
+        **kwargs: Any,
+    ) -> xr.DataArray:
         da.attrs = {
             "standard_name": "surface_air_pressure",
             "long_name": "Surface Air Pressure",
@@ -1038,10 +1033,15 @@ class Forcing:
         _plot_data(self, da, name)
         return da
 
-    def set_wind(
-        self, da: xr.DataArray, direction: str, *args: Any, **kwargs: Any
+    def set_wind_10m_m_per_s(
+        self,
+        da: xr.DataArray,
+        direction: str,
+        name: str = "climate/wind_{direction}10m_m_per_s",
+        *args: Any,
+        **kwargs: Any,
     ) -> xr.DataArray:
-        name: str = f"climate/wind_{direction}10m"
+        name: str = name.format(direction=direction)
         da.attrs = {
             "standard_name": "wind_speed",
             "long_name": "Near-Surface Wind Speed",
@@ -1138,34 +1138,33 @@ class Forcing:
 
         # ensure no negative values for precipitation, which may arise due to float precision
         pr_hourly: xr.DataArray = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
-        pr_hourly: xr.DataArray = self.set_pr(pr_hourly)
+        pr_hourly: xr.DataArray = self.set_pr_kg_per_m2_per_s(pr_hourly)
 
         hourly_tas: xr.DataArray = era5_loader("t2m")
-        self.set_tas(hourly_tas)
+        self.set_tas_2m_K(hourly_tas)
 
         hourly_dew_point_tas: xr.DataArray = era5_loader("d2m")
-        self.set_dewpoint_tas(hourly_dew_point_tas)
+        self.set_dewpoint_tas_2m_K(hourly_dew_point_tas)
 
-        hourly_rsds: xr.DataArray = era5_loader("ssrd") / (
-            24 * 3600  # convert from J/m2 to W/m2
-        )  # surface_solar_radiation_downwards
-        self.set_rsds(hourly_rsds)
+        hourly_rsds: xr.DataArray = (
+            era5_loader("ssrd") / 3600  # convert from J/m2/(per timestep) to W/m2
+        ).compute()  # surface_solar_radiation_downwards
+        self.set_rsds_W_per_m2(hourly_rsds)
 
-        hourly_rlds: xr.DataArray = era5_loader(
-            "strd"
-        ) / (  # surface_thermal_radiation_downwards
-            24 * 3600
-        )  # convert from J/m2 to W/m2
-        self.set_rlds(hourly_rlds)
+        # surface_thermal_radiation_downwards
+        hourly_rlds: xr.DataArray = (
+            era5_loader("strd") / 3600
+        )  # convert from J/m2/(per timestep) to W/m2
+        self.set_rlds_W_per_m2(hourly_rlds)
 
         pressure: xr.DataArray = era5_loader("sp")
-        self.set_ps(pressure)
+        self.set_ps_pascal(pressure)
 
         u_wind: xr.DataArray = era5_loader("u10")
-        self.set_wind(u_wind, direction="u")
+        self.set_wind_10m_m_per_s(u_wind, direction="u")
 
         v_wind: xr.DataArray = era5_loader("v10")
-        self.set_wind(v_wind, direction="v")
+        self.set_wind_10m_m_per_s(v_wind, direction="v")
 
         elevation_forcing: xr.DataArray = self.get_elevation_forcing(
             pr_hourly
@@ -1196,10 +1195,6 @@ class Forcing:
                 "ISIMIP forcing is not supported anymore. We switched fully to hourly forcing data."
             )
         elif forcing == "ERA5":
-            assert resolution_arcsec is None, (
-                "resolution_arcsec must be None for ERA5 forcing data"
-            )
-            assert model is None, "model must be None for ERA5 forcing data"
             self.setup_forcing_ERA5()
         elif forcing == "CMIP":
             raise NotImplementedError("CMIP forcing data is not yet supported")
@@ -1242,28 +1237,34 @@ class Forcing:
         )
 
         # assert input data have the same coordinates
-        tasmin = self.other["climate/tas"].resample(time="D").min()
-        tasmax = self.other["climate/tas"].resample(time="D").max()
-        pr = self.other["climate/pr"].resample(time="D").mean()
+        tasmin_2m_K = self.other["climate/tas_2m_K"].resample(time="D").min()
+        tasmax_2m_K = self.other["climate/tas_2m_K"].resample(time="D").max()
+        pr_kg_per_m2_per_s = (
+            self.other["climate/pr_kg_per_m2_per_s"].resample(time="D").mean()
+        )
 
-        assert np.array_equal(self.other["climate/pr"].x, tasmin.x)
-        assert np.array_equal(self.other["climate/pr"].y, tasmin.y)
+        assert np.array_equal(self.other["climate/pr_kg_per_m2_per_s"].x, tasmin_2m_K.x)
+        assert np.array_equal(self.other["climate/pr_kg_per_m2_per_s"].y, tasmin_2m_K.y)
 
         if not self.other[
-            "climate/pr"
+            "climate/pr_kg_per_m2_per_s"
         ].time.min().dt.date <= calibration_period_start and self.other[
-            "climate/pr"
+            "climate/pr_kg_per_m2_per_s"
         ].time.max().dt.date >= calibration_period_end - timedelta(days=1):
-            forcing_start_date = self.other["climate/pr"].time.min().dt.date.item()
-            forcing_end_date = self.other["climate/pr"].time.max().dt.date.item()
+            forcing_start_date = (
+                self.other["climate/pr_kg_per_m2_per_s"].time.min().dt.date.item()
+            )
+            forcing_end_date = (
+                self.other["climate/pr_kg_per_m2_per_s"].time.max().dt.date.item()
+            )
             raise ValueError(
                 f"water data does not cover the entire calibration period, forcing data covers from {forcing_start_date} to {forcing_end_date}, "
                 f"while requested calibration period is from {calibration_period_start} to {calibration_period_end}"
             )
 
         pet = xci.potential_evapotranspiration(
-            tasmin=tasmin,
-            tasmax=tasmax,
+            tasmin=tasmin_2m_K,
+            tasmax=tasmax_2m_K,
             # hurs=self.other["climate/hurs"],
             # rsds=self.other["climate/rsds"],
             # rlds=self.other["climate/rlds"],
@@ -1284,7 +1285,7 @@ class Forcing:
         ).astype(np.float32)
 
         # Compute the potential evapotranspiration
-        water_budget = xci.water_budget(pr=pr, evspsblpot=pet)
+        water_budget = xci.water_budget(pr=pr_kg_per_m2_per_s, evspsblpot=pet)
 
         water_budget = water_budget.resample(time="MS").mean(keep_attrs=True)
         water_budget.attrs["_FillValue"] = np.nan
@@ -1737,7 +1738,7 @@ class Forcing:
                     rsds, target, method="conservative"
                 )  # Resample to target grid
                 rsds = rsds.rename("rsds")  # Rename to standard variable name
-                self.set_rsds(
+                self.set_rsds_W_per_m2(
                     rsds, f"forecasts/ECMWF/rsds_{forecast_issue_date_str}"
                 )  # Store solar radiation
 
@@ -1750,7 +1751,7 @@ class Forcing:
                     rlds, target, method="conservative"
                 )  # Resample to target grid
                 rlds = rlds.rename("rlds")  # Rename to standard variable name
-                self.set_rlds(
+                self.set_rlds_W_per_m2(
                     rlds, f"forecasts/ECMWF/rlds_{forecast_issue_date_str}"
                 )  # Store longwave radiation
 
@@ -1765,7 +1766,7 @@ class Forcing:
                 )
                 pressure = pressure.rename("ps")  # Rename to standard variable name
 
-                self.set_ps(
+                self.set_ps_pascal(
                     pressure, f"forecasts/ECMWF/ps_{forecast_issue_date_str}"
                 )  # Store surface pressure
 

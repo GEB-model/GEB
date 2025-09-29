@@ -68,7 +68,7 @@ class Evaporation(Module):
 
     def step(
         self,
-        reference_evapotranspiration_grass: npt.NDArray[np.float32],
+        reference_evapotranspiration_grass_m_per_day: npt.NDArray[np.float32],
         snow_melt: npt.NDArray[np.float32],
         crop_factor: npt.NDArray[np.float32],
     ) -> tuple[
@@ -81,7 +81,7 @@ class Evaporation(Module):
         """Calculate potential transpiration, potential bare soil evaporation, potential evapotranspiration and corrects snow melt for evaporation.
 
         Args:
-            reference_evapotranspiration_grass: Reference evapotranspiration [m]
+            reference_evapotranspiration_grass_m_per_day: Reference evapotranspiration [m]
             snow_melt: Snow melt [m]
             crop_factor: Crop factor for each land use type [dimensionless]
 
@@ -93,7 +93,7 @@ class Evaporation(Module):
         potential_bare_soil_evaporation: npt.NDArray[np.float32] = (
             self.hydrology.crop_factor_calibration_factor
             * 0.2
-            * reference_evapotranspiration_grass
+            * reference_evapotranspiration_grass_m_per_day
         )
 
         # calculate snow evaporation
@@ -105,7 +105,7 @@ class Evaporation(Module):
             potential_bare_soil_evaporation - snow_sublimation
         )
 
-        CO2_ppm: float = self.model.forcing.load("CO2")
+        CO2_ppm: float = self.model.forcing.load("CO2_ppm")
         CO2_induced_crop_factor_adustment: float = (
             get_CO2_induced_crop_factor_adustment(CO2_ppm)
         )
@@ -113,7 +113,7 @@ class Evaporation(Module):
         potential_evapotranspiration: npt.NDArray[np.float32] = (
             self.hydrology.crop_factor_calibration_factor
             * crop_factor
-            * reference_evapotranspiration_grass
+            * reference_evapotranspiration_grass_m_per_day
         ) * np.float32(CO2_induced_crop_factor_adustment)
 
         potential_transpiration: npt.NDArray[np.float32] = np.maximum(

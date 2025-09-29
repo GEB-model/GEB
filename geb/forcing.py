@@ -177,7 +177,7 @@ class Precipitation(ForcingLoader):
 
     def __init__(self, model: "GEBModel") -> None:
         """Initialize the Precipitation loader."""
-        super().__init__(model, "pr", 24)
+        super().__init__(model, "pr_kg_per_m2_per_s", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate precipitation data.
@@ -196,7 +196,7 @@ class Temperature(ForcingLoader):
 
     def __init__(self, model: "GEBModel") -> None:
         """Initialize the Temperature loader."""
-        super().__init__(model, "tas", 24)
+        super().__init__(model, "tas_2m_K", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate temperature data.
@@ -215,7 +215,7 @@ class DewPointTemperature(ForcingLoader):
 
     def __init__(self, model: "GEBModel") -> None:
         """Initialize the DewPointTemperature loader."""
-        super().__init__(model, "dewpoint_tas", 24)
+        super().__init__(model, "dewpoint_tas_2m_K", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate dew point temperature data.
@@ -247,7 +247,7 @@ class Wind(ForcingLoader):
         """
         if direction not in ["u", "v"]:
             raise ValueError("Direction must be 'u' or 'v'")
-        super().__init__(model, f"wind_{direction}10m", 24)
+        super().__init__(model, f"wind_{direction}10m_m_per_s", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate wind data.
@@ -266,7 +266,7 @@ class Pressure(ForcingLoader):
 
     def __init__(self, model: "GEBModel") -> None:
         """Initialize the Pressure loader."""
-        super().__init__(model, "ps", 24)
+        super().__init__(model, "ps_pascal", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate surface pressure data.
@@ -285,7 +285,7 @@ class RSDS(ForcingLoader):
 
     def __init__(self, model: "GEBModel") -> None:
         """Initialize the RSDS loader."""
-        super().__init__(model, "rsds", 24)
+        super().__init__(model, "rsds_W_per_m2", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate surface downwelling shortwave radiation data.
@@ -304,7 +304,7 @@ class RLDS(ForcingLoader):
 
     def __init__(self, model: "GEBModel") -> None:
         """Initialize the RLDS loader."""
-        super().__init__(model, "rlds", 24)
+        super().__init__(model, "rlds_W_per_m2", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate surface downwelling longwave radiation data.
@@ -420,28 +420,28 @@ class Forcing(Module):
             An AsyncGriddedForcingReader or xarray DataArray for the specified forcing dataset.
 
         """
-        if name == "pr":
+        if name == "pr_kg_per_m2_per_s":
             reader: Precipitation = Precipitation(self.model)
-        elif name == "tas":
+        elif name == "tas_2m_K":
             reader: Temperature = Temperature(self.model)
-        elif name == "dewpoint_tas":
+        elif name == "dewpoint_tas_2m_K":
             reader: DewPointTemperature = DewPointTemperature(self.model)
-        elif name == "wind_u10m":
+        elif name == "wind_u10m_m_per_s":
             reader: Wind = Wind(self.model, direction="u")
-        elif name == "wind_v10m":
+        elif name == "wind_v10m_m_per_s":
             reader: Wind = Wind(self.model, direction="v")
-        elif name == "ps":
+        elif name == "ps_pascal":
             reader: Pressure = Pressure(self.model)
-        elif name == "rsds":
+        elif name == "rsds_W_per_m2":
             reader: RSDS = RSDS(self.model)
-        elif name == "rlds":
+        elif name == "rlds_W_per_m2":
             reader: RLDS = RLDS(self.model)
         elif name == "SPEI":
             reader: SPEI = SPEI(self.model)
-        elif name == "CO2":
+        elif name == "CO2_ppm":
             reader: CO2 = CO2(self.model)
         else:
-            raise NotImplementedError
+            raise NotImplementedError(f"Forcing dataset '{name}' not implemented.")
         return reader
 
     def __setitem__(

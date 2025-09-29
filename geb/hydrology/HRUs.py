@@ -410,40 +410,36 @@ class Grid(BaseVariables):
         return data
 
     @property
-    def hurs(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("hurs"))
+    def pr_kg_per_m2_per_s(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("pr_kg_per_m2_per_s"))
 
     @property
-    def pr(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("pr"))
+    def ps_pascal(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("ps_pascal"))
 
     @property
-    def ps(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("ps"))
+    def rlds_W_per_m2(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("rlds_W_per_m2"))
 
     @property
-    def rlds(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("rlds"))
+    def rsds_W_per_m2(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("rsds_W_per_m2"))
 
     @property
-    def rsds(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("rsds"))
+    def tas_2m_K(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("tas_2m_K"))
 
     @property
-    def tas(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("tas"))
+    def dewpoint_tas_2m_K(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("dewpoint_tas_2m_K"))
 
     @property
-    def dewpoint_tas(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("dewpoint_tas"))
+    def wind_u10m_m_per_s(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("wind_u10m_m_per_s"))
 
     @property
-    def wind_u10m(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("wind_u10m"))
-
-    @property
-    def wind_v10m(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("wind_v10m"))
+    def wind_v10m_m_per_s(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("wind_v10m_m_per_s"))
 
     @property
     def spei_uncompressed(self) -> npt.NDArray[np.float32]:
@@ -892,49 +888,44 @@ class HRUs(BaseVariables):
             plt.show()
 
     @property
-    def hurs(self) -> npt.NDArray[np.float32]:
-        hurs: npt.NDArray[np.float32] = self.data.grid.hurs
-        return self.data.to_HRU(data=hurs, fn=None)
+    def pr_kg_per_m2_per_s(self) -> npt.NDArray[np.float32]:
+        pr_kg_per_m2_per_s: npt.NDArray[np.float32] = self.data.grid.pr_kg_per_m2_per_s
+        return self.data.to_HRU(data=pr_kg_per_m2_per_s, fn=None)
 
     @property
-    def pr(self) -> npt.NDArray[np.float32]:
-        pr: npt.NDArray[np.float32] = self.data.grid.pr
-        return self.data.to_HRU(data=pr, fn=None)
+    def ps_pascal(self) -> npt.NDArray[np.float32]:
+        ps_pascal: npt.NDArray[np.float32] = self.data.grid.ps_pascal
+        return self.data.to_HRU(data=ps_pascal, fn=None)
 
     @property
-    def ps(self) -> npt.NDArray[np.float32]:
-        ps: npt.NDArray[np.float32] = self.data.grid.ps
-        return self.data.to_HRU(data=ps, fn=None)
+    def rlds_W_per_m2(self) -> npt.NDArray[np.float32]:
+        rlds_W_per_m2: npt.NDArray[np.float32] = self.data.grid.rlds_W_per_m2
+        return self.data.to_HRU(data=rlds_W_per_m2, fn=None)
 
     @property
-    def rlds(self) -> npt.NDArray[np.float32]:
-        rlds: npt.NDArray[np.float32] = self.data.grid.rlds
-        return self.data.to_HRU(data=rlds, fn=None)
+    def rsds_W_per_m2(self) -> npt.NDArray[np.float32]:
+        rsds_W_per_m2: npt.NDArray[np.float32] = self.data.grid.rsds_W_per_m2
+        return self.data.to_HRU(data=rsds_W_per_m2, fn=None)
 
     @property
-    def rsds(self) -> npt.NDArray[np.float32]:
-        rsds: npt.NDArray[np.float32] = self.data.grid.rsds
-        return self.data.to_HRU(data=rsds, fn=None)
+    def tas_2m_K(self) -> npt.NDArray[np.float32]:
+        tas_2m_K: npt.NDArray[np.float32] = self.data.grid.tas_2m_K
+        return self.data.to_HRU(data=tas_2m_K, fn=None)
 
     @property
-    def tas(self) -> npt.NDArray[np.float32]:
-        tas: npt.NDArray[np.float32] = self.data.grid.tas
-        return self.data.to_HRU(data=tas, fn=None)
+    def dewpoint_tas_2m_K(self) -> npt.NDArray[np.float32]:
+        dewpoint_tas_2m_K: npt.NDArray[np.float32] = self.data.grid.dewpoint_tas_2m_K
+        return self.data.to_HRU(data=dewpoint_tas_2m_K, fn=None)
 
     @property
-    def dewpoint_tas(self) -> npt.NDArray[np.float32]:
-        dewpoint_tas: npt.NDArray[np.float32] = self.data.grid.dewpoint_tas
-        return self.data.to_HRU(data=dewpoint_tas, fn=None)
+    def wind_u10m_m_per_s(self) -> npt.NDArray[np.float32]:
+        wind_u10m_m_per_s: npt.NDArray[np.float32] = self.data.grid.wind_u10m_m_per_s
+        return self.data.to_HRU(data=wind_u10m_m_per_s, fn=None)
 
     @property
-    def wind_u10m(self) -> npt.NDArray[np.float32]:
-        wind_u10m: npt.NDArray[np.float32] = self.data.grid.wind_u10m
-        return self.data.to_HRU(data=wind_u10m, fn=None)
-
-    @property
-    def wind_v10m(self) -> npt.NDArray[np.float32]:
-        wind_v10m: npt.NDArray[np.float32] = self.data.grid.wind_v10m
-        return self.data.to_HRU(data=wind_v10m, fn=None)
+    def wind_v10m_m_per_s(self) -> npt.NDArray[np.float32]:
+        wind_v10m_m_per_s: npt.NDArray[np.float32] = self.data.grid.wind_v10m_m_per_s
+        return self.data.to_HRU(data=wind_v10m_m_per_s, fn=None)
 
 
 class Modflow(BaseVariables):

@@ -287,7 +287,7 @@ def add_water_to_topwater_and_evaporate_open_water(
     natural_available_water_infiltration: npt.NDArray[np.float32],
     actual_irrigation_consumption: npt.NDArray[np.float32],
     land_use_type: npt.NDArray[np.int32],
-    reference_evapotranspiration_water: npt.NDArray[np.float32],
+    reference_evapotranspiration_water_m_per_day: npt.NDArray[np.float32],
     topwater: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
     """Add available water from natural and innatural sources to the topwater and calculate open water evaporation.
@@ -296,7 +296,7 @@ def add_water_to_topwater_and_evaporate_open_water(
         natural_available_water_infiltration: The natural available water infiltration in m.
         actual_irrigation_consumption: The actual irrigation consumption in m.
         land_use_type: The land use type of the hydrological response unit.
-        reference_evapotranspiration_water: The reference evapotranspiration from water in m.
+        reference_evapotranspiration_water_m_per_day: The reference evapotranspiration from water in m.
         topwater: The topwater in m, which is the water available for evaporation and transpiration.
 
     Returns:
@@ -316,13 +316,13 @@ def add_water_to_topwater_and_evaporate_open_water(
         if land_use_type[i] == PADDY_IRRIGATED:
             open_water_evaporation[i] = np.minimum(
                 np.maximum(np.float32(0.0), topwater[i]),
-                reference_evapotranspiration_water[i],
+                reference_evapotranspiration_water_m_per_day[i],
             )
         elif land_use_type[i] == SEALED:
             # evaporation from precipitation fallen on sealed area (ponds)
-            # estimated as 0.2 x reference_evapotranspiration_water
+            # estimated as 0.2 x reference_evapotranspiration_water_m_per_day
             open_water_evaporation[i] = np.minimum(
-                0.2 * reference_evapotranspiration_water[i], topwater[i]
+                0.2 * reference_evapotranspiration_water_m_per_day[i], topwater[i]
             )
         else:
             # no open water evaporation for other land use types (thus using default of 0)
@@ -1951,7 +1951,7 @@ class Soil(Module):
                 actual_irrigation_consumption=actual_irrigation_consumption
                 / n_substeps,
                 land_use_type=self.HRU.var.land_use_type,
-                reference_evapotranspiration_water=self.HRU.var.reference_evapotranspiration_water
+                reference_evapotranspiration_water_m_per_day=self.HRU.var.reference_evapotranspiration_water_m_per_day
                 / n_substeps,
                 topwater=self.HRU.var.topwater,
             )

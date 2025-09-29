@@ -246,10 +246,10 @@ class SnowFrost(Module):
             0, dtype=np.float32
         )
 
-        tas_C: npt.NDArray[np.float32] = self.HRU.tas.mean(axis=0) - 273.15
-        precipitation_m_day: npt.NDArray[np.float32] = self.HRU.pr.mean(axis=0) * (
-            24 * 3600 / 1000
-        )  # kg/m2/s to m/day
+        tas_C: npt.NDArray[np.float32] = self.HRU.tas_2m_K.mean(axis=0) - 273.15
+        precipitation_m_day: npt.NDArray[np.float32] = self.HRU.pr_kg_per_m2_per_s.mean(
+            axis=0
+        ) * (24 * 3600 / 1000)  # kg/m2/s to m/day
 
         for i in range(self.var.numberSnowLayers):
             TavgS = tas_C + self.HRU.var.DeltaTSnow * self.var.deltaInvNorm[i]

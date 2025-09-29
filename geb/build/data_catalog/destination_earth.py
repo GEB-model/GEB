@@ -1,6 +1,6 @@
 """Data adapter for obtaining ERA5 data from the Destination Earth."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -122,7 +122,9 @@ class DestinationEarth(Adapter):
         Returns:
             xr.DataArray: Processed ERA5 data as an xarray DataArray.
         """
-        da: xr.DataArray = self.connect_API(variable, start_date, end_date, bounds)
+        da: xr.DataArray = self.connect_API(
+            variable, start_date - timedelta(hours=1), end_date, bounds
+        )
         # assert that time is monotonically increasing with a constant step size
         assert (
             da.time.diff("time").astype(np.int64)
@@ -136,9 +138,11 @@ class DestinationEarth(Adapter):
             )
 
         elif da.attrs["GRIB_stepType"] == "instant":
-            pass
+            da = da.isel(time=slice(1, None))
         else:
             raise NotImplementedError
+
+        assert da.time.dt.hour.min().item() == 0, "time does not start at hour 0"
 
         # rechunk to have all data for a time step in one chunk
         da = da.chunk({"x": -1, "y": -1, "time": 24})

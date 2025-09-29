@@ -126,16 +126,17 @@ def test_adjust_wind_speed() -> None:
 
 def test_get_reference_evapotranspiration() -> None:
     """Test the reference evapotranspiration calculation."""
-    reference_evapotranspiration_land, reference_evapotranspiration_water = (
-        get_reference_evapotranspiration(
-            net_radiation_land=13.28,
-            net_radiation_water=13.28,
-            slope_of_saturated_vapour_pressure_curve=0.122,
-            psychrometric_constant=0.066,
-            wind_2m=2.078,
-            latent_heat_of_vaporarization=1 / 0.408,
-            termperature_C=16.9,
-            vapour_pressure_deficit=0.589,
-        )
+    (
+        reference_evapotranspiration_land_m_per_day,
+        reference_evapotranspiration_water_m_per_day,
+    ) = get_reference_evapotranspiration(
+        net_radiation_land=13.28,
+        net_radiation_water=13.28,
+        slope_of_saturated_vapour_pressure_curve=0.122,
+        psychrometric_constant=0.066,
+        wind_2m=2.078,
+        latent_heat_of_vaporarization=1 / 0.408,
+        termperature_C=16.9,
+        vapour_pressure_deficit=0.589,
     )
-    assert math.isclose(reference_evapotranspiration_land, 3.9, rel_tol=1e-2)
+    assert math.isclose(reference_evapotranspiration_land_m_per_day, 3.9, rel_tol=1e-2)
