@@ -54,7 +54,7 @@ class Hydrology(Data, Module):
         model: The GEB model instance.
     """
 
-    def __init__(self, model) -> None:
+    def __init__(self, model: "GEBModel") -> None:
         """Create the hydrology module."""
         Data.__init__(self, model)
         Module.__init__(self, model)
@@ -108,6 +108,10 @@ class Hydrology(Data, Module):
         )
 
     def step(self) -> None:
+        """Perform a single time step of the hydrological model.
+
+        Calculates the water balance and updates all hydrological components.
+        """
         timer: TimingModule = TimingModule("Hydrology")
 
         if __debug__:
@@ -278,26 +282,6 @@ class Hydrology(Data, Module):
                     plantFATE_model.finalize()
 
     @property
-    def n_individuals_per_m2(self):
-        n_invidiuals_per_m2_per_HRU = np.array(
-            [model.n_individuals for model in self.plantFATE if model is not None]
-        )
-        land_use_ratios = self.data.HRU.land_use_ratio[self.soil.plantFATE_forest_RUs]
-        return np.array(
-            (n_invidiuals_per_m2_per_HRU * land_use_ratios).sum()
-            / land_use_ratios.sum()
-        )
-
-    @property
-    def biomass_per_m2(self):
-        biomass_per_m2_per_HRU = np.array(
-            [model.biomass for model in self.plantFATE if model is not None]
-        )
-        land_use_ratios = self.data.HRU.land_use_ratio[self.soil.plantFATE_forest_RUs]
-        return np.array(
-            (biomass_per_m2_per_HRU * land_use_ratios).sum() / land_use_ratios.sum()
-        )
-
-    @property
     def name(self) -> str:
+        """Name of the module."""
         return "hydrology"

@@ -680,12 +680,13 @@ class AsyncGriddedForcingReader:
             return indices.argmax()
 
     def read_timestep(
-        self, date: datetime.datetime, n=1, asynchronous: bool = False
+        self, date: datetime.datetime, n: int = 1, asynchronous: bool = False
     ) -> npt.NDArray[Any]:
         """Read the data for the given date from the zarr file.
 
         Args:
             date: The date of the timestep to read.
+            n: The number of timesteps to read. Defaults to 1.
             asynchronous: If True, the data is read asynchronously. Defaults to False.
 
         Note:

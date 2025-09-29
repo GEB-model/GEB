@@ -1,3 +1,5 @@
+"""Module to calculate potential evapotranspiration based on Penman-Monteith equation."""
+
 import numpy as np
 import numpy.typing as npt
 from numba import njit
@@ -250,8 +252,8 @@ def PET(
     rsds_W_per_m2: npt.NDArray[np.float32],
     wind_u10m_m_per_s: npt.NDArray[np.float32],
     wind_v10m_m_per_s: npt.NDArray[np.float32],
-    albedo_canopy=np.float32(0.13),
-    albedo_water=np.float32(0.05),
+    albedo_canopy: np.float32 = np.float32(0.13),
+    albedo_water: np.float32 = np.float32(0.05),
 ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
     """Calculate potential evapotranspiration based on Penman-Monteith equation.
 
@@ -404,7 +406,13 @@ def PET(
 class PotentialEvapotranspiration(Module):
     """Calculate potential evapotranspiration from climate data mainly based on FAO 56."""
 
-    def __init__(self, model, hydrology) -> None:
+    def __init__(self, model: "GEBModel", hydrology: "Hydrology") -> None:
+        """Initialize the potential evaporation module.
+
+        Args:
+            model: The GEB model instance.
+            hydrology: The hydrology module.
+        """
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -416,9 +424,11 @@ class PotentialEvapotranspiration(Module):
 
     @property
     def name(self) -> str:
+        """Name of the module."""
         return "hydrology.potential_evapotranspiration"
 
     def spinup(self) -> None:
+        """Spinup part of the potential evaporation module."""
         pass
 
     def step(self) -> None:
