@@ -15,7 +15,7 @@ This will copy the default model configuration files from the examples folder in
 
 .. code-block:: python
 
-    geb init --subbasin-id 23011134
+    geb init --basin-id 23011134
 
 For more options, you can call the command with the `--help` flag:
 

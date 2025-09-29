@@ -20,7 +20,12 @@ from ...hydrology.HRUs import load_geom
 from ...hydrology.landcover import OPEN_WATER, SEALED
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
-from .sfincs import MultipleSFINCSSimulations, SFINCSRootModel, SFINCSSimulation
+from .sfincs import (
+    MultipleSFINCSSimulations,
+    SFINCSRootModel,
+    SFINCSSimulation,
+    set_river_outflow_boundary_condition,
+)
 
 
 class Floods:
@@ -168,6 +173,7 @@ class Floods:
             simulation_name=f"{start_time.strftime(format='%Y%m%dT%H%M%S')} - {end_time.strftime(format='%Y%m%dT%H%M%S')}",
             start_time=start_time,
             end_time=end_time,
+            write_figures=self.config.get("write_figures", False),
         )
         if self.config["forcing_method"] == "headwater_points":
             n_timesteps: int = min(self.n_timesteps, len(self.discharge_per_timestep))
@@ -289,6 +295,14 @@ class Floods:
             raise ValueError(
                 f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'precipitation'."
             )
+
+        # Set up river outflow boundary condition for all simulations
+        set_river_outflow_boundary_condition(
+            sf=simulation.sfincs_model,
+            model_root=sfincs_model.path,
+            simulation_root=simulation.path,
+            write_figures=simulation.write_figures,
+        )
 
         return simulation
 
