@@ -24,6 +24,7 @@ hazards:
     nr_subgrid_pixels: 4
     crs: auto
     force_overwrite: true
+    write_figures: false  # whether to generate and save diagnostic figures
     return_periods:
       - 2
       - 5

@@ -7,12 +7,14 @@ and read simulation results.
 """
 
 import json
+import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -41,6 +43,73 @@ from .workflows.utils import (
     run_sfincs_simulation,
     to_sfincs_datetime,
 )
+
+
+def set_river_outflow_boundary_condition(
+    sf: "SfincsModel",
+    model_root: Path,
+    simulation_root: Path,
+    write_figures: bool = True,
+) -> None:
+    """Set up river outflow boundary condition with constant elevation.
+
+    This function reads the outflow point and elevation from the model setup,
+    creates a constant water level time series, and applies it as a boundary condition.
+
+    Args:
+        sf: The SFINCS model instance.
+        model_root: Path to the model root directory.
+        simulation_root: Path to the simulation directory.
+        write_figures: Whether to generate and save forcing plots. Defaults to True.
+    """
+    outflow = gpd.read_file(model_root / "gis/outflow_points.gpkg")
+    # only one point location is expected
+    assert len(outflow) == 1, "Only one outflow point is expected"
+
+    # before changing root read dem value from gis folder from .json file
+    dem_json_path = model_root / "gis" / "outflow_elevation.json"
+    with open(dem_json_path, "r") as f:
+        dem_values = json.load(f)
+    elevation = dem_values.get("outflow_elevation", None)
+
+    if elevation is None or elevation == 0:
+        assert False, (
+            "Elevation should have positive value to set up outflow waterlevel boundary"
+        )
+
+    # Get the model's start and stop time using the get_model_time function
+    tstart, tstop = sf.get_model_time()
+
+    # Define the time range (e.g., 1 month of hourly data)
+    time_range = pd.date_range(start=tstart, end=tstop, freq="H")
+
+    # Create DataFrame with constant elevation value
+    elevation_time_series_constant = pd.DataFrame(
+        data={"water_level": elevation},  # Use extracted elevation value
+        index=time_range,
+    )
+
+    # Extract a unique index from the outflow point. Here, we use 1 as an example.
+    outflow_index = 1  # This should be the index or a suitable ID of the outflow point
+    elevation_time_series_constant.columns = [
+        outflow_index
+    ]  # Use an integer as column name
+
+    # Ensure outflow has the correct index as well
+    outflow["index"] = outflow_index  # Set the matching index to outflow location
+
+    # Now set the water level forcing
+    sf.setup_waterlevel_forcing(
+        timeseries=elevation_time_series_constant,  # Constant time series
+        locations=outflow,  # Outflow point
+    )
+    sf.set_root(simulation_root, mode="w+")
+
+    sf.write_forcing()
+
+    if write_figures:
+        sf.plot_forcing(fn_out="waterlevel_forcing.png")
+        sf.plot_basemap(fn_out="basemap.png")
 
 
 class SFINCSRootModel:
@@ -164,6 +233,19 @@ class SFINCSRootModel:
             "power_law",
         ], "Method should be 'manning' or 'power_law'"
 
+        logger = logging.getLogger(__name__)
+
+        # Configure HydroMT logging to capture internal logs
+        for logger_name in ["hydromt", "hydromt_sfincs", "hydromt_sfincs.workflows"]:
+            hydromt_logger = logging.getLogger(logger_name)
+            hydromt_logger.setLevel(logging.INFO)
+            hydromt_logger.propagate = True
+
+        # Get the main HydroMT-SFINCS logger for level adjustments
+        hydromt_logger = logging.getLogger("hydromt_sfincs")
+
+        logger.info("Starting SFINCS model build...")
+
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+")
 
@@ -185,12 +267,27 @@ class SFINCSRootModel:
                 region, zmin=-21, reset_mask=True
             )  # TODO: Improve mask setup
 
-        # Setup river inflow points
+        # Temporarily set HydroMT logging to DEBUG to capture detailed internal logs
+        hydromt_logger.setLevel(logging.DEBUG)
+        # in one plot plot the region boundary as well as the rivers and save to file
+        fig, ax = plt.subplots(figsize=(10, 10))
+        region.boundary.plot(ax=ax, color="black")
+        rivers.plot(ax=ax, color="blue")
+        plt.savefig(self.path / "gis" / "rivers.png")
+
         sf.setup_river_inflow(
-            rivers=rivers,
+            rivers=rivers.to_crs(sf.crs),
             keep_rivers_geom=True,
             river_upa=0,
             river_len=0,
+        )
+
+        sf.setup_river_outflow(
+            rivers=rivers.to_crs(sf.crs),
+            keep_rivers_geom=True,
+            river_upa=0,
+            river_len=0,
+            btype="waterlevel",
         )
 
         # find outflow points and save for later use
@@ -289,7 +386,9 @@ class SFINCSRootModel:
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
         # including mannings roughness.
         if nr_subgrid_pixels is not None:
-            print("Setting up SFINCS subgrid...")
+            logger.info(
+                f"Setting up SFINCS subgrid with {nr_subgrid_pixels} subgrid pixels..."
+            )
             sf.setup_subgrid(
                 datasets_dep=DEMs,
                 datasets_rgh=[
@@ -313,7 +412,9 @@ class SFINCSRootModel:
 
             sf.write_subgrid()
         else:
-            print("Setting up SFINCS without subgrid")
+            logger.info(
+                "Setting up SFINCS without subgrid - burning rivers into main grid..."
+            )
             # first set up the mannings roughness with the default method
             # (we already have the DEM set up)
             sf.setup_manning_roughness(
@@ -520,6 +621,15 @@ class SFINCSRootModel:
                 nodes=inflow_nodes.to_crs(self.sfincs_model.crs),
                 timeseries=Q,
             )
+
+            # Set up river outflow boundary condition for this simulation
+            set_river_outflow_boundary_condition(
+                sf=simulation.sfincs_model,
+                model_root=self.path,
+                simulation_root=simulation.path,
+                write_figures=simulation.write_figures,
+            )
+
             simulations.append(simulation)
 
         return MultipleSFINCSSimulations(simulations=simulations)
@@ -702,10 +812,6 @@ class SFINCSSimulation:
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
 
-        if self.write_figures:
-            self.sfincs_model.plot_forcing(fn_out="forcing.png")
-            self.sfincs_model.plot_basemap(fn_out="basemap.png")
-
     def set_precipitation_forcing_grid(
         self,
         current_water_storage_grid: xr.DataArray,
@@ -748,10 +854,6 @@ class SFINCSSimulation:
         )
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
-
-        if self.write_figures:
-            self.sfincs_model.plot_basemap(fn_out="basemap.png")
-            self.sfincs_model.plot_forcing(fn_out="forcing.png")
 
     # def setup_outflow_boundary(self) -> None:
     #     # detect whether water level forcing should be set (use this under forcing == coastal) PLot basemap and forcing to check
