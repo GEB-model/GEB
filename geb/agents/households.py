@@ -529,19 +529,19 @@ class Households(AgentBaseClass):
         crs = self.model.config["hazards"]["floods"]["crs"]
         # strategy = self.model.config["general"]["forecasts"]["strategy"]
 
+        # Create output folder for probability maps
         prob_folder = self.model.output_folder / "prob_maps"
         prob_folder.mkdir(exist_ok=True, parents=True)
 
+        # Define water level ranges based on the chosen strategy
         if strategy == 1:
             # Water level ranges associated to specific measures (based on "impact" scale)
-            ranges = [
-                (1, 0.1, 1.0),
-                (2, 1.0, 2.0),
-                (3, 2.0, None),
-            ]  # Need to change it later to the actual json dictionary
+            ranges = []
+            for key, value in self.var.wlranges_and_measures.items():
+                ranges.append((key, value["min"], value["max"]))
 
         elif strategy == 2:
-            # Water level range for energy substations (based on critical hit)
+            # Water level range for energy substations (based on critical hit) -- need to change it to a dictionary
             ranges = [(1, 0.3, None)]
 
         else:
@@ -550,6 +550,7 @@ class Households(AgentBaseClass):
 
         probability_maps = {}
 
+        # Loop over days and water level ranges to calculate probability maps
         for i, day in enumerate(days):
             for range_id, min, max in ranges:
                 daily_ensemble = ensemble_flood_maps.isel(day=i)
