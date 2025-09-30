@@ -1,0 +1,139 @@
+name: Ruff Error Count Check
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  check-ruff-errors:
+    runs-on: ubuntu-latest
+    env:
+      RULES: ANN001,ANN003,ANN201,ANN202,D100,D102,D103,D107
+    steps:
+      - name: Checkout main branch for baseline
+        uses: actions/checkout@v3
+        with:
+          ref: main
+          path: main-branch
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          path: pr-branch
+
+      - name: Install Ruff
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: "--version"
+
+      - name: Detect changed Python files
+        id: changed_files
+        run: |
+          # Use filesystem comparison between checked out branches to find changed Python files
+          echo "Comparing Python files between main-branch and pr-branch directories..."
+          
+          # Find all Python files in both directories
+          find main-branch -name "*.py" -type f | sed 's|^main-branch/||' | sort > main_files.txt
+          find pr-branch -name "*.py" -type f | sed 's|^pr-branch/||' | sort > pr_files.txt
+          
+          # Find files that are different (new, modified, or only in PR)
+          changed_files=""
+          
+          # Check files that exist in PR branch
+          while IFS= read -r file; do
+            if [ -f "main-branch/$file" ]; then
+              # File exists in both, check if different
+              if ! diff -q "main-branch/$file" "pr-branch/$file" >/dev/null 2>&1; then
+                changed_files="$changed_files$file"$'\n'
+              fi
+            else
+              # New file in PR
+              changed_files="$changed_files$file"$'\n'
+            fi
+          done < pr_files.txt
+          
+          echo "Changed Python files in this PR:"
+          echo "$changed_files"
+          
+          # Save to file, filtering out empty lines
+          echo "$changed_files" | grep -v '^$' > changed_python_files.txt || touch changed_python_files.txt
+          
+          # Count actual files
+          file_count=$(wc -l < changed_python_files.txt 2>/dev/null || echo "0")
+          echo "Valid changed Python files found: $file_count"
+          cat changed_python_files.txt || true
+          echo "files_exist=$([ "$file_count" -gt 0 ] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+
+      - name: Run ruff on main (capture full output + per-rule stats)
+        id: ruff_main
+        run: |
+          set -o pipefail
+          cd main-branch
+          # Run ruff, capture full output to file and compute per-rule stats (RULE COUNT)
+          ruff check --isolated --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_main_full.txt || true
+          # extract lines like: "<count> <RULE>  <message>" -> produce "RULE COUNT"
+          awk '/^[[:space:]]*[0-9]+[[:space:]]+[A-Z0-9_]+/ {print $2" "$1}' ruff_main_full.txt > ruff_main_stats.txt || true
+          # expose paths as step outputs for later steps
+          echo "full_file=main-branch/ruff_main_full.txt" >> $GITHUB_OUTPUT
+          echo "stats_file=main-branch/ruff_main_stats.txt" >> $GITHUB_OUTPUT
+
+      - name: Run ruff on PR (capture full output + per-rule stats)
+        id: ruff_pr
+        run: |
+          set -o pipefail
+          cd pr-branch
+          ruff check --isolated --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_pr_full.txt || true
+          awk '/^[[:space:]]*[0-9]+[[:space:]]+[A-Z0-9_]+/ {print $2" "$1}' ruff_pr_full.txt > ruff_pr_stats.txt || true
+          echo "full_file=pr-branch/ruff_pr_full.txt" >> $GITHUB_OUTPUT
+          echo "stats_file=pr-branch/ruff_pr_stats.txt" >> $GITHUB_OUTPUT
+
+      - name: Compare per-rule counts and print full PR errors for regressed rules
+        run: |
+          MAIN_STATS="main-branch/ruff_main_stats.txt"
+          PR_STATS="pr-branch/ruff_pr_stats.txt"
+          PR_FULL="pr-branch/ruff_pr_full.txt"
+          CHANGED_FILES="changed_python_files.txt"
+
+          # Ensure files exist to avoid errors
+          [ -f "$MAIN_STATS" ] || touch "$MAIN_STATS"
+          [ -f "$PR_STATS" ] || touch "$PR_STATS"
+          [ -f "$PR_FULL" ] || touch "$PR_FULL"
+
+          # Build union of rules seen in either run
+          (cat "$MAIN_STATS" 2>/dev/null || true; cat "$PR_STATS" 2>/dev/null || true) | awk '{print $1}' | sort | uniq > all_rules.txt || true
+
+          regressions=0
+          while read -r rule; do
+            [ -z "$rule" ] && continue
+            base=$(awk -v r="$rule" '$1==r{print $2}' "$MAIN_STATS" | head -n1 || true)
+            pr=$(awk -v r="$rule" '$1==r{print $2}' "$PR_STATS" | head -n1 || true)
+            base=${base:-0}
+            pr=${pr:-0}
+            if [ "$pr" -gt "$base" ]; then
+              regressions=$((regressions+1))
+              echo "------------------------------------------------------------"
+              echo "Regression detected for rule: $rule (main branch: $base -> pull request: $pr)"
+              echo "More info: https://docs.astral.sh/ruff/rules/$rule"
+              echo "To replicate locally, run:"
+              COMMAND="ruff check --isolated --select "$rule""
+              echo $COMMAND
+              echo "PR error lines for rule $rule within changed files:"
+              # Convert relative paths to full paths in pr-branch directory
+              while IFS= read -r file; do
+              [ -n "$file" ] && [ -f "pr-branch/$file" ] && echo "pr-branch/$file"
+                done < "$CHANGED_FILES" | xargs -r $COMMAND --preview || true
+              echo ""
+            fi
+          done < all_rules.txt
+
+          if [ "$regressions" -gt 0 ]; then
+            echo "::error::New per-rule regressions introduced: $regressions"
+            exit 1
+          else
+            echo "No new per-rule regressions introduced."
+          fi
+
+      - name: Final message
+        if: success()
+        run: echo "Ruff per-rule regression check passed."

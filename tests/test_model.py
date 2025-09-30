@@ -1,5 +1,11 @@
+"""Tests for the main model functions of GEB, such as model initialization, building, and running.
+
+Most of these tests are quite heavy and therefore skipped on GitHub Actions.
+"""
+
 import json
 import os
+import shutil
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -9,7 +15,10 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from geb.build.methods import build_method
 from geb.cli import (
+    BUILD_DEFAULT,
+    CONFIG_DEFAULT,
     alter_fn,
     build_fn,
     init_fn,
@@ -21,36 +30,18 @@ from geb.cli import (
 from geb.hydrology.landcover import FOREST, GRASSLAND_LIKE
 from geb.model import GEBModel
 from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
-from geb.workflows.io import WorkingDirectory
+from geb.workflows.io import WorkingDirectory, open_zarr
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
 working_directory: Path = tmp_folder / "model"
 
-DEFAULT_BUILD_ARGS: dict[str, Any] = {
-    "data_catalog": [Path(os.getenv("GEB_PACKAGE_DIR")) / "data_catalog.yml"],
-    "config": "model.yml",
-    "build_config": "build.yml",
-    "working_directory": ".",
-    "custom_model": None,
-    "data_provider": None,
-    "data_root": str(Path(os.getenv("GEB_DATA_ROOT", ""))),
-}
-
-DEFAULT_RUN_ARGS: dict[str, Any] = {
-    "config": "model.yml",
-    "working_directory": ".",
-    "gui": False,
-    "no_browser": True,
-    "port": None,
-    "profiling": False,
-    "timing": False,
-    "optimize": False,
-}
+DEFAULT_BUILD_ARGS: dict[str, Any] = {}
+DEFAULT_RUN_ARGS: dict[str, Any] = {}
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_init():
+def test_init() -> None:
     working_directory.mkdir(parents=True, exist_ok=True)
 
     with WorkingDirectory(working_directory):
@@ -58,7 +49,7 @@ def test_init():
             "config": "model.yml",
             "build_config": "build.yml",
             "update_config": "update.yml",
-            "working_directory": working_directory,
+            "working_directory": ".",
             "from_example": "geul",
             "basin_id": "23011134",
         }
@@ -67,9 +58,9 @@ def test_init():
             overwrite=True,
         )
 
-        assert (working_directory / "model.yml").exists()
-        assert (working_directory / "build.yml").exists()
-        assert (working_directory / "update.yml").exists()
+        assert Path("model.yml").exists()
+        assert Path("build.yml").exists()
+        assert Path("update.yml").exists()
 
         assert pytest.raises(
             FileExistsError,
@@ -80,13 +71,52 @@ def test_init():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_build():
+def test_build() -> None:
     with WorkingDirectory(working_directory):
         build_fn(**DEFAULT_BUILD_ARGS)
 
 
+@pytest.mark.skipif(
+    IN_GITHUB_ACTIONS or os.getenv("GEB_TEST_ALL", "no") != "yes",
+    reason="Too heavy for GitHub Actions and needs GEB_TEST_ALL=yes.",
+)
+def test_build_dependencies() -> None:
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_BUILD_ARGS.copy()
+        build_config = parse_config(args["build_config"])
+        build_config = {"setup_region": build_config["setup_region"]}
+        args["build_config"] = build_config
+        build_fn(**args)
+
+        shutil.copy(Path("input") / "files.json", Path("input") / "files.json.bak")
+
+    for method in build_method.methods:
+        # Skip the setup_region method as this is a special case that is handled separately.
+        if method == "setup_region":
+            continue
+
+        # get all nodes which this node depends on
+        dependencies = build_method.get_dependencies(method)
+        with WorkingDirectory(working_directory):
+            shutil.copy(Path("input") / "files.json.bak", Path("input") / "files.json")
+            args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
+            build_config_original = parse_config(args["build_config"])
+
+            if method not in build_config_original:
+                continue
+
+            build_config = {}
+            for dependency in dependencies:
+                build_config[dependency] = build_config_original[dependency]
+
+            build_config[method] = build_config_original[method]
+
+            args["build_config"] = build_config
+            update_fn(**args)
+
+
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_forcing():
+def test_forcing() -> None:
     with WorkingDirectory(working_directory):
         model: GEBModel = run_model_with_method(
             method=None,
@@ -113,7 +143,69 @@ def test_forcing():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_alter():
+def test_update_with_file() -> None:
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_BUILD_ARGS.copy()
+        args["build_config"] = "update.yml"
+        update_fn(**args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_update_with_dict() -> None:
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_BUILD_ARGS.copy()
+        update = {"setup_land_use_parameters": {}}
+        args["build_config"] = update
+        update_fn(**args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.parametrize(
+    "method",
+    [
+        "setup_hydrography",
+        "setup_assets",
+        "setup_CO2_concentration",
+        "setup_waterbodies",
+        "setup_regions_and_land_use",
+    ],
+)
+def test_update_with_method(method: str) -> None:
+    with WorkingDirectory(working_directory):
+        args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
+
+        build_config: dict[str, dict] = parse_config(BUILD_DEFAULT)
+
+        update: dict[str, dict] = {method: build_config[method]}
+
+        args["build_config"] = update
+        update_fn(**args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_spinup() -> None:
+    with WorkingDirectory(working_directory):
+        run_model_with_method(method="spinup", **DEFAULT_RUN_ARGS)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_run() -> None:
+    args = DEFAULT_RUN_ARGS.copy()
+
+    with WorkingDirectory(working_directory):
+        args["config"] = parse_config(CONFIG_DEFAULT)
+        args["config"]["report"].update(
+            {
+                "_water_circle": True,
+            }
+        )
+        args["config"]["hazards"]["floods"]["simulate"] = True
+
+        run_model_with_method(method="run", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_alter() -> None:
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         args["build_config"] = {
@@ -130,77 +222,45 @@ def test_alter():
 
         run_args = DEFAULT_RUN_ARGS.copy()
         run_args["working_directory"] = args["working_directory"]
+        run_args["config"] = parse_config(CONFIG_DEFAULT)
+        run_args["config"]["general"]["start_time"] = run_args["config"]["general"][
+            "spinup_time"
+        ] + timedelta(days=370)  # run just over a year more is not needed
 
         run_model_with_method(method="spinup", **run_args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_update_with_file():
-    with WorkingDirectory(working_directory):
-        args = DEFAULT_BUILD_ARGS.copy()
-        args["build_config"] = "update.yml"
-        update_fn(**args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_update_with_dict():
-    with WorkingDirectory(working_directory):
-        args = DEFAULT_BUILD_ARGS.copy()
-        update = {"setup_land_use_parameters": {}}
-        args["build_config"] = update
-        update_fn(**args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-@pytest.mark.parametrize(
-    "method",
-    [
-        "setup_crop_prices",
-        "setup_discharge_observations",
-        "setup_forcing_era5",
-        "setup_water_demand",
-        "setup_SPEI",
-        "setup_CO2_concentration",
-    ],
-)
-def test_update_with_method(method: str):
-    with WorkingDirectory(working_directory):
-        args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
-
-        build_config: dict[str, dict] = parse_config(
-            working_directory / args["build_config"]
-        )
-
-        update: dict[str, dict] = {method: build_config[method]}
-
-        args["build_config"] = update
-        update_fn(**args)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_spinup():
-    with WorkingDirectory(working_directory):
-        run_model_with_method(method="spinup", **DEFAULT_RUN_ARGS)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_evaluate():
-    with WorkingDirectory(working_directory):
-        run_model_with_method(method="evaluate", **DEFAULT_RUN_ARGS)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_run():
-    with WorkingDirectory(working_directory):
-        run_model_with_method(method="run", **DEFAULT_RUN_ARGS)
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_land_use_change():
+def test_evaluate_water_circle() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
-        config = parse_config(args["config"])
+        method_args = {
+            "methods": ["water_circle"],
+        }
+        args["method_args"] = method_args
+        run_model_with_method(method="evaluate", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_evaluate() -> None:
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        method_args = {
+            "methods": ["plot_discharge", "evaluate_discharge"],
+        }
+        args["method_args"] = method_args
+        run_model_with_method(method="evaluate", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_land_use_change() -> None:
+    with WorkingDirectory(working_directory):
+        args = DEFAULT_RUN_ARGS.copy()
+        config = parse_config(CONFIG_DEFAULT)
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
+        config["general"]["end_time"] = config["general"]["start_time"] + timedelta(
+            days=370
+        )
         args["config"] = config
 
         geb = run_model_with_method(method=None, close_after_run=False, **args)
@@ -232,20 +292,21 @@ def test_land_use_change():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_run_yearly():
+def test_run_yearly() -> None:
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
-        config = parse_config(working_directory / args["config"])
-        config["general"]["start_time"] = date(2000, 1, 1)
+        config = parse_config(CONFIG_DEFAULT)
         config["general"]["end_time"] = date(2049, 12, 31)
+        config["hazards"]["floods"]["simulate"] = True  # enable flood simulation
+
         args["config"] = config
         args["config"]["report"] = {}
-        assert pytest.raises(
-            AssertionError,
-            run_model_with_method,
-            method="run_yearly",
-            **args,
-        )
+
+        with pytest.raises(
+            ValueError,
+            match="Yearly mode is not compatible with flood simulation. Please set 'simulate' to False in the config.",
+        ):
+            run_model_with_method(method="run_yearly", **args)
 
         config["hazards"]["floods"]["simulate"] = False  # disable flood simulation
 
@@ -253,24 +314,63 @@ def test_run_yearly():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_estimate_return_periods():
+def test_estimate_return_periods() -> None:
     with WorkingDirectory(working_directory):
         run_model_with_method(method="estimate_return_periods", **DEFAULT_RUN_ARGS)
 
+    if os.getenv("GEB_TEST_GPU", "no") == "yes":
+        flood_maps_CPU: Path = working_directory / "output" / "flood_maps" / "1000.zarr"
+
+        # move the flood maps to a separate folder
+        flood_maps_folder_CPU: Path = tmp_folder / "flood_maps" / "CPU"
+        flood_maps_folder_CPU.mkdir(parents=True, exist_ok=True)
+        flood_maps_CPU.rename(flood_maps_folder_CPU / "1000.zarr")
+
+        with WorkingDirectory(working_directory):
+            args = DEFAULT_RUN_ARGS.copy()
+            args["config"] = parse_config(CONFIG_DEFAULT)
+            args["config"]["hazards"]["floods"]["SFINCS"]["gpu"] = True
+            run_model_with_method(method="estimate_return_periods", **args)
+
+        flood_maps_folder_GPU: Path = tmp_folder / "flood_maps" / "GPU"
+        flood_maps_folder_GPU.mkdir(parents=True, exist_ok=True)
+        flood_maps_GPU: Path = working_directory / "output" / "flood_maps" / "1000.zarr"
+        flood_maps_GPU.rename(flood_maps_folder_GPU / "1000.zarr")
+
+        # compare the flood maps
+        flood_map_CPU: xr.DataArray = xr.open_dataarray(
+            flood_maps_folder_CPU / "1000.zarr"
+        )
+        flood_map_GPU: xr.DataArray = xr.open_dataarray(
+            flood_maps_folder_GPU / "1000.zarr"
+        )
+
+        flood_map_CPU = flood_map_CPU.fillna(0)
+        flood_map_GPU = flood_map_GPU.fillna(0)
+
+        np.testing.assert_almost_equal(
+            flood_map_CPU.values,
+            flood_map_GPU.values,
+            decimal=1,
+            err_msg="Flood maps for the 1000-year return period do not match between CPU and GPU runs.",
+        )
+
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_multiverse():
+def test_multiverse() -> None:
+    """Test the multiverse functionality with flood events and forecast forcing."""
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
 
-        config = parse_config(args["config"])
+        config: dict[str, Any] = parse_config(CONFIG_DEFAULT)
+        config["hazards"]["floods"]["simulate"] = True
 
-        forecast_after_n_days = 3
-        forecast_n_days = 5
-        forecast_n_hours = 13
+        forecast_after_n_days: int = 3
+        forecast_n_days: int = 5
+        forecast_n_hours: int = 13
 
-        forecast_date = (
-            datetime.combine(config["general"]["start_time"], time.min)
+        forecast_date: datetime = (
+            datetime.combine(date=config["general"]["start_time"], time=time.min)
             + timedelta(days=forecast_after_n_days)
             + timedelta(hours=forecast_n_hours)
         )
@@ -281,15 +381,14 @@ def test_multiverse():
             days=int(forecast_n_days) + 5
         )
 
-        input_folder = config["general"]["input_folder"]
-
-        files = input_folder / "files.json"
+        input_folder: Path = Path(config["general"]["input_folder"])
+        files: Path = input_folder / "files.json"
         files = json.loads(files.read_text())
 
-        precipitation = xr.open_dataarray(
-            input_folder / files["other"]["climate/pr_hourly"], consolidated=False
+        precipitation: xr.DataArray = open_zarr(
+            input_folder / files["other"]["climate/pr_hourly"]
         ).drop_encoding()
-        forecast = precipitation.sel(
+        forecast: xr.DataArray = precipitation.sel(
             time=slice(
                 forecast_date,
                 forecast_end_date,
@@ -297,7 +396,7 @@ def test_multiverse():
         )
 
         # add member dimension
-        forecast = forecast.expand_dims(dim={"member": [0]}, axis=0)
+        forecast: xr.DataArray = forecast.expand_dims(dim={"member": [0]}, axis=0)
 
         forecasts_folder: Path = Path("data") / "forecasts"
         forecasts_folder.mkdir(parents=True, exist_ok=True)
@@ -333,7 +432,7 @@ def test_multiverse():
             geb.step()
 
         mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
-            return_mean_discharge=True, forecast_dt=forecast_date
+            return_mean_discharge=True, forecast_issue_datetime=forecast_date
         )
 
         end_date = round_up_to_start_of_next_day_unless_midnight(
@@ -368,8 +467,8 @@ def test_multiverse():
         )
 
         np.testing.assert_array_equal(
-            flood_map_first_event.values,
-            flood_map_first_event_multiverse.values,
+            actual=flood_map_first_event.values,
+            desired=flood_map_first_event_multiverse.values,
             err_msg="Flood maps for the first event do not match across multiverse members.",
         )
 
@@ -385,7 +484,7 @@ def test_multiverse():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_ISIMIP_forcing_low_res():
+def test_ISIMIP_forcing_low_res() -> None:
     """Test the ISIMIP forcing update function.
 
     This is a special case that requires a specific setup.
@@ -402,9 +501,10 @@ def test_ISIMIP_forcing_low_res():
                 "start_date": date(2001, 1, 1),
                 "end_date": date(2024, 12, 31),
             },
-            "setup_forcing_ISIMIP": {
+            "setup_forcing": {
+                "forcing": "ISIMIP",
                 "resolution_arcsec": 1800,
-                "forcing": "gfdl-esm4",
+                "model": "gfdl-esm4",
             },
         }
         update_fn(**args)
@@ -418,7 +518,7 @@ def test_ISIMIP_forcing_low_res():
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_share():
+def test_share() -> None:
     with WorkingDirectory(working_directory):
         share_fn(
             working_directory=".",
@@ -427,7 +527,7 @@ def test_share():
             include_output=False,
         )
 
-        output_fn: Path = "test.zip"
+        output_fn: Path = Path("test.zip")
 
         assert output_fn.exists()
 

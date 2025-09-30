@@ -1,6 +1,6 @@
 """GEB simulates the environment, the individual behaviour of people, households and organizations - including their interactions - at small and large scale."""
 
-__version__ = "1.0.0b5"
+__version__ = "1.0.0b6"
 
 import faulthandler
 import os
@@ -8,6 +8,7 @@ import platform
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding
@@ -21,12 +22,25 @@ load_dotenv()
 # set environment variable for GEB package directory
 os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
 
+# Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
+if Path("/scistor/ivm/GEB").exists():
+    os.environ["GEB_DATA_ROOT"] = "/scistor/ivm/GEB/data_catalog/"
+    os.environ["SFINCS_SIF"] = (
+        "/ada-software/containers/sfincs-cpu-v2.2.0-col-dEze-Release.sif"
+    )
+    os.environ["SFINCS_SIF_GPU"] = (
+        "/ada-software/containers/sfincs-gpu.coldeze_combo_ccall.sif"
+    )
+
 
 def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     """Load TBB shared library, a very efficient threading layer for parallelizing CPU-bound tasks in Numba-compiled functions.
 
     Args:
         version: version of TBB to use, default is "2022.1.0".
+
+    Raises:
+        RuntimeError: If the platform is not supported.
 
     """
     version = "2022.1.0"
@@ -95,7 +109,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     _check_tbb_version_compatible()
 
     @njit(parallel=True)
-    def test_threading_layer():
+    def test_threading_layer() -> npt.NDArray[np.int32]:
         array = np.zeros(10, dtype=np.int32)
         """Test function to check if TBB is loaded correctly."""
         for i in prange(10):

@@ -1,3 +1,9 @@
+"""
+Evaluation utilities for the GEB model.
+
+Contains the Evaluate class which contains evaluation routines for model runs.
+"""
+
 from pathlib import Path
 
 from .hydrology import Hydrology
@@ -10,27 +16,37 @@ class Evaluate(Hydrology):
         model: The GEB model instance.
     """
 
-    def __init__(self, model):
+    def __init__(self, model) -> None:
         self.model = model
 
-    def run(self, methods: list | None = None) -> None:
+    def run(
+        self,
+        methods: list,
+        spinup_name: str = "spinup",
+        run_name: str = "default",
+        include_spinup: bool = False,
+        include_yearly_plots: bool = False,
+        correct_Q_obs: bool = False,
+    ) -> None:
         """Run the evaluation methods.
 
         Args:
-            methods (list, optional): List of method names to run. If None, defaults to
+            methods: List of method names to run. Defaults to
                 ["plot_discharge", "evaluate_discharge"].
+            spinup_name: Name of the spinup run. Defaults to "spinup".
+            run_name: Name of the run to evaluate. Defaults to "default".
+            include_spinup: If True, includes the spinup run in the evaluation.
+            include_yearly_plots: If True, creates plots for every year showing the evaluation
+            correct_Q_obs: If True, corrects the observed discharge values.
 
         Raises:
-            AssertionError: If methods is not a list or tuple, or if any method is not a string.
             ValueError: If a specified method is not implemented in the Evaluate class.
-
-        Returns:
-            None
         """
         if methods is None:
             methods: list = [
                 "plot_discharge",
                 "evaluate_discharge",
+                "evaluate_hydrodynamics",
             ]
         else:
             assert isinstance(methods, (list, tuple)), (
@@ -52,7 +68,13 @@ class Evaluate(Hydrology):
                 raise ValueError(
                     f"Method {method} is not implemented in Evaluate class."
                 )
-            attr()
+            attr(
+                spinup_name=spinup_name,
+                run_name=run_name,
+                include_spinup=include_spinup,
+                include_yearly_plots=include_yearly_plots,
+                correct_Q_obs=correct_Q_obs,
+            )  # this calls the method and executes them
 
     @property
     def output_folder_evaluate(self) -> Path:

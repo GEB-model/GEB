@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from datetime import date
-from typing import Any, Union
+from typing import Any, Literal, Union
 
 import dask
 import numpy as np
@@ -8,7 +8,8 @@ import pandas as pd
 import xarray
 import xarray as xr
 import xarray_regrid
-from pyresample import geometry
+from affine import Affine
+from pyresample.geometry import AreaDefinition
 from pyresample.gradient import (
     block_bilinear_interpolator,
     block_nn_interpolator,
@@ -19,13 +20,9 @@ from scipy.interpolate import griddata
 from tqdm import tqdm
 
 
-def repeat_grid(data, factor):
-    return data.repeat(factor, axis=-2).repeat(factor, axis=-1)
-
-
-def calculate_cell_area(affine_transform, shape):
-    RADIUS_EARTH_EQUATOR = 40075017  # m
-    distance_1_degree_latitude = RADIUS_EARTH_EQUATOR / 360
+def calculate_cell_area(affine_transform: Affine, shape: tuple[int, int]) -> np.ndarray:
+    RADIUS_EARTH_EQUATOR: Literal[40075017] = 40075017  # m
+    distance_1_degree_latitude: float = RADIUS_EARTH_EQUATOR / 360
 
     height, width = shape
 
@@ -53,7 +50,7 @@ def clip_with_grid(ds, mask):
     return ds.isel(bounds), bounds
 
 
-def bounds_are_within(small_bounds, large_bounds, tollerance=0):
+def bounds_are_within(small_bounds, large_bounds, tollerance=0) -> bool:
     assert small_bounds[0] + tollerance >= large_bounds[0], "Region bounds do not match"
     assert small_bounds[1] + tollerance >= large_bounds[1], "Region bounds do not match"
     assert small_bounds[2] <= large_bounds[2] + tollerance, "Region bounds do not match"
@@ -216,6 +213,9 @@ def resample_like(
     Returns:
         A new DataArray that has been resampled to match the target's grid.
 
+    Raises:
+        ValueError: if the method is not 'bilinear', 'nearest', or 'conservative'.
+
     """
     source_spatial_ref: Any = source.spatial_ref
 
@@ -255,7 +255,7 @@ def resample_like(
     return dst
 
 
-def get_area_definition(da: xr.DataArray) -> geometry.AreaDefinition:
+def get_area_definition(da: xr.DataArray) -> AreaDefinition:
     """Get the pyresample area definition from an xarray DataArray.
 
     This is a requirement for the resampling functions in pyresample.
@@ -266,7 +266,7 @@ def get_area_definition(da: xr.DataArray) -> geometry.AreaDefinition:
     Returns:
         A pyresample AreaDefinition object.
     """
-    return geometry.AreaDefinition(
+    return AreaDefinition(
         area_id="",
         description="",
         proj_id="",
@@ -277,7 +277,23 @@ def get_area_definition(da: xr.DataArray) -> geometry.AreaDefinition:
     )
 
 
-def _fill_in_coords(target_coords, source_coords, data_dims):
+def _fill_in_coords(
+    target_coords: xr.core.coordinates.DataArrayCoordinates,
+    source_coords: xr.core.coordinates.DataArrayCoordinates,
+    data_dims: tuple[str, ...],
+):
+    """Fill in missing coordinates that are also dimensions from source except for 'x' and 'y' which are taken from target.
+
+    For example useful to fill the time coordinate
+
+    Args:
+        target_coords: All coordinates from the target DataArray.
+        source_coords: All coordinates from the source DataArray.
+        data_dims: Dimensions to transfer coordinates for. 'x' and 'y' are skipped.
+
+    Returns:
+        A list of coordinates in the order of data_dims.
+    """
     x_coord, y_coord = target_coords["x"], target_coords["y"]
     coords = []
     for key in data_dims:
@@ -318,8 +334,8 @@ def resample_chunked(
 
     assert target.dims == ("y", "x")
 
-    source_geo: geometry.AreaDefinition = get_area_definition(source)
-    target_geo: geometry.AreaDefinition = get_area_definition(target)
+    source_geo: AreaDefinition = get_area_definition(source)
+    target_geo: AreaDefinition = get_area_definition(target)
 
     indices: dask.Array = resample_blocks(
         gradient_resampler_indices_block,

@@ -1,17 +1,33 @@
+"""Tests for soil functions in GEB."""
+
 import math
 from time import time
 
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import pytest
 
 import geb.hydrology.soil
+from geb.hydrology.landcover import (
+    NON_PADDY_IRRIGATED,
+    OPEN_WATER,
+    PADDY_IRRIGATED,
+    SEALED,
+)
 from geb.hydrology.soil import (
+    add_water_to_topwater_and_evaporate_open_water,
     get_critical_soil_moisture_content,
+    get_flux,
     get_fraction_easily_available_soil_water,
+    get_mean_unsaturated_hydraulic_conductivity,
+    get_root_mass_ratios,
+    get_root_ratios,
+    get_saturated_area_fraction,
     get_soil_moisture_at_pressure,
     get_soil_water_flow_parameters,
     get_transpiration_factor,
+    get_transpiration_factor_per_layer,
     vertical_water_transport,
 )
 
@@ -21,7 +37,453 @@ output_folder_soil = output_folder / "soil"
 output_folder_soil.mkdir(exist_ok=True)
 
 
-def test_get_transpiration_factor():
+def test_vertical_flow_stability() -> None:
+    lower_layer_w = np.linspace(0.1, 0.4, 1000, dtype=np.float32)
+    upper_layer_w = np.full_like(lower_layer_w, 0.4, dtype=np.float32)
+
+    upper_layer_wres = np.full_like(lower_layer_w, 0.1, dtype=np.float32)
+    lower_layer_wres = np.full_like(lower_layer_w, 0.1, dtype=np.float32)
+
+    upper_layer_ws = np.full_like(lower_layer_w, 0.4, dtype=np.float32)
+    lower_layer_ws = np.full_like(lower_layer_w, 0.4, dtype=np.float32)
+
+    upper_layer_lambda = np.full_like(lower_layer_w, 0.5, dtype=np.float32)
+    lower_layer_lambda = np.full_like(lower_layer_w, 0.5, dtype=np.float32)
+
+    upper_layer_saturated_hydraulic_conductivity = np.full_like(
+        lower_layer_w, 0.1, dtype=np.float32
+    )
+    lower_layer_saturated_hydraulic_conductivity = np.full_like(
+        lower_layer_w, 0.1, dtype=np.float32
+    )
+
+    upper_layer_bubbing_pressure_cm = np.full_like(lower_layer_w, 20, dtype=np.float32)
+    lower_layer_bubbing_pressure_cm = np.full_like(lower_layer_w, 20, dtype=np.float32)
+
+    delta_z = np.full_like(lower_layer_w, 1.0, dtype=np.float32)
+
+    upper_psi, upper_unsaturated_hydraulic_conductivity = (
+        get_soil_water_flow_parameters(
+            w=upper_layer_w,
+            ws=upper_layer_ws,
+            wres=upper_layer_wres,
+            lambda_=upper_layer_lambda,
+            saturated_hydraulic_conductivity=upper_layer_saturated_hydraulic_conductivity,
+            bubbling_pressure_cm=upper_layer_bubbing_pressure_cm,
+        )
+    )
+
+    lower_psi, lower_unsaturated_hydraulic_conductivity = (
+        get_soil_water_flow_parameters(
+            w=lower_layer_w,
+            ws=lower_layer_ws,
+            wres=lower_layer_wres,
+            lambda_=lower_layer_lambda,
+            saturated_hydraulic_conductivity=lower_layer_saturated_hydraulic_conductivity,
+            bubbling_pressure_cm=lower_layer_bubbing_pressure_cm,
+        )
+    )
+
+    mean_unsaturated_hydraulic_conductivity = np.array(
+        [
+            get_mean_unsaturated_hydraulic_conductivity(
+                lower_unsaturated_hydraulic_conductivity[i],
+                upper_unsaturated_hydraulic_conductivity[i],
+            )
+            for i in range(lower_unsaturated_hydraulic_conductivity.size)
+        ],
+        dtype=np.float32,
+    )
+
+    assert (
+        mean_unsaturated_hydraulic_conductivity
+        <= lower_layer_saturated_hydraulic_conductivity
+    ).all()
+    assert (
+        mean_unsaturated_hydraulic_conductivity
+        <= upper_layer_saturated_hydraulic_conductivity
+    ).all()
+
+    flux = np.array(
+        [
+            get_flux(
+                mean_unsaturated_hydraulic_conductivity[i],
+                lower_psi[i],
+                upper_psi[i],
+                delta_z[i],
+            )
+            for i in range(mean_unsaturated_hydraulic_conductivity.size)
+        ],
+        dtype=np.float32,
+    )
+
+    fig, (ax0, ax1) = plt.subplots(1, 2)
+
+    ax0.plot(lower_layer_w, flux, label="flux")
+    ax0.set_ylabel("Flux (cm/day)")
+    ax0.set_xlabel("Lower layer soil moisture content (m3/m3)")
+
+    ax1.plot(
+        lower_layer_w,
+        flux / (lower_layer_w - lower_layer_wres),
+        label="flux / (w - wres)",
+    )
+    ax1.set_xlabel("Lower layer soil moisture content (m3/m3)")
+    ax1.set_ylabel("Flux / (w - wres) (cm/day)")
+
+    plt.savefig(output_folder_soil / "vertical_flow_stability.png")
+
+
+def test_get_root_ratios() -> None:
+    soil_layer_height = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+    geb.hydrology.soil.N_SOIL_LAYERS = soil_layer_height.shape[0]
+
+    root_ratios = get_root_ratios(
+        root_depth=np.float32(0.5), soil_layer_height=soil_layer_height
+    )
+    np.testing.assert_almost_equal(
+        root_ratios, np.array([1.0, 1.0, 2 / 3], dtype=np.float32)
+    )
+
+    root_ratios = get_root_ratios(
+        root_depth=np.float32(0.2), soil_layer_height=soil_layer_height
+    )
+    np.testing.assert_almost_equal(
+        root_ratios, np.array([1.0, 0.5, 0.0], dtype=np.float32)
+    )
+
+    root_ratios = get_root_ratios(
+        root_depth=np.float32(0.1), soil_layer_height=soil_layer_height
+    )
+    np.testing.assert_almost_equal(
+        root_ratios, np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    )
+
+    root_ratios = get_root_ratios(
+        root_depth=np.float32(0.05), soil_layer_height=soil_layer_height
+    )
+    np.testing.assert_almost_equal(
+        root_ratios, np.array([0.5, 0.0, 0.0], dtype=np.float32)
+    )
+
+
+def test_get_root_mass_ratios() -> None:
+    soil_layer_height = np.array([1, 1, 1], dtype=np.float32)
+    geb.hydrology.soil.N_SOIL_LAYERS = soil_layer_height.shape[0]
+
+    root_depth = np.float32(0.5)
+    root_ratios = get_root_ratios(
+        root_depth=root_depth, soil_layer_height=soil_layer_height
+    )
+    root_mass_ratios = get_root_mass_ratios(
+        root_depth=root_depth,
+        root_ratios=root_ratios,
+        soil_layer_height=soil_layer_height,
+    )
+    assert math.isclose(root_mass_ratios.sum(), 1.0)
+    np.testing.assert_almost_equal(
+        root_mass_ratios, np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    )
+
+    root_depth = np.float32(1.0)
+    root_ratios = get_root_ratios(
+        root_depth=root_depth, soil_layer_height=soil_layer_height
+    )
+    root_mass_ratios = get_root_mass_ratios(
+        root_depth=root_depth,
+        root_ratios=root_ratios,
+        soil_layer_height=soil_layer_height,
+    )
+    assert math.isclose(root_mass_ratios.sum(), 1.0)
+    np.testing.assert_almost_equal(
+        root_mass_ratios, np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    )
+
+    root_depth = np.float32(2.0)
+    root_ratios = get_root_ratios(
+        root_depth=root_depth, soil_layer_height=soil_layer_height
+    )
+    root_mass_ratios = get_root_mass_ratios(
+        root_depth=root_depth,
+        root_ratios=root_ratios,
+        soil_layer_height=soil_layer_height,
+    )
+    assert math.isclose(root_mass_ratios.sum(), 1.0)
+    np.testing.assert_almost_equal(
+        root_mass_ratios, np.array([0.75, 0.25, 0], dtype=np.float32)
+    )
+
+    soil_layer_height = np.array([0.5, 1, 1], dtype=np.float32)
+    root_depth = np.float32(2.0)
+    root_ratios = get_root_ratios(
+        root_depth=root_depth, soil_layer_height=soil_layer_height
+    )
+    root_mass_ratios = get_root_mass_ratios(
+        root_depth=root_depth,
+        root_ratios=root_ratios,
+        soil_layer_height=soil_layer_height,
+    )
+    assert math.isclose(root_mass_ratios.sum(), 1.0)
+    np.testing.assert_almost_equal(
+        root_mass_ratios, np.array([0.4375, 0.5, 0.0625], dtype=np.float32)
+    )
+
+
+def test_get_saturated_area_fraction() -> None:
+    saturated_area_fraction = get_saturated_area_fraction(
+        soil_water_storage=np.float32(0.0),
+        soil_water_storage_max=np.float32(0.7),
+        arno_beta=np.float32(0.5),
+    )
+    assert saturated_area_fraction == np.float32(0.0)
+
+    saturated_area_fraction = get_saturated_area_fraction(
+        soil_water_storage=np.float32(0.7),
+        soil_water_storage_max=np.float32(0.7),
+        arno_beta=np.float32(0.5),
+    )
+    assert saturated_area_fraction == 1.0
+
+    saturated_area_fraction_half_arno_0_5 = get_saturated_area_fraction(
+        soil_water_storage=np.float32(0.35),
+        soil_water_storage_max=np.float32(0.7),
+        arno_beta=np.float32(0.5),
+    )
+    assert saturated_area_fraction_half_arno_0_5 < np.float32(0.5)
+
+    saturated_area_fraction_half_arno_0_1 = get_saturated_area_fraction(
+        soil_water_storage=np.float32(0.35),
+        soil_water_storage_max=np.float32(0.7),
+        arno_beta=np.float32(0.1),
+    )
+    assert saturated_area_fraction_half_arno_0_1 < saturated_area_fraction_half_arno_0_5
+
+
+# def test_get_infiltration_capacity():
+#     infiltration_capacity = get_infiltration_capacity(
+#         w=np.array([0.3, 0.3, 0.3], dtype=np.float32),
+#         ws=np.array([0.34, 0.4, 0.3], dtype=np.float32),
+#         saturated_hydraulic_conductivity=np.array([0.1, 0.1, 0.1], dtype=np.float32),
+#     )
+#     assert math.isclose(infiltration_capacity, 0.1, rel_tol=1e-4)
+
+
+def test_get_transpiration_factor_per_layer() -> None:
+    soil_layer_height = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+    geb.hydrology.soil.N_SOIL_LAYERS = soil_layer_height.shape[0]
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2),
+        w=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=False,
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+    np.testing.assert_equal(
+        transpiration_factor_per_layer,
+        np.array([0.5, 0.5, 0.0, 0.0], dtype=np.float32),
+    )
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2),
+        w=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=True,
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+    np.testing.assert_equal(
+        transpiration_factor_per_layer,
+        np.array([0.75, 0.25, 0.0, 0.0], dtype=np.float32),
+    )
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=False,
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+    np.testing.assert_equal(
+        transpiration_factor_per_layer,
+        np.array([0.4, 0.4, 0.2, 0.0], dtype=np.float32),
+    )
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=True,
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+    np.testing.assert_equal(
+        transpiration_factor_per_layer,
+        np.array([0.64, 0.32, 0.04, 0.0], dtype=np.float32),
+    )
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=np.array([0.05, 1.0, 1.0, 1.0], dtype=np.float32),
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.03, 0.3, 0.3, 0.3], dtype=np.float32),
+        wfc=np.array([0.04, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.01, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=False,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.02, 0.4, 0.4, 0.18], dtype=np.float32),
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0, abs_tol=1e-6)
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=np.array([0.05, 1.0, 1.0, 1.0], dtype=np.float32),
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.03, 0.3, 0.3, 0.3], dtype=np.float32),
+        wfc=np.array([0.04, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.01, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=True,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.0396, 0.624, 0.304, 0.0324], dtype=np.float32),
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.15, 0.3, 0.3, 0.3], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=False,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.0, 1 / 3 * 2, 1 / 3, 0.0], dtype=np.float32),
+    )
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.15, 0.3, 0.3, 0.3], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=True,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.0, 0.8888889, 0.1111111, 0.0], dtype=np.float32),
+    )
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.15, 0.15, 0.15, 0.3], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=False,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+    )
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.15, 0.15, 0.15, 0.3], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=True,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+    )
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.16, 0.16, 0.16, 0.3], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=False,
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+    np.testing.assert_equal(
+        transpiration_factor_per_layer,
+        np.array([1.0 / 2.5, 1.0 / 2.5, 0.5 / 2.5, 0.0], dtype=np.float32),
+    )  # at p of 1, we can still extract water as we like
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.16, 0.16, 0.16, 0.3], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(1),
+        correct_root_mass=True,
+    )
+    assert math.isclose(transpiration_factor_per_layer.sum(), 1.0)
+    np.testing.assert_equal(
+        transpiration_factor_per_layer,
+        np.array([0.64, 0.32, 0.04, 0.0], dtype=np.float32),
+    )  # at p of 1, we can still extract water as we like
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.16, 0.16, 0.16, 0.16], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(0.5),
+        correct_root_mass=False,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array(
+            [0.1333333 / 2.5, 0.1333333 / 2.5, 0.066666 / 2.5, 0.0], dtype=np.float32
+        ),
+        decimal=4,
+    )  # but at lower p, this becomes much more difficult
+    assert transpiration_factor_per_layer.sum() < 1.0
+
+    transpiration_factor_per_layer = get_transpiration_factor_per_layer(
+        soil_layer_height=soil_layer_height,
+        effective_root_depth=np.float32(2.5),
+        w=np.array([0.16, 0.16, 0.16, 0.16], dtype=np.float32),
+        wfc=np.array([0.3, 0.3, 0.3, 0.3], dtype=np.float32),
+        wwp=np.array([0.15, 0.15, 0.15, 0.15], dtype=np.float32),
+        p=np.float32(0.5),
+        correct_root_mass=True,
+    )
+    np.testing.assert_almost_equal(
+        transpiration_factor_per_layer,
+        np.array([0.0853, 0.0427, 0.0053, 0.0], dtype=np.float32),
+        decimal=4,
+    )  # but at lower p, this becomes much more difficult
+    assert transpiration_factor_per_layer.sum() < 1.0
+
+
+def test_get_transpiration_factor() -> None:
     critical_soil_moisture_content = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
     wwp = np.array([0.15, 0.15, 0.15, 0.15, 0.15, 0.15])  # wilting point
     w = np.array([0.3, 0.2, 0.175, 0.15, 0.1, 0.0])
@@ -38,7 +500,7 @@ def test_get_transpiration_factor():
     )
 
 
-def test_get_soil_moisture_at_pressure():
+def test_get_soil_moisture_at_pressure() -> None:
     capillary_suction = np.linspace(-1, -20000, 10000, dtype=np.float32).reshape(1, -1)
 
     soils = ["sand", "silt", "clay"]
@@ -71,7 +533,7 @@ def test_get_soil_moisture_at_pressure():
     plt.savefig(output_folder / "soil_moisture_at_pressure.png")
 
 
-def test_get_soil_water_flow_parameters_potential():
+def test_get_soil_water_flow_parameters_potential() -> None:
     assert not np.isnan(
         get_soil_water_flow_parameters(
             w=np.array([0.068], dtype=np.float32),
@@ -97,9 +559,23 @@ def test_get_soil_water_flow_parameters_potential():
 
 
 @pytest.mark.parametrize("pf_value", [2.0, 4.2])
-def test_soil_moisture_potential_inverse(pf_value):
+def test_soil_moisture_potential_inverse(pf_value: float) -> None:
+    """Test whether soil moisture potential and its inverse are consistent.
+
+    In GEB, we use pF values (log10 of capillary suction in cm) to get the soil moisture
+    content at various levels of soil suction. Inversely, we can also calculate the
+    capillary suction from a given soil moisture content. This test checks whether
+    these two functions are consistent with each other by converting a pF value to
+    capillary suction, calculating the corresponding soil moisture content, and then
+    converting it back to capillary suction. The original and calculated capillary
+    suctions should be approximately equal within a small tolerance.
+
+    Args:
+        pf_value: The pF value to test (e.g., 2.0 for field capacity, 4.2 for wilting point).
+
+    """
     # Convert pF value to capillary suction in cm (h)
-    capillary_suction = np.array(
+    capillary_suction_cm = np.array(
         [-(10**pf_value)], dtype=np.float32
     )  # Negative value for suction
 
@@ -109,13 +585,13 @@ def test_soil_moisture_potential_inverse(pf_value):
     lambda_ = np.array([0.5], dtype=np.float32)  # Pore-size distribution index
     bubbling_pressure_cm = np.array([10.0], dtype=np.float32)  # Bubbling pressure in cm
 
-    # Step 1: Calculate theta from capillary suction
+    # Calculate theta from capillary suction
     theta = get_soil_moisture_at_pressure(
-        capillary_suction, bubbling_pressure_cm, thetas, thetar, lambda_
+        capillary_suction_cm, bubbling_pressure_cm, thetas, thetar, lambda_
     )
 
-    # Step 2: Calculate capillary suction from theta
-    capillary_suction_calculated = get_soil_water_flow_parameters(
+    # Calculate capillary suction from theta
+    capillary_suction_calculated_m = get_soil_water_flow_parameters(
         w=theta,
         wres=thetar,
         ws=thetas,
@@ -124,18 +600,20 @@ def test_soil_moisture_potential_inverse(pf_value):
         bubbling_pressure_cm=bubbling_pressure_cm,
     )[0]
 
+    capillary_suction_calculated_cm = (
+        capillary_suction_calculated_m * 100
+    )  # Convert to cm
+
     # Allow a small tolerance due to numerical approximations
-    tolerance = 1e-2 * abs(capillary_suction)  # 1% of the suction value
+    tolerance = 1e-2 * abs(capillary_suction_cm)  # 1% of the suction value
 
     # Assert that the original and calculated capillary suctions are approximately equal
     assert np.isclose(
-        capillary_suction, capillary_suction_calculated, atol=tolerance
-    ), (
-        f"Capillary suction mismatch at pF {pf_value}: original {capillary_suction}, calculated {capillary_suction_calculated}"
+        capillary_suction_cm, capillary_suction_calculated_cm, atol=tolerance
     )
 
 
-def test_get_fraction_easily_available_soil_water():
+def test_get_fraction_easily_available_soil_water() -> None:
     potential_evapotranspiratios = (
         np.array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]) / 100
     )  # cm/day to m/day
@@ -183,7 +661,7 @@ def test_get_fraction_easily_available_soil_water():
         assert math.isclose(p1, p1_test, rel_tol=1e-6)
 
 
-def test_get_critical_soil_moisture_content():
+def test_get_critical_soil_moisture_content() -> None:
     p = np.array([0.3, 0.7, 1.0, 0.0])
     wfc = np.array([0.35, 0.35, 0.35, 0.35])  # field capacity
     wwp = np.array([0.15, 0.15, 0.15, 0.15])  # wilting point
@@ -194,7 +672,7 @@ def test_get_critical_soil_moisture_content():
     assert np.array_equal(critical_soil_moisture_content, [0.29, 0.21, 0.15, 0.35])
 
 
-def test_get_unsaturated_hydraulic_conductivity():
+def test_get_unsaturated_hydraulic_conductivity() -> None:
     wres = np.full(1_000_000, 0.1, dtype=np.float32)
     ws = np.full_like(wres, 0.4)
 
@@ -278,7 +756,28 @@ def test_get_unsaturated_hydraulic_conductivity():
     plt.savefig(output_folder / "unsaturated_hydraulic_conductivity.png")
 
 
-def plot_soil_layers(ax, soil_thickness, w, wres, ws, fluxes=None):
+def plot_soil_layers(
+    ax: plt.Axes,
+    soil_thickness: npt.NDArray[np.floating],
+    w: npt.NDArray[np.floating],
+    wres: npt.NDArray[np.floating],
+    ws: npt.NDArray[np.floating],
+    fluxes: npt.NDArray[np.floating] | None = None,
+) -> None:
+    """Plot a number of soil columns with their moisture content, and potentially fluxes.
+
+    All inputs except ax and fluxes should be 2D arrays with shape (n_layers, n_columns).
+
+    Args:
+        ax: The Matplotlib axis to plot on.
+        soil_thickness: The thickness of the soil layers [m].
+        w: The soil moisture content [m]. Cannot be larger than soil_thickness.
+        wres: The residual soil moisture content [m].
+        ws: The saturated soil moisture content [m].
+        fluxes: Fluxes between soil layers if given. The first row is the flux between
+            the top layer, and the layer below. Etc. Number of rows is n_layers -1. In
+            case fluxes is None, no fluxes are plotted. Defaults to None.
+    """
     n_soil_columns = soil_thickness.shape[1]
     for column in range(n_soil_columns):
         current_depth = 0
@@ -334,8 +833,83 @@ def plot_soil_layers(ax, soil_thickness, w, wres, ws, fluxes=None):
     ax.invert_yaxis()
 
 
+def test_add_water_to_topwater_and_evaporate_open_water() -> None:
+    topwater = np.array([0.05, 0.0, 0.0, 0.0], dtype=np.float32)
+    topwater_pre = topwater.copy()
+    natural_available_water_infiltration = np.array(
+        [0.01, 0.01, 0.01, 0.01], dtype=np.float32
+    )
+    actual_irrigation_consumption = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    land_use_type = np.array(
+        [PADDY_IRRIGATED, NON_PADDY_IRRIGATED, SEALED, OPEN_WATER], dtype=np.int32
+    )
+    reference_evapatotranspiration_water = np.array(
+        [
+            0.025,
+            0.025,
+            0.025,
+            0.025,
+        ],
+        dtype=np.float32,
+    )
+
+    open_water_evaporation = add_water_to_topwater_and_evaporate_open_water(
+        natural_available_water_infiltration=natural_available_water_infiltration,
+        actual_irrigation_consumption=actual_irrigation_consumption,
+        land_use_type=land_use_type,
+        reference_evapotranspiration_water=reference_evapatotranspiration_water,
+        topwater=topwater,
+    )
+    assert (open_water_evaporation >= 0.0).all()
+    assert (topwater >= 0.0).all()
+
+    np.testing.assert_array_almost_equal(
+        topwater_pre
+        + natural_available_water_infiltration
+        + actual_irrigation_consumption,
+        topwater + open_water_evaporation,
+    )
+
+    topwater = topwater_pre.copy()
+
+    reference_evapatotranspiration_water = np.array(
+        [
+            1,
+            1,
+            1,
+            1,
+        ],
+        dtype=np.float32,
+    )
+
+    open_water_evaporation = add_water_to_topwater_and_evaporate_open_water(
+        natural_available_water_infiltration=natural_available_water_infiltration,
+        actual_irrigation_consumption=actual_irrigation_consumption,
+        land_use_type=land_use_type,
+        reference_evapotranspiration_water=reference_evapatotranspiration_water,
+        topwater=topwater,
+    )
+
+    np.testing.assert_array_almost_equal(
+        topwater_pre
+        + natural_available_water_infiltration
+        + actual_irrigation_consumption,
+        topwater + open_water_evaporation,
+    )
+
+    assert (open_water_evaporation >= 0.0).all()
+    assert (topwater >= 0.0).all()
+
+
 @pytest.mark.parametrize("capillary_rise_from_groundwater", [0.0, 0.01])
-def test_vertical_water_transport(capillary_rise_from_groundwater):
+def test_vertical_water_transport(capillary_rise_from_groundwater: float) -> None:
+    """Test vertical water transport through the soil column.
+
+    Makes several plots to visualize the soil moisture in the soil column.
+
+    Args:
+        capillary_rise_from_groundwater: The capillary rise from the groundwater (cm/day).
+    """
     ncols = 11
 
     soil_layer_height = np.array(
@@ -344,14 +918,10 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
     # soil_thickness = np.array([[0.4, 0.4, 0.4, 0.4, 0.4, 0.4]])
     soil_layer_height = np.vstack([soil_layer_height] * ncols).T
 
-    available_water_infiltration = np.full(ncols, 0.005, dtype=np.float32)
-    land_use_type = np.full_like(available_water_infiltration, 0.1, dtype=np.int32)
-    frost_index = np.full_like(
-        available_water_infiltration, -9999, dtype=np.float32
-    )  # no frost
-    arno_beta = np.full_like(available_water_infiltration, 1.0, dtype=np.float32)
-    preferential_flow_constant = 4.5
-    topwater = np.zeros_like(available_water_infiltration)
+    topwater = np.full(ncols, 0.005, dtype=np.float32)
+    land_use_type = np.full_like(topwater, 0.1, dtype=np.int32)
+    frost_index = np.full_like(topwater, -9999, dtype=np.float32)  # no frost
+    arno_beta = np.full_like(topwater, 0.5, dtype=np.float32)
 
     geb.hydrology.soil.N_SOIL_LAYERS = soil_layer_height.shape[0]
     geb.hydrology.soil.FROST_INDEX_THRESHOLD = 0
@@ -396,11 +966,8 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     plot_soil_layers(axes[0], soil_layer_height, w, wres, ws)
 
-    preferential_flow, direct_runoff, groundwater_recharge = vertical_water_transport(
-        available_water_infiltration=available_water_infiltration,
-        capillary_rise_from_groundwater=np.full_like(
-            available_water_infiltration, capillary_rise_from_groundwater
-        ),
+    direct_runoff, groundwater_recharge, infiltration = vertical_water_transport(
+        capillary_rise_from_groundwater=np.zeros_like(topwater),
         ws=ws,
         wres=wres,
         saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
@@ -409,7 +976,6 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
         land_use_type=land_use_type,
         frost_index=frost_index,
         arno_beta=arno_beta,
-        preferential_flow_constant=preferential_flow_constant,
         w=w,
         topwater=topwater,
         soil_layer_height=soil_layer_height,
@@ -422,27 +988,49 @@ def test_vertical_water_transport(capillary_rise_from_groundwater):
 
     plot_soil_layers(axes[1], soil_layer_height, w, wres, ws)
 
-    available_water_infiltration.fill(0)
+    topwater.fill(0)
     for _ in range(1000):
-        preferential_flow, direct_runoff, groundwater_recharge = (
-            vertical_water_transport(
-                available_water_infiltration=available_water_infiltration,
-                capillary_rise_from_groundwater=np.full_like(
-                    available_water_infiltration, capillary_rise_from_groundwater
-                ),
-                ws=ws,
-                wres=wres,
-                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
-                lambda_=lambda_,
-                bubbling_pressure_cm=bubbling_pressure_cm,
-                land_use_type=land_use_type,
-                frost_index=frost_index,
-                arno_beta=arno_beta,
-                preferential_flow_constant=preferential_flow_constant,
-                w=w,
-                topwater=topwater,
-                soil_layer_height=soil_layer_height,
-            )
+        direct_runoff, groundwater_recharge, infiltration = vertical_water_transport(
+            capillary_rise_from_groundwater=np.full_like(
+                topwater, capillary_rise_from_groundwater
+            ),
+            ws=ws,
+            wres=wres,
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+            lambda_=lambda_,
+            bubbling_pressure_cm=bubbling_pressure_cm,
+            land_use_type=land_use_type,
+            frost_index=frost_index,
+            arno_beta=arno_beta,
+            w=w,
+            topwater=topwater,
+            soil_layer_height=soil_layer_height,
+        )
+
+    # with open(output_folder_soil / "vertical_water_transport_compiled.txt", "w") as f:
+    #     f.write(
+    #         vertical_water_transport.inspect_asm(vertical_water_transport.signatures[0])
+    #     )
+
+    plot_soil_layers(axes[1], soil_layer_height, w, wres, ws)
+
+    topwater.fill(0)
+    for _ in range(1000):
+        direct_runoff, groundwater_recharge, infiltration = vertical_water_transport(
+            capillary_rise_from_groundwater=np.full_like(
+                topwater, capillary_rise_from_groundwater
+            ),
+            ws=ws,
+            wres=wres,
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+            lambda_=lambda_,
+            bubbling_pressure_cm=bubbling_pressure_cm,
+            land_use_type=land_use_type,
+            frost_index=frost_index,
+            arno_beta=arno_beta,
+            w=w,
+            topwater=topwater,
+            soil_layer_height=soil_layer_height,
         )
 
     plot_soil_layers(axes[2], soil_layer_height, w, wres, ws)

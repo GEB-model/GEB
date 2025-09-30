@@ -10,7 +10,6 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: ../../data_catalogue/topography/fabdem.vrt
-
 GRDC:
   crs: 4326
   data_type: GeoDataset
@@ -19,112 +18,7 @@ GRDC:
     category: hydrology
     source_license: https://grdc.bafg.de/downloads/policy_guidelines.pdf
     source_url: https://grdc.bafg.de/
-  path: rivers/discharge/GRDC/GRDC-Daily_V2.nc
-
-SWORD:
-  data_type: GeoDataFrame
-  driver: vector
-  path: rivers/SWORD_v16/sword_reaches_v16.gpkg
-  meta:
-    category: hydrology
-    source_license: Creative Commons Attribution 4.0 International
-    source_url: doi.org/10.5281/zenodo.14727521
-    source_version: v16
-    notes: |
-      ```python
-      import geopandas as gpd
-      import pandas as pd
-      import sqlite3
-
-      SWORD = []
-      for continent in ("sa", "na", "oc", "eu", "af", "as"):
-          SWORD.append(gpd.read_file(f"{continent}_sword_reaches_v16.gpkg"))
-
-      SWORD = pd.concat(SWORD, ignore_index=True)
-
-      SWORD.to_file("sword_reaches_v16.gpkg")
-
-      # Connect to the GPKG
-      conn = sqlite3.connect("sword_reaches_v16.gpkg")
-      cursor = conn.cursor()
-
-      # Create an index on COMID
-      cursor.execute("""
-          CREATE INDEX IF NOT EXISTS idx_reach_id
-          ON sword_reaches_v16 (reach_id);
-      """)
-
-      conn.commit()
-      conn.close()
-      ```
-MERIT_Basins_to_SWORD:
-  path: basins/MERIT-Basins_v07/mb_to_sword_pfaf_{SWORD_Region}_translate.nc
-  data_type: Dataset
-  driver: netcdf
-  meta:
-    category: hydrology
-    source_license: Creative Commons Attribution Non Commercial Share Alike 4.0 International
-    source_url: doi.org/10.5281/zenodo.14675925
-    source_version: v0.4
-MERIT_Basins_{kind}:
-  data_type: GeoDataFrame
-  driver: vector
-  placeholders: 
-    kind: [riv, cat]
-  path: basins/MERIT-Basins_v07/{kind}_pfaf_MERIT_Hydro_v07_Basins_v01.geoparquet
-  meta:
-    category: hydrology
-    source_license: CC BY-NC-SA 4.0
-    source_url: https://www.reachhydro.org/home/params/merit-basins
-    source_version: v0.7
-    notes: |
-      ```python
-      # /// script
-      # requires-python = ">=3.13"
-      # dependencies = [
-      #     "geopandas",
-      #     "pyarrow",
-      # ]
-      # ///
-      import geopandas as gpd
-      import pandas as pd
-      from time import time
-      from pyarrow.parquet import SortingColumn
-      import pyarrow.parquet as pq
-
-
-      def merge_dataset(kind):
-          output_path = f"{kind}_pfaf_MERIT_Hydro_v07_Basins_v01.geoparquet"
-          gdfs = []
-          for continent in range(1, 10):
-              print("reading continent", continent)
-              gdf = gpd.read_file(f"{kind}_pfaf_{continent}_MERIT_Hydro_v07_Basins_v01.shp")
-              gdfs.append(gdf)
-
-          merged = pd.concat(gdfs, ignore_index=True)
-
-          if kind == "cat":
-              merged.set_crs("EPSG:4326", inplace=True)
-
-          print("writing")
-          ascending = True
-          merged = merged.sort_values(by="COMID", ascending=ascending)  # sort by COMID
-
-          merged.to_parquet(
-              output_path,
-              compression="gzip",
-              write_covering_bbox=True,
-              index=False,
-              sorting_columns=[SortingColumn(0, descending=not ascending)],
-              row_group_size=10_000,
-              schema_version="1.1.0",
-          )
-
-
-      if __name__ == "__main__":
-          merge_dataset("riv")
-          merge_dataset("cat")
-      ```
+  path: rivers/discharge/GRDC/GRDC_global.zip
 geul_dem:
   data_type: RasterDataset
   driver: raster
@@ -139,6 +33,7 @@ MIRCA2000_crop_data:
   meta:
     paper_doi: 10.1016/j.jhydrol.2009.07.031
     paper_ref: Siebert et al. (2010)
+    source_license:  Creative Commons Attribution 4.0 International 
 MIRCA2000_crop_data_variants:
   data_type: DataFrame
   driver: excel
@@ -146,6 +41,7 @@ MIRCA2000_crop_data_variants:
   meta:
     paper_doi: adjusted from 10.1016/j.jhydrol.2009.07.031
     paper_ref: Siebert et al. (2010)
+    source_license:  Creative Commons Attribution 4.0 International 
 MIRCA2000_unit_grid:
   data_type: RasterDataset
   driver: raster
@@ -208,7 +104,7 @@ global_irrigation_area_{irrigation_type}:
     irrigation_type: [aei, aai, aeisw, aeigw]
 GTSM:
   data_type: Dataset
-  path: GTSM/reanalysis_waterlevel_10min_*_v1.nc
+  path: GTSM/reanalysis_waterlevel_10min_{}_{}_v1.nc
   meta:
     category: water level
     paper_doi: doi:10.1038/ncomms11969
@@ -217,6 +113,38 @@ GTSM:
     source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/sis-water-level-change-timeseries-cmip6?tab=overview
     source_version: 1.0
     unit: m+MSL
+GTSM_surge:
+  data_type: Dataset
+  path: GTSM/reanalysis_surge_10min_{}_{}_v2.nc
+  meta:
+    category: surge water level
+    paper_doi: doi:10.1038/ncomms11969
+    paper_ref: Muis, S. et al. (2016)
+    source_license: CC BY license
+    source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/sis-water-level-change-timeseries-cmip6?tab=overview
+    source_version: 1.0
+    unit: m+MSL
+COAST_HG:
+  path: COAST_RP/COAST-HG_RP100.nc
+  data_type: GeoDataset
+  meta:
+    category: extreme water levels
+    paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
+    paper_ref: Dullaart et al. (2023)
+COAST_RP:
+  path: COAST_RP/COAST-RP.pkl
+  data_type: Dataset
+  meta:
+    category: extreme water levels
+    paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
+    paper_ref: Dullaart et al. (2023)
+COAST_RP_stations:
+  path: COAST_RP/pxyn_coastal_points.xyn
+  data_type: Dataset
+  meta:
+      category: station ids
+      paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
+      paper_ref: Dullaart et al. (2023)
 gebco:
   crs: 4326
   data_type: RasterDataset
@@ -231,22 +159,6 @@ gebco:
     source_version: 2020
     unit: m+MSL
   path: topography/gebco.vrt
-merit_hydro:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  filesystem: local
-  version: default
-  meta:
-    category: topography
-    paper_doi: 10.1029/2019WR024873
-    paper_ref: Yamazaki et al. (2019)
-    source_license: CC-BY-NC 4.0 or ODbL 1.0 (commercial use requires ODbL 1.0 with share-alike)
-    source_url: http://hydro.iis.u-tokyo.ac.jp/~yamadai/MERIT_Hydro
-    source_version: 1.0
-  path: hydrography/merit_hydro_v1.0/{variable}.vrt
-  # path: ../ivm_data_catalog/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
-  # path: /scistor/ivm/data_catalogue/hydrology/topography/merit_hydro_v1.0/{variable}.vrt
 cwatm_soil_5min:
   crs: 4326
   data_type: RasterDataset
@@ -268,29 +180,6 @@ cwatm_grassland_5min:
   data_type: RasterDataset
   driver: raster
   path: cwatm_input_5min/landcover/grassland/{variable}.nc
-hydro_lakes:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  meta:
-    category: surface water
-    notes: HydroLAKES.v10_extract
-    source_author: Arjen Haag
-    source_version: 1.0
-    source_license: Creative Commons Attribution (CC-BY) 4.0 International License
-  path: hydro_lakes/HydroLAKES_polys_v10.gpkg
-  rename:
-    Vol_total: volume_total
-    Depth_avg: Depth_avg
-    Dis_avg: average_discharge
-    Hylak_id: waterbody_id
-    Lake_area: average_area
-    Lake_type: waterbody_type
-    Pour_lat: yout
-    Pour_long: xout
-  unit_mult:
-    average_area: 1_000_000
-    volume_total: 1_000_000
 reservoir_command_areas_krishna:
   crs: 4326
   data_type: GeoDataFrame
@@ -311,7 +200,6 @@ custom_reservoir_capacity_krishna:
     volume_flood: 1_000_000_000
     volume_total: 1_000_000_000
     flood_cushion: 1_000_000_000
-
 UN_dev_index:
   meta:
     category: economics
@@ -323,7 +211,15 @@ UN_dev_index:
   data_type: DataFrame
   driver_kwargs:
     index_col: 'Year'
-
+oecd_idd:
+  meta:
+    category: economics
+    source_author: OECD
+    source_url: https://data-explorer.oecd.org/vis?fs[0]=Topic%2C1%7CSociety%23SOC%23%7CInequality%23SOC_INE%23&pg=0&fc=Topic&bp=true&snb=2&df[ds]=dsDisseminateFinalDMZ&df[id]=DSD_WISE_IDD%40DF_IDD&df[ag]=OECD.WISE.INE&df[vs]=1.0&pd=2010%2C&dq=.A.INC_DISP.MEDIAN%2BMEAN.XDC_HH_EQ._T.METH2012.D_CUR.&to[TIME_PERIOD]=false&vw=ov
+  path:
+    socioeconomic/OECD/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0+.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR..csv
+  driver: csv
+  data_type: DataFrame
 wb_inflation_rate:
   meta:
     category: economics
@@ -379,34 +275,6 @@ gcam_electricity_rates:
   path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
   driver: csv
   data_type: DataFrame
-GADM_level0:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  driver_kwargs:
-    layer: ADM_0
-  meta:
-    category: geography
-    notes: last downloaded 2023-05-18; license required for commercial use
-    source_author: gadm
-    source_license: https://gadm.org/license.html
-    source_url: https://gadm.org/download_world.html
-    source_version: 4.1
-  path: admin/gadm_410-levels.gpkg
-GADM_level1:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  driver_kwargs:
-    layer: ADM_1
-  meta:
-    category: geography
-    notes: last downloaded 2023-05-18; license required for commercial use
-    source_author: gadm
-    source_license: https://gadm.org/license.html
-    source_url: https://gadm.org/download_world.html
-    source_version: 4.1
-  path: admin/gadm_410-levels.gpkg
 india_cencus:
   crs: 4326
   data_type: GeoDataFrame
@@ -441,6 +309,8 @@ AQUASTAT_municipal_withdrawal:
   data_type: DataFrame
   driver: excel
   path: water_demand/AQUASTAT_municipal_withdrawal.xlsx
+  meta:
+    source_license: CC BY 4.0
 esa_worldcover_2020_v100:
   crs: 4326
   data_type: RasterDataset
@@ -757,7 +627,8 @@ GLOBIOM_regions_59:
   driver: excel
   path: GLOBIOM/Region_Country_Mapping.xlsx
   meta:
-    source_url: https://www.isric.org/explore/soilgrids
+    source_url: https://iiasa.ac.at/models-tools-data/globiom
+    source_license: Creative Commons Attribution-NonCommercial 4.0 International
   driver_kwargs:
     sheet_name: Region59
 GLOBIOM_regions_37:
@@ -765,7 +636,8 @@ GLOBIOM_regions_37:
   driver: excel
   path: GLOBIOM/Region_Country_Mapping.xlsx
   meta:
-    source_url: https://www.isric.org/explore/soilgrids
+    source_url: https://iiasa.ac.at/models-tools-data/globiom
+    source_license: Creative Commons Attribution-NonCommercial 4.0 International
   driver_kwargs:
     sheet_name: Region37
 ISIMIP:

@@ -66,11 +66,11 @@ class SnowFrost(Module):
     SnowCoverS            snow cover for each layer                                                         m
     Kfrost                Snow depth reduction coefficient, (HH, p. 7.28)                                   m-1
     Afrost                Daily decay coefficient, (Handbook of Hydrology, p. 7.28)                         --
-    frost_indexThreshold   Degree Days Frost Threshold (stops infiltration, percolation and capillary rise)  --
+    frost_index_threshold   Degree Days Frost Threshold (stops infiltration, percolation and capillary rise)  --
     SnowWaterEquivalent   Snow water equivalent, (based on snow density of 450 kg/m3) (e.g. Tarboton and L  --
     frost_index            frost_index - Molnau and Bissel (1983), A Continuous Frozen Ground Index for Floo  --
     extfrost_index         Flag for second frost_index                                                        --
-    frost_indexThreshold2  frost_index2 - Molnau and Bissel (1983), A Continuous Frozen Ground Index for Flo
+    frost_index_threshold2  frost_index2 - Molnau and Bissel (1983), A Continuous Frozen Ground Index for Flo
     frostInd1             forstindex 1
     frostInd2             frost_index 2
     frost_indexS           array for frost_index
@@ -79,7 +79,7 @@ class SnowFrost(Module):
     ====================  ================================================================================  =========
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -90,10 +90,10 @@ class SnowFrost(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.snowfrost"
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.var.numberSnowLayers = 3  # default 3
         self.var.glaciertransportZone = (
             1.0  # default 1 -> highest zone is transported to middle zone
@@ -161,22 +161,22 @@ class SnowFrost(Module):
 
         self.HRU.var.DeltaTSnow = elevation_std * TemperatureLapseRate
 
-        self.var.SnowDayDegrees: float = 0.9856
+        self.var.SnowDayDegrees = 0.9856
         # day of the year to degrees: 360/365.25 = 0.9856
-        self.var.summerSeasonStart: int = 165
+        self.var.summerSeasonStart = 165
         # self.var.IceDayDegrees = 1.915
-        self.var.IceDayDegrees: float = 180.0 / (259 - self.var.summerSeasonStart)
+        self.var.IceDayDegrees = 180.0 / (259 - self.var.summerSeasonStart)
         # days of summer (15th June-15th Sept.) to degree: 180/(259-165)
         SnowSeasonAdj: float = 0.001
-        self.var.SnowSeason: float = SnowSeasonAdj * 0.5
+        self.var.SnowSeason = SnowSeasonAdj * 0.5
         # default value of range  of seasonal melt factor is set to 0.001 m C-1 day-1
         # 0.5 x range of sinus function [-1,1]
-        self.var.TempSnow: float = 1.0
-        self.var.SnowFactor: float = 1.0
-        self.var.SnowMeltCoef: float = self.model.config["parameters"]["SnowMeltCoef"]
-        self.var.IceMeltCoef: float = 0.007
+        self.var.TempSnow = 1.0
+        self.var.SnowFactor = 1.0
+        self.var.SnowMeltCoef = self.model.config["parameters"]["SnowMeltCoef"]
+        self.var.IceMeltCoef = 0.007
 
-        self.var.TempMelt: float = 1.0
+        self.var.TempMelt = 1.0
 
         # initialize snowcovers as many as snow layers -> read them as SnowCover1 , SnowCover2 ...
         # SnowCover1 is the highest zone
@@ -189,12 +189,8 @@ class SnowFrost(Module):
         )
         # Pixel-average initial snow cover: average of values in 3 elevation
         # zones
-
-        # ---------------------------------------------------------------------------------
-        # Initial part of frost index
-
         self.var.Afrost = 0.97
-        self.var.frost_indexThreshold = 56.0
+        self.var.frost_index_threshold = 85.0
         self.var.SnowWaterEquivalent = 0.45
 
         self.HRU.var.frost_index = self.HRU.full_compressed(0, dtype=np.float32)
@@ -207,24 +203,24 @@ class SnowFrost(Module):
     ]:
         """Dynamic part of the snow module.
 
-        Distinguish between rain/snow and calculates snow melt and glacier melt
-        The equation is a modification of:
+        Distinguish between rain/snow and calculates snow melt and glacier melt.
 
         References:
             Speers, D.D., Versteeg, J.D. (1979) Runoff forecasting for reservoir operations - the pastand the future. In: Proceedings 52nd Western Snow Conference, 149-156
-
-        Frost index in soil [degree days] based on:
-
-        References:
             Molnau and Bissel (1983, A Continuous Frozen Ground Index for Flood Forecasting. In: Maidment, Handbook of Hydrology, p. 7.28, 7.55)
 
         Todo:
-            calculate sinus shape function for the southern hemisspere
+            calculate sinus shape function for the southern hemispere
+
+        Returns:
+            snow: snow (equal to a part of precipitation) [m]
+            rain: rain (equal to a part of precipitation) [m]
+            snow_melt: total snow melt from all snow layers [m]
         """
         if __debug__:
             self.HRU.var.prevSnowCover = self.HRU.var.SnowCoverS.copy()
 
-        day_of_year = self.model.current_time.timetuple().tm_yday
+        day_of_year: int = self.model.current_day_of_year
         SeasSnowMeltCoef = (
             self.var.SnowSeason
             * np.sin(math.radians((day_of_year - 81) * self.var.SnowDayDegrees))
@@ -378,6 +374,6 @@ class SnowFrost(Module):
             self.HRU.var.frost_index + frost_indexChangeRate, 0
         )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return snow, rain, snow_melt

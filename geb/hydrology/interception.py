@@ -45,7 +45,7 @@ class Interception(Module):
     ====================  ================================================================================  =========
     Variable [self.var]   Description                                                                       Unit
     ====================  ================================================================================  =========
-    EWRef                 potential evaporation rate from water surface                                     m
+    reference_evapotranspiration_water                 potential evaporation rate from water surface                                     m
     interceptCap          interception capacity of vegetation                                               m
     minInterceptCap       Maximum interception read from file for forest and grassland land cover           m
     interception_storage         simulated vegetation interception storage                                         m
@@ -58,7 +58,7 @@ class Interception(Module):
     ====================  ================================================================================  =========
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -69,10 +69,10 @@ class Interception(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.interception"
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.HRU.var.minInterceptCap = self.HRU.full_compressed(
             np.nan, dtype=np.float32
         )
@@ -184,7 +184,7 @@ class Interception(Module):
         interception_evaporation[sealed_area] = np.maximum(
             np.minimum(
                 self.HRU.var.interception_storage[sealed_area],
-                self.HRU.var.EWRef[sealed_area],
+                self.HRU.var.reference_evapotranspiration_water[sealed_area],
             ),
             self.HRU.full_compressed(0, dtype=np.float32)[sealed_area],
         )
@@ -215,5 +215,5 @@ class Interception(Module):
 
         assert not np.isnan(potential_transpiration[bio_area]).any()
 
-        self.report(self, locals())
+        self.report(locals())
         return potential_transpiration, interception_evaporation

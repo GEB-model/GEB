@@ -35,7 +35,7 @@ For example, to export the total bare soil evaporation, gridded daily discharge,
             actual_bare_soil_evaporation_weighted_sum:
                 varname: .actual_bare_soil_evaporation
                 type: HRU
-                function: weightednansum
+                function: weightednanmean
         hydrology.routing:
             discharge_daily:
                 varname: grid.var.discharge_m3_s
@@ -46,6 +46,10 @@ For example, to export the total bare soil evaporation, gridded daily discharge,
                 varname: var.channel_abstraction_m3_by_farmer
                 type: agents
                 function: mean
+        hydrology:
+            storage:
+                varname: .current_storage
+                type: scalar
 
 The following options are supported.
 
@@ -57,10 +61,13 @@ The following options are supported.
   + **local variable**: Any variable that exists within the `step` function of the module. This is useful for reporting variables that are not stored between timesteps. Local variables are prefixed with ".", for exampe `.actual_bare_soil_evaporation` in the example above.
 * **type**: The type of the variable. This can be one of the following:
 
+  * **scalar**: A scalar variable that is reported as a single value.
   * **grid**: A variable that is stored in the grid structure of GEB.
   * **HRU**: A variable that is stored in the hydrological response unit (HRU) structure of GEB.
   * **agents**: A variable that is stored in the agents. This is a 1D array with the same length as the number of agents. The variable will be reported as a 1D array.
 * **function**: The function to be used to process the variable before reporting. The supported options vary per type. Each type supports the **null** function, which means that no function is applied and the variable is reported as is in a zarr file. In all other cases the variable is reported at the end of the model run in a csv file. The following functions are supported:
+
+  * **scalar**: No functions are applied to scalar variables. Reporting is done as a single value in a csv file (per timestep).
 
   * **agents**:
 
@@ -79,8 +86,10 @@ The following options are supported.
     * **nansum**: The sum of the variable is calculated and reported, ignoring NaN values.
     * **weightedmean**: The mean of the variable is calculated and reported, weighted by the grid cell area.
     * **weightednanmean**: The mean of the variable is calculated and reported, weighted by the grid cell area, ignoring NaN values.
-    * **sample,[y],[x]**: Sample a specific variable at specific y,x pixel. 0,0 is the top left corner of the grid. Example is **sample,1,2** to sample the variable at pixel 1,2.
-    * **sample_coord,[lat],[lon]**: Sample a specific variable at specific coordinates using the lat,lon coordinates of the grid. The coordinates are in the same coordinate system as the grid. Example is **sample_coord,52.38,4.89** to sample the variable at coordinates latitude 52.38 and longitude 4.89 (Amsterdam). Note that when reporting discharge, it is important to make sure that the location is in the actual river you want to sample from. You can refer to the upstream area in the input files to find the actual river.
+    * **weightedsum**: The sum of the variable is calculated and reported, weighted by the grid cell area. This means that the variable is multiplied by the grid cell area before summing. This is (for example) useful for variables that are reported in meters, and are now converted to cubic meters.
+    * **weightednansum**: The sum of the variable is calculated and reported, weighted by the grid cell area, ignoring NaN values. This means that the variable is multiplied by the grid cell area before summing, ignoring NaN values.
+    * **sample_xy,[x],[y]**: Sample a specific variable at specific x,y pixel. 0,0 is the top left corner of the grid. Example is **sample_xy,1,2** to sample the variable at pixel 1,2.
+    * **sample_lonlat,[lon],[lat]**: Sample a specific variable at specific coordinates using the lon,lat coordinates of the grid. The coordinates are in the same coordinate system as the grid. Example is **sample_coord,4.89,52.38** to sample the variable at coordinates latitude 52.38 and longitude 4.89 (Amsterdam). Note that when reporting discharge, it is important to make sure that the location is in the actual river you want to sample from. You can refer to the upstream area in the input files to find the actual river.
 
 * **frequency** (optional): The frequency at which the variable is reported. The default is **every: day** This can be one of the following:
 
@@ -116,6 +125,27 @@ Report every 15th of March every year:
                 every: year
                 month: 3
                 day: 15
+
+Special reporting options
+**************************
+
+Some evaluation options (currently only water circles) have special reporting options that can be configured in the `model.yml` file.
+
+Water circles
+-------------
+Water circles are used to report the inflow and outflow of water in the system. These can be generated by `geb evaluate --methods water_circle`, but require special variables to be reported during the run.
+
+.. image:: images/water_circle.png
+    :alt: Water circle
+
+For more information about water circles, see: :doi:`10.1088/1748-9326/ad18de`
+
+To turn on this option, configure the following in the `model.yml` file:
+
+.. code-block:: yaml
+
+    report:
+        _water_circle: true
 
 Package contents
 ******************

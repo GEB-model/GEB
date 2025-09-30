@@ -5,7 +5,7 @@ inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
 general:
   ###
   # model start time (YYYY-MM-DD).
-  start_time: 2021-07-01
+  start_time: 2021-01-01
   ###
   # model end time (YYYY-MM-DD).
   end_time: 2024-12-30
@@ -22,11 +22,11 @@ general:
     subbasin: 23011134
 hazards:
   floods:
-    simulate: true
+    simulate: false
     resolution: 100
     nr_subgrid_pixels: 4
     flood_risk: false
-    gpu: false
+    gpu: auto
     force_overwrite: true
     return_periods:
       - 2
@@ -36,8 +36,18 @@ hazards:
         end_time: 2021-07-20 09:00:00
 
 report:
+  hydrology.soil:
+    actual_bare_soil_evaporation_weighted_sum:
+      varname: .actual_bare_soil_evaporation
+      type: HRU
+      function: weightednanmean
   hydrology.routing:
     discharge_daily:
       varname: grid.var.discharge_m3_s
       type: grid
       function: null
+  agents.crop_farmers:
+    channel_abstraction_m3_by_farmer_mean:
+      varname: var.channel_abstraction_m3_by_farmer
+      type: agents
+      function: mean
