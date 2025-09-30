@@ -857,7 +857,7 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
         natural_available_water_infiltration=natural_available_water_infiltration,
         actual_irrigation_consumption=actual_irrigation_consumption,
         land_use_type=land_use_type,
-        reference_evapotranspiration_water=reference_evapatotranspiration_water,
+        reference_evapotranspiration_water_m_per_day=reference_evapatotranspiration_water,
         topwater=topwater,
     )
     assert (open_water_evaporation >= 0.0).all()
@@ -886,7 +886,7 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
         natural_available_water_infiltration=natural_available_water_infiltration,
         actual_irrigation_consumption=actual_irrigation_consumption,
         land_use_type=land_use_type,
-        reference_evapotranspiration_water=reference_evapatotranspiration_water,
+        reference_evapotranspiration_water_m_per_day=reference_evapatotranspiration_water,
         topwater=topwater,
     )
 

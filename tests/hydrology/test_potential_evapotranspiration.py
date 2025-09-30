@@ -136,7 +136,7 @@ def test_get_reference_evapotranspiration() -> None:
         psychrometric_constant=0.066,
         wind_2m=2.078,
         latent_heat_of_vaporarization=1 / 0.408,
-        termperature_C=16.9,
+        temperature_C=16.9,
         vapour_pressure_deficit=0.589,
     )
     assert math.isclose(reference_evapotranspiration_land_m_per_day, 3.9, rel_tol=1e-2)
