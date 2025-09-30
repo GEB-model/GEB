@@ -136,6 +136,26 @@ def generate_bilinear_interpolation_weights(
     return indices, weights
 
 
+def get_pressure_correction_factor(
+    DEM: npt.NDArray[np.float32],
+    g: float,
+    Mo: float,
+    lapse_rate: float,
+) -> npt.NDArray[np.float32]:
+    """Calculate pressure correction factor based on elevation.
+
+    Args:
+        DEM: Digital elevation model data (meters).
+        g: Gravitational constant (m/s²).
+        Mo: Molecular weight of dry air (kg/mol).
+        lapse_rate: Temperature lapse rate (K/m).
+
+    Returns:
+        Pressure correction factor (dimensionless).
+    """
+    return (288.15 / (288.15 + lapse_rate * DEM)) ** (g * Mo / (8.3144621 * lapse_rate))
+
+
 class ForcingLoader(ABC):
     """Abstract base class for loading and validating forcing data."""
 
@@ -212,8 +232,14 @@ class ForcingLoader(ABC):
 class Precipitation(ForcingLoader):
     """Loader for precipitation data with specific validation."""
 
-    def __init__(self, model: "GEBModel") -> None:
-        """Initialize the Precipitation loader."""
+    def __init__(self, model: "GEBModel", grid_mask: npt.NDArray[np.bool_]) -> None:
+        """Initialize the Precipitation loader.
+
+        Args:
+            model: The GEB model instance.
+            grid_mask: The mask of the model grid (True for valid points, False for invalid).
+        """
+        self.grid_mask = grid_mask
         super().__init__(model, "pr_kg_per_m2_per_s", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
@@ -225,7 +251,8 @@ class Precipitation(ForcingLoader):
         Returns:
             True if valid, otherwise raises ValueError.
         """
-        return (v >= 0).all() and (v < 500 / 3600).all()
+        v_non_masked = v[:, self.grid_mask]
+        return (v_non_masked >= 0).all() and (v_non_masked < 500 / 3600).all()
 
 
 class Temperature(ForcingLoader):
@@ -236,6 +263,7 @@ class Temperature(ForcingLoader):
         model: "GEBModel",
         forcing_DEM: npt.NDArray[np.float32],
         grid_DEM: npt.NDArray[np.float32],
+        grid_mask: npt.NDArray[np.bool_],
         dewpoint: bool = False,
         lapse_rate: float = -0.0065,
     ) -> None:
@@ -248,11 +276,13 @@ class Temperature(ForcingLoader):
             model: The GEB model instance.
             forcing_DEM: The DEM used in the forcing data.
             grid_DEM: The DEM used in the model grid.
+            grid_mask: The mask of the model grid (True for valid points, False for invalid).
             dewpoint: If True, load dewpoint temperature; otherwise, load air temperature.
             lapse_rate: The lapse rate in K/m (default is -0.0065 K/m).
         """
         self.forcing_DEM = forcing_DEM
         self.grid_DEM = grid_DEM
+        self.grid_mask = grid_mask
         self.lapse_rate = lapse_rate
 
         if dewpoint:
@@ -269,7 +299,8 @@ class Temperature(ForcingLoader):
         Returns:
             True if valid, otherwise raises ValueError.
         """
-        return (v > 170).all() and (v < 370).all()
+        v_non_masked = v[:, self.grid_mask]
+        return (v_non_masked > 170).all() and (v_non_masked < 370).all()
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
         """Interpolate data to the model grid using bilinear interpolation.
@@ -304,18 +335,22 @@ class Wind(ForcingLoader):
     Note that wind can be both positive and negative.
     """
 
-    def __init__(self, model: "GEBModel", direction: str) -> None:
+    def __init__(
+        self, model: "GEBModel", direction: str, grid_mask: npt.NDArray[np.bool_]
+    ) -> None:
         """Initialize the Wind loader.
 
         Args:
             model: The GEB model instance.
             direction: The wind direction, either "u" or "v".
+            grid_mask: The mask of the model grid (True for valid points, False for invalid).
 
         Raises:
             ValueError: If the direction is not "u" or "v".
         """
         if direction not in ["u", "v"]:
             raise ValueError("Direction must be 'u' or 'v'")
+        self.grid_mask = grid_mask
         super().__init__(model, f"wind_{direction}10m_m_per_s", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
@@ -327,33 +362,108 @@ class Wind(ForcingLoader):
         Returns:
             True if valid, otherwise raises ValueError.
         """
-        return (v >= -150).all() and (v < 150).all()
+        v_non_masked = v[:, self.grid_mask]
+        return (v_non_masked >= -150).all() and (v_non_masked < 150).all()
 
 
 class Pressure(ForcingLoader):
-    """Loader for surface pressure data with specific validation."""
+    """Loader for surface pressure data with elevation-based correction and validation."""
 
-    def __init__(self, model: "GEBModel") -> None:
-        """Initialize the Pressure loader."""
+    def __init__(
+        self,
+        model: "GEBModel",
+        forcing_DEM: npt.NDArray[np.float32],
+        grid_DEM: npt.NDArray[np.float32],
+        grid_mask: npt.NDArray[np.bool_],
+        g: float = 9.80665,
+        Mo: float = 0.0289644,
+        lapse_rate: float = -0.0065,
+    ) -> None:
+        """Initialize the Pressure loader.
+
+        This class performs an elevation-based pressure correction based on the difference
+        between the forcing DEM and the model grid DEM.
+
+        Args:
+            model: The GEB model instance.
+            forcing_DEM: The DEM used in the forcing data (meters).
+            grid_DEM: The DEM used in the model grid (meters).
+            grid_mask: The mask of the model grid (True for valid points, False for invalid).
+            g: Gravitational constant (m/s², default is 9.80665).
+            Mo: Molecular weight of dry air (kg/mol, default is 0.0289644).
+            lapse_rate: Temperature lapse rate (K/m, default is -0.0065).
+        """
+        self.forcing_DEM = forcing_DEM
+        self.grid_DEM = grid_DEM
+        self.grid_mask = grid_mask
+        self.g = g
+        self.Mo = Mo
+        self.lapse_rate = lapse_rate
+
         super().__init__(model, "ps_pascal", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate surface pressure data.
 
         Args:
-            v: The data array to validate.
+            v: The data array to validate (Pa).
 
         Returns:
             True if valid, otherwise raises ValueError.
         """
-        return (v > 30_000).all() and (v < 120_000).all()
+        v_non_masked = v[:, self.grid_mask]
+        return (v_non_masked > 30_000).all() and (v_non_masked < 120_000).all()
+
+    def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
+        """Interpolate data to the model grid using bilinear interpolation.
+
+        Overrides the base class method to handle pressure with elevation correction.
+        First, the pressure is adjusted to sea level using the forcing DEM and atmospheric model.
+        Then, after interpolation, it is adjusted back to the model grid elevation.
+
+        This ensures proper pressure gradients with elevation.
+
+        Args:
+            data: The input pressure data array to interpolate (Pa).
+
+        Returns:
+            The interpolated pressure data array (Pa).
+        """
+        # Convert pressure to sea level by dividing by correction factor
+        # for the forcing grid
+        pressure_sea_level = (
+            data
+            / get_pressure_correction_factor(
+                self.forcing_DEM, self.g, self.Mo, self.lapse_rate
+            )[np.newaxis, :, :]
+        )
+
+        # Interpolate the sea level pressure
+        interpolated_pressure_sea_level = super().interpolate(pressure_sea_level)
+
+        # Convert back to grid elevation by multiplying by correction factor, now
+        # for the model grid
+        interpolated_pressure = (
+            interpolated_pressure_sea_level
+            * get_pressure_correction_factor(
+                self.grid_DEM, self.g, self.Mo, self.lapse_rate
+            )[np.newaxis, :, :]
+        )
+
+        return interpolated_pressure
 
 
 class RSDS(ForcingLoader):
     """Loader for surface downwelling shortwave radiation data with specific validation."""
 
-    def __init__(self, model: "GEBModel") -> None:
-        """Initialize the RSDS loader."""
+    def __init__(self, model: "GEBModel", grid_mask: npt.NDArray[np.bool_]) -> None:
+        """Initialize the RSDS loader.
+
+        Args:
+            model: The GEB model instance.
+            grid_mask: The mask of the model grid (True for valid points, False for invalid).
+        """
+        self.grid_mask = grid_mask
         super().__init__(model, "rsds_W_per_m2", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
@@ -365,14 +475,21 @@ class RSDS(ForcingLoader):
         Returns:
             True if valid, otherwise raises ValueError.
         """
-        return (v >= 0).all()
+        v_non_masked = v[:, self.grid_mask]
+        return (v_non_masked >= 0).all()
 
 
 class RLDS(ForcingLoader):
     """Loader for surface downwelling longwave radiation data with specific validation."""
 
-    def __init__(self, model: "GEBModel") -> None:
-        """Initialize the RLDS loader."""
+    def __init__(self, model: "GEBModel", grid_mask: npt.NDArray[np.bool_]) -> None:
+        """Initialize the RLDS loader.
+
+        Args:
+            model: The GEB model instance.
+            grid_mask: The mask of the model grid (True for valid points, False for invalid).
+        """
+        self.grid_mask = grid_mask
         super().__init__(model, "rlds_W_per_m2", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
@@ -384,14 +501,21 @@ class RLDS(ForcingLoader):
         Returns:
             True if valid, otherwise raises ValueError.
         """
-        return (v >= 0).all()
+        v_non_masked = v[:, self.grid_mask]
+        return (v_non_masked >= 0).all()
 
 
 class SPEI(ForcingLoader):
     """Loader for Standardized Precipitation-Evapotranspiration Index (SPEI) data with specific validation."""
 
-    def __init__(self, model: "GEBModel") -> None:
-        """Initialize the SPEI loader."""
+    def __init__(self, model: "GEBModel", grid_mask: npt.NDArray[np.bool_]) -> None:
+        """Initialize the SPEI loader.
+
+        Args:
+            model: The GEB model instance.
+            grid_mask: The mask of the model grid (True for valid points, False for invalid).
+        """
+        self.grid_mask = grid_mask
         super().__init__(model, "SPEI", 1)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
@@ -403,7 +527,8 @@ class SPEI(ForcingLoader):
         Returns:
             True if valid, otherwise raises ValueError.
         """
-        return not np.isnan(v).any()
+        v_non_masked = v[:, self.grid_mask]
+        return not np.isnan(v_non_masked).any()
 
 
 class CO2:
@@ -491,7 +616,9 @@ class Forcing(Module):
 
         """
         if name == "pr_kg_per_m2_per_s":
-            reader: Precipitation = Precipitation(self.model)
+            reader: Precipitation = Precipitation(
+                self.model, grid_mask=~self.model.hydrology.grid.mask
+            )
         elif name == "tas_2m_K":
             reader: Temperature = Temperature(
                 self.model,
@@ -499,22 +626,42 @@ class Forcing(Module):
                 grid_DEM=self.model.hydrology.grid.decompress(
                     self.model.hydrology.grid.var.elevation
                 ),
+                grid_mask=~self.model.hydrology.grid.mask,
                 dewpoint=False,
             )
         elif name == "dewpoint_tas_2m_K":
-            reader: Temperature = Temperature(self.model, dewpoint=True)
+            reader: Temperature = Temperature(
+                self.model,
+                forcing_DEM=self.forcing_DEM,
+                grid_DEM=self.model.hydrology.grid.decompress(
+                    self.model.hydrology.grid.var.elevation
+                ),
+                grid_mask=~self.model.hydrology.grid.mask,
+                dewpoint=True,
+            )
         elif name == "wind_u10m_m_per_s":
-            reader: Wind = Wind(self.model, direction="u")
+            reader: Wind = Wind(
+                self.model, direction="u", grid_mask=~self.model.hydrology.grid.mask
+            )
         elif name == "wind_v10m_m_per_s":
-            reader: Wind = Wind(self.model, direction="v")
+            reader: Wind = Wind(
+                self.model, direction="v", grid_mask=~self.model.hydrology.grid.mask
+            )
         elif name == "ps_pascal":
-            reader: Pressure = Pressure(self.model)
+            reader: Pressure = Pressure(
+                self.model,
+                forcing_DEM=self.forcing_DEM,
+                grid_DEM=self.model.hydrology.grid.decompress(
+                    self.model.hydrology.grid.var.elevation
+                ),
+                grid_mask=~self.model.hydrology.grid.mask,
+            )
         elif name == "rsds_W_per_m2":
-            reader: RSDS = RSDS(self.model)
+            reader: RSDS = RSDS(self.model, grid_mask=~self.model.hydrology.grid.mask)
         elif name == "rlds_W_per_m2":
-            reader: RLDS = RLDS(self.model)
+            reader: RLDS = RLDS(self.model, grid_mask=~self.model.hydrology.grid.mask)
         elif name == "SPEI":
-            reader: SPEI = SPEI(self.model)
+            reader: SPEI = SPEI(self.model, grid_mask=~self.model.hydrology.grid.mask)
         elif name == "CO2_ppm":
             reader: CO2 = CO2(self.model)
         else:
