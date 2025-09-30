@@ -570,12 +570,12 @@ def get_gross_irrigation_demand_m3(
                 consumption_m * cell_area[field]
             ) / irrigation_efficiency_farmer
 
+        farmer_gross_irrigation_demand_m3: np.float32 = gross_potential_irrigation_m3[
+            farmer_fields
+        ].sum()
         # If the potential irrigation consumption is larger than 0, the farmer needs to abstract water
         # if there is no irrigation limit, no need to adjust the irrigation
         if not np.isnan(remaining_irrigation_limit_m3_reservoir[farmer]):
-            farmer_gross_irrigation_demand_m3: np.float32 = (
-                gross_potential_irrigation_m3[farmer_fields].sum()
-            )
             if farmer_gross_irrigation_demand_m3 > 0.0:
                 irrigation_correction_factor: float = adjust_irrigation_to_limit(
                     farmer=farmer,
@@ -601,15 +601,12 @@ def get_gross_irrigation_demand_m3(
                 gross_potential_irrigation_m3[farmer_fields]
             )
 
-        if not np.isnan(gross_potential_irrigation_m3_limit_adjusted_channel[farmer]):
-            farmer_gross_irrigation_demand_m3: np.float32 = (
-                gross_potential_irrigation_m3[farmer_fields].sum()
-            )
+        if not np.isnan(remaining_irrigation_limit_m3_channel[farmer]):
             if farmer_gross_irrigation_demand_m3 > 0.0:
                 irrigation_correction_factor: float = adjust_irrigation_to_limit(
                     farmer=farmer,
                     day_index=day_index,
-                    remaining_irrigation_limit_m3=gross_potential_irrigation_m3_limit_adjusted_channel,
+                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_channel,
                     cumulative_water_deficit_m3=cumulative_water_deficit_m3,
                     crop_calendar=crop_calendar,
                     crop_rotation_year_index=current_crop_calendar_rotation_year_index,
@@ -628,17 +625,12 @@ def get_gross_irrigation_demand_m3(
                 gross_potential_irrigation_m3[farmer_fields]
             )
 
-        if not np.isnan(
-            gross_potential_irrigation_m3_limit_adjusted_groundwater[farmer]
-        ):
-            farmer_gross_irrigation_demand_m3: np.float32 = (
-                gross_potential_irrigation_m3[farmer_fields].sum()
-            )
+        if not np.isnan(remaining_irrigation_limit_m3_groundwater[farmer]):
             if farmer_gross_irrigation_demand_m3 > 0.0:
                 irrigation_correction_factor: float = adjust_irrigation_to_limit(
                     farmer=farmer,
                     day_index=day_index,
-                    remaining_irrigation_limit_m3=gross_potential_irrigation_m3_limit_adjusted_groundwater,
+                    remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_groundwater,
                     cumulative_water_deficit_m3=cumulative_water_deficit_m3,
                     crop_calendar=crop_calendar,
                     crop_rotation_year_index=current_crop_calendar_rotation_year_index,

@@ -55,6 +55,19 @@ INDEX_INSURANCE_ADAPTATION: int = 5
 PR_INSURANCE_ADAPTATION: int = 6
 
 
+def _fit_linear(X, y):
+    """Least squares fit for y ~ m*X + c. Returns (m, c)."""
+    Xmat = np.vstack([X, np.ones(len(X))]).T
+    m, c = np.linalg.lstsq(Xmat, y, rcond=None)[0]
+    return m, c
+
+
+def _r2(y, yhat):
+    ss_res = np.sum((y - yhat) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    return 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+
+
 def cumulative_mean(mean, counter, update, mask=None):
     """Calculates the cumulative mean of a series of numbers. This function operates in place.
 
@@ -1067,8 +1080,10 @@ class CropFarmers(AgentBaseClass):
 
     def save_water_deficit(self, discount_factor=0.2):
         water_deficit_day_m3 = (
-            self.HRU.var.reference_evapotranspiration_grass - self.HRU.pr
-        ) * self.HRU.var.cell_area
+            (self.HRU.var.reference_evapotranspiration_grass - self.HRU.pr)  # kg/m^2/s
+            * self.HRU.var.cell_area  # m^2
+            * 86400  # s/day
+        ) / 1000.0  # m3/day
         water_deficit_day_m3[water_deficit_day_m3 < 0] = 0
 
         water_deficit_day_m3_per_farmer = np.bincount(
@@ -1192,11 +1207,8 @@ class CropFarmers(AgentBaseClass):
         crop_growth_lengths = np.where(
             crop_growth_lengths == -1, 0, crop_growth_lengths
         )
-        kharif_total = crop_growth_lengths[:, 0] * 4
-        rabi_total = crop_growth_lengths[:, 0] * 3
-        summer_total = crop_growth_lengths[:, 0] * 3
-        total_growth_hours = kharif_total + rabi_total + summer_total
-        yearly_irrigation_total = hourly_irrigation_maximum * total_growth_hours
+        total_hours = 365 * 3.5
+        yearly_irrigation_total = hourly_irrigation_maximum * total_hours
         return yearly_irrigation_total
 
     @property
@@ -2028,7 +2040,7 @@ class CropFarmers(AgentBaseClass):
         year_income_m2 = self.var.yearly_income[:, 0] / self.field_size_per_farmer
 
         group_indices, n_groups = self.create_unique_groups(
-            self.main_irrigation_source,
+            self.well_status,
         )
         group_mean_cap = np.zeros(n_groups, dtype=float)
         for group_idx in range(n_groups):
@@ -2082,7 +2094,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         group_indices, n_groups = self.create_unique_groups(
-            self.main_irrigation_source,
+            self.well_status,
         )
 
         years_observed = np.sum(~np.isnan(income_masked), axis=1)
@@ -2238,8 +2250,10 @@ class CropFarmers(AgentBaseClass):
 
         insured_yearly_yield_ratio = np.clip(insured_yearly_yield_ratio.data, 0, 1)
 
-        insured_yield_probability_relation = self.calculate_yield_spei_relation_group(
-            insured_yearly_yield_ratio, self.var.yearly_SPEI_probability
+        insured_yield_probability_relation = (
+            self.calculate_yield_spei_relation_group_lin(
+                insured_yearly_yield_ratio, self.var.yearly_SPEI_probability
+            )
         )
         return insured_yield_probability_relation
 
@@ -2455,632 +2469,163 @@ class CropFarmers(AgentBaseClass):
         self.var.yearly_income[:, 0] += income
         self.var.yearly_potential_income[:, 0] += potential_income
 
-    def calculate_yield_spei_relation_test_solo(self):
-        import matplotlib
-
-        matplotlib.use("Agg")  # Use the 'Agg' backend for non-interactive plotting
-        import matplotlib.pyplot as plt
-
-        # Number of agents
-        n_agents = self.var.yearly_yield_ratio.shape[0]
-
-        # Define regression models
-        def linear_model(X, a, b):
-            return a * X + b
-
-        def exponential_model(X, a, b):
-            return a * np.exp(b * X)
-
-        def logarithmic_model(X, a, b):
-            return a * np.log(X) + b
-
-        def quadratic_model(X, a, b, c):
-            return a * X**2 + b * X + c
-
-        def power_model(X, a, b):
-            return a * X**b
-
-        # Initialize dictionaries for coefficients and R² values
-        model_names = ["linear", "exponential", "logarithmic", "quadratic", "power"]
-        r_squared_dict = {model: np.zeros(n_agents) for model in model_names}
-        coefficients_dict = {model: [] for model in model_names}
-
-        # Create a folder to save the plots
-        output_folder = "plot/relation_test"
-        if not os.path.exists(output_folder):
-            os.makedirs(output_folder)
-
-        # For each agent, perform regression with different models
-        for agent_idx in range(n_agents):
-            # Get data for the agent
-            y_data = self.var.yearly_yield_ratio[agent_idx, :]  # shape (n_years,)
-            X_data = self.var.yearly_SPEI_probability[agent_idx, :]  # shape (n_years,)
-
-            # Filter out invalid values
-            valid_mask = (
-                (~np.isnan(X_data)) & (~np.isnan(y_data)) & (X_data > 0) & (y_data != 0)
-            )
-            X_valid = X_data[valid_mask]
-            y_valid = y_data[valid_mask]
-
-            if len(X_valid) >= 2:
-                # Prepare data
-                X_log = np.log10(X_valid)
-
-                # Model 1: Linear in log-transformed X
-                try:
-                    popt, _ = curve_fit(linear_model, X_log, y_valid, maxfev=10000)
-                    a, b = popt
-                    y_pred = linear_model(X_log, a, b)
-                    ss_res = np.sum((y_valid - y_pred) ** 2)
-                    ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
-                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                    r_squared_dict["linear"][agent_idx] = r_squared
-                    coefficients_dict["linear"].append((a, b))
-                except RuntimeError:
-                    r_squared_dict["linear"][agent_idx] = np.nan
-                    coefficients_dict["linear"].append((np.nan, np.nan))
-
-                # Model 2: Exponential
-                try:
-                    popt, _ = curve_fit(
-                        exponential_model, X_valid, y_valid, maxfev=10000
-                    )
-                    y_pred = exponential_model(X_valid, *popt)
-                    ss_res = np.sum((y_valid - y_pred) ** 2)
-                    ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
-                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                    r_squared_dict["exponential"][agent_idx] = r_squared
-                    coefficients_dict["exponential"].append(popt)
-                except RuntimeError:
-                    r_squared_dict["exponential"][agent_idx] = np.nan
-                    coefficients_dict["exponential"].append((np.nan, np.nan))
-
-                # Model 3: Logarithmic (ensure X > 0)
-                try:
-                    popt, _ = curve_fit(
-                        logarithmic_model, X_valid, y_valid, maxfev=10000
-                    )
-                    y_pred = logarithmic_model(X_valid, *popt)
-                    ss_res = np.sum((y_valid - y_pred) ** 2)
-                    ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
-                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                    r_squared_dict["logarithmic"][agent_idx] = r_squared
-                    coefficients_dict["logarithmic"].append(popt)
-                except RuntimeError:
-                    r_squared_dict["logarithmic"][agent_idx] = np.nan
-                    coefficients_dict["logarithmic"].append((np.nan, np.nan))
-
-                # Model 4: Quadratic
-                try:
-                    popt, _ = curve_fit(quadratic_model, X_valid, y_valid, maxfev=10000)
-                    y_pred = quadratic_model(X_valid, *popt)
-                    ss_res = np.sum((y_valid - y_pred) ** 2)
-                    ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
-                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                    r_squared_dict["quadratic"][agent_idx] = r_squared
-                    coefficients_dict["quadratic"].append(popt)
-                except RuntimeError:
-                    r_squared_dict["quadratic"][agent_idx] = np.nan
-                    coefficients_dict["quadratic"].append((np.nan, np.nan))
-
-                # Model 5: Power
-                try:
-                    popt, _ = curve_fit(power_model, X_valid, y_valid, maxfev=10000)
-                    y_pred = power_model(X_valid, *popt)
-                    ss_res = np.sum((y_valid - y_pred) ** 2)
-                    ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
-                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                    r_squared_dict["power"][agent_idx] = r_squared
-                    coefficients_dict["power"].append(popt)
-                except RuntimeError:
-                    r_squared_dict["power"][agent_idx] = np.nan
-                    coefficients_dict["power"].append((np.nan, np.nan))
-            else:
-                # Not enough data points
-                for model in model_names:
-                    r_squared_dict[model][agent_idx] = np.nan
-                    coefficients_dict[model].append(None)
-
-            # Plotting code for this agent
-
-            # Create a new figure
-            plt.figure(figsize=(10, 6))
-
-            # Plot the data points
-            plt.scatter(X_valid, y_valid, label="Data", color="black")
-
-            # Generate x values for plotting fitted curves
-            x_min = np.min(X_valid)
-            x_max = np.max(X_valid)
-            x_plot = np.linspace(x_min, x_max, 100)
-
-            # Plot each fitted model with R² in the label
-            for model in model_names:
-                coeffs = coefficients_dict[model][agent_idx]
-                r_squared = r_squared_dict[model][agent_idx]
-
-                if (
-                    coeffs is not None
-                    and not any([np.isnan(c) for c in np.atleast_1d(coeffs)])
-                    and not np.isnan(r_squared)
-                ):
-                    # Depending on the model, compute y values for plotting
-                    if model == "linear":
-                        a, b = coeffs
-                        x_plot_log = np.log10(x_plot[x_plot > 0])
-                        if len(x_plot_log) > 0:
-                            y_plot = linear_model(x_plot_log, a, b)
-                            plt.plot(
-                                x_plot[x_plot > 0],
-                                y_plot,
-                                label=f"{model} (R²={r_squared:.3f})",
-                                linewidth=2,
-                            )
-                    elif model == "exponential":
-                        y_plot = exponential_model(x_plot, *coeffs)
-                        plt.plot(
-                            x_plot,
-                            y_plot,
-                            label=f"{model} (R²={r_squared:.3f})",
-                            linewidth=2,
-                        )
-                    elif model == "logarithmic":
-                        x_plot_positive = x_plot[x_plot > 0]
-                        if len(x_plot_positive) > 0:
-                            y_plot = logarithmic_model(x_plot_positive, *coeffs)
-                            plt.plot(
-                                x_plot_positive,
-                                y_plot,
-                                label=f"{model} (R²={r_squared:.3f})",
-                                linewidth=2,
-                            )
-                    elif model == "quadratic":
-                        y_plot = quadratic_model(x_plot, *coeffs)
-                        plt.plot(
-                            x_plot,
-                            y_plot,
-                            label=f"{model} (R²={r_squared:.3f})",
-                            linewidth=2,
-                        )
-                    elif model == "power":
-                        x_plot_positive = x_plot[x_plot > 0]
-                        if len(x_plot_positive) > 0:
-                            y_plot = power_model(x_plot_positive, *coeffs)
-                            plt.plot(
-                                x_plot_positive,
-                                y_plot,
-                                label=f"{model} (R²={r_squared:.3f})",
-                                linewidth=2,
-                            )
-                else:
-                    continue  # Skip models with invalid coefficients or R²
-
-            # Add labels and legend
-            plt.xlabel("SPEI Probability")
-            plt.ylabel("Yield Ratio")
-            plt.title(
-                f"Agent {agent_idx}, irr class {self.var.farmer_class[agent_idx]}, crop {self.var.crop_calendar[agent_idx, 0, 0]} "
-            )
-            plt.legend()
-            plt.grid(True)
-
-            # Save the plot to a file
-            filename = os.path.join(output_folder, f"agent_{agent_idx}.png")
-            plt.savefig(filename)
-            plt.close()
-
-        # Compute median R² for each model
-        for model in model_names:
-            valid_r2 = r_squared_dict[model][~np.isnan(r_squared_dict[model])]
-            median_r2 = np.median(valid_r2) if len(valid_r2) > 0 else np.nan
-            print(f"Median R² for {model}: {median_r2}")
-
-    def calculate_yield_spei_relation_test_group(self):
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
-        from scipy.optimize import curve_fit
-
-        # Create unique groups based on agent properties
-        crop_elevation_group = self.create_unique_groups(10)
-        unique_crop_combinations, group_indices = np.unique(
-            crop_elevation_group, axis=0, return_inverse=True
-        )
-
-        # Mask out empty rows (agents) where data is zero or NaN
-        mask_agents = np.any(self.var.yearly_yield_ratio != 0, axis=1) & np.any(
-            self.var.yearly_SPEI_probability != 0, axis=1
-        )
-
-        # Apply the mask to data and group indices
-        masked_yearly_yield_ratio = self.var.yearly_yield_ratio[mask_agents, :]
-        masked_SPEI_probability = self.var.yearly_SPEI_probability[mask_agents, :]
-        group_indices = group_indices[mask_agents]
-
-        # Number of groups
-        n_groups = unique_crop_combinations.shape[0]
-
-        # Define regression models
-        def linear_model(X, a, b):
-            return a * X + b
-
-        def exponential_model(X, a, b):
-            return a * np.exp(b * X)
-
-        def logarithmic_model(X, a, b):
-            return a * np.log(X) + b
-
-        def quadratic_model(X, a, b, c):
-            return a * X**2 + b * X + c
-
-        def power_model(X, a, b):
-            return a * X**b
-
-        # Initialize dictionaries for coefficients and R² values
-        model_names = ["linear", "exponential", "logarithmic", "quadratic", "power"]
-        r_squared_dict = {model: np.full(n_groups, np.nan) for model in model_names}
-        coefficients_dict = {model: [None] * n_groups for model in model_names}
-
-        # Create a folder to save the plots
-        output_folder = "plots/relation_test"
-        if not os.path.exists(output_folder):
-            os.makedirs(output_folder)
-
-        # For each group, perform regression with different models
-        for group_idx in range(n_groups):
-            # Get indices of agents in this group
-            agent_indices = np.where(group_indices == group_idx)[0]
-
-            if len(agent_indices) == 0:
-                # No data for this group
-                continue
-
-            # Get data for the group
-            y_data = masked_yearly_yield_ratio[
-                agent_indices, :
-            ]  # shape (num_agents_in_group, num_years)
-            X_data = masked_SPEI_probability[agent_indices, :]  # same shape
-
-            # Remove values where SPEI probability is greater than 1
-            invalid_mask = X_data >= 1
-            y_data[invalid_mask] = np.nan
-            X_data[invalid_mask] = np.nan
-
-            # Compute mean over agents in the group (axis=0 corresponds to years)
-            y_group = np.nanmean(y_data, axis=0)  # shape (num_years,)
-            X_group = np.nanmean(X_data, axis=0)  # same shape
-
-            # Remove any years with NaN values
-            valid_indices = (~np.isnan(y_group)) & (~np.isnan(X_group)) & (X_group > 0)
-            y_group_valid = y_group[valid_indices]
-            X_group_valid = X_group[valid_indices]
-
-            if len(X_group_valid) >= 2:
-                # Prepare data
-                X_group_log = np.log10(X_group_valid)
-
-                # Model 1: Linear in log-transformed X
-                try:
-                    popt, _ = curve_fit(
-                        linear_model, X_group_log, y_group_valid, maxfev=10000
-                    )
-                    a, b = popt
-                    y_pred = linear_model(X_group_log, a, b)
-                    ss_res = np.sum((y_group_valid - y_pred) ** 2)
-                    ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
-                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                    r_squared_dict["linear"][group_idx] = r_squared
-                    coefficients_dict["linear"][group_idx] = (a, b)
-                except (RuntimeError, ValueError):
-                    pass  # Keep NaN in R² and None in coefficients
-
-                # Model 2: Exponential
-                try:
-                    popt, _ = curve_fit(
-                        exponential_model, X_group_valid, y_group_valid, maxfev=10000
-                    )
-                    y_pred = exponential_model(X_group_valid, *popt)
-                    ss_res = np.sum((y_group_valid - y_pred) ** 2)
-                    ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
-                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                    r_squared_dict["exponential"][group_idx] = r_squared
-                    coefficients_dict["exponential"][group_idx] = popt
-                except (RuntimeError, ValueError):
-                    pass
-
-                # Model 3: Logarithmic
-                try:
-                    popt, _ = curve_fit(
-                        logarithmic_model, X_group_valid, y_group_valid, maxfev=10000
-                    )
-                    y_pred = logarithmic_model(X_group_valid, *popt)
-                    ss_res = np.sum((y_group_valid - y_pred) ** 2)
-                    ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
-                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                    r_squared_dict["logarithmic"][group_idx] = r_squared
-                    coefficients_dict["logarithmic"][group_idx] = popt
-                except (RuntimeError, ValueError):
-                    pass
-
-                # Model 4: Quadratic
-                try:
-                    popt, _ = curve_fit(
-                        quadratic_model, X_group_valid, y_group_valid, maxfev=10000
-                    )
-                    y_pred = quadratic_model(X_group_valid, *popt)
-                    ss_res = np.sum((y_group_valid - y_pred) ** 2)
-                    ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
-                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                    r_squared_dict["quadratic"][group_idx] = r_squared
-                    coefficients_dict["quadratic"][group_idx] = popt
-                except (RuntimeError, ValueError):
-                    pass
-
-                # Model 5: Power
-                try:
-                    popt, _ = curve_fit(
-                        power_model, X_group_valid, y_group_valid, maxfev=10000
-                    )
-                    y_pred = power_model(X_group_valid, *popt)
-                    ss_res = np.sum((y_group_valid - y_pred) ** 2)
-                    ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
-                    r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-                    r_squared_dict["power"][group_idx] = r_squared
-                    coefficients_dict["power"][group_idx] = popt
-                except (RuntimeError, ValueError):
-                    pass
-
-                # Plotting code for this group
-                plt.figure(figsize=(10, 6))
-                plt.scatter(X_group_valid, y_group_valid, label="Data", color="black")
-
-                # Generate x values for plotting fitted curves
-                x_min = np.min(X_group_valid)
-                x_max = np.max(X_group_valid)
-                x_plot = np.linspace(x_min, x_max, 100)
-
-                for model in model_names:
-                    coeffs = coefficients_dict[model][group_idx]
-                    r_squared = r_squared_dict[model][group_idx]
-
-                    if (
-                        coeffs is not None
-                        and not any([np.isnan(c) for c in np.atleast_1d(coeffs)])
-                        and not np.isnan(r_squared)
-                    ):
-                        if model == "linear":
-                            a, b = coeffs
-                            x_plot_positive = x_plot[x_plot > 0]
-                            x_plot_log = np.log10(x_plot_positive)
-                            if len(x_plot_log) > 0:
-                                y_plot = linear_model(x_plot_log, a, b)
-                                plt.plot(
-                                    x_plot_positive,
-                                    y_plot,
-                                    label=f"{model} (R²={r_squared:.3f})",
-                                    linewidth=2,
-                                )
-                        elif model == "exponential":
-                            y_plot = exponential_model(x_plot, *coeffs)
-                            plt.plot(
-                                x_plot,
-                                y_plot,
-                                label=f"{model} (R²={r_squared:.3f})",
-                                linewidth=2,
-                            )
-                        elif model == "logarithmic":
-                            x_plot_positive = x_plot[x_plot > 0]
-                            if len(x_plot_positive) > 0:
-                                y_plot = logarithmic_model(x_plot_positive, *coeffs)
-                                plt.plot(
-                                    x_plot_positive,
-                                    y_plot,
-                                    label=f"{model} (R²={r_squared:.3f})",
-                                    linewidth=2,
-                                )
-                        elif model == "quadratic":
-                            y_plot = quadratic_model(x_plot, *coeffs)
-                            plt.plot(
-                                x_plot,
-                                y_plot,
-                                label=f"{model} (R²={r_squared:.3f})",
-                                linewidth=2,
-                            )
-                        elif model == "power":
-                            x_plot_positive = x_plot[x_plot > 0]
-                            if len(x_plot_positive) > 0:
-                                y_plot = power_model(x_plot_positive, *coeffs)
-                                plt.plot(
-                                    x_plot_positive,
-                                    y_plot,
-                                    label=f"{model} (R²={r_squared:.3f})",
-                                    linewidth=2,
-                                )
-                # Add labels and legend
-                plt.xlabel("SPEI Probability")
-                plt.ylabel("Yield Ratio")
-                plt.title(f"Group {group_idx}")
-                plt.legend()
-                plt.grid(True)
-
-                # Save the plot to a file
-                filename = os.path.join(output_folder, f"group_{group_idx}.png")
-                plt.savefig(filename)
-                plt.close()
-            else:
-                # Not enough data points for this group
-                continue
-
-        # Compute median R² for each model across all groups
-        for model in model_names:
-            valid_r2 = r_squared_dict[model][~np.isnan(r_squared_dict[model])]
-            median_r2 = np.median(valid_r2) if len(valid_r2) > 0 else np.nan
-            print(f"Median R² for {model}: {median_r2}")
-
-        # Assign relations to agents based on their group
-        # Here, we'll choose the model with the highest median R²
-        # Alternatively, you can select the best model per group
-        # For simplicity, we'll assign the linear model coefficients to agents
-
-        # Example: Assign linear model coefficients to agents
-        a_array = np.full(len(group_indices), np.nan)
-        b_array = np.full(len(group_indices), np.nan)
-
-        for group_idx in range(n_groups):
-            if coefficients_dict["linear"][group_idx] is not None:
-                a, b = coefficients_dict["linear"][group_idx]
-                agent_mask = group_indices == group_idx
-                a_array[agent_mask] = a
-                b_array[agent_mask] = b
-
-        # Assign to agents
-        self.var.farmer_yield_probability_relation = np.column_stack((a_array, b_array))
-
-        # Print overall best-fitting model based on median R²
-        median_r2_values = {
-            model: np.nanmedian(r_squared_dict[model]) for model in model_names
-        }
-        best_model_overall = max(median_r2_values, key=median_r2_values.get)
-        print(f"Best-fitting model overall: {best_model_overall}")
-
-    def calculate_yield_spei_relation(self):
-        # Number of agents
-        n_agents = self.var.yearly_yield_ratio.shape[0]
-
-        # Initialize arrays for coefficients and R²
-        a_array = np.zeros(n_agents)
-        b_array = np.zeros(n_agents)
-        r_squared_array = np.zeros(n_agents)
-
-        # Loop over each agent
-        for agent_idx in range(n_agents):
-            # Get data for the agent
-            y_data = self.var.yearly_yield_ratio[agent_idx, :]
-            X_data = self.var.yearly_SPEI_probability[agent_idx, :]
-
-            # Log-transform X_data, handling zeros
-            with np.errstate(divide="ignore"):
-                X_data_log = np.log10(X_data)
-
-            # Mask out zeros and NaNs
-            valid_mask = (
-                (~np.isnan(y_data))
-                & (~np.isnan(X_data_log))
-                & (y_data != 0)
-                & (X_data != 0)
-            )
-            y_valid = y_data[valid_mask]
-            X_valid = X_data_log[valid_mask]
-
-            if len(X_valid) >= 2:
-                # Prepare matrices
-                X_matrix = np.vstack([X_valid, np.ones(len(X_valid))]).T
-                # Perform linear regression
-                coefficients = np.linalg.lstsq(X_matrix, y_valid, rcond=None)[0]
-                a, b = coefficients
-
-                # Calculate R²
-                y_pred = a * X_valid + b
-                ss_res = np.sum((y_valid - y_pred) ** 2)
-                ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
-                r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
-            else:
-                # Not enough data points
-                a, b, r_squared = np.nan, np.nan, np.nan
-
-            a_array[agent_idx] = a
-            b_array[agent_idx] = b
-            r_squared_array[agent_idx] = r_squared
-
-        # Assign relations to agents
-        self.var.farmer_yield_probability_relation = np.column_stack((a_array, b_array))
-
-        # Print median R²
-        valid_r2 = r_squared_array[~np.isnan(r_squared_array)]
-        print("Median R²:", np.median(valid_r2) if len(valid_r2) > 0 else "N/A")
-
-    def calculate_yield_spei_relation_group(
-        self, yearly_yield_ratio, yearly_SPEI_probability
+    def calculate_yield_spei_relation_group_exp(
+        self, yearly_yield_ratio, yearly_SPEI_probability, drop_k=2
     ):
-        # Create unique groups
-        group_indices, n_groups = self.create_unique_groups(
-            self.main_irrigation_source,
-        )
+        """
+        Exponential model: y = a * exp(b * X)
+        Internally: ln(y) = b*X + ln(a)
+        Drops the largest |residual| in log-space up to drop_k points per group, then refits.
+        """
+        # Create groups (unchanged)
+        group_indices, n_groups = self.create_unique_groups(self.well_status)
         assert (np.any(self.var.yearly_SPEI_probability != 0, axis=1) > 0).all()
 
-        # Apply the mask to data
         masked_yearly_yield_ratio = yearly_yield_ratio
         masked_SPEI_probability = yearly_SPEI_probability
 
-        # Initialize arrays for coefficients and R²
         a_array = np.zeros(n_groups)
         b_array = np.zeros(n_groups)
         r_squared_array = np.zeros(n_groups)
 
-        for group_idx in range(n_groups):
-            agent_indices = np.where(group_indices == group_idx)[0]
+        for g in range(n_groups):
+            agent_idx = np.where(group_indices == g)[0]
 
-            # Get data for the group
-            y_data = masked_yearly_yield_ratio[agent_indices, :]
-            X_data = masked_SPEI_probability[agent_indices, :]
+            y_data = masked_yearly_yield_ratio[agent_idx, :].copy()
+            X_data = masked_SPEI_probability[agent_idx, :].copy()
 
-            # Remove invalid values where SPEI probability >= 1 or yield <= 0
-            mask = (X_data >= 1) | (y_data <= 0)
-            y_data[mask] = np.nan
-            X_data[mask] = np.nan
+            # Same validity rules as your original (ln requires y>0 anyway)
+            mask_bad = (X_data >= 1) | (y_data <= 0)
+            y_data[mask_bad] = np.nan
+            X_data[mask_bad] = np.nan
 
-            # Compute mean over agents (axis=0 corresponds to years)
-            y_group = np.nanmean(y_data, axis=0)  # shape (num_years,)
-            X_group = np.nanmean(X_data, axis=0)  # shape (num_years,)
+            y_group = np.nanmean(y_data, axis=0)
+            X_group = np.nanmean(X_data, axis=0)
 
-            # Remove any entries with NaN values
-            valid_indices = (~np.isnan(y_group)) & (~np.isnan(X_group)) & (y_group > 0)
-            y_group_valid = y_group[valid_indices]
-            X_group_valid = X_group[valid_indices]
+            valid = (~np.isnan(y_group)) & (~np.isnan(X_group)) & (y_group > 0)
+            Xv = X_group[valid]
+            yv = y_group[valid]
 
-            if len(X_group_valid) >= 2:
-                # Take the natural logarithm of y_group_valid
-                ln_y_group = np.log(y_group_valid)
-
-                # Prepare matrices for linear regression
-                X_matrix = np.vstack([X_group_valid, np.ones(len(X_group_valid))]).T
-
-                # Perform linear regression on ln(y) = b * X + ln(a)
-                coefficients = np.linalg.lstsq(X_matrix, ln_y_group, rcond=None)[0]
-                b, ln_a = coefficients
+            if len(Xv) >= 2:
+                # First fit in log-space
+                ln_y = np.log(yv)
+                b, ln_a = _fit_linear(Xv, ln_y)  # returns (slope, intercept)
                 a = np.exp(ln_a)
 
-                # Calculate predicted y values
-                y_pred = a * np.exp(b * X_group_valid)
+                # Optionally drop worst k residuals (log-space) and refit
+                if drop_k and len(Xv) > drop_k + 1:
+                    ln_y_hat = b * Xv + ln_a
+                    resid = ln_y - ln_y_hat
+                    worst_idx = np.argsort(np.abs(resid))[-drop_k:]
+                    keep = np.ones(len(Xv), dtype=bool)
+                    keep[worst_idx] = False
 
-                # Calculate R²
-                ss_res = np.sum((y_group_valid - y_pred) ** 2)
-                ss_tot = np.sum((y_group_valid - np.mean(y_group_valid)) ** 2)
-                r_squared = 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
+                    Xv2 = Xv[keep]
+                    ln_y2 = ln_y[keep]
+                    # Refit
+                    b, ln_a = _fit_linear(Xv2, ln_y2)
+                    a = np.exp(ln_a)
+
+                    # R² in y-space on the kept points
+                    y_pred2 = a * np.exp(b * Xv2)
+                    r2 = _r2(np.exp(ln_y2), y_pred2)
+                else:
+                    # R² in y-space on all valid points
+                    y_pred = a * np.exp(b * Xv)
+                    r2 = _r2(yv, y_pred)
             else:
-                # Not enough data points
-                a, b, r_squared = np.nan, np.nan, np.nan
+                a, b, r2 = np.nan, np.nan, np.nan
 
-            a_array[group_idx] = a
-            b_array[group_idx] = b
-            r_squared_array[group_idx] = r_squared
+            a_array[g] = a
+            b_array[g] = b
+            r_squared_array[g] = r2
 
-        # Assign relations to agents
-        farmer_yield_probability_relation = np.column_stack(
+        # Assign per farmer (cols: intercept=a, slope=b)
+        farmer_params = np.column_stack(
             (a_array[group_indices], b_array[group_indices])
         )
 
         # Print median R²
-        weighted_r2 = r_squared_array[group_indices]
-        valid_r2 = weighted_r2[~np.isnan(weighted_r2)]
-        print(
-            "Median R² for exponential model:",
-            np.median(valid_r2) if len(valid_r2) > 0 else "N/A",
+        r2_mapped = r_squared_array[group_indices]
+        r2_valid = r2_mapped[~np.isnan(r2_mapped)]
+        print("Median R² (exp):", np.median(r2_valid) if len(r2_valid) else "N/A")
+        if np.median(r2_valid) < 0.2:
+            pass
+
+        return farmer_params
+
+    def calculate_yield_spei_relation_group_lin(
+        self, yearly_yield_ratio, yearly_SPEI_probability, drop_k=2
+    ):
+        """
+        Linear model: y = m * X + c
+        Uses the same invalid-data mask as the exponential function for apples-to-apples comparison.
+        Drops the largest |residual| in y-space up to drop_k points per group, then refits.
+        """
+        group_indices, n_groups = self.create_unique_groups(self.well_status)
+        assert (np.any(self.var.yearly_SPEI_probability != 0, axis=1) > 0).all()
+
+        y_all = yearly_yield_ratio
+        X_all = yearly_SPEI_probability
+
+        c_array = np.zeros(n_groups)  # intercept
+        m_array = np.zeros(n_groups)  # slope
+        r_squared_array = np.zeros(n_groups)
+
+        for g in range(n_groups):
+            agent_idx = np.where(group_indices == g)[0]
+
+            y_data = y_all[agent_idx, :].copy()
+            X_data = X_all[agent_idx, :].copy()
+
+            # Keep the same mask as before (you can relax this for linear if desired)
+            mask_bad = (X_data >= 1) | (y_data <= 0)
+            y_data[mask_bad] = np.nan
+            X_data[mask_bad] = np.nan
+
+            y_group = np.nanmean(y_data, axis=0)
+            X_group = np.nanmean(X_data, axis=0)
+
+            valid = (~np.isnan(y_group)) & (~np.isnan(X_group))
+            Xv = X_group[valid]
+            yv = y_group[valid]
+
+            if len(Xv) >= 2:
+                m, c = _fit_linear(Xv, yv)
+
+                if drop_k and len(Xv) > drop_k + 1:
+                    yhat = m * Xv + c
+                    resid = yv - yhat
+                    worst_idx = np.argsort(np.abs(resid))[-drop_k:]
+                    keep = np.ones(len(Xv), dtype=bool)
+                    keep[worst_idx] = False
+
+                    Xv2 = Xv[keep]
+                    yv2 = yv[keep]
+                    m, c = _fit_linear(Xv2, yv2)
+
+                    yhat2 = m * Xv2 + c
+                    r2 = _r2(yv2, yhat2)
+                else:
+                    yhat = m * Xv + c
+                    r2 = _r2(yv, yhat)
+            else:
+                m, c, r2 = np.nan, np.nan, np.nan
+
+            c_array[g] = c
+            m_array[g] = m
+            r_squared_array[g] = r2
+
+        # Assign per farmer (cols: intercept=c, slope=m)
+        farmer_params = np.column_stack(
+            (c_array[group_indices], m_array[group_indices])
         )
-        return farmer_yield_probability_relation
+
+        r2_mapped = r_squared_array[group_indices]
+        r2_valid = r2_mapped[~np.isnan(r2_mapped)]
+        print("Median R² (lin):", np.median(r2_valid) if len(r2_valid) else "N/A")
+
+        return farmer_params
 
     def adapt_crops(self, farmer_yield_probability_relation) -> None:
         # Fetch loan configuration
@@ -3195,37 +2740,40 @@ class CropFarmers(AgentBaseClass):
         # Determine the crop of the best option
         row_indices = np.arange(new_farmer_id.shape[0])
         new_id_temp = new_farmer_id[row_indices, chosen_option]
-
+        factor = self.model.config["agent_settings"]["farmers"]["expected_utility"][
+            "crop_switching"
+        ]["seut_factor"]
+        adjusted_do_nothing = SEUT_do_nothing * (factor ** np.sign(SEUT_do_nothing))
         # Determine for which agents it is beneficial to switch crops
         SEUT_adaptation_decision = (
-            (best_option_SEUT > (SEUT_do_nothing * 1.5)) & (new_id_temp != -1)
+            (best_option_SEUT > (adjusted_do_nothing)) & (new_id_temp != -1)
         )  # Filter out crops chosen due to small diff in do_nothing and adapt SEUT calculation
 
-        # Adjust the intention threshold based on whether neighbors already have similar crop
-        # Check for each farmer which crops their neighbors are cultivating
-        social_network_crops = self.var.crop_calendar[self.var.social_network, :, 0]
+        # # Adjust the intention threshold based on whether neighbors already have similar crop
+        # # Check for each farmer which crops their neighbors are cultivating
+        # social_network_crops = self.var.crop_calendar[self.var.social_network, :, 0]
 
-        potential_new_rotation = self.var.crop_calendar[new_id_temp, :, 0]
+        # potential_new_rotation = self.var.crop_calendar[new_id_temp, :, 0]
 
-        matches_per_neighbor = np.all(
-            social_network_crops == potential_new_rotation[:, None, :], axis=2
-        )
-        # Check whether adapting agents have adaptation type in their network and create mask
-        network_has_rotation = np.any(matches_per_neighbor, axis=1)
+        # matches_per_neighbor = np.all(
+        #     social_network_crops == potential_new_rotation[:, None, :], axis=2
+        # )
+        # # Check whether adapting agents have adaptation type in their network and create mask
+        # network_has_rotation = np.any(matches_per_neighbor, axis=1)
 
-        # Increase intention factor if someone in network has crop
-        intention_factor_adjusted = self.var.intention_factor.copy()
-        intention_factor_adjusted = np.clip(
-            self.var.intention_factor.data - 0.3, 0.05, 0.2
-        )
-        intention_factor_adjusted[network_has_rotation] += 4
+        # # Increase intention factor if someone in network has crop
+        # intention_factor_adjusted = self.var.intention_factor.copy()
+        # intention_factor_adjusted = np.clip(
+        #     self.var.intention_factor.data - 0.3, 0.05, 0.2
+        # )
+        # intention_factor_adjusted[network_has_rotation] += 0.4
 
-        # Determine whether it passed the intention threshold
-        random_values = np.random.rand(*intention_factor_adjusted.shape)
-        intention_mask = random_values < intention_factor_adjusted
+        # # Determine whether it passed the intention threshold
+        # random_values = np.random.rand(*intention_factor_adjusted.shape)
+        # intention_mask = random_values < intention_factor_adjusted
 
         # # Set the adaptation mask
-        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
+        # SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
         new_id_final = new_id_temp[SEUT_adaptation_decision]
 
         print("Crop switching farmers", np.count_nonzero(SEUT_adaptation_decision))
@@ -3288,16 +2836,14 @@ class CropFarmers(AgentBaseClass):
         ]["adaptation_well"]["loan_duration"]
 
         adapted = self.var.adaptations[:, WELL_ADAPTATION] > 0
-        additional_diffentiator = (
-            self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
-        )
+
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # and who's wells are much shallower than the groundwater depth
         self.reset_well_status(
             farmer_yield_probability_relation,
             adapted,
             groundwater_depth,
-            additional_diffentiator,
+            self.blank_additional_differentiator,
         )
 
         # Define extra constraints (farmers' wells must reach groundwater)
@@ -3311,7 +2857,7 @@ class CropFarmers(AgentBaseClass):
             energy_diff_m2,
             water_diff_m2,
         ) = self.adaptation_water_cost_difference(
-            additional_diffentiator, adapted, energy_cost_m2, water_cost_m2
+            self.blank_additional_differentiator, adapted, energy_cost_m2, water_cost_m2
         )
 
         (
@@ -3321,7 +2867,9 @@ class CropFarmers(AgentBaseClass):
             profits_no_event_adaptation,
             ids_to_switch_to,
         ) = self.profits_SEUT(
-            additional_diffentiator, adapted, farmer_yield_probability_relation
+            self.blank_additional_differentiator,
+            adapted,
+            farmer_yield_probability_relation,
         )
 
         total_profits_adaptation = (
@@ -3452,7 +3000,7 @@ class CropFarmers(AgentBaseClass):
         ] = -1
 
         # To determine the benefit of irrigation, those who have above 90% irrigation efficiency have adapted
-        adapted = self.var.adapted[:, IRRIGATION_EFFICIENCY_ADAPTATION] > 0
+        adapted = self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION] > 0
 
         energy_cost_m2 = energy_cost / self.field_size_per_farmer
         water_cost_m2 = water_cost / self.field_size_per_farmer
@@ -3738,7 +3286,7 @@ class CropFarmers(AgentBaseClass):
 
             # Determine the would be income with insurance
             insured_yield_ratios = self.convert_probability_to_yield_ratio(
-                farmer_yield_probability_relation_insured
+                farmer_yield_probability_relation_insured, model="linear"
             )
             total_profits_insured = self.compute_total_profits(insured_yield_ratios)
             total_profits_index_insured, profits_no_event_index_insured = (
@@ -3831,38 +3379,55 @@ class CropFarmers(AgentBaseClass):
         SEUT_adapt,
         ids_to_switch_to,
     ):
-        # Compare EU values for those who haven't adapted yet and get boolean results
-        SEUT_adaptation_decision = SEUT_adapt > SEUT_do_nothing
-
-        social_network_adaptation = adapted[self.var.social_network]
-
-        # Check whether adapting agents have adaptation type in their network and create mask
-        network_has_adaptation = np.any(social_network_adaptation == 1, axis=1)
-
-        # Increase intention factor if someone in network has adaptation
-        intention_factor_adjusted = self.var.intention_factor.copy()
-
         if adaptation_type in (
             PERSONAL_INSURANCE_ADAPTATION,
             INDEX_INSURANCE_ADAPTATION,
             PR_INSURANCE_ADAPTATION,
         ):
-            social_network_payout = self.var.payout_mask[
-                self.var.social_network, adaptation_type
-            ]
-            network_has_payout = np.any(social_network_payout == 1, axis=1)
-            intention_factor_adjusted[network_has_payout] += 0.40
-
-            agent_has_payout = self.var.payout_mask[:, adaptation_type]
-            intention_factor_adjusted[agent_has_payout] += 0.40
+            factor = self.model.config["agent_settings"]["farmers"]["expected_utility"][
+                "insurance"
+            ]["seut_factor"]
         else:
-            intention_factor_adjusted[network_has_adaptation] += 0.40
+            factor = self.model.config["agent_settings"]["farmers"]["expected_utility"][
+                "adaptation_well"
+            ]["seut_factor"]
+        # Compare EU values for those who haven't adapted yet and get boolean results
 
-        # Determine whether it passed the intention threshold
-        random_values = np.random.rand(*intention_factor_adjusted.shape)
-        intention_mask = random_values < intention_factor_adjusted
+        adjusted_do_nothing = SEUT_do_nothing * (factor ** np.sign(SEUT_do_nothing))
+        SEUT_adaptation_decision = SEUT_adapt > adjusted_do_nothing
 
-        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
+        # social_network_adaptation = adapted[self.var.social_network]
+
+        # # Check whether adapting agents have adaptation type in their network and create mask
+        # network_has_adaptation = np.any(social_network_adaptation == 1, axis=1)
+
+        # # Increase intention factor if someone in network has adaptation
+        # intention_factor_adjusted = self.var.intention_factor.copy()
+        # intention_factor_adjusted = np.clip(
+        #     self.var.intention_factor.data - 0.3, 0.05, 0.2
+        # )
+
+        # if adaptation_type in (
+        #     PERSONAL_INSURANCE_ADAPTATION,
+        #     INDEX_INSURANCE_ADAPTATION,
+        #     PR_INSURANCE_ADAPTATION,
+        # ):
+        #     social_network_payout = self.var.payout_mask[
+        #         self.var.social_network, adaptation_type
+        #     ]
+        #     network_has_payout = np.any(social_network_payout == 1, axis=1)
+        #     intention_factor_adjusted[network_has_payout] += 0.4
+
+        #     agent_has_payout = self.var.payout_mask[:, adaptation_type]
+        #     intention_factor_adjusted[agent_has_payout] += 0.4
+        # else:
+        #     intention_factor_adjusted[network_has_adaptation] += 0.4
+
+        # # Determine whether it passed the intention threshold
+        # random_values = np.random.rand(*intention_factor_adjusted.shape)
+        # intention_mask = random_values < intention_factor_adjusted
+
+        SEUT_adaptation_decision = SEUT_adaptation_decision  # & intention_mask
 
         # Update the adaptation status
         self.var.adaptations[SEUT_adaptation_decision, adaptation_type] = 1
@@ -4224,9 +3789,10 @@ class CropFarmers(AgentBaseClass):
         crop_elevation_group = np.hstack(
             (
                 self.var.crop_calendar[:, :, 0].data,
-                self.command_area.reshape(-1, 1),
-                self.up_or_downstream.reshape(-1, 1),
+                self.in_command_area.reshape(-1, 1),
+                self.elev_class.reshape(-1, 1),
                 insurance_differentiator.reshape(-1, 1),
+                self.well_status.reshape(-1, 1),
             )
         )
 
@@ -4327,52 +3893,42 @@ class CropFarmers(AgentBaseClass):
         return total_profits, profits_no_event
 
     def convert_probability_to_yield_ratio(
-        self, farmer_yield_probability_relation
+        self,
+        farmer_yield_probability_relation: np.ndarray,
+        model: str = "exponential",
     ) -> np.ndarray:
-        """Convert drought probabilities to yield ratios based on the given polynomial relationship.
+        """
+        Convert drought probabilities to yield ratios using the fitted relation.
 
-        For each farmer's yield-probability relationship (represented as a polynomial),
-        this function calculates the inverse of the relationship and then applies the
-        inverted polynomial to a set of given probabilities to obtain yield ratios.
-        The resulting yield ratios are then adjusted to lie between 0 and 1. The final
-        results are stored in `self.var.yield_ratios_drought_event`.
+        - model="exponential": y = a * exp(b * x)
+        - model="linear":      y = c + m * x
+        (param columns must be [intercept, slope] as returned by your fitters)
 
-        Note:
-            - It assumes that the polynomial relationship is invertible.
-            - Adjusts yield ratios to be non-negative and capped at 1.0.
+        Returns an array clipped to [0, 1].
         """
 
-        def logarithmic_function(probability, params):
-            a = params[:, 0]
-            b = params[:, 1]
-            x = probability[:, np.newaxis]
-            return a * np.log10(x) + b
+        # x: same driver you used before (note: you’re feeding 1/p_droughts)
+        x = 1.0 / self.var.p_droughts  # shape: (num_events,)
+        x = x[np.newaxis, :]  # -> (1, num_events)
 
-        def exponential_function(probability, params):
-            # Extract parameters
-            a = params[:, 0]  # Shape: (num_agents,)
-            b = params[:, 1]  # Shape: (num_agents,)
-            x = probability  # Shape: (num_events,)
+        # params
+        P = farmer_yield_probability_relation  # -> (num_agents, 2)
+        p0 = P[:, 0:1]  # intercept column, shape: (num_agents, 1)
+        p1 = P[:, 1:2]  # slope column,     shape: (num_agents, 1)
 
-            # Reshape arrays for broadcasting
-            a = a[:, np.newaxis]  # Shape: (num_agents, 1)
-            b = b[:, np.newaxis]  # Shape: (num_agents, 1)
-            x = x[np.newaxis, :]  # Shape: (1, num_events)
+        if model == "exponential":
+            # y = a * exp(b * x)
+            y = p0 * np.exp(p1 * x)  # broadcast -> (num_agents, num_events)
+        elif model == "linear":
+            # y = c + m * x
+            y = p0 + p1 * x
+        else:
+            raise ValueError("model must be 'exponential' or 'linear'")
 
-            # Compute the exponential function
-            return a * np.exp(b * x)  # Shape: (num_agents, num_events)
+        # Clamp to [0, 1]
+        y = np.clip(y, 0.0, 1.0)
 
-        yield_ratios = exponential_function(
-            1 / self.var.p_droughts, farmer_yield_probability_relation
-        )
-
-        # Adjust the yield ratios to lie between 0 and 1
-        yield_ratios = np.clip(yield_ratios, 0, 1)
-
-        # Store the results in a variable
-        yield_ratios_drought_event = yield_ratios[:]
-
-        return yield_ratios_drought_event
+        return y
 
     def create_unique_groups(self, *additional_diffentiators):
         """Create unique groups based on elevation data and merge with crop calendar.
@@ -4821,7 +4377,7 @@ class CropFarmers(AgentBaseClass):
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
-            if self.model.current_time.year - 1 > self.model.spinup_start.year:
+            if self.model.current_time.year > self.model.spinup_start.year:
                 # reset the irrigation limit, but only if a full year has passed already. Otherwise
                 # the cumulative water deficit is not year completed.
                 self.var.remaining_irrigation_limit_m3_reservoir[:] = (
@@ -4834,7 +4390,6 @@ class CropFarmers(AgentBaseClass):
                     self.irrigation_limit_groundwater
                 )
 
-                # Save SPEI after 1 year, otherwise doesnt line up with harvests
                 self.save_yearly_spei()
                 self.save_yearly_pr()
 
@@ -4843,22 +4398,15 @@ class CropFarmers(AgentBaseClass):
                 self.var.yearly_income / self.var.yearly_potential_income
             )
 
-            # Create a DataFrame with command area and elevation
-            df = pd.DataFrame(
-                {
-                    "command_area": self.command_area,
-                    "elevation": self.var.elevation,
-                }
-            )
+            k = 8
 
-            # Compute group-specific median elevation
-            df["group_median"] = df.groupby("command_area")["elevation"].transform(
-                "median"
-            )
+            self.in_command_area = (self.command_area >= 0).astype(np.int8)
 
-            # Determine lower or higher part and assign distinct ids
-            self.up_or_downstream = np.where(
-                df["elevation"] <= df["group_median"], 0, 1
+            edges = np.nanpercentile(
+                self.var.elevation, np.linspace(100 / k, 100 - 100 / k, k - 1)
+            )
+            self.elev_class = np.digitize(self.var.elevation, edges, right=True).astype(
+                np.int8
             )
 
             # create a unique index for each type of crop calendar that a farmer follows
@@ -4866,28 +4414,22 @@ class CropFarmers(AgentBaseClass):
                 self.var.crop_calendar[:, :, 0], axis=0, return_inverse=True
             )[1]
 
+            self.insurance_diffentiator = np.int32(
+                self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
+            )  # only personal insurance affects adaptation
+
+            self.blank_additional_differentiator = np.zeros(
+                self.var.n, dtype=np.float32
+            )
+            self.well_status = np.int32(self.var.adaptations[:, WELL_ADAPTATION] > 0)
+
             self.var.farmer_base_class[:] = self.create_farmer_classes(
                 crop_calendar_group,
-                self.command_area,
-                self.up_or_downstream,
+                self.in_command_area,
+                self.elev_class,
+                self.insurance_diffentiator,
             )
-
-            print(
-                "well",
-                np.mean(
-                    self.var.yearly_yield_ratio[
-                        self.main_irrigation_source == GROUNDWATER_IRRIGATION, 1
-                    ]
-                ),
-                "no irrigation",
-                np.mean(
-                    self.var.yearly_yield_ratio[
-                        self.main_irrigation_source == NO_IRRIGATION, 1
-                    ]
-                ),
-                "total_mean",
-                np.mean(self.var.yearly_yield_ratio[:, 1]),
-            )
+            print("Nr of base groups", len(np.unique(self.var.farmer_base_class[:])))
 
             energy_cost, water_cost, average_extraction_speed = (
                 self.calculate_water_costs()
@@ -4903,9 +4445,12 @@ class CropFarmers(AgentBaseClass):
                 # Determine the relation between drought probability and yield
                 # self.calculate_yield_spei_relation()
                 farmer_yield_probability_relation = (
-                    self.calculate_yield_spei_relation_group(
+                    self.calculate_yield_spei_relation_group_exp(
                         self.var.yearly_yield_ratio, self.var.yearly_SPEI_probability
                     )
+                )
+                self.calculate_yield_spei_relation_group_lin(
+                    self.var.yearly_yield_ratio, self.var.yearly_SPEI_probability
                 )
                 # Set the base insured income of this year as the yearly income
                 # Later, insured losses will be added to this
@@ -5043,7 +4588,7 @@ class CropFarmers(AgentBaseClass):
 
                     if (
                         self.personal_insurance_adaptation_active
-                        and self.index_insurance_adaptation_active
+                        # and self.index_insurance_adaptation_active
                         and self.pr_insurance_adaptation_active
                     ):
                         # In scenario with both insurance, compare simultaneously
@@ -5051,20 +4596,20 @@ class CropFarmers(AgentBaseClass):
                             np.array(
                                 [
                                     PERSONAL_INSURANCE_ADAPTATION,
-                                    INDEX_INSURANCE_ADAPTATION,
+                                    # INDEX_INSURANCE_ADAPTATION,
                                     PR_INSURANCE_ADAPTATION,
                                 ]
                             ),
-                            ["Personal", "Index", "Precipitation"],
+                            ["Personal", "Precipitation"],
                             farmer_yield_probability_relation_base,
                             [
                                 farmer_yield_probability_relation_insured_personal,
-                                farmer_yield_probability_relation_insured_index,
+                                # farmer_yield_probability_relation_insured_index,
                                 farmer_yield_probability_relation_insured_pr,
                             ],
                             [
                                 self.var.personal_premium,
-                                self.var.index_premium,
+                                # self.var.index_premium,
                                 self.var.pr_premium,
                             ],
                         )
