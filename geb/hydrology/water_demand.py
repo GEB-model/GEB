@@ -23,9 +23,9 @@ import numpy as np
 import numpy.typing as npt
 from honeybees.library.raster import write_to_array
 
-from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
+from geb.workflows.io import load_grid
 
 
 def weighted_sum_per_reservoir(

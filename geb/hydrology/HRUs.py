@@ -1,20 +1,17 @@
 import math
-import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Union
 
-import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
-import rasterio
 import xarray as xr
 import zarr
 from affine import Affine
 from numba import njit
 from scipy.spatial import cKDTree
 
-from geb.workflows.io import open_zarr
+from geb.workflows.io import load_grid, open_zarr
 from geb.workflows.raster import compress
 
 
@@ -60,61 +57,6 @@ def determine_nearest_river_cell(
     assert nearest_indices_in_valid.max() < (~mask).sum()
 
     return nearest_indices_in_valid[HRU_to_grid]
-
-
-def load_grid(
-    filepath, layer=1, return_transform_and_crs=False
-) -> np.ndarray | tuple[np.ndarray, Affine, str]:
-    if filepath.suffix == ".tif":
-        warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
-        with rasterio.open(filepath) as src:
-            data: np.ndarray = src.read(layer)
-            data: np.ndarray = (
-                data.astype(np.float32) if data.dtype == np.float64 else data
-            )
-            if return_transform_and_crs:
-                return data, src.transform, src.crs
-            else:
-                return data
-    elif filepath.suffix == ".zarr":
-        store: zarr.storage._local.LocalStore = zarr.storage.LocalStore(
-            filepath, read_only=True
-        )
-        group: zarr.core.group.Group = zarr.open_group(store, mode="r")
-        data: np.ndarray = group[filepath.stem][:]
-        data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
-        if return_transform_and_crs:
-            x: np.ndarray = group["x"][:]
-            y: np.ndarray = group["y"][:]
-            x_diff: float = np.diff(x[:]).mean().item()
-            y_diff: float = np.diff(y[:]).mean().item()
-            transform: Affine = Affine(
-                a=x_diff,
-                b=0,
-                c=x[0] - x_diff / 2,
-                d=0,
-                e=y_diff,
-                f=y[0] - y_diff / 2,
-            )
-            wkt: str = group[filepath.stem].attrs["_CRS"]["wkt"]
-            return data, transform, wkt
-        else:
-            return data
-    else:
-        raise ValueError("File format not supported.")
-
-
-def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
-    """Load a geometry for the GEB model from disk.
-
-    Args:
-        filepath: Path to the geometry file.
-
-    Returns:
-        A GeoDataFrame containing the geometries.
-
-    """
-    return gpd.read_parquet(filepath)
 
 
 def load_water_demand_xr(filepath: str | Path) -> xr.Dataset:

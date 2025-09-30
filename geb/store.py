@@ -12,7 +12,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from .hydrology.HRUs import load_geom
+from geb.workflows.io import load_geom
 
 
 class DynamicArray:

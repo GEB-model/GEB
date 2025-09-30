@@ -13,6 +13,7 @@ from types import TracebackType
 from typing import Any
 
 import cftime
+import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -24,6 +25,7 @@ import xarray as xr
 import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
+from rasterio.transform import Affine
 from tqdm import tqdm
 from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
@@ -62,6 +64,74 @@ def load_array(fp: Path) -> np.ndarray:
         return zarr.load(fp)
     else:
         raise ValueError(f"Unsupported file format: {fp.suffix}")
+
+
+def load_grid(
+    filepath: str | Path, layer: int = 1, return_transform_and_crs: bool = False
+) -> np.ndarray | tuple[np.ndarray, Affine, str]:
+    """Load a raster grid from a .tif or .zarr file.
+
+    Args:
+        filepath: The path to the .tif or .zarr file.
+        layer: The layer to load from the .tif file. Default is 1.
+        return_transform_and_crs: Whether to return the affine transform and CRS along with the data. Default is False.
+
+    Returns:
+        The raster data as a numpy array, or a tuple of the raster data, affine transform, and CRS string if return_transform_and_crs is True.
+
+    Raises:
+        ValueError: If the file format is not supported.
+    """
+    if filepath.suffix == ".tif":
+        warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
+        with rasterio.open(filepath) as src:
+            data: np.ndarray = src.read(layer)
+            data: np.ndarray = (
+                data.astype(np.float32) if data.dtype == np.float64 else data
+            )
+            if return_transform_and_crs:
+                return data, src.transform, src.crs
+            else:
+                return data
+    elif filepath.suffix == ".zarr":
+        store: zarr.storage._local.LocalStore = zarr.storage.LocalStore(
+            filepath, read_only=True
+        )
+        group: zarr.core.group.Group = zarr.open_group(store, mode="r")
+        data: np.ndarray = group[filepath.stem][:]
+        data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
+        if return_transform_and_crs:
+            x: np.ndarray = group["x"][:]
+            y: np.ndarray = group["y"][:]
+            x_diff: float = np.diff(x[:]).mean().item()
+            y_diff: float = np.diff(y[:]).mean().item()
+            transform: Affine = Affine(
+                a=x_diff,
+                b=0,
+                c=x[0] - x_diff / 2,
+                d=0,
+                e=y_diff,
+                f=y[0] - y_diff / 2,
+            )
+            wkt: str = group[filepath.stem].attrs["_CRS"]["wkt"]
+            return data, transform, wkt
+        else:
+            return data
+    else:
+        raise ValueError("File format not supported.")
+
+
+def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
+    """Load a geometry for the GEB model from disk.
+
+    Args:
+        filepath: Path to the geometry file.
+
+    Returns:
+        A GeoDataFrame containing the geometries.
+
+    """
+    return gpd.read_parquet(filepath)
 
 
 def calculate_scaling(

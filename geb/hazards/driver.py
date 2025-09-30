@@ -85,7 +85,7 @@ class HazardDriver:
                     event = copy.deepcopy(event)
 
                     end_of_forcing_date = self.model.forcing[
-                        "pr"
+                        "pr_kg_per_m2_s"
                     ].reader.datetime_index[-1]
                     if event["end_time"] > end_of_forcing_date:
                         print(

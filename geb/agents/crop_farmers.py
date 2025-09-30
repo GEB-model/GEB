@@ -15,13 +15,13 @@ from scipy.optimize import curve_fit
 from scipy.stats import genextreme
 
 from geb.workflows import TimingModule
+from geb.workflows.io import load_grid
 
 from ..data import (
     load_crop_data,
     load_economic_data,
     load_regional_crop_data_from_dict,
 )
-from ..hydrology.HRUs import load_grid
 from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 from ..store import DynamicArray
 from ..workflows import balance_check

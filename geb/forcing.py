@@ -9,6 +9,8 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 
+from geb.workflows.io import load_grid
+
 from .module import Module
 from .workflows.io import AsyncGriddedForcingReader
 
@@ -20,7 +22,7 @@ def generate_bilinear_interpolation_weights(
     tgt_y: npt.NDArray[np.float32],
 ) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.float32]]:
     """
-    Generates indices and weights for bilinear interpolation using pure NumPy.
+    Generates indices and weights for bilinear interpolation.
 
     Assumes the source grid is rectilinear and monotonic.
 
@@ -39,9 +41,9 @@ def generate_bilinear_interpolation_weights(
         ValueError: If target points are outside the source grid bounds.
     """
     # Create the full grid of target points and flatten them
-    # The 'ij' indexing creates a target grid of shape (len(tgt_y_1d), len(tgt_x_1d))
-    # Note: len(tgt_y_1d) is the row count (Ny_tgt), len(tgt_x_1d) is the col count (Nx_tgt)
-    tgt_x_2d, tgt_y_2d = np.meshgrid(tgt_x, tgt_y, indexing="ij")
+    # The 'xy' indexing creates a target grid of shape (len(tgt_y), len(tgt_x))
+    # Note: len(tgt_y) is the row count (Ny_tgt), len(tgt_x) is the col count (Nx_tgt)
+    tgt_x_2d, tgt_y_2d = np.meshgrid(tgt_x, tgt_y, indexing="xy")
 
     # Flatten the target coordinates into (N_targets,) arrays
     tgt_x = tgt_x_2d.flatten()
@@ -51,52 +53,85 @@ def generate_bilinear_interpolation_weights(
     nx: int = len(src_x)
     ny: int = len(src_y)
 
+    # Validate that x-coordinates are ascending
+    if not np.all(src_x[1:] > src_x[:-1]):
+        raise ValueError("Source x-coordinates must be strictly ascending.")
+
     # ix is the index of the source x-coordinate that is just less than or equal to tgt_x
     ix = np.searchsorted(src_x, tgt_x) - 1
-    # Check bounds for ix
-    if not np.all((ix >= 0) & (ix < nx - 1)):
+    # Clip indices to be within valid bounds for x
+    ix = np.clip(ix, 0, nx - 2)
+    # Check bounds for ix after clipping - if any targets are still out of bounds, it's an error
+    if not np.all((tgt_x >= src_x[0]) & (tgt_x <= src_x[-1])):
         raise ValueError("Target x-coordinates are outside the source grid bounds.")
 
     is_y_descending = src_y[0] > src_y[-1]
 
-    if is_y_descending:
-        # Search on a reversed copy of the y-axis
-        iy_search = np.searchsorted(src_y[::-1], tgt_y) - 1
-        # Map the index from the reversed array back to the original descending array
-        iy = (ny - 1) - (iy_search + 1)
+    if not is_y_descending:
+        # For ascending y-axis (normal case)
+        iy = np.searchsorted(src_y, tgt_y, side="right") - 1
+        iy = np.clip(iy, 0, ny - 2)
+        y0 = src_y[iy]
+        y1 = src_y[iy + 1]
+        dy = (tgt_y - y0) / (y1 - y0)
     else:
-        # Standard case for ascending y-axis
-        iy = np.searchsorted(src_y, tgt_y) - 1
+        # For descending y-axis, use vectorized NumPy operations
+        # Create a matrix comparison to find intervals efficiently
+        # src_y[j] >= tgt_y >= src_y[j+1] for descending coordinates
 
-    # Check bounds for iy
-    if not np.all((iy >= 0) & (iy < ny - 1)):
-        raise ValueError("Target y-coordinates are outside the source grid bounds.")
+        # Reshape for broadcasting: tgt_y as column, src_y as row
+        tgt_y_col = tgt_y[:, np.newaxis]  # Shape: (n_targets, 1)
+        src_y_intervals = src_y[:-1]  # Shape: (ny-1,) - upper bounds of intervals
+        src_y_intervals_next = src_y[1:]  # Shape: (ny-1,) - lower bounds of intervals
 
-    # Get corner coordinates for each grid cell
+        # Find where target points fall within each interval
+        # For descending: src_y[j] >= target_y >= src_y[j+1]
+        in_interval = (src_y_intervals >= tgt_y_col) & (
+            tgt_y_col >= src_y_intervals_next
+        )
+
+        # Find the first (leftmost) interval index for each target point
+        iy = np.argmax(in_interval, axis=1)
+
+        # Handle out-of-bounds cases
+        no_interval_found = ~np.any(in_interval, axis=1)
+        above_highest = tgt_y > src_y[0]
+        below_lowest = tgt_y < src_y[-1]
+
+        # Assign boundary indices for out-of-bounds points
+        iy = np.where(no_interval_found & above_highest, 0, iy)
+        iy = np.where(no_interval_found & below_lowest, ny - 2, iy)
+
+        # Calculate dy for descending coordinates
+        y0 = src_y[iy]
+        y1 = src_y[iy + 1]
+        # For descending coordinates, the weight should be calculated as:
+        # dy = (y0 - target_y) / (y0 - y1) since y0 > y1
+        dy = (y0 - tgt_y) / (y0 - y1)  # Get the corner coordinates
     x0 = src_x[ix]
     x1 = src_x[ix + 1]
-    y0 = src_y[iy]
-    y1 = src_y[iy + 1]
 
-    # Calculate normalized distances; denominators are guaranteed non-zero for monotonic grids
+    # Calculate normalized distances
     dx = (tgt_x - x0) / (x1 - x0)
-    dy = (tgt_y - y0) / (y1 - y0)
 
-    # Calculate Weights
-    w00 = (1 - dx) * (1 - dy)
-    w10 = dx * (1 - dy)
-    w01 = (1 - dx) * dy
-    w11 = dx * dy
+    # Weights for the four corners
+    w00 = (1 - dx) * (1 - dy)  # Corresponds to (y0, x0)
+    w01 = dx * (1 - dy)  # Corresponds to (y0, x1)
+    w10 = (1 - dx) * dy  # Corresponds to (y1, x0)
+    w11 = dx * dy  # Corresponds to (y1, x1)
 
-    # Calculate Flat Indices (Assumes C-style row-major: index = iy * nx + ix)
-    idx00 = iy * nx + ix  # (y0, x0)
-    idx01 = iy * nx + (ix + 1)  # (y0, x1)
-    idx10 = (iy + 1) * nx + ix  # (y1, x0)
-    idx11 = (iy + 1) * nx + (ix + 1)  # (y1, x1)
+    # Flat indices for the four corners
+    idx00 = iy * nx + ix
+    idx01 = iy * nx + (ix + 1)
+    idx10 = (iy + 1) * nx + ix
+    idx11 = (iy + 1) * nx + (ix + 1)
 
-    # Stack the indices and weights for the final output
+    # Stack indices and weights in a consistent order
     indices = np.stack([idx00, idx01, idx10, idx11], axis=1).astype(np.int32)
-    weights = np.stack([w00, w10, w01, w11], axis=1).astype(np.float32)
+    weights = np.stack([w00, w01, w10, w11], axis=1).astype(np.float32)
+
+    assert (weights >= 0).all() and (weights <= 1).all(), "Weights must be in [0, 1]"
+    assert np.allclose(weights.sum(axis=1), 1.0), "Weights must sum to 1"
 
     return indices, weights
 
@@ -158,13 +193,15 @@ class ForcingLoader(ABC):
             The interpolated data array.
         """
         data_flattened_xy_dims = data.reshape(data.shape[0], -1)
+        # the corner values must be gathered in the same order as the weights
         corner_values = data_flattened_xy_dims[:, self.indices]
         interpolated_flattened_xy_dims = np.sum(
             corner_values * self.weights[np.newaxis, :, :], axis=2
         )
-        return interpolated_flattened_xy_dims.reshape(
+        output = interpolated_flattened_xy_dims.reshape(
             interpolated_flattened_xy_dims.shape[0], self.ysize, self.xsize
         )
+        return output
 
     @abstractmethod
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
@@ -194,9 +231,34 @@ class Precipitation(ForcingLoader):
 class Temperature(ForcingLoader):
     """Loader for temperature data with specific validation."""
 
-    def __init__(self, model: "GEBModel") -> None:
-        """Initialize the Temperature loader."""
-        super().__init__(model, "tas_2m_K", 24)
+    def __init__(
+        self,
+        model: "GEBModel",
+        forcing_DEM: npt.NDArray[np.float32],
+        grid_DEM: npt.NDArray[np.float32],
+        dewpoint: bool = False,
+        lapse_rate: float = -0.0065,
+    ) -> None:
+        """Initialize the Temperature loader.
+
+        This class performs a lapse rate correction based on the difference between the
+        forcing DEM and the model grid DEM.
+
+        Args:
+            model: The GEB model instance.
+            forcing_DEM: The DEM used in the forcing data.
+            grid_DEM: The DEM used in the model grid.
+            dewpoint: If True, load dewpoint temperature; otherwise, load air temperature.
+            lapse_rate: The lapse rate in K/m (default is -0.0065 K/m).
+        """
+        self.forcing_DEM = forcing_DEM
+        self.grid_DEM = grid_DEM
+        self.lapse_rate = lapse_rate
+
+        if dewpoint:
+            super().__init__(model, "dewpoint_tas_2m_K", 24)
+        else:
+            super().__init__(model, "tas_2m_K", 24)
 
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate temperature data.
@@ -209,24 +271,31 @@ class Temperature(ForcingLoader):
         """
         return (v > 170).all() and (v < 370).all()
 
+    def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
+        """Interpolate data to the model grid using bilinear interpolation.
 
-class DewPointTemperature(ForcingLoader):
-    """Loader for dew point temperature data with specific validation."""
+        Overrides the base class method to handle temperature with a lapse rate correction.
+        First, the temperature is adjusted to sea level using the forcing DEM and lapse rate.
+        Then, after interpolation, it is adjusted back to the model grid elevation.
 
-    def __init__(self, model: "GEBModel") -> None:
-        """Initialize the DewPointTemperature loader."""
-        super().__init__(model, "dewpoint_tas_2m_K", 24)
-
-    def validate(self, v: npt.NDArray[np.float32]) -> bool:
-        """Validate dew point temperature data.
+        This ensures a smooth temperature gradient with elevation.
 
         Args:
-            v: The data array to validate.
+            data: The input data array to interpolate.
 
         Returns:
-            True if valid, otherwise raises ValueError.
+            The interpolated data array.
         """
-        return (v > 170).all() and (v < 370).all()
+        temperature_sea_level = (
+            data - self.forcing_DEM[np.newaxis, :, :] * self.lapse_rate
+        )
+        interpolated_temperature_sea_level = super().interpolate(data)
+        interpolated_temperature = (
+            interpolated_temperature_sea_level
+            + self.grid_DEM[np.newaxis, :, :] * self.lapse_rate
+        )
+
+        return interpolated_temperature
 
 
 class Wind(ForcingLoader):
@@ -399,6 +468,7 @@ class Forcing(Module):
             model: The GEB model instance.
         """
         self.model = model
+        self.forcing_DEM = load_grid(model.files["other"]["climate/elevation_forcing"])
         self._forcings = {}
 
     @property
@@ -423,9 +493,16 @@ class Forcing(Module):
         if name == "pr_kg_per_m2_per_s":
             reader: Precipitation = Precipitation(self.model)
         elif name == "tas_2m_K":
-            reader: Temperature = Temperature(self.model)
+            reader: Temperature = Temperature(
+                self.model,
+                forcing_DEM=self.forcing_DEM,
+                grid_DEM=self.model.hydrology.grid.decompress(
+                    self.model.hydrology.grid.var.elevation
+                ),
+                dewpoint=False,
+            )
         elif name == "dewpoint_tas_2m_K":
-            reader: DewPointTemperature = DewPointTemperature(self.model)
+            reader: Temperature = Temperature(self.model, dewpoint=True)
         elif name == "wind_u10m_m_per_s":
             reader: Wind = Wind(self.model, direction="u")
         elif name == "wind_v10m_m_per_s":

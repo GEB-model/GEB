@@ -24,9 +24,9 @@ import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 
-from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import balance_check
+from geb.workflows.io import load_grid
 
 OFF: int = 0
 LAKE: int = 1
