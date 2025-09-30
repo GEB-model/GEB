@@ -23,7 +23,7 @@ from geb.agents.crop_farmers import (
 )
 from geb.build.methods import build_method
 
-from ...workflows.io import open_zarr, load_array
+from ...workflows.io import open_zarr
 from .. import GEBModel
 from ..workflows.general import repeat_grid
 
@@ -52,9 +52,7 @@ def replace_crop(crop_calendar_per_farmer, crop_values, replaced_crop_values):
     max_index = np.argmax(counts)
     crop_replacement = unique_rows[max_index]
 
-    crop_replacement_only_crops = crop_replacement[
-        crop_replacement[:, -1] != -1
-    ]
+    crop_replacement_only_crops = crop_replacement[crop_replacement[:, -1] != -1]
     if crop_replacement_only_crops.shape[0] > 1:
         assert (
             np.unique(crop_replacement_only_crops[:, [1, 3]], axis=0).shape[0]
@@ -63,13 +61,12 @@ def replace_crop(crop_calendar_per_farmer, crop_values, replaced_crop_values):
 
     for replaced_crop in replaced_crop_values:
         # Check where to be replaced crop is
-        crop_mask = (crop_calendar_per_farmer[:, :, 0] == replaced_crop).any(
-            axis=1
-        )
+        crop_mask = (crop_calendar_per_farmer[:, :, 0] == replaced_crop).any(axis=1)
         # Replace the crop
         crop_calendar_per_farmer[crop_mask] = crop_replacement
 
     return crop_calendar_per_farmer
+
 
 def unify_crop_variants(crop_calendar_per_farmer, target_crop):
     # Create a mask for all entries whose first value == target_crop
@@ -95,6 +92,7 @@ def unify_crop_variants(crop_calendar_per_farmer, target_crop):
     crop_calendar_per_farmer[mask] = most_common_variant
 
     return crop_calendar_per_farmer
+
 
 class Survey:
     def __init__(self) -> None:
@@ -1218,7 +1216,9 @@ class fairSTREAMModel(GEBModel):
         )
 
     @build_method(depends_on="setup_farmer_crop_calendar")
-    def adjust_crop_calendar(self,):
+    def adjust_crop_calendar(
+        self,
+    ):
         BAJRA = 0
         GROUNDNUT = 1
         JOWAR = 2
@@ -1232,8 +1232,13 @@ class fairSTREAMModel(GEBModel):
         SUNFLOWER = 10
         TUR = 11
         import zarr
-        crop_calendar = zarr.load("/net/sys/pscst001/export/BETA-IVM-BAZIS/mka483/GEB_p3/GEB_models/models/bhima/base/input/array/agents/farmers/crop_calendar.zarr")
-        crop_calendar_rotation_years = zarr.load("/net/sys/pscst001/export/BETA-IVM-BAZIS/mka483/GEB_p3/GEB_models/models/bhima/base/input/array/agents/farmers/crop_calendar_rotation_years.zarr")
+
+        crop_calendar = zarr.load(
+            "/net/sys/pscst001/export/BETA-IVM-BAZIS/mka483/GEB_p3/GEB_models/models/bhima/base/input/array/agents/farmers/crop_calendar.zarr"
+        )
+        crop_calendar_rotation_years = zarr.load(
+            "/net/sys/pscst001/export/BETA-IVM-BAZIS/mka483/GEB_p3/GEB_models/models/bhima/base/input/array/agents/farmers/crop_calendar_rotation_years.zarr"
+        )
         most_common_check = [TUR, MOONG, GRAM]
         replaced_value = [TUR, MOONG, GRAM]
         crop_calendar_per_farmer = replace_crop(
