@@ -1381,10 +1381,10 @@ def init_multiple_fn(
 )
 @click.option(
     "--geometry-bounds",
-    default="-5.0, 47.0, 15.0, 58.0",
+    default="-180.0, -90.0, 180.0, 90.0",  # "-5.0, 47.0, 15.0, 58.0"
     required=True,
     type=str,
-    help="Bounding box as 'xmin,ymin,xmax,ymax' to select subbasins (e.g., '5.0,50.0,15.0,55.0' for parts of Europe).",
+    help="Bounding box as 'xmin,ymin,xmax,ymax' to select subbasins (e.g., '5.0,50.0,15.0,55.0' for parts of Europe). Defaults to global coverage.",
 )
 @click.option(
     "--target-area-km2",
@@ -1454,6 +1454,8 @@ def init_multiple(
 
     Example for parts of Europe:
         geb init_multiple --geometry-bounds="5.0,50.0,15.0,55.0"
+
+    By default, the whole world is covered. Use --geometry-bounds to specify a region.
     """
     init_multiple_fn(
         config=config,

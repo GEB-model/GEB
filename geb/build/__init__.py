@@ -547,6 +547,32 @@ def cluster_subbasins_by_area_and_proximity(
 
     print(f"Found {len(touching_pairs)} touching relationships")
 
+    # Pre-compute all pairwise distances between subbasin centroids
+    print("Pre-computing all pairwise distances...")
+    distance_matrix = {}
+    subbasin_list = list(subbasin_ids)
+
+    for i, subbasin_1 in enumerate(subbasin_list):
+        distance_matrix[subbasin_1] = {}
+        centroid_1 = centroids[subbasin_1]
+
+        # Only compute distances to subbasins we haven't processed yet (symmetric matrix)
+        for j in range(i + 1, len(subbasin_list)):
+            subbasin_2 = subbasin_list[j]
+            centroid_2 = centroids[subbasin_2]
+
+            distance = centroid_1.distance(centroid_2)
+            distance_matrix[subbasin_1][subbasin_2] = distance
+
+            # Ensure both directions are stored
+            if subbasin_2 not in distance_matrix:
+                distance_matrix[subbasin_2] = {}
+            distance_matrix[subbasin_2][subbasin_1] = distance
+
+    print(
+        f"Pre-computed {len(subbasin_ids) * (len(subbasin_ids) - 1) // 2} pairwise distances"
+    )
+
     clusters = []
     used_subbasins = set()
 
@@ -592,13 +618,28 @@ def cluster_subbasins_by_area_and_proximity(
 
             # Find unused subbasins that touch the current cluster (using pre-computed adjacency)
             touching_candidates = []
+            cluster_representative = max(
+                current_cluster, key=lambda x: upstream_areas.get(x, 0)
+            )
 
             for candidate_id in cluster_neighbors:
                 if candidate_id not in used_subbasins:
                     candidate_area = upstream_areas.get(candidate_id, 0)
-                    touching_candidates.append((candidate_id, candidate_area))
+                    # Get distance to cluster representative
+                    distance = distance_matrix[cluster_representative].get(
+                        candidate_id, float("inf")
+                    )
+                    touching_candidates.append((candidate_id, candidate_area, distance))
 
-            # If no touching candidates, find the closest unused subbasin using pre-computed centroids
+            # Sort touching candidates by distance (closest first)
+            if touching_candidates:
+                touching_candidates.sort(key=lambda x: x[2])  # Sort by distance
+                # Convert to the expected format (id, area)
+                touching_candidates = [
+                    (cid, carea) for cid, carea, _ in touching_candidates
+                ]
+
+            # If no touching candidates, find the closest unused subbasins using pre-computed distances
             if not touching_candidates:
                 remaining_subbasins = [
                     s for s in sorted_subbasins if s not in used_subbasins
@@ -606,33 +647,41 @@ def cluster_subbasins_by_area_and_proximity(
                 if not remaining_subbasins:
                     break
 
-                # Find closest remaining subbasin using pre-computed centroids
-                cluster_centroid = (
-                    subbasins.loc[current_cluster].geometry.centroid.iloc[0]
-                    if len(current_cluster) == 1
-                    else subbasins.loc[current_cluster].geometry.union_all().centroid
+                # Get distances from current cluster to all remaining subbasins
+                cluster_distances = []
+
+                # For multi-subbasin clusters, use the cluster's centroid subbasin
+                # (the one with largest area in current cluster)
+                cluster_representative = max(
+                    current_cluster, key=lambda x: upstream_areas.get(x, 0)
                 )
-                min_distance = float("inf")
-                closest_subbasin = None
 
-                for candidate_id in remaining_subbasins[
-                    : min(50, len(remaining_subbasins))
-                ]:  # Limit search for performance
-                    distance = cluster_centroid.distance(centroids[candidate_id])
-                    if distance < min_distance:
-                        min_distance = distance
-                        closest_subbasin = candidate_id
+                for candidate_id in remaining_subbasins:
+                    if candidate_id in distance_matrix[cluster_representative]:
+                        distance = distance_matrix[cluster_representative][candidate_id]
+                        candidate_area = upstream_areas.get(candidate_id, 0)
+                        cluster_distances.append(
+                            (candidate_id, candidate_area, distance)
+                        )
 
-                if closest_subbasin:
-                    candidate_area = upstream_areas.get(closest_subbasin, 0)
-                    touching_candidates = [(closest_subbasin, candidate_area)]
+                if cluster_distances:
+                    # Sort by distance (closest first), then take top candidates
+                    cluster_distances.sort(
+                        key=lambda x: x[2]
+                    )  # Sort by distance (index 2)
+
+                    # Take closest 20 candidates for consideration
+                    top_candidates = cluster_distances[
+                        : min(20, len(cluster_distances))
+                    ]
+                    touching_candidates = [
+                        (cid, carea) for cid, carea, _ in top_candidates
+                    ]
 
             if not touching_candidates:
                 break
 
-            # Sort by area (largest first) and pick the best candidate
-            touching_candidates.sort(key=lambda x: x[1], reverse=True)
-
+            # Candidates are already sorted by distance (closest first)
             # Select the best candidate that doesn't exceed max threshold
             best_candidate = None
             for candidate_id, candidate_area in touching_candidates:
@@ -640,9 +689,9 @@ def cluster_subbasins_by_area_and_proximity(
                     best_candidate = candidate_id
                     break
 
-            # If no candidate fits within threshold, take the smallest one if we're still below min
+            # If no candidate fits within threshold, take the closest one if we're still below min
             if best_candidate is None and current_area < min_area_threshold:
-                best_candidate = touching_candidates[-1][0]  # Smallest area
+                best_candidate = touching_candidates[0][0]  # Closest candidate
 
             if best_candidate is None:
                 break
@@ -695,41 +744,45 @@ def save_clusters_to_geoparquet(
         cluster_prefix: Prefix for cluster names.
     """
     print(f"Saving clusters to geoparquet: {output_path}")
-    
+
     # Get all subbasin IDs
     all_subbasin_ids = [sid for cluster in clusters for sid in cluster]
-    
+
     # Load subbasin geometries
     subbasins = gpd.read_parquet(
         data_catalog.get("merit_basins_catchments").path,
         filters=[("COMID", "in", all_subbasin_ids)],
     ).set_index("COMID")
-    
+
     # Get upstream areas for display
     upstream_areas = get_subbasin_upstream_areas(data_catalog, all_subbasin_ids)
-    
+
     # Create cluster assignments
     cluster_data = []
     for cluster_idx, cluster_subbasins in enumerate(clusters):
         cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
         cluster_area = sum(upstream_areas.get(sid, 0) for sid in cluster_subbasins)
-        
+
         for subbasin_id in cluster_subbasins:
-            cluster_data.append({
-                'COMID': subbasin_id,
-                'cluster_id': cluster_id,
-                'cluster_number': cluster_idx,
-                'cluster_area_km2': cluster_area,
-                'subbasin_area_km2': upstream_areas.get(subbasin_id, 0),
-                'geometry': subbasins.loc[subbasin_id].geometry
-            })
-    
+            cluster_data.append(
+                {
+                    "COMID": subbasin_id,
+                    "cluster_id": cluster_id,
+                    "cluster_number": cluster_idx,
+                    "cluster_area_km2": cluster_area,
+                    "subbasin_area_km2": upstream_areas.get(subbasin_id, 0),
+                    "geometry": subbasins.loc[subbasin_id].geometry,
+                }
+            )
+
     # Create GeoDataFrame
     cluster_gdf = gpd.GeoDataFrame(cluster_data, crs=subbasins.crs)
-    
+
     # Save to geoparquet
     cluster_gdf.to_parquet(output_path)
-    print(f"Saved {len(cluster_data)} subbasins in {len(clusters)} clusters to {output_path}")
+    print(
+        f"Saved {len(cluster_data)} subbasins in {len(clusters)} clusters to {output_path}"
+    )
 
 
 def create_cluster_visualization_map(
@@ -751,113 +804,172 @@ def create_cluster_visualization_map(
     import contextily as ctx
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
-    
+
     print(f"Creating visualization map: {output_path}")
-    
+
     # Get all subbasin IDs
     all_subbasin_ids = [sid for cluster in clusters for sid in cluster]
-    
+
     # Load subbasin geometries
     subbasins = gpd.read_parquet(
         data_catalog.get("merit_basins_catchments").path,
         filters=[("COMID", "in", all_subbasin_ids)],
     ).set_index("COMID")
-    
+
     # Create cluster assignments with colors
     cluster_data = []
     colors = plt.cm.Set3(np.linspace(0, 1, len(clusters)))  # Generate distinct colors
-    
+
     for cluster_idx, cluster_subbasins in enumerate(clusters):
         cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
         color = colors[cluster_idx]
-        
+
         for subbasin_id in cluster_subbasins:
-            cluster_data.append({
-                'COMID': subbasin_id,
-                'cluster_id': cluster_id,
-                'cluster_number': cluster_idx,
-                'color': color,
-                'geometry': subbasins.loc[subbasin_id].geometry
-            })
-    
+            cluster_data.append(
+                {
+                    "COMID": subbasin_id,
+                    "cluster_id": cluster_id,
+                    "cluster_number": cluster_idx,
+                    "color": color,
+                    "geometry": subbasins.loc[subbasin_id].geometry,
+                }
+            )
+
     # Create GeoDataFrame
     cluster_gdf = gpd.GeoDataFrame(cluster_data, crs=subbasins.crs)
-    
+
     # Convert to Web Mercator for contextily
     cluster_gdf_mercator = cluster_gdf.to_crs(epsg=3857)
-    
-    # Create the plot
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
-    
-    # Plot each cluster with different colors
-    for cluster_idx, (cluster_id, group) in enumerate(cluster_gdf_mercator.groupby('cluster_id')):
+
+    # Create the plot with dark background
+    fig, ax = plt.subplots(1, 1, figsize=figsize, facecolor="black")
+    ax.set_facecolor("black")
+
+    # Plot each cluster with different colors and better visibility
+    for cluster_idx, (cluster_id, group) in enumerate(
+        cluster_gdf_mercator.groupby("cluster_id")
+    ):
         group.plot(
             ax=ax,
             color=colors[cluster_idx],
-            alpha=0.3,  # Transparent fill
-            edgecolor='blue',
-            linewidth=0.8,
-            label=f'{cluster_id} ({len(group)} subbasins)'
+            alpha=0.7,  # More opaque for better visibility
+            edgecolor="white",  # White edges for contrast against dark background
+            linewidth=1.5,  # Thicker lines for better visibility
+            label=f"{cluster_id} ({len(group)} subbasins)",
         )
-        
-        # Add cluster labels at centroids
+
+        # Add cluster labels at centroids with better visibility
         centroid = group.geometry.union_all().centroid
         ax.annotate(
-            f'{cluster_idx}',
+            f"{cluster_idx}",
             (centroid.x, centroid.y),
-            fontsize=12,
-            fontweight='bold',
-            ha='center',
-            va='center',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8)
+            fontsize=14,  # Larger font
+            fontweight="bold",
+            ha="center",
+            va="center",
+            color="white",  # White text
+            bbox=dict(
+                boxstyle="round,pad=0.4",
+                facecolor="black",
+                alpha=0.8,
+                edgecolor="white",
+            ),
         )
-    
-    # Add satellite background
+
+    # Add dark satellite/terrain background
     try:
+        # Try dark satellite imagery first
         ctx.add_basemap(
             ax,
             crs=cluster_gdf_mercator.crs.to_string(),
-            source=ctx.providers.Esri.WorldImagery,
-            zoom='auto'
+            source=ctx.providers.CartoDB.DarkMatter,  # Dark background
+            zoom="auto",
+            alpha=0.8,  # Slightly transparent to not overpower subbasins
         )
-        print("Added satellite background from Esri WorldImagery")
+        print("Added dark CartoDB background")
     except Exception as e:
-        print(f"Could not add satellite background: {e}")
-        print("Using OpenStreetMap background instead")
+        print(f"Could not add CartoDB background: {e}")
         try:
+            # Fallback to Stamen Toner (dark background)
             ctx.add_basemap(
                 ax,
                 crs=cluster_gdf_mercator.crs.to_string(),
-                source=ctx.providers.OpenStreetMap.Mapnik,
-                zoom='auto'
+                source=ctx.providers.Stamen.Toner,
+                zoom="auto",
+                alpha=0.7,
             )
+            print("Added Stamen Toner background")
         except Exception as e2:
-            print(f"Could not add any background: {e2}")
-    
-    # Customize the plot
-    ax.set_title(f'GEB Multi-Basin Clusters - {len(clusters)} Clusters', fontsize=16, fontweight='bold')
-    ax.set_xlabel('Longitude', fontsize=12)
-    ax.set_ylabel('Latitude', fontsize=12)
-    
-    # Add legend
+            print(f"Could not add Stamen background: {e2}")
+            try:
+                # Final fallback to OpenStreetMap with dark styling
+                ctx.add_basemap(
+                    ax,
+                    crs=cluster_gdf_mercator.crs.to_string(),
+                    source=ctx.providers.OpenStreetMap.Mapnik,
+                    zoom="auto",
+                    alpha=0.5,  # Very transparent to darken it
+                )
+                print("Added OpenStreetMap background (darkened)")
+                # Make the plot background even darker
+                ax.set_facecolor("#2F2F2F")
+            except Exception as e3:
+                print(f"Could not add any background: {e3}")
+                # Set a dark gray background if all else fails
+                ax.set_facecolor("#2F2F2F")
+
+    # Customize the plot with dark theme
+    ax.set_title(
+        f"GEB Multi-Basin Clusters - {len(clusters)} Clusters",
+        fontsize=18,
+        fontweight="bold",
+        color="white",  # White title text
+        pad=20,
+    )
+    ax.set_xlabel("Longitude", fontsize=14, color="white")
+    ax.set_ylabel("Latitude", fontsize=14, color="white")
+
+    # Add legend with dark styling
     legend_elements = [
-        Patch(facecolor=colors[i], alpha=0.3, edgecolor='blue', 
-              label=f'Cluster {i} ({len([sid for cluster in [clusters[i]] for sid in cluster])} subbasins)')
+        Patch(
+            facecolor=colors[i],
+            alpha=0.7,
+            edgecolor="white",
+            linewidth=1.5,
+            label=f"Cluster {i} ({len([sid for cluster in [clusters[i]] for sid in cluster])} subbasins)",
+        )
         for i in range(len(clusters))
     ]
-    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.02, 1))
-    
-    # Remove axes ticks for cleaner look
+    legend = ax.legend(
+        handles=legend_elements,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1),
+        facecolor="black",  # Dark legend background
+        edgecolor="white",
+        labelcolor="white",  # White legend text
+        fontsize=12,
+    )
+
+    # Style the legend frame
+    legend.get_frame().set_alpha(0.9)
+
+    # Remove axes ticks for cleaner look but keep white color for any remaining elements
     ax.set_xticks([])
     ax.set_yticks([])
-    
+    ax.spines["bottom"].set_color("white")
+    ax.spines["top"].set_color("white")
+    ax.spines["right"].set_color("white")
+    ax.spines["left"].set_color("white")
+
     # Tight layout to prevent legend cutoff
     plt.tight_layout()
-    
-    # Save the figure
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+
+    # Save the figure with dark theme
+    plt.savefig(
+        output_path, dpi=300, bbox_inches="tight", facecolor="black", edgecolor="white"
+    )
     plt.close()
-    
+
     print(f"Saved visualization map to {output_path}")
 
 
