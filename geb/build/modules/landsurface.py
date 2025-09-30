@@ -7,7 +7,12 @@ import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
-from geb.workflows.raster import convert_nodata, rasterize_like, repeat_grid
+from geb.workflows.raster import (
+    convert_nodata,
+    rasterize_like,
+    repeat_grid,
+    snap_to_grid,
+)
 
 from ..workflows.general import (
     bounds_are_within,
@@ -353,11 +358,11 @@ class LandSurface:
         )
 
         land_use_classes = full_region_land_use_classes.isel(region_subgrid_slice)
-        land_use_classes = self.snap_to_grid(land_use_classes, self.subgrid)
+        land_use_classes = snap_to_grid(land_use_classes, self.subgrid)
         self.set_subgrid(land_use_classes, name="landsurface/land_use_classes")
 
         cultivated_land = cultivated_land_full_region.isel(region_subgrid_slice)
-        cultivated_land = self.snap_to_grid(cultivated_land, self.subgrid)
+        cultivated_land = snap_to_grid(cultivated_land, self.subgrid)
         self.set_subgrid(cultivated_land, name="landsurface/cultivated_land")
 
     @build_method(depends_on=[])

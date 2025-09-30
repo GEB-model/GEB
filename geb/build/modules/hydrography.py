@@ -17,7 +17,7 @@ from shapely.geometry import LineString, Point
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
-from geb.workflows.raster import rasterize_like
+from geb.workflows.raster import rasterize_like, snap_to_grid
 
 
 def get_all_upstream_subbasin_ids(
@@ -392,12 +392,12 @@ class Hydrography:
 
         # elevation (we only set this later, because it has to be done after setting the mask)
         elevation = elevation_coarsened.mean()
-        elevation = self.snap_to_grid(elevation, self.grid["mask"])
+        elevation = snap_to_grid(elevation, self.grid["mask"])
 
         self.set_grid(elevation, name="landsurface/elevation")
 
         elevation_std = elevation_coarsened.std()
-        elevation_std = self.snap_to_grid(elevation_std, self.grid["mask"])
+        elevation_std = snap_to_grid(elevation_std, self.grid["mask"])
         self.set_grid(
             elevation_std,
             name="landsurface/elevation_standard_deviation",
@@ -405,7 +405,7 @@ class Hydrography:
 
         # outflow elevation
         outflow_elevation = elevation_coarsened.min()
-        outflow_elevation = self.snap_to_grid(outflow_elevation, self.grid["mask"])
+        outflow_elevation = snap_to_grid(outflow_elevation, self.grid["mask"])
         self.set_grid(outflow_elevation, name="routing/outflow_elevation")
 
         slope = self.full_like(
