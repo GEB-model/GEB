@@ -125,6 +125,11 @@ cwatm_forest_5min:
   meta:
     source_license: GNU General Public License V3
     source_url: https://cwatm.iiasa.ac.at/license.html
+cwatm_grassland_5min:
+  crs: 4326
+  data_type: RasterDataset
+  driver: raster
+  path: cwatm_input_5min/landcover/grassland/{variable}.nc
 reservoir_command_areas_krishna:
   crs: 4326
   data_type: GeoDataFrame
