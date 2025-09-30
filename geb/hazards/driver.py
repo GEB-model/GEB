@@ -3,6 +3,8 @@
 import copy
 from datetime import datetime
 
+import pandas as pd
+
 
 class HazardDriver:
     """Class that manages the simulation of short-lived hazards such as floods.
@@ -84,9 +86,11 @@ class HazardDriver:
                 ):
                     event = copy.deepcopy(event)
 
-                    end_of_forcing_date = self.model.forcing[
-                        "pr_kg_per_m2_s"
-                    ].reader.datetime_index[-1]
+                    end_of_forcing_date = pd.to_datetime(
+                        self.model.forcing["pr_kg_per_m2_per_s"].reader.datetime_index[
+                            -1
+                        ]
+                    ).to_pydatetime()
                     if event["end_time"] > end_of_forcing_date:
                         print(
                             f"Warning: Flood event {event} ends after the model end time {self.end_time}. Simulating only part of flood event."
