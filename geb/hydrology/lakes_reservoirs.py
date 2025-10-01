@@ -291,7 +291,7 @@ class LakesReservoirs(Module):
                 self.var.lake_area[self.is_lake],
                 self.var.outflow_height[self.is_lake],
             )
-            < 1e-10
+            < 1e-5
         ).all()
 
     def map_water_bodies_IDs(self, waterBodyID_unmapped):
