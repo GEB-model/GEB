@@ -120,6 +120,7 @@ class SFINCSRootModel:
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
         coastal: bool = False,
+        bnd_exclude_mask: gpd.GeoDataFrame | None = None,
     ) -> "SFINCSRootModel":
         """Build a SFINCS model.
 
@@ -193,6 +194,7 @@ class SFINCSRootModel:
             sf.setup_mask_bounds(
                 btype="waterlevel",
                 zmax=10,
+                exclude_mask=bnd_exclude_mask,
             )
 
         else:

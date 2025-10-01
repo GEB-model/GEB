@@ -84,7 +84,11 @@ class Floods:
         return utm_crs
 
     def build(
-        self, name: str, region: gpd.GeoDataFrame = None, coastal: bool = False
+        self,
+        name: str,
+        region: gpd.GeoDataFrame = None,
+        coastal: bool = False,
+        bnd_exclude_mask: gpd.GeoDataFrame = None,
     ) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
 
@@ -138,6 +142,7 @@ class Floods:
                 else {},
                 mask_flood_plains=False,  # setting this to True sometimes leads to errors
                 coastal=coastal,
+                bnd_exclude_mask=bnd_exclude_mask,
             )
         else:
             sfincs_model.read()
@@ -420,16 +425,17 @@ class Floods:
             self.model.reporter.variables["discharge_daily"].close()
 
         # build model for coastal region using different mask
-        region = load_geom(self.model.files["geom"]["coastal/land_polygons_buffered"])
+        region = load_geom(self.model.files["geom"]["coastal/lecz_bbox"])
+        bnd_exclude_mask = load_geom(
+            self.model.files["geom"]["coastal/land_polygons"],
+        )
         sfincs_root_model: SFINCSRootModel = self.build(
             "coastal_region",
             region=region,
             coastal=True,
+            bnd_exclude_mask=bnd_exclude_mask,
         )
-        # sfincs_root_model.sfincs_model.setup_mask_active(
-        #     region, zmin=-21, zmax=10, reset_mask=True
-        # )  # TODO: Improve mask setup
-        # add locations
+
         locations = (
             gpd.GeoDataFrame(
                 gpd.read_parquet(self.model.files["geom"]["gtsm/stations_coast_rp"])
