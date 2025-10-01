@@ -1049,12 +1049,14 @@ class CropFarmers(AgentBaseClass):
         if day_index == 364 and not calendar.isleap(self.model.current_time.year):
             self.var.cumulative_pr_mm[:, 365] = self.var.cumulative_pr_mm[:, 364]
 
-    def save_water_deficit(self, discount_factor=0.2) -> None:
+    def save_water_deficit(
+        self, reference_evapotranspiration_grass_m_per_day, discount_factor=0.2
+    ) -> None:
         pr: npt.NDArray[np.float32] = self.HRU.pr_kg_per_m2_per_s.mean(axis=0) * (
             3600 * 24 / 1000
         )  # m / day
         water_deficit_day_m3 = (
-            self.HRU.var.reference_evapotranspiration_grass_m_per_day - pr
+            reference_evapotranspiration_grass_m_per_day - pr
         ) * self.HRU.var.cell_area
         water_deficit_day_m3[water_deficit_day_m3 < 0] = 0
 
