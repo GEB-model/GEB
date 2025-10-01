@@ -1,5 +1,6 @@
 """Build methods for the hydrography for GEB."""
 
+import json
 import os
 
 import geopandas as gpd
@@ -8,15 +9,18 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyflwdir
+import rasterio
+from shapely import Polygon
 import xarray as xr
 from pyflwdir import FlwdirRaster
 from rasterio.features import rasterize
 from scipy.ndimage import value_indices
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
+from geb.workflows.io import fetch_and_save, get_window
 from geb.workflows.raster import rasterize_like
 
 
@@ -585,6 +589,88 @@ class Hydrography:
         )
         river_width.data = river_width_data
         self.set_grid(river_width, name="routing/river_width")
+
+    @build_method
+    def setup_lecz_mask(self) -> None:
+        """Sets up the low elevation coastal zone (LECZ) mask for sfincs models."""
+        # load low elevation coastal zone mask
+        lecz = self.other["landsurface/low_elevation_coastal_zone"]
+        mask_data = lecz.values.astype(np.uint8)
+
+        # Get transform from raster metadata
+        transform = lecz.rio.transform()
+
+        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
+        shapes = rasterio.features.shapes(mask_data, mask=None, transform=transform)
+
+        # Build GeoDataFrame from the shapes generator
+        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
+
+        gdf = gpd.GeoDataFrame.from_records(records)
+        gdf.set_geometry("geometry", inplace=True)
+        gdf.crs = lecz.rio.crs
+        # Keep only mask == 1
+        gdf = gdf[gdf["value"] == 1]
+
+        # load mask to select coastal areas in model region
+        # intersect the mask with the lecz mask
+        lecz_mask = gpd.overlay(gdf, self.geom["mask"], how="intersection")
+        # merge all polygons into a single polygon
+        lecz_mask = gpd.GeoDataFrame(
+            geometry=[lecz_mask.union_all()], crs=lecz_mask.crs
+        )
+        # create rectangular box around lecz mask
+        if not lecz_mask.empty:
+            bbox = lecz_mask.minimum_rotated_rectangle().iloc[0]  # get the Polygon
+            bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=lecz_mask.crs)
+            bbox_gdf.geometry = bbox_gdf.geometry.buffer(
+                0.04, join_style=2
+            )  # buffer by 0.04 degree
+            self.set_geom(bbox_gdf, name="coastal/lecz_bbox")
+
+    @build_method
+    def setup_coastlines(self) -> None:
+        """Sets up the coastlines for the model."""
+        # load the coastline from the data catalog
+        fp_coastlines = self.data_catalog.get_source("osm_coastlines").path
+        coastlines = gpd.read_file(fp_coastlines)
+
+        # clip the coastline to overlapping with mask
+        coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
+        # merge all coastlines into a single linestring
+        coastlines = gpd.GeoDataFrame(
+            geometry=[coastlines.union_all()], crs=coastlines.crs
+        )
+
+        # write to model files
+        self.set_geom(coastlines, name="coastal/coastlines")
+
+        # create rectangular box around coastlines
+        if not coastlines.empty:
+            bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
+            bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
+            bbox_gdf.geometry = bbox_gdf.geometry.buffer(
+                0.04, join_style=2
+            )  # buffer by 0.04 degree
+            self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
+
+    @build_method
+    def setup_osm_land_polygons(
+        self,
+    ) -> None:
+        """Sets up the OSM land polygons for the model."""
+        # load the land polygon from the data catalog
+        fp_land_polygons = self.data_catalog.get_source("osm_land_polygons").path
+        land_polygons = gpd.read_file(fp_land_polygons)
+        # select only the land polygons that intersect with the region
+        land_polygons = land_polygons[land_polygons.intersects(self.region.union_all())]
+        # merge all land polygons into a single polygon
+        land_polygons = gpd.GeoDataFrame(
+            geometry=[land_polygons.union_all()], crs=land_polygons.crs
+        )
+
+        # clip and write to model files
+        self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
     @build_method
     def setup_waterbodies(
