@@ -83,7 +83,9 @@ class Floods:
             utm_crs: str = f"EPSG:327{utm_zone}"  # Southern hemisphere
         return utm_crs
 
-    def build(self, name: str, region: gpd.GeoDataFrame = None) -> SFINCSRootModel:
+    def build(
+        self, name: str, region: gpd.GeoDataFrame = None, coastal: bool = False
+    ) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
 
         Before using this model, forcing must be set.
@@ -135,6 +137,7 @@ class Floods:
                 in self.model.config["hydrology"]["routing"]["river_depth"]
                 else {},
                 mask_flood_plains=False,  # setting this to True sometimes leads to errors
+                coastal=coastal,
             )
         else:
             sfincs_model.read()
@@ -417,9 +420,15 @@ class Floods:
             self.model.reporter.variables["discharge_daily"].close()
 
         # build model for coastal region using different mask
+        region = load_geom(self.model.files["geom"]["coastal/land_polygons_buffered"])
         sfincs_root_model: SFINCSRootModel = self.build(
-            "coastal_region", region=self.build_mask_for_coastal_sfincs()
+            "coastal_region",
+            region=region,
+            coastal=True,
         )
+        # sfincs_root_model.sfincs_model.setup_mask_active(
+        #     region, zmin=-21, zmax=10, reset_mask=True
+        # )  # TODO: Improve mask setup
         # add locations
         locations = (
             gpd.GeoDataFrame(
@@ -436,9 +445,10 @@ class Floods:
         sfincs_root_model.sfincs_model.setup_mask_bounds(
             btype="waterlevel",
             # include_mask=boundary_mask,
-            zmax=10,  # Maximum elevation of boundary cells [m] to assign as waterlevel boundary
+            zmax=2,  # Maximum elevation of boundary cells [m] to assign as waterlevel boundary
             reset_bounds=True,
             all_touched=True,
+            exclude_mask=load_geom(self.model.files["geom"]["coastal/land_polygons"]),
         )
 
         rp_maps_coastal = {}

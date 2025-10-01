@@ -119,6 +119,7 @@ class SFINCSRootModel:
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
+        coastal: bool = False,
     ) -> "SFINCSRootModel":
         """Build a SFINCS model.
 
@@ -180,6 +181,20 @@ class SFINCSRootModel:
 
         if mask_flood_plains:
             do_mask_flood_plains(sf)
+        elif coastal:
+            sf.setup_mask_active(
+                zmin=0,  # minimum elevation for valid cells
+                zmax=20,  # maximum elevation for valid cells
+                # exclude_mask="osm_coastlines",
+                drop_area=1,  # drops areas that are smaller than 1km2,
+                reset_mask=True,
+            )
+
+            sf.setup_mask_bounds(
+                btype="waterlevel",
+                zmax=10,
+            )
+
         else:
             sf.setup_mask_active(
                 region, zmin=-21, reset_mask=True
