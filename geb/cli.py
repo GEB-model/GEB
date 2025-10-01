@@ -1199,7 +1199,7 @@ def init_multiple_fn(
     update_config: str | Path,
     working_directory: str | Path,
     from_example: str,
-    geometry_bounds: str,
+    geometry_bounds: str = "-180.0, -90.0, 180.0, 90.0",
     target_area_km2: float = 817000.0,
     area_tolerance: float = 0.3,
     cluster_prefix: str = "cluster",
