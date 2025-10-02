@@ -619,14 +619,7 @@ class Hydrography:
         lecz_mask = gpd.GeoDataFrame(
             geometry=[lecz_mask.union_all()], crs=lecz_mask.crs
         )
-        # create rectangular box around lecz mask
-        if not lecz_mask.empty:
-            bbox = lecz_mask.minimum_rotated_rectangle().iloc[0]  # get the Polygon
-            bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=lecz_mask.crs)
-            bbox_gdf.geometry = bbox_gdf.geometry.buffer(
-                0.04, join_style=2
-            )  # buffer by 0.04 degree
-            self.set_geom(bbox_gdf, name="coastal/lecz_bbox")
+        self.set_geom(lecz_mask, name="coastal/lecz_mask")
 
     @build_method
     def setup_coastlines(self) -> None:
@@ -654,6 +647,18 @@ class Hydrography:
             )  # buffer by 0.04 degree
             self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
 
+    # Function to check if a polygon is fully contained in another
+    @staticmethod
+    def remove_contained_polygons(gdf):
+        to_drop = set()
+        for i, geom1 in gdf.iterrows():
+            for j, geom2 in gdf.iterrows():
+                if i != j and geom1.geometry.within(
+                    geom2.geometry
+                ):  # geom1 is inside geom2
+                    to_drop.add(i)
+        return gdf.drop(index=list(to_drop))
+
     @build_method
     def setup_osm_land_polygons(
         self,
@@ -671,6 +676,38 @@ class Hydrography:
 
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
+
+    @build_method
+    def setup_coastal_sfincs_model_regions(self) -> None:
+        """Sets up the coastal sfincs model regions."""
+        # load the lecz mask
+        lecz_mask = self.geom["coastal/lecz_mask"]
+        # add small buffer to ensure connection of 'islands' with coastlines
+        lecz_mask.geometry = lecz_mask.geometry.buffer(0.001)
+        # split the lezc mask into individual polygons of contiguous areas
+        lecz_polygons = lecz_mask.explode(index_parts=False).reset_index(drop=True)
+
+        # load the coastlines
+        coastlines = self.geom["coastal/coastlines"]
+        sfincs_regions = []
+        for _, lecz_polygon in lecz_polygons.iterrows():
+            # check if the lecz polygon intersects with the coastline
+            if coastlines.intersects(lecz_polygon.geometry).any():
+                # if it does, create a sfincs region
+                # create a bounding box around the lecz polygon
+                lecz_polygon_gpd = gpd.GeoDataFrame(
+                    geometry=[lecz_polygon.geometry], crs=lecz_mask.crs
+                )
+                bbox = lecz_polygon_gpd.minimum_rotated_rectangle().iloc[0]
+                # add a small buffer to ensure connection with coastlines
+                bbox = bbox.buffer(0.04, join_style=2)
+
+                sfincs_regions.append(bbox)
+        bbox_gdf = gpd.GeoDataFrame(geometry=sfincs_regions, crs=lecz_mask.crs)
+        # remove polygons that are completely inside another larger polygon
+        filtered_gdf = self.remove_contained_polygons(bbox_gdf).reset_index(drop=True)
+
+        self.set_geom(filtered_gdf, name="coastal/model_regions")
 
     @build_method
     def setup_waterbodies(
