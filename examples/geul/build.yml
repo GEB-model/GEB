@@ -356,14 +356,13 @@ setup_forcing:
   forcing: ERA5
 
 # setup_forecasts:
-#   only_rainfall: true
 #   forecast_start: 2021-07-11 00:00:00 # start time of the forecast initialization
 #   forecast_end: 2021-07-12 00:00:00 # end time of the forecast initialization
 #   forecast_provider: ECMWF # only ECMWF supported currently
-#   forecast_model: pf # pf (50 ensembles) or cf (control forecast)
+#   forecast_model: probabilistic_forecast # probabilistic_forecast (50 ensemble forecasts) or control_forecast (best estimate; 1 forecast)
 #   forecast_resolution: 0.1/0.1 # degrees. ENS is now also on 9km resolution (same as HRES). This corresponds to 0.1/0.1 degrees. F640 is also possble (roughly 8km res).
 #   forecast_horizon: 240 # lead time of the forecasts, in hours
-#   forecast_timestep: 1 # time step of the forecast output, in hours
+#   forecast_timestep_hours: 1 # time step of the forecast output, in hours
   
 setup_SPEI:
   window_months: 12

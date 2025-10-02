@@ -329,10 +329,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 set(forecast_issue_dates)
             )  # only keep unique dates
 
-            if self.config["general"]["forecasts"]["only_rainfall"]:
-                variables = ["pr_hourly"]  # only rainfall is currently implemented
-            else:
-                print("Other variables than rainfall not yet implemented.")
+            # if self.config["general"]["forecasts"]["only_rainfall"]:
+            #    variables = ["pr_hourly"]  # only rainfall is currently implemented
+            # else:
+            #    print("Other variables than rainfall not yet implemented.")
 
             for dt in forecast_issue_dates:
                 if (
@@ -353,22 +353,22 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 # simulate household response to warning
                 # self.agents.households.infrastructure_warning_strategy()
 
-        t0 = time()  # start timing
-        self.agents.step()  # step the agents
+        t0 = time()
+        self.agents.step()
         if self.simulate_hydrology:
-            self.hydrology.step()  # step the hydrology
+            self.hydrology.step()
 
-        HazardDriver.step(self)  # step the hazards
+        HazardDriver.step(self)
 
-        self.report(locals())  # report the current state of the model
+        self.report(locals())
 
-        t1 = time()  # end timing
+        t1 = time()
         print(
             f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}finished {self.current_time} ({round(t1 - t0, 4)}s)",
             flush=True,
-        )  # print the time taken for the step
+        )
 
-        self.current_timestep += 1  # increment the timestep
+        self.current_timestep += 1
 
     def _initialize(
         self,
