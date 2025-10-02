@@ -665,8 +665,7 @@ osm_land_polygons:
     category: landsurface
     source_author: OpenStreetMap contributors
     source_url: https://osmdata.openstreetmap.de/data/land-polygons.html
-    source_license: Data Commons Open Database License (ODbL)
-    
+    source_license: Data Commons Open Database License (ODbL)   
 osm_coastlines:
   crs: 4326
   data_type: GeoDataFrame
@@ -677,6 +676,5 @@ osm_coastlines:
     source_author: OpenStreetMap contributors
     source_url: https://osmdata.openstreetmap.de/data/coastlines.html
     source_license: Data Commons Open Database License (ODbL)
-    
 
 
