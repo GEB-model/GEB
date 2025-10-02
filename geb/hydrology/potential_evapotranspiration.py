@@ -193,7 +193,7 @@ def penman_monteith(
     return energy_term_land + aerodynamic_term, energy_term_water + aerodynamic_term
 
 
-@njit(cache=False, parallel=True)
+@njit(cache=True, parallel=True)
 def potential_evapotranspiration(
     tas_K: npt.NDArray[np.float32],
     dewpoint_tas_K: npt.NDArray[np.float32],
