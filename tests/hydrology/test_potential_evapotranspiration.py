@@ -5,17 +5,15 @@ import math
 import numpy as np
 
 from geb.hydrology.potential_evapotranspiration import (
-    W_m2_to_MJ_m2_day,
+    W_per_m2_to_MJ_per_m2_per_hour,
     adjust_wind_speed,
-    get_actual_vapour_pressure,
-    get_latent_heat_of_vaporization,
     get_net_solar_radiation,
     get_psychrometric_constant,
-    get_reference_evapotranspiration,
     get_slope_of_saturation_vapour_pressure_curve,
     get_upwelling_long_wave_radiation,
     get_vapour_pressure,
     get_vapour_pressure_deficit,
+    penman_monteith,
 )
 
 
@@ -29,49 +27,34 @@ def test_get_vapour_pressure() -> None:
     assert math.isclose(saturated_vapour_pressure, 3.075, abs_tol=1e-2)
 
 
-def test_get_actual_vapour_pressure() -> None:
-    """See example 5: https://www.fao.org/4/X0490E/x0490e07.htm."""
-    saturated_vapour_pressure_min = get_vapour_pressure(
-        temperature_C=18,
-    )
-    saturated_vapour_pressure_max = get_vapour_pressure(
-        temperature_C=25,
-    )
-    actual_vapour_pressure_deficit = get_actual_vapour_pressure(
-        saturated_vapour_pressure_min=saturated_vapour_pressure_min,
-        saturated_vapour_pressure_max=saturated_vapour_pressure_max,
-        hurs=(82 + 54) / 2,  # Average relative humidity
-    )
-    assert math.isclose(actual_vapour_pressure_deficit, 1.78, abs_tol=1e-2)
-
-
 def test_get_vapour_pressure_deficit() -> None:
-    """See example 6: https://www.fao.org/4/X0490E/x0490e07.htm."""
+    """See example 18: https://www.fao.org/4/x0490e/x0490e08.htm."""
     vapour_pressure_deficit = get_vapour_pressure_deficit(
-        saturated_vapour_pressure_min=2.064,
-        saturated_vapour_pressure_max=3.168,
-        actual_vapour_pressure=1.70,
+        saturated_vapour_pressure=1.997,
+        actual_vapour_pressure=1.409,
     )
-    assert math.isclose(vapour_pressure_deficit, 0.91, abs_tol=0.1)
+    assert math.isclose(a=vapour_pressure_deficit, b=0.589, abs_tol=0.1)
 
 
-def test_W_m2_to_MJ_m2_day() -> None:
-    """Test the conversion from W/m^2 to MJ/m^2/day."""
-    W_m2 = np.float32(100.0)  # Example value in W/m^2
-    MJ_m2_day = W_m2_to_MJ_m2_day(W_m2)
+def test_W_per_m2_to_MJ_per_m2_per_hour() -> None:
+    """Test the conversion from W/m^2 to MJ/m^2/hour."""
+    W_per_m2 = np.float32(100.0)  # Example value in W/m^2
+    MJ_per_m2_per_hour = W_per_m2_to_MJ_per_m2_per_hour(W_per_m2)
 
-    expected_value = W_m2 * (86400 * 1e-6)  # Convert W/m^2 to MJ/m^2/day
-    assert math.isclose(MJ_m2_day, expected_value, rel_tol=1e-6)
+    expected_value = W_per_m2 * (3600 * 1e-6)  # Convert W/m^2 to MJ/m^2/hour
+    assert math.isclose(MJ_per_m2_per_hour, expected_value, rel_tol=1e-6)
 
 
 def test_get_upwelling_long_wave_radiation() -> None:
-    """Test the upwelling long wave radiation calculation."""
-    tasmin_C = 19.1  # Minimum temperature in Celsius
-    tasmax_C = 25.1  # Maximum temperature in Celsius
-    rlus_MJ_m2_day = get_upwelling_long_wave_radiation(tasmin_C, tasmax_C)
+    """Test the upwelling long wave radiation calculation.
 
-    expected_value = (38.8 + 35.8) / 2
-    assert math.isclose(rlus_MJ_m2_day, expected_value, rel_tol=1e-2)
+    See example 18: https://www.fao.org/4/x0490e/x0490e08.htm.
+    """
+    tas_C = 38  # Temperature in Celsius
+    rlus_MJ_m2_per_hour = get_upwelling_long_wave_radiation(tas_C)
+
+    expected_value = 1.915  # Expected value in MJ/m^2/hour
+    assert math.isclose(rlus_MJ_m2_per_hour, expected_value, rel_tol=1e-2)
 
 
 def test_get_psychrometric_constant() -> None:
@@ -106,16 +89,6 @@ def test_get_slope_of_saturation_vapour_pressure_curve() -> None:
     assert math.isclose(slope, expected_value, rel_tol=1e-6)
 
 
-def test_get_latent_heat_of_vaporization() -> None:
-    """Test the latent heat of vaporization calculation."""
-    temperature_C = np.float32(25.0)  # Example temperature in Celsius
-
-    latent_heat = get_latent_heat_of_vaporization(temperature_C)
-
-    expected_value = 2.501 - 0.002361 * temperature_C
-    assert math.isclose(latent_heat, expected_value, rel_tol=1e-6)
-
-
 def test_adjust_wind_speed() -> None:
     """Test the wind speed adjustment function."""
     wind_speed = np.float32(100.0)  # Example wind speed in m/s
@@ -124,19 +97,47 @@ def test_adjust_wind_speed() -> None:
     assert math.isclose(adjusted_wind_speed, 74.8, rel_tol=1e-6)
 
 
-def test_get_reference_evapotranspiration() -> None:
-    """Test the reference evapotranspiration calculation."""
+def test_penman_monteith_day() -> None:
+    """Test the reference evapotranspiration calculation during the day.
+
+    See example 19: https://www.fao.org/4/x0490e/x0490e08.htm
+    """
     (
         reference_evapotranspiration_land_m_per_day,
         reference_evapotranspiration_water_m_per_day,
-    ) = get_reference_evapotranspiration(
-        net_radiation_land=13.28,
-        net_radiation_water=13.28,
-        slope_of_saturated_vapour_pressure_curve=0.122,
-        psychrometric_constant=0.066,
-        wind_2m=2.078,
-        latent_heat_of_vaporarization=1 / 0.408,
-        temperature_C=16.9,
-        vapour_pressure_deficit=0.589,
+    ) = penman_monteith(
+        net_radiation_land=1.749,
+        net_radiation_water=1.749,
+        soil_heat_flux=0.175,
+        slope_of_saturated_vapour_pressure_curve=0.358,
+        psychrometric_constant=0.0673,
+        wind_2m=3.3,
+        temperature_C=38,
+        vapour_pressure_deficit=3.180,
     )
-    assert math.isclose(reference_evapotranspiration_land_m_per_day, 3.9, rel_tol=1e-2)
+    assert math.isclose(
+        a=reference_evapotranspiration_land_m_per_day, b=0.63, rel_tol=1e-2
+    )
+
+
+def test_penman_monteith_night() -> None:
+    """Test the reference evapotranspiration calculation at night.
+
+    See example 19: https://www.fao.org/4/x0490e/x0490e08.htm
+    """
+    (
+        reference_evapotranspiration_land_m_per_day,
+        reference_evapotranspiration_water_m_per_day,
+    ) = penman_monteith(
+        net_radiation_land=-0.100,
+        net_radiation_water=-0.100,
+        soil_heat_flux=-0.050,
+        slope_of_saturated_vapour_pressure_curve=0.220,
+        psychrometric_constant=0.0673,
+        wind_2m=1.9,
+        temperature_C=28,
+        vapour_pressure_deficit=0.378,
+    )
+    assert math.isclose(
+        a=reference_evapotranspiration_land_m_per_day, b=0.00, abs_tol=1e-2
+    )

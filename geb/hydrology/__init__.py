@@ -35,7 +35,6 @@ from .lakes_res_small import SmallLakesReservoirs
 from .lakes_reservoirs import LakesReservoirs
 from .landcover import LandCover
 from .landsurface import LandSurface
-from .potential_evapotranspiration import PotentialEvapotranspiration
 from .routing import Routing
 from .runoff_concentration import RunoffConcentration
 from .snow_frost import SnowFrost
@@ -67,10 +66,6 @@ class Hydrology(Data, Module):
         self.crop_factor_calibration_factor = 1
 
         self.landsurface = LandSurface(self.model, self)
-
-        self.potential_evapotranspiration = PotentialEvapotranspiration(
-            self.model, self
-        )
         self.snowfrost = SnowFrost(self.model, self)
         self.landcover = LandCover(self.model, self)
         self.soil = Soil(self.model, self)
@@ -133,12 +128,6 @@ class Hydrology(Data, Module):
 
         self.landsurface.step()
         timer.finish_split("Land surface")
-
-        self.potential_evapotranspiration.step()
-        timer.finish_split("PET")
-
-        print(self.HRU.var.reference_evapotranspiration_grass_m_per_day_.mean())
-        print(self.HRU.var.reference_evapotranspiration_grass_m_per_day.mean())
 
         self.lakes_reservoirs.step()
         timer.finish_split("Waterbodies")
