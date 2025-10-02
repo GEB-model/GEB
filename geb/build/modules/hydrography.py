@@ -1,6 +1,5 @@
 """Build methods for the hydrography for GEB."""
 
-import json
 import os
 
 import geopandas as gpd
@@ -10,7 +9,6 @@ import numpy.typing as npt
 import pandas as pd
 import pyflwdir
 import rasterio
-from shapely import Polygon
 import xarray as xr
 from pyflwdir import FlwdirRaster
 from rasterio.features import rasterize
@@ -20,7 +18,6 @@ from shapely.geometry import LineString, Point, shape
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
-from geb.workflows.io import fetch_and_save, get_window
 from geb.workflows.raster import rasterize_like
 
 
@@ -647,9 +644,15 @@ class Hydrography:
             )  # buffer by 0.04 degree
             self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
 
-    # Function to check if a polygon is fully contained in another
     @staticmethod
-    def remove_contained_polygons(gdf):
+    def remove_contained_polygons(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+        """Remove polygons that are completely inside another larger polygon.
+
+        Args:
+            gdf: A GeoDataFrame containing the polygons to be filtered.
+        Returns:
+            A GeoDataFrame containing only the polygons that are not completely inside another polygon.
+        """
         to_drop = set()
         for i, geom1 in gdf.iterrows():
             for j, geom2 in gdf.iterrows():

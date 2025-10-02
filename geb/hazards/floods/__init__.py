@@ -10,10 +10,8 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import rasterio
 import xarray as xr
 import zarr
-from shapely.geometry import shape
 from shapely.geometry.point import Point
 
 from ...hydrology.HRUs import load_geom
@@ -99,6 +97,8 @@ class Floods:
         Args:
             name: Name of the SFINCS model (used for the model root directory).
             region: The region geometry for the model (optional).
+            coastal: Whether to setup the model for coastal flooding (default is False).
+            bnd_exclude_mask: A geometry to exclude from the boundary cells (optional).
         Returns:
             The built or read SFINCSRootModel instance.
         """
