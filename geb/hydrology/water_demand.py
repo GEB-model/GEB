@@ -363,7 +363,7 @@ class WaterDemand(Module):
                     irrigation_loss_to_evaporation_m,
                     return_flow_irrigation_m,
                 ],
-                tollerance=1e-5,
+                tolerance=1e-5,
             )
 
         self.HRU.var.actual_irrigation_consumption = irrigation_water_consumption_m
@@ -410,7 +410,7 @@ class WaterDemand(Module):
                     irrigation_loss_to_evaporation_m,
                     return_flow_irrigation_m,
                 ],
-                tollerance=1e-6,
+                tolerance=1e-6,
             )
             balance_check(
                 name="water_demand_2",
@@ -432,7 +432,7 @@ class WaterDemand(Module):
                     available_reservoir_storage_m3,
                     available_groundwater_m3,
                 ],
-                tollerance=10000,
+                tolerance=10000,
             )
         if self.model.timing:
             print(timer)

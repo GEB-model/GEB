@@ -1288,7 +1288,7 @@ class CropFarmers(AgentBaseClass):
                 outfluxes=[
                     (water_withdrawal_m * self.model.hydrology.HRU.var.cell_area)
                 ],
-                tollerance=50,
+                tolerance=50,
             )
 
             # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
@@ -1298,7 +1298,7 @@ class CropFarmers(AgentBaseClass):
                 outfluxes=self.var.channel_abstraction_m3_by_farmer,
                 prestorages=available_channel_storage_m3_pre,
                 poststorages=available_channel_storage_m3,
-                tollerance=50,
+                tolerance=50,
             )
 
             balance_check(
@@ -1306,7 +1306,7 @@ class CropFarmers(AgentBaseClass):
                 how="sum",
                 outfluxes=self.var.reservoir_abstraction_m3_by_farmer,
                 influxes=reservoir_abstraction_m3,
-                tollerance=50,
+                tolerance=50,
             )
 
             balance_check(
@@ -1314,7 +1314,7 @@ class CropFarmers(AgentBaseClass):
                 how="sum",
                 outfluxes=self.var.groundwater_abstraction_m3_by_farmer,
                 influxes=groundwater_abstraction_m3,
-                tollerance=10,
+                tolerance=10,
             )
 
             # assert that the total amount of water withdrawn is equal to the total storage before and after abstraction
@@ -1338,7 +1338,7 @@ class CropFarmers(AgentBaseClass):
                 poststorages=self.var.remaining_irrigation_limit_m3[
                     ~np.isnan(self.var.remaining_irrigation_limit_m3)
                 ].astype(np.float64),
-                tollerance=50,
+                tolerance=50,
             )
 
             # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal
@@ -1351,7 +1351,7 @@ class CropFarmers(AgentBaseClass):
                     addtoevapotrans_m,
                 ),
                 outfluxes=water_withdrawal_m,
-                tollerance=50,
+                tolerance=50,
             )
 
             assert water_withdrawal_m.dtype == np.float32

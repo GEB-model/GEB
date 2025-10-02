@@ -499,7 +499,7 @@ class LakesReservoirs(Module):
                 outfluxes=[],
                 prestorages=[prestorage[self.is_reservoir]],
                 poststorages=[self.var.storage[self.is_reservoir]],
-                tollerance=1,  # 1 m3
+                tolerance=1,  # 1 m3
             )
 
         return outflow_to_drainage_network_m3, command_area_release_m3

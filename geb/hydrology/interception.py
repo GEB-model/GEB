@@ -210,7 +210,7 @@ class Interception(Module):
                 ],  # Out
                 prestorages=[interception_storage_pre],  # prev storage
                 poststorages=[self.HRU.var.interception_storage],
-                tollerance=1e-7,
+                tolerance=1e-7,
             )
 
         assert not np.isnan(potential_transpiration[bio_area]).any()

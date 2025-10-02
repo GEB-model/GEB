@@ -346,7 +346,7 @@ class LandCover(Module):
                 ],
                 prestorages=[interception_storage_pre],
                 poststorages=[self.HRU.var.interception_storage],
-                tollerance=1e-6,
+                tolerance=1e-6,
             )
 
             balance_check(
@@ -370,7 +370,7 @@ class LandCover(Module):
                     np.nansum(self.HRU.var.w, axis=0),
                     self.HRU.var.topwater,
                 ],
-                tollerance=1e-6,
+                tolerance=1e-6,
                 error_identifiers={
                     "land_use_type": self.HRU.var.land_use_type,
                 },
@@ -412,7 +412,7 @@ class LandCover(Module):
                 ],
                 prestorages=[totalstorage_landcover_pre],
                 poststorages=[totalstorage_landcover],
-                tollerance=1e-6,
+                tolerance=1e-6,
             )
 
             balance_check(
@@ -433,7 +433,7 @@ class LandCover(Module):
                 ],
                 prestorages=[totalstorage_landcover_pre],
                 poststorages=[totalstorage_landcover],
-                tollerance=1e-6,
+                tolerance=1e-6,
             )
 
         groundwater_recharge = self.hydrology.to_grid(

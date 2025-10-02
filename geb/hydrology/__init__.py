@@ -173,8 +173,8 @@ class Hydrology(Data, Module):
                 ],
                 prestorages=[prev_storage],
                 poststorages=[self.get_current_storage()],
-                tollerance=self.grid.compressed_size
-                / 3,  # increase tollerance for large models
+                tolerance=self.grid.compressed_size
+                / 3,  # increase tolerance for large models
             )
 
         timer.finish_split("Landcover")
@@ -209,8 +209,8 @@ class Hydrology(Data, Module):
                 ],
                 prestorages=[prev_storage],
                 poststorages=[self.get_current_storage()],
-                tollerance=self.grid.compressed_size
-                / 3,  # increase tollerance for large models
+                tolerance=self.grid.compressed_size
+                / 3,  # increase tolerance for large models
             )
 
         timer.finish_split("GW")
@@ -253,8 +253,8 @@ class Hydrology(Data, Module):
                 ],
                 prestorages=[prev_storage],
                 poststorages=[current_storage],
-                tollerance=self.grid.compressed_size
-                / 3,  # increase tollerance for large models
+                tolerance=self.grid.compressed_size
+                / 3,  # increase tolerance for large models
             )
 
         timer.finish_split("Routing")

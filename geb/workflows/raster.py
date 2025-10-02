@@ -230,7 +230,7 @@ def convert_nodata(
 def snap_to_grid(
     ds: xr.DataArray | xr.Dataset,
     reference: xr.DataArray | xr.Dataset,
-    relative_tollerance: float = 0.02,
+    relative_tolerance: float = 0.02,
     ydim: str = "y",
     xdim: str = "x",
 ) -> xr.Dataset | xr.DataArray:
@@ -245,7 +245,7 @@ def snap_to_grid(
     Args:
         ds: The dataset to snap.
         reference: The reference dataset.
-        relative_tollerance: The relative tolerance for snapping.
+        relative_tolerance: The relative tolerance for snapping.
         ydim: The name of the y dimension.
         xdim: The name of the x dimension.
 
@@ -256,13 +256,13 @@ def snap_to_grid(
     assert np.isclose(
         ds.coords[ydim].values,
         reference[ydim].values,
-        atol=abs(ds.rio.resolution()[1] * relative_tollerance),
+        atol=abs(ds.rio.resolution()[1] * relative_tolerance),
         rtol=0,
     ).all()
     assert np.isclose(
         ds.coords[xdim].values,
         reference[xdim].values,
-        atol=abs(ds.rio.resolution()[0] * relative_tollerance),
+        atol=abs(ds.rio.resolution()[0] * relative_tolerance),
         rtol=0,
     ).all()
     return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})

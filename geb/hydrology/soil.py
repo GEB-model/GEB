@@ -2019,7 +2019,7 @@ class Soil(Module):
                     np.nansum(self.HRU.var.w, axis=0),
                     self.HRU.var.topwater,
                 ],
-                tollerance=1e-6,
+                tolerance=1e-6,
                 error_identifiers={
                     "land_use_type": self.HRU.var.land_use_type,
                 },
@@ -2134,7 +2134,7 @@ class Soil(Module):
                     np.nansum(self.HRU.var.w, axis=0),
                     self.HRU.var.topwater,
                 ],
-                tollerance=1e-6,
+                tolerance=1e-6,
                 error_identifiers={
                     "land_use_type": self.HRU.var.land_use_type,
                 },
@@ -2237,7 +2237,7 @@ class Soil(Module):
                         np.nansum(self.HRU.var.w, axis=0),
                         self.HRU.var.topwater,
                     ],
-                    tollerance=1e-6,
+                    tolerance=1e-6,
                     error_identifiers={
                         "land_use_type": self.HRU.var.land_use_type,
                     },

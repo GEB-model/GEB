@@ -335,14 +335,14 @@ class SnowFrost(Module):
                 poststorages=[
                     np.sum(self.HRU.var.SnowCoverS, axis=0) / self.var.numberSnowLayers
                 ],
-                tollerance=1e-7,
+                tolerance=1e-7,
             )
             balance_check(
                 name="snow_2",
                 how="cellwise",
                 influxes=[precipitation_m_day],
                 outfluxes=[snow, rain],
-                tollerance=1e-7,
+                tolerance=1e-7,
             )
 
         # Calculation of the frost index
