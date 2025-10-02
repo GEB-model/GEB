@@ -57,7 +57,7 @@ class LandSurface(Module):
         ) = potential_evapotranspiration(
             tas_K=tas_2m_K,
             dewpoint_tas_K=dewpoint_tas_2m_K,
-            ps_pascal=ps_pascal,
+            ps_pa=ps_pascal,
             rlds_W_per_m2=rlds_W_per_m2,
             rsds_W_per_m2=rsds_W_per_m2,
             wind_u10m_m_per_s=wind_u10m_m_per_s,

@@ -24,37 +24,37 @@ def get_vapour_pressure(
 
 @njit(cache=True, inline="always")
 def get_vapour_pressure_deficit(
-    saturated_vapour_pressure: npt.NDArray[np.float32],
-    actual_vapour_pressure: npt.NDArray[np.float32],
+    saturated_vapour_pressure_kPa: npt.NDArray[np.float32],
+    actual_vapour_pressure_kPa: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
     """Calculate the vapour pressure deficit.
 
     Args:
-        saturated_vapour_pressure: Saturated vapour pressure.
-        actual_vapour_pressure: Actual vapour pressure.
+        saturated_vapour_pressure_kPa: Saturated vapour pressure (kPa).
+        actual_vapour_pressure_kPa: Actual vapour pressure (kPa).
 
     Returns:
         Vapour pressure deficit in kPa.
     """
     return np.maximum(
-        saturated_vapour_pressure - actual_vapour_pressure,
+        saturated_vapour_pressure_kPa - actual_vapour_pressure_kPa,
         np.float32(0.0),
     )
 
 
 @njit(cache=True, inline="always")
 def get_psychrometric_constant(
-    ps_pascal: npt.NDArray[np.float32],
+    ps_pa: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
     """Calculate the psychrometric constant.
 
     Args:
-        ps_pascal: Surface pressure in Pascals.
+        ps_pa: Surface pressure in Pascals.
 
     Returns:
         Psychrometric constant in kPa/°C.
     """
-    return np.float32(0.665e-3) * np.float32(0.001) * ps_pascal  # Convert Pa to kPa
+    return np.float32(0.665e-3) * np.float32(0.001) * ps_pa  # Convert Pa to kPa
 
 
 @njit(cache=True, inline="always")
@@ -74,33 +74,33 @@ def get_upwelling_long_wave_radiation(
 
 @njit(cache=True, inline="always")
 def W_per_m2_to_MJ_per_m2_per_hour(
-    solar_radiation: npt.NDArray[np.float32],
+    solar_radiation_W_per_m2: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
     """Convert solar radiation from W/m^2 to MJ/m^2/hour.
 
     Args:
-        solar_radiation: Solar radiation in W/m^2.
+        solar_radiation_W_per_m2: Solar radiation in W/m^2.
 
     Returns:
         Solar radiation in MJ/m^2/hour.
     """
-    return solar_radiation * (np.float32(3600) * np.float32(1e-6))
+    return solar_radiation_W_per_m2 * (np.float32(3600) * np.float32(1e-6))
 
 
 @njit(cache=True, inline="always")
 def get_net_solar_radiation(
-    solar_radiation: npt.NDArray[np.float32], albedo: np.float32
+    solar_radiation_MJ_per_m2_per_hour: npt.NDArray[np.float32], albedo: np.float32
 ) -> npt.NDArray[np.float32]:
     """Calculate net solar radiation based on incoming solar radiation and albedo.
 
     Args:
-        solar_radiation: Incoming solar radiation.
+        solar_radiation_MJ_per_m2_per_hour: Incoming solar radiation (MJ/m^2/hour).
         albedo: Albedo of the surface (fraction of reflected solar radiation).
 
     Returns:
         Net solar radiation in MJ/m²/timestep.
     """
-    return (np.float32(1) - albedo) * solar_radiation
+    return (np.float32(1) - albedo) * solar_radiation_MJ_per_m2_per_hour
 
 
 @njit(cache=True, inline="always")
@@ -123,62 +123,72 @@ def get_slope_of_saturation_vapour_pressure_curve(
 
 
 @njit(cache=True, inline="always")
-def adjust_wind_speed(wind_speed: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+def adjust_wind_speed(
+    wind_speed_10m_m_per_s: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
     """Adjust wind speed to surface level.
 
     Args:
-        wind_speed: Wind speed at 10 m height in m/s.
+        wind_speed_10m_m_per_s: Wind speed at 10 m height in m/s.
 
     Returns:
         Adjusted wind speed at 2 m height in m/s.
     """
-    return wind_speed * np.float32(0.748)
+    return wind_speed_10m_m_per_s * np.float32(0.748)
 
 
 @njit(cache=True, inline="always")
 def penman_monteith(
-    net_radiation_land: npt.NDArray[np.float32],
-    net_radiation_water: npt.NDArray[np.float32],
-    soil_heat_flux: npt.NDArray[np.float32],
-    slope_of_saturated_vapour_pressure_curve: npt.NDArray[np.float32],
-    psychrometric_constant: npt.NDArray[np.float32],
-    wind_2m: npt.NDArray[np.float32],
+    net_radiation_land_MJ_per_m2_per_hour: npt.NDArray[np.float32],
+    net_radiation_water_MJ_per_m2_per_hour: npt.NDArray[np.float32],
+    soil_heat_flux_MJ_per_m2_per_hour: npt.NDArray[np.float32],
+    slope_of_saturated_vapour_pressure_curve_kPa_per_C: npt.NDArray[np.float32],
+    psychrometric_constant_kPa_per_C: npt.NDArray[np.float32],
+    wind_2m_m_per_s: npt.NDArray[np.float32],
     temperature_C: npt.NDArray[np.float32],
-    vapour_pressure_deficit: npt.NDArray[np.float32],
+    vapour_pressure_deficit_kPa: npt.NDArray[np.float32],
 ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
     """Combine all terms of the Penman-Monteith equation to calculate reference evapotranspiration.
 
     Args:
-        net_radiation_land: Net radiation for land in MJ/m^2/hour.
-        net_radiation_water: Net radiation for water in MJ/m^2/hour.
-        soil_heat_flux: Soil heat flux in MJ/m^2/hour.
-        slope_of_saturated_vapour_pressure_curve: Slope of the saturation vapour pressure curve in kPa/°C.
-        psychrometric_constant: Psychrometric constant in kPa/°C.
-        wind_2m: Wind speed at 2 m height in m/s.
+        net_radiation_land_MJ_per_m2_per_hour: Net radiation for land in MJ/m^2/hour.
+        net_radiation_water_MJ_per_m2_per_hour: Net radiation for water in MJ/m^2/hour.
+        soil_heat_flux_MJ_per_m2_per_hour: Soil heat flux in MJ/m^2/hour.
+        slope_of_saturated_vapour_pressure_curve_kPa_per_C: Slope of the saturation vapour pressure curve in kPa/°C.
+        psychrometric_constant_kPa_per_C: Psychrometric constant in kPa/°C.
+        wind_2m_m_per_s: Wind speed at 2 m height in m/s.
         temperature_C: Temperature in Celsius.
-        vapour_pressure_deficit: Vapour pressure deficit in kPa.
+        vapour_pressure_deficit_kPa: Vapour pressure deficit in kPa.
 
     Returns:
         reference_evapotranspiration_land: Reference evapotranspiration for land in mm/hour.
         reference_evapotranspiration_water: Reference evapotranspiration for water in mm/hour.
     """
-    denominator = slope_of_saturated_vapour_pressure_curve + psychrometric_constant * (
-        np.float32(1) + np.float32(0.34) * wind_2m
+    denominator = (
+        slope_of_saturated_vapour_pressure_curve_kPa_per_C
+        + psychrometric_constant_kPa_per_C
+        * (np.float32(1) + np.float32(0.34) * wind_2m_m_per_s)
     )
 
     common_energy_factor = (
-        np.float32(0.408) * slope_of_saturated_vapour_pressure_curve / denominator
+        np.float32(0.408)
+        * slope_of_saturated_vapour_pressure_curve_kPa_per_C
+        / denominator
     )
 
-    energy_term_land = (net_radiation_land - soil_heat_flux) * common_energy_factor
-    energy_term_water = (net_radiation_water - soil_heat_flux) * common_energy_factor
+    energy_term_land = (
+        net_radiation_land_MJ_per_m2_per_hour - soil_heat_flux_MJ_per_m2_per_hour
+    ) * common_energy_factor
+    energy_term_water = (
+        net_radiation_water_MJ_per_m2_per_hour - soil_heat_flux_MJ_per_m2_per_hour
+    ) * common_energy_factor
 
     aerodynamic_term = (
-        psychrometric_constant
+        psychrometric_constant_kPa_per_C
         * np.float32(37)
         / (temperature_C + np.float32(273.16))
-        * wind_2m
-        * vapour_pressure_deficit
+        * wind_2m_m_per_s
+        * vapour_pressure_deficit_kPa
     ) / denominator
     return energy_term_land + aerodynamic_term, energy_term_water + aerodynamic_term
 
@@ -187,7 +197,7 @@ def penman_monteith(
 def potential_evapotranspiration(
     tas_K: npt.NDArray[np.float32],
     dewpoint_tas_K: npt.NDArray[np.float32],
-    ps_pascal: npt.NDArray[np.float32],
+    ps_pa: npt.NDArray[np.float32],
     rlds_W_per_m2: npt.NDArray[np.float32],
     rsds_W_per_m2: npt.NDArray[np.float32],
     wind_u10m_m_per_s: npt.NDArray[np.float32],
@@ -220,7 +230,7 @@ def potential_evapotranspiration(
     Args:
         tas_K: average air temperature in Kelvin.
         dewpoint_tas_K: dew point temperature in Kelvin.
-        ps_pascal: surface pressure in Pascals.
+        ps_pa: surface pressure in Pascals.
         rlds_W_per_m2: long wave downward surface radiation fluxes in W/m^2.
         rsds_W_per_m2: short wave downward surface radiation fluxes in W/m^2.
         wind_u10m_m_per_s: wind speed at 10 m height in m/s (u component).
@@ -229,84 +239,90 @@ def potential_evapotranspiration(
         albedo_water: albedo of water surface (default = 0.05).
 
     Returns:
-        reference_evapotranspiration_land: reference evapotranspiration for land in m/dt.
-        reference_evapotranspiration_water: reference evapotranspiration for water in m/dt.
-        net_radiation_land: net radiation for land in MJ/m^2/dt.
+        reference_evapotranspiration_land_m_per_dt: reference evapotranspiration for land in m/dt.
+        reference_evapotranspiration_water_m_per_dt: reference evapotranspiration for water in m/dt.
+        net_radiation_land_MJ_per_m2_per_dt: net radiation for land in MJ/m^2/dt.
     """
     tas_C: npt.NDArray[np.float32] = tas_K - np.float32(273.15)
     dewpoint_tas_C: npt.NDArray[np.float32] = dewpoint_tas_K - np.float32(273.15)
 
-    actual_vapour_pressure: npt.NDArray[np.float32] = get_vapour_pressure(
+    actual_vapour_pressure_kPa: npt.NDArray[np.float32] = get_vapour_pressure(
         temperature_C=dewpoint_tas_C
     )
-    saturated_vapour_pressure: npt.NDArray[np.float32] = get_vapour_pressure(
+    saturated_vapour_pressure_kPa: npt.NDArray[np.float32] = get_vapour_pressure(
         temperature_C=tas_C
     )
 
-    vapour_pressure_deficit: npt.NDArray[np.float32] = get_vapour_pressure_deficit(
-        saturated_vapour_pressure=saturated_vapour_pressure,
-        actual_vapour_pressure=actual_vapour_pressure,
+    vapour_pressure_deficit_kPa: npt.NDArray[np.float32] = get_vapour_pressure_deficit(
+        saturated_vapour_pressure_kPa=saturated_vapour_pressure_kPa,
+        actual_vapour_pressure_kPa=actual_vapour_pressure_kPa,
     )
 
-    psychrometric_constant: npt.NDArray[np.float32] = get_psychrometric_constant(
-        ps_pascal=ps_pascal
+    psychrometric_constant_kPa_per_C: npt.NDArray[np.float32] = (
+        get_psychrometric_constant(ps_pa=ps_pa)
     )
 
-    rlus_MJ_m2_dt: npt.NDArray[np.float32] = get_upwelling_long_wave_radiation(tas_C)
-    rlds_MJ_m2_dt: npt.NDArray[np.float32] = W_per_m2_to_MJ_per_m2_per_hour(
+    rlus_MJ_per_m2_per_hour: npt.NDArray[np.float32] = (
+        get_upwelling_long_wave_radiation(tas_C)
+    )
+    rlds_MJ_per_m2_per_hour: npt.NDArray[np.float32] = W_per_m2_to_MJ_per_m2_per_hour(
         rlds_W_per_m2
     )
 
-    net_longwave_radation_MJ_m2_dt: npt.NDArray[np.float32] = (
-        rlus_MJ_m2_dt - rlds_MJ_m2_dt
+    net_longwave_radation_MJ_per_m2_per_hour: npt.NDArray[np.float32] = (
+        rlus_MJ_per_m2_per_hour - rlds_MJ_per_m2_per_hour
     )
 
-    solar_radiation_MJ_m2_dt: npt.NDArray[np.float32] = W_per_m2_to_MJ_per_m2_per_hour(
-        rsds_W_per_m2
+    solar_radiation_MJ_per_m2_per_hour: npt.NDArray[np.float32] = (
+        W_per_m2_to_MJ_per_m2_per_hour(rsds_W_per_m2)
     )
 
-    net_solar_radiation_MJ_m2_land_dt: npt.NDArray[np.float32] = (
-        get_net_solar_radiation(solar_radiation_MJ_m2_dt, albedo_canopy)
+    net_solar_radiation_land_MJ_per_m2_per_hour: npt.NDArray[np.float32] = (
+        get_net_solar_radiation(solar_radiation_MJ_per_m2_per_hour, albedo_canopy)
     )
 
-    net_radiation_land_dt: npt.NDArray[np.float32] = (
-        net_solar_radiation_MJ_m2_land_dt - net_longwave_radation_MJ_m2_dt
+    net_radiation_land_MJ_per_m2_per_hour: npt.NDArray[np.float32] = (
+        net_solar_radiation_land_MJ_per_m2_per_hour
+        - net_longwave_radation_MJ_per_m2_per_hour
     )
 
-    net_solar_radiation_MJ_m2_water_dt: npt.NDArray[np.float32] = (
-        get_net_solar_radiation(solar_radiation_MJ_m2_dt, albedo_water)
+    net_solar_radiation_water_MJ_per_m2_per_hour: npt.NDArray[np.float32] = (
+        get_net_solar_radiation(solar_radiation_MJ_per_m2_per_hour, albedo_water)
     )
-    net_radiation_water_dt: npt.NDArray[np.float32] = (
-        net_solar_radiation_MJ_m2_water_dt - net_longwave_radation_MJ_m2_dt
+    net_radiation_water_MJ_per_m2_per_hour: npt.NDArray[np.float32] = (
+        net_solar_radiation_water_MJ_per_m2_per_hour
+        - net_longwave_radation_MJ_per_m2_per_hour
     )
 
-    slope_of_saturated_vapour_pressure_curve: npt.NDArray[np.float32] = (
+    slope_of_saturated_vapour_pressure_curve_kPa_per_C: npt.NDArray[np.float32] = (
         get_slope_of_saturation_vapour_pressure_curve(temperature_C=tas_C)
     )
 
-    wind_10m: npt.NDArray[np.float32] = np.sqrt(
+    wind_10m_m_per_s: npt.NDArray[np.float32] = np.sqrt(
         wind_u10m_m_per_s**2 + wind_v10m_m_per_s**2
     )
-    wind_2m: npt.NDArray[np.float32] = adjust_wind_speed(wind_10m)
+    wind_2m_m_per_s: npt.NDArray[np.float32] = adjust_wind_speed(wind_10m_m_per_s)
 
-    soil_heat_flux = np.zeros_like(net_radiation_land_dt)
+    soil_heat_flux_MJ_per_m2_per_hour = np.zeros_like(
+        net_radiation_land_MJ_per_m2_per_hour
+    )
 
     (
-        reference_evapotranspiration_land_mm_dt,
-        reference_evapotranspiration_water_mm_dt,
+        reference_evapotranspiration_land_mm_per_hour,
+        reference_evapotranspiration_water_mm_per_hour,
     ) = penman_monteith(
-        net_radiation_land=net_radiation_land_dt,
-        net_radiation_water=net_radiation_water_dt,
-        soil_heat_flux=soil_heat_flux,
-        slope_of_saturated_vapour_pressure_curve=slope_of_saturated_vapour_pressure_curve,
-        psychrometric_constant=psychrometric_constant,
-        wind_2m=wind_2m,
+        net_radiation_land_MJ_per_m2_per_hour=net_radiation_land_MJ_per_m2_per_hour,
+        net_radiation_water_MJ_per_m2_per_hour=net_radiation_water_MJ_per_m2_per_hour,
+        soil_heat_flux_MJ_per_m2_per_hour=soil_heat_flux_MJ_per_m2_per_hour,
+        slope_of_saturated_vapour_pressure_curve_kPa_per_C=slope_of_saturated_vapour_pressure_curve_kPa_per_C,
+        psychrometric_constant_kPa_per_C=psychrometric_constant_kPa_per_C,
+        wind_2m_m_per_s=wind_2m_m_per_s,
         temperature_C=tas_C,
-        vapour_pressure_deficit=vapour_pressure_deficit,
+        vapour_pressure_deficit_kPa=vapour_pressure_deficit_kPa,
     )
 
     return (
-        reference_evapotranspiration_land_mm_dt / np.float32(1000),
-        reference_evapotranspiration_water_mm_dt / np.float32(1000),
-        net_radiation_land_dt,
+        reference_evapotranspiration_land_mm_per_hour / np.float32(1000),
+        reference_evapotranspiration_water_mm_per_hour / np.float32(1000),
+        net_radiation_land_MJ_per_m2_per_hour,
     )
