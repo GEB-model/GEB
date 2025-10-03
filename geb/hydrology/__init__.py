@@ -37,7 +37,6 @@ from .landcover import LandCover
 from .landsurface import LandSurface
 from .routing import Routing
 from .runoff_concentration import RunoffConcentration
-from .snow_frost import SnowFrost
 from .soil import Soil
 from .water_demand import WaterDemand
 
@@ -66,7 +65,6 @@ class Hydrology(Data, Module):
         self.crop_factor_calibration_factor = 1
 
         self.landsurface = LandSurface(self.model, self)
-        self.snowfrost = SnowFrost(self.model, self)
         self.landcover = LandCover(self.model, self)
         self.soil = Soil(self.model, self)
         self.evaporation = Evaporation(self.model, self)
