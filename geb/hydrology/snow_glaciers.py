@@ -215,7 +215,15 @@ def calculate_melt(
     albedo_decay_coefficient: np.float32 = np.float32(0.01),
     snow_radiation_coefficient: np.float32 = np.float32(1.0),
     bulk_transfer_coefficient: np.float32 = np.float32(0.0015),
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+) -> tuple[
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+]:
     """
     Calculate snow melt based on a simplified energy balance model.
 
@@ -236,7 +244,9 @@ def calculate_melt(
 
     Returns:
         A tuple of melt rate (m/hour), sublimation/deposition rate (m/hour),
-        and updated snow water equivalent (m).
+        updated snow water equivalent (m), net shortwave radiation (W/m²),
+        upward longwave radiation (W/m²), sensible heat flux (W/m²),
+        and latent heat flux (W/m²).
     """
     # Calculate turbulent fluxes and sublimation/deposition
     (
@@ -311,6 +321,10 @@ def calculate_melt(
         snow_melt_rate_m_per_hour,
         sublimation_deposition_rate_m_per_hour,
         updated_snow_water_equivalent_m,
+        net_shortwave_radiation_W_per_m2,
+        upward_longwave_radiation_W_per_m2,
+        sensible_heat_flux_W_per_m2,
+        latent_heat_flux_W_per_m2,
     )
 
 
@@ -452,6 +466,12 @@ def snow_model(
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
 ]:
     """
     Calculate snow accumulation and melt based on a simple energy balance model.
@@ -492,6 +512,12 @@ def snow_model(
         - snow_melt_rate_m_per_hour: Rate of snow melt (m/hour).
         - sublimation_deposition_rate_m_per_hour: Rate of sublimation/deposition (m/hour, negative for sublimation).
         - runoff_rate_m_per_hour: Combined rainfall and snowmelt runoff (m/hour).
+        - actual_refreezing_m_per_hour: Rate of refreezing (m/hour).
+        - snow_surface_temperature_C: Snow surface temperature (°C).
+        - net_shortwave_radiation_W_per_m2: Net shortwave radiation (W/m²).
+        - upward_longwave_radiation_W_per_m2: Upward longwave radiation (W/m²).
+        - sensible_heat_flux_W_per_m2: Sensible heat flux (W/m²).
+        - latent_heat_flux_W_per_m2: Latent heat flux (W/m²).
     """
     # Convert precipitation to meters per hour
     precipitation_m_per_hour = precipitation_rate_kg_per_m2_per_s * np.float32(
@@ -523,6 +549,10 @@ def snow_model(
         snow_melt_rate_m_per_hour,
         sublimation_deposition_rate_m_per_hour,
         swe_after_melt_m,
+        net_shortwave_radiation_W_per_m2,
+        upward_longwave_radiation_W_per_m2,
+        sensible_heat_flux_W_per_m2,
+        latent_heat_flux_W_per_m2,
     ) = calculate_melt(
         air_temperature_C,
         snow_surface_temperature_C,
@@ -602,6 +632,12 @@ def snow_model(
         snow_melt_rate_m_per_hour,
         sublimation_deposition_rate_m_per_hour,
         runoff_rate_m_per_hour,
+        actual_refreezing_m_per_hour,
+        snow_surface_temperature_C,
+        net_shortwave_radiation_W_per_m2,
+        upward_longwave_radiation_W_per_m2,
+        sensible_heat_flux_W_per_m2,
+        latent_heat_flux_W_per_m2,
     )
 
 
