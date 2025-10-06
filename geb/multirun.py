@@ -108,7 +108,6 @@ def summarize_multirun(
     module_name = "agents.crop_farmers"
 
     for key in SCENARIO_NAMES:
-        boolean = False
         for param in params:
             print("Scenario:", key, ", Parameter:", param)
             # --- collect + aggregate runs (same as before) ---

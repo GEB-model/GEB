@@ -13,6 +13,7 @@ Modified by Peter Burek and Jens de Bruijn
 import array
 import collections
 import datetime
+from datetime import date
 import json
 import multiprocessing
 import os
@@ -78,6 +79,17 @@ def compute_score(sim, obs):
     diff = sum(abs(s - o) for s, o in zip(sim, obs))
     score = 1 - diff
     return max(0, min(1, score))
+
+
+def norm_closeness(mean_score, observed_mean):
+    t = observed_mean
+    x = mean_score
+    den = max(t - 0.0, 1.0 - t)  # farthest possible distance to an edge given t
+
+    if den == 0:  # t is exactly 0 or 1
+        return 1.0 if x == t else 0.0
+
+    return 1 - min(abs(x - t) / den, 1)
 
 
 def load_ds(output_folder, name, start_time, end_time, time=True):
@@ -696,98 +708,180 @@ def KGE_region_diversion(run_directory, individual, config):
     return kge
 
 
-def KGE_discharge(
+def score_wells(
     run_directory,
     individual,
     config,
 ):
-    path_stations = (
-        Path("input") / "geom/discharge/discharge_snapped_locations.geoparquet"
-    )
-    discharge_stations = pd.read_parquet(path_stations)
-    coordinates_lon_lat = discharge_stations["snapped_grid_pixel_lonlat"].values
-
-    def load_zarr_discharge(config, run_directory, coordinates_lon_lat):
-        points = [(float(p[0]), float(p[1])) for p in coordinates_lon_lat]
-        da = open_zarr(run_directory)
-        cols = {}
-        for lon, lat in points:
-            col_name = f"{lon:.5f}_{lat:.5f}"
-            cols[col_name] = da.sel(
-                x=lon, y=lat, method="nearest"
-            ).to_series()  # index -> time
-
-        df = pd.DataFrame(cols)
-        df.index.name = "time"
-        return df
-
     scenario_dir = (
         Path(run_directory)
         / "output"
         / "report"
         / config["general"]["name"]
-        / "hydrology.routing"
-        / "discharge_daily.zarr"
+        / "agents.crop_farmers"
+        / "well_adaptation.zarr"
     )
-    data_simulated = load_zarr_discharge(config, scenario_dir, coordinates_lon_lat)
 
-    def prepare_observed(data_observed):
-        # 1) filter to the time range (inclusive)
-        df = data_observed.copy()
-        df.index = pd.to_datetime(df.index)
-
-        # 2) detect frequency -> "daily" | "monthly" | "yearly"
-        f = (pd.infer_freq(df.index) or "").upper()
-        period = (
-            "monthly" if "M" in f else ("yearly" if ("A" in f or "Y" in f) else "daily")
-        )
-
-        return df, period
-
-    def resample_simulated_to_period(
-        data_simulated: pd.DataFrame, period: str
-    ) -> pd.DataFrame:
-        if period == "monthly":
-            return data_simulated.resample("MS").mean()  # month start, mean
-        if period == "yearly":
-            return data_simulated.resample("YS").mean()  # year start, mean
-        return data_simulated  # daily -> no change
-
-    path_observed = Path("input") / "table/discharge/Q_obs.parquet"
-    data_observed = pd.read_parquet(path_observed)
-    df_obs_slice, period = prepare_observed(data_observed)
-
-    data_sim_resampled = resample_simulated_to_period(data_simulated, period)
-
-    joined_streamflows = {}
-    ts_obs = df_obs_slice.iloc[:, 0].rename("observed")
-    for coord in coordinates_lon_lat:
-        lon, lat = float(coord[0]), float(coord[1])
-        col_name = f"{lon:.5f}_{lat:.5f}"  # matches data_simulated column naming
-        ts_sim = data_sim_resampled[col_name].rename("simulated")
-        streamflows = pd.concat([ts_sim, ts_obs], axis=1, join="inner")
-        joined_streamflows[col_name] = streamflows
-        pass
-
-    KGEs = []
-    for station in joined_streamflows:
-        streamflow = joined_streamflows[station]
-        streamflow = streamflow.dropna()  # If there are any NaNs values the KGE will become NaN, that's why we drop them before doing the calculation
-        KGEs.append(
-            KGE_calculation(s=streamflow["simulated"], o=streamflow["observed"])
-        )
-
-    assert KGEs  # Check if KGEs is not empty
-    kge = np.mean(KGEs)
+    da = open_zarr(scenario_dir)
+    simulated_mean = (
+        da.sel(time="2010-01-01")
+        .clip(min=0, max=1)  # -1→0; 0/1 unchanged; NaNs preserved
+        .mean(dim="agents", skipna=True)
+        .compute()
+        .item()
+    )
+    observed_mean = 0.26
+    score = norm_closeness(simulated_mean, observed_mean)
     print(
-        "run_id: " + str(individual.label) + ", KGE_discharge: " + "{0:.3f}".format(kge)
+        "run_id: "
+        + str(individual.label)
+        + ", Wells Score: "
+        + "{0:.3f}".format(score)
+        + ", Mean Wells: "
+        + "{0:.3f}".format(simulated_mean)
     )
     with open(
-        os.path.join(config["calibration"]["path"], "KGE_discharge_log.csv"), "a"
+        os.path.join(config["calibration"]["path"], "Score_wells_log.csv"), "a"
     ) as myfile:
-        myfile.write(str(individual.label) + "," + str(kge) + "\n")
+        myfile.write(
+            str(individual.label) + "," + str(score) + "," + str(simulated_mean) + "\n"
+        )
+    return score
 
-    return kge
+
+def score_insurance(
+    run_directory,
+    individual,
+    config,
+):
+    scenario_dir = (
+        Path(run_directory)
+        / "output"
+        / "report"
+        / config["general"]["name"]
+        / "agents.crop_farmers"
+        / "precipitation_insurance_adaptation.zarr"
+    )
+
+    da = open_zarr(scenario_dir)
+    simulated_mean = (
+        da.sel(time="2010-01-01")
+        .clip(min=0, max=1)  # -1→0; 0/1 unchanged; NaNs preserved
+        .mean(dim="agents", skipna=True)
+        .compute()
+        .item()
+    )
+    observed_mean = 0.23
+    score = norm_closeness(simulated_mean, observed_mean)
+    print(
+        "run_id: "
+        + str(individual.label)
+        + ", Insurance Score: "
+        + "{0:.3f}".format(score)
+        + ", Mean Insurance: "
+        + "{0:.3f}".format(simulated_mean)
+    )
+    with open(
+        os.path.join(config["calibration"]["path"], "Score_insurance_log.csv"), "a"
+    ) as myfile:
+        myfile.write(
+            str(individual.label) + "," + str(score) + "," + str(simulated_mean) + "\n"
+        )
+    return score
+
+
+def KGE_discharge(
+    run_directory,
+    individual,
+    config,
+):
+    # path_stations = (
+    #     Path("input") / "geom/discharge/discharge_snapped_locations.geoparquet"
+    # )
+    # discharge_stations = pd.read_parquet(path_stations)
+    # coordinates_lon_lat = discharge_stations["snapped_grid_pixel_lonlat"].values
+
+    # def load_zarr_discharge(config, run_directory, coordinates_lon_lat):
+    #     points = [(float(p[0]), float(p[1])) for p in coordinates_lon_lat]
+    #     da = open_zarr(run_directory)
+    #     cols = {}
+    #     for lon, lat in points:
+    #         col_name = f"{lon:.5f}_{lat:.5f}"
+    #         cols[col_name] = da.sel(
+    #             x=lon, y=lat, method="nearest"
+    #         ).to_series()  # index -> time
+
+    #     df = pd.DataFrame(cols)
+    #     df.index.name = "time"
+    #     return df
+
+    # scenario_dir = (
+    #     Path(run_directory)
+    #     / "output"
+    #     / "report"
+    #     / config["general"]["name"]
+    #     / "hydrology.routing"
+    #     / "discharge_daily.zarr"
+    # )
+    # data_simulated = load_zarr_discharge(config, scenario_dir, coordinates_lon_lat)
+
+    # def prepare_observed(data_observed):
+    #     # 1) filter to the time range (inclusive)
+    #     df = data_observed.copy()
+    #     df.index = pd.to_datetime(df.index)
+
+    #     # 2) detect frequency -> "daily" | "monthly" | "yearly"
+    #     f = (pd.infer_freq(df.index) or "").upper()
+    #     period = (
+    #         "monthly" if "M" in f else ("yearly" if ("A" in f or "Y" in f) else "daily")
+    #     )
+
+    #     return df, period
+
+    # def resample_simulated_to_period(
+    #     data_simulated: pd.DataFrame, period: str
+    # ) -> pd.DataFrame:
+    #     if period == "monthly":
+    #         return data_simulated.resample("MS").mean()  # month start, mean
+    #     if period == "yearly":
+    #         return data_simulated.resample("YS").mean()  # year start, mean
+    #     return data_simulated  # daily -> no change
+
+    # path_observed = Path("input") / "table/discharge/Q_obs.parquet"
+    # data_observed = pd.read_parquet(path_observed)
+    # df_obs_slice, period = prepare_observed(data_observed)
+
+    # data_sim_resampled = resample_simulated_to_period(data_simulated, period)
+
+    # joined_streamflows = {}
+    # ts_obs = df_obs_slice.iloc[:, 0].rename("observed")
+    # for coord in coordinates_lon_lat:
+    #     lon, lat = float(coord[0]), float(coord[1])
+    #     col_name = f"{lon:.5f}_{lat:.5f}"  # matches data_simulated column naming
+    #     ts_sim = data_sim_resampled[col_name].rename("simulated")
+    #     streamflows = pd.concat([ts_sim, ts_obs], axis=1, join="inner")
+    #     joined_streamflows[col_name] = streamflows
+    #     pass
+
+    # KGEs = []
+    # for station in joined_streamflows:
+    #     streamflow = joined_streamflows[station]
+    #     streamflow = streamflow.dropna()  # If there are any NaNs values the KGE will become NaN, that's why we drop them before doing the calculation
+    #     KGEs.append(
+    #         KGE_calculation(s=streamflow["simulated"], o=streamflow["observed"])
+    #     )
+
+    # assert KGEs  # Check if KGEs is not empty
+    # kge = np.mean(KGEs)
+    # print(
+    #     "run_id: " + str(individual.label) + ", KGE_discharge: " + "{0:.3f}".format(kge)
+    # )
+    # with open(
+    #     os.path.join(config["calibration"]["path"], "KGE_discharge_log.csv"), "a"
+    # ) as myfile:
+    #     myfile.write(str(individual.label) + "," + str(kge) + "\n")
+
+    return 1
 
 
 def get_KGE_yield_ratio(run_directory, individual, config):
@@ -1347,17 +1441,6 @@ def export_front_history(config, ngen, effmax, effmin, effstd, effavg):
     )
 
 
-def spinup_outputs_ready(run_directory, config, required=("modflow_model", "store")):
-    """Return (ok, root_path, missing_list)."""
-    root = (
-        Path(run_directory)
-        / config["general"]["simulation_root"]
-        / config["general"]["spinup_name"]
-    )
-    missing = [d for d in required if not (root / d).is_dir()]
-    return (len(missing) == 0, root, missing)
-
-
 @handle_ctrl_c
 def run_model(
     individual,
@@ -1385,7 +1468,10 @@ def run_model(
     else:
         runmodel = True
 
-    spinup_completed = os.path.exists(spinup_done_path)
+    if not config["calibration"]["spinup"] or os.path.exists(spinup_done_path):
+        spinup_completed = True
+    else:
+        spinup_completed = False
 
     if runmodel:
         individual_parameter_ratio = individual.tolist()
@@ -1411,9 +1497,10 @@ def run_model(
             template["general"]["output_folder"] = os.path.join(
                 run_directory, config["general"]["output_folder"]
             )
-            template["general"]["simulation_root"] = os.path.join(
-                run_directory, config["general"]["simulation_root"]
-            )
+            if config["calibration"]["spinup"]:
+                template["general"]["simulation_root"] = os.path.join(
+                    run_directory, config["general"]["simulation_root"]
+                )
             template["general"]["spinup_time"] = config["calibration"]["spinup_time"]
             template["general"]["start_time"] = config["calibration"]["start_time"]
             template["general"]["end_time"] = config["calibration"]["end_time"]
@@ -1540,6 +1627,15 @@ def run_model(
                         )
                         time.sleep(1)
                         continue
+                    elif p.returncode == 127:
+                        retries += 1
+                        if retries > max_retries:
+                            break
+                        print(
+                            f"Return code 127 received. Retrying {retries}/{max_retries}..."
+                        )
+                        time.sleep(1)
+                        continue
                     else:
                         timestamp = datetime.datetime.now().strftime(
                             "%Y-%m-%d %H:%M:%S"
@@ -1560,16 +1656,8 @@ def run_model(
                             f"Return code was {p.returncode}. See log file {log_filename} for details."
                         )
                 raise ValueError(
-                    f"Return code 2/66 received {max_retries} times. See log file for details."
+                    f"Return code 2/66/127 received {max_retries} times. See log file for details."
                 )
-
-            if spinup_completed:
-                ok, spinup_root, missing = spinup_outputs_ready(run_directory, config)
-                if not ok:
-                    print(
-                        f"Spinup marker exists but outputs are missing at {spinup_root}: {missing}. Forcing re-run."
-                    )
-                    spinup_completed = False
 
             max_spinup_retries = 3
             attempt = 0
@@ -1598,20 +1686,16 @@ def run_model(
                         )
                     break  # fatal failure -> stop retrying
 
-                # Post-run integrity check
-                ok, spinup_root, missing = spinup_outputs_ready(run_directory, config)
-                if ok:
+                else:
+                    spinup_root = (
+                        Path(run_directory)
+                        / config["general"]["simulation_root"]
+                        / config["general"]["spinup_name"]
+                    )
                     with open(spinup_done_path, "w") as f:
                         f.write("spinup done")
                     spinup_completed = True
                     print(f"Spinup completed and verified at {spinup_root}.")
-                else:
-                    print(
-                        f"Spinup reported success but outputs are missing at {spinup_root}: {missing}. "
-                        "Retrying..."
-                    )
-                    # Optionally: clean partial outputs here before retrying, if needed.
-                    continue  # loop back to top and try again
 
             # If we exhausted retries without success, clean up GPU once (if not already released)
             if not spinup_completed and not released_gpu and use_gpu is not False:
@@ -1662,6 +1746,10 @@ def run_model(
     for score in config["calibration"]["calibration_targets"]:
         if score == "KGE_discharge":
             scores.append(KGE_discharge(run_directory, individual, config))
+        if score == "score_wells":
+            scores.append(score_wells(run_directory, individual, config))
+        if score == "score_insurance":
+            scores.append(score_insurance(run_directory, individual, config))
         if score == "KGE_crops":
             scores.append(get_crops_KGE(run_directory, individual, config))
         if score == "KGE_irrigation_method":
@@ -1703,7 +1791,7 @@ def calibrate(config, working_directory):
     mu = calibration_config["DEAP"]["mu"]
     lambda_ = calibration_config["DEAP"]["lambda_"]
     config["calibration"]["scenario"] = calibration_config["scenario"]
-    config["agent_settings"]["farmers"]["ruleset"] = calibration_config["scenario"]
+    # config["agent_settings"]["farmers"]["ruleset"] = calibration_config["scenario"]
 
     # Create DEAP classes
     creator.create(

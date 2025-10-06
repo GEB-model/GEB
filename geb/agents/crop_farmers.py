@@ -2125,7 +2125,7 @@ class CropFarmers(AgentBaseClass):
             + (1 - credibility_weights) * group_mean_premiums[group_indices]
         )
         # Return to personal prices and add loading factor
-        personal_premium = credibility_premiums_m2 * self.field_size_per_farmer * 1.2
+        personal_premium = credibility_premiums_m2 * self.field_size_per_farmer * 1.3
 
         return np.minimum(government_premium_cap, personal_premium)
 
@@ -2202,7 +2202,7 @@ class CropFarmers(AgentBaseClass):
         best_strike = strike_vals[best_strike_idx]
         best_exit = exit_vals[best_exit_idx]
         best_rate = rate_vals[best_rate_idx]
-        best_premiums = best_prem * 1.1  # add loading factor
+        best_premiums = best_prem * 1.3  # add loading factor
 
         return (
             best_strike,
@@ -2630,6 +2630,8 @@ class CropFarmers(AgentBaseClass):
     def adapt_crops(self, farmer_yield_probability_relation) -> None:
         # Fetch loan configuration
         loan_duration = 2
+
+        hello = bye
 
         index = self.cultivation_costs[0].get(self.model.current_time)
         cultivation_cost = self.cultivation_costs[1][index]
@@ -3813,7 +3815,7 @@ class CropFarmers(AgentBaseClass):
             crop_calendar=self.var.crop_calendar.data,
             unique_crop_calendars=unique_crop_calendars,
             p_droughts=self.var.p_droughts,
-            past_window=5,
+            past_window=7,
         )
 
         total_profits_adaptation = np.full(
@@ -4653,10 +4655,12 @@ class CropFarmers(AgentBaseClass):
             # Update loans
             self.update_loans()
 
-            for i in range(len(self.var.yearly_abstraction_m3_by_farmer[0, :, 0])):
-                shift_and_reset_matrix(
-                    self.var.yearly_abstraction_m3_by_farmer[:, i, :]
-                )
+            matrix_abstraction = (
+                self.var.yearly_abstraction_m3_by_farmer
+            )  # shape (n_farmers, 4, 20)
+            shift_and_reset_matrix(
+                matrix_abstraction.reshape(-1, matrix_abstraction.shape[-1])
+            )
 
             # Shift the potential and yearly profits forward
             shift_and_reset_matrix(self.var.yearly_income)
