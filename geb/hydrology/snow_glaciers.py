@@ -156,7 +156,7 @@ def calculate_turbulent_fluxes(
     snow_surface_temperature_C: npt.NDArray[np.float32],
     vapor_pressure_air_Pa: npt.NDArray[np.float32],
     air_pressure_Pa: npt.NDArray[np.float32],
-    wind_speed_m_per_s: npt.NDArray[np.float32],
+    wind_speed_10m_m_per_s: npt.NDArray[np.float32],
     bulk_transfer_coefficient: np.float32,
 ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
     """
@@ -167,7 +167,7 @@ def calculate_turbulent_fluxes(
         snow_surface_temperature_C: Snow surface temperature (°C).
         vapor_pressure_air_Pa: Vapor pressure of the air (Pa).
         air_pressure_Pa: Air pressure (Pa).
-        wind_speed_m_per_s: Wind speed (m/s).
+        wind_speed_10m_m_per_s: Wind speed (m/s).
         bulk_transfer_coefficient: Bulk transfer coefficient for heat and moisture.
 
     Returns:
@@ -197,7 +197,7 @@ def calculate_turbulent_fluxes(
         air_density_kg_per_m3
         * SPECIFIC_HEAT_AIR_J_PER_KG_K
         * bulk_transfer_coefficient
-        * wind_speed_m_per_s
+        * wind_speed_10m_m_per_s
         * (air_temperature_C - snow_surface_temperature_C)
     )
 
@@ -231,7 +231,7 @@ def calculate_turbulent_fluxes(
         air_density_kg_per_m3
         * latent_heat_J_per_kg
         * bulk_transfer_coefficient
-        * wind_speed_m_per_s
+        * wind_speed_10m_m_per_s
         * (specific_humidity_air - specific_humidity_surface)
     )
 
@@ -258,7 +258,7 @@ def calculate_melt(
     downward_longwave_radiation_W_per_m2: npt.NDArray[np.float32],
     vapor_pressure_air_Pa: npt.NDArray[np.float32],
     air_pressure_Pa: npt.NDArray[np.float32],
-    wind_speed_m_per_s: npt.NDArray[np.float32],
+    wind_speed_10m_m_per_s: npt.NDArray[np.float32],
     albedo_min: np.float32 = np.float32(0.4),
     albedo_max: np.float32 = np.float32(0.9),
     albedo_decay_coefficient: np.float32 = np.float32(0.01),
@@ -293,7 +293,7 @@ def calculate_melt(
         snow_surface_temperature_C,
         vapor_pressure_air_Pa,
         air_pressure_Pa,
-        wind_speed_m_per_s,
+        wind_speed_10m_m_per_s,
         bulk_transfer_coefficient,
     )
 
@@ -492,7 +492,7 @@ def warm_snowpack(
 
 @njit(cache=True, parallel=True)
 def snow_model(
-    precipitation_rate_kg_per_m2_per_s: npt.NDArray[np.float32],
+    pr_kg_per_m2_per_s: npt.NDArray[np.float32],
     air_temperature_C: npt.NDArray[np.float32],
     snow_water_equivalent_m: npt.NDArray[np.float32],
     liquid_water_in_snow_m: npt.NDArray[np.float32],
@@ -501,7 +501,7 @@ def snow_model(
     downward_longwave_radiation_W_per_m2: npt.NDArray[np.float32],
     vapor_pressure_air_Pa: npt.NDArray[np.float32],
     air_pressure_Pa: npt.NDArray[np.float32],
-    wind_speed_m_per_s: npt.NDArray[np.float32],
+    wind_speed_10m_m_per_s: npt.NDArray[np.float32],
     snowfall_threshold_temperature_C: np.float32 = np.float32(0.0),
     water_holding_capacity_fraction: np.float32 = np.float32(0.1),
     albedo_min: np.float32 = np.float32(0.4),
@@ -511,6 +511,7 @@ def snow_model(
     bulk_transfer_coefficient: np.float32 = np.float32(0.0015),
     activate_layer_thickness_m: np.float32 = np.float32(0.2),
 ) -> tuple[
+    npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
@@ -536,7 +537,7 @@ def snow_model(
         between time steps.
 
     Args:
-        precipitation_rate_kg_per_m2_per_s: Precipitation rate (kg/m²/s).
+        pr_kg_per_m2_per_s: Precipitation rate (kg/m²/s).
         air_temperature_C: Air temperature (°C).
         snow_water_equivalent_m: Snow water equivalent from the previous time step (m).
         liquid_water_in_snow_m: Liquid water content in the snow pack from the previous time step (m).
@@ -545,7 +546,7 @@ def snow_model(
         downward_longwave_radiation_W_per_m2: Downward longwave radiation (W/m²).
         vapor_pressure_air_Pa: Vapor pressure of the air (Pa).
         air_pressure_Pa: Air pressure (Pa).
-        wind_speed_m_per_s: Wind speed (m/s).
+        wind_speed_10m_m_per_s: Wind speed (m/s).
         snowfall_threshold_temperature_C: Threshold temperature for snowfall/rainfall (°C).
         water_holding_capacity_fraction: Water holding capacity of the snow pack as a fraction of snow water equivalent.
         albedo_min: Minimum albedo.
@@ -561,8 +562,9 @@ def snow_model(
         - new_liquid_water_in_snow_m: Updated liquid water content in snow pack (m).
         - new_snow_temperature_C: Updated snow pack temperature (°C).
         - snow_melt_rate_m_per_hour: Rate of snow melt (m/hour).
+        - melt_runoff_rate_m_per_hour: Runoff from snowmelt (m/hour).
+        - direct_rainfall_m_per_hour: Direct rainfall runoff (m/hour).
         - sublimation_deposition_rate_m_per_hour: Rate of sublimation/deposition (m/hour, negative for sublimation).
-        - runoff_rate_m_per_hour: Combined rainfall and snowmelt runoff (m/hour).
         - actual_refreezing_m_per_hour: Rate of refreezing (m/hour).
         - snow_surface_temperature_C: Snow surface temperature (°C).
         - net_shortwave_radiation_W_per_m2: Net shortwave radiation (W/m²).
@@ -571,9 +573,7 @@ def snow_model(
         - latent_heat_flux_W_per_m2: Latent heat flux (W/m²).
     """
     # Convert precipitation to meters per hour
-    precipitation_m_per_hour = precipitation_rate_kg_per_m2_per_s * np.float32(
-        3.6
-    )  # kg/m²/s to m/hour
+    precipitation_m_per_hour = pr_kg_per_m2_per_s * np.float32(3.6)  # kg/m²/s to m/hour
 
     # Discriminate between rainfall and snowfall
     snowfall_m_per_hour, rainfall_m_per_hour = discriminate_precipitation(
@@ -615,7 +615,7 @@ def snow_model(
         downward_longwave_radiation_W_per_m2,
         vapor_pressure_air_Pa,
         air_pressure_Pa,
-        wind_speed_m_per_s,
+        wind_speed_10m_m_per_s,
         albedo_min,
         albedo_max,
         albedo_decay_coefficient,
@@ -674,13 +674,19 @@ def snow_model(
         refreezing_energy_J_per_m2_per_s,
     )
 
-    # Add rainfall
-    liquid_water_with_rain_m = liquid_water_after_refreezing_m + rainfall_m_per_hour
+    # Calculate runoff from meltwater
+    melt_runoff_m_per_hour, liquid_water_after_melt_runoff_m = calculate_runoff(
+        liquid_water_after_refreezing_m,
+        swe_after_refreezing_m,
+        water_holding_capacity_fraction,
+        activate_layer_thickness_m=activate_layer_thickness_m,
+    )
 
-    # Water balance check: rainfall addition
-    water_after_rainfall_m = swe_after_refreezing_m + liquid_water_with_rain_m
-    # Calculate runoff
-    runoff_rate_m_per_hour, new_liquid_water_in_snow_m = calculate_runoff(
+    # Add rainfall
+    liquid_water_with_rain_m = liquid_water_after_melt_runoff_m + rainfall_m_per_hour
+
+    # Calculate runoff from rainfall
+    direct_rainfall_m_per_hour, new_liquid_water_in_snow_m = calculate_runoff(
         liquid_water_with_rain_m,
         swe_after_refreezing_m,
         water_holding_capacity_fraction,
@@ -692,8 +698,9 @@ def snow_model(
         new_liquid_water_in_snow_m,
         final_snow_temperature_C,
         actual_melt_m_per_hour,
+        melt_runoff_m_per_hour,
+        direct_rainfall_m_per_hour,
         sublimation_deposition_rate_m_per_hour,
-        runoff_rate_m_per_hour,
         actual_refreezing_m_per_hour,
         snow_surface_temperature_C,
         net_shortwave_radiation_W_per_m2,

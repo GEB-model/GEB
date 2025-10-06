@@ -394,25 +394,28 @@ def test_snow_model_full_cycle() -> None:
     wind_speed = np.array([1.0], dtype=np.float32)
 
     # --- Accumulation phase ---
-    new_swe, new_lw, new_temp, melt, sublimation, runoff, *_ = snow_model(
-        precip,
-        air_temp,
-        swe,
-        lw,
-        snow_temp,
-        sw_rad,
-        downward_lw_rad,
-        vapor_pressure,
-        pressure,
-        wind_speed,
+    new_swe, new_lw, new_temp, melt, melt_runoff, direct_rainfall, sublimation, *_ = (
+        snow_model(
+            precip,
+            air_temp,
+            swe,
+            lw,
+            snow_temp,
+            sw_rad,
+            downward_lw_rad,
+            vapor_pressure,
+            pressure,
+            wind_speed,
+        )
     )
 
     assert new_swe.dtype == np.float32 or new_swe.dtype == np.float64
     assert new_lw.dtype == np.float32 or new_lw.dtype == np.float64
     assert new_temp.dtype == np.float32 or new_temp.dtype == np.float64
     assert melt.dtype == np.float32 or melt.dtype == np.float64
+    assert melt_runoff.dtype == np.float32 or melt_runoff.dtype == np.float64
+    assert direct_rainfall.dtype == np.float32 or direct_rainfall.dtype == np.float64
     assert sublimation.dtype == np.float32 or sublimation.dtype == np.float64
-    assert runoff.dtype == np.float32 or runoff.dtype == np.float64
 
     precip_m_hr = precip * 3.6
     # With downward LW, some melt might occur even at night if energy balance is positive
@@ -420,7 +423,8 @@ def test_snow_model_full_cycle() -> None:
     # Upward LW is ~315 W/m2. Downward is 250. Net is -65. Turbulent fluxes are small.
     # So total energy should be negative.
     assert melt[0] == 0.0
-    assert runoff[0] == 0.0  # No runoff
+    assert melt_runoff[0] == 0.0  # No runoff
+    assert direct_rainfall[0] == 0.0  # No rainfall
     assert new_swe[0] > swe[0]  # Snow should accumulate
     # New temperature: mixed then tau-based relaxation toward air temperature
     mixed_temp = (swe * snow_temp + precip_m_hr * air_temp) / (swe + precip_m_hr)
@@ -438,7 +442,14 @@ def test_snow_model_full_cycle() -> None:
 
     # Water balance for accumulation phase
     water_in = swe[0] + lw[0] + precip_m_hr[0]
-    water_out = new_swe[0] + new_lw[0] + melt[0] + sublimation[0] + runoff[0]
+    water_out = (
+        new_swe[0]
+        + new_lw[0]
+        + melt[0]
+        + sublimation[0]
+        + melt_runoff[0]
+        + direct_rainfall[0]
+    )
     assert math.isclose(water_in, water_out, abs_tol=1e-5)
     precip_melt = np.array([0.0], dtype=np.float32)
     air_temp_melt = np.array([5.0], dtype=np.float32)
@@ -461,8 +472,9 @@ def test_snow_model_full_cycle() -> None:
         final_lw,
         final_temp,
         melt_rate,
+        melt_runoff_final,
+        direct_rainfall_final,
         sublimation_rate,
-        runoff_final,
         actual_refreezing,
         snow_surface_temp,
         net_sw,
@@ -486,8 +498,14 @@ def test_snow_model_full_cycle() -> None:
     assert final_lw.dtype == np.float32 or final_lw.dtype == np.float64
     assert final_temp.dtype == np.float32 or final_temp.dtype == np.float64
     assert melt_rate.dtype == np.float32 or melt_rate.dtype == np.float64
+    assert (
+        melt_runoff_final.dtype == np.float32 or melt_runoff_final.dtype == np.float64
+    )
+    assert (
+        direct_rainfall_final.dtype == np.float32
+        or direct_rainfall_final.dtype == np.float64
+    )
     assert sublimation_rate.dtype == np.float32 or sublimation_rate.dtype == np.float64
-    assert runoff_final.dtype == np.float32 or runoff_final.dtype == np.float64
 
     assert melt_rate[0] > 0
     assert final_swe[0] < swe_after_acc[0]
@@ -497,7 +515,7 @@ def test_snow_model_full_cycle() -> None:
     whc_limit = refrozen_swe * 0.1
     # Liquid water available for runoff is what's left after refreezing
     # This part of the test is complex, let's simplify the assertion
-    assert runoff_final[0] >= 0
+    assert (melt_runoff_final[0] + direct_rainfall_final[0]) >= 0
 
     # Water balance for melt phase
     water_in_melt = swe_after_acc[0] + lw_after_acc[0] + 0.0
@@ -506,7 +524,8 @@ def test_snow_model_full_cycle() -> None:
         + final_lw[0]
         + melt_rate[0]
         + sublimation_rate[0]
-        + runoff_final[0]
+        + melt_runoff_final[0]
+        + direct_rainfall_final[0]
     )
     # Water balance for melt phase
     # Note: Balance may not be exact due to numerical precision and model structure
@@ -551,24 +570,33 @@ def test_rain_on_snow_event() -> None:
     pressure = np.array([98000.0], dtype=np.float32)
     wind_speed = np.array([5.0], dtype=np.float32)
 
-    final_swe, final_lw, final_temp, melt_rate, sublimation_rate, runoff_final, *_ = (
-        snow_model(
-            precip,
-            air_temp,
-            swe,
-            lw,
-            snow_temp,
-            sw_rad,
-            downward_lw_rad,
-            vapor_pressure,
-            pressure,
-            wind_speed,
-        )
+    (
+        final_swe,
+        final_lw,
+        final_temp,
+        melt_rate,
+        melt_runoff_final,
+        direct_rainfall_final,
+        sublimation_rate,
+        *_,
+    ) = snow_model(
+        precip,
+        air_temp,
+        swe,
+        lw,
+        snow_temp,
+        sw_rad,
+        downward_lw_rad,
+        vapor_pressure,
+        pressure,
+        wind_speed,
     )
 
     # Assertions
     assert melt_rate[0] > 0, "Melt should be significant during a warm rain event"
-    assert runoff_final[0] > 0, "Runoff should be generated"
+    assert (melt_runoff_final[0] + direct_rainfall_final[0]) > 0, (
+        "Runoff should be generated"
+    )
     # SWE should decrease due to melt, even with rain adding mass via refreezing
     # The initial refreezing will add mass, but melt should dominate
     assert final_swe[0] < swe[0] + (precip[0] * 3.6), (
@@ -643,6 +671,8 @@ def test_snowpack_development_scenario() -> None:
         lw_log=results["lw_log"],
         precip_log=params["precip_series"] * 1000,  # Convert to mm/hr
         runoff_log=results["runoff_log"] * 1000,  # Convert to mm/hr
+        melt_runoff_log=results["melt_runoff_log"] * 1000,
+        direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,  # Convert to mm/hr
         refreezing_log=results["refreezing_log"] * 1000,  # Convert to mm/hr
         air_temp_log=params["air_temp_series"],
@@ -723,6 +753,8 @@ def test_snowpack_arctic_scenario() -> None:
         lw_log=results["lw_log"],
         precip_log=params["precip_series"] * 1000,
         runoff_log=results["runoff_log"] * 1000,
+        melt_runoff_log=results["melt_runoff_log"] * 1000,
+        direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
         air_temp_log=params["air_temp_series"],
@@ -802,6 +834,8 @@ def test_snowpack_high_altitude_scenario() -> None:
         lw_log=results["lw_log"],
         precip_log=params["precip_series"] * 1000,
         runoff_log=results["runoff_log"] * 1000,
+        melt_runoff_log=results["melt_runoff_log"] * 1000,
+        direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
         air_temp_log=params["air_temp_series"],
@@ -835,17 +869,19 @@ def test_sublimation_scenario() -> None:
     pressure = np.array([70000.0], dtype=np.float32)  # High altitude
     wind_speed = np.array([8.0], dtype=np.float32)
 
-    final_swe, _, _, melt_rate, sublimation_rate, runoff, *_ = snow_model(
-        precip,
-        air_temp,
-        swe,
-        lw,
-        snow_temp,
-        sw_rad,
-        downward_lw_rad,
-        vapor_pressure,
-        pressure,
-        wind_speed,
+    final_swe, _, _, melt_rate, melt_runoff, direct_rainfall, sublimation_rate, *_ = (
+        snow_model(
+            precip,
+            air_temp,
+            swe,
+            lw,
+            snow_temp,
+            sw_rad,
+            downward_lw_rad,
+            vapor_pressure,
+            pressure,
+            wind_speed,
+        )
     )
 
     # Assertions
@@ -880,24 +916,32 @@ def test_no_change_scenario() -> None:
     pressure = np.array([100000.0], dtype=np.float32)
     wind_speed = np.array([0.0], dtype=np.float32)  # No wind
 
-    final_swe, final_lw, final_temp, melt_rate, sublimation_rate, runoff_final, *_ = (
-        snow_model(
-            precip,
-            air_temp,
-            swe,
-            lw,
-            snow_temp,
-            sw_rad,
-            downward_lw_rad,
-            vapor_pressure,
-            pressure,
-            wind_speed,
-        )
+    (
+        final_swe,
+        final_lw,
+        final_temp,
+        melt_rate,
+        melt_runoff_final,
+        direct_rainfall_final,
+        sublimation_rate,
+        *_,
+    ) = snow_model(
+        precip,
+        air_temp,
+        swe,
+        lw,
+        snow_temp,
+        sw_rad,
+        downward_lw_rad,
+        vapor_pressure,
+        pressure,
+        wind_speed,
     )
 
     # Assertions
     assert abs(melt_rate[0]) < 1e-4, "Melt should not occur"
-    assert runoff_final[0] == 0.0, "Runoff should not occur"
+    assert melt_runoff_final[0] == 0.0, "Melt runoff should not occur"
+    assert direct_rainfall_final[0] == 0.0, "Direct rainfall should not occur"
     assert math.isclose(sublimation_rate[0], 0.0, abs_tol=1e-6), (
         "Sublimation should not occur"
     )
@@ -975,6 +1019,8 @@ def test_complete_ablation_scenario() -> None:
         lw_log=results["lw_log"],
         precip_log=params["precip_series"] * 1000,
         runoff_log=results["runoff_log"] * 1000,
+        melt_runoff_log=results["melt_runoff_log"] * 1000,
+        direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
         air_temp_log=params["air_temp_series"],
@@ -1043,6 +1089,8 @@ def test_deposition_scenario() -> None:
         lw_log=results["lw_log"],
         precip_log=params["precip_series"] * 1000,
         runoff_log=results["runoff_log"] * 1000,
+        melt_runoff_log=results["melt_runoff_log"] * 1000,
+        direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
         air_temp_log=params["air_temp_series"],
@@ -1122,6 +1170,8 @@ def test_intermittent_snowfall_scenario() -> None:
         lw_log=results["lw_log"],
         precip_log=params["precip_series"] * 1000,
         runoff_log=results["runoff_log"] * 1000,
+        melt_runoff_log=results["melt_runoff_log"] * 1000,
+        direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
         air_temp_log=params["air_temp_series"],
@@ -1288,6 +1338,8 @@ def test_glacier_ice_scenario() -> None:
         lw_log=results["lw_log"],
         precip_log=params["precip_series"] * 1000,
         runoff_log=results["runoff_log"] * 1000,
+        melt_runoff_log=results["melt_runoff_log"] * 1000,
+        direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
         air_temp_log=params["air_temp_series"],
@@ -1354,6 +1406,8 @@ def _plot_scenario_results(
     lw_log: np.ndarray,
     precip_log: np.ndarray,
     runoff_log: np.ndarray,
+    melt_runoff_log: np.ndarray,
+    direct_rainfall_log: np.ndarray,
     sublimation_log: np.ndarray,
     refreezing_log: np.ndarray,
     air_temp_log: np.ndarray,
@@ -1369,7 +1423,7 @@ def _plot_scenario_results(
     """Helper function to plot results of a snow model scenario."""
     fig, axs = plt.subplots(5, 1, figsize=(15, 20), sharex=True)
     fig.suptitle(f"Snow Model Scenario: {scenario_name}", fontsize=16)
-
+    #
     # 1. Mass Balance
     axs[0].set_title("Snowpack Mass Balance")
     axs[0].plot(timesteps, swe_log, label="SWE (m)", color="blue")
@@ -1390,11 +1444,29 @@ def _plot_scenario_results(
     )
     ax2.set_ylabel("Precipitation (mm/hr)")
     ax2.legend(loc="upper right")
-
+    #
     # 2. Outgoing Fluxes
     axs[1].set_title("Internal and Outgoing Water Fluxes")
     axs[1].plot(
-        timesteps, runoff_log, label="Runoff (mm/hr)", color="green", linestyle="-"
+        timesteps,
+        runoff_log,
+        label="Total Runoff (mm/hr)",
+        color="green",
+        linestyle="-",
+    )
+    axs[1].plot(
+        timesteps,
+        melt_runoff_log,
+        label="Melt Runoff (mm/hr)",
+        color="blue",
+        linestyle="--",
+    )
+    axs[1].plot(
+        timesteps,
+        direct_rainfall_log,
+        label="Direct Rainfall Runoff (mm/hr)",
+        color="orange",
+        linestyle="--",
     )
     axs[1].plot(
         timesteps,
@@ -1413,7 +1485,7 @@ def _plot_scenario_results(
     axs[1].set_ylabel("Water Flux (mm/hr)")
     axs[1].legend()
     axs[1].grid(True)
-
+    #
     # 3. Temperature
     axs[2].set_title("Temperatures")
     axs[2].plot(timesteps, air_temp_log, label="Air Temp (°C)", color="red")
@@ -1435,7 +1507,7 @@ def _plot_scenario_results(
     axs[2].set_ylabel("Temperature (°C)")
     axs[2].legend()
     axs[2].grid(True)
-
+    #
     # 4. Radiation and Energy Fluxes
     axs[3].set_title("Radiation and Energy Fluxes")
     axs[3].plot(timesteps, net_sw_rad_log, label="Net Shortwave (W/m²)", color="orange")
@@ -1469,7 +1541,7 @@ def _plot_scenario_results(
     axs[3].legend()
     axs[3].grid(True)
     axs[3].axhline(0, color="black", linestyle="-", linewidth=0.8)
-
+    #
     # 5. Detailed Radiation Components
     axs[4].set_title("Detailed Radiation Components")
     axs[4].plot(
@@ -1501,7 +1573,7 @@ def _plot_scenario_results(
     axs[4].legend()
     axs[4].grid(True)
     axs[4].axhline(0, color="black", linestyle="-", linewidth=0.8)
-
+    #
     axs[-1].set_xlabel("Time (hours)")
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plot_path = (
@@ -1512,6 +1584,8 @@ def _plot_scenario_results(
     assert plot_path.exists()
 
 
+#
+#
 def _run_scenario(
     n_hours: int,
     precip_series: np.ndarray,
@@ -1553,6 +1627,8 @@ def _run_scenario(
     snow_surface_temp_log = np.zeros(n_hours, dtype=np.float32)
     runoff_log = np.zeros(n_hours, dtype=np.float32)
     melt_log = np.zeros(n_hours, dtype=np.float32)
+    melt_runoff_log = np.zeros(n_hours, dtype=np.float32)
+    direct_rainfall_log = np.zeros(n_hours, dtype=np.float32)
     precip_log = np.zeros(n_hours, dtype=np.float32)
     sublimation_log = np.zeros(n_hours, dtype=np.float32)
     refreezing_log = np.zeros(n_hours, dtype=np.float32)
@@ -1580,8 +1656,9 @@ def _run_scenario(
             lw,
             snow_temp,
             melt,
+            melt_runoff,
+            direct_rainfall,
             sublimation,
-            runoff,
             refreezing,
             snow_surface_temp,
             net_shortwave_radiation,
@@ -1589,9 +1666,7 @@ def _run_scenario(
             sensible_heat_flux,
             latent_heat_flux,
         ) = snow_model(
-            precipitation_rate_kg_per_m2_per_s=np.array(
-                [precip_kg_per_m2_per_s], dtype=np.float32
-            ),
+            pr_kg_per_m2_per_s=np.array([precip_kg_per_m2_per_s], dtype=np.float32),
             air_temperature_C=np.array([air_temp_series[i]], dtype=np.float32),
             snow_water_equivalent_m=swe.copy(),
             liquid_water_in_snow_m=lw.copy(),
@@ -1604,7 +1679,7 @@ def _run_scenario(
                 [vapor_pressure_series[i]], dtype=np.float32
             ),
             air_pressure_Pa=np.array([current_pressure], dtype=np.float32),
-            wind_speed_m_per_s=np.array([current_wind_speed], dtype=np.float32),
+            wind_speed_10m_m_per_s=np.array([current_wind_speed], dtype=np.float32),
             activate_layer_thickness_m=activate_layer_thickness_m,
         )
 
@@ -1612,8 +1687,10 @@ def _run_scenario(
         swe_log[i] = swe[0]
         lw_log[i] = lw[0]
         snow_temp_log[i] = snow_temp[0]
-        runoff_log[i] = runoff[0]
+        runoff_log[i] = melt_runoff[0] + direct_rainfall[0]
         melt_log[i] = melt[0]
+        melt_runoff_log[i] = melt_runoff[0]
+        direct_rainfall_log[i] = direct_rainfall[0]
         precip_log[i] = precip_series[i]  # Log precip in m/hr for consistency
         sublimation_log[i] = sublimation[0]
         refreezing_log[i] = refreezing[0]
@@ -1654,6 +1731,8 @@ def _run_scenario(
         "snow_surface_temp_log": snow_surface_temp_log,
         "runoff_log": runoff_log,
         "melt_log": melt_log,
+        "melt_runoff_log": melt_runoff_log,
+        "direct_rainfall_log": direct_rainfall_log,
         "sublimation_log": sublimation_log,
         "refreezing_log": refreezing_log,
         "upward_lw_rad_log": upward_lw_rad_log,
