@@ -20,18 +20,18 @@ from geb.hydrology.potential_evapotranspiration import (
 def test_get_vapour_pressure() -> None:
     """See example 3: https://www.fao.org/4/X0490E/x0490e07.htm."""
     saturated_vapour_pressure = get_vapour_pressure(
-        temperature_C=15,
+        temperature_C=np.float32(15.0),
     )
     assert math.isclose(saturated_vapour_pressure, 1.705, abs_tol=1e-2)
-    saturated_vapour_pressure = get_vapour_pressure(temperature_C=24.5)
+    saturated_vapour_pressure = get_vapour_pressure(temperature_C=np.float32(24.5))
     assert math.isclose(saturated_vapour_pressure, 3.075, abs_tol=1e-2)
 
 
 def test_get_vapour_pressure_deficit() -> None:
     """See example 18: https://www.fao.org/4/x0490e/x0490e08.htm."""
     vapour_pressure_deficit_kPa = get_vapour_pressure_deficit(
-        saturated_vapour_pressure_kPa=1.997,
-        actual_vapour_pressure_kPa=1.409,
+        saturated_vapour_pressure_kPa=np.float32(1.997),
+        actual_vapour_pressure_kPa=np.float32(1.409),
     )
     assert math.isclose(a=vapour_pressure_deficit_kPa, b=0.589, abs_tol=0.1)
 
@@ -52,7 +52,7 @@ def test_get_upwelling_long_wave_radiation() -> None:
 
     See example 18: https://www.fao.org/4/x0490e/x0490e08.htm.
     """
-    tas_C = 38  # Temperature in Celsius
+    tas_C = np.float32(38.0)  # Temperature in Celsius
     rlus_MJ_m2_per_hour = get_upwelling_long_wave_radiation(tas_C)
 
     expected_value = 1.915  # Expected value in MJ/m^2/hour
@@ -65,6 +65,7 @@ def test_get_psychrometric_constant() -> None:
     psychrometric_constant_kPa_per_C = get_psychrometric_constant(ps_pa=ps_pa)
 
     assert math.isclose(psychrometric_constant_kPa_per_C, 0.054, abs_tol=0.01)
+    assert isinstance(psychrometric_constant_kPa_per_C, np.float32)
 
 
 def test_get_net_solar_radiation() -> None:
@@ -114,14 +115,14 @@ def test_penman_monteith_day() -> None:
         reference_evapotranspiration_land_mm_per_hour,
         reference_evapotranspiration_water_mm_per_hour,
     ) = penman_monteith(
-        net_radiation_land_MJ_per_m2_per_hour=1.749,
-        net_radiation_water_MJ_per_m2_per_hour=1.749,
-        soil_heat_flux_MJ_per_m2_per_hour=0.175,
-        slope_of_saturated_vapour_pressure_curve_kPa_per_C=0.358,
-        psychrometric_constant_kPa_per_C=0.0673,
-        wind_2m_m_per_s=3.3,
-        temperature_C=38,
-        vapour_pressure_deficit_kPa=3.180,
+        net_radiation_land_MJ_per_m2_per_hour=np.float32(1.749),
+        net_radiation_water_MJ_per_m2_per_hour=np.float32(1.749),
+        soil_heat_flux_MJ_per_m2_per_hour=np.float32(0.175),
+        slope_of_saturated_vapour_pressure_curve_kPa_per_C=np.float32(0.358),
+        psychrometric_constant_kPa_per_C=np.float32(0.0673),
+        wind_2m_m_per_s=np.float32(3.3),
+        temperature_C=np.float32(38.0),
+        vapour_pressure_deficit_kPa=np.float32(3.180),
     )
     assert math.isclose(
         a=reference_evapotranspiration_land_mm_per_hour, b=0.63, rel_tol=1e-2
@@ -137,14 +138,14 @@ def test_penman_monteith_night() -> None:
         reference_evapotranspiration_land_mm_per_hour,
         reference_evapotranspiration_water_mm_per_hour,
     ) = penman_monteith(
-        net_radiation_land_MJ_per_m2_per_hour=-0.100,
-        net_radiation_water_MJ_per_m2_per_hour=-0.100,
-        soil_heat_flux_MJ_per_m2_per_hour=-0.050,
-        slope_of_saturated_vapour_pressure_curve_kPa_per_C=0.220,
-        psychrometric_constant_kPa_per_C=0.0673,
-        wind_2m_m_per_s=1.9,
-        temperature_C=28,
-        vapour_pressure_deficit_kPa=0.378,
+        net_radiation_land_MJ_per_m2_per_hour=np.float32(-0.100),
+        net_radiation_water_MJ_per_m2_per_hour=np.float32(-0.100),
+        soil_heat_flux_MJ_per_m2_per_hour=np.float32(-0.050),
+        slope_of_saturated_vapour_pressure_curve_kPa_per_C=np.float32(0.220),
+        psychrometric_constant_kPa_per_C=np.float32(0.0673),
+        wind_2m_m_per_s=np.float32(1.9),
+        temperature_C=np.float32(28.0),
+        vapour_pressure_deficit_kPa=np.float32(0.378),
     )
     assert math.isclose(
         a=reference_evapotranspiration_land_mm_per_hour, b=0.00, abs_tol=1e-2
