@@ -25,101 +25,93 @@ output_folder_snow.mkdir(exist_ok=True)
 
 def test_discriminate_precipitation() -> None:
     """Test discrimination between snowfall and rainfall."""
-    precip = np.array([0.005], dtype=np.float32)  # 0.005 m/hour
-    temp = np.array([-2.0], dtype=np.float32)
+    precip = np.float32(0.005)  # 0.005 m/hour
+    temp = np.float32(-2.0)
     threshold = np.float32(0.0)
 
     snowfall, rainfall = discriminate_precipitation(precip, temp, threshold)
 
-    assert snowfall.dtype == np.float32
-    assert rainfall.dtype == np.float32
-    assert math.isclose(snowfall[0], 0.005, abs_tol=1e-6)
-    assert math.isclose(rainfall[0], 0.0, abs_tol=1e-6)
+    assert math.isclose(snowfall, 0.005, abs_tol=1e-6)
+    assert math.isclose(rainfall, 0.0, abs_tol=1e-6)
 
     # Test rain
-    temp_rain = np.array([2.0], dtype=np.float32)
+    temp_rain = np.float32(2.0)
     snowfall_r, rainfall_r = discriminate_precipitation(precip, temp_rain, threshold)
 
-    assert snowfall_r.dtype == np.float32
-    assert rainfall_r.dtype == np.float32
-    assert math.isclose(snowfall_r[0], 0.0, abs_tol=1e-6)
-    assert math.isclose(rainfall_r[0], 0.005, abs_tol=1e-6)
+    assert math.isclose(snowfall_r, 0.0, abs_tol=1e-6)
+    assert math.isclose(rainfall_r, 0.005, abs_tol=1e-6)
 
 
 def test_update_snow_temperature() -> None:
     """Test updating snow temperature with new snowfall."""
-    snow_pack = np.array([0.01], dtype=np.float32)
-    snow_temp = np.array([-1.0], dtype=np.float32)
-    snowfall = np.array([0.005], dtype=np.float32)
-    air_temp = np.array([-2.0], dtype=np.float32)
+    snow_pack = np.float32(0.01)
+    snow_temp = np.float32(-1.0)
+    snowfall = np.float32(0.005)
+    air_temp = np.float32(-2.0)
 
     new_temp = update_snow_temperature(snow_pack, snow_temp, snowfall, air_temp)
 
-    assert new_temp.dtype == np.float32
     # Expected mixing then conductive relaxation with tau formulation
     mixed = (snow_temp * snow_pack + air_temp * snowfall) / (snow_pack + snowfall)
     # Reconstruct tau-based fraction: tau = d^2 / (pi^2 * alpha)
-    snow_density = min(550.0, 150.0 + 400.0 * float(snow_pack[0] + snowfall[0]))
+    snow_density = min(550.0, 150.0 + 400.0 * float(snow_pack + snowfall))
     k = 0.021 + 2.5 * (snow_density / 1000.0) ** 2
-    depth = float(snow_pack[0] + snowfall[0]) / (snow_density / 1000.0)
+    depth = float(snow_pack + snowfall) / (snow_density / 1000.0)
     depth = max(depth, 0.01)
     alpha = k / (snow_density * 2108.0)
     tau = depth * depth / (math.pi * math.pi * alpha + 1e-12)
     fraction = 1.0 - math.exp(-3600.0 / tau)
-    expected = mixed[0] + fraction * (air_temp[0] - mixed[0])
+    expected = mixed + fraction * (air_temp - mixed)
     expected = min(0.0, expected)
-    assert math.isclose(float(new_temp[0]), expected, rel_tol=0, abs_tol=1e-5)
+    assert math.isclose(float(new_temp), expected, rel_tol=0, abs_tol=1e-5)
 
     # Test clipping to 0 when new snow temp would be positive
-    snow_pack_zero = np.array([0.01], dtype=np.float32)
-    snow_temp_zero = np.array([-1.0], dtype=np.float32)
-    snowfall_warm = np.array([0.005], dtype=np.float32)
-    air_temp_warm = np.array([30.0], dtype=np.float32)
+    snow_pack_zero = np.float32(0.01)
+    snow_temp_zero = np.float32(-1.0)
+    snowfall_warm = np.float32(0.005)
+    air_temp_warm = np.float32(30.0)
 
     new_temp_clipped = update_snow_temperature(
         snow_pack_zero, snow_temp_zero, snowfall_warm, air_temp_warm
     )
 
-    assert new_temp_clipped.dtype == np.float32
     # Without clipping, it would be > 0, so it should be clipped to 0.0
-    assert math.isclose(new_temp_clipped[0], 0.0)
+    assert math.isclose(new_temp_clipped, 0.0)
 
 
 def test_update_snow_temperature_depth_sensitivity() -> None:
     """Test that deeper snow adjusts more slowly toward air temperature."""
     # Shallow snow (0.1 m SWE)
-    swe_shallow = np.array([0.1], dtype=np.float32)
-    temp_shallow = np.array([-5.0], dtype=np.float32)
-    snowfall = np.array([0.0], dtype=np.float32)
-    air_temp = np.array([0.0], dtype=np.float32)
+    swe_shallow = np.float32(0.1)
+    temp_shallow = np.float32(-5.0)
+    snowfall = np.float32(0.0)
+    air_temp = np.float32(0.0)
 
     new_temp_shallow = update_snow_temperature(
         swe_shallow, temp_shallow, snowfall, air_temp
     )
 
     # Deep snow (1.0 m SWE)
-    swe_deep = np.array([1.0], dtype=np.float32)
-    temp_deep = np.array([-5.0], dtype=np.float32)
+    swe_deep = np.float32(1.0)
+    temp_deep = np.float32(-5.0)
 
     new_temp_deep = update_snow_temperature(swe_deep, temp_deep, snowfall, air_temp)
 
     # Deeper snow should adjust less (fraction smaller for thicker layer)
     # Shallow: fraction ~0.1, Deep: fraction ~0.01 (much slower)
-    assert abs(new_temp_shallow[0] - temp_shallow[0]) > abs(
-        new_temp_deep[0] - temp_deep[0]
-    )
+    assert abs(new_temp_shallow - temp_shallow) > abs(new_temp_deep - temp_deep)
     # Both should be warmer than initial but not reach air temp
-    assert new_temp_shallow[0] > temp_shallow[0]
-    assert new_temp_deep[0] > temp_deep[0]
-    assert new_temp_shallow[0] < air_temp[0]
-    assert new_temp_deep[0] < air_temp[0]
+    assert new_temp_shallow > temp_shallow
+    assert new_temp_deep > temp_deep
+    assert new_temp_shallow < air_temp
+    assert new_temp_deep < air_temp
 
 
 def test_calculate_albedo() -> None:
     """Test albedo calculation."""
-    swe_deep = np.array([1.0], dtype=np.float32)  # 1m SWE
-    swe_shallow = np.array([0.01], dtype=np.float32)  # 1cm SWE
-    swe_zero = np.array([0.0], dtype=np.float32)
+    swe_deep = np.float32(1.0)  # 1m SWE
+    swe_shallow = np.float32(0.01)  # 1cm SWE
+    swe_zero = np.float32(0.0)
 
     albedo_min = np.float32(0.4)
     albedo_max = np.float32(0.9)
@@ -127,32 +119,29 @@ def test_calculate_albedo() -> None:
 
     # Deep snow should approach max albedo
     albedo_deep = calculate_albedo(swe_deep, albedo_min, albedo_max, decay)
-    assert albedo_deep.dtype == np.float32
     expected_deep = albedo_min + (albedo_max - albedo_min) * np.exp(-decay * 1000)
-    assert math.isclose(albedo_deep[0], expected_deep)
+    assert math.isclose(albedo_deep, expected_deep)
 
     # Shallow snow
     albedo_shallow = calculate_albedo(swe_shallow, albedo_min, albedo_max, decay)
-    assert albedo_shallow.dtype == np.float32
     expected_shallow = albedo_min + (albedo_max - albedo_min) * np.exp(-decay * 10)
-    assert math.isclose(albedo_shallow[0], expected_shallow, rel_tol=1e-6)
+    assert math.isclose(albedo_shallow, expected_shallow, rel_tol=1e-6)
 
     # With no snow, albedo should be max_albedo because exp(0) = 1
     albedo_zero = calculate_albedo(swe_zero, albedo_min, albedo_max, decay)
-    assert albedo_zero.dtype == np.float32
-    assert math.isclose(albedo_zero[0], albedo_max)  # exp(0) is 1
+    assert math.isclose(albedo_zero, albedo_max)  # exp(0) is 1
 
 
 def test_calculate_turbulent_fluxes() -> None:
     """Test sensible and latent heat flux calculations."""
-    air_temp_C = np.array([5.0], dtype=np.float32)
-    snow_surface_temp_C = np.array([0.0], dtype=np.float32)  # Assume surface at 0°C
+    air_temp_C = np.float32(5.0)
+    snow_surface_temp_C = np.float32(0.0)  # Assume surface at 0°C
     dewpoint_C = np.float32(2.0)
-    vapor_pressure_air_Pa = np.array(
-        [610.94 * np.exp(17.625 * dewpoint_C / (243.04 + dewpoint_C))], dtype=np.float32
+    vapor_pressure_air_Pa = np.float32(
+        610.94 * np.exp(17.625 * dewpoint_C / (243.04 + dewpoint_C))
     )
-    pressure_Pa = np.array([100000.0], dtype=np.float32)
-    wind_speed = np.array([2.0], dtype=np.float32)
+    pressure_Pa = np.float32(100000.0)
+    wind_speed = np.float32(2.0)
     bulk_coeff = np.float32(0.0015)
 
     sensible, latent, sublimation_rate = calculate_turbulent_fluxes(
@@ -164,34 +153,30 @@ def test_calculate_turbulent_fluxes() -> None:
         bulk_coeff,
     )
 
-    assert sensible.dtype == np.float32
-    assert latent.dtype == np.float32
-
     # Manual calculation for verification
     air_temp_K = 5.0 + 273.15
     air_density = 100000.0 / (287.058 * air_temp_K)  # ~1.20 kg/m³
 
     # Sensible heat: rho * cp * C * U * (T_air - T_surf)
-    expected_sensible = air_density * 1005.0 * bulk_coeff * wind_speed[0] * (5.0 - 0.0)
-    assert math.isclose(sensible[0], expected_sensible, rel_tol=1e-3)
+    expected_sensible = air_density * 1005.0 * bulk_coeff * wind_speed * (5.0 - 0.0)
+    assert math.isclose(sensible, expected_sensible, rel_tol=1e-3)
 
     # Latent heat
     e_surf = 610.94  # Saturation vapor pressure at 0°C
-    q_air = (0.622 * vapor_pressure_air_Pa[0]) / (
-        pressure_Pa[0] - 0.378 * vapor_pressure_air_Pa[0]
+    q_air = (0.622 * vapor_pressure_air_Pa) / (
+        pressure_Pa - 0.378 * vapor_pressure_air_Pa
     )
-    q_surf = (0.622 * e_surf) / (pressure_Pa[0] - 0.378 * e_surf)
+    q_surf = (0.622 * e_surf) / (pressure_Pa - 0.378 * e_surf)
     latent_heat_vap = 2.501e6
     expected_latent = (
-        air_density * latent_heat_vap * bulk_coeff * wind_speed[0] * (q_air - q_surf)
+        air_density * latent_heat_vap * bulk_coeff * wind_speed * (q_air - q_surf)
     )
-    assert math.isclose(latent[0], expected_latent, rel_tol=1e-2)
+    assert math.isclose(latent, expected_latent, rel_tol=1e-2)
 
     # Test condensation (negative latent heat)
     dewpoint_cold_C = np.float32(-1.0)
-    vapor_pressure_cold_Pa = np.array(
-        [610.94 * np.exp(17.625 * dewpoint_cold_C / (243.04 + dewpoint_cold_C))],
-        dtype=np.float32,
+    vapor_pressure_cold_Pa = np.float32(
+        610.94 * np.exp(17.625 * dewpoint_cold_C / (243.04 + dewpoint_cold_C))
     )
     _, latent_cond, _ = calculate_turbulent_fluxes(
         air_temp_C,
@@ -201,29 +186,28 @@ def test_calculate_turbulent_fluxes() -> None:
         wind_speed,
         bulk_coeff,
     )
-    assert latent_cond.dtype == np.float32
-    assert latent_cond[0] < 0
+    assert latent_cond < 0
 
     # Energy balance: total turbulent flux should be sensible + latent
-    total_turbulent_flux = sensible[0] + latent[0]
+    total_turbulent_flux = sensible + latent
     # For this case, since latent is positive (sublimation), total is positive
     assert total_turbulent_flux > 0
 
 
 def test_calculate_melt() -> None:
     """Test melt calculation with the energy balance model."""
-    air_temp = np.array([5.0], dtype=np.float32)
-    snow_temp = np.array([-1.0], dtype=np.float32)  # Assume bulk snow temp
-    snow_pack = np.array([0.1], dtype=np.float32)
-    sw_rad = np.array([200.0], dtype=np.float32)
+    air_temp = np.float32(5.0)
+    snow_temp = np.float32(-1.0)  # Assume bulk snow temp
+    snow_pack = np.float32(0.1)
+    sw_rad = np.float32(200.0)
     # Downward LW radiation, typical for a spring day
-    downward_lw_rad = np.array([300.0], dtype=np.float32)
+    downward_lw_rad = np.float32(300.0)
     dewpoint_C = np.float32(2.0)
-    vapor_pressure_air_Pa = np.array(
-        [610.94 * np.exp(17.625 * dewpoint_C / (243.04 + dewpoint_C))], dtype=np.float32
+    vapor_pressure_air_Pa = np.float32(
+        610.94 * np.exp(17.625 * dewpoint_C / (243.04 + dewpoint_C))
     )
-    pressure_Pa = np.array([100000.0], dtype=np.float32)
-    wind_speed = np.array([2.0], dtype=np.float32)
+    pressure_Pa = np.float32(100000.0)
+    wind_speed = np.float32(2.0)
 
     # Calculate snow surface temperature
     snow_surface_temp = calculate_snow_surface_temperature(
@@ -241,10 +225,8 @@ def test_calculate_melt() -> None:
         wind_speed,
     )
 
-    assert melt_rate.dtype == np.float32 or melt_rate.dtype == np.float64
-
     # Get fluxes for verification
-    snow_surface_temp_C = np.array([0.0], dtype=np.float32)
+    snow_surface_temp_C = np.float32(0.0)
     sensible, latent, sublimation_rate = calculate_turbulent_fluxes(
         air_temp,
         snow_surface_temp_C,
@@ -280,10 +262,10 @@ def test_calculate_melt() -> None:
     expected_melt = total_energy * conversion_factor
     expected_melt = np.minimum(expected_melt, swe_after_sublimation)
 
-    assert math.isclose(melt_rate[0], expected_melt[0], abs_tol=1e-4)
+    assert math.isclose(melt_rate, expected_melt, abs_tol=1e-4)
 
     # Test melt limited by snow pack
-    snow_pack_small = np.array([0.00001], dtype=np.float32)
+    snow_pack_small = np.float32(0.00001)
     snow_surface_temp_small = calculate_snow_surface_temperature(
         air_temp, snow_temp, snow_pack_small
     )
@@ -305,93 +287,81 @@ def test_calculate_melt() -> None:
 
 def test_handle_refreezing() -> None:
     """Test refreezing based on cold content."""
-    snow_temp = np.array([-5.0], dtype=np.float32)
-    liquid_water = np.array([0.002], dtype=np.float32)
-    rainfall = np.array([0.0], dtype=np.float32)
-    snow_pack = np.array([0.1], dtype=np.float32)
+    snow_temp = np.float32(-5.0)
+    liquid_water = np.float32(0.002)
+    rainfall = np.float32(0.0)
+    snow_pack = np.float32(0.1)
 
     refreeze, updated_swe, updated_lw = handle_refreezing(
         snow_temp, liquid_water, snow_pack, np.float32(0.2)
     )
 
-    assert refreeze.dtype == np.float32
-    assert updated_swe.dtype == np.float32
-    assert updated_lw.dtype == np.float32
-
     # Manual calculation
     cold_content = -(-5.0) * 0.1 * 1000.0 * 2108.0  # J/m²
     potential_refreeze = cold_content / (334000.0 * 1000.0)  # m
-    expected_refreeze = min(potential_refreeze, liquid_water[0])
+    expected_refreeze = min(potential_refreeze, liquid_water)
 
-    assert math.isclose(refreeze[0], expected_refreeze, rel_tol=1e-6)
-    assert math.isclose(updated_swe[0], snow_pack[0] + expected_refreeze, rel_tol=1e-6)
-    assert math.isclose(
-        updated_lw[0], liquid_water[0] - expected_refreeze, rel_tol=1e-6
-    )
+    assert math.isclose(refreeze, expected_refreeze, rel_tol=1e-6)
+    assert math.isclose(updated_swe, snow_pack + expected_refreeze, rel_tol=1e-6)
+    assert math.isclose(updated_lw, liquid_water - expected_refreeze, rel_tol=1e-6)
 
     # Test no refreezing when snow is at 0°C
-    snow_temp_zero = np.array([0.0], dtype=np.float32)
+    snow_temp_zero = np.float32(0.0)
     refreeze_zero, _, _ = handle_refreezing(
         snow_temp_zero, liquid_water, snow_pack, np.float32(0.2)
     )
-    assert refreeze_zero.dtype == np.float32
-    assert refreeze_zero[0] == 0.0
+    assert refreeze_zero == 0.0
 
     # Test refreezing limited by available liquid water
-    liquid_water_small = np.array([0.0001], dtype=np.float32)
+    liquid_water_small = np.float32(0.0001)
     refreeze_limited, _, _ = handle_refreezing(
         snow_temp, liquid_water_small, snow_pack, np.float32(0.2)
     )
-    assert refreeze_limited.dtype == np.float32
-    assert refreeze_limited[0] == liquid_water_small[0]
+    assert refreeze_limited == liquid_water_small
 
     # Energy balance for refreezing
-    energy_released_J_per_m2 = refreeze[0] * 1000.0 * 334000.0
-    cold_content_J_per_m2 = -snow_temp[0] * snow_pack[0] * 1000.0 * 2108.0
+    energy_released_J_per_m2 = refreeze * 1000.0 * 334000.0
+    cold_content_J_per_m2 = -snow_temp * snow_pack * 1000.0 * 2108.0
     assert energy_released_J_per_m2 <= cold_content_J_per_m2 + 1e-3
 
 
 def test_calculate_runoff() -> None:
     """Test runoff calculation."""
-    liquid_water = np.array([0.02], dtype=np.float32)
-    snow_pack = np.array([0.1], dtype=np.float32)
+    liquid_water = np.float32(0.02)
+    snow_pack = np.float32(0.1)
     whc = np.float32(0.1)  # 10% WHC
 
     runoff, updated_liquid = calculate_runoff(
         liquid_water, snow_pack, whc, np.float32(0.2)
     )
 
-    assert runoff.dtype == np.float32
-    assert updated_liquid.dtype == np.float32
-
     max_water = 0.1 * 0.1  # 0.01 m
     expected_runoff = 0.02 - 0.01  # 0.01 m
-    assert math.isclose(runoff[0], expected_runoff, abs_tol=1e-6)
-    assert math.isclose(updated_liquid[0], max_water, abs_tol=1e-6)
+    assert math.isclose(runoff, expected_runoff, abs_tol=1e-6)
+    assert math.isclose(updated_liquid, max_water, abs_tol=1e-6)
 
     # Test no runoff if liquid water is below WHC
-    liquid_water_low = np.array([0.005], dtype=np.float32)
+    liquid_water_low = np.float32(0.005)
     runoff_zero, _ = calculate_runoff(liquid_water_low, snow_pack, whc, np.float32(0.2))
-    assert runoff_zero.dtype == np.float32
-    assert runoff_zero[0] == 0.0
+    assert runoff_zero == 0.0
 
 
 def test_snow_model_full_cycle() -> None:
     """Test a full cycle of the main snow model function."""
-    precip = np.array([0.001], dtype=np.float32)  # kg/m²/s -> 3.6 mm/hr
-    air_temp = np.array([-2.0], dtype=np.float32)  # Snowing
-    swe = np.array([0.05], dtype=np.float32)
-    lw = np.array([0.0], dtype=np.float32)
-    snow_temp = np.array([-1.0], dtype=np.float32)
-    sw_rad = np.array([0.0], dtype=np.float32)  # Night
+    precip = np.float32(0.001)  # kg/m²/s -> 3.6 mm/hr
+    air_temp = np.float32(-2.0)  # Snowing
+    swe = np.float32(0.05)
+    lw = np.float32(0.0)
+    snow_temp = np.float32(-1.0)
+    sw_rad = np.float32(0.0)  # Night
     # Downward LW for a clear night
-    downward_lw_rad = np.array([250.0], dtype=np.float32)
+    downward_lw_rad = np.float32(250.0)
     dewpoint_C = np.float32(-3.0)
-    vapor_pressure = np.array(
-        [610.94 * np.exp(17.625 * dewpoint_C / (243.04 + dewpoint_C))], dtype=np.float32
+    vapor_pressure = np.float32(
+        610.94 * np.exp(17.625 * dewpoint_C / (243.04 + dewpoint_C))
     )
-    pressure = np.array([95000.0], dtype=np.float32)
-    wind_speed = np.array([1.0], dtype=np.float32)
+    pressure = np.float32(95000.0)
+    wind_speed = np.float32(1.0)
 
     # --- Accumulation phase ---
     new_swe, new_lw, new_temp, melt, melt_runoff, direct_rainfall, sublimation, *_ = (
@@ -409,47 +379,32 @@ def test_snow_model_full_cycle() -> None:
         )
     )
 
-    assert new_swe.dtype == np.float32 or new_swe.dtype == np.float64
-    assert new_lw.dtype == np.float32 or new_lw.dtype == np.float64
-    assert new_temp.dtype == np.float32 or new_temp.dtype == np.float64
-    assert melt.dtype == np.float32 or melt.dtype == np.float64
-    assert melt_runoff.dtype == np.float32 or melt_runoff.dtype == np.float64
-    assert direct_rainfall.dtype == np.float32 or direct_rainfall.dtype == np.float64
-    assert sublimation.dtype == np.float32 or sublimation.dtype == np.float64
-
     precip_m_hr = precip * 3.6
     # With downward LW, some melt might occur even at night if energy balance is positive
     # For this specific case, let's verify it's still a net loss environment
     # Upward LW is ~315 W/m2. Downward is 250. Net is -65. Turbulent fluxes are small.
     # So total energy should be negative.
-    assert melt[0] == 0.0
-    assert melt_runoff[0] == 0.0  # No runoff
-    assert direct_rainfall[0] == 0.0  # No rainfall
-    assert new_swe[0] > swe[0]  # Snow should accumulate
+    assert melt == 0.0
+    assert melt_runoff == 0.0  # No runoff
+    assert direct_rainfall == 0.0  # No rainfall
+    assert new_swe > swe  # Snow should accumulate
     # New temperature: mixed then tau-based relaxation toward air temperature
     mixed_temp = (swe * snow_temp + precip_m_hr * air_temp) / (swe + precip_m_hr)
     total_swe = swe + precip_m_hr
-    snow_density = min(550.0, 150.0 + 400.0 * float(total_swe[0]))
+    snow_density = min(550.0, 150.0 + 400.0 * float(total_swe))
     k = 0.021 + 2.5 * (snow_density / 1000.0) ** 2
-    depth = float(total_swe[0]) / (snow_density / 1000.0)
+    depth = float(total_swe) / (snow_density / 1000.0)
     depth = max(depth, 0.01)
     alpha = k / (snow_density * 2108.0)
     tau = depth * depth / (math.pi * math.pi * alpha + 1e-12)
     fraction = 1.0 - math.exp(-3600.0 / tau)
-    expected_temp = mixed_temp[0] + fraction * (air_temp[0] - mixed_temp[0])
+    expected_temp = mixed_temp + fraction * (air_temp - mixed_temp)
     expected_temp = min(0.0, expected_temp)
-    assert math.isclose(float(new_temp[0]), expected_temp, abs_tol=1e-4)
+    assert math.isclose(float(new_temp), expected_temp, abs_tol=1e-4)
 
     # Water balance for accumulation phase
-    water_in = swe[0] + lw[0] + precip_m_hr[0]
-    water_out = (
-        new_swe[0]
-        + new_lw[0]
-        + melt[0]
-        + sublimation[0]
-        + melt_runoff[0]
-        + direct_rainfall[0]
-    )
+    water_in = swe + lw + precip_m_hr
+    water_out = new_swe + new_lw + melt + sublimation + melt_runoff + direct_rainfall
     assert math.isclose(water_in, water_out, abs_tol=1e-5)
     precip_melt = np.array([0.0], dtype=np.float32)
     air_temp_melt = np.array([5.0], dtype=np.float32)
@@ -554,21 +509,21 @@ def test_snow_model_full_cycle() -> None:
 def test_rain_on_snow_event() -> None:
     """Test a rain-on-snow event, expecting significant melt and runoff."""
     # Initial conditions: existing cold snowpack
-    swe = np.array([0.1], dtype=np.float32)
-    lw = np.array([0.0], dtype=np.float32)
-    snow_temp = np.array([-2.0], dtype=np.float32)
+    swe = np.float32(0.1)
+    lw = np.float32(0.0)
+    snow_temp = np.float32(-2.0)
 
     # Event: warm rain, no solar radiation (e.g., overcast day)
-    precip = np.array([0.004], dtype=np.float32)  # 14.4 mm/hr rain
-    air_temp = np.array([5.0], dtype=np.float32)  # Warm air
-    sw_rad = np.array([0.0], dtype=np.float32)
-    downward_lw_rad = np.array([320.0], dtype=np.float32)  # Warm, cloudy sky
+    precip = np.float32(0.004)  # 14.4 mm/hr rain
+    air_temp = np.float32(5.0)  # Warm air
+    sw_rad = np.float32(0.0)
+    downward_lw_rad = np.float32(320.0)  # Warm, cloudy sky
     dewpoint_C = np.float32(4.5)
-    vapor_pressure = np.array(
-        [610.94 * np.exp(17.625 * dewpoint_C / (243.04 + dewpoint_C))], dtype=np.float32
+    vapor_pressure = np.float32(
+        610.94 * np.exp(17.625 * dewpoint_C / (243.04 + dewpoint_C))
     )
-    pressure = np.array([98000.0], dtype=np.float32)
-    wind_speed = np.array([5.0], dtype=np.float32)
+    pressure = np.float32(98000.0)
+    wind_speed = np.float32(5.0)
 
     (
         final_swe,
@@ -593,13 +548,11 @@ def test_rain_on_snow_event() -> None:
     )
 
     # Assertions
-    assert melt_rate[0] > 0, "Melt should be significant during a warm rain event"
-    assert (melt_runoff_final[0] + direct_rainfall_final[0]) > 0, (
-        "Runoff should be generated"
-    )
+    assert melt_rate > 0, "Melt should be significant during a warm rain event"
+    assert (melt_runoff_final + direct_rainfall_final) > 0, "Runoff should be generated"
     # SWE should decrease due to melt, even with rain adding mass via refreezing
     # The initial refreezing will add mass, but melt should dominate
-    assert final_swe[0] < swe[0] + (precip[0] * 3.6), (
+    assert final_swe < swe + (precip * 3.6), (
         "Net SWE should decrease as melt outpaces accumulation"
     )
 
@@ -853,21 +806,21 @@ def test_snowpack_high_altitude_scenario() -> None:
 def test_sublimation_scenario() -> None:
     """Test snowpack mass loss under cold, dry, and windy conditions."""
     # Initial conditions: existing snowpack
-    swe = np.array([0.1], dtype=np.float32)
-    lw = np.array([0.0], dtype=np.float32)
-    snow_temp = np.array([-10.0], dtype=np.float32)
+    swe = np.float32(0.1)
+    lw = np.float32(0.0)
+    snow_temp = np.float32(-10.0)
 
     # Event: cold, dry, windy, sunny day (e.g., high-altitude winter)
-    precip = np.array([0.0], dtype=np.float32)
-    air_temp = np.array([-8.0], dtype=np.float32)
-    sw_rad = np.array([300.0], dtype=np.float32)
-    downward_lw_rad = np.array([220.0], dtype=np.float32)  # Clear, cold sky
+    precip = np.float32(0.0)
+    air_temp = np.float32(-8.0)
+    sw_rad = np.float32(300.0)
+    downward_lw_rad = np.float32(220.0)  # Clear, cold sky
     dewpoint_C = np.float32(-20.0)  # Very dry air
-    vapor_pressure = np.array(
-        [610.94 * np.exp(17.625 * dewpoint_C / (243.04 + dewpoint_C))], dtype=np.float32
+    vapor_pressure = np.float32(
+        610.94 * np.exp(17.625 * dewpoint_C / (243.04 + dewpoint_C))
     )
-    pressure = np.array([70000.0], dtype=np.float32)  # High altitude
-    wind_speed = np.array([8.0], dtype=np.float32)
+    pressure = np.float32(70000.0)  # High altitude
+    wind_speed = np.float32(8.0)
 
     final_swe, _, _, melt_rate, melt_runoff, direct_rainfall, sublimation_rate, *_ = (
         snow_model(
@@ -885,36 +838,36 @@ def test_sublimation_scenario() -> None:
     )
 
     # Assertions
-    assert abs(melt_rate[0]) < 1e-3, (
+    assert abs(melt_rate) < 1e-3, (
         "No significant melt should occur at these cold temperatures"
     )
     # Latent heat flux should be negative (sublimation), leading to mass loss
-    assert sublimation_rate[0] < 0, "Sublimation should be negative"
-    assert final_swe[0] < swe[0], "SWE should decrease due to sublimation"
+    assert sublimation_rate < 0, "Sublimation should be negative"
+    assert final_swe < swe, "SWE should decrease due to sublimation"
 
 
 def test_no_change_scenario() -> None:
     """Test that the snowpack is stable with no energy/mass inputs or outputs."""
     # Initial conditions: cold, stable snowpack
-    swe = np.array([0.2], dtype=np.float32)
-    lw = np.array([0.0], dtype=np.float32)
-    snow_temp = np.array([-5.0], dtype=np.float32)
+    swe = np.float32(0.2)
+    lw = np.float32(0.0)
+    snow_temp = np.float32(-5.0)
 
     # Event: No precip, no radiation, stable temps
-    precip = np.array([0.0], dtype=np.float32)
-    air_temp = np.array([-5.0], dtype=np.float32)  # Same as snow temp
-    sw_rad = np.array([0.0], dtype=np.float32)
+    precip = np.float32(0.0)
+    air_temp = np.float32(-5.0)  # Same as snow temp
+    sw_rad = np.float32(0.0)
     # Set downward LW to balance upward LW to create zero net radiation
     # Upward LW = εσT⁴ = 0.99 * 5.67e-8 * (273.15 - 5)^4 = 293.3
-    downward_lw_rad = np.array([293.3], dtype=np.float32)
+    downward_lw_rad = np.float32(293.3)
     # Set dewpoint to create zero vapor pressure gradient
     # Surface vapor pressure is over ice at -5C: 401.7 Pa
     dewpoint_C = np.float32(-5.0)
-    vapor_pressure = np.array(
-        [610.94 * np.exp(22.46 * dewpoint_C / (272.62 + dewpoint_C))], dtype=np.float32
+    vapor_pressure = np.float32(
+        610.94 * np.exp(22.46 * dewpoint_C / (272.62 + dewpoint_C))
     )  # Using formula for ice
-    pressure = np.array([100000.0], dtype=np.float32)
-    wind_speed = np.array([0.0], dtype=np.float32)  # No wind
+    pressure = np.float32(100000.0)
+    wind_speed = np.float32(0.0)  # No wind
 
     (
         final_swe,
@@ -939,17 +892,15 @@ def test_no_change_scenario() -> None:
     )
 
     # Assertions
-    assert abs(melt_rate[0]) < 1e-4, "Melt should not occur"
-    assert melt_runoff_final[0] == 0.0, "Melt runoff should not occur"
-    assert direct_rainfall_final[0] == 0.0, "Direct rainfall should not occur"
-    assert math.isclose(sublimation_rate[0], 0.0, abs_tol=1e-6), (
+    assert abs(melt_rate) < 1e-4, "Melt should not occur"
+    assert melt_runoff_final == 0.0, "Melt runoff should not occur"
+    assert direct_rainfall_final == 0.0, "Direct rainfall should not occur"
+    assert math.isclose(sublimation_rate, 0.0, abs_tol=1e-6), (
         "Sublimation should not occur"
     )
-    assert abs(final_swe[0] - swe[0]) < 1e-3, "SWE should not change significantly"
-    assert abs(final_lw[0] - lw[0]) < 1e-4, (
-        "Liquid water should not change significantly"
-    )
-    assert abs(final_temp[0] - snow_temp[0]) < 10.0, (
+    assert abs(final_swe - swe) < 1e-3, "SWE should not change significantly"
+    assert abs(final_lw - lw) < 1e-4, "Liquid water should not change significantly"
+    assert abs(final_temp - snow_temp) < 10.0, (
         "Snow temperature should not change drastically"
     )
 
@@ -1638,9 +1589,9 @@ def _run_scenario(
     latent_heat_flux_log = np.zeros(n_hours, dtype=np.float32)
 
     # Initial state
-    swe = initial_swe.copy()
-    lw = initial_lw.copy()
-    snow_temp = initial_snow_temp.copy()
+    swe = initial_swe
+    lw = initial_lw
+    snow_temp = initial_snow_temp
 
     for i in range(n_hours):
         # Select the correct forcing value (for constants or time series)
@@ -1666,39 +1617,35 @@ def _run_scenario(
             sensible_heat_flux,
             latent_heat_flux,
         ) = snow_model(
-            pr_kg_per_m2_per_s=np.array([precip_kg_per_m2_per_s], dtype=np.float32),
-            air_temperature_C=np.array([air_temp_series[i]], dtype=np.float32),
-            snow_water_equivalent_m=swe.copy(),
-            liquid_water_in_snow_m=lw.copy(),
-            snow_temperature_C=snow_temp.copy(),
-            shortwave_radiation_W_per_m2=np.array([sw_rad_series[i]], dtype=np.float32),
-            downward_longwave_radiation_W_per_m2=np.array(
-                [lw_rad_series[i]], dtype=np.float32
-            ),
-            vapor_pressure_air_Pa=np.array(
-                [vapor_pressure_series[i]], dtype=np.float32
-            ),
-            air_pressure_Pa=np.array([current_pressure], dtype=np.float32),
-            wind_speed_10m_m_per_s=np.array([current_wind_speed], dtype=np.float32),
+            pr_kg_per_m2_per_s=precip_kg_per_m2_per_s,
+            air_temperature_C=air_temp_series[i],
+            snow_water_equivalent_m=swe,
+            liquid_water_in_snow_m=lw,
+            snow_temperature_C=snow_temp,
+            shortwave_radiation_W_per_m2=sw_rad_series[i],
+            downward_longwave_radiation_W_per_m2=lw_rad_series[i],
+            vapor_pressure_air_Pa=vapor_pressure_series[i],
+            air_pressure_Pa=current_pressure,
+            wind_speed_10m_m_per_s=current_wind_speed,
             activate_layer_thickness_m=activate_layer_thickness_m,
         )
 
         # Log results
-        swe_log[i] = swe[0]
-        lw_log[i] = lw[0]
-        snow_temp_log[i] = snow_temp[0]
-        runoff_log[i] = melt_runoff[0] + direct_rainfall[0]
-        melt_log[i] = melt[0]
-        melt_runoff_log[i] = melt_runoff[0]
-        direct_rainfall_log[i] = direct_rainfall[0]
+        swe_log[i] = swe
+        lw_log[i] = lw
+        snow_temp_log[i] = snow_temp
+        runoff_log[i] = melt_runoff + direct_rainfall
+        melt_log[i] = melt
+        melt_runoff_log[i] = melt_runoff
+        direct_rainfall_log[i] = direct_rainfall
         precip_log[i] = precip_series[i]  # Log precip in m/hr for consistency
-        sublimation_log[i] = sublimation[0]
-        refreezing_log[i] = refreezing[0]
-        snow_surface_temp_log[i] = snow_surface_temp[0]
-        net_sw_rad_log[i] = net_shortwave_radiation[0]
-        upward_lw_rad_log[i] = upward_longwave_radiation[0]
-        sensible_heat_flux_log[i] = sensible_heat_flux[0]
-        latent_heat_flux_log[i] = latent_heat_flux[0]
+        sublimation_log[i] = sublimation
+        refreezing_log[i] = refreezing
+        snow_surface_temp_log[i] = snow_surface_temp
+        net_sw_rad_log[i] = net_shortwave_radiation
+        upward_lw_rad_log[i] = upward_longwave_radiation
+        sensible_heat_flux_log[i] = sensible_heat_flux
+        latent_heat_flux_log[i] = latent_heat_flux
 
     # Water balance check: total water in should equal total water out
     total_precip = np.sum(precip_log)
@@ -1709,16 +1656,13 @@ def _run_scenario(
     deposition_gain = np.sum(sublimation_log[sublimation_log > 0], dtype=np.float64)
 
     total_water_in = (
-        initial_swe[0].astype(np.float64)
-        + initial_lw[0].astype(np.float64)
+        float(initial_swe)
+        + float(initial_lw)
         + total_precip.astype(np.float64)
         + deposition_gain
     )
     total_water_out = (
-        swe[0].astype(np.float64)
-        + lw[0].astype(np.float64)
-        + total_runoff.astype(np.float64)
-        + sublimation_loss
+        float(swe) + float(lw) + total_runoff.astype(np.float64) + sublimation_loss
     )
 
     assert math.isclose(total_water_in, total_water_out, abs_tol=1e-3)

@@ -1,23 +1,19 @@
 """Functions to calculate snow accumulation and melt."""
 
 import numpy as np
-import numpy.typing as npt
 from numba import njit
 
 STEFAN_BOLTZMANN_CONSTANT = np.float32(5.670374419e-8)  # W m⁻² K⁻⁴
 SNOW_EMISSIVITY = np.float32(0.99)  # Emissivity of snow surface
 KELVIN_OFFSET = np.float32(273.15)
 
-# Precomputed SWE range for albedo caching (0 to 10m, step 0.01m)
-SWE_RANGE_M = np.arange(0, 10.01, 0.01, dtype=np.float32)
-
 
 @njit(cache=True, inline="always")
 def discriminate_precipitation(
-    precipitation_m_per_hour: npt.NDArray[np.float32],
-    air_temperature_C: npt.NDArray[np.float32],
+    precipitation_m_per_hour: np.float32,
+    air_temperature_C: np.float32,
     snowfall_threshold_temperature_C: np.float32,
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+) -> tuple[np.float32, np.float32]:
     """
     Discriminate between snowfall and rainfall based on temperature.
 
@@ -30,18 +26,22 @@ def discriminate_precipitation(
         A tuple of snowfall rate (m/hour) and rainfall rate (m/hour).
     """
     is_snow = air_temperature_C <= snowfall_threshold_temperature_C
-    snowfall_m_per_hour = np.where(is_snow, precipitation_m_per_hour, np.float32(0.0))
-    rainfall_m_per_hour = np.where(is_snow, np.float32(0.0), precipitation_m_per_hour)
+    snowfall_m_per_hour = (
+        np.float32(precipitation_m_per_hour) if is_snow else np.float32(0.0)
+    )
+    rainfall_m_per_hour = (
+        np.float32(0.0) if is_snow else np.float32(precipitation_m_per_hour)
+    )
     return snowfall_m_per_hour, rainfall_m_per_hour
 
 
 @njit(cache=True, inline="always")
 def update_snow_temperature(
-    snow_water_equivalent_m: npt.NDArray[np.float32],
-    snow_temperature_C: npt.NDArray[np.float32],
-    snowfall_m_per_hour: npt.NDArray[np.float32],
-    air_temperature_C: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    snow_water_equivalent_m: np.float32,
+    snow_temperature_C: np.float32,
+    snowfall_m_per_hour: np.float32,
+    air_temperature_C: np.float32,
+) -> np.float32:
     """
     Update the snow pack temperature based on new snowfall and air temperature.
 
@@ -66,14 +66,14 @@ def update_snow_temperature(
     new_swe_m = snow_water_equivalent_m + snowfall_m_per_hour
 
     # Avoid division by zero if there's no snow
-    mixed_temp_C = np.where(
-        new_swe_m > 0,
+    mixed_temp_C = (
         (
             snow_temperature_C * snow_water_equivalent_m
             + air_temperature_C * snowfall_m_per_hour
         )
-        / new_swe_m,
-        air_temperature_C,  # If no snow, temp is air temp
+        / new_swe_m
+        if new_swe_m > 0
+        else air_temperature_C
     )
 
     # Conductive heat transfer adjustment from the atmosphere
@@ -118,11 +118,11 @@ def update_snow_temperature(
 
 @njit(cache=True, inline="always")
 def calculate_albedo(
-    snow_water_equivalent_m: npt.NDArray[np.float32],
+    snow_water_equivalent_m: np.float32,
     albedo_min: np.float32,
     albedo_max: np.float32,
     albedo_decay_coefficient: np.float32,
-) -> npt.NDArray[np.float32]:
+) -> np.float32:
     """
     Calculate snow albedo based on snow water equivalent using a cached lookup table.
 
@@ -138,27 +138,22 @@ def calculate_albedo(
     Returns:
         Snow albedo (dimensionless).
     """
-    # Compute the albedo table for the given parameters (cached implicitly via Numba)
-    albedo_table = albedo_min + (albedo_max - albedo_min) * np.exp(
-        -albedo_decay_coefficient * SWE_RANGE_M * np.float32(1000.0)
-    ).astype(np.float32)
-
-    # Find nearest index for input SWE values
     # Clamp SWE to the table range (0 to 10m)
-    clamped_swe = np.clip(snow_water_equivalent_m, np.float32(0.0), np.float32(10.0))
-    indices = np.round(clamped_swe * 100).astype(np.int32)
-    return albedo_table[indices]
+    clamped_swe = max(np.float32(0.0), min(snow_water_equivalent_m, np.float32(10.0)))
+    return albedo_min + (albedo_max - albedo_min) * np.exp(
+        -albedo_decay_coefficient * clamped_swe * np.float32(1000.0)
+    )
 
 
 @njit(cache=True, inline="always")
 def calculate_turbulent_fluxes(
-    air_temperature_C: npt.NDArray[np.float32],
-    snow_surface_temperature_C: npt.NDArray[np.float32],
-    vapor_pressure_air_Pa: npt.NDArray[np.float32],
-    air_pressure_Pa: npt.NDArray[np.float32],
-    wind_speed_10m_m_per_s: npt.NDArray[np.float32],
+    air_temperature_C: np.float32,
+    snow_surface_temperature_C: np.float32,
+    vapor_pressure_air_Pa: np.float32,
+    air_pressure_Pa: np.float32,
+    wind_speed_10m_m_per_s: np.float32,
     bulk_transfer_coefficient: np.float32,
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+) -> tuple[np.float32, np.float32, np.float32]:
     """
     Calculate sensible and latent heat fluxes, and sublimation/deposition rate.
 
@@ -205,10 +200,10 @@ def calculate_turbulent_fluxes(
     # Based on bulk aerodynamic formula: Q_l = rho * L * C_e * U * (q_air - q_surf)
     # Use latent heat of sublimation for snow (ice) surfaces, vaporization for liquid.
     # This is more physically realistic than using air temperature.
-    latent_heat_J_per_kg = np.where(
-        snow_surface_temperature_C >= np.float32(0.0),
-        LATENT_HEAT_VAPORIZATION_J_PER_KG,
-        LATENT_HEAT_SUBLIMATION_J_PER_KG,
+    latent_heat_J_per_kg = (
+        LATENT_HEAT_VAPORIZATION_J_PER_KG
+        if snow_surface_temperature_C >= np.float32(0.0)
+        else LATENT_HEAT_SUBLIMATION_J_PER_KG
     )
 
     # Saturation vapor pressure at snow surface (e_surf)
@@ -251,26 +246,26 @@ def calculate_turbulent_fluxes(
 
 @njit(cache=True, inline="always")
 def calculate_melt(
-    air_temperature_C: npt.NDArray[np.float32],
-    snow_surface_temperature_C: npt.NDArray[np.float32],
-    snow_water_equivalent_m: npt.NDArray[np.float32],
-    shortwave_radiation_W_per_m2: npt.NDArray[np.float32],
-    downward_longwave_radiation_W_per_m2: npt.NDArray[np.float32],
-    vapor_pressure_air_Pa: npt.NDArray[np.float32],
-    air_pressure_Pa: npt.NDArray[np.float32],
-    wind_speed_10m_m_per_s: npt.NDArray[np.float32],
+    air_temperature_C: np.float32,
+    snow_surface_temperature_C: np.float32,
+    snow_water_equivalent_m: np.float32,
+    shortwave_radiation_W_per_m2: np.float32,
+    downward_longwave_radiation_W_per_m2: np.float32,
+    vapor_pressure_air_Pa: np.float32,
+    air_pressure_Pa: np.float32,
+    wind_speed_10m_m_per_s: np.float32,
     albedo_min: np.float32 = np.float32(0.4),
     albedo_max: np.float32 = np.float32(0.9),
     albedo_decay_coefficient: np.float32 = np.float32(0.01),
     snow_radiation_coefficient: np.float32 = np.float32(1.0),
     bulk_transfer_coefficient: np.float32 = np.float32(0.0015),
 ) -> tuple[
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
 ]:
     """
     Calculate potential snow melt and sublimation based on energy balance.
@@ -345,12 +340,12 @@ def calculate_melt(
 
 @njit(cache=True, inline="always")
 def handle_refreezing(
-    snow_surface_temperature_C: npt.NDArray[np.float32],
-    liquid_water_in_snow_m: npt.NDArray[np.float32],
-    snow_water_equivalent_m: npt.NDArray[np.float32],
+    snow_surface_temperature_C: np.float32,
+    liquid_water_in_snow_m: np.float32,
+    snow_water_equivalent_m: np.float32,
     activate_layer_thickness_m: np.float32,
     max_refreezing_rate_m_per_hour: np.float32 = np.float32(0.01),
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+) -> tuple[np.float32, np.float32, np.float32]:
     """
     Handle refreezing of liquid water in the snow pack based on energy balance.
 
@@ -393,10 +388,10 @@ def handle_refreezing(
     potential_refreezing_m_per_hour = cold_content_J_per_m2 / (
         LATENT_HEAT_FUSION_J_PER_KG * DENSITY_WATER_KG_PER_M3
     )
-    potential_refreezing_m_per_hour = np.where(
-        snow_surface_temperature_C < np.float32(0.0),
-        potential_refreezing_m_per_hour,
-        np.float32(0.0),
+    potential_refreezing_m_per_hour = (
+        potential_refreezing_m_per_hour
+        if snow_surface_temperature_C < np.float32(0.0)
+        else np.float32(0.0)
     )
 
     # Liquid water available for refreezing is the stored liquid water.
@@ -421,11 +416,11 @@ def handle_refreezing(
 
 @njit(cache=True, inline="always")
 def calculate_runoff(
-    liquid_water_in_snow_m: npt.NDArray[np.float32],
-    snow_water_equivalent_m: npt.NDArray[np.float32],
+    liquid_water_in_snow_m: np.float32,
+    snow_water_equivalent_m: np.float32,
     water_holding_capacity_fraction: np.float32,
     activate_layer_thickness_m: np.float32,
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+) -> tuple[np.float32, np.float32]:
     """
     Calculate runoff from the snow pack based on water holding capacity.
 
@@ -451,10 +446,10 @@ def calculate_runoff(
 
 @njit(cache=True, inline="always")
 def warm_snowpack(
-    snow_temperature_C: npt.NDArray[np.float32],
-    snow_water_equivalent_m: npt.NDArray[np.float32],
-    energy_J_per_m2_per_s: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    snow_temperature_C: np.float32,
+    snow_water_equivalent_m: np.float32,
+    energy_J_per_m2_per_s: np.float32,
+) -> np.float32:
     """
     Warm or cool the snowpack based on a given energy flux over one second.
 
@@ -478,10 +473,10 @@ def warm_snowpack(
 
     # Temperature change (delta T) = Energy / (mass * specific heat)
     # Avoid division by zero if there is no snow mass
-    delta_T_C = np.where(
-        snow_mass_kg_per_m2 > 0,
-        energy_J_per_m2_per_s / (snow_mass_kg_per_m2 * SPECIFIC_HEAT_ICE_J_PER_KG_K),
-        np.float32(0.0),
+    delta_T_C = (
+        energy_J_per_m2_per_s / (snow_mass_kg_per_m2 * SPECIFIC_HEAT_ICE_J_PER_KG_K)
+        if snow_mass_kg_per_m2 > 0
+        else np.float32(0.0)
     )
 
     new_temp_C = snow_temperature_C + delta_T_C
@@ -490,18 +485,18 @@ def warm_snowpack(
     return np.minimum(np.float32(0.0), new_temp_C)
 
 
-@njit(cache=True, parallel=True)
+@njit(cache=True, inline="always")
 def snow_model(
-    pr_kg_per_m2_per_s: npt.NDArray[np.float32],
-    air_temperature_C: npt.NDArray[np.float32],
-    snow_water_equivalent_m: npt.NDArray[np.float32],
-    liquid_water_in_snow_m: npt.NDArray[np.float32],
-    snow_temperature_C: npt.NDArray[np.float32],
-    shortwave_radiation_W_per_m2: npt.NDArray[np.float32],
-    downward_longwave_radiation_W_per_m2: npt.NDArray[np.float32],
-    vapor_pressure_air_Pa: npt.NDArray[np.float32],
-    air_pressure_Pa: npt.NDArray[np.float32],
-    wind_speed_10m_m_per_s: npt.NDArray[np.float32],
+    pr_kg_per_m2_per_s: np.float32,
+    air_temperature_C: np.float32,
+    snow_water_equivalent_m: np.float32,
+    liquid_water_in_snow_m: np.float32,
+    snow_temperature_C: np.float32,
+    shortwave_radiation_W_per_m2: np.float32,
+    downward_longwave_radiation_W_per_m2: np.float32,
+    vapor_pressure_air_Pa: np.float32,
+    air_pressure_Pa: np.float32,
+    wind_speed_10m_m_per_s: np.float32,
     snowfall_threshold_temperature_C: np.float32 = np.float32(0.0),
     water_holding_capacity_fraction: np.float32 = np.float32(0.1),
     albedo_min: np.float32 = np.float32(0.4),
@@ -511,19 +506,19 @@ def snow_model(
     bulk_transfer_coefficient: np.float32 = np.float32(0.0015),
     activate_layer_thickness_m: np.float32 = np.float32(0.2),
 ) -> tuple[
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.float32],
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
+    np.float32,
 ]:
     """
     Calculate snow accumulation and melt based on a simple energy balance model.
@@ -712,10 +707,10 @@ def snow_model(
 
 @njit(cache=True, inline="always")
 def calculate_snow_surface_temperature(
-    air_temperature_C: npt.NDArray[np.float32],
-    snow_temperature_C: npt.NDArray[np.float32],
-    snow_water_equivalent_m: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    air_temperature_C: np.float32,
+    snow_temperature_C: np.float32,
+    snow_water_equivalent_m: np.float32,
+) -> np.float32:
     """
     Estimate snow surface temperature based on snowpack insulation.
 
