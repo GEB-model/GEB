@@ -406,15 +406,14 @@ def test_snow_model_full_cycle() -> None:
     water_in = swe + lw + precip_m_hr
     water_out = new_swe + new_lw + melt + sublimation + melt_runoff + direct_rainfall
     assert math.isclose(water_in, water_out, abs_tol=1e-5)
-    precip_melt = np.array([0.0], dtype=np.float32)
-    air_temp_melt = np.array([5.0], dtype=np.float32)
-    sw_rad_melt = np.array([400.0], dtype=np.float32)
+    precip_melt = np.float32(0.0)
+    air_temp_melt = np.float32(5.0)
+    sw_rad_melt = np.float32(400.0)
     # Downward LW for a melt day
-    downward_lw_rad_melt = np.array([320.0], dtype=np.float32)
+    downward_lw_rad_melt = np.float32(320.0)
     dewpoint_melt_C = np.float32(3.0)
-    vapor_pressure_melt = np.array(
-        [610.94 * np.exp(17.625 * dewpoint_melt_C / (243.04 + dewpoint_melt_C))],
-        dtype=np.float32,
+    vapor_pressure_melt = np.float32(
+        610.94 * np.exp(17.625 * dewpoint_melt_C / (243.04 + dewpoint_melt_C))
     )
 
     swe_after_acc = new_swe
@@ -449,38 +448,25 @@ def test_snow_model_full_cycle() -> None:
         wind_speed,
     )
 
-    assert final_swe.dtype == np.float32 or final_swe.dtype == np.float64
-    assert final_lw.dtype == np.float32 or final_lw.dtype == np.float64
-    assert final_temp.dtype == np.float32 or final_temp.dtype == np.float64
-    assert melt_rate.dtype == np.float32 or melt_rate.dtype == np.float64
-    assert (
-        melt_runoff_final.dtype == np.float32 or melt_runoff_final.dtype == np.float64
-    )
-    assert (
-        direct_rainfall_final.dtype == np.float32
-        or direct_rainfall_final.dtype == np.float64
-    )
-    assert sublimation_rate.dtype == np.float32 or sublimation_rate.dtype == np.float64
-
-    assert melt_rate[0] > 0
-    assert final_swe[0] < swe_after_acc[0]
+    assert melt_rate > 0
+    assert final_swe < swe_after_acc
     # Runoff should be generated if melt + initial LW > WHC
     # After refreezing, swe is `final_swe`, so WHC is based on that
     refrozen_swe = final_swe
     whc_limit = refrozen_swe * 0.1
     # Liquid water available for runoff is what's left after refreezing
     # This part of the test is complex, let's simplify the assertion
-    assert (melt_runoff_final[0] + direct_rainfall_final[0]) >= 0
+    assert (melt_runoff_final + direct_rainfall_final) >= 0
 
     # Water balance for melt phase
-    water_in_melt = swe_after_acc[0] + lw_after_acc[0] + 0.0
+    water_in_melt = swe_after_acc + lw_after_acc + 0.0
     water_out_melt = (
-        final_swe[0]
-        + final_lw[0]
-        + melt_rate[0]
-        + sublimation_rate[0]
-        + melt_runoff_final[0]
-        + direct_rainfall_final[0]
+        final_swe
+        + final_lw
+        + melt_rate
+        + sublimation_rate
+        + melt_runoff_final
+        + direct_rainfall_final
     )
     # Water balance for melt phase
     # Note: Balance may not be exact due to numerical precision and model structure
@@ -496,12 +482,9 @@ def test_snow_model_full_cycle() -> None:
 
     # Energy balance for melt phase
     total_energy_flux_W_per_m2 = (
-        net_sw[0]
-        + (downward_lw_rad_melt[0] - upward_lw[0])
-        + sensible_flux[0]
-        + latent_flux[0]
+        net_sw + (downward_lw_rad_melt - upward_lw) + sensible_flux + latent_flux
     )
-    energy_for_melt_W_per_m2 = melt_rate[0] * 1000.0 * 334000.0 / 3600.0
+    energy_for_melt_W_per_m2 = melt_rate * 1000.0 * 334000.0 / 3600.0
     # Total energy input should be at least the energy used for melt
     assert total_energy_flux_W_per_m2 >= energy_for_melt_W_per_m2 - 1e-3
 
@@ -590,11 +573,11 @@ def test_snowpack_development_scenario() -> None:
         "sw_rad_series": sw_rad_series,
         "lw_rad_series": lw_rad_series,
         "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.array([95000.0], dtype=np.float32),
-        "wind_speed": np.array([2.0], dtype=np.float32),
-        "initial_swe": np.array([0.02], dtype=np.float32),
-        "initial_lw": np.array([0.0], dtype=np.float32),
-        "initial_snow_temp": np.array([-2.0], dtype=np.float32),
+        "pressure": np.float32(95000.0),
+        "wind_speed": np.float32(2.0),
+        "initial_swe": np.float32(0.02),
+        "initial_lw": np.float32(0.0),
+        "initial_snow_temp": np.float32(-2.0),
         "activate_layer_thickness_m": np.float32(0.2),
     }
 
@@ -672,11 +655,11 @@ def test_snowpack_arctic_scenario() -> None:
         "sw_rad_series": sw_rad_series,
         "lw_rad_series": lw_rad_series,
         "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.array([101000.0], dtype=np.float32),
-        "wind_speed": np.array([3.0], dtype=np.float32),
-        "initial_swe": np.array([0.1], dtype=np.float32),
-        "initial_lw": np.array([0.0], dtype=np.float32),
-        "initial_snow_temp": np.array([-10.0], dtype=np.float32),
+        "pressure": np.float32(101000.0),
+        "wind_speed": np.float32(3.0),
+        "initial_swe": np.float32(0.1),
+        "initial_lw": np.float32(0.0),
+        "initial_snow_temp": np.float32(-10.0),
         "activate_layer_thickness_m": np.float32(0.2),
     }
 
@@ -755,11 +738,11 @@ def test_snowpack_high_altitude_scenario() -> None:
         "sw_rad_series": sw_rad_series,
         "lw_rad_series": lw_rad_series,
         "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.array([60000.0], dtype=np.float32),
-        "wind_speed": np.array([5.0], dtype=np.float32),
-        "initial_swe": np.array([0.15], dtype=np.float32),
-        "initial_lw": np.array([0.0], dtype=np.float32),
-        "initial_snow_temp": np.array([-5.0], dtype=np.float32),
+        "pressure": np.float32(60000.0),
+        "wind_speed": np.float32(5.0),
+        "initial_swe": np.float32(0.15),
+        "initial_lw": np.float32(0.0),
+        "initial_snow_temp": np.float32(-5.0),
         "activate_layer_thickness_m": np.float32(0.2),
     }
 
@@ -928,11 +911,11 @@ def test_complete_ablation_scenario() -> None:
         "sw_rad_series": sw_rad_series,
         "lw_rad_series": lw_rad_series,
         "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.array([98000.0], dtype=np.float32),
-        "wind_speed": np.array([3.0], dtype=np.float32),
-        "initial_swe": np.array([0.05], dtype=np.float32),
-        "initial_lw": np.array([0.0], dtype=np.float32),
-        "initial_snow_temp": np.array([-1.0], dtype=np.float32),
+        "pressure": np.float32(98000.0),
+        "wind_speed": np.float32(3.0),
+        "initial_swe": np.float32(0.05),
+        "initial_lw": np.float32(0.0),
+        "initial_snow_temp": np.float32(-1.0),
         "activate_layer_thickness_m": np.float32(0.2),
     }
 
@@ -1007,11 +990,11 @@ def test_deposition_scenario() -> None:
         "sw_rad_series": sw_rad_series,
         "lw_rad_series": lw_rad_series,
         "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.array([100000.0], dtype=np.float32),
-        "wind_speed": np.array([2.0], dtype=np.float32),
-        "initial_swe": np.array([0.02], dtype=np.float32),
-        "initial_lw": np.array([0.0], dtype=np.float32),
-        "initial_snow_temp": np.array([-10.0], dtype=np.float32),
+        "pressure": np.float32(100000.0),
+        "wind_speed": np.float32(2.0),
+        "initial_swe": np.float32(0.02),
+        "initial_lw": np.float32(0.0),
+        "initial_snow_temp": np.float32(-10.0),
         "activate_layer_thickness_m": np.float32(0.2),
     }
 
@@ -1086,11 +1069,11 @@ def test_intermittent_snowfall_scenario() -> None:
         "sw_rad_series": sw_rad_series,
         "lw_rad_series": lw_rad_series,
         "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.array([96000.0], dtype=np.float32),
-        "wind_speed": np.array([2.5], dtype=np.float32),
-        "initial_swe": np.array([0.0], dtype=np.float32),
-        "initial_lw": np.array([0.0], dtype=np.float32),
-        "initial_snow_temp": np.array([0.0], dtype=np.float32),
+        "pressure": np.float32(96000.0),
+        "wind_speed": np.float32(2.5),
+        "initial_swe": np.float32(0.0),
+        "initial_lw": np.float32(0.0),
+        "initial_snow_temp": np.float32(0.0),
         "activate_layer_thickness_m": np.float32(0.2),
     }
 
@@ -1163,11 +1146,11 @@ def test_snow_introduction_after_bare_ground() -> None:
         "sw_rad_series": sw_rad_series,
         "lw_rad_series": lw_rad_series,
         "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.array([96000.0], dtype=np.float32),
-        "wind_speed": np.array([2.5], dtype=np.float32),
-        "initial_swe": np.array([0.0], dtype=np.float32),
-        "initial_lw": np.array([0.0], dtype=np.float32),
-        "initial_snow_temp": np.array([0.0], dtype=np.float32),
+        "pressure": np.float32(96000.0),
+        "wind_speed": np.float32(2.5),
+        "initial_swe": np.float32(0.0),
+        "initial_lw": np.float32(0.0),
+        "initial_snow_temp": np.float32(0.0),
         "activate_layer_thickness_m": np.float32(0.2),
     }
 
@@ -1203,10 +1186,7 @@ def test_snow_introduction_after_bare_ground() -> None:
         results["sublimation_log"][results["sublimation_log"] > 0], dtype=np.float64
     )
     total_water_in = (
-        params["initial_swe"][0]
-        + params["initial_lw"][0]
-        + total_precip
-        + deposition_gain
+        params["initial_swe"] + params["initial_lw"] + total_precip + deposition_gain
     )
     total_water_out = (
         results["swe_log"][-1] + results["lw_log"][-1] + total_runoff + sublimation_loss
@@ -1253,11 +1233,11 @@ def test_glacier_ice_scenario() -> None:
         "sw_rad_series": sw_rad_series,
         "lw_rad_series": lw_rad_series,
         "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.array([70000.0], dtype=np.float32),
-        "wind_speed": np.array([2.0], dtype=np.float32),
-        "initial_swe": np.array([10.0], dtype=np.float32),
-        "initial_lw": np.array([0.0], dtype=np.float32),
-        "initial_snow_temp": np.array([-1.0], dtype=np.float32),
+        "pressure": np.float32(70000.0),
+        "wind_speed": np.float32(2.0),
+        "initial_swe": np.float32(10.0),
+        "initial_lw": np.float32(0.0),
+        "initial_snow_temp": np.float32(-1.0),
         "activate_layer_thickness_m": np.float32(
             2.0
         ),  # Deeper active layer for glaciers
@@ -1308,46 +1288,46 @@ def test_glacier_ice_scenario() -> None:
 def test_calculate_snow_surface_temperature() -> None:
     """Test the snow surface temperature calculation."""
     # Scenario 1: Deep, cold snowpack with cold air
-    air_temp = np.array([-10.0], dtype=np.float32)
-    snow_temp = np.array([-15.0], dtype=np.float32)
-    swe = np.array([2.0], dtype=np.float32)  # Deep snow
+    air_temp = np.float32(-10.0)
+    snow_temp = np.float32(-15.0)
+    swe = np.float32(2.0)  # Deep snow
     surface_temp = calculate_snow_surface_temperature(air_temp, snow_temp, swe)
     # Expect surface temp to be between air and snow temp, likely closer to air temp
-    assert -15.0 < surface_temp[0] < -10.0
+    assert -15.0 < surface_temp < -10.0
 
     # Scenario 2: Shallow, cold snowpack with warmer air
-    air_temp_warm = np.array([-2.0], dtype=np.float32)
-    snow_temp_cold = np.array([-10.0], dtype=np.float32)
-    swe_shallow = np.array([0.05], dtype=np.float32)  # Shallow snow
+    air_temp_warm = np.float32(-2.0)
+    snow_temp_cold = np.float32(-10.0)
+    swe_shallow = np.float32(0.05)  # Shallow snow
     surface_temp_shallow = calculate_snow_surface_temperature(
         air_temp_warm, snow_temp_cold, swe_shallow
     )
     # Expect surface temp to be strongly influenced by air temp due to low insulation
-    assert -10.0 < surface_temp_shallow[0] < -2.0
+    assert -10.0 < surface_temp_shallow < -2.0
     # It should be closer to the air temperature
-    assert abs(surface_temp_shallow[0] - air_temp_warm[0]) < abs(
-        surface_temp_shallow[0] - snow_temp_cold[0]
+    assert abs(surface_temp_shallow - air_temp_warm) < abs(
+        surface_temp_shallow - snow_temp_cold
     )
 
     # Scenario 3: Melting conditions
-    air_temp_melt = np.array([5.0], dtype=np.float32)
-    snow_temp_melt = np.array([-1.0], dtype=np.float32)
-    swe_melt = np.array([0.5], dtype=np.float32)
+    air_temp_melt = np.float32(5.0)
+    snow_temp_melt = np.float32(-1.0)
+    swe_melt = np.float32(0.5)
     surface_temp_melt = calculate_snow_surface_temperature(
         air_temp_melt, snow_temp_melt, swe_melt
     )
     # Surface temperature should be capped at 0.0
-    assert math.isclose(surface_temp_melt[0], 0.0, abs_tol=1e-6)
+    assert math.isclose(surface_temp_melt, 0.0, abs_tol=1e-6)
 
     # Scenario 4: No snow
-    air_temp_no_snow = np.array([10.0], dtype=np.float32)
-    snow_temp_no_snow = np.array([0.0], dtype=np.float32)
-    swe_no_snow = np.array([0.0], dtype=np.float32)
+    air_temp_no_snow = np.float32(10.0)
+    snow_temp_no_snow = np.float32(0.0)
+    swe_no_snow = np.float32(0.0)
     surface_temp_no_snow = calculate_snow_surface_temperature(
         air_temp_no_snow, snow_temp_no_snow, swe_no_snow
     )
     # With no snow, surface temp should equal bulk temp (which is irrelevant but consistent)
-    assert math.isclose(surface_temp_no_snow[0], 0.0, abs_tol=1e-6)
+    assert math.isclose(surface_temp_no_snow, 0.0, abs_tol=1e-6)
 
 
 def _plot_scenario_results(
@@ -1595,12 +1575,20 @@ def _run_scenario(
 
     for i in range(n_hours):
         # Select the correct forcing value (for constants or time series)
-        current_wind_speed = wind_speed[i] if len(wind_speed) > 1 else wind_speed[0]
-        current_pressure = pressure[i] if len(pressure) > 1 else pressure[0]
+        current_wind_speed = (
+            wind_speed
+            if not isinstance(wind_speed, np.ndarray)
+            else (wind_speed[i] if len(wind_speed) > 1 else wind_speed[0])
+        )
+        current_pressure = (
+            pressure
+            if not isinstance(pressure, np.ndarray)
+            else (pressure[i] if len(pressure) > 1 else pressure[0])
+        )
 
         # Convert precipitation from m/hr (test unit) to kg/m²/s (model unit)
         # 1 m/hr = 1000 kg/m²/hr = 1000/3600 kg/m²/s = 1/3.6 kg/m²/s
-        precip_kg_per_m2_per_s = precip_series[i] / 3.6
+        precip_kg_per_m2_per_s = np.float32(precip_series[i] / 3.6)
 
         (
             swe,

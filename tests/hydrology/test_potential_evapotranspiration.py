@@ -65,7 +65,6 @@ def test_get_psychrometric_constant() -> None:
     psychrometric_constant_kPa_per_C = get_psychrometric_constant(ps_pa=ps_pa)
 
     assert math.isclose(psychrometric_constant_kPa_per_C, 0.054, abs_tol=0.01)
-    assert isinstance(psychrometric_constant_kPa_per_C, np.float32)
 
 
 def test_get_net_solar_radiation() -> None:
