@@ -2631,8 +2631,6 @@ class CropFarmers(AgentBaseClass):
         # Fetch loan configuration
         loan_duration = 2
 
-        hello = bye
-
         index = self.cultivation_costs[0].get(self.model.current_time)
         cultivation_cost = self.cultivation_costs[1][index]
 
