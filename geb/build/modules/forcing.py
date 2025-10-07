@@ -1378,7 +1378,9 @@ class Forcing:
 
     @build_method(depends_on=["setup_forcing"])
     def setup_pr_GEV(self) -> None:
-        pr: xr.DataArray = self.other["climate/pr"] * 3600  # convert to mm/hour
+        pr: xr.DataArray = (
+            self.other["climate/pr_kg_per_m2_per_s"] * 3600
+        )  # convert to mm/hour
         pr_monthly: xr.DataArray = pr.resample(time="M").sum(dim="time", skipna=True)
 
         pr_yearly_max = (
