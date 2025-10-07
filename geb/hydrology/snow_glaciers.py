@@ -151,7 +151,7 @@ def calculate_turbulent_fluxes(
     snow_surface_temperature_C: np.float32,
     vapor_pressure_air_Pa: np.float32,
     air_pressure_Pa: np.float32,
-    wind_speed_10m_m_per_s: np.float32,
+    wind_10m_m_per_s: np.float32,
     bulk_transfer_coefficient: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32]:
     """
@@ -162,7 +162,7 @@ def calculate_turbulent_fluxes(
         snow_surface_temperature_C: Snow surface temperature (°C).
         vapor_pressure_air_Pa: Vapor pressure of the air (Pa).
         air_pressure_Pa: Air pressure (Pa).
-        wind_speed_10m_m_per_s: Wind speed (m/s).
+        wind_10m_m_per_s: Wind speed (m/s).
         bulk_transfer_coefficient: Bulk transfer coefficient for heat and moisture.
 
     Returns:
@@ -192,7 +192,7 @@ def calculate_turbulent_fluxes(
         air_density_kg_per_m3
         * SPECIFIC_HEAT_AIR_J_PER_KG_K
         * bulk_transfer_coefficient
-        * wind_speed_10m_m_per_s
+        * wind_10m_m_per_s
         * (air_temperature_C - snow_surface_temperature_C)
     )
 
@@ -226,7 +226,7 @@ def calculate_turbulent_fluxes(
         air_density_kg_per_m3
         * latent_heat_J_per_kg
         * bulk_transfer_coefficient
-        * wind_speed_10m_m_per_s
+        * wind_10m_m_per_s
         * (specific_humidity_air - specific_humidity_surface)
     )
 
@@ -253,7 +253,7 @@ def calculate_melt(
     downward_longwave_radiation_W_per_m2: np.float32,
     vapor_pressure_air_Pa: np.float32,
     air_pressure_Pa: np.float32,
-    wind_speed_10m_m_per_s: np.float32,
+    wind_10m_m_per_s: np.float32,
     albedo_min: np.float32 = np.float32(0.4),
     albedo_max: np.float32 = np.float32(0.9),
     albedo_decay_coefficient: np.float32 = np.float32(0.01),
@@ -288,7 +288,7 @@ def calculate_melt(
         snow_surface_temperature_C,
         vapor_pressure_air_Pa,
         air_pressure_Pa,
-        wind_speed_10m_m_per_s,
+        wind_10m_m_per_s,
         bulk_transfer_coefficient,
     )
 
@@ -496,7 +496,7 @@ def snow_model(
     downward_longwave_radiation_W_per_m2: np.float32,
     vapor_pressure_air_Pa: np.float32,
     air_pressure_Pa: np.float32,
-    wind_speed_10m_m_per_s: np.float32,
+    wind_10m_m_per_s: np.float32,
     snowfall_threshold_temperature_C: np.float32 = np.float32(0.0),
     water_holding_capacity_fraction: np.float32 = np.float32(0.1),
     albedo_min: np.float32 = np.float32(0.4),
@@ -541,7 +541,7 @@ def snow_model(
         downward_longwave_radiation_W_per_m2: Downward longwave radiation (W/m²).
         vapor_pressure_air_Pa: Vapor pressure of the air (Pa).
         air_pressure_Pa: Air pressure (Pa).
-        wind_speed_10m_m_per_s: Wind speed (m/s).
+        wind_10m_m_per_s: Wind speed (m/s).
         snowfall_threshold_temperature_C: Threshold temperature for snowfall/rainfall (°C).
         water_holding_capacity_fraction: Water holding capacity of the snow pack as a fraction of snow water equivalent.
         albedo_min: Minimum albedo.
@@ -610,7 +610,7 @@ def snow_model(
         downward_longwave_radiation_W_per_m2,
         vapor_pressure_air_Pa,
         air_pressure_Pa,
-        wind_speed_10m_m_per_s,
+        wind_10m_m_per_s,
         albedo_min,
         albedo_max,
         albedo_decay_coefficient,

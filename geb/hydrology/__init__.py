@@ -87,14 +87,14 @@ class Hydrology(Data, Module):
             The total water storage in the hydrological system in cubic meters.
         """
         return (
-            np.sum(self.HRU.var.SnowCoverS.astype(np.float64) * self.HRU.var.cell_area)
-            / self.snowfrost.var.numberSnowLayers
-            + (
-                self.HRU.var.interception_storage.astype(np.float64)
-                * self.HRU.var.cell_area
-            ).sum()
-            + (
-                np.nansum(self.HRU.var.w.astype(np.float64), axis=0)
+            (
+                (
+                    self.HRU.var.snow_water_equivalent_m.astype(np.float64)
+                    + self.HRU.var.liquid_water_in_snow_m.astype(np.float64)
+                    + self.HRU.var.interception_storage.astype(np.float64)
+                    + np.nansum(self.HRU.var.w.astype(np.float64), axis=0)
+                    + self.HRU.var.topwater.astype(np.float64)
+                )
                 * self.HRU.var.cell_area
             ).sum()
             + (self.HRU.var.topwater.astype(np.float64) * self.HRU.var.cell_area).sum()
@@ -124,14 +124,14 @@ class Hydrology(Data, Module):
                 self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
             ).sum()
 
-        self.landsurface.step()
+        snow_melt_m, rain_m, sublimation_m = self.landsurface.step()
+
+        snow_melt_m = snow_melt_m.sum(axis=0)
+        rain_m = rain_m.sum(axis=0)
         timer.finish_split("Land surface")
 
         self.lakes_reservoirs.step()
         timer.finish_split("Waterbodies")
-
-        snow, rain, snow_melt = self.snowfrost.step()
-        timer.finish_split("Snow and frost")
 
         (
             interflow,
@@ -142,13 +142,15 @@ class Hydrology(Data, Module):
             return_flow,
             capillary_m,
             total_water_demand_loss_m3,
-        ) = self.landcover.step(snow, rain, snow_melt)
+        ) = self.landcover.step(rain_m, snow_melt_m)
 
         if __debug__:
             outflux: np.float64 = (
                 self.HRU.var.actual_evapotranspiration.astype(np.float64)
                 * self.HRU.var.cell_area
             ).sum() + total_water_demand_loss_m3
+
+            outflux -= (sublimation_m * self.HRU.var.cell_area).sum()
 
             invented_water: np.float64 = (
                 (

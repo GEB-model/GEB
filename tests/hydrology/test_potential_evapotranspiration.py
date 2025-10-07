@@ -97,10 +97,8 @@ def test_get_slope_of_saturation_vapour_pressure_curve() -> None:
 
 def test_adjust_wind_speed() -> None:
     """Test the wind speed adjustment function."""
-    wind_speed_10m_m_per_s = np.float32(100.0)  # Example wind speed in m/s
-    adjusted_wind_speed_m_per_s = adjust_wind_speed(
-        wind_speed_10m_m_per_s=wind_speed_10m_m_per_s
-    )
+    wind_10m_m_per_s = np.float32(100.0)  # Example wind speed in m/s
+    adjusted_wind_speed_m_per_s = adjust_wind_speed(wind_10m_m_per_s=wind_10m_m_per_s)
 
     assert math.isclose(adjusted_wind_speed_m_per_s, 74.8, rel_tol=1e-6)
 

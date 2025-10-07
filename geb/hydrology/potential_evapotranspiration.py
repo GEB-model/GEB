@@ -123,17 +123,17 @@ def get_slope_of_saturation_vapour_pressure_curve(
 
 @njit(cache=True, inline="always")
 def adjust_wind_speed(
-    wind_speed_10m_m_per_s: np.float32,
+    wind_10m_m_per_s: np.float32,
 ) -> np.float32:
     """Adjust wind speed to surface level.
 
     Args:
-        wind_speed_10m_m_per_s: Wind speed at 10 m height in m/s.
+        wind_10m_m_per_s: Wind speed at 10 m height in m/s.
 
     Returns:
         Adjusted wind speed at 2 m height in m/s.
     """
-    return wind_speed_10m_m_per_s * np.float32(0.748)
+    return wind_10m_m_per_s * np.float32(0.748)
 
 
 @njit(cache=True, inline="always")
@@ -199,8 +199,7 @@ def potential_evapotranspiration(
     ps_pa: np.float32,
     rlds_W_per_m2: np.float32,
     rsds_W_per_m2: np.float32,
-    wind_u10m_m_per_s: np.float32,
-    wind_v10m_m_per_s: np.float32,
+    wind_10m_m_per_s: np.float32,
     albedo_canopy: np.float32 = np.float32(0.13),
     albedo_water: np.float32 = np.float32(0.05),
 ) -> tuple[np.float32, np.float32, np.float32]:
@@ -232,8 +231,7 @@ def potential_evapotranspiration(
         ps_pa: surface pressure in Pascals.
         rlds_W_per_m2: long wave downward surface radiation flux in W/m^2.
         rsds_W_per_m2: short wave downward surface radiation flux in W/m^2.
-        wind_u10m_m_per_s: wind speed at 10 m height in m/s (u component).
-        wind_v10m_m_per_s: wind speed at 10 m height in m/s (v component).
+        wind_10m_m_per_s: wind speed at 10 m height in m/s.
         albedo_canopy: albedo of vegetation canopy (default = 0.13).
         albedo_water: albedo of water surface (default = 0.05).
 
@@ -241,6 +239,7 @@ def potential_evapotranspiration(
         reference_evapotranspiration_land_m_per_dt: reference evapotranspiration for land in m/dt.
         reference_evapotranspiration_water_m_per_dt: reference evapotranspiration for water in m/dt.
         net_radiation_land_MJ_per_m2_per_dt: net radiation for land in MJ/m^2/dt.
+        actual_vapour_pressure_Pa: actual vapour pressure in Pa.
     """
     actual_vapour_pressure_kPa: np.float32 = get_vapour_pressure(
         temperature_C=dewpoint_tas_C
@@ -288,7 +287,6 @@ def potential_evapotranspiration(
         get_slope_of_saturation_vapour_pressure_curve(temperature_C=tas_C)
     )
 
-    wind_10m_m_per_s: np.float32 = np.sqrt(wind_u10m_m_per_s**2 + wind_v10m_m_per_s**2)
     wind_2m_m_per_s: np.float32 = adjust_wind_speed(wind_10m_m_per_s)
 
     soil_heat_flux_MJ_per_m2_per_hour: np.float32 = np.float32(0.0)
@@ -311,4 +309,5 @@ def potential_evapotranspiration(
         reference_evapotranspiration_land_mm_per_hour / np.float32(1000),
         reference_evapotranspiration_water_mm_per_hour / np.float32(1000),
         net_radiation_land_MJ_per_m2_per_hour,
+        actual_vapour_pressure_kPa * np.float32(1000),
     )

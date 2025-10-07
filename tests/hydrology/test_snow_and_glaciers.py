@@ -1614,7 +1614,7 @@ def _run_scenario(
             downward_longwave_radiation_W_per_m2=lw_rad_series[i],
             vapor_pressure_air_Pa=vapor_pressure_series[i],
             air_pressure_Pa=current_pressure,
-            wind_speed_10m_m_per_s=current_wind_speed,
+            wind_10m_m_per_s=current_wind_speed,
             activate_layer_thickness_m=activate_layer_thickness_m,
         )
 

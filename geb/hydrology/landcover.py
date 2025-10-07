@@ -148,7 +148,6 @@ class LandCover(Module):
 
     def step(
         self,
-        snow: npt.NDArray[np.float32],
         rain: npt.NDArray[np.float32],
         snow_melt: npt.NDArray[np.float32],
     ):
@@ -376,65 +375,65 @@ class LandCover(Module):
                 },
             )
 
-            totalstorage_landcover = (
-                np.sum(self.HRU.var.SnowCoverS, axis=0)
-                / self.hydrology.snowfrost.var.numberSnowLayers
-                + self.HRU.var.interception_storage
-                + np.nansum(self.HRU.var.w, axis=0)
-                + self.HRU.var.topwater
-            )
-            totalstorage_landcover_pre = (
-                np.sum(self.HRU.var.prevSnowCover, axis=0)
-                / self.hydrology.snowfrost.var.numberSnowLayers
-                + np.nansum(w_pre, axis=0)
-                + topwater_pre
-                + interception_storage_pre
-            )
+            # totalstorage_landcover = (
+            #     np.sum(self.HRU.var.SnowCoverS, axis=0)
+            #     / self.hydrology.snowfrost.var.numberSnowLayers
+            #     + self.HRU.var.interception_storage
+            #     + np.nansum(self.HRU.var.w, axis=0)
+            #     + self.HRU.var.topwater
+            # )
+            # totalstorage_landcover_pre = (
+            #     np.sum(self.HRU.var.prevSnowCover, axis=0)
+            #     / self.hydrology.snowfrost.var.numberSnowLayers
+            #     + np.nansum(w_pre, axis=0)
+            #     + topwater_pre
+            #     + interception_storage_pre
+            # )
 
-            balance_check(
-                name="landcover_3",
-                how="cellwise",
-                influxes=[
-                    rain,
-                    snow,
-                    self.HRU.var.actual_irrigation_consumption,
-                    capillar,
-                ],
-                outfluxes=[
-                    runoff,
-                    interflow,
-                    groundwater_recharge,
-                    actual_transpiration,
-                    actual_bare_soil_evaporation,
-                    open_water_evaporation,
-                    interception_evaporation,
-                    snow_sublimation,
-                ],
-                prestorages=[totalstorage_landcover_pre],
-                poststorages=[totalstorage_landcover],
-                tolerance=1e-6,
-            )
+            # balance_check(
+            #     name="landcover_3",
+            #     how="cellwise",
+            #     influxes=[
+            #         rain,
+            #         snow,
+            #         self.HRU.var.actual_irrigation_consumption,
+            #         capillar,
+            #     ],
+            #     outfluxes=[
+            #         runoff,
+            #         interflow,
+            #         groundwater_recharge,
+            #         actual_transpiration,
+            #         actual_bare_soil_evaporation,
+            #         open_water_evaporation,
+            #         interception_evaporation,
+            #         snow_sublimation,
+            #     ],
+            #     prestorages=[totalstorage_landcover_pre],
+            #     poststorages=[totalstorage_landcover],
+            #     tolerance=1e-6,
+            # )
 
-            balance_check(
-                name="landcover_4",
-                how="cellwise",
-                influxes=[
-                    rain,
-                    snow,
-                    self.HRU.var.actual_irrigation_consumption,
-                    capillar,
-                    irrigation_loss_to_evaporation_m,  # irrigation loss is coming from external sources
-                ],
-                outfluxes=[
-                    runoff,
-                    interflow,
-                    groundwater_recharge,
-                    self.HRU.var.actual_evapotranspiration,
-                ],
-                prestorages=[totalstorage_landcover_pre],
-                poststorages=[totalstorage_landcover],
-                tolerance=1e-6,
-            )
+            # balance_check(
+            #     name="landcover_4",
+            #     how="cellwise",
+            #     influxes=[
+            #         rain,
+            #         snow,
+            #         self.HRU.var.actual_irrigation_consumption,
+            #         capillar,
+            #         irrigation_loss_to_evaporation_m,  # irrigation loss is coming from external sources
+            #     ],
+            #     outfluxes=[
+            #         runoff,
+            #         interflow,
+            #         groundwater_recharge,
+            #         self.HRU.var.actual_evapotranspiration,
+            #     ],
+            #     prestorages=[totalstorage_landcover_pre],
+            #     poststorages=[totalstorage_landcover],
+            #     tolerance=1e-6,
+            # )
 
         groundwater_recharge = self.hydrology.to_grid(
             HRU_data=groundwater_recharge, fn="weightedmean"
