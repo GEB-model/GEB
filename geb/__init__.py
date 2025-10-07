@@ -27,4 +27,15 @@ config.THREADING_LAYER = "tbb"
 # set environment variable for GEB package directory
 os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
 
+# Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
+if Path("/research/BETA-IVM-HPC/GEB").exists():
+    os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/data_catalog/"
+    os.environ["SFINCS_SIF"] = (
+        "/ada-software/containers/sfincs-cpu-v2.2.0-col-dEze-Release.sif"
+    )
+    os.environ["SFINCS_SIF_GPU"] = (
+        "/ada-software/containers/sfincs-gpu.coldeze_combo_ccall.sif"
+    )
+
+
 faulthandler.enable()
