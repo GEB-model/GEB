@@ -77,9 +77,7 @@ docs = [
     "sphinxcontrib-autoyaml",
     "pypandoc",
 ]
-gpu = [
-    "cupy"
-]
+
 
 full = [
 ]

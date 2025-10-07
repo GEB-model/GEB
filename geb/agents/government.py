@@ -4,6 +4,7 @@ import geopandas as gpd
 import rasterio
 import xarray as xr
 import numpy as np
+import matplotlib.pyplot as plt
 from rasterio.features import rasterize
 from rasterio.features import shapes
 from shapely.geometry import shape
@@ -96,7 +97,10 @@ class Government(AgentBaseClass):
 
             # Open dataset and explicitly select `esa_worldcover`
             # to_forest = xr.open_dataset(self.model.files["forcing"]["hydrodynamics/esa_worldcover_reforestation_scenario"])["esa_worldcover"]
-            to_forest = xr.open_dataset("/scistor/ivm/vbl220/PhD/models/geulnew/input/hydrodynamics/esa_worldcover_reforestation.nc", engine="netcdf4")["esa_worldcover"]
+            to_forest = xr.open_dataset(
+                "/scistor/ivm/vbl220/PhD/models/geulnew/input/hydrodynamics/esa_worldcover_reforestation.nc",
+                engine="netcdf4",
+            )["esa_worldcover"]
             print(to_forest)
 
             # Convert to a spatially-aware raster dataset
@@ -144,7 +148,6 @@ class Government(AgentBaseClass):
             print(forest.geometry.head())  # Print a few geometries
             print("\nNumber of geometries:", len(forest))
 
-
             # then we rasterize this file to match the HRUs
             forest = rasterize(
                 [(shape(geom), 1) for geom in forest.geometry],
@@ -159,7 +162,7 @@ class Government(AgentBaseClass):
             print("Max value:", forest.max())
             print("Number of forest pixels (value=1):", np.sum(forest))
             print("Total pixels:", forest.size)
-            
+
             # do not create forests outside the study area
             forest[self.model.data.HRU.mask] = False
             # only create forests in grassland or agricultural areas
@@ -171,8 +174,6 @@ class Government(AgentBaseClass):
                     [GRASSLAND_LIKE, PADDY_IRRIGATED, NON_PADDY_IRRIGATED],
                 )
             ] = False
-
-           
 
             import matplotlib.pyplot as plt
 
@@ -204,9 +205,9 @@ class Government(AgentBaseClass):
             new_forest_HRUs = np.unique(
                 np.concatenate([new_forest_HRUs, HRUs_removed_farmers])
             )
-           
+
             print("loading soil parameter input files")
-          
+
             self.HRU.var.soil_organic_carbon = self.HRU.compress(
                 load_grid(
                     self.model.files["subgrid"]["soil/forestation_soil_organic_carbon"],
@@ -214,7 +215,7 @@ class Government(AgentBaseClass):
                 ),
                 method="mean",
             )
-          
+
             self.HRU.var.bulk_density = self.HRU.compress(
                 load_grid(
                     self.model.files["subgrid"]["soil/forestation_bulk_density"],
@@ -222,7 +223,7 @@ class Government(AgentBaseClass):
                 ),
                 method="mean",
             )
-         
+
             print("changing soil parameters")
             # Estimate soil properties
             estimate_soil_properties(
@@ -242,11 +243,16 @@ class Government(AgentBaseClass):
         if self.model.current_timestep == 1:
             print("running the cropland to grassland conversion scenario")
 
-            # Load scenario 
+            # Load scenario
             # new_grassland_path = "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_cropland_conversion.nc"
 
             # Open dataset and explicitly select `esa_worldcover`
-            to_grasland = xr.open_dataset(self.model.files["forcing"]["hydrodynamics/esa_worldcover_cropland_scenario"], engine="netcdf4")["lulc"]
+            to_grasland = xr.open_dataset(
+                self.model.files["forcing"][
+                    "hydrodynamics/esa_worldcover_cropland_scenario"
+                ],
+                engine="netcdf4",
+            )["lulc"]
 
             # Convert to a spatially-aware raster dataset
             to_grasland = to_grasland.rio.write_crs("EPSG:28992").squeeze()
@@ -258,7 +264,6 @@ class Government(AgentBaseClass):
             # Debug information
             print(f"Shape: {to_grasland.shape}, Dtype: {to_grasland.dtype}")
             print(f"Min: {data.min()}, Max: {data.max()}")
-
 
             y_coords = to_grasland.coords["y"].values
             x_coords = to_grasland.coords["x"].values
@@ -334,9 +339,9 @@ class Government(AgentBaseClass):
             # new_grassland_HRUs = np.unique(
             #     np.concatenate([new_grassland_HRUs, HRUs_removed_farmers])
             # )
-           
+
             print("loading soil parameter input files")
-          
+
             self.HRU.var.soil_organic_carbon = self.HRU.compress(
                 load_grid(
                     self.model.files["subgrid"]["soil/grassland_soil_organic_carbon"],
@@ -344,7 +349,7 @@ class Government(AgentBaseClass):
                 ),
                 method="mean",
             )
-          
+
             self.HRU.var.bulk_density = self.HRU.compress(
                 load_grid(
                     self.model.files["subgrid"]["soil/grassland_bulk_density"],
@@ -352,8 +357,176 @@ class Government(AgentBaseClass):
                 ),
                 method="mean",
             )
-         
+
             print("changing soil parameters")
+            # Estimate soil properties
+            estimate_soil_properties(
+                self,
+                soil_layer_height=self.HRU.var.soil_layer_height,
+                soil_organic_carbon=self.HRU.var.soil_organic_carbon,
+                bulk_density=self.HRU.var.bulk_density,
+                sand=self.HRU.var.sand,
+                clay=self.HRU.var.clay,
+                silt=self.HRU.var.silt,
+            )
+            print("soil parameters should be changed")
+
+    def high_nbs_strategy(self) -> None:
+        if self.model.spinup:
+            return None
+        elif not self.config.get("high_nbs_strategy", False):
+            return None
+        elif self.model.current_timestep == 1:
+            print("running the high nbs scenario (collab Max - Guillermo)")
+
+            changed_lu = xr.open_dataset(
+                "/scistor/ivm/vbl220/PhD/merged_landuse.nc",
+                engine="netcdf4",
+            )["lulc"]
+            print(changed_lu)
+
+            # Convert to a spatially-aware raster dataset
+            changed_lu = changed_lu.rio.write_crs("EPSG:28992").squeeze()
+
+            # If needed, reproject to match other layers (e.g., EPSG:4326)
+            changed_lu = changed_lu.rio.reproject("EPSG:4326")
+
+            # Ensure values are in correct range and type
+            data = np.clip(changed_lu.values, 0, 255).astype(np.uint8)
+
+            y_coords = changed_lu.coords["y"].values
+            x_coords = changed_lu.coords["x"].values
+
+            transform = rasterio.transform.from_origin(
+                x_coords[0],
+                y_coords[0],
+                abs(x_coords[1] - x_coords[0]),
+                abs(y_coords[1] - y_coords[0]),
+            )
+
+            grassland = data == 30
+            shapes_gen = shapes(data, mask=grassland, transform=transform)
+            polygons = []
+            for geom, value in shapes_gen:
+                if value == 30:
+                    polygons.append(shape(geom))
+            grassland = gpd.GeoDataFrame(
+                {"value": [30] * len(polygons), "geometry": polygons}
+            )
+            grassland.set_crs(epsg=4326, inplace=True)
+            output_vector_path = (
+                "/scistor/ivm/vbl220/PhD/grassland_high_nbs_scenario.gpkg"
+            )
+            grassland.to_file(output_vector_path)
+
+            # then we rasterize this file to match the HRUs
+            grassland = rasterize(
+                [(shape(geom), 1) for geom in grassland.geometry],
+                out_shape=self.model.data.HRU.shape,
+                transform=self.model.data.HRU.transform,
+                fill=False,
+                dtype="uint8",  # bool is not supported, so we use uint8 and convert to bool
+            ).astype(bool)
+            # do not create forests outside the study area
+            grassland[self.model.data.HRU.mask] = False
+            # only create forests in grassland or agricultural areas
+            grassland[
+                ~np.isin(
+                    self.model.data.HRU.decompress(
+                        self.model.data.HRU.var.land_use_type
+                    ),
+                    [GRASSLAND_LIKE, PADDY_IRRIGATED, NON_PADDY_IRRIGATED],
+                )
+            ] = False
+
+            plt.imshow(grassland)
+            plt.savefig("grassland.png")
+
+            forest = data == 10
+            shapes_gen = shapes(data, mask=forest, transform=transform)
+            polygons = []
+            for geom, value in shapes_gen:
+                if value == 10:
+                    polygons.append(shape(geom))
+            forest = gpd.GeoDataFrame(
+                {"value": [10] * len(polygons), "geometry": polygons}
+            )
+            forest.set_crs(epsg=4326, inplace=True)
+            output_vector_path = (
+                "/scistor/ivm/vbl220/PhD/forestation_high_nbs_scenario.gpkg"
+            )
+            forest.to_file(output_vector_path)
+
+            # then we rasterize this file to match the HRUs
+            forest = rasterize(
+                [(shape(geom), 1) for geom in forest.geometry],
+                out_shape=self.model.data.HRU.shape,
+                transform=self.model.data.HRU.transform,
+                fill=False,
+                dtype="uint8",  # bool is not supported, so we use uint8 and convert to bool
+            ).astype(bool)
+
+            # do not create forests outside the study area
+            forest[self.model.data.HRU.mask] = False
+            # only create forests in grassland or agricultural areas
+            forest[
+                ~np.isin(
+                    self.model.data.HRU.decompress(
+                        self.model.data.HRU.var.land_use_type
+                    ),
+                    [GRASSLAND_LIKE, PADDY_IRRIGATED, NON_PADDY_IRRIGATED],
+                )
+            ] = False
+
+            plt.imshow(forest)
+            plt.savefig("forest.png")
+
+            new_forest_HRUs = np.unique(
+                self.model.data.HRU.var.unmerged_HRU_indices[forest]
+            )
+
+            print(f"new forest hrus: {new_forest_HRUs}")
+            # set the land use type to forest
+            self.model.data.HRU.var.land_use_type[new_forest_HRUs] = FOREST
+
+            # get the farmers corresponding to the new forest HRUs
+            farmers_with_land_converted_to_forest = np.unique(
+                self.model.data.HRU.var.land_owners[new_forest_HRUs]
+            )
+            farmers_with_land_converted_to_forest = (
+                farmers_with_land_converted_to_forest
+            )[farmers_with_land_converted_to_forest != -1]
+
+            print(farmers_with_land_converted_to_forest)
+
+            HRUs_removed_farmers = self.model.agents.crop_farmers.remove_agents(
+                farmers_with_land_converted_to_forest, new_land_use_type=FOREST
+            )
+
+            new_forest_HRUs = np.unique(
+                np.concatenate([new_forest_HRUs, HRUs_removed_farmers])
+            )
+
+            print("loading soil parameter input files")
+
+            self.HRU.var.soil_organic_carbon = self.HRU.compress(
+                load_grid(
+                    self.model.files["subgrid"]["soil/high_nbs_scenario_soil_organic_carbon"],
+                    layer=None,
+                ),
+                method="mean",
+            )
+
+            self.HRU.var.bulk_density = self.HRU.compress(
+                load_grid(
+                    self.model.files["subgrid"]["soil/high_nbs_scenario_bulk_density"],
+                    layer=None,
+                ),
+                method="mean",
+            )
+
+            print("changing soil parameters")
+
             # Estimate soil properties
             estimate_soil_properties(
                 self,
@@ -372,3 +545,4 @@ class Government(AgentBaseClass):
         self.provide_subsidies()
         self.reforestation()
         self.cropland_to_grassland()
+        self.high_nbs_strategy()

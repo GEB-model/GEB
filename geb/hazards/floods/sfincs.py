@@ -48,7 +48,9 @@ class SFINCS:
         self.saturated_hydraulic_conductivity_per_timestep = deque(
             maxlen=self.max_number_of_timesteps
         )
-        self.soil_storage_capacity_per_timestep = deque(maxlen=self.max_number_of_timesteps)
+        self.soil_storage_capacity_per_timestep = deque(
+            maxlen=self.max_number_of_timesteps
+        )
 
     def sfincs_model_root(self, basin_id):
         folder = self.model.simulation_root / "SFINCS" / str(basin_id)
@@ -176,7 +178,7 @@ class SFINCS:
 
     def setup(self, event, config_fn="sfincs.yml"):
         build_parameters = {}
-
+        print("SETTING UP NEW CLUSTER AND SFINCS")
         if "set_force_overwrite" in self.model.config["hazards"]["floods"]:
             set_force_overwrite = self.model.config["hazards"]["floods"][
                 "set_force_overwrite"
@@ -239,8 +241,13 @@ class SFINCS:
 
         import yaml
         from pathlib import Path
+
         # Get YAML file path
-        yaml_path = Path(self.model.config["general"]["input_folder"]) / "hydrodynamics" / "data_catalog.yml"
+        yaml_path = (
+            Path(self.model.config["general"]["input_folder"])
+            / "hydrodynamics"
+            / "data_catalog.yml"
+        )
 
         # Read the YAML file
         with open(yaml_path, "r") as file:
@@ -248,7 +255,9 @@ class SFINCS:
 
         # Ensure self.data_catalogs is a dictionary
         if not isinstance(updated_data_catalog, dict):
-            print(f"Warning: data_catalogs was not a dictionary (got {type(updated_data_catalog)}), resetting.")
+            print(
+                f"Warning: data_catalogs was not a dictionary (got {type(updated_data_catalog)}), resetting."
+            )
             updated_data_catalog = {}
 
         if (
@@ -256,25 +265,41 @@ class SFINCS:
             .get("government", {})
             .get("cropland_to_grassland")
             is True
-        ):   
+        ):
             print("running cropland conversion scenario -- updating data catalog")
             updated_data_catalog["esa_worldcover"] = {
                 "data_type": "RasterDataset",
-                "path": "/scistor/ivm/vbl220/PhD/reclassified_landcover_geul_cropland_conversion_renamed.nc",
+                "path": "/scistor/ivm/vbl220/PhD//files for paper 1/reclassified_landcover_geul_cropland_conversion_renamed.nc",
                 "driver": "netcdf",
                 "crs": 28992,
             }
-        
+
         elif (
             self.model.config["agent_settings"]
             .get("government", {})
             .get("reforestation")
             is True
-        ):   
+        ):
             print("running reforestation scenario -- updating data catalog")
             updated_data_catalog["esa_worldcover"] = {
                 "data_type": "RasterDataset",
-                "path": "/scistor/ivm/vbl220/PhD/reforestation_10km2_1_renamed.nc",
+                "path": "/scistor/ivm/vbl220/PhD/files for paper 1/reforestation_10km2_1_renamed.nc",
+                "driver": "netcdf",
+                "crs": 28992,
+            }
+
+        elif (
+            self.model.config["agent_settings"]
+            .get("government", {})
+            .get("high_nbs_strategy")
+            is True
+        ):
+            print(
+                "running high_nbs_strategy (max, guillermo) scenario -- updating data catalog"
+            )
+            updated_data_catalog["esa_worldcover"] = {
+                "data_type": "RasterDataset",
+                "path": "/scistor/ivm/vbl220/PhD/merged_landuse.nc",
                 "driver": "netcdf",
                 "crs": 28992,
             }
@@ -399,7 +424,9 @@ class SFINCS:
                     "soil_storage_capacity": (
                         ["y", "x"],
                         self.model.data.HRU.decompress(
-                            self.soil_storage_capacity_per_timestep[first_timestep_of_event]
+                            self.soil_storage_capacity_per_timestep[
+                                first_timestep_of_event
+                            ]
                         ),  # take first time step of soil moisture
                     )
                 },  # deque
@@ -480,7 +507,6 @@ class SFINCS:
         sfincs_precipitation = event.get("precipitation", None)
 
         if sfincs_precipitation is None:
-
             # if (self.model.config["hazards"]
             #     .get("floods", {})
             #     .get("include_existing_waterbuffers")
@@ -529,11 +555,12 @@ class SFINCS:
         return None
 
     def run_single_event(self, event, start_time, return_period=None):
+        print("RUNNING A SINGLE EVENT")
         self.setup(event)
         self.set_forcing(event, start_time)
         self.model.logger.info(f"Running SFINCS for {self.model.current_time}...")
         event_name = self.get_event_name(event)
-    
+
         run_sfincs_simulation(
             simulation_root=self.sfincs_simulation_root(event_name),
             model_root=self.sfincs_model_root(event_name),
@@ -566,7 +593,7 @@ class SFINCS:
         sfincs_precipitation = sfincs_precipitation.rio.set_crs(4326)
         scaled_event["precipitation"] = sfincs_precipitation
         return scaled_event
-    
+
     def create_blokbui(self, event, precip):
         blokbui = event.copy()
         sfincs_precipitation = (
@@ -631,7 +658,9 @@ class SFINCS:
                 scale_factors = pd.read_parquet(
                     self.model.files["table"]["hydrodynamics/risk_scaling_factors"]
                 )
-                scale_factors["return_period"] = 1 / scale_factors["exceedance_probability"]
+                scale_factors["return_period"] = (
+                    1 / scale_factors["exceedance_probability"]
+                )
                 damages_list = []
                 return_periods_list = []
                 exceedence_probabilities_list = []
@@ -640,7 +669,9 @@ class SFINCS:
                     exceedence_probability = row["exceedance_probability"]
                     scale_factor = row["scaling_factor"]
                     scaled_event = self.scale_event(event, scale_factor)
-                    damages = self.run_single_event(scaled_event, start_time, return_period)
+                    damages = self.run_single_event(
+                        scaled_event, start_time, return_period
+                    )
 
                     damages_list.append(damages)
                     return_periods_list.append(return_period)
@@ -651,7 +682,9 @@ class SFINCS:
                 print(exceedence_probabilities_list)
 
                 inverted_damage_list = damages_list[::-1]
-                inverted_exceedence_probabilities_list = exceedence_probabilities_list[::-1]
+                inverted_exceedence_probabilities_list = exceedence_probabilities_list[
+                    ::-1
+                ]
 
                 expected_annual_damage = np.trapz(
                     y=inverted_damage_list, x=inverted_exceedence_probabilities_list
@@ -663,7 +696,9 @@ class SFINCS:
                 accumulated_rainfall = pd.read_parquet(
                     "/scistor/ivm/vbl220/PhD/models/geulnew/input/hydrodynamics/accumulated_precipitation_factors.parquet"
                 )
-                accumulated_rainfall["return_period"] = 1 / accumulated_rainfall["exceedance_probability"]
+                accumulated_rainfall["return_period"] = (
+                    1 / accumulated_rainfall["exceedance_probability"]
+                )
                 damages_list = []
                 return_periods_list = []
                 exceedence_probabilities_list = []
@@ -682,13 +717,15 @@ class SFINCS:
                 print(exceedence_probabilities_list)
 
                 inverted_damage_list = damages_list[::-1]
-                inverted_exceedence_probabilities_list = exceedence_probabilities_list[::-1]
+                inverted_exceedence_probabilities_list = exceedence_probabilities_list[
+                    ::-1
+                ]
 
                 expected_annual_damage = np.trapz(
                     y=inverted_damage_list, x=inverted_exceedence_probabilities_list
                 )  # np.trapezoid or np.trapz -> depends on np version
                 print(f"expected annual damage is: {expected_annual_damage}")
-        
+
         # elif self.model.config["hazards"]["floods"]["custom_flood_map"]:
         # print("running with custom flood map")
         #     # flood_map = "custom_flood_map"
@@ -696,7 +733,7 @@ class SFINCS:
         #     # model_root =  self.sfincs_model_root(event_name)
         #     # simulation_root=self.sfincs_simulation_root(event_name)
         #     # print("variables are set -- time to run")
-        #     # damages = self.model.agents.households.flood(   
+        #     # damages = self.model.agents.households.flood(
         #     #     model_root=model_root,
         #     #     simulation_root=simulation_root,
         #     #     flood_map=flood_map,
@@ -759,9 +796,11 @@ class SFINCS:
         ] = 0
         self.max_water_storage_grid = self.model.data.HRU.var.ws[:2].sum(axis=0)
         self.max_water_storage_per_timestep.append(self.max_water_storage_grid)
-    
+
     def save_soil_storage_capacity(self):
-        self.soil_storage_capacity_grid = self.max_water_storage_grid - self.initial_soil_moisture_grid
+        self.soil_storage_capacity_grid = (
+            self.max_water_storage_grid - self.initial_soil_moisture_grid
+        )
         self.soil_storage_capacity_per_timestep.append(self.soil_storage_capacity_grid)
 
     def save_ksat(self):
@@ -776,7 +815,9 @@ class SFINCS:
             axis=0
         )
 
-        saturated_hydraulic_conductivity_grid = (saturated_hydraulic_conductivity_grid * 1000) / 24
+        saturated_hydraulic_conductivity_grid = (
+            saturated_hydraulic_conductivity_grid * 1000
+        ) / 24
         self.saturated_hydraulic_conductivity_per_timestep.append(
             saturated_hydraulic_conductivity_grid
         )
