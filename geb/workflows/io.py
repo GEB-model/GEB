@@ -357,7 +357,7 @@ def to_zarr(
         x_chunksize: The chunk size for the x dimension. Default is 350.
         y_chunksize: The chunk size for the y dimension. Default is 350.
         time_chunksize: The chunk size for the time dimension. Default is 1.
-        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to Non
+        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
             to disable sharding.
         byteshuffle: Whether to use byteshuffle compression. Default is True.
         filters: A list of filters to apply. Default is [].
