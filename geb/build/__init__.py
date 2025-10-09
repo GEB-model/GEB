@@ -1627,6 +1627,7 @@ class GEBModel(
             self.files["other"][name] = fp
 
             fp_with_root: Path = Path(self.root, fp)
+
             da: xr.DataArray = to_zarr(
                 da,
                 fp_with_root,

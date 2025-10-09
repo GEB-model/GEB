@@ -127,14 +127,12 @@ class GEBModel(Module, HazardDriver, ABM_Model):
     @overload
     def multiverse(
         self,
-        variables: list[str],
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: Literal[False],
     ) -> None: ...
 
     def multiverse(
         self,
-        variables: list[str],
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = False,
     ) -> None | dict[Any, float]:
@@ -153,7 +151,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         All other dimensions should be the same as the original forcing data. Units are also expected to be the same.
 
         Args:
-            variables: List of variables to use in the multiverse. Currently, only `pr_hourly` is supported.
             forecast_issue_datetime: Datetime that the forecast was issued.
             return_mean_discharge: Whether to return the mean discharge for each forecast member. This is
                 mostly useful for testing purposes.
@@ -176,31 +173,14 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
-        forecasts: xr.DataArray = open_zarr(  # open the forecast data
-            self.input_folder
-            / "other"
-            / "forecasts"
-            / "ECMWF"
-            / f"{'pr_hourly'}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
-        )
-        forecast_lead_time = pd.to_datetime(forecasts.time[-1].item()) - pd.to_datetime(
-            forecasts.time[0].item()
-        )  # calculate the lead time of the forecast
-
-        forecast_end_date = round_up_to_start_of_next_day_unless_midnight(
-            pd.to_datetime(forecasts.time[-1].item()).to_pydatetime()
-        ).date()  # calculate the end date of the forecast
-        self.n_timesteps = (
-            forecast_end_date - self.start_time.date()
-        ).days  # set the number of timesteps to the end of the forecast
-        print(
-            f"Hydrological model run starts at {self.start_time}. SFINCS and forecasts will be active from {forecast_issue_datetime} with max. lead time of {forecast_lead_time} days"
-        )
+        forecast_variables = [
+            "pr_hourly"
+        ]  # list of forecast variables to include in the multiverse
 
         original_data: dict[
             str, xr.DataArray
         ] = {}  # Save original data arrays for all variables to restore later
-        for var in variables:
+        for var in forecast_variables:
             original_data[var] = self.forcing[var]  # store original forcing data
 
         if return_mean_discharge:
@@ -212,14 +192,22 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             "%Y%m%dT%H%M%S"
         )  # set the forecast issue date
 
-        for member in forecasts.member:  # loop over all forecast members
-            self.multiverse_name = (
-                member.item()
-            )  # set the multiverse name to the member name
-            for var in variables:
+        # open one forecast to see the number of members
+        forecast_data: xr.DataArray = open_zarr(
+            self.input_folder
+            / "other"
+            / "forecasts"
+            / "ECMWF"
+            / f"{'pr_hourly'}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
+        )  # open the forecast data for the variable
+        forecast_members = [i.item() for i in forecast_data.member.values]
+
+        for member in forecast_members:  # loop over all forecast members
+            self.multiverse_name = member  # set the multiverse name to the member name
+            for var in forecast_variables:
                 print(
-                    f"Entering the multiverse space for member {member.item()} and variable {var}"
-                )  # debugging print
+                    f"Entering the multiverse space for member {member} and variable {var}"
+                )
                 forecasts: xr.DataArray = open_zarr(
                     self.input_folder
                     / "other"
@@ -227,6 +215,20 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                     / "ECMWF"
                     / f"{var}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
                 )  # open the forecast data for the variable
+
+                forecast_lead_time = pd.to_datetime(
+                    forecasts.time[-1].item()
+                ) - pd.to_datetime(
+                    forecasts.time[0].item()
+                )  # calculate the lead time of the forecast
+
+                forecast_end_date = round_up_to_start_of_next_day_unless_midnight(
+                    pd.to_datetime(forecasts.time[-1].item()).to_pydatetime()
+                ).date()  # calculate the end date of the forecast
+
+                self.n_timesteps = (
+                    forecast_end_date - self.start_time.date()
+                ).days  # set the number of timesteps to the end of the forecast
 
                 forecast_member: xr.DataArray = forecasts.sel(
                     member=member
@@ -260,11 +262,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                     observed_and_forecasted_combined  # set the forcing data to the combined data
                 )
 
-            print(f"Running forecast member {member.item()}")  # debugging print
+            print(f"Running forecast member {member}")  # debugging print
             self.step_to_end()  # steps to end of forecast period as defined in self.n_timesteps
 
             if return_mean_discharge:
-                mean_discharge[member.item()] = (
+                mean_discharge[member] = (
                     self.hydrology.routing.grid.var.discharge_m3_s.mean()
                 ).item()  # calculate the mean discharge for the member
 
@@ -276,7 +278,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         print("Forecast finished, restoring all conditions...")  # debugging print
 
-        for var in variables:
+        for var in forecast_variables:
             self.forcing[var] = original_data[
                 var
             ]  # restore the forcing data arrays, step out of the multiverse
@@ -328,11 +330,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 set(forecast_issue_dates)
             )  # only keep unique dates
 
-            if self.config["general"]["forecasts"]["only_rainfall"]:
-                variables = ["pr_hourly"]  # only rainfall is currently implemented
-            else:
-                print("Other variables than rainfall not yet implemented.")
-
             for dt in forecast_issue_dates:
                 if (
                     dt == self.current_time
@@ -342,7 +339,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                     )  # Convert date back to datetime for the multiverse method
 
                     self.multiverse(
-                        variables=variables,
                         forecast_issue_datetime=forecast_datetime,
                         return_mean_discharge=True,
                     )  # run the multiverse for the current timestep
@@ -352,22 +348,22 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 # simulate household response to warning
                 # self.agents.households.infrastructure_warning_strategy()
 
-        t0 = time()  # start timing
-        self.agents.step()  # step the agents
+        t0 = time()
+        self.agents.step()
         if self.simulate_hydrology:
-            self.hydrology.step()  # step the hydrology
+            self.hydrology.step()
 
-        HazardDriver.step(self)  # step the hazards
+        HazardDriver.step(self)
 
-        self.report(locals())  # report the current state of the model
+        self.report(locals())
 
-        t1 = time()  # end timing
+        t1 = time()
         print(
             f"{self.multiverse_name + ' - ' if self.multiverse_name is not None else ''}finished {self.current_time} ({round(t1 - t0, 4)}s)",
             flush=True,
-        )  # print the time taken for the step
+        )
 
-        self.current_timestep += 1  # increment the timestep
+        self.current_timestep += 1
 
     def _initialize(
         self,
