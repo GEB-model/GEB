@@ -1199,7 +1199,7 @@ def init_multiple_fn(
     update_config: str | Path,
     working_directory: str | Path,
     from_example: str,
-    geometry_bounds: str = "-180.0, -90.0, 180.0, 90.0",
+    geometry_bounds: str = "-10.0, 35.0, 20.0, 70.0",
     target_area_km2: float = 817000.0,
     area_tolerance: float = 0.3,
     cluster_prefix: str = "cluster",
@@ -1381,10 +1381,10 @@ def init_multiple_fn(
 )
 @click.option(
     "--geometry-bounds",
-    default="-180.0, -90.0, 180.0, 90.0",  # "-5.0, 47.0, 15.0, 58.0"
+    default="-10.0, 35.0, 20.0, 70.0",  # Western Europe
     required=True,
     type=str,
-    help="Bounding box as 'xmin,ymin,xmax,ymax' to select subbasins (e.g., '5.0,50.0,15.0,55.0' for parts of Europe). Defaults to global coverage.",
+    help="Bounding box as 'xmin,ymin,xmax,ymax' to select subbasins (e.g., '5.0,50.0,15.0,55.0' for parts of Europe). Defaults to Western Europe coverage.",
 )
 @click.option(
     "--target-area-km2",

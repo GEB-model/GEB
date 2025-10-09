@@ -473,7 +473,20 @@ def cluster_subbasins_by_area_and_proximity(
     target_area_km2: float = 817000.0,  # Approximate Danube basin area
     area_tolerance: float = 0.3,
 ) -> list[list[int]]:
-    """Cluster subbasins by proximity and cumulative upstream area.
+    """Cluster subbasins by following the coastline rather than by area and proximity.
+
+    This function creates clusters of subbasins that:
+    1. Start from coastal basins and follow the coastline
+    2. Add nearby subbasins along the coast
+    3. Use distance thresholds to avoid overly large jumps
+    4. Keep the algorithm simple and focused on coastline connectivity
+
+    The algorithm:
+    1. Identifies coastal basins (basins with no downstream neighbors)
+    2. Starts from an unused coastal basin
+    3. Follows the coastline by adding adjacent/nearby coastal and inland basins
+    4. Uses a maximum distance threshold (approx UK-NL distance ~180km)
+    5. Moves to the closest unused basin when current cluster is complete
 
     Args:
         data_catalog: Data catalog containing the MERIT basins.
@@ -484,247 +497,210 @@ def cluster_subbasins_by_area_and_proximity(
     Returns:
         List of clusters, where each cluster is a list of COMID values.
     """
-    print(f"Loading geometries for {len(subbasin_ids)} subbasins...")
+    print(f"Clustering {len(subbasin_ids)} subbasins along the coastline...")
 
-    # Get subbasin geometries and upstream areas
+    # Load subbasin geometries and river graph to identify coastal basins
     subbasins = gpd.read_parquet(
         data_catalog.get("merit_basins_catchments").path,
         filters=[("COMID", "in", subbasin_ids)],
     ).set_index("COMID")
 
+    # Get river graph to identify coastal basins
+    river_graph = get_river_graph(data_catalog)
+
+    # Identify coastal basins (no downstream neighbors)
+    coastal_basin_ids = []
+    inland_basin_ids = []
+
+    for subbasin_id in subbasin_ids:
+        if len(list(river_graph.neighbors(subbasin_id))) == 0:
+            coastal_basin_ids.append(subbasin_id)
+        else:
+            inland_basin_ids.append(subbasin_id)
+
+    print(
+        f"Found {len(coastal_basin_ids)} coastal basins and {len(inland_basin_ids)} inland basins"
+    )
+
     print("Getting upstream areas...")
     upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasin_ids)
 
-    # Sort subbasins by upstream area (largest first)
-    sorted_subbasins = sorted(
-        subbasin_ids, key=lambda x: upstream_areas.get(x, 0), reverse=True
-    )
-
-    print(
-        f"Starting clustering with target area: {target_area_km2:,.0f} km² ± {area_tolerance * 100:.0f}%"
-    )
-    print(
-        f"Area range: {target_area_km2 * (1 - area_tolerance):,.0f} - {target_area_km2 * (1 + area_tolerance):,.0f} km²"
-    )
-
-    # Pre-compute expensive operations for performance
     print("Pre-computing spatial relationships...")
 
-    # Build spatial index for fast neighbor finding
-    subbasins_sindex = subbasins.sindex
-
-    # Pre-compute centroids for all subbasins (avoid repeated calculations)
+    # Pre-compute centroids for distance calculations
     centroids = {}
     for subbasin_id in subbasin_ids:
         centroids[subbasin_id] = subbasins.loc[subbasin_id].geometry.centroid
 
-    # Pre-compute touching relationships using spatial index
-    print("Computing adjacency matrix...")
-    touching_pairs = set()
+    # Build spatial index for fast neighbor finding
+    subbasins_sindex = subbasins.sindex
 
+    # Pre-compute touching relationships
+    print("Computing adjacency matrix...")
+    adjacency = {}
     for subbasin_id in subbasin_ids:
+        adjacency[subbasin_id] = set()
+
         geom = subbasins.loc[subbasin_id].geometry
-        # Use spatial index to find potential neighbors (much faster than checking all)
         possible_matches_idx = list(subbasins_sindex.intersection(geom.bounds))
         possible_matches = subbasins.iloc[possible_matches_idx]
 
         for neighbor_id in possible_matches.index:
             if neighbor_id != subbasin_id and neighbor_id in subbasin_ids:
-                # Check if they actually touch
                 if geom.touches(possible_matches.loc[neighbor_id].geometry):
-                    # Store as sorted pair to avoid duplicates
-                    pair = tuple(sorted([subbasin_id, neighbor_id]))
-                    touching_pairs.add(pair)
+                    adjacency[subbasin_id].add(neighbor_id)
 
-    # Convert to adjacency dict for O(1) lookup
-    adjacency = {}
-    for subbasin_id in subbasin_ids:
-        adjacency[subbasin_id] = set()
-
-    for id1, id2 in touching_pairs:
-        adjacency[id1].add(id2)
-        adjacency[id2].add(id1)
-
-    print(f"Found {len(touching_pairs)} touching relationships")
-
-    # Pre-compute all pairwise distances between subbasin centroids
-    print("Pre-computing all pairwise distances...")
-    distance_matrix = {}
-    subbasin_list = list(subbasin_ids)
-
-    for i, subbasin_1 in enumerate(subbasin_list):
-        distance_matrix[subbasin_1] = {}
-        centroid_1 = centroids[subbasin_1]
-
-        # Only compute distances to subbasins we haven't processed yet (symmetric matrix)
-        for j in range(i + 1, len(subbasin_list)):
-            subbasin_2 = subbasin_list[j]
-            centroid_2 = centroids[subbasin_2]
-
-            distance = centroid_1.distance(centroid_2)
-            distance_matrix[subbasin_1][subbasin_2] = distance
-
-            # Ensure both directions are stored
-            if subbasin_2 not in distance_matrix:
-                distance_matrix[subbasin_2] = {}
-            distance_matrix[subbasin_2][subbasin_1] = distance
+    # Maximum distance threshold - approximately UK to Netherlands distance (~180 km)
+    # Converting to degrees (rough approximation: 1 degree ≈ 111 km at equator)
+    MAX_DISTANCE_DEGREES = 180.0 / 111.0  # ~1.6 degrees
 
     print(
-        f"Pre-computed {len(subbasin_ids) * (len(subbasin_ids) - 1) // 2} pairwise distances"
+        f"Using maximum distance threshold: {MAX_DISTANCE_DEGREES:.2f} degrees (~180 km)"
     )
 
     clusters = []
     used_subbasins = set()
+    remaining_basins = set(subbasin_ids)
 
-    # Progress tracking
+    min_area_threshold = target_area_km2 * (1 - area_tolerance)
+    max_area_threshold = target_area_km2 * (1 + area_tolerance)
+
+    cluster_number = 1
     total_subbasins = len(subbasin_ids)
 
-    for i, subbasin_id in enumerate(sorted_subbasins):
-        if subbasin_id in used_subbasins:
-            continue
-
-        # Progress update
-        progress_percent = (len(used_subbasins) / total_subbasins) * 100
+    while remaining_basins:
+        # Calculate and display progress
+        processed_subbasins = total_subbasins - len(remaining_basins)
+        progress_percent = (processed_subbasins / total_subbasins) * 100
         print(
-            f"Progress: {len(used_subbasins)}/{total_subbasins} subbasins processed ({progress_percent:.1f}%) - Creating cluster {len(clusters) + 1}"
+            f"\nProgress: {processed_subbasins}/{total_subbasins} subbasins processed ({progress_percent:.1f}%)"
         )
+        print(f"Starting cluster {cluster_number}")
 
-        # Start a new cluster with this subbasin
-        current_cluster = [subbasin_id]
-        current_area = upstream_areas.get(subbasin_id, 0)
-        used_subbasins.add(subbasin_id)
+        # Find the starting basin for this cluster
+        # Prefer coastal basins that haven't been used
+        unused_coastal = [bid for bid in coastal_basin_ids if bid in remaining_basins]
 
-        # Keep track of cluster neighbors for fast expansion
-        cluster_neighbors = adjacency[subbasin_id].copy()
+        if unused_coastal:
+            # Start with the first unused coastal basin
+            start_basin = unused_coastal[0]
+            print(f"  Starting from coastal basin {start_basin}")
+        else:
+            # No coastal basins left, start with closest unused basin to any existing cluster
+            if clusters:
+                # Find closest unused basin to any existing cluster
+                min_distance = float("inf")
+                start_basin = None
 
-        print(
-            f"  Starting cluster {len(clusters) + 1} with subbasin {subbasin_id} (area: {current_area:,.0f} km²)"
-        )
+                for existing_cluster in clusters:
+                    for cluster_basin in existing_cluster:
+                        cluster_centroid = centroids[cluster_basin]
 
-        # Try to add neighboring subbasins until we reach the target area
-        min_area_threshold = target_area_km2 * (1 - area_tolerance)
-        max_area_threshold = target_area_km2 * (1 + area_tolerance)
+                        for candidate_basin in remaining_basins:
+                            candidate_centroid = centroids[candidate_basin]
+                            distance = cluster_centroid.distance(candidate_centroid)
 
-        expansion_attempts = 0
+                            if distance < min_distance:
+                                min_distance = distance
+                                start_basin = candidate_basin
 
-        while current_area < min_area_threshold and len(used_subbasins) < len(
-            subbasin_ids
-        ):
-            expansion_attempts += 1
-            if expansion_attempts % 10 == 0:
                 print(
-                    f"    Cluster expansion attempt {expansion_attempts}, current area: {current_area:,.0f} km² (target: {min_area_threshold:,.0f}-{max_area_threshold:,.0f} km²)"
+                    f"  Starting from closest inland basin {start_basin} (distance: {min_distance:.3f} degrees)"
                 )
+            else:
+                # Fallback: just pick any remaining basin
+                start_basin = next(iter(remaining_basins))
+                print(f"  Starting from arbitrary basin {start_basin}")
 
-            # Find unused subbasins that touch the current cluster (using pre-computed adjacency)
-            touching_candidates = []
-            cluster_representative = max(
-                current_cluster, key=lambda x: upstream_areas.get(x, 0)
-            )
+        # Initialize cluster
+        current_cluster = [start_basin]
+        current_area = upstream_areas.get(start_basin, 0)
+        used_subbasins.add(start_basin)
+        remaining_basins.remove(start_basin)
 
-            for candidate_id in cluster_neighbors:
-                if candidate_id not in used_subbasins:
-                    candidate_area = upstream_areas.get(candidate_id, 0)
-                    # Get distance to cluster representative
-                    distance = distance_matrix[cluster_representative].get(
-                        candidate_id, float("inf")
-                    )
-                    touching_candidates.append((candidate_id, candidate_area, distance))
+        print(f"    Starting area: {current_area:,.0f} km²")
 
-            # Sort touching candidates by distance (closest first)
-            if touching_candidates:
-                touching_candidates.sort(key=lambda x: x[2])  # Sort by distance
-                # Convert to the expected format (id, area)
-                touching_candidates = [
-                    (cid, carea) for cid, carea, _ in touching_candidates
-                ]
+        # Grow cluster along coastline/proximity
+        while current_area < min_area_threshold and remaining_basins:
+            # Find candidates: adjacent basins and nearby basins within distance threshold
+            candidates = []
 
-            # If no touching candidates, find the closest unused subbasins using pre-computed distances
-            if not touching_candidates:
-                remaining_subbasins = [
-                    s for s in sorted_subbasins if s not in used_subbasins
-                ]
-                if not remaining_subbasins:
-                    break
+            for cluster_basin in current_cluster:
+                cluster_centroid = centroids[cluster_basin]
 
-                # Get distances from current cluster to all remaining subbasins
-                cluster_distances = []
+                # Add adjacent basins
+                for adj_basin in adjacency[cluster_basin]:
+                    if adj_basin in remaining_basins:
+                        candidates.append(
+                            (adj_basin, 0.0)
+                        )  # Priority distance 0 for adjacent
 
-                # For multi-subbasin clusters, use the cluster's centroid subbasin
-                # (the one with largest area in current cluster)
-                cluster_representative = max(
-                    current_cluster, key=lambda x: upstream_areas.get(x, 0)
-                )
+                # Add nearby basins within distance threshold
+                for candidate_basin in remaining_basins:
+                    if (
+                        candidate_basin not in adjacency[cluster_basin]
+                    ):  # Not already adjacent
+                        candidate_centroid = centroids[candidate_basin]
+                        distance = cluster_centroid.distance(candidate_centroid)
 
-                for candidate_id in remaining_subbasins:
-                    if candidate_id in distance_matrix[cluster_representative]:
-                        distance = distance_matrix[cluster_representative][candidate_id]
-                        candidate_area = upstream_areas.get(candidate_id, 0)
-                        cluster_distances.append(
-                            (candidate_id, candidate_area, distance)
-                        )
+                        if distance <= MAX_DISTANCE_DEGREES:
+                            candidates.append((candidate_basin, distance))
 
-                if cluster_distances:
-                    # Sort by distance (closest first), then take top candidates
-                    cluster_distances.sort(
-                        key=lambda x: x[2]
-                    )  # Sort by distance (index 2)
-
-                    # Take closest 20 candidates for consideration
-                    top_candidates = cluster_distances[
-                        : min(20, len(cluster_distances))
-                    ]
-                    touching_candidates = [
-                        (cid, carea) for cid, carea, _ in top_candidates
-                    ]
-
-            if not touching_candidates:
+            if not candidates:
+                print(f"    No more candidates within distance threshold")
                 break
 
-            # Candidates are already sorted by distance (closest first)
-            # Select the best candidate that doesn't exceed max threshold
+            # Sort candidates by distance (adjacent basins first, then by distance)
+            candidates.sort(key=lambda x: x[1])
+
+            # Select best candidate that doesn't exceed area threshold
             best_candidate = None
-            for candidate_id, candidate_area in touching_candidates:
+            for candidate_id, distance in candidates:
+                candidate_area = upstream_areas.get(candidate_id, 0)
                 if current_area + candidate_area <= max_area_threshold:
                     best_candidate = candidate_id
                     break
 
-            # If no candidate fits within threshold, take the closest one if we're still below min
-            if best_candidate is None and current_area < min_area_threshold:
-                best_candidate = touching_candidates[0][0]  # Closest candidate
+            # If no candidate fits, and we're still below minimum, take the closest one
+            if (
+                best_candidate is None
+                and current_area < min_area_threshold
+                and candidates
+            ):
+                best_candidate = candidates[0][0]
 
             if best_candidate is None:
+                print(f"    No suitable candidates found")
                 break
 
-            # Add the best candidate to the cluster
-            current_cluster.append(best_candidate)
+            # Add the best candidate
             candidate_area = upstream_areas.get(best_candidate, 0)
+            current_cluster.append(best_candidate)
             current_area += candidate_area
             used_subbasins.add(best_candidate)
+            remaining_basins.remove(best_candidate)
 
-            # Update cluster neighbors efficiently
-            cluster_neighbors.discard(best_candidate)  # Remove the added subbasin
-            cluster_neighbors.update(adjacency[best_candidate])  # Add its neighbors
-            cluster_neighbors -= used_subbasins  # Remove already used subbasins
-
-            if expansion_attempts <= 5 or expansion_attempts % 5 == 0:
-                print(
-                    f"    Added subbasin {best_candidate} (area: {candidate_area:,.0f} km²), cluster total: {current_area:,.0f} km²"
-                )
+            print(
+                f"    Added basin {best_candidate} (area: {candidate_area:,.0f} km²), total: {current_area:,.0f} km²"
+            )
 
         clusters.append(current_cluster)
         final_area = sum(upstream_areas.get(sid, 0) for sid in current_cluster)
         print(
-            f"  Completed cluster {len(clusters)} with {len(current_cluster)} subbasins, total area: {final_area:,.0f} km²"
+            f"  Completed cluster {cluster_number} with {len(current_cluster)} subbasins, total area: {final_area:,.0f} km²"
         )
-        print()
+
+        cluster_number += 1
 
     print(
-        f"Clustering completed! Created {len(clusters)} clusters from {len(subbasin_ids)} subbasins"
+        f"\nClustering completed! Created {len(clusters)} clusters from {len(subbasin_ids)} subbasins"
     )
     for i, cluster in enumerate(clusters):
         cluster_area = sum(upstream_areas.get(sid, 0) for sid in cluster)
-        print(f"  Cluster {i + 1}: {len(cluster)} subbasins, {cluster_area:,.0f} km²")
+        coastal_count = sum(1 for sid in cluster if sid in coastal_basin_ids)
+        print(
+            f"  Cluster {i + 1}: {len(cluster)} subbasins ({coastal_count} coastal), {cluster_area:,.0f} km²"
+        )
 
     return clusters
 
