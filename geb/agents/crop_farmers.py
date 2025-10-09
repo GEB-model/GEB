@@ -1106,7 +1106,8 @@ class CropFarmers(AgentBaseClass):
                 )
 
     def get_gross_irrigation_demand_m3(
-        self, potential_evapotranspiration, available_infiltration
+        self,
+        root_depth_m: npt.NDArray[np.float32],
     ) -> tuple[
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
@@ -1114,8 +1115,7 @@ class CropFarmers(AgentBaseClass):
         """Calculates the gross irrigation demand in m3 for each farmer.
 
         Args:
-            potential_evapotranspiration: potential evapotranspiration in m/day
-            available_infiltration: available infiltration from other sources in m/day
+            root_depth_m: root depth in meters for each HRU
 
         Returns:
             gross_irrigation_demand_m3: gross irrigation demand in m3 for each farmer
@@ -1133,9 +1133,7 @@ class CropFarmers(AgentBaseClass):
                 cell_area=self.model.hydrology.HRU.var.cell_area,
                 crop_map=self.HRU.var.crop_map,
                 topwater=self.HRU.var.topwater,
-                available_infiltration=available_infiltration,
-                potential_evapotranspiration=potential_evapotranspiration,
-                root_depth=self.HRU.var.root_depth,
+                root_depth_m=root_depth_m,
                 soil_layer_height=self.HRU.var.soil_layer_height,
                 field_capacity=self.HRU.var.wfc,
                 wilting_point=self.HRU.var.wwp,

@@ -158,16 +158,6 @@ class LandCover(Module):
             w_pre = self.HRU.var.w.copy()
             topwater_pre = self.HRU.var.topwater.copy()
 
-        timer.finish_split("Interception")
-
-        (
-            groundwater_abstraction_m3,
-            channel_abstraction_m3,
-            return_flow,  # from all sources
-            irrigation_loss_to_evaporation_m,
-            total_water_demand_loss_m3,
-        ) = self.hydrology.water_demand.step(potential_evapotranspiration)
-
         timer.finish_split("Demand")
 
         # Soil for forest, grassland, and irrigated land

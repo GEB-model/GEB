@@ -349,7 +349,7 @@ class LandSurface(Module):
             ]
         )
 
-        crop_factor, root_depth, crop_sub_stage = get_crop_factors_and_root_depths(
+        crop_factor, root_depth_m, crop_sub_stage = get_crop_factors_and_root_depths(
             land_use_map=self.HRU.var.land_use_type,
             crop_factor_forest_map=forest_crop_factor,
             crop_map=self.HRU.var.crop_map,
@@ -382,6 +382,14 @@ class LandSurface(Module):
         )
 
         pr_kg_per_m2_per_s = self.HRU.pr_kg_per_m2_per_s
+
+        (
+            groundwater_abstraction_m3,
+            channel_abstraction_m3,
+            return_flow,  # from all sources
+            irrigation_loss_to_evaporation_m,
+            total_water_demand_loss_m3,
+        ) = self.hydrology.water_demand.step(root_depth_m)
 
         (
             snow_melt_m,

@@ -155,7 +155,7 @@ class WaterDemand(Module):
         return withdrawal
 
     def step(
-        self, potential_evapotranspiration: npt.NDArray[np.float32]
+        self, root_depth_m: npt.NDArray[np.float32]
     ) -> tuple[
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
@@ -175,7 +175,7 @@ class WaterDemand(Module):
         while for the industry and livestock water demand, a gridded approach is used.
 
         Args:
-            potential_evapotranspiration: Potential evapotranspiration in m per HRU [m].
+            root_depth_m: Root depth in meters for each HRU.
 
         Returns:
             Groundwater abstraction per grid cell [m3].
@@ -207,10 +207,7 @@ class WaterDemand(Module):
         (
             gross_irrigation_demand_m3_per_field,
             gross_potential_irrigation_m3_per_field_limit_adjusted,
-        ) = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
-            potential_evapotranspiration=potential_evapotranspiration,
-            available_infiltration=self.HRU.var.natural_available_water_infiltration,
-        )
+        ) = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(root_depth_m)
 
         gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32] = (
             self.model.agents.crop_farmers.field_to_farmer(
