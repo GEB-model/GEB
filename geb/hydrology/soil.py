@@ -160,11 +160,11 @@ def get_fraction_easily_available_soil_water(
     """Calculate the fraction of easily available soil water.
 
     Calculation is based on crop group number and potential evapotranspiration
-    following Van Diepen et al., 1988: WOFOST 6.0, p.87.
+    following Van Diepen et al., 1988: WOFOST 6.0, Theory and Algorithms p.87.
 
     Args:
         crop_group_number: The crop group number is a indicator of adaptation to dry climate,
-            Van Diepen et al., 1988: WOFOST 6.0, p.87
+            Van Diepen et al., 1988: WOFOST 6.0, Theory and Algorithms p.87
         potential_evapotranspiration: Potential evapotranspiration in m
 
     Returns:

@@ -28,7 +28,6 @@ from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
-from .evaporation import Evaporation
 from .groundwater import GroundWater
 from .interception import Interception
 from .lakes_res_small import SmallLakesReservoirs
@@ -45,7 +44,7 @@ class Hydrology(Data, Module):
     """The hydrological module of the GEB model.
 
     This module handles all hydrological processes, including potential evapotranspiration,
-    snow and frost dynamics, land cover interactions, soil processes, evaporation, groundwater
+    snow and frost dynamics, land cover interactions, soil processes, groundwater
     management, interception, sealed water bodies, runoff concentration, routing of water,
     lakes and reservoirs management, water demand, and hillslope erosion.
 
@@ -67,7 +66,6 @@ class Hydrology(Data, Module):
         self.landsurface = LandSurface(self.model, self)
         self.landcover = LandCover(self.model, self)
         self.soil = Soil(self.model, self)
-        self.evaporation = Evaporation(self.model, self)
         self.groundwater = GroundWater(self.model, self)
         self.interception = Interception(self.model, self)
         self.runoff_concentration = RunoffConcentration(self.model, self)

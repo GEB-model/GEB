@@ -193,7 +193,7 @@ def penman_monteith(
 
 
 @njit(cache=True, inline="always")
-def potential_evapotranspiration(
+def get_reference_evapotranspiration(
     tas_C: np.float32,
     dewpoint_tas_C: np.float32,
     ps_pa: np.float32,

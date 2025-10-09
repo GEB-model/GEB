@@ -176,6 +176,7 @@ def test_update_with_dict() -> None:
         "setup_farmer_crop_calendar",
         "setup_discharge_observations",
         "setup_elevation",
+        "setup_pr_GEV",
     ],
 )
 def test_update_with_method(method: str) -> None:
