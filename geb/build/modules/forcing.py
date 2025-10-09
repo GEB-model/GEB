@@ -986,7 +986,7 @@ def get_chunk_size(da, target: float | int = 1e8) -> int:
     """
     spatial_size = da.x.size * da.y.size
     # Include member dimension if it exists
-    if 'member' in da.dims:
+    if "member" in da.dims:
         spatial_size *= da.member.size
     return int(target / (da.dtype.itemsize * spatial_size))
 
