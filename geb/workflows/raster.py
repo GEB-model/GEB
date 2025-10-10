@@ -7,6 +7,7 @@ import numpy as np
 import numpy.typing as npt
 import xarray as xr
 from rasterio.features import rasterize
+from shapely.geometry import Polygon
 
 
 def compress(array: npt.NDArray[Any], mask: npt.NDArray[np.bool_]) -> npt.NDArray[Any]:
@@ -184,9 +185,12 @@ def rasterize_like(
         name=column,
     )
     geoms: gpd.Geoseries = gpd.geometry
+
+    assert da.rio.crs == gpd.crs, "CRS of raster and GeoDataFrame must match"
+
     values: list[Any] = gpd[column].tolist()
-    shapes = list(zip(geoms, values))
-    rasterize(
+    shapes: list[tuple[Polygon, int | float]] = list(zip(geoms, values, strict=True))
+    out = rasterize(
         shapes,
         out_shape=raster.rio.shape,
         fill=nodata,
@@ -195,6 +199,7 @@ def rasterize_like(
         all_touched=all_touched,
         **kwargs,
     )
+    da.values = out
     return da
 
 
@@ -220,3 +225,44 @@ def convert_nodata(
     da_new.attrs = da.attrs.copy()
     da_new.attrs["_FillValue"] = new_nodata
     return da_new
+
+
+def snap_to_grid(
+    ds: xr.DataArray | xr.Dataset,
+    reference: xr.DataArray | xr.Dataset,
+    relative_tolerance: float = 0.02,
+    ydim: str = "y",
+    xdim: str = "x",
+) -> xr.Dataset | xr.DataArray:
+    """Snaps the coordinates of a dataset to a reference dataset.
+
+    Some datasets have a slightly different grid than the model grid, usually
+    because of different rounding errors when creating the grid, and floating
+    point precision issues. This method checks if the coordinates are more or
+    less the same, and if so, snaps the coordinates of the dataset to the
+    reference dataset.
+
+    Args:
+        ds: The dataset to snap.
+        reference: The reference dataset.
+        relative_tolerance: The relative tolerance for snapping.
+        ydim: The name of the y dimension.
+        xdim: The name of the x dimension.
+
+    Returns:
+        The snapped dataset.
+    """
+    # make sure all datasets have more or less the same coordinates
+    assert np.isclose(
+        ds.coords[ydim].values,
+        reference[ydim].values,
+        atol=abs(ds.rio.resolution()[1] * relative_tolerance),
+        rtol=0,
+    ).all()
+    assert np.isclose(
+        ds.coords[xdim].values,
+        reference[xdim].values,
+        atol=abs(ds.rio.resolution()[0] * relative_tolerance),
+        rtol=0,
+    ).all()
+    return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})

@@ -3,7 +3,7 @@ import calendar
 import numpy as np
 import numpy.typing as npt
 
-from ..hydrology.landcover import GRASSLAND_LIKE
+from ..hydrology.landcovers import GRASSLAND_LIKE
 from .general import AgentBaseClass, downscale_volume
 
 

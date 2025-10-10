@@ -28,7 +28,7 @@ class Sword(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def processor(self, url: str) -> Adapter:
+    def fetch(self, url: str) -> Adapter:
         """Process SWORD zip file to extract and convert to parquet.
 
         Args:

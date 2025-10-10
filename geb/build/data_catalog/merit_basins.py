@@ -174,7 +174,7 @@ class MeritBasins(Adapter):
                 "Too many users have viewed or downloaded this file recently. Please try accessing the file again later. If the file you are trying to access is particularly large or is shared with many people, it may take up to 24 hours to be able to view or download the file."
             )
 
-    def processor(self, url: str) -> Path:
+    def fetch(self, url: str) -> Path:
         """Process HydroLAKES zip file to extract and convert to parquet.
 
         Args:

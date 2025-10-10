@@ -12,7 +12,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from .hydrology.HRUs import load_geom
+from geb.workflows.io import load_geom
 
 
 class DynamicArray:
@@ -990,6 +990,9 @@ class Bucket:
 
         Args:
             path: The location where the data should be saved. Must be a directory.
+
+        Raises:
+            ValueError: If a value type is not supported for saving.
         """
         path.mkdir(parents=True, exist_ok=True)
         for name, value in self.__dict__.items():
@@ -1016,7 +1019,7 @@ class Bucket:
                     compression="gzip",
                     compression_level=9,
                 )
-            elif isinstance(value, (list, dict)):
+            elif isinstance(value, (list, dict, float, int)):
                 with open((path / name).with_suffix(".json"), "w") as f:
                     json.dump(value, f)
             elif isinstance(value, str):
@@ -1025,8 +1028,10 @@ class Bucket:
             elif isinstance(value, datetime):
                 with open((path / name).with_suffix(".datetime"), "w") as f:
                     f.write(value.isoformat())
-            else:
+            elif isinstance(value, np.ndarray):
                 np.save((path / name).with_suffix(".npy"), value)
+            else:
+                raise ValueError(f"Cannot save value of type {type(value)} for {name}")
 
     def load(self, path: Path) -> "Bucket":
         """Load the bucket data from disk to the Bucket instance.

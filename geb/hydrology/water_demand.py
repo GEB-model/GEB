@@ -23,9 +23,9 @@ import numpy as np
 import numpy.typing as npt
 from honeybees.library.raster import write_to_array
 
-from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
+from geb.workflows.io import load_grid
 
 
 def weighted_sum_per_reservoir(
@@ -155,7 +155,7 @@ class WaterDemand(Module):
         return withdrawal
 
     def step(
-        self, potential_evapotranspiration: npt.NDArray[np.float32]
+        self, root_depth_m: npt.NDArray[np.float32]
     ) -> tuple[
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
@@ -175,7 +175,7 @@ class WaterDemand(Module):
         while for the industry and livestock water demand, a gridded approach is used.
 
         Args:
-            potential_evapotranspiration: Potential evapotranspiration in m per HRU [m].
+            root_depth_m: Root depth in meters for each HRU.
 
         Returns:
             Groundwater abstraction per grid cell [m3].
@@ -207,10 +207,7 @@ class WaterDemand(Module):
         (
             gross_irrigation_demand_m3_per_field,
             gross_potential_irrigation_m3_per_field_limit_adjusted,
-        ) = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
-            potential_evapotranspiration=potential_evapotranspiration,
-            available_infiltration=self.HRU.var.natural_available_water_infiltration,
-        )
+        ) = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(root_depth_m)
 
         gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32] = (
             self.model.agents.crop_farmers.field_to_farmer(
@@ -363,7 +360,7 @@ class WaterDemand(Module):
                     irrigation_loss_to_evaporation_m,
                     return_flow_irrigation_m,
                 ],
-                tollerance=1e-5,
+                tolerance=1e-5,
             )
 
         self.HRU.var.actual_irrigation_consumption = irrigation_water_consumption_m
@@ -410,7 +407,7 @@ class WaterDemand(Module):
                     irrigation_loss_to_evaporation_m,
                     return_flow_irrigation_m,
                 ],
-                tollerance=1e-6,
+                tolerance=1e-6,
             )
             balance_check(
                 name="water_demand_2",
@@ -432,7 +429,7 @@ class WaterDemand(Module):
                     available_reservoir_storage_m3,
                     available_groundwater_m3,
                 ],
-                tollerance=10000,
+                tolerance=10000,
             )
         if self.model.timing:
             print(timer)
@@ -445,4 +442,5 @@ class WaterDemand(Module):
             return_flow,  # from all sources, re-added in routing
             irrigation_loss_to_evaporation_m,
             total_water_demand_loss_m3,
+            self.HRU.var.actual_irrigation_consumption,
         )

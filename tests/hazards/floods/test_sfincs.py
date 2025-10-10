@@ -17,9 +17,8 @@ import xarray as xr
 from geb.cli import CONFIG_DEFAULT, parse_config, run_model_with_method
 from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
-from geb.hydrology.HRUs import load_geom
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory, open_zarr
+from geb.workflows.io import WorkingDirectory, load_geom, open_zarr
 
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
 

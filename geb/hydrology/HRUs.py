@@ -1,19 +1,17 @@
 import math
-import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Union
 
-import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
-import rasterio
 import xarray as xr
 import zarr
 from affine import Affine
 from numba import njit
 from scipy.spatial import cKDTree
 
+from geb.workflows.io import load_grid, open_zarr
 from geb.workflows.raster import compress
 
 
@@ -59,61 +57,6 @@ def determine_nearest_river_cell(
     assert nearest_indices_in_valid.max() < (~mask).sum()
 
     return nearest_indices_in_valid[HRU_to_grid]
-
-
-def load_grid(
-    filepath, layer=1, return_transform_and_crs=False
-) -> np.ndarray | tuple[np.ndarray, Affine, str]:
-    if filepath.suffix == ".tif":
-        warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
-        with rasterio.open(filepath) as src:
-            data: np.ndarray = src.read(layer)
-            data: np.ndarray = (
-                data.astype(np.float32) if data.dtype == np.float64 else data
-            )
-            if return_transform_and_crs:
-                return data, src.transform, src.crs
-            else:
-                return data
-    elif filepath.suffix == ".zarr":
-        store: zarr.storage._local.LocalStore = zarr.storage.LocalStore(
-            filepath, read_only=True
-        )
-        group: zarr.core.group.Group = zarr.open_group(store, mode="r")
-        data: np.ndarray = group[filepath.stem][:]
-        data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
-        if return_transform_and_crs:
-            x: np.ndarray = group["x"][:]
-            y: np.ndarray = group["y"][:]
-            x_diff: float = np.diff(x[:]).mean().item()
-            y_diff: float = np.diff(y[:]).mean().item()
-            transform: Affine = Affine(
-                a=x_diff,
-                b=0,
-                c=x[0] - x_diff / 2,
-                d=0,
-                e=y_diff,
-                f=y[0] - y_diff / 2,
-            )
-            wkt: str = group[filepath.stem].attrs["_CRS"]["wkt"]
-            return data, transform, wkt
-        else:
-            return data
-    else:
-        raise ValueError("File format not supported.")
-
-
-def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
-    """Load a geometry for the GEB model from disk.
-
-    Args:
-        filepath: Path to the geometry file.
-
-    Returns:
-        A GeoDataFrame containing the geometries.
-
-    """
-    return gpd.read_parquet(filepath)
 
 
 def load_water_demand_xr(filepath: str | Path) -> xr.Dataset:
@@ -409,40 +352,36 @@ class Grid(BaseVariables):
         return data
 
     @property
-    def hurs(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("hurs"))
+    def pr_kg_per_m2_per_s(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("pr_kg_per_m2_per_s"))
 
     @property
-    def pr(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("pr"))
+    def ps_pascal(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("ps_pascal"))
 
     @property
-    def ps(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("ps"))
+    def rlds_W_per_m2(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("rlds_W_per_m2"))
 
     @property
-    def rlds(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("rlds"))
+    def rsds_W_per_m2(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("rsds_W_per_m2"))
 
     @property
-    def rsds(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("rsds"))
+    def tas_2m_K(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("tas_2m_K"))
 
     @property
-    def tas(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("tas"))
+    def dewpoint_tas_2m_K(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("dewpoint_tas_2m_K"))
 
     @property
-    def tasmin(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("tasmin"))
+    def wind_u10m_m_per_s(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("wind_u10m_m_per_s"))
 
     @property
-    def tasmax(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("tasmax"))
-
-    @property
-    def sfcWind(self) -> npt.NDArray[np.float32]:
-        return self.compress(self.model.forcing.load("sfcwind"))
+    def wind_v10m_m_per_s(self) -> npt.NDArray[np.float32]:
+        return self.compress(self.model.forcing.load("wind_v10m_m_per_s"))
 
     @property
     def spei_uncompressed(self) -> npt.NDArray[np.float32]:
@@ -474,23 +413,26 @@ class Grid(BaseVariables):
             # Check if we ran out of SPEI data. If we did, revert to using the last month
             if (
                 np.datetime64(spei_time, "ns")
-                > self.model.forcing["SPEI"].datetime_index[-1]
+                > self.model.forcing["SPEI"].reader.datetime_index[-1]
             ):
                 spei_time: datetime = current_time.replace(day=1)
 
-        return self.model.forcing.load("SPEI", time=spei_time)
+        spei = self.model.forcing.load("SPEI", time=spei_time)
+        assert spei.ndim == 3 and spei.shape[0] == 1
+        spei = spei[0]
+        return spei
 
     @property
     def gev_c(self):
-        return load_grid(self.model.files["grid"]["climate/gev_c"])
+        return open_zarr(self.model.files["other"]["climate/gev_c"])
 
     @property
     def gev_loc(self):
-        return load_grid(self.model.files["grid"]["climate/gev_loc"])
+        return open_zarr(self.model.files["other"]["climate/gev_loc"])
 
     @property
     def gev_scale(self):
-        return load_grid(self.model.files["grid"]["climate/gev_scale"])
+        return open_zarr(self.model.files["other"]["climate/gev_scale"])
 
     @property
     def pr_gev_c(self):
@@ -888,49 +830,44 @@ class HRUs(BaseVariables):
             plt.show()
 
     @property
-    def hurs(self) -> npt.NDArray[np.float32]:
-        hurs: npt.NDArray[np.float32] = self.data.grid.hurs
-        return self.data.to_HRU(data=hurs, fn=None)
+    def pr_kg_per_m2_per_s(self) -> npt.NDArray[np.float32]:
+        pr_kg_per_m2_per_s: npt.NDArray[np.float32] = self.data.grid.pr_kg_per_m2_per_s
+        return self.data.to_HRU(data=pr_kg_per_m2_per_s, fn=None)
 
     @property
-    def pr(self) -> npt.NDArray[np.float32]:
-        pr: npt.NDArray[np.float32] = self.data.grid.pr
-        return self.data.to_HRU(data=pr, fn=None)
+    def ps_pascal(self) -> npt.NDArray[np.float32]:
+        ps_pascal: npt.NDArray[np.float32] = self.data.grid.ps_pascal
+        return self.data.to_HRU(data=ps_pascal, fn=None)
 
     @property
-    def ps(self) -> npt.NDArray[np.float32]:
-        ps: npt.NDArray[np.float32] = self.data.grid.ps
-        return self.data.to_HRU(data=ps, fn=None)
+    def rlds_W_per_m2(self) -> npt.NDArray[np.float32]:
+        rlds_W_per_m2: npt.NDArray[np.float32] = self.data.grid.rlds_W_per_m2
+        return self.data.to_HRU(data=rlds_W_per_m2, fn=None)
 
     @property
-    def rlds(self) -> npt.NDArray[np.float32]:
-        rlds: npt.NDArray[np.float32] = self.data.grid.rlds
-        return self.data.to_HRU(data=rlds, fn=None)
+    def rsds_W_per_m2(self) -> npt.NDArray[np.float32]:
+        rsds_W_per_m2: npt.NDArray[np.float32] = self.data.grid.rsds_W_per_m2
+        return self.data.to_HRU(data=rsds_W_per_m2, fn=None)
 
     @property
-    def rsds(self) -> npt.NDArray[np.float32]:
-        rsds: npt.NDArray[np.float32] = self.data.grid.rsds
-        return self.data.to_HRU(data=rsds, fn=None)
+    def tas_2m_K(self) -> npt.NDArray[np.float32]:
+        tas_2m_K: npt.NDArray[np.float32] = self.data.grid.tas_2m_K
+        return self.data.to_HRU(data=tas_2m_K, fn=None)
 
     @property
-    def tas(self) -> npt.NDArray[np.float32]:
-        tas: npt.NDArray[np.float32] = self.data.grid.tas
-        return self.data.to_HRU(data=tas, fn=None)
+    def dewpoint_tas_2m_K(self) -> npt.NDArray[np.float32]:
+        dewpoint_tas_2m_K: npt.NDArray[np.float32] = self.data.grid.dewpoint_tas_2m_K
+        return self.data.to_HRU(data=dewpoint_tas_2m_K, fn=None)
 
     @property
-    def tasmin(self) -> npt.NDArray[np.float32]:
-        tasmin: npt.NDArray[np.float32] = self.data.grid.tasmin
-        return self.data.to_HRU(data=tasmin, fn=None)
+    def wind_u10m_m_per_s(self) -> npt.NDArray[np.float32]:
+        wind_u10m_m_per_s: npt.NDArray[np.float32] = self.data.grid.wind_u10m_m_per_s
+        return self.data.to_HRU(data=wind_u10m_m_per_s, fn=None)
 
     @property
-    def tasmax(self) -> npt.NDArray[np.float32]:
-        tasmax: npt.NDArray[np.float32] = self.data.grid.tasmax
-        return self.data.to_HRU(data=tasmax, fn=None)
-
-    @property
-    def sfcWind(self) -> npt.NDArray[np.float32]:
-        sfcWind: npt.NDArray[np.float32] = self.data.grid.sfcWind
-        return self.data.to_HRU(data=sfcWind, fn=None)
+    def wind_v10m_m_per_s(self) -> npt.NDArray[np.float32]:
+        wind_v10m_m_per_s: npt.NDArray[np.float32] = self.data.grid.wind_v10m_m_per_s
+        return self.data.to_HRU(data=wind_v10m_m_per_s, fn=None)
 
 
 class Modflow(BaseVariables):

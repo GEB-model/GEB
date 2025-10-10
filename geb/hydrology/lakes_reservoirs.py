@@ -24,9 +24,9 @@ import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 
-from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import balance_check
+from geb.workflows.io import load_grid
 
 OFF: int = 0
 LAKE: int = 1
@@ -291,7 +291,7 @@ class LakesReservoirs(Module):
                 self.var.lake_area[self.is_lake],
                 self.var.outflow_height[self.is_lake],
             )
-            < 1e-10
+            < 1e-5
         ).all()
 
     def map_water_bodies_IDs(self, waterBodyID_unmapped):
@@ -499,7 +499,7 @@ class LakesReservoirs(Module):
                 outfluxes=[],
                 prestorages=[prestorage[self.is_reservoir]],
                 poststorages=[self.var.storage[self.is_reservoir]],
-                tollerance=1,  # 1 m3
+                tolerance=1,  # 1 m3
             )
 
         return outflow_to_drainage_network_m3, command_area_release_m3

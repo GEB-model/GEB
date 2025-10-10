@@ -6,11 +6,11 @@ import numpy.typing as npt
 from numba import float32, njit, prange
 from tqdm import tqdm
 
-from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
+from geb.workflows.io import load_grid
 
-from .landcover import (
+from .landcovers import (
     FOREST,
     GRASSLAND_LIKE,
     NON_PADDY_IRRIGATED,
@@ -160,11 +160,11 @@ def get_fraction_easily_available_soil_water(
     """Calculate the fraction of easily available soil water.
 
     Calculation is based on crop group number and potential evapotranspiration
-    following Van Diepen et al., 1988: WOFOST 6.0, p.87.
+    following Van Diepen et al., 1988: WOFOST 6.0, Theory and Algorithms p.87.
 
     Args:
         crop_group_number: The crop group number is a indicator of adaptation to dry climate,
-            Van Diepen et al., 1988: WOFOST 6.0, p.87
+            Van Diepen et al., 1988: WOFOST 6.0, Theory and Algorithms p.87
         potential_evapotranspiration: Potential evapotranspiration in m
 
     Returns:
@@ -287,7 +287,7 @@ def add_water_to_topwater_and_evaporate_open_water(
     natural_available_water_infiltration: npt.NDArray[np.float32],
     actual_irrigation_consumption: npt.NDArray[np.float32],
     land_use_type: npt.NDArray[np.int32],
-    reference_evapotranspiration_water: npt.NDArray[np.float32],
+    reference_evapotranspiration_water_m_per_day: npt.NDArray[np.float32],
     topwater: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
     """Add available water from natural and innatural sources to the topwater and calculate open water evaporation.
@@ -296,7 +296,7 @@ def add_water_to_topwater_and_evaporate_open_water(
         natural_available_water_infiltration: The natural available water infiltration in m.
         actual_irrigation_consumption: The actual irrigation consumption in m.
         land_use_type: The land use type of the hydrological response unit.
-        reference_evapotranspiration_water: The reference evapotranspiration from water in m.
+        reference_evapotranspiration_water_m_per_day: The reference evapotranspiration from water in m.
         topwater: The topwater in m, which is the water available for evaporation and transpiration.
 
     Returns:
@@ -316,13 +316,13 @@ def add_water_to_topwater_and_evaporate_open_water(
         if land_use_type[i] == PADDY_IRRIGATED:
             open_water_evaporation[i] = np.minimum(
                 np.maximum(np.float32(0.0), topwater[i]),
-                reference_evapotranspiration_water[i],
+                reference_evapotranspiration_water_m_per_day[i],
             )
         elif land_use_type[i] == SEALED:
             # evaporation from precipitation fallen on sealed area (ponds)
-            # estimated as 0.2 x reference_evapotranspiration_water
+            # estimated as 0.2 x reference_evapotranspiration_water_m_per_day
             open_water_evaporation[i] = np.minimum(
-                0.2 * reference_evapotranspiration_water[i], topwater[i]
+                0.2 * reference_evapotranspiration_water_m_per_day[i], topwater[i]
             )
         else:
             # no open water evaporation for other land use types (thus using default of 0)
@@ -1813,9 +1813,7 @@ class Soil(Module):
 
         # set the frost index threshold as global variable for numba
         global FROST_INDEX_THRESHOLD
-        FROST_INDEX_THRESHOLD = np.float32(
-            self.model.hydrology.snowfrost.var.frost_index_threshold
-        )
+        FROST_INDEX_THRESHOLD = np.float32(85.0)
 
     def step(
         self,
@@ -1951,7 +1949,7 @@ class Soil(Module):
                 actual_irrigation_consumption=actual_irrigation_consumption
                 / n_substeps,
                 land_use_type=self.HRU.var.land_use_type,
-                reference_evapotranspiration_water=self.HRU.var.reference_evapotranspiration_water
+                reference_evapotranspiration_water_m_per_day=self.HRU.var.reference_evapotranspiration_water_m_per_day
                 / n_substeps,
                 topwater=self.HRU.var.topwater,
             )
@@ -2019,7 +2017,7 @@ class Soil(Module):
                     np.nansum(self.HRU.var.w, axis=0),
                     self.HRU.var.topwater,
                 ],
-                tollerance=1e-6,
+                tolerance=1e-6,
                 error_identifiers={
                     "land_use_type": self.HRU.var.land_use_type,
                 },
@@ -2071,18 +2069,18 @@ class Soil(Module):
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
         assert (self.HRU.var.w[:, bioarea] >= self.HRU.var.wres[:, bioarea]).all()
 
-        self.grid.vapour_pressure_deficit_KPa = (
-            self.calculate_vapour_pressure_deficit_kPa(
-                temperature_K=self.grid.tas,
-                relative_humidity=self.grid.hurs,
-            )
-        )
-        self.grid.photosynthetic_photon_flux_density_umol_m2_s = (
-            self.calculate_photosynthetic_photon_flux_density(
-                shortwave_radiation=self.grid.rsds,
-                xi=0.5,
-            )
-        )
+        # self.grid.vapour_pressure_deficit_KPa = (
+        #     self.calculate_vapour_pressure_deficit_kPa(
+        #         temperature_K=self.grid.tas,
+        #         relative_humidity=self.grid.hurs,
+        #     )
+        # )
+        # self.grid.photosynthetic_photon_flux_density_umol_m2_s = (
+        #     self.calculate_photosynthetic_photon_flux_density(
+        #         shortwave_radiation=self.grid.rsds,
+        #         xi=0.5,
+        #     )
+        # )
 
         w_forest = self.HRU.var.w.sum(axis=0)
         w_forest[self.HRU.var.land_use_type != FOREST] = np.nan
@@ -2134,7 +2132,7 @@ class Soil(Module):
                     np.nansum(self.HRU.var.w, axis=0),
                     self.HRU.var.topwater,
                 ],
-                tollerance=1e-6,
+                tolerance=1e-6,
                 error_identifiers={
                     "land_use_type": self.HRU.var.land_use_type,
                 },
@@ -2237,7 +2235,7 @@ class Soil(Module):
                         np.nansum(self.HRU.var.w, axis=0),
                         self.HRU.var.topwater,
                     ],
-                    tollerance=1e-6,
+                    tolerance=1e-6,
                     error_identifiers={
                         "land_use_type": self.HRU.var.land_use_type,
                     },

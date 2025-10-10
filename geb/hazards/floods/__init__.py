@@ -16,8 +16,9 @@ import zarr
 from shapely.geometry import shape
 from shapely.geometry.point import Point
 
-from ...hydrology.HRUs import load_geom
-from ...hydrology.landcover import OPEN_WATER, SEALED
+from geb.workflows.io import load_geom
+
+from ...hydrology.landcovers import OPEN_WATER, SEALED
 from ...workflows.io import open_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .sfincs import (

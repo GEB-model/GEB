@@ -142,7 +142,7 @@ def distribute_well_rate_per_layer(
 
         assert remaining_well_rate > -1e-10, (
             "Well rate could not be distributed, layers are too dry"
-        )  # leaving some tollerance for numerical errors
+        )  # leaving some tolerance for numerical errors
 
     assert np.allclose(well_rate_per_layer.sum(axis=0), well_rate)
     return well_rate_per_layer

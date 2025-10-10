@@ -23,12 +23,11 @@ from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
 from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
-from geb.workflows.io import open_zarr
+from geb.workflows.io import load_geom, open_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
 from .hydrology import Hydrology
-from .hydrology.HRUs import load_geom
 
 
 class GEBModel(Module, HazardDriver, ABM_Model):

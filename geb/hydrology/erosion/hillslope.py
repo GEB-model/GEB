@@ -339,8 +339,10 @@ class HillSlopeErosion(Module):
         if not self.simulate:
             return None
 
-        pr_mm_day = self.HRU.pr * (24 * 3600)  # # kg/m2/s to m/day
-        effective_rainfall_mm_day = pr_mm_day * np.cos(self.HRU.var.slope)
+        pr_mm_day = self.HRU.pr_kg_per_m2_per_s.mean() * (24 * 3600)  # kg/m2/s to m/day
+        effective_rainfall_mm_day = pr_mm_day * np.cos(
+            self.HRU.var.slope
+        )  # TODO: CHECK UNIT
 
         leaf_drainage = effective_rainfall_mm_day * self.HRU.var.canopy_cover
 

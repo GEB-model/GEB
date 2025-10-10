@@ -13,16 +13,19 @@ from types import TracebackType
 from typing import Any
 
 import cftime
+import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyproj
 import rasterio
 import requests
+import s3fs
 import xarray as xr
 import zarr
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
+from rasterio.transform import Affine
 from tqdm import tqdm
 from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
@@ -61,6 +64,74 @@ def load_array(fp: Path) -> np.ndarray:
         return zarr.load(fp)
     else:
         raise ValueError(f"Unsupported file format: {fp.suffix}")
+
+
+def load_grid(
+    filepath: str | Path, layer: int = 1, return_transform_and_crs: bool = False
+) -> np.ndarray | tuple[np.ndarray, Affine, str]:
+    """Load a raster grid from a .tif or .zarr file.
+
+    Args:
+        filepath: The path to the .tif or .zarr file.
+        layer: The layer to load from the .tif file. Default is 1.
+        return_transform_and_crs: Whether to return the affine transform and CRS along with the data. Default is False.
+
+    Returns:
+        The raster data as a numpy array, or a tuple of the raster data, affine transform, and CRS string if return_transform_and_crs is True.
+
+    Raises:
+        ValueError: If the file format is not supported.
+    """
+    if filepath.suffix == ".tif":
+        warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
+        with rasterio.open(filepath) as src:
+            data: np.ndarray = src.read(layer)
+            data: np.ndarray = (
+                data.astype(np.float32) if data.dtype == np.float64 else data
+            )
+            if return_transform_and_crs:
+                return data, src.transform, src.crs
+            else:
+                return data
+    elif filepath.suffix == ".zarr":
+        store: zarr.storage._local.LocalStore = zarr.storage.LocalStore(
+            filepath, read_only=True
+        )
+        group: zarr.core.group.Group = zarr.open_group(store, mode="r")
+        data: np.ndarray = group[filepath.stem][:]
+        data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
+        if return_transform_and_crs:
+            x: np.ndarray = group["x"][:]
+            y: np.ndarray = group["y"][:]
+            x_diff: float = np.diff(x[:]).mean().item()
+            y_diff: float = np.diff(y[:]).mean().item()
+            transform: Affine = Affine(
+                a=x_diff,
+                b=0,
+                c=x[0] - x_diff / 2,
+                d=0,
+                e=y_diff,
+                f=y[0] - y_diff / 2,
+            )
+            wkt: str = group[filepath.stem].attrs["_CRS"]["wkt"]
+            return data, transform, wkt
+        else:
+            return data
+    else:
+        raise ValueError("File format not supported.")
+
+
+def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
+    """Load a geometry for the GEB model from disk.
+
+    Args:
+        filepath: Path to the geometry file.
+
+    Returns:
+        A GeoDataFrame containing the geometries.
+
+    """
+    return gpd.read_parquet(filepath)
 
 
 def calculate_scaling(
@@ -286,7 +357,7 @@ def to_zarr(
         x_chunksize: The chunk size for the x dimension. Default is 350.
         y_chunksize: The chunk size for the y dimension. Default is 350.
         time_chunksize: The chunk size for the time dimension. Default is 1.
-        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to Non
+        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
             to disable sharding.
         byteshuffle: Whether to use byteshuffle compression. Default is True.
         filters: A list of filters to apply. Default is [].
@@ -589,16 +660,17 @@ class AsyncGriddedForcingReader:
         self.loop = asyncio.new_event_loop()
         self.executor = ThreadPoolExecutor(max_workers=1)
 
-    def load(self, index: int) -> npt.NDArray[Any]:
+    def load(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
         """Load the data for the given index from the zarr file.
 
         Args:
-            index: The index of the timestep to load in the zarr file, along the time dimension.
+            start_index: The start index of the timestep to load in the zarr file, along the time dimension.
+            end_index: The final index of the timestep to load in the zarr file, along the time dimension.
 
         Returns:
             The data for the given index from the zarr file.
         """
-        data = self.var[index, :]
+        data: npt.NDArray[Any] = self.var[start_index:end_index, :]
         return data
 
     async def load_await(self, index: int) -> npt.NDArray[Any]:
@@ -683,12 +755,13 @@ class AsyncGriddedForcingReader:
             return indices.argmax()
 
     def read_timestep(
-        self, date: datetime.datetime, asynchronous: bool = False
+        self, date: datetime.datetime, n: int = 1, asynchronous: bool = False
     ) -> npt.NDArray[Any]:
         """Read the data for the given date from the zarr file.
 
         Args:
             date: The date of the timestep to read.
+            n: The number of timesteps to read. Defaults to 1.
             asynchronous: If True, the data is read asynchronously. Defaults to False.
 
         Note:
@@ -703,8 +776,9 @@ class AsyncGriddedForcingReader:
             data = self.loop.run_until_complete(fn)
             return data
         else:
-            index = self.get_index(date)
-            data = self.load(index)
+            start_index = self.get_index(date)
+            end_index = start_index + n
+            data = self.load(start_index, end_index)
             return data
 
     def close(self) -> None:
@@ -716,6 +790,24 @@ class AsyncGriddedForcingReader:
         self.executor.shutdown(wait=False)
 
         self.loop.call_soon_threadsafe(self.loop.stop)
+
+    @property
+    def x(self) -> npt.NDArray[Any]:
+        """Get the x coordinates of the variable.
+
+        Returns:
+            The x coordinates of the variable.
+        """
+        return self.ds["x"][:]
+
+    @property
+    def y(self) -> npt.NDArray[Any]:
+        """Get the y coordinates of the variable.
+
+        Returns:
+            The y coordinates of the variable.
+        """
+        return self.ds["y"][:]
 
 
 class WorkingDirectory:
@@ -808,49 +900,90 @@ def fetch_and_save(
     if not overwrite and file_path.exists():
         return True
 
-    attempts = 0
-    temp_file = None
+    if url.startswith("s3://"):
+        # Fetch from S3 without authentication
+        fs = s3fs.S3FileSystem(anon=True)
+        attempts = 0
+        temp_file = None
 
-    while attempts < max_retries:
-        try:
-            print(f"Downloading {url} to {file_path}")
-            # Attempt to make the request
-            response = session.get(url, stream=True, params=params, timeout=timeout)
-            response.raise_for_status()  # Raises HTTPError for bad status codes
+        while attempts < max_retries:
+            try:
+                print(f"Downloading {url} to {file_path}")
+                # Create a temporary file
+                temp_file = tempfile.NamedTemporaryFile(delete=False)
+                temp_file.close()
 
-            # Create a temporary file
-            temp_file = tempfile.NamedTemporaryFile(delete=False)
+                # Download from S3
+                fs.get(url, temp_file.name)
 
-            # Write to the temporary file
-            total_size = int(response.headers.get("content-length", 0))
-            progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-            for data in response.iter_content(chunk_size=chunk_size):
-                temp_file.write(data)
-                progress_bar.update(len(data))
-            progress_bar.close()
+                # Move the temporary file to the destination
+                shutil.move(temp_file.name, file_path)
+                return True
 
-            # Close the temporary file
-            temp_file.close()
+            except Exception as e:
+                # Log the error
+                print(
+                    f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
+                )
 
-            # Move the temporary file to the destination
-            shutil.move(temp_file.name, file_path)
+                # Remove the temporary file if it exists
+                if temp_file is not None and os.path.exists(temp_file.name):
+                    os.remove(temp_file.name)
 
-            return True  # Exit the function after successful write
+                # Increment the attempt counter and wait before retrying
+                attempts += 1
+                if attempts < max_retries:
+                    time.sleep(delay)
 
-        except requests.RequestException as e:
-            # Log the error
-            print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+        # If all attempts fail, raise an exception
+        raise RuntimeError(
+            f"Failed to download '{url}' from S3 to '{file_path}' after {max_retries} attempts."
+        )
 
-            # Remove the temporary file if it exists
-            if temp_file is not None and os.path.exists(temp_file.name):
-                os.remove(temp_file.name)
+    elif url.startswith("http://") or url.startswith("https://"):
+        attempts = 0
+        temp_file = None
 
-            # Increment the attempt counter and wait before retrying
-            attempts += 1
-            time.sleep(delay)
+        while attempts < max_retries:
+            try:
+                print(f"Downloading {url} to {file_path}")
+                # Attempt to make the request
+                response = session.get(url, stream=True, params=params, timeout=timeout)
+                response.raise_for_status()  # Raises HTTPError for bad status codes
 
-    # If all attempts fail, raise an exception
-    raise RuntimeError(
-        f"Failed to download '{url}' to '{file_path}' after {max_retries} attempts. "
-        "Please check the URL, network connectivity, and destination permissions."
-    )
+                # Create a temporary file
+                temp_file = tempfile.NamedTemporaryFile(delete=False)
+
+                # Write to the temporary file
+                total_size = int(response.headers.get("content-length", 0))
+                progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
+                for data in response.iter_content(chunk_size=chunk_size):
+                    temp_file.write(data)
+                    progress_bar.update(len(data))
+                progress_bar.close()
+
+                # Close the temporary file
+                temp_file.close()
+
+                # Move the temporary file to the destination
+                shutil.move(temp_file.name, file_path)
+
+                return True  # Exit the function after successful write
+
+            except requests.RequestException as e:
+                # Log the error
+                print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+
+                # Remove the temporary file if it exists
+                if temp_file is not None and os.path.exists(temp_file.name):
+                    os.remove(temp_file.name)
+
+                # Increment the attempt counter and wait before retrying
+                attempts += 1
+                time.sleep(delay)
+
+        # If all attempts fail, raise an exception
+        raise RuntimeError(
+            f"Failed to download '{url}' to '{file_path}' after {max_retries} attempts. "
+            "Please check the URL, network connectivity, and destination permissions."
+        )

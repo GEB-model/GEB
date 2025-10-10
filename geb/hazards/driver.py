@@ -85,12 +85,11 @@ class HazardDriver:
                     and self.current_timestep == self.n_timesteps - 1
                 ):
                     event = copy.deepcopy(event)
-                    if isinstance(self.model.forcing["pr_hourly"], list):
-                        final_forcing_dataset = self.model.forcing["pr_hourly"][-1]
-                    else:
-                        final_forcing_dataset = self.model.forcing["pr_hourly"]
-                    end_of_forcing_date: datetime = pd.to_datetime(
-                        final_forcing_dataset.time[-1].item()
+
+                    end_of_forcing_date = pd.to_datetime(
+                        self.model.forcing["pr_kg_per_m2_per_s"].reader.datetime_index[
+                            -1
+                        ]
                     ).to_pydatetime()
                     if event["end_time"] > end_of_forcing_date:
                         print(
