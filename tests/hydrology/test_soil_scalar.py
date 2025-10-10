@@ -11,7 +11,8 @@ from geb.hydrology.landcover import (
 from geb.hydrology.soil_scalar import (
     add_water_to_topwater_and_evaporate_open_water,
     get_infiltration_capacity,
-    infiltration_scalar,
+    get_soil_water_flow_parameters,
+    infiltration,
     rise_from_groundwater,
 )
 
@@ -159,7 +160,7 @@ def test_rise_from_groundwater() -> None:
     runoff = rise_from_groundwater(w, ws, capillary_rise)
 
     # All water should go to runoff
-    assert runoff == capillary_rise
+    assert abs(runoff - capillary_rise) < 1e-6
     # Soil water unchanged
     assert np.allclose(w, w_pre)
 
@@ -187,7 +188,7 @@ def test_get_infiltration_capacity() -> None:
     # Very small conductivity
     k_sat = np.float32(1e-6)
     capacity = get_infiltration_capacity(k_sat)
-    assert capacity == 1e-6
+    assert abs(capacity - 1e-6) < 1e-9
 
     # Very large conductivity
     k_sat = np.float32(1e6)
@@ -208,8 +209,15 @@ def test_infiltration() -> None:
     w_pre = w.copy()
     topwater_pre = topwater
 
-    direct_runoff, groundwater_recharge, infiltration_amount = infiltration_scalar(
-        ws, saturated_hydraulic_conductivity, land_use_type, frost_index, w, topwater
+    updated_topwater, direct_runoff, groundwater_recharge, infiltration_amount = (
+        infiltration(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            frost_index,
+            w,
+            topwater,
+        )
     )
 
     # Check that some water was infiltrated
@@ -227,8 +235,15 @@ def test_infiltration() -> None:
     topwater = np.float32(0.005)
     frost_index = np.float32(100.0)  # Above threshold
 
-    direct_runoff, groundwater_recharge, infiltration_amount = infiltration_scalar(
-        ws, saturated_hydraulic_conductivity, land_use_type, frost_index, w, topwater
+    updated_topwater, direct_runoff, groundwater_recharge, infiltration_amount = (
+        infiltration(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            frost_index,
+            w,
+            topwater,
+        )
     )
 
     # No infiltration on frozen soil
@@ -243,8 +258,15 @@ def test_infiltration() -> None:
     frost_index = np.float32(0.0)
     land_use_type = np.int32(SEALED)
 
-    direct_runoff, groundwater_recharge, infiltration_amount = infiltration_scalar(
-        ws, saturated_hydraulic_conductivity, land_use_type, frost_index, w, topwater
+    updated_topwater, direct_runoff, groundwater_recharge, infiltration_amount = (
+        infiltration(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            frost_index,
+            w,
+            topwater,
+        )
     )
 
     # No infiltration on sealed areas
@@ -259,8 +281,15 @@ def test_infiltration() -> None:
     frost_index = np.float32(0.0)
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
 
-    direct_runoff, groundwater_recharge, infiltration_amount = infiltration_scalar(
-        ws, saturated_hydraulic_conductivity, land_use_type, frost_index, w, topwater
+    updated_topwater, direct_runoff, groundwater_recharge, infiltration_amount = (
+        infiltration(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            frost_index,
+            w,
+            topwater,
+        )
     )
 
     # No infiltration possible
@@ -276,8 +305,15 @@ def test_infiltration() -> None:
     frost_index = np.float32(0.0)
     land_use_type = np.int32(OPEN_WATER)
 
-    direct_runoff, groundwater_recharge, infiltration_amount = infiltration_scalar(
-        ws, saturated_hydraulic_conductivity, land_use_type, frost_index, w, topwater
+    updated_topwater, direct_runoff, groundwater_recharge, infiltration_amount = (
+        infiltration(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            frost_index,
+            w,
+            topwater,
+        )
     )
 
     # No infiltration on open water
@@ -292,8 +328,15 @@ def test_infiltration() -> None:
     frost_index = np.float32(0.0)
     land_use_type = np.int32(PADDY_IRRIGATED)
 
-    direct_runoff, groundwater_recharge, infiltration_amount = infiltration_scalar(
-        ws, saturated_hydraulic_conductivity, land_use_type, frost_index, w, topwater
+    updated_topwater, direct_runoff, groundwater_recharge, infiltration_amount = (
+        infiltration(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            frost_index,
+            w,
+            topwater,
+        )
     )
 
     # Should infiltrate up to capacity, then pond up to 0.05m before runoff
@@ -309,8 +352,15 @@ def test_infiltration() -> None:
     frost_index = np.float32(85.0)  # Exactly at threshold
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
 
-    direct_runoff, groundwater_recharge, infiltration_amount = infiltration_scalar(
-        ws, saturated_hydraulic_conductivity, land_use_type, frost_index, w, topwater
+    updated_topwater, direct_runoff, groundwater_recharge, infiltration_amount = (
+        infiltration(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            frost_index,
+            w,
+            topwater,
+        )
     )
 
     # Should still infiltrate (frost_index > threshold means frozen)
@@ -328,8 +378,15 @@ def test_infiltration() -> None:
     land_use_type = np.int32(NON_PADDY_IRRIGATED)
 
     w_pre = w.copy()
-    direct_runoff, groundwater_recharge, infiltration_amount = infiltration_scalar(
-        ws, saturated_hydraulic_conductivity, land_use_type, frost_index, w, topwater
+    updated_topwater, direct_runoff, groundwater_recharge, infiltration_amount = (
+        infiltration(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            frost_index,
+            w,
+            topwater,
+        )
     )
 
     # Should infiltrate into unsaturated layers
@@ -337,3 +394,106 @@ def test_infiltration() -> None:
     assert groundwater_recharge == 0.0
     # Check that unsaturated layers received water
     assert w[2] > w_pre[2] or w[3] > w_pre[3] or w[4] > w_pre[4] or w[5] > w_pre[5]
+
+
+def test_get_soil_water_flow_parameters() -> None:
+    """Test get_soil_water_flow_parameters function."""
+    # Test case 1: Saturated soil
+    w = np.float32(0.3)  # saturated
+    wres = np.float32(0.05)  # residual
+    ws = np.float32(0.3)  # saturated
+    lambda_ = np.float32(0.5)  # van Genuchten parameter
+    ksat = np.float32(0.01)  # saturated hydraulic conductivity
+    bubbling_pressure = np.float32(10.0)  # cm
+
+    psi, k_unsat = get_soil_water_flow_parameters(
+        w, wres, ws, lambda_, ksat, bubbling_pressure
+    )
+
+    # At saturation, psi should be close to 0 (no suction)
+    assert abs(psi) < 1e-3, f"Expected psi close to 0 at saturation, got {psi}"
+    # Unsaturated conductivity should equal saturated at saturation
+    assert abs(k_unsat - ksat) < 1e-6, (
+        f"Expected k_unsat={ksat} at saturation, got {k_unsat}"
+    )
+
+    # Test case 2: Residual soil water content
+    w = np.float32(0.05)  # at residual
+    psi, k_unsat = get_soil_water_flow_parameters(
+        w, wres, ws, lambda_, ksat, bubbling_pressure
+    )
+
+    # At residual, psi should be very negative (high suction)
+    assert psi < -1000, f"Expected high suction at residual, got {psi}"
+    # Unsaturated conductivity should be very low
+    assert k_unsat < ksat * 1e-6, (
+        f"Expected very low k_unsat at residual, got {k_unsat}"
+    )
+
+    # Test case 3: Field capacity (typical value)
+    w = np.float32(0.15)  # field capacity
+    psi, k_unsat = get_soil_water_flow_parameters(
+        w, wres, ws, lambda_, ksat, bubbling_pressure
+    )
+
+    # At field capacity, psi should be around -1 to -10 m
+    assert -10 < psi < -0.1, f"Expected moderate suction at field capacity, got {psi}"
+    # Unsaturated conductivity should be reduced but not extremely low
+    assert k_unsat < ksat, f"Expected k_unsat < ksat at field capacity, got {k_unsat}"
+    assert k_unsat > ksat * 1e-4, (
+        f"Expected reasonable k_unsat at field capacity, got {k_unsat}"
+    )
+
+    # Test case 4: Boundary conditions - w exactly at wres
+    w = np.float32(0.05)  # exactly residual
+    psi, k_unsat = get_soil_water_flow_parameters(
+        w, wres, ws, lambda_, ksat, bubbling_pressure
+    )
+
+    assert psi < 0, "Psi should be negative (suction)"
+    assert k_unsat >= 0, "Unsaturated conductivity should be non-negative"
+
+    # Test case 5: Boundary conditions - w exactly at ws
+    w = np.float32(0.3)  # exactly saturated
+    psi, k_unsat = get_soil_water_flow_parameters(
+        w, wres, ws, lambda_, ksat, bubbling_pressure
+    )
+
+    assert psi >= -1e-3, "Psi should be close to 0 at saturation"
+    assert k_unsat <= ksat, "Unsaturated conductivity should not exceed saturated"
+
+    # Test case 6: Different van Genuchten parameters
+    lambda_values = [0.2, 0.8, 1.5]
+    for lambda_val in lambda_values:
+        w = np.float32(0.15)
+        psi, k_unsat = get_soil_water_flow_parameters(
+            w, wres, ws, np.float32(lambda_val), ksat, bubbling_pressure
+        )
+        assert psi < 0, f"Psi should be negative for lambda={lambda_val}"
+        assert 0 <= k_unsat <= ksat, (
+            f"k_unsat should be between 0 and ksat for lambda={lambda_val}"
+        )
+
+    # Test case 7: Different bubbling pressures
+    bubbling_pressures = [5.0, 20.0, 50.0]  # cm
+    for bp in bubbling_pressures:
+        w = np.float32(0.15)
+        psi, k_unsat = get_soil_water_flow_parameters(
+            w, wres, ws, lambda_, ksat, np.float32(bp)
+        )
+        assert psi < 0, f"Psi should be negative for bubbling_pressure={bp}"
+        assert 0 <= k_unsat <= ksat, (
+            f"k_unsat should be between 0 and ksat for bubbling_pressure={bp}"
+        )
+
+    # Test case 8: Very dry soil (effective saturation approaches 0)
+    w = np.float32(0.0501)  # just above residual
+    psi, k_unsat = get_soil_water_flow_parameters(
+        w, wres, ws, lambda_, ksat, bubbling_pressure
+    )
+
+    # Should have high suction and very low conductivity
+    assert psi < -100, f"Expected high suction for very dry soil, got {psi}"
+    assert k_unsat < ksat * 1e-5, (
+        f"Expected very low conductivity for very dry soil, got {k_unsat}"
+    )

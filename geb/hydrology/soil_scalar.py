@@ -100,7 +100,7 @@ def rise_from_groundwater(
 
 @njit(cache=True, inline="always")
 def get_infiltration_capacity(
-    saturated_hydraulic_conductivity_cell: npt.NDArray[np.float32],
+    saturated_hydraulic_conductivity_cell: np.float32,
 ) -> np.float32:
     """Calculate the infiltration capacity for a single cell.
 
@@ -182,3 +182,126 @@ def infiltration(
     )
     topwater_m -= direct_runoff
     return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
+
+
+@njit(cache=True, inline="always")
+def get_soil_water_flow_parameters(
+    w: np.float32,
+    wres: np.float32,
+    ws: np.float32,
+    lambda_pore_size_distribution: np.float32,
+    saturated_hydraulic_conductivity: np.float32,
+    bubbling_pressure_cm: np.float32,
+) -> tuple[np.float32, np.float32]:
+    """Calculate the soil water potential and unsaturated hydraulic conductivity for a single soil layer.
+
+    Notes:
+        - psi is cutoff at MAX_SUCTION_METERS because the van Genuchten model predicts infinite suction
+        for very dry soils.
+
+    Args:
+        w: Soil water content in the layer in meters.
+        wres: Residual soil water content in the layer in meters.
+        ws: Saturated soil water content in the layer in meters.
+        lambda_pore_size_distribution: Van Genuchten parameter lambda for the layer.
+        saturated_hydraulic_conductivity: Saturated hydraulic conductivity for the layer in m/timestep
+        bubbling_pressure_cm: Bubbling pressure for the layer in cm.
+
+    Returns:
+        A tuple containing:
+            - psi: Soil water potential in the layer in meters (negative value for suction).
+            - unsaturated_hydraulic_conductivity: Unsaturated hydraulic conductivity in the layer in m/timestep.
+
+    """
+    # oven-dried soil has a suction of 1 GPa, which is about 100000 m water column
+    max_suction_meters = np.float32(1_000_000_000 / 1_000 / 9.81)
+
+    # Compute effective saturation
+    effective_saturation = (w - wres) / (ws - wres)
+    effective_saturation = np.maximum(effective_saturation, np.float32(1e-9))
+    effective_saturation = np.minimum(effective_saturation, np.float32(1))
+
+    # Compute parameters n and m
+    n = lambda_pore_size_distribution + np.float32(1)
+    m = np.float32(1) - np.float32(1) / n
+
+    # Compute unsaturated hydraulic conductivity
+    term1 = saturated_hydraulic_conductivity * np.sqrt(effective_saturation)
+    term2 = (
+        np.float32(1)
+        - np.power(
+            (np.float32(1) - np.power(effective_saturation, (np.float32(1) / m))),
+            m,
+        )
+    ) ** 2
+
+    unsaturated_hydraulic_conductivity = term1 * term2
+
+    alpha = np.float32(1) / (bubbling_pressure_cm / 100)  # convert cm to m
+
+    # Compute capillary pressure head (phi)
+    phi_power_term = np.power(effective_saturation, (-np.float32(1) / m))
+    phi = (
+        np.power(phi_power_term - np.float32(1), (np.float32(1) / n)) / alpha
+    )  # Positive value
+    phi = np.minimum(phi, max_suction_meters)  # Limit to maximum suction
+
+    # Soil water potential (negative value for suction)
+    psi = -phi
+
+    return psi, unsaturated_hydraulic_conductivity
+
+
+@njit(cache=True, inline="always")
+def get_mean_unsaturated_hydraulic_conductivity(
+    unsaturated_hydraulic_conductivity_1: np.float32,
+    unsaturated_hydraulic_conductivity_2: np.float32,
+) -> np.float32:
+    """Calculate the mean unsaturated hydraulic conductivity between two soil layers using the geometric mean.
+
+    Args:
+        unsaturated_hydraulic_conductivity_1: Unsaturated hydraulic conductivity of the first soil layer.
+        unsaturated_hydraulic_conductivity_2: Unsaturated hydraulic conductivity of the second soil layer.
+
+    Returns:
+        The mean unsaturated hydraulic conductivity between the two soil layers.
+    """
+    # harmonic mean
+    # mean_unsaturated_hydraulic_conductivity = (
+    #     2
+    #     * unsaturated_hydraulic_conductivity_1
+    #     * unsaturated_hydraulic_conductivity_2
+    #     / (unsaturated_hydraulic_conductivity_1 + unsaturated_hydraulic_conductivity_2)
+    # )
+    # geometric mean
+    mean_unsaturated_hydraulic_conductivity = np.sqrt(
+        unsaturated_hydraulic_conductivity_1 * unsaturated_hydraulic_conductivity_2
+    )
+    # ensure that there is some minimum flow is possible
+    mean_unsaturated_hydraulic_conductivity = max(
+        mean_unsaturated_hydraulic_conductivity, np.float32(1e-9)
+    )
+    return mean_unsaturated_hydraulic_conductivity
+
+
+@njit(cache=True, inline="always")
+def get_flux(
+    mean_unsaturated_hydraulic_conductivity: np.float32,
+    psi_lower: np.float32,
+    psi_upper: np.float32,
+    delta_z: np.float32,
+) -> np.float32:
+    """Calculate the flux between two soil layers using Darcy's law.
+
+    Args:
+        mean_unsaturated_hydraulic_conductivity: Mean unsaturated hydraulic conductivity between the two soil layers.
+        psi_lower: Soil water potential of the lower soil layer.
+        psi_upper: Soil water potential of the upper soil layer.
+        delta_z: Distance between the two soil layers.
+
+    Returns:
+        The flux between the two soil layers.
+    """
+    return -mean_unsaturated_hydraulic_conductivity * (
+        (psi_lower - psi_upper) / delta_z - np.float32(1)
+    )
