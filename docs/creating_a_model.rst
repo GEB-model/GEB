@@ -15,7 +15,7 @@ This will copy the default model configuration files from the examples folder in
 
 .. code-block:: python
 
-    geb init --subbasin-id 23011134
+    geb init --basin-id 23011134
 
 For more options, you can call the command with the `--help` flag:
 
@@ -102,6 +102,8 @@ Some of the data that is obtained from online sources and APIs requires keys. Yo
     MERIT_PASSWORD=<your_password>
 
 2. To set up the model with ERA5-Land forcing data using the build-method `setup_forcing_era5`, create an account on `Destination Earth <https://earthdatahub.destine.eu/>`_ and copy your personal access token to a .netrc file, located in your home directory. You can find the personal access token `here <https://earthdatahub.destine.eu/account-settings>`_.
+
+3. To use forecasts in GEB, unflag the build-method "setup_forecasts" in the build.yml file. This will trigger the downloading and processing of ECMWF ensemble forecasts from the ECMWF archive. To access ECMWF forecasts, request access to the `ECMWF MARS archive <https://confluence.ecmwf.int/display/WEBAPI/Access+MARS>`_. Afterwards, find your `API key <https://api.ecmwf.int/v1/key/>`_ and add the content to the ".env"-file in the GEB repository.
 
 Building to model
 -------------------

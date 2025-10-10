@@ -69,6 +69,7 @@ dependencies = [
     "kaleido>=1.0.0",
     "h5netcdf>=1.6.4",
     "ty>=0.0.1a20",
+    "ecmwf-api-client>=1.6.5",
 ]
 requires-python = ">=3.12, <3.14"
 readme = "README.md"
