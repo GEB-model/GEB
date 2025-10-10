@@ -1199,15 +1199,15 @@ def init_multiple_fn(
     update_config: str | Path,
     working_directory: str | Path,
     from_example: str,
-    geometry_bounds: str = "-10.0, 35.0, 20.0, 70.0",
-    target_area_km2: float = 817000.0,
-    area_tolerance: float = 0.3,
-    cluster_prefix: str = "cluster",
-    overwrite: bool = True,
-    data_catalog: str | Path = DATA_CATALOG_DEFAULT,
-    data_provider: str = DATA_PROVIDER_DEFAULT,
-    save_geoparquet: str | Path | None = None,
-    save_map: str | Path | None = None,
+    geometry_bounds: str,
+    target_area_km2: float,
+    area_tolerance: float,
+    cluster_prefix: str,
+    overwrite: bool,
+    data_catalog: str | Path,
+    data_provider: str,
+    save_geoparquet: str | Path | None,
+    save_map: str | Path | None,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -1239,6 +1239,7 @@ def init_multiple_fn(
         get_all_downstream_subbasins_in_geom,
         get_river_graph,
         save_clusters_to_geoparquet,
+        save_complete_basins_to_geoparquet,
     )
     from geb.build.data_catalog import NewDataCatalog
 
@@ -1255,9 +1256,9 @@ def init_multiple_fn(
 
     # Always create geoparquet and map files in models directory if not specified
     if save_geoparquet is None:
-        save_geoparquet = models_dir / "clusters.geoparquet"
+        save_geoparquet = models_dir / f"{cluster_prefix}_clusters.geoparquet"
     if save_map is None:
-        save_map = models_dir / "clusters_map.png"
+        save_map = models_dir / f"{cluster_prefix}_clusters_map.png"
 
     # Parse geometry bounds
     try:
@@ -1278,31 +1279,38 @@ def init_multiple_fn(
         geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
     )
 
-    # Initialize data catalog
+    # Initialize data catalog and logger
     data_catalog_instance = NewDataCatalog()
+    logger = create_logger(working_directory / "init_multiple.log")
 
-    print("Loading river network...")
+    logger.info("Starting multiple model initialization")
+    logger.info(f"Using geometry bounds: {geometry_bounds}")
+    logger.info(f"Target area: {target_area_km2:,.0f} km²")
+    logger.info(f"Area tolerance: {area_tolerance:.1%}")
+
+    logger.info("Loading river network...")
     river_graph = get_river_graph(data_catalog_instance)
 
-    print("Finding downstream subbasins in geometry...")
+    logger.info("Finding downstream subbasins in geometry...")
     downstream_subbasins = get_all_downstream_subbasins_in_geom(
-        data_catalog_instance, bbox_geom, river_graph
+        data_catalog_instance, bbox_geom, river_graph, logger
     )
 
     if not downstream_subbasins:
         raise ValueError("No downstream subbasins found in the specified geometry")
 
-    print(f"Found {len(downstream_subbasins)} downstream subbasins")
+    logger.info(f"Found {len(downstream_subbasins)} downstream subbasins")
 
-    print("Clustering subbasins by area and proximity...")
+    logger.info("Clustering subbasins by area and proximity...")
     clusters = cluster_subbasins_by_area_and_proximity(
         data_catalog_instance,
         downstream_subbasins,
         target_area_km2=target_area_km2,
         area_tolerance=area_tolerance,
+        logger=logger,
     )
 
-    print(f"Created {len(clusters)} clusters")
+    logger.info(f"Created {len(clusters)} clusters")
 
     # Check for existing directories if not overwriting
     if not overwrite:
@@ -1322,6 +1330,7 @@ def init_multiple_fn(
             f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
         )
 
+    logger.info(f"Creating cluster configurations using example: {from_example}")
     # Create cluster configurations
     cluster_directories = create_multi_basin_configs(
         clusters=clusters,
@@ -1332,6 +1341,7 @@ def init_multiple_fn(
         cluster_prefix=cluster_prefix,
     )
 
+    logger.info(f"Saving clusters to geoparquet: {save_geoparquet}")
     # Save clusters to geoparquet (always create)
     save_clusters_to_geoparquet(
         clusters=clusters,
@@ -1340,6 +1350,20 @@ def init_multiple_fn(
         cluster_prefix=cluster_prefix,
     )
 
+    # Save complete basin areas (including all upstream subbasins)
+    complete_basins_path = (
+        save_geoparquet.parent / f"complete_basins_{save_geoparquet.stem}.geoparquet"
+    )
+    logger.info(f"Saving complete basin areas to geoparquet: {complete_basins_path}")
+    save_complete_basins_to_geoparquet(
+        clusters=clusters,
+        data_catalog=data_catalog_instance,
+        river_graph=river_graph,
+        output_path=complete_basins_path,
+        cluster_prefix=cluster_prefix,
+    )
+
+    logger.info(f"Creating visualization map: {save_map}")
     # Create visualization map (always create)
     create_cluster_visualization_map(
         clusters=clusters,
@@ -1348,16 +1372,20 @@ def init_multiple_fn(
         cluster_prefix=cluster_prefix,
     )
 
-    print(f"\nSuccessfully created {len(cluster_directories)} model configurations:")
+    logger.info(
+        f"Successfully created {len(cluster_directories)} model configurations:"
+    )
     for cluster_dir in cluster_directories:
-        print(f"  {cluster_dir.relative_to(large_scale_dir)}")
+        logger.info(f"  {cluster_dir.relative_to(large_scale_dir)}")
 
-    print(f"\nTo build all models, run:")
-    print(f"  cd {large_scale_dir}")
-    print(f"  for dir in {cluster_prefix}_*/; do")
-    print(f"    echo 'Building model in $dir'")
-    print(f"    cd $dir && geb build && cd ..")
-    print(f"  done")
+    logger.info("To build all models, run:")
+    logger.info(f"  cd {large_scale_dir}")
+    logger.info(f"  for dir in {cluster_prefix}_*/; do")
+    logger.info(f"    echo 'Building model in $dir'")
+    logger.info(f"    cd $dir && geb build && cd ..")
+    logger.info(f"  done")
+
+    logger.info("Multiple model initialization completed successfully")
 
 
 @cli.command()
@@ -1381,14 +1409,14 @@ def init_multiple_fn(
 )
 @click.option(
     "--geometry-bounds",
-    default="-10.0, 35.0, 20.0, 70.0",  # Western Europe
+    default="-180.0,-90.0,180.0,90.0",  # World: "-180.0,-90.0,180.0,90.0" Western Europe: "-10.0,35.0,20.0,70.0" Europe: "-10.0,35.0,40.0,70.0"
     required=True,
     type=str,
     help="Bounding box as 'xmin,ymin,xmax,ymax' to select subbasins (e.g., '5.0,50.0,15.0,55.0' for parts of Europe). Defaults to Western Europe coverage.",
 )
 @click.option(
     "--target-area-km2",
-    default=817000.0,
+    default=34000.0,
     type=float,
     help="Target cumulative upstream area per cluster in km2. Defaults to Danube basin area (~817,000 km2).",
 )
