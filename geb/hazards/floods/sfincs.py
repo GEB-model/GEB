@@ -847,11 +847,16 @@ class SFINCSSimulation:
             precip=(precipitation_grid * 3600).to_dataset(name="precip")
         )  # convert from kg/m2/s to mm/h
 
-        self._setup_infiltration_capacity(
-            max_water_storage=max_water_storage_grid,
-            current_water_storage=current_water_storage_grid,
-            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_grid,
+        # self._setup_infiltration_capacity(
+        #     max_water_storage=max_water_storage_grid,
+        #     current_water_storage=current_water_storage_grid,
+        #     saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_grid,
+        # )
+        # warning
+        logging.warning(
+            "Infiltration capacity setup is currently disabled due to an issue."
         )
+
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
 
