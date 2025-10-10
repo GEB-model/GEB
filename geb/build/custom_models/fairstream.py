@@ -706,7 +706,7 @@ class fairSTREAMModel(GEBModel):
         # Set all farmers within cells with rivers to canal irrigation
 
         def get_rivers(da, axis, **kwargs: Any):
-            from geb.hydrology.landcover import OPEN_WATER
+            from geb.hydrology.landcovers import OPEN_WATER
 
             return np.any(da == OPEN_WATER, axis=axis)
 

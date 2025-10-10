@@ -10,7 +10,7 @@ from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import load_grid
 
-from .landcover import (
+from .landcovers import (
     FOREST,
     GRASSLAND_LIKE,
     NON_PADDY_IRRIGATED,

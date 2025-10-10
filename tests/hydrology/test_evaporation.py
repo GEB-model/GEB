@@ -9,7 +9,7 @@ from geb.hydrology.evaporation import (
     get_potential_evapotranspiration,
     get_potential_transpiration,
 )
-from geb.hydrology.landcover import (
+from geb.hydrology.landcovers import (
     FOREST,
     GRASSLAND_LIKE,
     NON_PADDY_IRRIGATED,

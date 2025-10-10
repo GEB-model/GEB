@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from geb.hydrology.landcover import (
+from geb.hydrology.landcovers import (
     NON_PADDY_IRRIGATED,
     OPEN_WATER,
     PADDY_IRRIGATED,

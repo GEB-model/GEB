@@ -2,7 +2,7 @@ import calendar
 
 import numpy as np
 
-from ..hydrology.landcover import SEALED
+from ..hydrology.landcovers import SEALED
 from .general import AgentBaseClass, downscale_volume
 
 

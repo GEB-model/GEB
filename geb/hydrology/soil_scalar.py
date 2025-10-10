@@ -2,7 +2,7 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
-from .landcover import OPEN_WATER, PADDY_IRRIGATED, SEALED
+from .landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 
 # TODO: Load this dynamically as global var (see soil.py)
 N_SOIL_LAYERS = 6

@@ -27,7 +27,7 @@ from geb.cli import (
     share_fn,
     update_fn,
 )
-from geb.hydrology.landcover import FOREST, GRASSLAND_LIKE
+from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.model import GEBModel
 from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
 from geb.workflows.io import WorkingDirectory, open_zarr

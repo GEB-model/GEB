@@ -22,7 +22,7 @@ from ..data import (
     load_economic_data,
     load_regional_crop_data_from_dict,
 )
-from ..hydrology.landcover import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
+from ..hydrology.landcovers import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 from ..store import DynamicArray
 from ..workflows import balance_check
 from ..workflows.io import load_array

@@ -9,7 +9,7 @@ import numpy.typing as npt
 import pytest
 
 import geb.hydrology.soil
-from geb.hydrology.landcover import (
+from geb.hydrology.landcovers import (
     NON_PADDY_IRRIGATED,
     OPEN_WATER,
     PADDY_IRRIGATED,

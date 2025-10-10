@@ -28,7 +28,7 @@ from .soil_scalar import (
 )
 
 
-# @njit(parallel=True, cache=True)
+@njit(parallel=True, cache=True)
 def land_surface_model(
     land_use_type: npt.NDArray[np.int32],
     w: npt.NDArray[np.float32],  # TODO: Check if fortran order speeds up
@@ -433,7 +433,7 @@ class LandSurface(Module):
 
     def spinup(self) -> None:
         """Spinup function for the land surface module."""
-        self.HRU.var.topwater = self.HRU.full_compressed(0.0, dtype=np.float32)
+        self.HRU.var.topwater_m = self.HRU.full_compressed(0.0, dtype=np.float32)
 
         self.HRU.var.snow_water_equivalent_m = self.HRU.full_compressed(
             0.0, dtype=np.float32
@@ -495,7 +495,7 @@ class LandSurface(Module):
             snow_water_equivalent_prev = self.HRU.var.snow_water_equivalent_m.copy()
             liquid_water_in_snow_prev = self.HRU.var.liquid_water_in_snow_m.copy()
             interception_storage_prev = self.HRU.var.interception_storage_m.copy()
-            topwater_prev = self.HRU.var.topwater.copy()
+            topwater_m_prev = self.HRU.var.topwater_m.copy()
             w_prev = np.nansum(self.HRU.var.w, axis=0).copy()
 
         forest_crop_factor = self.hydrology.to_HRU(
@@ -587,7 +587,7 @@ class LandSurface(Module):
         (
             groundwater_abstraction_m3,
             channel_abstraction_m3,
-            return_flow,  # from all sources
+            return_flow_m,  # from all sources
             irrigation_loss_to_evaporation_m,
             total_water_demand_loss_m3,
             actual_irrigation_consumption_m,
@@ -600,17 +600,19 @@ class LandSurface(Module):
                 "Capillary rise is not implemented in the land surface model yet."
             )
 
-        self.HRU.var.frost_index = np.full_like(self.HRU.var.topwater, np.float32(0.0))
+        self.HRU.var.frost_index = np.full_like(
+            self.HRU.var.topwater_m, np.float32(0.0)
+        )
         print("warning: setting frost index to zero")
 
-        # TODO: pre-compute this
+        # TODO: pre-compute this once only
         delta_z = (
             self.HRU.var.soil_layer_height[:-1, :]
             + self.HRU.var.soil_layer_height[1:, :]
         ) / 2
 
         (
-            self.HRU.var.topwater,
+            self.HRU.var.topwater_m,
             reference_evapotranspiration_grass_m_dt,
             reference_evapotranspiration_water_m_dt,
             self.HRU.var.snow_water_equivalent_m,
@@ -629,7 +631,7 @@ class LandSurface(Module):
             ws=self.HRU.var.ws,
             delta_z=delta_z,
             land_use_type=self.HRU.var.land_use_type,
-            topwater_m=self.HRU.var.topwater,
+            topwater_m=self.HRU.var.topwater_m,
             snow_water_equivalent_m=self.HRU.var.snow_water_equivalent_m,
             liquid_water_in_snow_m=self.HRU.var.liquid_water_in_snow_m,
             snow_temperature_C=self.HRU.var.snow_temperature_C,
@@ -692,17 +694,29 @@ class LandSurface(Module):
                 snow_water_equivalent_prev,
                 liquid_water_in_snow_prev,
                 interception_storage_prev,
-                topwater_prev,
+                topwater_m_prev,
                 w_prev,
             ],
             poststorages=[
                 self.HRU.var.snow_water_equivalent_m,
                 self.HRU.var.liquid_water_in_snow_m,
                 self.HRU.var.interception_storage_m,
-                self.HRU.var.topwater,
+                self.HRU.var.topwater_m,
                 np.nansum(self.HRU.var.w, axis=0),
             ],
             tolerance=1e-6,
+        )
+
+        print("Setting transpiration to zero for now")
+        transpiration_m = self.HRU.full_compressed(0.0, dtype=np.float32)
+        bare_soil_evaporation_m = self.HRU.full_compressed(0.0, dtype=np.float32)
+
+        actual_evapotranspiration_m = (
+            interception_evaporation_m
+            + open_water_evaporation_m
+            + transpiration_m
+            + bare_soil_evaporation_m
+            + irrigation_loss_to_evaporation_m
         )
 
         self.HRU.var.reference_evapotranspiration_water_m_per_day = np.sum(
@@ -724,4 +738,15 @@ class LandSurface(Module):
         )
         self.report(locals())
 
-        return snow_melt_m, throughfall_m, sublimation_m
+        return (
+            interflow_m,
+            runoff_m,
+            groundwater_recharge_m,
+            groundwater_abstraction_m3,
+            channel_abstraction_m3,
+            return_flow_m,
+            capillar_rise_m,
+            total_water_demand_loss_m3,
+            actual_evapotranspiration_m,
+            sublimation_m,
+        )
