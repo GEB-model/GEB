@@ -158,8 +158,6 @@ class LandCover(Module):
             w_pre = self.HRU.var.w.copy()
             topwater_pre = self.HRU.var.topwater.copy()
 
-        timer.finish_split("Demand")
-
         # Soil for forest, grassland, and irrigated land
         capillar = self.hydrology.to_HRU(data=self.grid.var.capillar, fn=None)
 

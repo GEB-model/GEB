@@ -442,4 +442,5 @@ class WaterDemand(Module):
             return_flow,  # from all sources, re-added in routing
             irrigation_loss_to_evaporation_m,
             total_water_demand_loss_m3,
+            self.HRU.var.actual_irrigation_consumption,
         )
