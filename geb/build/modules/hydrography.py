@@ -690,14 +690,22 @@ class Hydrography:
         # split the lezc mask into individual polygons of contiguous areas
         lecz_polygons = lecz_mask.explode(index_parts=False).reset_index(drop=True)
 
+        # add area column
+        lecz_polygons["area"] = lecz_polygons.geometry.area
+
         # load the coastlines
         coastlines = self.geom["coastal/coastlines"]
         sfincs_regions = []
+        lecz_regions = []
         for _, lecz_polygon in lecz_polygons.iterrows():
             # check if the lecz polygon intersects with the coastline
-            if coastlines.intersects(lecz_polygon.geometry).any():
+            if (
+                coastlines.intersects(lecz_polygon.geometry).any()
+                and lecz_polygon["area"] > 0.0006449015308288645
+            ):
                 # if it does, create a sfincs region
                 # create a bounding box around the lecz polygon
+                lecz_polygon.geometry = lecz_polygon.geometry.buffer(0.00833333)
                 lecz_polygon_gpd = gpd.GeoDataFrame(
                     geometry=[lecz_polygon.geometry], crs=lecz_mask.crs
                 )
@@ -706,11 +714,18 @@ class Hydrography:
                 bbox = bbox.buffer(0.04, join_style=2)
 
                 sfincs_regions.append(bbox)
+                lecz_regions.append(lecz_polygon[0])
         bbox_gdf = gpd.GeoDataFrame(geometry=sfincs_regions, crs=lecz_mask.crs)
+        lecz_gdf = gpd.GeoDataFrame(geometry=lecz_regions, crs=lecz_mask.crs)
         # remove polygons that are completely inside another larger polygon
-        filtered_gdf = self.remove_contained_polygons(bbox_gdf).reset_index(drop=True)
+        # filtered_gdf = self.remove_contained_polygons(bbox_gdf).reset_index(drop=True)
 
-        self.set_geom(filtered_gdf, name="coastal/model_regions")
+        # add idx
+        bbox_gdf["idx"] = bbox_gdf.index
+        lecz_gdf["idx"] = lecz_gdf.index
+        lecz_gdf["area"] = lecz_gdf.geometry.area
+        self.set_geom(bbox_gdf, name="coastal/model_regions")
+        self.set_geom(lecz_gdf, name="coastal/lecz_regions")
 
     @build_method
     def setup_waterbodies(
