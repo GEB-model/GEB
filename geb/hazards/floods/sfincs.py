@@ -120,6 +120,7 @@ class SFINCSRootModel:
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
         coastal: bool = False,
+        include_mask: gpd.GeoDataFrame | None = None,
         bnd_exclude_mask: gpd.GeoDataFrame | None = None,
     ) -> "SFINCSRootModel":
         """Build a SFINCS model.
@@ -145,6 +146,7 @@ class SFINCSRootModel:
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
             coastal: Whether to set up the model for coastal flooding. Defaults to False.
+            include_mask: A GeoDataFrame defining areas to include as active cells. Required if coastal is True.
             bnd_exclude_mask: A GeoDataFrame defining areas to exclude from coastal boundary conditions. Required if coastal is True.
 
         Returns:
@@ -186,16 +188,17 @@ class SFINCSRootModel:
             do_mask_flood_plains(sf)
         elif coastal:
             sf.setup_mask_active(
-                zmin=0,  # minimum elevation for valid cells
-                zmax=20,  # maximum elevation for valid cells
-                # exclude_mask="osm_coastlines",
+                mask=include_mask,
+                zmin=-21,  # minimum elevation for valid cells
+                zmax=12,  # maximum elevation for valid cells (lecz is +10m, so no active cells in the mask should be above that)
+                # include_mask=include_mask,
                 drop_area=1,  # drops areas that are smaller than 1km2,
                 reset_mask=True,
             )
 
             sf.setup_mask_bounds(
                 btype="waterlevel",
-                zmax=10,
+                zmax=2,  # maximum elevation for valid boundary cells
                 exclude_mask=bnd_exclude_mask,
             )
 
@@ -223,7 +226,7 @@ class SFINCSRootModel:
         )
         # give error if outflow greater than 1
         if len(outflow_points) > 1:
-            raise ValueError(
+            print(
                 "More than one outflow point found, outflow boundary condition will fail to setup"
             )
         elif len(outflow_points) == 0:
@@ -747,6 +750,10 @@ class SFINCSSimulation:
                 The columns should match the index of the locations GeoDataFrame.
         """
         # assert np.array_equal(locations.index, np.arange(1, len(locations) + 1))
+
+        # select only locations that are in the model
+        station_ids_in_model = self.sfincs_model.forcing["bzs"].index.values
+        timeseries = timeseries.loc[:, timeseries.columns.isin(station_ids_in_model)]
 
         self.sfincs_model.setup_waterlevel_forcing(timeseries=timeseries)
 
