@@ -1105,10 +1105,10 @@ class Data:
         self.HRU.var.interception_storage = self.split_HRU_data(
             self.HRU.var.interception_storage, HRU
         )
-        self.HRU.var.potential_evapotranspiration_crop_life = self.split_HRU_data(
-            self.HRU.var.potential_evapotranspiration_crop_life, HRU
+        self.HRU.var.potential_transpiration_crop_life = self.split_HRU_data(
+            self.HRU.var.potential_transpiration_crop_life, HRU
         )
-        self.HRU.var.actual_evapotranspiration_crop_life = self.split_HRU_data(
-            self.HRU.var.actual_evapotranspiration_crop_life, HRU
+        self.HRU.var.transpiration_crop_life = self.split_HRU_data(
+            self.HRU.var.transpiration_crop_life, HRU
         )
         return HRU

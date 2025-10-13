@@ -84,7 +84,7 @@ def interception(
         evaporation: Evaporation from intercepted water in m.
     """
     # Calculate throughfall
-    throughfall = max(0.0, rainfall_m + storage_m - capacity_m)
+    throughfall = max(np.float32(0.0), rainfall_m + storage_m - capacity_m)
 
     # Update interception storage after throughfall
     new_storage = storage_m + rainfall_m - throughfall
@@ -92,12 +92,15 @@ def interception(
     # Calculate evaporation from intercepted water
     evaporation = min(
         new_storage,
-        potential_transpiration_m * (new_storage / capacity_m) ** (2.0 / 3.0)
-        if capacity_m > 0
-        else 0.0,
+        potential_transpiration_m * (new_storage / capacity_m) ** np.float32(2.0 / 3.0)
+        if capacity_m > np.float32(0.0)
+        else np.float32(0.0),
     )
 
     # Update interception storage after evaporation
     new_storage -= evaporation
 
-    return new_storage, throughfall, evaporation
+    potential_transpiration_m -= evaporation
+    potential_transpiration_m = max(np.float32(0.0), potential_transpiration_m)
+
+    return new_storage, throughfall, evaporation, potential_transpiration_m

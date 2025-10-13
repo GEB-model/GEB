@@ -42,10 +42,13 @@ class SmallLakesReservoirs(Module):
 
     @property
     def name(self) -> str:
+        """Name of the module."""
         return "hydrology.lakes_res_small"
 
     def spinup(self) -> None:
+        """Spinup method for the small lakes and reservoirs module."""
         pass
 
     def step(self) -> None:
+        """Step method for the small lakes and reservoirs module."""
         self.report(locals())

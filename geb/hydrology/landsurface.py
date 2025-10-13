@@ -86,6 +86,7 @@ def land_surface_model(
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
 ]:
     """The main land surface model of GEB.
 
@@ -139,6 +140,10 @@ def land_surface_model(
         - snow_temperature_C: Updated snow temperature in Celsius.
         - interception_storage_m: Updated interception storage in meters.
         - interception_evaporation_m: Evaporation from interception storage in meters.
+        - open_water_evaporation_m: Evaporation from open water in meters.
+        - bare_soil_evaporation: Evaporation from bare soil in meters.
+        - transpiration_m: Transpiration in meters.
+        - potential_transpiration_m: Potential transpiration in meters.
     """
     N_SOIL_LAYERS = 6
 
@@ -159,6 +164,7 @@ def land_surface_model(
     interception_evaporation_m = np.zeros_like(snow_water_equivalent_m)
     open_water_evaporation_m = np.zeros_like(snow_water_equivalent_m)
     bare_soil_evaporation = np.zeros_like(snow_water_equivalent_m)
+    potential_transpiration_m = np.zeros_like(snow_water_equivalent_m)
     transpiration_m = np.zeros_like(snow_water_equivalent_m)
     runoff = np.zeros_like(snow_water_equivalent_m)
     groundwater_recharge_m = np.zeros_like(snow_water_equivalent_m)
@@ -244,19 +250,22 @@ def land_surface_model(
                 CO2_induced_crop_factor_adustment=CO2_induced_crop_factor_adustment,
             )
 
-            potential_transpiration_m: np.float32 = get_potential_transpiration(
-                potential_evapotranspiration_m=potential_evapotranspiration_m,
-                potential_bare_soil_evaporation_m=potential_bare_soil_evaporation_m,
+            potential_transpiration_m_cell_hour: np.float32 = (
+                get_potential_transpiration(
+                    potential_evapotranspiration_m=potential_evapotranspiration_m,
+                    potential_bare_soil_evaporation_m=potential_bare_soil_evaporation_m,
+                )
             )
             (
                 interception_storage_m[i],
                 throughfall_m,
                 interception_evaporation_m_cell_hour,
+                potential_transpiration_m_cell_hour,
             ) = interception(
                 rainfall_m=rainfall_m,
                 storage_m=interception_storage_m[i],
                 capacity_m=interception_capacity_m[i],
-                potential_transpiration_m=potential_transpiration_m,
+                potential_transpiration_m=potential_transpiration_m_cell_hour,
             )
 
             interception_evaporation_m[i] += interception_evaporation_m_cell_hour
@@ -421,7 +430,7 @@ def land_surface_model(
                 root_depth_m=root_depth_m[i],
                 crop_map=crop_map[i],
                 natural_crop_groups=natural_crop_groups[i],
-                potential_transpiration_m=potential_transpiration_m,  # TODO: Should be reduced by interception evapotranspiration?
+                potential_transpiration_m=potential_transpiration_m_cell_hour,
                 potential_evapotranspiration_m=potential_evapotranspiration_m,
                 crop_group_number_per_group=crop_group_number_per_group,
                 w_m=w[:, i],
@@ -429,6 +438,8 @@ def land_surface_model(
                 minimum_effective_root_depth_m=np.float32(0.2),
                 time_step_hours_h=np.float32(24),
             )
+
+            potential_transpiration_m[i] = potential_transpiration_m_cell_hour
             transpiration_m[i] += transpiration_m_cell_hour
 
             # soil moisture is updated in place
@@ -451,6 +462,7 @@ def land_surface_model(
     groundwater_recharge_m = np.nan_to_num(groundwater_recharge_m)
     bare_soil_evaporation = np.nan_to_num(bare_soil_evaporation)
     transpiration_m = np.nan_to_num(transpiration_m)
+    potential_transpiration_m = np.nan_to_num(potential_transpiration_m)
 
     return (
         topwater_m,
@@ -468,6 +480,7 @@ def land_surface_model(
         interflow_m,
         bare_soil_evaporation,
         transpiration_m,
+        potential_transpiration_m,
     )
 
 
@@ -541,7 +554,15 @@ class LandSurface(Module):
     def step(
         self,
     ) -> tuple[
-        npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
     ]:
         """Step function for the land surface module.
 
@@ -691,6 +712,7 @@ class LandSurface(Module):
             interflow_m,
             bare_soil_evaporation_m,
             transpiration_m,
+            potential_transpiration_m,
         ) = land_surface_model(
             w=self.HRU.var.w,
             wres=self.HRU.var.wres,
@@ -791,6 +813,21 @@ class LandSurface(Module):
             + bare_soil_evaporation_m
             + irrigation_loss_to_evaporation_m
         )
+
+        growing_crop_mask = self.HRU.var.crop_map != -1
+
+        self.HRU.var.transpiration_crop_life[growing_crop_mask] += transpiration_m[
+            growing_crop_mask
+        ]
+        self.HRU.var.potential_transpiration_crop_life[growing_crop_mask] += (
+            potential_transpiration_m[growing_crop_mask]
+        )
+        self.HRU.var.transpiration_crop_life_per_crop_stage[
+            crop_sub_stage[growing_crop_mask], growing_crop_mask
+        ] += transpiration_m[growing_crop_mask]
+        self.HRU.var.potential_transpiration_crop_life_per_crop_stage[
+            crop_sub_stage[growing_crop_mask], growing_crop_mask
+        ] += potential_transpiration_m[growing_crop_mask]
 
         self.HRU.var.reference_evapotranspiration_water_m_per_day = np.sum(
             reference_evapotranspiration_water_m_dt, axis=0

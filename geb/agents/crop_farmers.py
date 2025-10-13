@@ -283,17 +283,17 @@ class CropFarmers(AgentBaseClass):
             30,
         )
 
-        self.HRU.var.actual_evapotranspiration_crop_life = self.HRU.full_compressed(
+        self.HRU.var.transpiration_crop_life = self.HRU.full_compressed(
             0, dtype=np.float32
         )
-        self.HRU.var.potential_evapotranspiration_crop_life = self.HRU.full_compressed(
+        self.HRU.var.potential_transpiration_crop_life = self.HRU.full_compressed(
             0, dtype=np.float32
         )
-        self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage = np.zeros(
-            (6, self.HRU.var.actual_evapotranspiration_crop_life.size), dtype=np.float32
+        self.HRU.var.transpiration_crop_life_per_crop_stage = np.zeros(
+            (6, self.HRU.var.transpiration_crop_life.size), dtype=np.float32
         )
-        self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage = np.zeros(
-            (6, self.HRU.var.potential_evapotranspiration_crop_life.size),
+        self.HRU.var.potential_transpiration_crop_life_per_crop_stage = np.zeros(
+            (6, self.HRU.var.potential_transpiration_crop_life.size),
             dtype=np.float32,
         )
         self.HRU.var.crop_map = np.full_like(self.HRU.var.land_owners, -1)
@@ -1654,10 +1654,10 @@ class CropFarmers(AgentBaseClass):
             # Get yield ratio for the harvested crops
             yield_ratio_per_field = self.get_yield_ratio(
                 harvest,
-                self.HRU.var.actual_evapotranspiration_crop_life,
-                self.HRU.var.potential_evapotranspiration_crop_life,
-                self.HRU.var.actual_evapotranspiration_crop_life_per_crop_stage,
-                self.HRU.var.potential_evapotranspiration_crop_life_per_crop_stage,
+                self.HRU.var.transpiration_crop_life,
+                self.HRU.var.potential_transpiration_crop_life,
+                self.HRU.var.transpiration_crop_life_per_crop_stage,
+                self.HRU.var.potential_transpiration_crop_life_per_crop_stage,
                 self.HRU.var.crop_map,
             )
             assert (yield_ratio_per_field >= 0).all()
@@ -1761,8 +1761,8 @@ class CropFarmers(AgentBaseClass):
             self.income_farmer = np.zeros(self.var.n, dtype=np.float32)
 
         # Reset transpiration values for harvested fields
-        self.HRU.var.actual_evapotranspiration_crop_life[harvest] = 0
-        self.HRU.var.potential_evapotranspiration_crop_life[harvest] = 0
+        self.HRU.var.transpiration_crop_life[harvest] = 0
+        self.HRU.var.potential_transpiration_crop_life[harvest] = 0
 
         # Update crop and land use maps after harvest
         self.HRU.var.crop_map[harvest] = -1
