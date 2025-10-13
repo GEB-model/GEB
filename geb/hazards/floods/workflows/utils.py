@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -130,7 +131,31 @@ def read_flood_depth(
         f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "
         f"Mean flood depth: {float(flood_depth_m.mean().values):.2f} m"
     )
+    # Create basemap plot
+    fig, ax = model.plot_basemap(
+        fn_out=None,
+        variable="",  # No variable to plot, only basemap
+        plot_geoms=False,
+        zoomlevel=12,
+        figsize=(11, 7),
+    )
 
+    # Plot flood depth with colorbar
+    cbar_kwargs = {"shrink": 0.6, "anchor": (0, 0)}
+    flood_depth_m.plot(
+        x="x",
+        y="y",
+        ax=ax,
+        vmin=0,
+        vmax=float(flood_depth_m.max().values),
+        cmap=plt.cm.viridis,
+        cbar_kwargs=cbar_kwargs,
+    )
+
+    ax.set_title("Maximum Water Depth over all time steps")
+
+    output_path: Path = model_root / "flood_depth_all_time_steps.png"
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
     return flood_depth_m
 
 
