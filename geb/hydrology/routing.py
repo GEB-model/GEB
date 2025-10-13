@@ -929,7 +929,7 @@ class Routing(Module):
 
     def step(
         self,
-        total_runoff: np.ndarray,
+        total_runoff_m: np.ndarray,
         channel_abstraction_m3: np.ndarray,
         return_flow: np.ndarray,
     ):
@@ -961,18 +961,6 @@ class Routing(Module):
         )
         return_flow_m3_per_routing_step[self.grid.var.waterBodyID != -1] = 0.0
 
-        runoff_m3_per_routing_step: np.ndarray = (
-            total_runoff * self.grid.var.cell_area / self.var.n_routing_substeps
-        )
-
-        # add runoff to the water bodies
-        runoff_m3_per_routing_step_water_bodies = np.bincount(
-            self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
-            weights=runoff_m3_per_routing_step[self.grid.var.waterBodyID != -1],
-        )
-
-        runoff_m3_per_routing_step[self.grid.var.waterBodyID != -1] = 0.0
-
         self.grid.var.discharge_m3_s_per_substep = np.full(
             (self.var.n_routing_substeps, self.grid.var.discharge_m3_s_substep.size),
             np.nan,
@@ -999,9 +987,20 @@ class Routing(Module):
             command_area_release_m3 = 0
 
         for subrouting_step in range(self.var.n_routing_substeps):
-            self.hydrology.lakes_reservoirs.var.storage += (
-                runoff_m3_per_routing_step_water_bodies
+            total_runoff_m3: np.ndarray = (
+                total_runoff_m[subrouting_step, :] * self.grid.var.cell_area
             )
+
+            # then split the runoff into runoff directly to water bodies
+            # and runoff to the channel network
+            self.hydrology.lakes_reservoirs.var.storage += np.bincount(
+                self.grid.var.waterBodyID[self.grid.var.waterBodyID != -1],
+                weights=total_runoff_m3[self.grid.var.waterBodyID != -1],
+            )
+
+            # after adding the runoff to the water bodies, we set the runoff to zero
+            # in those grid cells
+            total_runoff_m3[self.grid.var.waterBodyID != -1] = 0.0
 
             self.hydrology.lakes_reservoirs.var.storage += (
                 return_flow_m3_to_water_bodies_per_routing_step
@@ -1033,7 +1032,7 @@ class Routing(Module):
             ).all(), "outflow cannot be smaller or equal to storage"
 
             side_flow_channel_m3_per_routing_step = (
-                runoff_m3_per_routing_step
+                total_runoff_m3
                 + return_flow_m3_per_routing_step
                 - channel_abstraction_m3_per_routing_step
             )
@@ -1131,7 +1130,7 @@ class Routing(Module):
             balance_check(
                 how="sum",
                 influxes=[
-                    total_runoff * self.grid.var.cell_area,
+                    total_runoff_m.sum(axis=0) * self.grid.var.cell_area,
                     return_flow * self.grid.var.cell_area,
                     over_abstraction_m3,
                 ],

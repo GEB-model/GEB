@@ -83,13 +83,13 @@ def to_grid(data, grid_to_HRU, land_use_ratio, fn="weightedmean"):
     """Numba helper function to convert from HRU to grid.
 
     Args:
-        data: The grid data to be converted.
+        data: The HRU data to be converted (1D array).
         grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
         land_use_ratio: Relative size of HRU to grid.
         fn: Name of function to apply to data. In most cases, several HRUs are combined into one grid unit, so a function must be applied. Choose from `mean`, `sum`, `nansum`, `max` and `min`.
 
     Returns:
-        ouput_data: Data converted to HRUs.
+        ouput_data: Data converted to grid.
     """
     output_data = np.empty(grid_to_HRU.size, dtype=data.dtype)
 
@@ -989,12 +989,29 @@ class Data:
         ):  # check if data is simple float. Otherwise should be numpy array.
             outdata = HRU_data
         else:
-            outdata = to_grid(
-                HRU_data,
-                self.HRU.var.grid_to_HRU,
-                self.HRU.var.land_use_ratio,
-                fn,
-            )
+            if HRU_data.ndim == 1:
+                outdata = to_grid(
+                    HRU_data,
+                    self.HRU.var.grid_to_HRU,
+                    self.HRU.var.land_use_ratio,
+                    fn,
+                )
+            elif HRU_data.ndim == 2:
+                # Create output array with shape (first_dim, grid_size)
+                output_data = np.zeros(
+                    (HRU_data.shape[0], self.HRU.var.grid_to_HRU.size),
+                    dtype=HRU_data.dtype,
+                )
+                for i in range(HRU_data.shape[0]):
+                    output_data[i] = to_grid(
+                        HRU_data[i],
+                        self.HRU.var.grid_to_HRU,
+                        self.HRU.var.land_use_ratio,
+                        fn,
+                    )
+                outdata = output_data
+            else:
+                raise NotImplementedError("Only 1D and 2D arrays are supported")
 
         return outdata
 

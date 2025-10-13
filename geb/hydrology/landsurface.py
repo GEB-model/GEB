@@ -158,6 +158,8 @@ def land_surface_model(
 
     reference_evapotranspiration_grass_m = np.zeros_like(pr_kg_per_m2_per_s)
     reference_evapotranspiration_water_m = np.zeros_like(pr_kg_per_m2_per_s)
+    runoff_m = np.zeros_like(pr_kg_per_m2_per_s)
+    interflow_m = np.zeros_like(pr_kg_per_m2_per_s)
 
     # total per day variables for water balance
     sublimation_m = np.zeros_like(snow_water_equivalent_m)
@@ -166,9 +168,7 @@ def land_surface_model(
     bare_soil_evaporation = np.zeros_like(snow_water_equivalent_m)
     potential_transpiration_m = np.zeros_like(snow_water_equivalent_m)
     transpiration_m = np.zeros_like(snow_water_equivalent_m)
-    runoff = np.zeros_like(snow_water_equivalent_m)
     groundwater_recharge_m = np.zeros_like(snow_water_equivalent_m)
-    interflow_m = np.zeros_like(snow_water_equivalent_m)
 
     for i in prange(snow_water_equivalent_m.size):
         pr_kg_per_m2_per_s_cell = pr_kg_per_m2_per_s[:, i]
@@ -288,7 +288,7 @@ def land_surface_model(
             )
             open_water_evaporation_m[i] += open_water_evaporation_m_cell_hour
 
-            runoff[i] += rise_from_groundwater(
+            runoff_m[hour, i] += rise_from_groundwater(
                 w=w[:, i],
                 ws=ws[:, i],
                 capillary_rise_from_groundwater=capillar_rise_m[i],
@@ -311,7 +311,7 @@ def land_surface_model(
                 w=w[:, i],
                 topwater_m=topwater_m[i],
             )
-            runoff[i] += direct_runoff_m
+            runoff_m[hour, i] += direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
 
             bottom_layer = N_SOIL_LAYERS - 1
@@ -475,7 +475,7 @@ def land_surface_model(
         interception_storage_m,
         interception_evaporation_m,
         open_water_evaporation_m,
-        runoff,
+        runoff_m,
         groundwater_recharge_m,
         interflow_m,
         bare_soil_evaporation,
@@ -784,7 +784,8 @@ class LandSurface(Module):
                 -sublimation_m,
                 interception_evaporation_m,
                 open_water_evaporation_m,
-                runoff_m,
+                runoff_m.sum(axis=0),  # sum over hours to make it day
+                interflow_m.sum(axis=0),  # sum over hours to make it day
                 groundwater_recharge_m,
                 bare_soil_evaporation_m,
                 transpiration_m,

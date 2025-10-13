@@ -22,4 +22,14 @@ def concentrate_runoff(
     assert (runoff >= 0).all()
     assert (interflow >= 0).all()
     assert (baseflow >= 0).all()
-    return interflow + baseflow + runoff
+
+    assert interflow.shape[0] == 24
+    assert runoff.shape[0] == 24
+
+    assert interflow.ndim == 2
+    assert baseflow.ndim == 1
+    assert runoff.ndim == 2
+
+    baseflow_per_timestep = baseflow / np.float32(24)
+
+    return interflow + baseflow_per_timestep + runoff

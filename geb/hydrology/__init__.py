@@ -152,7 +152,12 @@ class Hydrology(Data, Module):
                     + self.model.agents.reservoir_operators.command_area_release_m3.sum()  # already applied but not yet removed from reservoir
                 )
                 - (
-                    (interflow_m + runoff_m + return_flow_m + groundwater_recharge_m)
+                    (
+                        interflow_m.sum(axis=0)
+                        + runoff_m.sum(axis=0)
+                        + return_flow_m
+                        + groundwater_recharge_m
+                    )
                     * self.grid.var.cell_area
                 ).sum()  # already removed from sources but not yet added to sinks
             )
@@ -225,7 +230,8 @@ class Hydrology(Data, Module):
 
             outflux_m3 += routing_loss_m3
             invented_water += (
-                (interflow_m + runoff_m + return_flow_m) * self.grid.var.cell_area
+                (interflow_m.sum(axis=0) + runoff_m.sum(axis=0) + return_flow_m)
+                * self.grid.var.cell_area
             ).sum()  # added to sinks, so remove from invented water
 
             invented_water += (
