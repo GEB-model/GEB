@@ -33,7 +33,7 @@ from .lakes_res_small import SmallLakesReservoirs
 from .lakes_reservoirs import LakesReservoirs
 from .landsurface import LandSurface
 from .routing import Routing
-from .runoff_concentration import RunoffConcentration
+from .runoff_concentration import concentrate_runoff
 from .soil import Soil
 from .water_demand import WaterDemand
 
@@ -64,7 +64,6 @@ class Hydrology(Data, Module):
         self.landsurface = LandSurface(self.model, self)
         self.soil = Soil(self.model, self)
         self.groundwater = GroundWater(self.model, self)
-        self.runoff_concentration = RunoffConcentration(self.model, self)
         self.lakes_res_small = SmallLakesReservoirs(self.model, self)
         self.routing = Routing(self.model, self)
         self.lakes_reservoirs = LakesReservoirs(self.model, self)
@@ -128,7 +127,6 @@ class Hydrology(Data, Module):
             groundwater_abstraction_m3,
             channel_abstraction_m3,
             return_flow_m,
-            capillary_m,
             total_water_demand_loss_m3,
             actual_evapotranspiration_m,
             sublimation_m,
@@ -210,9 +208,7 @@ class Hydrology(Data, Module):
 
         timer.finish_split("GW")
 
-        total_runoff_m = self.runoff_concentration.step(
-            interflow_m, baseflow_m, runoff_m
-        )
+        total_runoff_m = concentrate_runoff(interflow_m, baseflow_m, runoff_m)
         timer.finish_split("Runoff concentration")
 
         self.lakes_res_small.step()

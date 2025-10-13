@@ -120,7 +120,7 @@ def infiltration(
     ws: npt.NDArray[np.float32],
     saturated_hydraulic_conductivity: np.float32,
     land_use_type: np.int32,
-    frost_index: np.float32,
+    soil_is_frozen: bool,
     w: npt.NDArray[np.float32],
     topwater_m: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32]:
@@ -130,7 +130,7 @@ def infiltration(
         ws: Saturated soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
         saturated_hydraulic_conductivity: Saturated hydraulic conductivity for the cell in m/day.
         land_use_type: Land use type for the cell.
-        frost_index: Frost index for the cell.
+        soil_is_frozen: Boolean indicating if the soil is frozen.
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.
         topwater_m: Topwater for the cell in meters, modified in place.
         soil_layer_height: Soil layer heights for the cell in meters, shape (N_SOIL_LAYERS,).
@@ -141,15 +141,8 @@ def infiltration(
             - groundwater_recharge: Groundwater recharge from the cell in meters (currently set to 0.0).
             - infiltration: Infiltration into the soil for the cell in meters.
     """
-    # Constants
-    # TODO: Set this from a global var (see soil.py)
-    FROST_INDEX_THRESHOLD = np.float32(85.0)
-
     # Calculate potential infiltration for the cell
     potential_infiltration = get_infiltration_capacity(saturated_hydraulic_conductivity)
-
-    # Check if soil is frozen
-    soil_is_frozen = frost_index > FROST_INDEX_THRESHOLD
 
     # Calculate infiltration for the cell
     infiltration_amount = min(

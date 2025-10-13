@@ -15,6 +15,10 @@ from .evaporation import (
     get_potential_evapotranspiration,
     get_potential_transpiration,
 )
+from .evapotranspiration import (  # noqa: F401
+    calculate_bare_soil_evaporation,
+    calculate_transpiration,
+)
 from .interception import get_interception_capacity, interception
 from .potential_evapotranspiration import get_reference_evapotranspiration
 from .snow_glaciers import snow_model
@@ -33,8 +37,14 @@ def land_surface_model(
     land_use_type: npt.NDArray[np.int32],
     w: npt.NDArray[np.float32],  # TODO: Check if fortran order speeds up
     wres: npt.NDArray[np.float32],  # TODO: Check if fortran order speeds up
+    wwp: npt.NDArray[np.float32],  # TODO: Check if fortran order speeds up
+    wfc: npt.NDArray[np.float32],  # TODO: Check if fortran order speeds up
     ws: npt.NDArray[np.float32],  # TODO: Check if fortran order speeds up
     delta_z: npt.NDArray[np.float32],  # TODO: Check if fortran order speeds up
+    soil_layer_height: npt.NDArray[
+        np.float32
+    ],  # TODO: Check if fortran order speeds up
+    root_depth_m: npt.NDArray[np.float32],
     topwater_m: npt.NDArray[np.float32],
     snow_water_equivalent_m: npt.NDArray[np.float32],
     liquid_water_in_snow_m: npt.NDArray[np.float32],
@@ -51,13 +61,21 @@ def land_surface_model(
     wind_v10m_m_per_s: npt.NDArray[np.float32],
     CO2_ppm: np.float32,
     crop_factor: npt.NDArray[np.float32],
+    crop_map: npt.NDArray[np.int32],
     actual_irrigation_consumption_m: npt.NDArray[np.float32],
     capillar_rise_m: npt.NDArray[np.float32],
     saturated_hydraulic_conductivity_m_per_s: npt.NDArray[np.float32],
     lambda_pore_size_distribution: npt.NDArray[np.float32],
     bubbing_pressure_cm: npt.NDArray[np.float32],
     frost_index: npt.NDArray[np.float32],
+    natural_crop_groups: npt.NDArray[np.float32],
+    crop_group_number_per_group: npt.NDArray[np.float32],
 ) -> tuple[
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
@@ -75,8 +93,12 @@ def land_surface_model(
         land_use_type: Land use type of the hydrological response unit.
         w: Current soil moisture content [m3/m3].
         wres: Soil moisture content at residual [m3/m3].
+        wwp: Wilting point soil moisture content [m3/m3].
+        wfc: Field capacity soil moisture content [m3/m3].
         ws: Soil moisture content at saturation [m3/m3].
         delta_z: Thickness of soil layers [m].
+        soil_layer_height: Soil layer heights for the cell in meters, shape (N_SOIL_LAYERS,).
+        root_depth_m: Root depth for the cell in meters.
         topwater_m: Topwater in meters, which is >=0 for paddy and 0 for non-paddy. Within
             this function topwater is used to add water from natural infiltration and
             irrigation and to calculate open water evaporation.
@@ -95,12 +117,15 @@ def land_surface_model(
         wind_v10m_m_per_s: V component of 10m wind speed in m/s.
         CO2_ppm: Atmospheric CO2 concentration in ppm.
         crop_factor: Crop factor for each HRU. Dimensionless.
+        crop_map: Crop type map for each HRU.
         actual_irrigation_consumption_m: Actual irrigation consumption in meters.
         capillar_rise_m: Capillary rise in meters.
         saturated_hydraulic_conductivity_m_per_s: Saturated hydraulic conductivity in m/s.
         lambda_pore_size_distribution: Van Genuchten pore size distribution parameter.
         bubbing_pressure_cm: Bubbling pressure in cm.
         frost_index: Frost index. TODO: Add unit and description.
+        natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
+        crop_group_number_per_group: Crop group numbers for each crop type.
 
     Returns:
         Tuple of:
@@ -133,6 +158,8 @@ def land_surface_model(
     sublimation_m = np.zeros_like(snow_water_equivalent_m)
     interception_evaporation_m = np.zeros_like(snow_water_equivalent_m)
     open_water_evaporation_m = np.zeros_like(snow_water_equivalent_m)
+    bare_soil_evaporation = np.zeros_like(snow_water_equivalent_m)
+    transpiration_m = np.zeros_like(snow_water_equivalent_m)
     runoff = np.zeros_like(snow_water_equivalent_m)
     groundwater_recharge_m = np.zeros_like(snow_water_equivalent_m)
     interflow_m = np.zeros_like(snow_water_equivalent_m)
@@ -258,6 +285,8 @@ def land_surface_model(
                 capillary_rise_from_groundwater=capillar_rise_m[i],
             )
 
+            soil_is_frozen = frost_index[i] > np.float32(85.0)
+
             (
                 topwater_m[i],
                 direct_runoff_m,
@@ -269,7 +298,7 @@ def land_surface_model(
                     :, i
                 ],
                 land_use_type=land_use_type[i],
-                frost_index=frost_index[i],
+                soil_is_frozen=soil_is_frozen,
                 w=w[:, i],
                 topwater_m=topwater_m[i],
             )
@@ -381,6 +410,37 @@ def land_surface_model(
                     unsaturated_hydraulic_conductivity_m_per_hour
                 )
 
+            # soil moisture is updated in place
+            transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
+                soil_is_frozen=soil_is_frozen,
+                wwp_m=wwp[:, i],
+                wfc_m=wfc[:, i],
+                wres_m=wres[:, i],
+                soil_layer_height_m=soil_layer_height[:, i],
+                land_use_type=land_use_type[i],
+                root_depth_m=root_depth_m[i],
+                crop_map=crop_map[i],
+                natural_crop_groups=natural_crop_groups[i],
+                potential_transpiration_m=potential_transpiration_m,  # TODO: Should be reduced by interception evapotranspiration?
+                potential_evapotranspiration_m=potential_evapotranspiration_m,
+                crop_group_number_per_group=crop_group_number_per_group,
+                w_m=w[:, i],
+                topwater_m=topwater_m[i],
+                minimum_effective_root_depth_m=np.float32(0.2),
+                time_step_hours_h=np.float32(24),
+            )
+            transpiration_m[i] += transpiration_m_cell_hour
+
+            # soil moisture is updated in place
+            bare_soil_evaporation[i] += calculate_bare_soil_evaporation(
+                soil_is_frozen=soil_is_frozen,
+                land_use_type=land_use_type[i],
+                potential_bare_soil_evaporation_m=potential_bare_soil_evaporation_m,
+                open_water_evaporation_m=open_water_evaporation_m_cell_hour,
+                w_m=w[:, i],
+                wres_m=wres[:, i],
+            )
+
         snow_water_equivalent_m[i] = snow_water_equivalent_m_cell
         liquid_water_in_snow_m[i] = liquid_water_in_snow_m_cell
         snow_temperature_C[i] = snow_temperature_C_cell
@@ -389,6 +449,8 @@ def land_surface_model(
     # some of the above calculations for non-bio land use types will lead to NaNs
     # but these can be safely converted to zeros
     groundwater_recharge_m = np.nan_to_num(groundwater_recharge_m)
+    bare_soil_evaporation = np.nan_to_num(bare_soil_evaporation)
+    transpiration_m = np.nan_to_num(transpiration_m)
 
     return (
         topwater_m,
@@ -404,6 +466,8 @@ def land_surface_model(
         runoff,
         groundwater_recharge_m,
         interflow_m,
+        bare_soil_evaporation,
+        transpiration_m,
     )
 
 
@@ -625,11 +689,17 @@ class LandSurface(Module):
             runoff_m,
             groundwater_recharge_m,
             interflow_m,
+            bare_soil_evaporation_m,
+            transpiration_m,
         ) = land_surface_model(
             w=self.HRU.var.w,
             wres=self.HRU.var.wres,
+            wwp=self.HRU.var.wwp,
+            wfc=self.HRU.var.wfc,
             ws=self.HRU.var.ws,
             delta_z=delta_z,
+            soil_layer_height=self.HRU.var.soil_layer_height,
+            root_depth_m=root_depth_m,
             land_use_type=self.HRU.var.land_use_type,
             topwater_m=self.HRU.var.topwater_m,
             snow_water_equivalent_m=self.HRU.var.snow_water_equivalent_m,
@@ -663,6 +733,7 @@ class LandSurface(Module):
             ),  # Due to the access pattern in numba (iterate over hours), the fortran order is much faster in this case
             CO2_ppm=self.model.forcing.load("CO2_ppm"),
             crop_factor=crop_factor,
+            crop_map=self.HRU.var.crop_map,
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
             capillar_rise_m=capillar_rise_m,
             saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity
@@ -670,6 +741,10 @@ class LandSurface(Module):
             lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
             bubbing_pressure_cm=self.HRU.var.bubbling_pressure_cm,
             frost_index=self.HRU.var.frost_index,
+            natural_crop_groups=self.HRU.var.natural_crop_groups,
+            crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
+                "crop_group_number"
+            ].values.astype(np.float32),
         )
 
         assert interflow_m.sum() == 0.0, "Interflow is not implemented yet."
@@ -689,6 +764,8 @@ class LandSurface(Module):
                 open_water_evaporation_m,
                 runoff_m,
                 groundwater_recharge_m,
+                bare_soil_evaporation_m,
+                transpiration_m,
             ],
             prestorages=[
                 snow_water_equivalent_prev,
@@ -706,10 +783,6 @@ class LandSurface(Module):
             ],
             tolerance=1e-6,
         )
-
-        print("Setting transpiration to zero for now")
-        transpiration_m = self.HRU.full_compressed(0.0, dtype=np.float32)
-        bare_soil_evaporation_m = self.HRU.full_compressed(0.0, dtype=np.float32)
 
         actual_evapotranspiration_m = (
             interception_evaporation_m
@@ -745,7 +818,6 @@ class LandSurface(Module):
             groundwater_abstraction_m3,
             channel_abstraction_m3,
             return_flow_m,
-            capillar_rise_m,
             total_water_demand_loss_m3,
             actual_evapotranspiration_m,
             sublimation_m,

@@ -474,6 +474,7 @@ def evapotranspirate(
     minimum_effective_root_depth: float,
     mask_transpiration: npt.NDArray[np.bool_],
     mask_soil_evaporation: npt.NDArray[np.bool_],
+    time_step_hours: float = 24,
 ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
     """Evapotranspiration calculation for the soil module.
 
@@ -499,6 +500,7 @@ def evapotranspirate(
             effective root depth is not less than this value. Crops can extract water up to this depth.
         mask_transpiration: A mask indicating which pixels are valid for transpiration calculation.
         mask_soil_evaporation: A mask indicating which pixels are valid for evapotranspration calculation.
+        time_step_hours: Time step in hours (default 24 for daily time steps).
 
     Returns:
         A tuple containing:
@@ -537,7 +539,9 @@ def evapotranspirate(
                 # vegetation-specific factor for easily available soil water
                 fraction_easily_available_soil_water: np.float32 = (
                     get_fraction_easily_available_soil_water(
-                        crop_group_number, potential_evapotranspiration[i]
+                        crop_group_number,
+                        potential_evapotranspiration[i],
+                        time_step_hours,
                     )
                 )
 
@@ -2064,6 +2068,7 @@ class Soil(Module):
             minimum_effective_root_depth=self.var.minimum_effective_root_depth,
             mask_transpiration=mask_transpiration,
             mask_soil_evaporation=mask_soil_evaporation,
+            time_step_hours=1.0,  # Hourly time step
         )
         assert transpiration.dtype == np.float32
         assert (self.HRU.var.w[:, bioarea] <= self.HRU.var.ws[:, bioarea]).all()
