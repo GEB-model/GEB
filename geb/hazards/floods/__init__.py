@@ -88,6 +88,7 @@ class Floods:
         coastal: bool = False,
         include_mask: gpd.GeoDataFrame = None,
         bnd_exclude_mask: gpd.GeoDataFrame = None,
+        gtsm_stations: gpd.GeoDataFrame = None,
     ) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
 
@@ -145,6 +146,7 @@ class Floods:
                 coastal=coastal,
                 include_mask=include_mask,
                 bnd_exclude_mask=bnd_exclude_mask,
+                gtsm_stations=gtsm_stations,
             )
         else:
             sfincs_model.read()
@@ -367,26 +369,23 @@ class Floods:
         locations.index = locations.index.astype(int)
 
         # build model for the different sfincs model regions
-        model_regions = load_geom(self.model.files["geom"]["coastal/model_regions"])
         lecz_regions = load_geom(self.model.files["geom"]["coastal/lecz_regions"])
 
         # iterate over the different regions and run the coastal model for each region
         for idx, region in lecz_regions.iterrows():
             print(f"Run coastal model for region {idx}.")
-            include_mask = lecz_regions[lecz_regions["idx"] == idx]
             # create geodataframe for the region
             region = gpd.GeoDataFrame(
-                [region], geometry="geometry", crs=model_regions.crs
+                [region], geometry="geometry", crs=lecz_regions.crs
             )
             sfincs_root_model: SFINCSRootModel = self.build(
                 f"coastal_region_{idx}",
                 region=region,
                 coastal=True,
                 bnd_exclude_mask=bnd_exclude_mask,
-                include_mask=include_mask,
+                include_mask=region,
+                gtsm_stations=locations,
             )
-
-            sfincs_root_model.sfincs_model.setup_waterlevel_forcing(locations=locations)
 
             rp_maps_coastal = {}
             for return_period in self.config["return_periods"]:

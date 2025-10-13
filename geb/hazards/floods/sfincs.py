@@ -122,6 +122,7 @@ class SFINCSRootModel:
         coastal: bool = False,
         include_mask: gpd.GeoDataFrame | None = None,
         bnd_exclude_mask: gpd.GeoDataFrame | None = None,
+        gtsm_stations: gpd.GeoDataFrame | None = None,
     ) -> "SFINCSRootModel":
         """Build a SFINCS model.
 
@@ -201,6 +202,7 @@ class SFINCSRootModel:
                 zmax=2,  # maximum elevation for valid boundary cells
                 exclude_mask=bnd_exclude_mask,
             )
+            sf.setup_waterlevel_forcing(locations=gtsm_stations)
 
         else:
             sf.setup_mask_active(
