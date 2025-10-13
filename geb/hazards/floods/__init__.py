@@ -86,6 +86,7 @@ class Floods:
         name: str,
         region: gpd.GeoDataFrame = None,
         coastal: bool = False,
+        include_mask: gpd.GeoDataFrame = None,
         bnd_exclude_mask: gpd.GeoDataFrame = None,
     ) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
@@ -142,6 +143,7 @@ class Floods:
                 else {},
                 mask_flood_plains=False,  # setting this to True sometimes leads to errors
                 coastal=coastal,
+                include_mask=include_mask,
                 bnd_exclude_mask=bnd_exclude_mask,
             )
         else:
@@ -366,10 +368,12 @@ class Floods:
 
         # build model for the different sfincs model regions
         model_regions = load_geom(self.model.files["geom"]["coastal/model_regions"])
+        lecz_regions = load_geom(self.model.files["geom"]["coastal/lecz_regions"])
 
         # iterate over the different regions and run the coastal model for each region
-        for idx, region in model_regions.iterrows():
+        for idx, region in lecz_regions.iterrows():
             print(f"Run coastal model for region {idx}.")
+            include_mask = lecz_regions[lecz_regions["idx"] == idx]
             # create geodataframe for the region
             region = gpd.GeoDataFrame(
                 [region], geometry="geometry", crs=model_regions.crs
@@ -379,21 +383,10 @@ class Floods:
                 region=region,
                 coastal=True,
                 bnd_exclude_mask=bnd_exclude_mask,
+                include_mask=include_mask,
             )
 
             sfincs_root_model.sfincs_model.setup_waterlevel_forcing(locations=locations)
-
-            # setup coastal boundary mask
-            sfincs_root_model.sfincs_model.setup_mask_bounds(
-                btype="waterlevel",
-                # include_mask=boundary_mask,
-                zmax=2,  # Maximum elevation of boundary cells [m] to assign as waterlevel boundary
-                reset_bounds=True,
-                all_touched=True,
-                exclude_mask=load_geom(
-                    self.model.files["geom"]["coastal/land_polygons"]
-                ),
-            )
 
             rp_maps_coastal = {}
             for return_period in self.config["return_periods"]:
@@ -406,20 +399,28 @@ class Floods:
                         return_period,
                     )
                 )
-                simulation.run(
-                    gpu=self.config["SFINCS"]["gpu"],
-                )
-                flood_depth_return_period: xr.DataArray = (
-                    simulation.read_max_flood_depth(self.config["minimum_flood_depth"])
-                )
-                rp_maps_coastal[return_period] = flood_depth_return_period
-                to_zarr(
-                    flood_depth_return_period,
-                    self.model.output_folder
-                    / "flood_maps"
-                    / f"{return_period}_coastal_reg_{idx}.zarr",
-                    crs=flood_depth_return_period.rio.crs,
-                )
+                try:
+                    simulation.run(
+                        gpu=self.config["SFINCS"]["gpu"],
+                    )
+                    flood_depth_return_period: xr.DataArray = (
+                        simulation.read_max_flood_depth(
+                            self.config["minimum_flood_depth"]
+                        )
+                    )
+                    rp_maps_coastal[return_period] = flood_depth_return_period
+                    to_zarr(
+                        flood_depth_return_period,
+                        self.model.output_folder
+                        / "flood_maps"
+                        / f"{return_period}_coastal_reg_{idx}.zarr",
+                        crs=flood_depth_return_period.rio.crs,
+                    )
+                except Exception as e:
+                    print(
+                        f"Error running coastal model for return period {return_period} years for region {idx}: {e}"
+                    )
+                    continue
             if hasattr(self.model, "reporter"):
                 # and re-open afterwards
                 self.model.reporter.variables["discharge_daily"] = zarr.ZipStore(
@@ -467,6 +468,15 @@ class Floods:
             flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
                 self.config["minimum_flood_depth"]
             )
+
+            to_zarr(
+                flood_depth_return_period,
+                self.model.output_folder
+                / "flood_maps"
+                / f"{return_period}_riverine.zarr",
+                crs=flood_depth_return_period.rio.crs,
+            )
+
             rp_maps_riverine[return_period] = flood_depth_return_period
 
         if hasattr(self.model, "reporter"):
