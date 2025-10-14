@@ -1151,9 +1151,7 @@ class CropFarmers(AgentBaseClass):
                 paddy_irrigated_crops=self.var.crop_data["is_paddy"].values,
                 current_crop_calendar_rotation_year_index=self.var.current_crop_calendar_rotation_year_index.data,
                 max_paddy_water_level=self.var.max_paddy_water_level.data,
-                minimum_effective_root_depth=np.float32(
-                    self.model.hydrology.soil.var.minimum_effective_root_depth
-                ),
+                minimum_effective_root_depth_m=self.model.hydrology.landsurface.var.minimum_effective_root_depth_m,
             )
         )
 

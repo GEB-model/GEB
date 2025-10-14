@@ -979,6 +979,7 @@ class Bucket:
                 str,
                 dict,
                 datetime,
+                np.generic,
             ),
         )
         super().__setattr__(name, value)
@@ -1029,6 +1030,8 @@ class Bucket:
                 with open((path / name).with_suffix(".datetime"), "w") as f:
                     f.write(value.isoformat())
             elif isinstance(value, np.ndarray):
+                np.save((path / name).with_suffix(".npy"), value)
+            elif isinstance(value, np.generic):
                 np.save((path / name).with_suffix(".npy"), value)
             else:
                 raise ValueError(f"Cannot save value of type {type(value)} for {name}")

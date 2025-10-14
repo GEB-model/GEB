@@ -412,7 +412,7 @@ def get_potential_irrigation_consumption_m(
     max_paddy_water_level_farmer,
     crop_group: np.float32,
     is_paddy: np.bool_,
-    minimum_effective_root_depth: np.float32,
+    minimum_effective_root_depth_m: np.float32,
     depletion_factor: np.float32 = np.float32(0.5),
 ) -> np.float32:
     assert np.float32(0) <= fraction_irrigated_field <= np.float32(1)
@@ -429,7 +429,7 @@ def get_potential_irrigation_consumption_m(
         # use a minimum root depth of 25 cm, following AQUACROP recommendation
         # see: Reference manual for AquaCrop v7.1 – Chapter 3
         effective_root_depth: np.float32 = np.maximum(
-            minimum_effective_root_depth, root_depth_m
+            minimum_effective_root_depth_m, root_depth_m
         )
         root_ratios: npt.NDArray[np.float32] = get_root_ratios(
             effective_root_depth,
@@ -463,8 +463,6 @@ def get_potential_irrigation_consumption_m(
             potential_irrigation_consumption_m = np.float32(0)
 
         infiltration_capacity = get_infiltration_capacity(
-            w=w,
-            ws=ws,
             saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
         )
         potential_irrigation_consumption_m = np.minimum(
@@ -502,7 +500,7 @@ def get_gross_irrigation_demand_m3(
     paddy_irrigated_crops: npt.NDArray[np.bool_],
     current_crop_calendar_rotation_year_index: npt.NDArray[np.int32],
     max_paddy_water_level: npt.NDArray[np.float32],
-    minimum_effective_root_depth: np.float32,
+    minimum_effective_root_depth_m: np.float32,
 ) -> tuple[
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
@@ -550,7 +548,7 @@ def get_gross_irrigation_demand_m3(
                 max_paddy_water_level_farmer=max_paddy_water_level[farmer],
                 crop_group=crop_group_numbers[crop],
                 is_paddy=paddy_irrigated_crops[crop],
-                minimum_effective_root_depth=minimum_effective_root_depth,
+                minimum_effective_root_depth_m=minimum_effective_root_depth_m,
             )
 
             assert consumption_m < 1

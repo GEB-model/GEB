@@ -423,7 +423,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         if self.simulate_hydrology:
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
-            self.hydrology.soil.set_global_variables()
+            self.hydrology.landsurface.set_global_variables()
 
         if create_reporter:
             self.reporter = Reporter(self, clean=clean_report_folder)

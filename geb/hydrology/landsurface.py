@@ -78,6 +78,7 @@ def land_surface_model(
     frost_index: npt.NDArray[np.float32],
     natural_crop_groups: npt.NDArray[np.float32],
     crop_group_number_per_group: npt.NDArray[np.float32],
+    minimum_effective_root_depth_m: np.float32,
 ) -> tuple[
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
@@ -135,6 +136,7 @@ def land_surface_model(
         frost_index: Frost index. TODO: Add unit and description.
         natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
         crop_group_number_per_group: Crop group numbers for each crop type.
+        minimum_effective_root_depth_m: Minimum effective root depth in meters.
 
     Returns:
         Tuple of:
@@ -153,8 +155,6 @@ def land_surface_model(
         - transpiration_m: Transpiration in meters.
         - potential_transpiration_m: Potential transpiration in meters.
     """
-    N_SOIL_LAYERS = 6
-
     CO2_induced_crop_factor_adustment = get_CO2_induced_crop_factor_adustment(CO2_ppm)
 
     # convert values to substep (i.e., per hour)
@@ -428,8 +428,6 @@ def land_surface_model(
                 )
 
             # soil moisture is updated in place
-            # use a minimum root depth of 25 cm, following AQUACROP recommendation
-            # see: Reference manual for AquaCrop v7.1 – Chapter 3
             transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
                 soil_is_frozen=soil_is_frozen,
                 wwp_m=wwp[:, i],
@@ -445,7 +443,7 @@ def land_surface_model(
                 crop_group_number_per_group=crop_group_number_per_group,
                 w_m=w[:, i],
                 topwater_m=topwater_m[i],
-                minimum_effective_root_depth_m=np.float32(0.25),
+                minimum_effective_root_depth_m=minimum_effective_root_depth_m,
                 time_step_hours_h=np.float32(24),
             )
 
@@ -518,6 +516,11 @@ class LandSurface(Module):
         """Name of the module."""
         return "hydrology.landsurface"
 
+    def set_global_variables(self) -> None:
+        # set number of soil layers as global variable for numba
+        global N_SOIL_LAYERS
+        N_SOIL_LAYERS = self.HRU.var.soil_layer_height.shape[0]
+
     def spinup(self) -> None:
         """Spinup function for the land surface module."""
         self.HRU.var.topwater_m = self.HRU.full_compressed(0.0, dtype=np.float32)
@@ -560,6 +563,9 @@ class LandSurface(Module):
         self.grid.var.forest_crop_factor_per_10_days = zarr.open_group(store, mode="r")[
             "crop_coefficient"
         ][:]
+
+        # Default follows AQUACROP recommendation, see reference manual for AquaCrop v7.1 – Chapter 3
+        self.var.minimum_effective_root_depth_m: np.float32 = np.float32(0.25)
 
         self.setup_soil_properties()
 
@@ -939,6 +945,7 @@ class LandSurface(Module):
             crop_group_number_per_group=self.model.agents.crop_farmers.var.crop_data[
                 "crop_group_number"
             ].values.astype(np.float32),
+            minimum_effective_root_depth_m=self.var.minimum_effective_root_depth_m,
         )
 
         assert interflow_m.sum() == 0.0, "Interflow is not implemented yet."

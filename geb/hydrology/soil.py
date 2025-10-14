@@ -100,19 +100,19 @@ def rise_from_groundwater(
 
 @njit(cache=True, inline="always")
 def get_infiltration_capacity(
-    saturated_hydraulic_conductivity_cell: npt.NDArray[np.float32],
+    saturated_hydraulic_conductivity: npt.NDArray[np.float32],
 ) -> np.float32:
     """Calculate the infiltration capacity for a single cell.
 
     TODO: This function is a placeholder for more complex logic should be added later.
 
     Args:
-        saturated_hydraulic_conductivity_cell: Saturated hydraulic conductivity for the cell.
+        saturated_hydraulic_conductivity: Saturated hydraulic conductivity for the cell.
 
     Returns:
         The infiltration capacity for the cell.
     """
-    return saturated_hydraulic_conductivity_cell[0]
+    return saturated_hydraulic_conductivity[0]
 
 
 @njit(cache=True, inline="always")
