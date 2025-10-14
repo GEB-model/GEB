@@ -206,7 +206,7 @@ class Reporter:
                             for station_ID, station_info in stations.iterrows():
                                 xy_grid = station_info["snapped_grid_pixel_xy"]
                                 station_reporters[
-                                    f"discharge_hourly_m3_s_{station_ID}"
+                                    f"discharge_hourly_m3_per_s_{station_ID}"
                                 ] = {
                                     "varname": f"grid.var.discharge_m3_s_per_substep",
                                     "type": "grid",
@@ -691,7 +691,22 @@ class Reporter:
         if name not in self.variables[module_name]:
             self.variables[module_name][name] = []
 
-        self.variables[module_name][name].append((self.model.current_time, value))
+        if "substeps" in config:
+            assert len(value) == config["substeps"], (
+                f"Value for {module_name}.{name} has length {len(value)}, but {config['substeps']} substeps are expected."
+            )
+            self.variables[module_name][name].extend(
+                [
+                    (
+                        self.model.current_time
+                        + i * self.model.timestep_length / config["substeps"],
+                        v,
+                    )
+                    for i, v in enumerate(value)
+                ]
+            )
+        else:
+            self.variables[module_name][name].append((self.model.current_time, value))
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""

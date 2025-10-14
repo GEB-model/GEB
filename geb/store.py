@@ -1030,6 +1030,10 @@ class Bucket:
                 with open((path / name).with_suffix(".datetime"), "w") as f:
                     f.write(value.isoformat())
             elif isinstance(value, np.ndarray):
+                if value.ndim == 0:
+                    raise ValueError(
+                        "0-dim arrays should be saved as scalars. Otherwise we get undefined and unexpected behavior when loading the array back. Here, 0-dim array are converted to scalars."
+                    )
                 np.save((path / name).with_suffix(".npy"), value)
             elif isinstance(value, np.generic):
                 np.save((path / name).with_suffix(".npy"), value)
@@ -1053,10 +1057,13 @@ class Bucket:
                     DynamicArray.load(filename),
                 )
             elif filename.suffixes == [".array", ".npz"]:
+                value = np.load(filename)
+                if value.ndim == 0:
+                    value = value[()]  # convert to scalar but keep dtype
                 setattr(
                     self,
                     filename.name.removesuffix("".join(filename.suffixes)),
-                    np.load(filename)["value"],
+                    value,
                 )
             elif filename.suffix == ".geoparquet":
                 setattr(
