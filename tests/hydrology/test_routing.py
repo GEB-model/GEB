@@ -81,34 +81,6 @@ def test_update_node_kinematic_no_flow() -> None:
     assert math.isclose(Q_new, 1e-30, abs_tol=1e-12)
 
 
-# def test_storage_discharge_conversions():
-#     # one should be the inverse of the other
-#     river_alpha = np.array([100, 200, 300, 300])
-#     river_beta = np.array([0.1, 0.2, 0.3, 0.3])
-#     river_storage = np.array([1000, 2000, 3000, 3000])
-#     river_length = np.array([2, 4, 6, 6])
-#     waterbody_id = np.array([-1, -1, -1, 0])
-
-#     discharge = calculate_discharge_from_storage(
-#         river_storage=river_storage,
-#         river_length=river_length,
-#         river_alpha=river_alpha,
-#         river_beta=river_beta,
-#     )
-
-#     storage_check = calculate_river_storage_from_discharge(
-#         discharge=discharge,
-#         river_length=river_length,
-#         river_alpha=river_alpha,
-#         river_beta=river_beta,
-#         waterbody_id=waterbody_id,
-#     )
-
-#     assert np.allclose(river_storage[:-1], storage_check[:-1], rtol=1e-9)
-#     # storage should be 0 for the waterbody
-#     assert storage_check[-1] == 0
-
-
 def test_get_channel_ratio() -> None:
     river_width = np.array([1, 2, 3, 4, 5])
     river_length = np.array([1000, 2000, 3000, 4000, 5000])

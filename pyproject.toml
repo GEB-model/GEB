@@ -175,7 +175,7 @@ extend-select = ["I"]
 preview = true
 
 [tool.ruff.lint.extend-per-file-ignores]
-"geb/agents/{crop_farmers,decision_module_flood,decision_module,households,industry,livestock_farmers,market,reservoir_operators}.py" = [
+"geb/agents/{crop_farmers,decision_module,households,industry,livestock_farmers,market,reservoir_operators}.py" = [
     "ANN001",
     "ANN003",
     "ANN201",
@@ -205,7 +205,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/hydrology/{HRUs,plantFATE,routing}.py" = [
+"geb/hydrology/{HRUs,plantFATE}.py" = [
     "ANN001",
     "ANN003",
     "ANN201",
