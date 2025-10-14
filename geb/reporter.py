@@ -206,11 +206,12 @@ class Reporter:
                             for station_ID, station_info in stations.iterrows():
                                 xy_grid = station_info["snapped_grid_pixel_xy"]
                                 station_reporters[
-                                    f"discharge_daily_m3_s_{station_ID}"
+                                    f"discharge_hourly_m3_s_{station_ID}"
                                 ] = {
-                                    "varname": f"grid.var.discharge_m3_s",
+                                    "varname": f"grid.var.discharge_m3_s_per_substep",
                                     "type": "grid",
                                     "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
+                                    "substeps": 24,
                                 }
                             report_config = multi_level_merge(
                                 report_config,
@@ -572,7 +573,7 @@ class Reporter:
                         decompressed_array = self.hydrology.HRU.decompress(value)
                     else:
                         raise ValueError(f"Unknown varname type {config['varname']}")
-                    value = decompressed_array[int(args[1]), int(args[0])]
+                    value = decompressed_array[..., int(args[1]), int(args[0])]
                 elif function == "sample_lonlat":
                     if config["type"] == "grid":
                         gt = self.model.hydrology.grid.gt
@@ -683,9 +684,6 @@ class Reporter:
                     value = np.nansum(value)
                 else:
                     raise ValueError(f"Function {function} not recognized")
-
-        if np.isnan(value):
-            value = None
 
         if module_name not in self.variables:
             self.variables[module_name] = {}
