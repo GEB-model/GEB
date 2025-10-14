@@ -34,7 +34,6 @@ from .lakes_reservoirs import LakesReservoirs
 from .landsurface import LandSurface
 from .routing import Routing
 from .runoff_concentration import concentrate_runoff
-from .soil import Soil
 from .water_demand import WaterDemand
 
 
@@ -62,7 +61,6 @@ class Hydrology(Data, Module):
         self.crop_factor_calibration_factor = 1
 
         self.landsurface = LandSurface(self.model, self)
-        self.soil = Soil(self.model, self)
         self.groundwater = GroundWater(self.model, self)
         self.lakes_res_small = SmallLakesReservoirs(self.model, self)
         self.routing = Routing(self.model, self)
@@ -272,7 +270,6 @@ class Hydrology(Data, Module):
         if hasattr(self, "groundwater") and hasattr(self.groundwater, "modflow"):
             self.groundwater.modflow.finalize()
 
-        # if self.config["general"]["simulate_forest"] and self.soil.model.spinup is False:
         if self.model.config["general"]["simulate_forest"]:
             for plantFATE_model in self.plantFATE:
                 if plantFATE_model is not None:

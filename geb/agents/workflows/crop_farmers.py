@@ -4,9 +4,9 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit, prange
 
+from geb.hydrology.evapotranspiration import get_root_ratios
 from geb.hydrology.soil import (
     get_infiltration_capacity,
-    get_root_ratios,
 )
 
 

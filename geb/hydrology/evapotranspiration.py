@@ -88,6 +88,19 @@ def get_root_mass_ratios(
 def get_transpiration_factor(
     w_m: np.float32, wwp_m: np.float32, wcrit_m: np.float32
 ) -> np.float32:
+    """Calculate the transpiration factor based on the available water in the soil.
+
+    A factor of 1 means that there is no water stress and the plant can transpire at its potential rate.
+    A factor of 0 means that the plant is at wilting point and cannot transpire.
+
+    Args:
+        w_m: The soil water content in m.
+        wwp_m: The wilting point in m.
+        wcrit_m: The critical soil moisture content in m.
+
+    Returns:
+        The transpiration factor between 0 and 1.
+    """
     nominator = w_m - wwp_m
     denominator = wcrit_m - wwp_m
     if denominator == np.float32(0):
@@ -271,7 +284,7 @@ def calculate_transpiration(
     topwater_m: np.float32,  # [m]
     minimum_effective_root_depth_m: np.float32,  # [m]
     time_step_hours_h: np.float32 = np.float32(24),  # [h]
-) -> np.float32:
+) -> tuple[np.float32, np.float32]:
     """Calculate transpiration for a single soil cell.
 
     Args:
@@ -293,7 +306,9 @@ def calculate_transpiration(
         time_step_hours_h: Time step [h] (default 24 for daily).
 
     Returns:
-        The actual transpiration [m] for the cell.
+        A tuple containing:
+            - transpiration: The actual transpiration [m] for the cell.
+            - topwater_m: Updated topwater [m] after transpiration.
     """
     transpiration: np.float32 = np.float32(0.0)
 
@@ -430,7 +445,7 @@ def evapotranspirate(
     open_water_evaporation_m: np.float32,  # [m]
     minimum_effective_root_depth_m: np.float32,  # [m]
     time_step_hours_h: np.float32 = np.float32(24),  # [h]
-) -> tuple[np.float32, np.float32]:
+) -> tuple[np.float32, np.float32, np.float32]:
     """Evapotranspiration calculation for a single soil cell.
 
     Args:
@@ -456,10 +471,11 @@ def evapotranspirate(
 
     Returns:
         A tuple containing:
-            - transpiration: The actual transpiration [m] for the cell.
-            - actual_bare_soil_evaporation: The actual bare soil evaporation in meters for the cell.
+            - The actual transpiration [m] for the cell.
+            - The actual bare soil evaporation in meters for the cell.
+            - Updated topwater [m] after transpiration.
     """
-    transpiration = calculate_transpiration(
+    transpiration_m, topwater_m = calculate_transpiration(
         soil_is_frozen,
         wwp_m,
         wfc_m,
@@ -478,7 +494,7 @@ def evapotranspirate(
         time_step_hours_h,
     )
 
-    actual_bare_soil_evaporation = calculate_bare_soil_evaporation(
+    actual_bare_soil_evaporation_m = calculate_bare_soil_evaporation(
         soil_is_frozen,
         land_use_type,
         potential_bare_soil_evaporation_m,
@@ -488,6 +504,7 @@ def evapotranspirate(
     )
 
     return (
-        transpiration,
-        actual_bare_soil_evaporation,
+        transpiration_m,
+        actual_bare_soil_evaporation_m,
+        topwater_m,
     )

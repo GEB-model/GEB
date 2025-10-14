@@ -465,7 +465,7 @@ def test_evapotranspirate() -> None:
     open_water_evaporation = np.float32(0.0)
     minimum_effective_root_depth = np.float32(0.1)
 
-    transpiration, evaporation = evapotranspirate(
+    transpiration, evaporation, topwater_m = evapotranspirate(
         soil_is_frozen=soil_is_frozen,
         wwp_m=wwp_cell,
         wfc_m=wfc_cell,
@@ -520,7 +520,7 @@ def test_calculate_transpiration() -> None:
     topwater = np.float32(0.0)
     minimum_effective_root_depth = np.float32(0.1)
 
-    transpiration = calculate_transpiration(
+    transpiration, topwater_m = calculate_transpiration(
         soil_is_frozen=soil_is_frozen,
         wwp_m=wwp_cell,
         wfc_m=wfc_cell,
@@ -661,7 +661,7 @@ def test_calculate_transpiration_frozen_soil() -> None:
     soil_layer_height = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
     w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
 
-    transpiration_frozen = calculate_transpiration(
+    transpiration_frozen, topwater_m = calculate_transpiration(
         soil_is_frozen=True,  # Frozen soil
         wwp_m=wwp,
         wfc_m=wfc,
@@ -694,7 +694,7 @@ def test_calculate_transpiration_paddy_irrigation() -> None:
     w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
 
     # Test with topwater available
-    transpiration_paddy = calculate_transpiration(
+    transpiration_paddy, topwater_m = calculate_transpiration(
         soil_is_frozen=False,
         wwp_m=wwp,
         wfc_m=wfc,
@@ -789,7 +789,7 @@ def test_evapotranspirate_different_time_steps() -> None:
     hourly_et = daily_et / 24
 
     # Test daily
-    trans_daily, evap_daily = evapotranspirate(
+    trans_daily, evap_daily, topwater_m = evapotranspirate(
         soil_is_frozen=False,
         wwp_m=wwp,
         wfc_m=wfc,
@@ -816,7 +816,7 @@ def test_evapotranspirate_different_time_steps() -> None:
     total_evap_hourly = 0.0
 
     for _ in range(24):
-        trans_step, evap_step = evapotranspirate(
+        trans_step, evap_step, topwater_m = evapotranspirate(
             soil_is_frozen=False,
             wwp_m=wwp,
             wfc_m=wfc,

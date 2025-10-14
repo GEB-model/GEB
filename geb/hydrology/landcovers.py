@@ -1,3 +1,5 @@
+"""Land cover types used in the hydrology module."""
+
 from typing import Literal
 
 # All natural areas MUST be before the sealed and water areas

@@ -7,6 +7,7 @@ from numba import njit, prange  # noqa: F401
 
 from geb.module import Module
 from geb.workflows import balance_check
+from geb.workflows.io import load_grid
 
 from .evaporation import (
     get_CO2_induced_crop_factor_adustment,
@@ -20,15 +21,22 @@ from .evapotranspiration import (  # noqa: F401
     calculate_transpiration,
 )
 from .interception import get_interception_capacity, interception
+from .landcovers import SEALED
 from .potential_evapotranspiration import get_reference_evapotranspiration
 from .snow_glaciers import snow_model
-from .soil_scalar import (
+from .soil import (
     add_water_to_topwater_and_evaporate_open_water,
+    get_bubbling_pressure,
     get_flux,
     get_mean_unsaturated_hydraulic_conductivity,
+    get_pore_size_index_brakensiek,
+    get_soil_moisture_at_pressure,
     get_soil_water_flow_parameters,
     infiltration,
+    kv_wosten,
     rise_from_groundwater,
+    thetar_brakensiek,
+    thetas_toth,
 )
 
 
@@ -420,6 +428,8 @@ def land_surface_model(
                 )
 
             # soil moisture is updated in place
+            # use a minimum root depth of 25 cm, following AQUACROP recommendation
+            # see: Reference manual for AquaCrop v7.1 – Chapter 3
             transpiration_m_cell_hour, topwater_m[i] = calculate_transpiration(
                 soil_is_frozen=soil_is_frozen,
                 wwp_m=wwp[:, i],
@@ -435,7 +445,7 @@ def land_surface_model(
                 crop_group_number_per_group=crop_group_number_per_group,
                 w_m=w[:, i],
                 topwater_m=topwater_m[i],
-                minimum_effective_root_depth_m=np.float32(0.2),
+                minimum_effective_root_depth_m=np.float32(0.25),
                 time_step_hours_h=np.float32(24),
             )
 
@@ -550,6 +560,168 @@ class LandSurface(Module):
         self.grid.var.forest_crop_factor_per_10_days = zarr.open_group(store, mode="r")[
             "crop_coefficient"
         ][:]
+
+        self.setup_soil_properties()
+
+    def setup_soil_properties(self) -> None:
+        """Setup soil properties for the land surface module."""
+        # Soil properties
+        self.HRU.var.soil_layer_height: npt.NDArray[np.float32] = self.HRU.compress(
+            load_grid(
+                self.model.files["subgrid"]["soil/soil_layer_height"],
+                layer=None,
+            ),
+            method="mean",
+        )
+
+        soil_organic_carbon: npt.NDArray[np.float32] = self.HRU.compress(
+            load_grid(
+                self.model.files["subgrid"]["soil/soil_organic_carbon"],
+                layer=None,
+            ),
+            method="mean",
+        )
+        bulk_density: npt.NDArray[np.float32] = self.HRU.compress(
+            load_grid(
+                self.model.files["subgrid"]["soil/bulk_density"],
+                layer=None,
+            ),
+            method="mean",
+        )
+        self.HRU.var.silt: npt.NDArray[np.float32] = self.HRU.compress(
+            load_grid(
+                self.model.files["subgrid"]["soil/silt"],
+                layer=None,
+            ),
+            method="mean",
+        )
+        self.HRU.var.clay: npt.NDArray[np.float32] = self.HRU.compress(
+            load_grid(
+                self.model.files["subgrid"]["soil/clay"],
+                layer=None,
+            ),
+            method="mean",
+        )
+
+        # calculate sand content based on silt and clay content (together they should sum to 100%)
+        self.HRU.var.sand: npt.NDArray[np.float32] = (
+            100 - self.HRU.var.silt - self.HRU.var.clay
+        )
+
+        # the top 30 cm is considered as top soil (https://www.fao.org/uploads/media/Harm-World-Soil-DBv7cv_1.pdf)
+        is_top_soil: npt.NDArray[np.bool_] = np.zeros_like(
+            self.HRU.var.clay, dtype=bool
+        )
+        is_top_soil[0:3] = True
+
+        thetas = thetas_toth(
+            soil_organic_carbon=soil_organic_carbon,
+            bulk_density=bulk_density,
+            is_top_soil=is_top_soil,
+            clay=self.HRU.var.clay,
+            silt=self.HRU.var.silt,
+        )
+
+        thetar = thetar_brakensiek(
+            sand=self.HRU.var.sand, clay=self.HRU.var.clay, thetas=thetas
+        )
+        self.HRU.var.bubbling_pressure_cm = get_bubbling_pressure(
+            clay=self.HRU.var.clay, sand=self.HRU.var.sand, thetas=thetas
+        )
+        self.HRU.var.lambda_pore_size_distribution = get_pore_size_index_brakensiek(
+            sand=self.HRU.var.sand, thetas=thetas, clay=self.HRU.var.clay
+        )
+
+        # θ saturation, field capacity, wilting point and residual moisture content
+        thetafc: npt.NDArray[np.float32] = get_soil_moisture_at_pressure(
+            np.float32(-100.0),  # assuming field capacity is at -100 cm (pF 2)
+            self.HRU.var.bubbling_pressure_cm,
+            thetas,
+            thetar,
+            self.HRU.var.lambda_pore_size_distribution,
+        )
+
+        thetawp: npt.NDArray[np.float32] = get_soil_moisture_at_pressure(
+            np.float32(-(10**4.2)),  # assuming wilting point is at -10^4.2 cm (pF 4.2)
+            self.HRU.var.bubbling_pressure_cm,
+            thetas,
+            thetar,
+            self.HRU.var.lambda_pore_size_distribution,
+        )
+
+        self.HRU.var.ws: npt.NDArray[np.float32] = (
+            thetas * self.HRU.var.soil_layer_height
+        )
+        self.HRU.var.wfc: npt.NDArray[np.float32] = (
+            thetafc * self.HRU.var.soil_layer_height
+        )
+        self.HRU.var.wwp: npt.NDArray[np.float32] = (
+            thetawp * self.HRU.var.soil_layer_height
+        )
+        self.HRU.var.wres: npt.NDArray[np.float32] = (
+            thetar * self.HRU.var.soil_layer_height
+        )
+
+        # initial soil water storage between field capacity and wilting point
+        # set soil moisture to nan where land use is not bioarea
+        self.HRU.var.w: npt.NDArray[np.float32] = np.where(
+            self.HRU.var.land_use_type[np.newaxis, :] < SEALED,
+            (self.HRU.var.wfc - self.HRU.var.wwp) * 0.2 + self.HRU.var.wwp,
+            np.nan,
+        )
+        # for paddy irrigation flooded paddy fields
+        self.HRU.var.topwater: npt.NDArray[np.float32] = self.HRU.full_compressed(
+            0, dtype=np.float32
+        )
+
+        # self.HRU.var.saturated_hydraulic_conductivity: npt.NDArray[np.float32] = (
+        #     kv_brakensiek(thetas=thetas, clay=self.HRU.var.clay, sand=self.HRU.var.sand)
+        # )
+
+        # self.HRU.var.saturated_hydraulic_conductivity = kv_cosby(
+        #     sand=self.HRU.var.sand, clay=self.HRU.var.clay
+        # )  # m/day
+
+        self.HRU.var.saturated_hydraulic_conductivity = kv_wosten(
+            silt=self.HRU.var.silt,
+            clay=self.HRU.var.clay,
+            bulk_density=bulk_density,
+            organic_matter=soil_organic_carbon,
+            is_topsoil=is_top_soil,
+        )  # m/day
+
+        self.HRU.var.saturated_hydraulic_conductivity = (
+            self.HRU.var.saturated_hydraulic_conductivity
+            * self.model.config["parameters"]["ksat_multiplier"]
+        )  # calibration parameter
+
+        # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
+        # crop groups for formular in van Diepen et al, 1988
+        natural_crop_groups: npt.NDArray[np.float32] = self.hydrology.grid.load(
+            self.model.files["grid"]["soil/crop_group"]
+        )
+        self.HRU.var.natural_crop_groups: npt.NDArray[np.float32] = (
+            self.hydrology.to_HRU(data=natural_crop_groups)
+        )
+
+        self.HRU.var.arno_beta = self.HRU.full_compressed(np.nan, dtype=np.float32)
+
+        # Improved Arno's scheme parameters: Hageman and Gates 2003
+        # arno_beta defines the shape of soil water capacity distribution curve as a function of  topographic variability
+        # b = max( (oh - o0)/(oh + omax), 0.01)
+        # oh: the standard deviation of orography, o0: minimum std dev, omax: max std dev
+        elevation_std = self.grid.load(
+            self.model.files["grid"]["landsurface/elevation_standard_deviation"]
+        )
+        elevation_std = self.hydrology.to_HRU(data=elevation_std, fn=None)
+
+        # TODO: Look into this parameter. What is the maximum std at varying grid resolutions?
+        self.HRU.var.arno_beta = (elevation_std - 0.0) / (elevation_std + 300.0)
+
+        self.HRU.var.arno_beta += self.model.config["parameters"][
+            "arno_beta_add"
+        ]  # calibration parameter
+        self.HRU.var.arno_beta = np.clip(self.HRU.var.arno_beta, 0.01, 0.5)
 
     def step(
         self,
