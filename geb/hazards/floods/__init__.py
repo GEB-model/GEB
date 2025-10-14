@@ -371,61 +371,66 @@ class Floods:
         # build model for the different sfincs model regions
         lecz_regions = load_geom(self.model.files["geom"]["coastal/lecz_regions"])
 
-        # iterate over the different regions and run the coastal model for each region
+        # iterate over the different regions and create a coastal model for each region
+        coastal_models = []
         for idx, region in lecz_regions.iterrows():
             print(f"Run coastal model for region {idx}.")
             # create geodataframe for the region
             region = gpd.GeoDataFrame(
                 [region], geometry="geometry", crs=lecz_regions.crs
             )
-            sfincs_root_model: SFINCSRootModel = self.build(
-                f"coastal_region_{idx}",
-                region=region,
-                coastal=True,
-                bnd_exclude_mask=bnd_exclude_mask,
-                include_mask=region,
-                gtsm_stations=locations,
+            try:
+                sfincs_root_model: SFINCSRootModel = self.build(
+                    f"coastal_region_{idx}",
+                    region=region,
+                    coastal=True,
+                    bnd_exclude_mask=bnd_exclude_mask,
+                    include_mask=region,
+                    gtsm_stations=locations,
+                )
+                coastal_models.append(sfincs_root_model)
+            except ValueError as e:
+                print(f"Skipping region {idx} due to error: {e}")
+                continue
+
+        # run each model for the different return periods
+        # and save the flood maps
+        rp_maps_coastal = {}
+        for return_period in self.config["return_periods"]:
+            print(
+                f"Run coastal model for return period {return_period} years for all rivers."
             )
 
-            rp_maps_coastal = {}
-            for return_period in self.config["return_periods"]:
-                print(
-                    f"Run coastal model for return period {return_period} years for all rivers."
-                )
-
-                simulation: SFINCSSimulation = (
-                    sfincs_root_model.create_coastal_simulation_for_return_period(
+            simulation: MultipleSFINCSSimulations = MultipleSFINCSSimulations(
+                [
+                    coastal_model.create_coastal_simulation_for_return_period(
                         return_period,
                     )
+                    for coastal_model in coastal_models
+                ]
+            )
+            # simulation.run(
+            #     gpu=self.config["SFINCS"]["gpu"],
+            # )
+            flood_depth_return_period: xr.DataArray = (
+                simulation.read_max_flood_depth_coastal(
+                    self.config["minimum_flood_depth"]
                 )
-                try:
-                    simulation.run(
-                        gpu=self.config["SFINCS"]["gpu"],
-                    )
-                    flood_depth_return_period: xr.DataArray = (
-                        simulation.read_max_flood_depth(
-                            self.config["minimum_flood_depth"]
-                        )
-                    )
-                    rp_maps_coastal[return_period] = flood_depth_return_period
-                    to_zarr(
-                        flood_depth_return_period,
-                        self.model.output_folder
-                        / "flood_maps"
-                        / f"{return_period}_coastal_reg_{idx}.zarr",
-                        crs=flood_depth_return_period.rio.crs,
-                    )
-                except Exception as e:
-                    print(
-                        f"Error running coastal model for return period {return_period} years for region {idx}: {e}"
-                    )
-                    continue
-            if hasattr(self.model, "reporter"):
-                # and re-open afterwards
-                self.model.reporter.variables["discharge_daily"] = zarr.ZipStore(
-                    self.model.config["report_hydrology"]["discharge_daily"]["path"],
-                    mode="a",
-                )
+            )
+            rp_maps_coastal[return_period] = flood_depth_return_period
+            to_zarr(
+                flood_depth_return_period,
+                self.model.output_folder
+                / "flood_maps"
+                / f"{return_period}_coastal.zarr",
+                crs=flood_depth_return_period.rio.crs,
+            )
+        if hasattr(self.model, "reporter"):
+            # and re-open afterwards
+            self.model.reporter.variables["discharge_daily"] = zarr.ZipStore(
+                self.model.config["report_hydrology"]["discharge_daily"]["path"],
+                mode="a",
+            )
 
         return rp_maps_coastal
 

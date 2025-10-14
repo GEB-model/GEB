@@ -17,9 +17,11 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
+import rioxarray as rxr
 from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.workflows import burn_river_rect, river_source_points
 from tqdm import tqdm
+from ...workflows.io import open_zarr, to_zarr
 
 from geb.hydrology.routing import get_river_width
 
@@ -519,7 +521,6 @@ class SFINCSRootModel:
         # set forcing and configure model
         simulation.set_coastal_waterlevel_forcing(timeseries=timeseries)
         return simulation
-        # pass
 
     def create_simulation_for_return_period(
         self, return_period: int | float
@@ -608,6 +609,75 @@ class MultipleSFINCSSimulations:
         """
         for simulation in self.simulations:
             simulation.run(gpu=gpu)
+
+    def merge_flood_depths(self, flood_depths: list[xr.DataArray]) -> xr.DataArray:
+        """Merges multiple flood depth outputs into a single DataArray.
+
+        Args:
+            flood_depths: A list of xarray DataArray objects containing flood depth data.
+
+        Returns:
+            An xarray DataArray that contains the merged flood depth results.
+        """
+        # --- 2. Get union bounds ---
+
+        minx = min([flood_depth.rio.bounds()[0] for flood_depth in flood_depths])
+        miny = min([flood_depth.rio.bounds()[1] for flood_depth in flood_depths])
+        maxx = max([flood_depth.rio.bounds()[2] for flood_depth in flood_depths])
+        maxy = max([flood_depth.rio.bounds()[3] for flood_depth in flood_depths])
+
+        # --- 3. Pick resolution ---
+        # Use resolution of the first map (all have the same; y is negative if north-up, so take abs)
+        res_x, res_y = flood_depths[0].rio.resolution()
+        res_x = abs(res_x)
+        res_y = abs(res_y)
+
+        # --- 4. Build template coords ---
+        width = int(np.ceil((maxx - minx) / res_x))
+        height = int(np.ceil((maxy - miny) / res_y))
+
+        x_coords = minx + (np.arange(width) + 0.5) * res_x
+        y_coords = maxy - (np.arange(height) + 0.5) * res_y  # top→bottom
+
+        template = xr.DataArray(
+            np.full((height, width), np.nan, dtype=flood_depths[0].dtype),
+            coords={"y": y_coords, "x": x_coords},
+            dims=("y", "x"),
+        ).rio.write_crs(flood_depths[0].rio.crs)
+
+        # --- 5. Reproject all floodmaps to the template ---
+        flood_depths_reproj: list[xr.DataArray] = []
+        for flood_depth in flood_depths:
+            assert flood_depth.rio.crs is not None, "Flood depth data must have a CRS"
+            flood_depth_reproj = flood_depth.rio.reproject_match(template)
+            flood_depths_reproj.append(flood_depth_reproj)
+
+        # --- 6. Merge via maximum ---
+        rp_map = xr.concat(flood_depths_reproj, dim="stacked").max(
+            dim="stacked", skipna=True
+        )
+        rp_map.rio.write_crs(template.rio.crs)
+        return rp_map
+
+    def read_max_flood_depth_coastal(
+        self, minimum_flood_depth: float | int
+    ) -> xr.DataArray:
+        """Reads the maximum flood depth map from a coastal simulation output.
+
+        Args:
+            minimum_flood_depth: Minimum flood depth to consider in the output.
+        Returns:
+            An xarray DataArray containing the maximum flood depth.
+        """
+        flood_depths: list[xr.DataArray] = []
+        for simulation in self.simulations:
+            flood_depths.append(simulation.read_max_flood_depth(minimum_flood_depth))
+
+        # Merge all flood maps in regions
+        rp_map = self.merge_flood_depths(flood_depths)
+        assert rp_map.rio.crs is not None
+
+        return rp_map
 
     def read_max_flood_depth(self, minimum_flood_depth: float | int) -> xr.DataArray:
         """Reads the maximum flood depth map from the simulation output.
