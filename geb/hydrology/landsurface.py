@@ -517,6 +517,13 @@ class LandSurface(Module):
         return "hydrology.landsurface"
 
     def set_global_variables(self) -> None:
+        """Set global variables for the land surface module.
+
+        This is nessecary because we want this variable to be available in the numba.
+        Passing it as a global variable will allow numba to optimize the code better.
+        At the same time we avoid using a constant variable, which does not allow
+        to change the number of soil layers between different datasets.
+        """
         # set number of soil layers as global variable for numba
         global N_SOIL_LAYERS
         N_SOIL_LAYERS = self.HRU.var.soil_layer_height.shape[0]
