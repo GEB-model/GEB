@@ -1,3 +1,5 @@
+"""Soil hydrology functions."""
+
 import numpy as np
 import numpy.typing as npt
 from numba import njit
@@ -547,6 +549,20 @@ def get_pore_size_index_wosten(
     bulk_density: npt.NDArray[np.float32],
     is_top_soil: npt.NDArray[np.bool_],
 ) -> npt.NDArray[np.float32]:
+    """Determine Brooks-Corey pore size distribution index [-].
+
+    See: https://doi.org/10.1016/S0016-7061(98)00132-3
+
+    Args:
+        clay: clay percentage [%].
+        silt: silt percentage [%].
+        soil_organic_carbon: soil organic carbon content [%].
+        bulk_density: bulk density [g /cm3].
+        is_top_soil: top soil flag.
+
+    Returns:
+        pore size distribution index [-].
+    """
     return np.exp(
         -25.23
         - 0.02195 * clay
@@ -652,7 +668,9 @@ def kv_wosten(
     return ks
 
 
-def kv_cosby(sand, clay):
+def kv_cosby(
+    sand: npt.NDArray[np.float32], clay: npt.NDArray[np.float32]
+) -> npt.NDArray[np.float32]:
     """Determine saturated hydraulic conductivity kv [m/day].
 
     based on:

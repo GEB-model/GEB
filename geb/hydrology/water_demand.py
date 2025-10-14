@@ -1,3 +1,5 @@
+"""Water demand module for the hydrological model."""
+
 # --------------------------------------------------------------------------------
 # This file contains code that has been adapted from an original source available
 # in a public repository under the GNU General Public License. The original code
@@ -33,6 +35,16 @@ def weighted_sum_per_reservoir(
     weights: npt.NDArray[np.float32],
     min_length: int,
 ) -> npt.NDArray[np.float32]:
+    """Calculate weighted sum of values per reservoir.
+
+    Args:
+        farmer_command_area: Array mapping each farmer to a reservoir command area.
+        weights: Values to be summed, weighted by the command area.
+        min_length: Minimum length of the output array, typically the number of reservoirs.
+
+    Returns:
+        Weighted sum of values per reservoir.
+    """
     mask: npt.NDArray[np.bool] = farmer_command_area != -1
     farmer_command_area = farmer_command_area[mask]
     weights = weights[mask]
@@ -49,7 +61,13 @@ class WaterDemand(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology) -> None:
+    def __init__(self, model: "GEBModel", hydrology: "Hydrology") -> None:
+        """Initialize the water demand module.
+
+        Args:
+            model: The GEB model instance.
+            hydrology: The hydrology submodel instance.
+        """
         super().__init__(model)
         self.hydrology = hydrology
 

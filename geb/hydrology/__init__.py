@@ -29,7 +29,6 @@ from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
-from .lakes_res_small import SmallLakesReservoirs
 from .lakes_reservoirs import LakesReservoirs
 from .landsurface import LandSurface
 from .routing import Routing
@@ -62,7 +61,6 @@ class Hydrology(Data, Module):
 
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)
-        self.lakes_res_small = SmallLakesReservoirs(self.model, self)
         self.routing = Routing(self.model, self)
         self.lakes_reservoirs = LakesReservoirs(self.model, self)
         self.water_demand = WaterDemand(self.model, self)
@@ -213,9 +211,6 @@ class Hydrology(Data, Module):
 
         total_runoff_m = concentrate_runoff(interflow_m, baseflow_m, runoff_m)
         timer.finish_split("Runoff concentration")
-
-        self.lakes_res_small.step()
-        timer.finish_split("Small waterbodies")
 
         routing_loss_m3, over_abstraction_m3 = self.routing.step(
             total_runoff_m, channel_abstraction_m3, return_flow_m

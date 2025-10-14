@@ -1,3 +1,5 @@
+"""Interception functions."""
+
 # --------------------------------------------------------------------------------
 # This file contains code that has been adapted from an original source available
 # in a public repository under the GNU General Public License. The original code
@@ -69,8 +71,11 @@ def interception(
     storage_m: np.float32,
     capacity_m: np.float32,
     potential_transpiration_m: np.float32,
-):
+) -> tuple[np.float32, np.float32, np.float32, np.float32]:
     """Calculate interception storage, throughfall, and evaporation.
+
+    The potential transpiration is reduced by the amount of evaporation from
+    the interception storage.
 
     Args:
         rainfall_m: Precipitation (rain) in m.
@@ -82,6 +87,7 @@ def interception(
         new_storage: Updated interception storage in m.
         throughfall: Water reaching the ground after interception in m.
         evaporation: Evaporation from intercepted water in m.
+        potential_transpiration_m: Updated potential transpiration in m.
     """
     # Calculate throughfall
     throughfall = max(np.float32(0.0), rainfall_m + storage_m - capacity_m)

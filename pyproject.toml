@@ -205,7 +205,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/hydrology/{evaporation,HRUs,interception,lakes_res_small,lakes_reservoirs,landcover,plantFATE,routing,runoff_concentration,snow_frost,soil,water_demand}.py" = [
+"geb/hydrology/{HRUs,lakes_reservoirs,plantFATE,routing}.py" = [
     "ANN001",
     "ANN003",
     "ANN201",
