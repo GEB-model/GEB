@@ -1048,6 +1048,9 @@ class Bucket:
 
         Returns:
             The Bucket instance itself with the loaded data.
+
+        Raises:
+            ValueError: If a value type is not supported for loading.
         """
         for filename in path.iterdir():
             if filename.suffixes == [".storearray", ".npz"]:
@@ -1056,8 +1059,11 @@ class Bucket:
                     filename.name.removesuffix("".join(filename.suffixes)),
                     DynamicArray.load(filename),
                 )
-            elif filename.suffixes == [".array", ".npz"]:
+            elif filename.suffixes == [".array", ".npz"] or filename.suffix == ".npy":
                 value = np.load(filename)
+                # unpack the value if it was saved as a .array.npz
+                if filename.suffixes == [".array", ".npz"]:
+                    value = value["value"]
                 if value.ndim == 0:
                     value = value[()]  # convert to scalar but keep dtype
                 setattr(
@@ -1091,7 +1097,7 @@ class Bucket:
                 with open(filename, "r") as f:
                     setattr(self, filename.stem, json.load(f))
             else:
-                setattr(self, filename.stem, np.load(filename).item())
+                raise ValueError(f"Cannot load value {filename}")
 
         return self
 
