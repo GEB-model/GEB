@@ -209,11 +209,13 @@ class Hydrology(Data, Module):
 
         timer.finish_split("GW")
 
-        total_runoff_m = concentrate_runoff(interflow_m, baseflow_m, runoff_m)
+        self.grid.var.total_runoff_m = concentrate_runoff(
+            interflow_m, baseflow_m, runoff_m
+        )
         timer.finish_split("Runoff concentration")
 
         routing_loss_m3, over_abstraction_m3 = self.routing.step(
-            total_runoff_m, channel_abstraction_m3, return_flow_m
+            self.grid.var.total_runoff_m, channel_abstraction_m3, return_flow_m
         )
 
         current_storage: np.float64 = self.get_current_storage()

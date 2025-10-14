@@ -873,7 +873,6 @@ class LandSurface(Module):
         self.HRU.var.frost_index = np.full_like(
             self.HRU.var.topwater_m, np.float32(0.0)
         )
-        print("warning: setting frost index to zero")
 
         # TODO: pre-compute this once only
         delta_z = (

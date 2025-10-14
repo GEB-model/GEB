@@ -129,19 +129,11 @@ def build_sfincs(geb_model: GEBModel, nr_subgrid_pixels: int | None) -> SFINCSRo
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-@pytest.mark.parametrize(
-    "infiltrate",
-    [
-        True,
-        False,
-    ],
-)
-def test_SFINCS_precipitation(geb_model: GEBModel, infiltrate: bool) -> None:
+def test_SFINCS_precipitation(geb_model: GEBModel) -> None:
     """Test SFINCS with precipitation forcing.
 
     Args:
         geb_model: A GEB model instance with SFINCS instance.
-        infiltrate: If True, infiltration is allowed. If False, all precipitation becomes runoff.
     """
     with WorkingDirectory(working_directory):
         start_time: datetime = datetime(2000, 1, 1, 0)
@@ -159,51 +151,21 @@ def test_SFINCS_precipitation(geb_model: GEBModel, infiltrate: bool) -> None:
 
         simulation.sfincs_model.set_config("storecumprcp", 1)
 
-        rainfall_rate: float = 1.0 / 3600  # mm/hr -> kg/m²/s
+        rainfall_rate: float = 1.0 / 1000  # mm/hr -> m/hr
 
         precipitation: xr.DataArray = open_zarr(
-            geb_model.files["other"]["climate/pr_hourly"]
+            geb_model.files["other"]["climate/pr_kg_per_m2_per_s"]
         ).sel(time=slice(start_time, end_time))
-        precipitation_grid: xr.DataArray = xr.full_like(
+        runoff_m: xr.DataArray = xr.full_like(
             precipitation, rainfall_rate, dtype=np.float64
         )
         # set the first day to 0
-        precipitation_grid.loc[
-            dict(time=slice(start_time, start_time + no_rainfall_time))
-        ] = 0
+        runoff_m.loc[dict(time=slice(start_time, start_time + no_rainfall_time))] = 0
 
         mask: xr.DataArray = sfincs_model.sfincs_model.grid["msk"]
 
-        current_water_storage_grid: xr.DataArray = xr.full_like(
-            mask, 0.15, dtype=np.float32
-        )
-
-        if infiltrate:
-            max_water_storage_grid: xr.DataArray = xr.full_like(
-                mask, 0.30, dtype=np.float32
-            )
-            targeted_recovery_rate = 0.15  # m/day
-        else:
-            max_water_storage_grid: xr.DataArray = current_water_storage_grid
-            targeted_recovery_rate = 0.0
-
-        saturated_hydraulic_conductivity = (
-            (targeted_recovery_rate * 75 / (max_water_storage_grid.mean().item() * 24))
-            ** 2
-            * (25.4 / 1000)
-            * 24
-        )
-        saturated_hydraulic_conductivity_grid: xr.DataArray = xr.full_like(
-            mask,
-            saturated_hydraulic_conductivity / (24 * 3600),
-            dtype=np.float32,
-        )  # m/day -> m/s
-
-        simulation.set_precipitation_forcing_grid(
-            current_water_storage_grid=current_water_storage_grid,
-            max_water_storage_grid=max_water_storage_grid,
-            saturated_hydraulic_conductivity_grid=saturated_hydraulic_conductivity_grid,
-            precipitation_grid=precipitation_grid,
+        simulation.set_runoff_forcing(
+            runoff_m=runoff_m,
         )
 
         assert (simulation.path / "sfincs.seff").exists()
@@ -212,14 +174,6 @@ def test_SFINCS_precipitation(geb_model: GEBModel, infiltrate: bool) -> None:
         assert (simulation.path / "precip_2d.nc").exists()
         assert (simulation.path / "sfincs.inp").exists()
 
-        parameterized_max_infiltration: float = (
-            max_water_storage_grid - current_water_storage_grid
-        ).values[
-            simulation.active_cells
-        ].sum() * sfincs_model.cell_area + targeted_recovery_rate / (
-            24 * 3600
-        ) * sfincs_model.cell_area * no_rainfall_time.total_seconds()
-
         simulation.run(gpu=False)
         flood_depth: xr.DataArray = simulation.read_final_flood_depth(
             minimum_flood_depth=0.0
@@ -227,46 +181,19 @@ def test_SFINCS_precipitation(geb_model: GEBModel, infiltrate: bool) -> None:
         # get total flood volume
         flood_volume: float = simulation.get_flood_volume(flood_depth)
 
-        rainfall_volume: float = (
+        runoff_volume: float = (
             precipitation_grid.mean().compute().item()
             * (end_time - start_time).total_seconds()
             * sfincs_model.area
             / 1000
         )
 
-        cumulative_precipitation = simulation.get_cumulative_precipitation().compute()
-        cumulative_precipitation = (
-            cumulative_precipitation.mean().item() * sfincs_model.area
-        )
-
-        cumulative_infiltration_simulated = (
-            simulation.get_cumulative_infiltration().compute()
-        )
-        cumulative_infiltration_simulated = (
-            cumulative_infiltration_simulated.mean().item() * sfincs_model.area
-        )
-
-        if infiltrate:
-            # simulated infiltration should be between 50% and 100% of parameterized infiltration
-            assert parameterized_max_infiltration >= cumulative_infiltration_simulated
-            assert (
-                parameterized_max_infiltration * 0.5
-                <= cumulative_infiltration_simulated
-            )
-
-        # print("Cumulative precipitation:", cumulative_precipitation)
-        # print("rainfall volume:", rainfall_volume)
-        # print("flood volume:", flood_volume)
-        # print("Simulated cumulative infiltration:", cumulative_infiltration_simulated)
-        # print("Parameterized max infiltration:", parameterized_max_infiltration)
-        # print(
-        #     "Infiltration to runoff",
-        #     cumulative_infiltration_simulated / cumulative_precipitation,
-        # )
+        cumulative_runoff = simulation.get_cumulative_precipitation().compute()
+        cumulative_runoff = cumulative_runoff.mean().item() * sfincs_model.area
 
         assert math.isclose(
-            flood_volume + cumulative_infiltration_simulated,
-            rainfall_volume,
+            flood_volume,
+            runoff_volume,
             abs_tol=0,
             rel_tol=0.01,
         )
