@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import rioxarray as rxr
 import xarray as xr
 from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
@@ -1363,7 +1362,7 @@ class Hydrology:
                 save_folder = output_folder
             # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)
-            obs = rxr.open_rasterio(observation)
+            obs = open_zarr(observation)
             sim = flood_map.raster.reproject_like(obs)
             rivers = gpd.read_parquet(
                 Path("simulation_root")
@@ -1857,9 +1856,9 @@ class Hydrology:
             raise FileNotFoundError(
                 f"Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
             )
-        if Path(self.config["floods"]["event_observation_file"]).suffix != ".tif":
+        if Path(self.config["floods"]["event_observation_file"]).suffix != ".zarr":
             raise ValueError(
-                f"Flood observation file is not in the correct format. Please provide a .tif file."
+                f"Flood observation file is not in the correct format. Please provide a .zarr file."
             )
 
         # Calculate performance metrics for every event in config file

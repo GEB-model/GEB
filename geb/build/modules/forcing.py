@@ -648,7 +648,7 @@ def process_forecast_ECMWF(
 
     # make sure forecasts are in same grid as original data
     forcing_da = xr.open_dataarray(  # Open existing forcing data to get target grid
-        "input" + "/" + self.files["other"]["climate/pr_hourly"]
+        Path("input/") / self.files["other"]["climate/pr_hourly"]
     )
 
     da = da.interp(  # Interpolate forecast data to match the target grid
