@@ -77,7 +77,7 @@ class Industry(AgentBaseClass):
                     self.grid.gt,
                     water_demand.values,
                     self.grid.mask,
-                    self.model.hydrology.grid_to_HRU_uncompressed,
+                    self.model.hydrology.mapping_grid_to_HRU_uncompressed,
                     downscale_mask,
                     self.HRU.var.land_use_ratio,
                 )
@@ -110,7 +110,7 @@ class Industry(AgentBaseClass):
                     self.grid.gt,
                     water_consumption.values,
                     self.grid.mask,
-                    self.model.hydrology.grid_to_HRU_uncompressed,
+                    self.model.hydrology.mapping_grid_to_HRU_uncompressed,
                     downscale_mask,
                     self.HRU.var.land_use_ratio,
                 )

@@ -202,7 +202,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/hydrology/{HRUs,plantFATE}.py" = [
+"geb/hydrology/{plantFATE}.py" = [
     "ANN001",
     "ANN003",
     "ANN201",

@@ -93,7 +93,7 @@ class WaterDemand(Module):
 
         This method initializes the reservoir command areas for the HRU grid.
         """
-        reservoir_command_areas = self.HRU.compress(
+        reservoir_command_areas = self.HRU.convert_subgrid_to_HRU(
             load_grid(self.model.files["subgrid"]["waterbodies/subcommand_areas"]),
             method="last",
         )
