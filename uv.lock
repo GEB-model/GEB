@@ -1410,7 +1410,7 @@ requires-dist = [
     { name = "setuptools", specifier = ">=75.8.0" },
     { name = "statsmodels", specifier = ">=0.14.5" },
     { name = "tqdm", specifier = ">=4.66.1" },
-    { name = "ty", specifier = ">=0.0.1a20" },
+    { name = "ty", specifier = ">=0.0.1a22" },
     { name = "xarray", specifier = ">=2025.3.0" },
     { name = "xarray-regrid", extras = ["accel"], specifier = ">=0.4.1" },
     { name = "xclim", specifier = ">=0.56.0" },
