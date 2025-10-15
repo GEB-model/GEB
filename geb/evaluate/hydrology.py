@@ -1089,8 +1089,8 @@ class Hydrology:
         interception_evaporation = read_csv_with_date_index(
             folder, "hydrology.landsurface", "_water_circle_interception_evaporation"
         ).sum()
-        snow_sublimation = read_csv_with_date_index(
-            folder, "hydrology.landsurface", "_water_circle_snow_sublimation"
+        sublimation_or_deposition = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_circle_sublimation_or_deposition"
         ).sum()
         river_evaporation = read_csv_with_date_index(
             folder, "hydrology.routing", "_water_circle_river_evaporation"
@@ -1123,11 +1123,11 @@ class Hydrology:
             "storage change": abs(storage_change),
         }
 
-        if snow_sublimation > 0:
-            hierarchy["in"]["sublimation"] = snow_sublimation
+        if sublimation_or_deposition > 0:
+            hierarchy["in"]["deposition"] = sublimation_or_deposition
         else:
             hierarchy["out"]["evapotranspiration"]["sublimation"] = abs(
-                snow_sublimation
+                sublimation_or_deposition
             )
 
         # the size of a section is the sum of the flows in that section

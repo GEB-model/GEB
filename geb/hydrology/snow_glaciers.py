@@ -277,6 +277,17 @@ def calculate_melt(
         net shortwave radiation (W/m²), upward longwave radiation (W/m²),
         sensible heat flux (W/m²), and latent heat flux (W/m²).
     """
+    # If there is no snow, there can be no sublimation or deposition from the snowpack.
+    if snow_water_equivalent_m == np.float32(0.0):
+        return (
+            np.float32(0.0),  # potential_melt_m_per_hour
+            np.float32(0.0),  # sublimation_deposition_rate_m_per_hour
+            np.float32(0.0),  # net_shortwave_radiation_W_per_m2
+            np.float32(0.0),  # upward_longwave_radiation_W_per_m2
+            np.float32(0.0),  # sensible_heat_flux_W_per_m2
+            np.float32(0.0),  # latent_heat_flux_W_per_m2
+        )
+
     # Calculate turbulent fluxes (sensible, latent) and the resulting mass flux
     # from sublimation/deposition.
     (
@@ -506,6 +517,8 @@ def snow_model(
     bulk_transfer_coefficient: np.float32 = np.float32(0.0015),
     activate_layer_thickness_m: np.float32 = np.float32(0.2),
 ) -> tuple[
+    np.float32,
+    np.float32,
     np.float32,
     np.float32,
     np.float32,

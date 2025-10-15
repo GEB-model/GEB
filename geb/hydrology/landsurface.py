@@ -590,36 +590,38 @@ class LandSurface(Module):
     def setup_soil_properties(self) -> None:
         """Setup soil properties for the land surface module."""
         # Soil properties
-        self.HRU.var.soil_layer_height: npt.NDArray[np.float32] = self.HRU.compress(
-            load_grid(
-                self.model.files["subgrid"]["soil/soil_layer_height"],
-                layer=None,
-            ),
-            method="mean",
+        self.HRU.var.soil_layer_height: npt.NDArray[np.float32] = (
+            self.HRU.convert_subgrid_to_HRU_numba(
+                load_grid(
+                    self.model.files["subgrid"]["soil/soil_layer_height"],
+                    layer=None,
+                ),
+                method="mean",
+            )
         )
 
-        soil_organic_carbon: npt.NDArray[np.float32] = self.HRU.compress(
+        soil_organic_carbon: npt.NDArray[np.float32] = self.HRU.convert_subgrid_to_HRU(
             load_grid(
                 self.model.files["subgrid"]["soil/soil_organic_carbon"],
                 layer=None,
             ),
             method="mean",
         )
-        bulk_density: npt.NDArray[np.float32] = self.HRU.compress(
+        bulk_density: npt.NDArray[np.float32] = self.HRU.convert_subgrid_to_HRU(
             load_grid(
                 self.model.files["subgrid"]["soil/bulk_density"],
                 layer=None,
             ),
             method="mean",
         )
-        self.HRU.var.silt: npt.NDArray[np.float32] = self.HRU.compress(
+        self.HRU.var.silt: npt.NDArray[np.float32] = self.HRU.convert_subgrid_to_HRU(
             load_grid(
                 self.model.files["subgrid"]["soil/silt"],
                 layer=None,
             ),
             method="mean",
         )
-        self.HRU.var.clay: npt.NDArray[np.float32] = self.HRU.compress(
+        self.HRU.var.clay: npt.NDArray[np.float32] = self.HRU.convert_subgrid_to_HRU(
             load_grid(
                 self.model.files["subgrid"]["soil/clay"],
                 layer=None,
@@ -899,7 +901,7 @@ class LandSurface(Module):
             reference_evapotranspiration_water_m_dt,
             self.HRU.var.snow_water_equivalent_m,
             self.HRU.var.liquid_water_in_snow_m,
-            sublimation_m,
+            sublimation_or_deposition_m,
             self.HRU.var.snow_temperature_C,
             self.HRU.var.interception_storage_m,
             interception_evaporation_m,
@@ -979,7 +981,7 @@ class LandSurface(Module):
                 capillar_rise_m,
             ],
             outfluxes=[
-                -sublimation_m,
+                -sublimation_or_deposition_m,
                 interception_evaporation_m,
                 open_water_evaporation_m,
                 runoff_m.sum(axis=0),  # sum over hours to make it day
@@ -1056,5 +1058,5 @@ class LandSurface(Module):
             return_flow_m,
             total_water_demand_loss_m3,
             actual_evapotranspiration_m,
-            sublimation_m,
+            sublimation_or_deposition_m,
         )

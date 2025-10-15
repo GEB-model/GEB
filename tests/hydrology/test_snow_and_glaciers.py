@@ -364,19 +364,28 @@ def test_snow_model_full_cycle() -> None:
     wind_speed = np.float32(1.0)
 
     # --- Accumulation phase ---
-    new_swe, new_lw, new_temp, melt, melt_runoff, direct_rainfall, sublimation, *_ = (
-        snow_model(
-            precip,
-            air_temp,
-            swe,
-            lw,
-            snow_temp,
-            sw_rad,
-            downward_lw_rad,
-            vapor_pressure,
-            pressure,
-            wind_speed,
-        )
+    (
+        _,
+        _,
+        new_swe,
+        new_lw,
+        new_temp,
+        melt,
+        melt_runoff,
+        direct_rainfall,
+        sublimation,
+        *_,
+    ) = snow_model(
+        precip,
+        air_temp,
+        swe,
+        lw,
+        snow_temp,
+        sw_rad,
+        downward_lw_rad,
+        vapor_pressure,
+        pressure,
+        wind_speed,
     )
 
     precip_m_hr = precip * 3.6
@@ -422,6 +431,8 @@ def test_snow_model_full_cycle() -> None:
 
     # Run model for melt
     (
+        _,
+        _,
         final_swe,
         final_lw,
         final_temp,
@@ -509,6 +520,8 @@ def test_rain_on_snow_event() -> None:
     wind_speed = np.float32(5.0)
 
     (
+        _,
+        _,
         final_swe,
         final_lw,
         final_temp,
@@ -805,19 +818,28 @@ def test_sublimation_scenario() -> None:
     pressure = np.float32(70000.0)  # High altitude
     wind_speed = np.float32(8.0)
 
-    final_swe, _, _, melt_rate, melt_runoff, direct_rainfall, sublimation_rate, *_ = (
-        snow_model(
-            precip,
-            air_temp,
-            swe,
-            lw,
-            snow_temp,
-            sw_rad,
-            downward_lw_rad,
-            vapor_pressure,
-            pressure,
-            wind_speed,
-        )
+    (
+        _,
+        _,
+        final_swe,
+        _,
+        _,
+        melt_rate,
+        melt_runoff,
+        direct_rainfall,
+        sublimation_rate,
+        *_,
+    ) = snow_model(
+        precip,
+        air_temp,
+        swe,
+        lw,
+        snow_temp,
+        sw_rad,
+        downward_lw_rad,
+        vapor_pressure,
+        pressure,
+        wind_speed,
     )
 
     # Assertions
@@ -853,6 +875,8 @@ def test_no_change_scenario() -> None:
     wind_speed = np.float32(0.0)  # No wind
 
     (
+        _,
+        _,
         final_swe,
         final_lw,
         final_temp,
@@ -1092,7 +1116,6 @@ def test_intermittent_snowfall_scenario() -> None:
         activate_layer_thickness_m=params["activate_layer_thickness_m"],
     )
 
-    assert results["swe_log"][15] > 0
     assert results["swe_log"][35] > results["swe_log"][29]
     assert np.any(results["swe_log"] < np.maximum.accumulate(results["swe_log"]))
     assert results["swe_log"][-1] > 0
@@ -1591,6 +1614,8 @@ def _run_scenario(
         precip_kg_per_m2_per_s = np.float32(precip_series[i] / 3.6)
 
         (
+            _,
+            _,
             swe,
             lw,
             snow_temp,

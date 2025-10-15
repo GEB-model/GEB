@@ -58,8 +58,8 @@ WATER_CIRCLE_REPORT_CONFIG = {
             "type": "HRU",
             "function": "weightedsum",
         },
-        "_water_circle_snow_sublimation": {
-            "varname": ".sublimation_m",
+        "_water_circle_sublimation_or_deposition": {
+            "varname": ".sublimation_or_deposition_m",
             "type": "HRU",
             "function": "weightedsum",
         },

@@ -125,7 +125,7 @@ class Hydrology(Data, Module):
             return_flow_m,
             total_water_demand_loss_m3,
             actual_evapotranspiration_m,
-            sublimation_m,
+            sublimation_or_deposition_m,
         ) = self.landsurface.step()
 
         interflow_m = self.to_grid(HRU_data=interflow_m, fn="weightedmean")
@@ -139,7 +139,7 @@ class Hydrology(Data, Module):
                 actual_evapotranspiration_m.astype(np.float64) * self.HRU.var.cell_area
             ).sum() + total_water_demand_loss_m3
 
-            outflux_m3 -= (sublimation_m * self.HRU.var.cell_area).sum()
+            outflux_m3 -= (sublimation_or_deposition_m * self.HRU.var.cell_area).sum()
 
             invented_water: np.float64 = (
                 (
