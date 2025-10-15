@@ -123,6 +123,65 @@ class DecisionModule:
         NPV_summed[0] = NPV_summed[1]
         return NPV_summed
 
+    @staticmethod
+    @njit(cache=True)
+    def IterateThroughWindstorm(
+        NPV_summed: np.ndarray,
+        n_windstorms: int,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        amenity_value: np.ndarray,
+        max_T: int,
+        expected_damages: np.ndarray,
+        r: float,
+    ) -> np.ndarray:
+        """This function calculates the NPV of each windstorm event.
+
+        Args:
+            NPV_summed: Array containing the summed time discounted NPV for each windstorm event i for each agent
+            n_windstorms: number of windstorm events included in model run
+            wealth: array containing the wealth of each household
+            income: array containing the income of each household
+            amenity_value: array containing the amenity value of each household
+            max_T: time horizon (same for each agent)
+            expected_damages: array containing the expected damages of each household under all windstorm events i
+            n_agents: number of household agents in the current admin unit
+            r: time discounting rate"
+
+        Returns:
+            NPV_summed_w: Array containing the summed time discounted NPV for each windstorm event i for each agent
+        """
+        # No windstorm in t=0
+        NPV_t0 = (wealth + income + amenity_value).astype(np.float32)
+
+        # Iterate through all windstorms events
+        for i, index in enumerate(np.arange(1, n_windstorms + 3)):
+            # Check if we are in the last iterations
+            if i < n_windstorms:
+                NPV_wind_i = wealth + income + amenity_value - expected_damages[i]
+                NPV_wind_i = NPV_wind_i.astype(np.float32)
+            # if in the last two windstorms do not subtract damages (probs of no event)
+            elif i >= n_windstorms:
+                # No damages for the last two 'no event' cases
+                NPV_wind_i = wealth + income + amenity_value
+                NPV_wind_i = NPV_wind_i.astype(np.float32)
+
+            # Discounted future NPVs
+            t_arr = np.arange(1, max_T, dtype=np.float32)
+            discounts = 1 / (1 + r) ** t_arr
+            NPV_tx = np.sum(discounts) * NPV_wind_i
+
+            # Add NPV at t0 (which is not discounted)
+            NPV_tx += NPV_t0
+
+            # Store result
+            NPV_summed[index] = NPV_tx
+
+        # Store NPVat p=0 for bounds in integration
+        NPV_summed[0] = NPV_summed[1]
+
+        return NPV_summed
+
     def IterateThroughEvents(
         self,
         n_events: int,
@@ -185,6 +244,17 @@ class DecisionModule:
                 profits_no_event=profits_no_event,
             )
 
+        elif mode == "windstorm":
+            NPV_summed = self.IterateThroughWindstorm(
+                NPV_summed=NPV_summed,
+                n_windstorms=n_events,
+                r=discount_rate,
+                max_T=max_T,
+                wealth=wealth,
+                income=income,
+                amenity_value=amenity_value,
+                expected_damages=expected_damages,
+            )
         else:
             raise ValueError("Mode must be either 'flood' or 'drought'")
 
@@ -796,3 +866,336 @@ class DecisionModule:
         EU_do_nothing_array[np.where(adapted == 1)] = -np.inf
 
         return EU_do_nothing_array
+
+    def calcEU_shutters_windstorm(
+        self,
+        geom_id,
+        n_agents: int,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        expendature_cap,
+        amenity_value: np.ndarray,
+        amenity_weight,
+        risk_perception: np.ndarray,
+        expected_damages_adapt: np.ndarray,
+        adaptation_costs: np.ndarray,
+        time_adapted,
+        loan_duration,
+        p_windstorm: np.ndarray,
+        T: np.ndarray,
+        r: float,
+        sigma: float,
+        **kwargs,
+    ) -> np.ndarray:
+        """_This function calculates the subjective utility of implementing window shutters.
+
+        Returns:
+            EU_shutters_array: array containing the time discounted subjective utility of installing window shutters for each agent.
+        """
+        # weight amenities
+        amenity_value = amenity_value * amenity_weight
+
+        # ensure probabilites are in increasing order
+        indices = np.argsort(p_windstorm)
+        expected_damages_adapt = expected_damages_adapt[indices]
+        p_windstorm = np.sort(p_windstorm)
+
+        # Preallocate arrays
+        n_windstorms, n_agents = expected_damages_adapt.shape
+        p_all_windstorms = np.full(
+            (p_windstorm.size + 3, n_agents), -1, dtype=np.float32
+        )
+
+        # calculate perceived risk
+        perc_risk = p_windstorm.repeat(n_agents).reshape(p_windstorm.size, n_agents)
+        perc_risk *= risk_perception
+        p_all_windstorms[1:-2, :] = perc_risk
+
+        # Cap perceived probability at 0.998. People cannot percieve any flood event
+        # to occur more than once per year
+        if np.max(p_all_windstorms > 0.998):
+            p_all_windstorms[np.where(p_all_windstorms > 0.998)] = 0.998
+
+        # Add lasts p to complete x axis to 1 for trapezoid function
+        p_all_windstorms[-2, :] = p_all_windstorms[-3, :] + 0.001
+        p_all_windstorms[-1, :] = 1
+        p_all_windstorms[0, :] = 0
+
+        # Prepare arrays
+        max_T = np.int32(np.max(T))
+
+        n_agents = np.int32(n_agents)
+        NPV_summed = self.IterateThroughEvents(
+            n_events=n_windstorms,
+            n_agents=n_agents,
+            discount_rate=r,
+            wealth=wealth,
+            income=income,
+            amenity_value=amenity_value,
+            max_T=max_T,
+            expected_damages=expected_damages_adapt,
+            mode="windstorm",
+        )
+
+        # ---- Adaptation cost logic ----
+        # For testing we assume a one-time payment with no loan for shutters installation
+        discounts = 1 / (1 + r) ** np.arange(1)  # only year 0
+        years = np.arange(1, dtype=np.int32)
+        cost_array = np.full((n_agents, years.size), -1, np.float32)
+        for i, year in enumerate(years):
+            cost_array[:, i] = np.sum(discounts[: year + 1]) * adaptation_costs
+
+        # right now we are considering no loan but this could be change/adapted in the future
+        loan_left = (loan_duration - time_adapted).astype(np.int32)  # 0 for no loan
+        loan_left = np.maximum(loan_left, 0)
+        loan_left - np.minimum(loan_left, T)
+
+        axis_0 = np.array(np.arange(n_agents))
+        time_discounted_adaptation_cost = adaptation_costs  # one-time payment
+
+        # substract from NPV array
+        NPV_summed -= time_discounted_adaptation_cost
+
+        # Filter negative NPVs
+        NPV_summed = np.maximum(1, NPV_summed)
+        if (NPV_summed == 1).any():
+            n_negative = np.sum(NPV_summed == 1)
+            print(
+                f"[CalcEU_adapt_windsotrm] Warning, {n_negative} negative NPVs in {geom_id}"
+            )
+
+        # Calculate expected utility
+        if sigma == 1:
+            EU_store = np.log(NPV_summed)
+        else:
+            EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
+
+        # Use composite trapezoidal rule to integrate EU over event probability
+        y = EU_store
+        x = p_all_windstorms
+        EU_shutters_array = np.trapezoid(y=y, x=x, axis=0)
+
+        # Constrained affordability -> set EU of adapt to -np.inf for those unable to afford it
+        constrained = np.where(income * expendature_cap <= adaptation_costs)
+        EU_shutters_array[constrained] = -np.inf
+
+        return EU_shutters_array
+
+    def calcEU_do_nothing_w(
+        self,
+        geom_id,
+        n_agents: int,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        amenity_value: np.ndarray,
+        amenity_weight,
+        risk_perception: np.ndarray,
+        expected_damages: np.ndarray,
+        adapted: np.ndarray,
+        p_windstorm: np.ndarray,
+        T: np.ndarray,
+        r: float,
+        sigma: float,
+        **kwargs,
+    ) -> np.ndarray:
+        """This function calculates the time discounted subjective utility of not undertaking any action.
+
+        Returns:
+            EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
+        """
+        # weigh amenities
+        amenity_value = amenity_value * amenity_weight
+
+        # Ensure p floods is in increasing order
+        indices = np.argsort(p_windstorm)
+        expected_damages = expected_damages[indices]
+        p_windstorm = np.sort(p_windstorm)
+
+        # Preallocate arrays
+        n_windstorm, n_agents = expected_damages.shape
+        p_all_events = np.full((p_windstorm.size + 3, n_agents), -1, dtype=np.float32)
+
+        # calculate perceived risk
+        perc_risk = p_windstorm.repeat(n_agents).reshape(p_windstorm.size, n_agents)
+        perc_risk *= risk_perception
+        p_all_events[1:-2, :] = perc_risk
+
+        # Cap percieved probability at 0.998. People cannot percieve any flood
+        # event to occur more than once per year
+        if np.max(p_all_events > 0.998):
+            p_all_events[np.where(p_all_events > 0.998)] = 0.998
+
+        # Add lasts p to complete x axis to 1 for trapezoid function (integrate
+        # domain [0,1])
+        p_all_events[-2, :] = p_all_events[-3, :] + 0.001
+        p_all_events[-1, :] = 1
+
+        # Add 0 to ensure we integrate [0, 1]
+        p_all_events[0, :] = 0
+
+        # Prepare arrays
+        max_T = np.int32(np.max(T))
+
+        # Part njit, iterate through floods
+        n_agents = np.int32(n_agents)
+        NPV_summed = self.IterateThroughEvents(
+            n_events=n_windstorm,
+            n_agents=n_agents,
+            discount_rate=r,
+            wealth=wealth,
+            income=income,
+            amenity_value=amenity_value,
+            max_T=max_T,
+            expected_damages=expected_damages,
+            mode="windstorm",
+        )
+
+        # Filter out negative NPVs
+        NPV_summed = np.maximum(1, NPV_summed)
+
+        if (NPV_summed == 1).any():
+            n_negative = np.sum(NPV_summed == 1)
+            print(
+                f"[calcEU_do_nothing_w] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
+            )
+
+        # Calculate expected utility
+        if sigma == 1:
+            EU_store = np.log(NPV_summed)
+        else:
+            EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
+
+        # Use composite trapezoidal rule integrate EU over event probability
+        y = EU_store
+        x = p_all_events
+        EU_do_nothing_w_array = np.trapezoid(y=y, x=x, axis=0)
+
+        # People who already adapted cannot not adapt
+        EU_do_nothing_w_array[np.where(adapted == 2)] = -np.inf
+
+        # EU_do_nothing_array *= self.error_terms_stay
+        return EU_do_nothing_w_array
+
+    def calcEU_insure_multirisk(
+        self,
+        geom_id,
+        n_agents: int,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        expendature_cap,
+        amenity_value: np.ndarray,
+        amenity_weight,
+        risk_perception: np.ndarray,
+        expected_damages: np.ndarray,
+        premium: np.ndarray,
+        p_event: np.ndarray,
+        T: np.ndarray,
+        r: float,
+        sigma: float,
+        deductable=0.1,
+        **kwargs,
+    ) -> np.ndarray:
+        """This function calculates the time discounted subjective utility of not undertaking any action.
+
+        Args:
+            n_agents: number of agents in the floodplain.
+            wealth: array containing the wealth of each household.
+            income: array containing the income of each household.
+            amenity_value: array containing the aminity value of each household.
+            risk_perception: array containing the risk perception of each household (see manuscript for details).
+            expected_damages: array expected damages for each flood event for each agent under no implementation of dry flood proofing.
+            adapted: array containing the adaptation status of each agent (1 = adapted, 0 = not adapted).
+            p_floods: array containing the exceedance probabilities of each flood event included in the analysis.
+            T: array containing the decision horizon of each agent.
+            r: time discounting factor.
+            sigma: risk aversion setting.
+
+        Returns:
+            EU_insure_array
+        """
+        # multiply damages by deductable
+        expected_damages_insured = expected_damages * deductable
+
+        # weigh amenities
+        amenity_value = amenity_value * amenity_weight
+
+        # Ensure p floods is in increasing order
+        indices = np.argsort(p_floods)
+        expected_damages_insured = expected_damages_insured[indices]
+        p_floods = np.sort(p_floods)
+
+        # Preallocate arrays
+        n_floods, n_agents = expected_damages_insured.shape
+        p_all_events = np.full((p_floods.size + 3, n_agents), -1, dtype=np.float32)
+
+        # calculate perceived risk
+        perc_risk = p_floods.repeat(n_agents).reshape(p_floods.size, n_agents)
+        perc_risk *= risk_perception
+        p_all_events[1:-2, :] = perc_risk
+
+        # Cap percieved probability at 0.998. People cannot percieve any flood
+        # event to occur more than once per year
+        if np.max(p_all_events > 0.998):
+            p_all_events[np.where(p_all_events > 0.998)] = 0.998
+
+        # Add lasts p to complete x axis to 1 for trapezoid function (integrate
+        # domain [0,1])
+        p_all_events[-2, :] = p_all_events[-3, :] + 0.001
+        p_all_events[-1, :] = 1
+
+        # Add 0 to ensure we integrate [0, 1]
+        p_all_events[0, :] = 0
+
+        # Prepare arrays
+        max_T = np.int32(np.max(T))
+
+        # Part njit, iterate through floods
+        n_agents = np.int32(n_agents)
+        NPV_summed = self.IterateThroughFlood(
+            n_floods,
+            wealth,
+            income,
+            amenity_value,
+            max_T,
+            expected_damages_insured,
+            n_agents,
+            r,
+        )
+        # some usefull attributes for cost calculations
+        # get time discounted adaptation cost for each agent based on time since adaptation
+        discounts = 1 / (1 + r) ** np.arange(max_T)
+        # create cost array for years payment left
+        years = np.arange(max_T + 1)
+        cost_array = np.full(years.size, -1, np.float32)
+        for i, year in enumerate(years):
+            cost_array[i] = np.sum(discounts[:year] * premium.mean())
+        # take the calculated adaptation cost based on decision horizon agents
+        time_discounted_adaptation_cost = np.take(cost_array, T)
+
+        # subtract from NPV array
+        NPV_summed -= time_discounted_adaptation_cost
+        # Filter out negative NPVs
+        NPV_summed = np.maximum(1, NPV_summed)
+        if (NPV_summed == 1).any():
+            n_negative = np.sum(NPV_summed == 1)
+            print(
+                f"[calcEU_insure] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
+            )
+
+        # Calculate expected utility
+        if sigma == 1:
+            EU_store = np.log(NPV_summed)
+        else:
+            EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
+
+        # Use composite trapezoidal rule integrate EU over event probability
+        y = EU_store
+        x = p_all_events
+        EU_insure_array = np.trapz(y=y, x=x, axis=0)
+
+        # set EU of adapt to -np.inf for thuse unable to afford it [maybe move this earlier to reduce array sizes]
+        constrained = np.where(income * expendature_cap <= premium)
+        EU_insure_array[constrained] = -np.inf
+        EU_insure_array *= self.error_terms_stay
+
+        return EU_insure_array

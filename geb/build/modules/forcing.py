@@ -19,8 +19,10 @@ import xarray as xr
 import xclim.indices as xci
 from dateutil.relativedelta import relativedelta
 from isimip_client.client import ISIMIPClient
+
+# from zarr.codecs.numcodecs import FixedScaleOffset
+from numcodecs import FixedScaleOffset
 from tqdm import tqdm
-from zarr.codecs.numcodecs import FixedScaleOffset
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
