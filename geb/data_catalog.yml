@@ -656,25 +656,3 @@ ERA5_hourly:
     source_author: ECMWF
     source_license: CC-BY licence
     source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels
-osm_land_polygons:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: osm/land-polygons-split-4326/land_polygons.shp
-  meta:
-    category: landsurface
-    source_author: OpenStreetMap contributors
-    source_url: https://osmdata.openstreetmap.de/data/land-polygons.html
-    source_license: Data Commons Open Database License (ODbL)   
-osm_coastlines:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: osm/coastlines-split-4326/lines.shp
-  meta:
-    category: landsurface
-    source_author: OpenStreetMap contributors
-    source_url: https://osmdata.openstreetmap.de/data/coastlines.html
-    source_license: Data Commons Open Database License (ODbL)
-
-

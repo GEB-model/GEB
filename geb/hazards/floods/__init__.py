@@ -10,8 +10,10 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import rasterio
 import xarray as xr
 import zarr
+from shapely.geometry import shape
 from shapely.geometry.point import Point
 
 from ...hydrology.HRUs import load_geom
@@ -86,15 +88,7 @@ class Floods:
             utm_crs: str = f"EPSG:327{utm_zone}"  # Southern hemisphere
         return utm_crs
 
-    def build(
-        self,
-        name: str,
-        region: gpd.GeoDataFrame = None,
-        coastal: bool = False,
-        include_mask: gpd.GeoDataFrame = None,
-        bnd_exclude_mask: gpd.GeoDataFrame = None,
-        gtsm_stations: gpd.GeoDataFrame = None,
-    ) -> SFINCSRootModel:
+    def build(self, name: str) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
 
         Before using this model, forcing must be set.
@@ -103,11 +97,7 @@ class Floods:
 
         Args:
             name: Name of the SFINCS model (used for the model root directory).
-            region: The region geometry for the model (optional).
-            coastal: Whether to setup the model for coastal flooding (default is False).
-            bnd_exclude_mask: A geometry to exclude from the boundary cells (optional).
-            include_mask: A geometry to include as active cells (optional).
-            gtsm_stations: A GeoDataFrame containing locations of GTSM stations for coastal boundary conditions. Required if coastal is True.
+
         Returns:
             The built or read SFINCSRootModel instance.
         """
@@ -120,10 +110,8 @@ class Floods:
                         self.model.files["other"][entry["path"]]
                     ).to_dataset(name="elevtn")
 
-            if region is None:
-                region = load_geom(self.model.files["geom"]["routing/subbasins"])
             sfincs_model.build(
-                region=region,
+                region=load_geom(self.model.files["geom"]["routing/subbasins"]),
                 DEMs=DEM_config,
                 rivers=self.rivers,
                 discharge=self.discharge_spinup_ds,
@@ -150,10 +138,6 @@ class Floods:
                 in self.model.config["hydrology"]["routing"]["river_depth"]
                 else {},
                 mask_flood_plains=False,  # setting this to True sometimes leads to errors
-                coastal=coastal,
-                include_mask=include_mask,
-                bnd_exclude_mask=bnd_exclude_mask,
-                gtsm_stations=gtsm_stations,
             )
         else:
             sfincs_model.read()
@@ -382,98 +366,104 @@ class Floods:
 
         self.model.agents.households.flood(flood_depth=flood_depth)
 
+    def build_mask_for_coastal_sfincs(self) -> gpd.GeoDataFrame:
+        """Builds a mask to define the active cells and boundaries for the coastal SFINCS model.
+
+        Returns:
+            GeoDataFrame: A GeoDataFrame containing the coastal mask.
+        """
+        # Load the dataset (assumes NetCDF with CF conventions and georeferencing info)
+        mask = xr.load_dataset(self.model.files["other"]["drainage/mask"])
+
+        # Extract the mask variable
+        mask_var = mask["mask"]
+
+        # Make sure it has a CRS
+        if mask_var.rio.crs is None:
+            mask_var = mask_var.rio.write_crs(
+                "EPSG:4326", inplace=False
+            )  # or your known CRS
+
+        # Extract binary mask values
+        mask_data = mask_var.values.astype(np.uint8)
+
+        # Get transform from raster metadata
+        transform = mask_var.rio.transform()
+
+        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
+        shapes = rasterio.features.shapes(mask_data, mask=None, transform=transform)
+
+        # Build GeoDataFrame from the shapes generator
+        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
+
+        gdf = gpd.GeoDataFrame.from_records(records)
+        gdf.set_geometry("geometry", inplace=True)
+        gdf.crs = mask_var.rio.crs
+        # include a 1km buffer to the mask to include the coastal areas
+        # Keep only mask == 1
+        gdf = gdf[gdf["value"] == 1]
+        # gdf.geometry = gdf.geometry.buffer(0.00833)
+
+        return gdf
+
+    def build_coastal_boundary_mask(self) -> gpd.GeoDataFrame:
+        """Builds a mask to define the coastal boundaries for the SFINCS model.
+
+        Returns:
+            GeoDataFrame: A GeoDataFrame containing the coastal boundary mask.
+        """
+        lecz = xr.load_dataset(
+            self.model.files["other"]["landsurface/low_elevation_coastal_zone"]
+        )
+
+        # Make sure it has a CRS
+        if lecz.rio.crs is None:
+            lecz = lecz.rio.write_crs(
+                "EPSG:4326", inplace=False
+            )  # check CRS for later applications
+
+        # Extract binary mask values
+        lecz_data = lecz["low_elevation_coastal_zone"].values.astype(np.uint8)
+
+        # Get transform from raster metadata
+        transform = lecz.rio.transform()
+
+        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
+        shapes = rasterio.features.shapes(lecz_data, mask=None, transform=transform)
+
+        # Build GeoDataFrame from the shapes generator
+        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
+
+        gdf = gpd.GeoDataFrame.from_records(records)
+        gdf.set_geometry("geometry", inplace=True)
+        gdf = gdf.set_crs(lecz.rio.crs, inplace=True)
+        gdf = gdf[gdf["value"] == 1]  # Keep only mask == 1
+        return gdf
+
     def get_coastal_return_period_maps(self) -> dict[int, xr.DataArray]:
         """This function models coastal flooding for the return periods specified in the model config.
 
         Returns:
             dict[int, xr.DataArray]: A dictionary mapping return periods to their respective flood maps.
         """
-        # close the zarr store
-        if hasattr(self.model, "reporter"):
-            self.model.reporter.variables["discharge_daily"].close()
-        # load osm land polygons to exclude from coastal boundary cells
-        bnd_exclude_mask = load_geom(
-            self.model.files["geom"]["coastal/land_polygons"],
+        coastal_mask = self.build_mask_for_coastal_sfincs()
+        boundary_mask = self.build_coastal_boundary_mask()
+        model_root: Path = self.sfincs_model_root("entire_region_coastal")
+        build_parameters = self.get_build_parameters(model_root)
+        build_parameters["region"] = coastal_mask
+        build_parameters["boundary_mask"] = boundary_mask
+        build_sfincs_coastal(
+            **build_parameters,
         )
-        # load gtsm tide gauge locations for water level boundary conditions
-        locations = (
-            gpd.GeoDataFrame(
-                gpd.read_parquet(self.model.files["geom"]["gtsm/stations_coast_rp"])
-            )
-            .rename(columns={"station_id": "stations"})
-            .set_index("stations")
+
+        rp_maps_coastal = run_sfincs_for_return_periods_coastal(
+            model=self.model,
+            model_root=model_root,
+            gpu=self.config["SFINCS"]["gpu"],
+            export_dir=self.model.output_folder / "flood_maps",
+            clean_working_dir=True,
+            return_periods=self.config["return_periods"],
         )
-        # convert index to int
-        locations.index = locations.index.astype(int)
-
-        # build model for the different sfincs model regions
-        lecz_regions = load_geom(self.model.files["geom"]["coastal/lecz_regions"])
-
-        # take the union of all regions as model region
-        model_domain = lecz_regions.unary_union.envelope
-        # create gpd.GeoDataFrame for the model domain
-        model_domain_gdf = gpd.GeoDataFrame(
-            geometry=[model_domain], crs=lecz_regions.crs
-        )
-        # iterate over the different regions and create a coastal model for each region
-        coastal_models = []
-        for idx, region in lecz_regions.iterrows():
-            print(f"Run coastal model for region {idx}.")
-            # create geodataframe for the region
-            region = gpd.GeoDataFrame(
-                [region], geometry="geometry", crs=lecz_regions.crs
-            )
-            try:
-                sfincs_root_model: SFINCSRootModel = self.build(
-                    f"coastal_region_{idx}",
-                    region=model_domain_gdf,
-                    coastal=True,
-                    bnd_exclude_mask=bnd_exclude_mask,
-                    include_mask=region,
-                    gtsm_stations=locations,
-                )
-                coastal_models.append(sfincs_root_model)
-            except ValueError as e:
-                print(f"Skipping region {idx} due to error: {e}")
-                continue
-
-        # run each model for the different return periods
-        # and save the flood maps
-        rp_maps_coastal = {}
-        for return_period in self.config["return_periods"]:
-            print(
-                f"Run coastal model for return period {return_period} years for all rivers."
-            )
-
-            simulation: MultipleSFINCSSimulations = MultipleSFINCSSimulations(
-                [
-                    coastal_model.create_coastal_simulation_for_return_period(
-                        return_period,
-                    )
-                    for coastal_model in coastal_models
-                ]
-            )
-            simulation.run(
-                gpu=self.config["SFINCS"]["gpu"],
-            )
-            flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
-                self.config["minimum_flood_depth"]
-            )
-            rp_maps_coastal[return_period] = flood_depth_return_period
-            to_zarr(
-                flood_depth_return_period,
-                self.model.output_folder
-                / "flood_maps"
-                / f"{return_period}_coastal.zarr",
-                crs=flood_depth_return_period.rio.crs,
-            )
-        if hasattr(self.model, "reporter"):
-            # and re-open afterwards
-            self.model.reporter.variables["discharge_daily"] = zarr.ZipStore(
-                self.model.config["report_hydrology"]["discharge_daily"]["path"],
-                mode="a",
-            )
-
         return rp_maps_coastal
 
     def get_riverine_return_period_maps(self) -> dict[int, xr.DataArray]:
@@ -514,15 +504,6 @@ class Floods:
             flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
                 self.config["minimum_flood_depth"]
             )
-
-            to_zarr(
-                flood_depth_return_period,
-                self.model.output_folder
-                / "flood_maps"
-                / f"{return_period}_riverine.zarr",
-                crs=flood_depth_return_period.rio.crs,
-            )
-
             rp_maps_riverine[return_period] = flood_depth_return_period
 
         if hasattr(self.model, "reporter"):
