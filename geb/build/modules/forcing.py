@@ -1,3 +1,4 @@
+import os
 import tempfile
 from datetime import date, datetime, timedelta
 from functools import partial
@@ -78,7 +79,8 @@ def download_forecasts_ECMWF(
     from the MARS archive using the ECMWF API. It handles the download and processing of both
     deterministic (cf) and ensemble (pf) forecasts returning them as an xarray DataArray.
 
-    This function requires the ECMWF_API_KEY to be set in the environment variables. You can do this by adding it to your .env file. For detailed instructions, see GEB documentation.
+    This function requires the ECMWF_API_KEY, ECMWF_API_URL and ECMWF_API_EMAIL to be set in the environment variables.
+    You can do this by adding it to your .env file. For detailed instructions, see GEB documentation.
 
     Your API key: https://api.ecmwf.int/v1/key/
     MARS data archive: https://apps.ecmwf.int/mars-catalogue/
@@ -97,8 +99,9 @@ def download_forecasts_ECMWF(
         forecast_timestep_hours: The forecast timestep in hours.
 
     Raises:
-        ImportError: If ECMWF_API_KEY is not found in environment variables.
+        ImportError: If ECMWF_API_KEY, ECMWF_API_URL or ECMWF_API_EMAIL is not found in environment variables.
         ValueError: If forecast dates are before 2010-01-01.
+        APIException: If there is an error accessing the ECMWF MARS service.
     """
     self.logger.info(
         f"Downloading forecast variables {forecast_variables}"
@@ -108,12 +111,12 @@ def download_forecasts_ECMWF(
         parents=True, exist_ok=True
     )  # Create the directory structure if it doesn't exist
 
-    if (
-        "ECMWF_API_KEY" not in os.environ
-    ):  # Check if ECMWF API key is available in environment
-        raise ImportError(
-            "ECMWF_API_KEY not found in environment variables. Please set it to your ECMWF API key in .env file. See https://github.com/ecmwf/ecmwf-api-client"
-        )
+    # Check for ECMWF API key in environment variables
+    for variable in ("ECMWF_API_KEY", "ECMWF_API_URL", "ECMWF_API_EMAIL"):
+        if variable not in os.environ:
+            raise ImportError(
+                f"{variable} not found in environment variables. Please set it to your ECMWF API key in .env file. See https://github.com/ecmwf/ecmwf-api-client"
+            )
     server = ecmwfapi.ECMWFService("mars")  # Initialize ECMWF MARS service connection
 
     fc_area_buffer: float = 1  # spatial buffer around the forecasts
@@ -144,13 +147,6 @@ def download_forecasts_ECMWF(
     ) in forecast_date_list:  # Loop through each forecast date to download
         print(forecast_date)  # Print the current forecast date being processed
 
-        forecast_datetime_str = forecast_date.strftime(
-            "%Y%m%dT%H%M%S"
-        )  # Format datetime as string for filename
-        forecast_date_str = forecast_date.strftime(
-            "%Y-%m-%d"
-        )  # Format date as string for MARS request
-
         # Process MARS request parameters
         mars_class: str = "od"  # operational data class
         mars_expver: str = "1"  # operational version number
@@ -158,6 +154,7 @@ def download_forecasts_ECMWF(
         mars_param: str = "/".join(
             str(var) for var in forecast_variables
         )  # Join parameter codes with "/" separator
+
         if forecast_timestep_hours == 1:  # Check if hourly timestep is requested
             mars_step: str = generate_forecast_steps(
                 forecast_date
@@ -168,6 +165,7 @@ def download_forecasts_ECMWF(
             raise ValueError(
                 f"Forecast timestep {forecast_timestep_hours} is not supported. Please use 1 or >=6."
             )
+
         mars_stream: str = "enfo"  # Ensemble forecast stream
         mars_time: str = forecast_date.strftime(
             "%H"
@@ -187,7 +185,7 @@ def download_forecasts_ECMWF(
             str, Any
         ] = {  # Build MARS request dictionary with all parameters
             "class": mars_class,
-            "date": forecast_date_str,
+            "date": forecast_date.strftime("%Y-%m-%d"),
             "expver": mars_expver,
             "levtype": mars_levtype,
             "param": mars_param,
@@ -199,6 +197,9 @@ def download_forecasts_ECMWF(
             "area": mars_area,
         }
 
+        forecast_datetime_str = forecast_date.strftime(
+            "%Y%m%dT%H%M%S"
+        )  # Format datetime as string for filename
         if (
             forecast_model == "probabilistic_forecast"
         ):  # check if ensemble forecasts are requested
@@ -227,10 +228,20 @@ def download_forecasts_ECMWF(
             f"Requesting data from ECMWF MARS server.. {mars_request}"
         )  # Log the MARS request parameters
 
-        server.execute(  # Execute the MARS request to download data
-            mars_request,
-            output_filename,
-        )  # start the download
+        try:
+            server.execute(  # Execute the MARS request to download data
+                mars_request,
+                output_filename,
+            )  # start the download
+        except ecmwfapi.api.APIException as e:
+            if "has no access to services/mars" in str(e):
+                raise ValueError(
+                    "\033[91mAccess denied to ECMWF MARS service. To get access, please visit https://confluence.ecmwf.int/display/WEBAPI/Access+MARS, "
+                    "register for an account if you don't have one, and request access to the MARS archive, usually through your country representative (see website). "
+                    "Once approved, ensure your API key, URL, and email are set in your .env file as ECMWF_API_KEY, ECMWF_API_URL, and ECMWF_API_EMAIL.\033[0m"
+                ) from e
+            else:
+                raise  # Re-raise other API exceptions
 
 
 def process_forecast_ECMWF(
