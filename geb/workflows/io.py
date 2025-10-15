@@ -67,13 +67,13 @@ def load_array(fp: Path) -> np.ndarray:
 
 
 def load_grid(
-    filepath: str | Path, layer: int = 1, return_transform_and_crs: bool = False
+    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
 ) -> np.ndarray | tuple[np.ndarray, Affine, str]:
     """Load a raster grid from a .tif or .zarr file.
 
     Args:
         filepath: The path to the .tif or .zarr file.
-        layer: The layer to load from the .tif file. Default is 1.
+        layer: The layer to load from the .tif file. If None, all layers are loaded. Default is 1.
         return_transform_and_crs: Whether to return the affine transform and CRS along with the data. Default is False.
 
     Returns:
