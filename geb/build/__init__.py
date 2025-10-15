@@ -52,6 +52,7 @@ GDAL_HTTP_ENV_OPTS = {
     "GDAL_HTTP_RETRY_DELAY": "2",  # Delay (seconds) between retries
     "GDAL_HTTP_TIMEOUT": "30",  # Timeout in seconds
     "GDAL_CACHEMAX": 1 * 1024**3,  # 1 GB cache size
+    "GDAL_MAX_BAND_COUNT": "200000",  # Increase max band count
 }
 defenv(**GDAL_HTTP_ENV_OPTS)
 
@@ -1667,6 +1668,7 @@ class GEBModel(
             self.files["other"][name] = fp
 
             fp_with_root: Path = Path(self.root, fp)
+
             da: xr.DataArray = to_zarr(
                 da,
                 fp_with_root,
