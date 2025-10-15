@@ -553,6 +553,8 @@ def snow_model(
 
     Returns:
         A tuple containing:
+        - rainfall_m_per_hour: Rainfall rate (m).
+        - snowfall_m_per_hour: Snowfall rate (m).
         - new_snow_water_equivalent_m: Updated snow water equivalent (m).
         - new_liquid_water_in_snow_m: Updated liquid water content in snow pack (m).
         - new_snow_temperature_C: Updated snow pack temperature (°C).
@@ -681,20 +683,24 @@ def snow_model(
     liquid_water_with_rain_m = liquid_water_after_melt_runoff_m + rainfall_m_per_hour
 
     # Calculate runoff from rainfall
-    direct_rainfall_m_per_hour, new_liquid_water_in_snow_m = calculate_runoff(
-        liquid_water_with_rain_m,
-        swe_after_refreezing_m,
-        water_holding_capacity_fraction,
-        activate_layer_thickness_m=activate_layer_thickness_m,
+    rainfall_that_resulted_in_runoff_m_per_hour, new_liquid_water_in_snow_m = (
+        calculate_runoff(
+            liquid_water_with_rain_m,
+            swe_after_refreezing_m,
+            water_holding_capacity_fraction,
+            activate_layer_thickness_m=activate_layer_thickness_m,
+        )
     )
 
     return (
+        rainfall_m_per_hour,
+        snowfall_m_per_hour,
         swe_after_refreezing_m,
         new_liquid_water_in_snow_m,
         final_snow_temperature_C,
         actual_melt_m_per_hour,
         melt_runoff_m_per_hour,
-        direct_rainfall_m_per_hour,
+        rainfall_that_resulted_in_runoff_m_per_hour,
         sublimation_deposition_rate_m_per_hour,
         actual_refreezing_m_per_hour,
         snow_surface_temperature_C,

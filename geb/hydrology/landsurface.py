@@ -96,6 +96,8 @@ def land_surface_model(
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
 ]:
     """The main land surface model of GEB.
 
@@ -170,6 +172,8 @@ def land_surface_model(
     interflow_m = np.zeros_like(pr_kg_per_m2_per_s)
 
     # total per day variables for water balance
+    rain_m = np.zeros_like(snow_water_equivalent_m)
+    snow_m = np.zeros_like(snow_water_equivalent_m)
     sublimation_m = np.zeros_like(snow_water_equivalent_m)
     interception_evaporation_m = np.zeros_like(snow_water_equivalent_m)
     open_water_evaporation_m = np.zeros_like(snow_water_equivalent_m)
@@ -215,12 +219,14 @@ def land_surface_model(
             )
 
             (
+                rain_m_cell,
+                snow_m_cell,
                 snow_water_equivalent_m_cell,
                 liquid_water_in_snow_m_cell,
                 snow_temperature_C_cell,
                 _,  # melt (before refreezing)
                 runoff_from_melt_m,  # after refreezing
-                rainfall_m,
+                rainfall_that_resulted_in_runoff_if_interception_was_not_considered_m_per_hour,
                 sublimation_m_cell_hour,
                 _,  # refreezing
                 _,  # snow surface temperature
@@ -240,6 +246,9 @@ def land_surface_model(
                 air_pressure_Pa=ps_pascal_cell[hour],
                 wind_10m_m_per_s=wind_10m_m_per_s,
             )
+
+            rain_m[i] += rain_m_cell
+            snow_m[i] += snow_m_cell
 
             sublimation_m[i] += sublimation_m_cell_hour
 
@@ -270,7 +279,7 @@ def land_surface_model(
                 interception_evaporation_m_cell_hour,
                 potential_transpiration_m_cell_hour,
             ) = interception(
-                rainfall_m=rainfall_m,
+                rainfall_m=rainfall_that_resulted_in_runoff_if_interception_was_not_considered_m_per_hour,
                 storage_m=interception_storage_m[i],
                 capacity_m=interception_capacity_m[i],
                 potential_transpiration_m=potential_transpiration_m_cell_hour,
@@ -473,6 +482,8 @@ def land_surface_model(
     potential_transpiration_m = np.nan_to_num(potential_transpiration_m)
 
     return (
+        rain_m,
+        snow_m,
         topwater_m,
         reference_evapotranspiration_grass_m,
         reference_evapotranspiration_water_m,
@@ -881,6 +892,8 @@ class LandSurface(Module):
         ) / 2
 
         (
+            rain_m,
+            snow_m,
             self.HRU.var.topwater_m,
             reference_evapotranspiration_grass_m_dt,
             reference_evapotranspiration_water_m_dt,

@@ -1057,10 +1057,10 @@ class Hydrology:
         storage_change = storage.iloc[-1] - storage.iloc[0]
 
         rain = read_csv_with_date_index(
-            folder, "hydrology.snowfrost", "_water_circle_rain"
+            folder, "hydrology.landsurface", "_water_circle_rain"
         ).sum()
         snow = read_csv_with_date_index(
-            folder, "hydrology.snowfrost", "_water_circle_snow"
+            folder, "hydrology.landsurface", "_water_circle_snow"
         ).sum()
 
         domestic_water_loss = read_csv_with_date_index(
@@ -1078,19 +1078,19 @@ class Hydrology:
         ).sum()
 
         transpiration = read_csv_with_date_index(
-            folder, "hydrology.landcover", "_water_circle_transpiration"
+            folder, "hydrology.landsurface", "_water_circle_transpiration"
         ).sum()
         bare_soil_evaporation = read_csv_with_date_index(
-            folder, "hydrology.landcover", "_water_circle_bare_soil_evaporation"
+            folder, "hydrology.landsurface", "_water_circle_bare_soil_evaporation"
         ).sum()
-        direct_evaporation = read_csv_with_date_index(
-            folder, "hydrology.landcover", "_water_circle_direct_evaporation"
+        open_water_evaporation = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_circle_open_water_evaporation"
         ).sum()
         interception_evaporation = read_csv_with_date_index(
-            folder, "hydrology.landcover", "_water_circle_interception_evaporation"
+            folder, "hydrology.landsurface", "_water_circle_interception_evaporation"
         ).sum()
         snow_sublimation = read_csv_with_date_index(
-            folder, "hydrology.landcover", "_water_circle_snow_sublimation"
+            folder, "hydrology.landsurface", "_water_circle_snow_sublimation"
         ).sum()
         river_evaporation = read_csv_with_date_index(
             folder, "hydrology.routing", "_water_circle_river_evaporation"
@@ -1108,7 +1108,7 @@ class Hydrology:
                 "evapotranspiration": {
                     "transpiration": transpiration,
                     "bare soil evaporation": bare_soil_evaporation,
-                    "direct evaporation": direct_evaporation,
+                    "open water evaporation": open_water_evaporation,
                     "interception evaporation": interception_evaporation,
                     "snow sublimation": snow_sublimation,
                     "river evaporation": river_evaporation,

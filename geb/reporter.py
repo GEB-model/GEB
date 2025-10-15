@@ -9,7 +9,7 @@ from typing import Any, Union
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import zarr
+import zarr.storage
 from honeybees.library.raster import coord_to_pixel
 
 from geb.module import Module
@@ -27,14 +27,39 @@ WATER_CIRCLE_REPORT_CONFIG = {
             "type": "scalar",
         },
     },
-    "hydrology.snowfrost": {
+    "hydrology.landsurface": {
         "_water_circle_rain": {
-            "varname": ".rain",
+            "varname": ".rain_m",
             "type": "HRU",
             "function": "weightedsum",
         },
         "_water_circle_snow": {
-            "varname": ".snow",
+            "varname": ".snow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_transpiration": {
+            "varname": ".transpiration_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_bare_soil_evaporation": {
+            "varname": ".bare_soil_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_open_water_evaporation": {
+            "varname": ".open_water_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_interception_evaporation": {
+            "varname": ".interception_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_snow_sublimation": {
+            "varname": ".sublimation_m",
             "type": "HRU",
             "function": "weightedsum",
         },
@@ -65,33 +90,6 @@ WATER_CIRCLE_REPORT_CONFIG = {
         "_water_circle_livestock_water_loss": {
             "varname": ".livestock_water_loss_m3",
             "type": "scalar",
-        },
-    },
-    "hydrology.landcover": {
-        "_water_circle_transpiration": {
-            "varname": ".actual_transpiration",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_bare_soil_evaporation": {
-            "varname": ".actual_bare_soil_evaporation",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_direct_evaporation": {
-            "varname": ".open_water_evaporation",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_interception_evaporation": {
-            "varname": ".interception_evaporation",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_snow_sublimation": {
-            "varname": ".snow_sublimation",
-            "type": "HRU",
-            "function": "weightedsum",
         },
     },
 }
@@ -245,7 +243,9 @@ class Reporter:
         else:
             self.activated = False
 
-    def create_variable(self, config: dict, module_name: str, name: str) -> None:
+    def create_variable(
+        self, config: dict, module_name: str, name: str
+    ) -> list | zarr.storage.LocalStore:
         """This function creates a variable for the reporter.
 
         For
