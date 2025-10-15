@@ -1110,7 +1110,6 @@ class Hydrology:
                     "bare soil evaporation": bare_soil_evaporation,
                     "open water evaporation": open_water_evaporation,
                     "interception evaporation": interception_evaporation,
-                    "snow sublimation": snow_sublimation,
                     "river evaporation": river_evaporation,
                     "waterbody evaporation": waterbody_evaporation,
                 },
@@ -1123,6 +1122,13 @@ class Hydrology:
             },
             "storage change": abs(storage_change),
         }
+
+        if snow_sublimation > 0:
+            hierarchy["in"]["sublimation"] = snow_sublimation
+        else:
+            hierarchy["out"]["evapotranspiration"]["sublimation"] = abs(
+                snow_sublimation
+            )
 
         # the size of a section is the sum of the flows in that section
         # plus the size of the section itself. So if all of the section
