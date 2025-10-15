@@ -1095,7 +1095,7 @@ def evaluate(
 
 def share_fn(
     working_directory: Path,
-    name: bool,
+    name: str,
     include_preprocessing: bool,
     include_output: bool,
 ) -> None:
