@@ -188,6 +188,10 @@ class SFINCSRootModel:
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
+        coastal: bool = False,
+        include_mask: gpd.GeoDataFrame | None = None,
+        bnd_exclude_mask: gpd.GeoDataFrame | None = None,
+        gtsm_stations: gpd.GeoDataFrame | None = None,
     ) -> "SFINCSRootModel":
         """Build a SFINCS model.
 
@@ -211,6 +215,10 @@ class SFINCSRootModel:
             depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
+            coastal: Whether to set up the model for coastal flooding. Defaults to False.
+            include_mask: A GeoDataFrame defining areas to include as active cells. Required if coastal is True.
+            bnd_exclude_mask: A GeoDataFrame defining areas to exclude from coastal boundary conditions. Required if coastal is True.
+            gtsm_stations: A GeoDataFrame containing locations of GTSM stations for coastal boundary conditions. Required if coastal is True.
 
         Returns:
             The SFINCSRootModel instance with the built model.
@@ -262,6 +270,23 @@ class SFINCSRootModel:
 
         if mask_flood_plains:
             do_mask_flood_plains(sf)
+        elif coastal:
+            sf.setup_mask_active(
+                mask=include_mask,
+                zmin=-21,  # minimum elevation for valid cells
+                zmax=12,  # maximum elevation for valid cells (lecz is +10m, so no active cells in the mask should be above that)
+                # include_mask=include_mask,
+                drop_area=1,  # drops areas that are smaller than 1km2,
+                reset_mask=True,
+            )
+
+            sf.setup_mask_bounds(
+                btype="waterlevel",
+                zmax=2,  # maximum elevation for valid boundary cells
+                exclude_mask=bnd_exclude_mask,
+            )
+            sf.setup_waterlevel_forcing(locations=gtsm_stations)
+
         else:
             sf.setup_mask_active(
                 region, zmin=-21, reset_mask=True
@@ -301,42 +326,44 @@ class SFINCSRootModel:
         )
         # give error if outflow greater than 1
         if len(outflow_points) > 1:
-            raise ValueError(
+            print(
                 "More than one outflow point found, outflow boundary condition will fail to setup"
             )
         elif len(outflow_points) == 0:
-            raise ValueError(
-                "No outflow point found, outflow boundary condition will fail to setup"
+            print(
+                "No outflow point found, outflow boundary condition will fail to setup. Skipping outflow elevation calculation..."
             )
-        # print crs of outflow_points
-        assert outflow_points.crs == sf.crs, (
-            "CRS of outflow_points is not the same as the model crs"
-        )
-        # set crs before saving
-        outflow_points = outflow_points.set_crs(sf.crs)
-        # save to model root as a gpkg file
-        outflow_points.to_file(self.path / "gis/outflow_points.gpkg", driver="GPKG")
-        # Get the single outflow point coordinates
-        x_coord = outflow_points.geometry.x.iloc[0]
-        y_coord = outflow_points.geometry.y.iloc[0]
-        assert sf.grid.dep.rio.crs == outflow_points.crs, (
-            "CRS of sf.grid.dep is not the same as the outflow_points crs"
-        )
-        # Sample from sf.grid.dep (which is the DEM DataArray)
-        elevation_value = sf.grid.dep.sel(
-            x=x_coord, y=y_coord, method="nearest"
-        ).values.item()
-
-        # Optional: sanity check
-        if elevation_value is None or elevation_value <= 0:
-            raise ValueError(
-                f"Invalid outflow elevation ({elevation_value}), must be > 0"
+        elif len(outflow_points) == 1:
+            print("One outflow point found, proceeding...")
+            # print crs of outflow_points
+            assert outflow_points.crs == sf.crs, (
+                "CRS of outflow_points is not the same as the model crs"
             )
+            # set crs before saving
+            outflow_points = outflow_points.set_crs(sf.crs)
+            # save to model root as a gpkg file
+            outflow_points.to_file(self.path / "gis/outflow_points.gpkg", driver="GPKG")
+            # Get the single outflow point coordinates
+            x_coord = outflow_points.geometry.x.iloc[0]
+            y_coord = outflow_points.geometry.y.iloc[0]
+            assert sf.grid.dep.rio.crs == outflow_points.crs, (
+                "CRS of sf.grid.dep is not the same as the outflow_points crs"
+            )
+            # Sample from sf.grid.dep (which is the DEM DataArray)
+            elevation_value = sf.grid.dep.sel(
+                x=x_coord, y=y_coord, method="nearest"
+            ).values.item()
 
-        # Save elevation value to a file in model_root/gis
-        outflow_elev_path = self.path / "gis" / "outflow_elevation.json"
-        with open(outflow_elev_path, "w") as f:
-            json.dump({"outflow_elevation": elevation_value}, f)
+            # Optional: sanity check
+            if elevation_value is None or elevation_value <= 0:
+                raise ValueError(
+                    f"Invalid outflow elevation ({elevation_value}), must be > 0"
+                )
+
+            # Save elevation value to a file in model_root/gis
+            outflow_elev_path = self.path / "gis" / "outflow_elevation.json"
+            with open(outflow_elev_path, "w") as f:
+                json.dump({"outflow_elevation": elevation_value}, f)
 
         river_representative_points = []
         for ID in rivers.index:
@@ -558,6 +585,43 @@ class SFINCSRootModel:
             **kwargs,
         )
 
+    def create_coastal_simulation_for_return_period(
+        self, return_period: int | float
+    ) -> "SFINCSSimulation":
+        """Creates a SFINCS simulation for coastal regions for a specified return period.
+
+        This method sets up a simulation that includes coastal
+        boundary conditions, such as storm surge or tidal influences, for the specified
+        return period.
+
+        Args:
+            return_period: The return period for which to create the coastal simulation.
+        Returns:
+            An instance of SFINCSSimulation configured for coastal conditions.
+        """
+        timeseries = pd.read_csv(
+            Path(
+                f"output/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
+            ),
+            index_col=0,
+        )
+        timeseries.index = pd.to_datetime(timeseries.index, format="%Y-%m-%d %H:%M:%S")
+        # convert columns to int
+        timeseries.columns = timeseries.columns.astype(int)
+
+        # Align timeseries columns with locations index
+        timeseries = timeseries.iloc[300:-300]  # trim the first and last 300 rows
+
+        simulation: SFINCSSimulation = self.create_simulation(
+            simulation_name=f"rp_{return_period}_coastal",
+            start_time=timeseries.index[0],
+            end_time=timeseries.index[-1],
+        )
+
+        # set forcing and configure model
+        simulation.set_coastal_waterlevel_forcing(timeseries=timeseries)
+        return simulation
+
     def create_simulation_for_return_period(
         self, return_period: int | float
     ) -> "MultipleSFINCSSimulations":
@@ -655,6 +719,75 @@ class MultipleSFINCSSimulations:
         for simulation in self.simulations:
             simulation.run(gpu=gpu)
 
+    def merge_flood_depths(self, flood_depths: list[xr.DataArray]) -> xr.DataArray:
+        """Merges multiple flood depth outputs into a single DataArray.
+
+        Args:
+            flood_depths: A list of xarray DataArray objects containing flood depth data.
+
+        Returns:
+            An xarray DataArray that contains the merged flood depth results.
+        """
+        # --- 2. Get union bounds ---
+
+        minx = min([flood_depth.rio.bounds()[0] for flood_depth in flood_depths])
+        miny = min([flood_depth.rio.bounds()[1] for flood_depth in flood_depths])
+        maxx = max([flood_depth.rio.bounds()[2] for flood_depth in flood_depths])
+        maxy = max([flood_depth.rio.bounds()[3] for flood_depth in flood_depths])
+
+        # --- 3. Pick resolution ---
+        # Use resolution of the first map (all have the same; y is negative if north-up, so take abs)
+        res_x, res_y = flood_depths[0].rio.resolution()
+        res_x = abs(res_x)
+        res_y = abs(res_y)
+
+        # --- 4. Build template coords ---
+        width = int(np.ceil((maxx - minx) / res_x))
+        height = int(np.ceil((maxy - miny) / res_y))
+
+        x_coords = minx + (np.arange(width) + 0.5) * res_x
+        y_coords = maxy - (np.arange(height) + 0.5) * res_y  # top→bottom
+
+        template = xr.DataArray(
+            np.full((height, width), np.nan, dtype=flood_depths[0].dtype),
+            coords={"y": y_coords, "x": x_coords},
+            dims=("y", "x"),
+        ).rio.write_crs(flood_depths[0].rio.crs)
+
+        # --- 5. Reproject all floodmaps to the template ---
+        flood_depths_reproj: list[xr.DataArray] = []
+        for flood_depth in flood_depths:
+            assert flood_depth.rio.crs is not None, "Flood depth data must have a CRS"
+            flood_depth_reproj = flood_depth.rio.reproject_match(template)
+            flood_depths_reproj.append(flood_depth_reproj)
+
+        # --- 6. Merge via maximum ---
+        rp_map = xr.concat(flood_depths_reproj, dim="stacked").max(
+            dim="stacked", skipna=True
+        )
+        rp_map.rio.write_crs(template.rio.crs)
+        return rp_map
+
+    def read_max_flood_depth_coastal(
+        self, minimum_flood_depth: float | int
+    ) -> xr.DataArray:
+        """Reads the maximum flood depth map from a coastal simulation output.
+
+        Args:
+            minimum_flood_depth: Minimum flood depth to consider in the output.
+        Returns:
+            An xarray DataArray containing the maximum flood depth.
+        """
+        flood_depths: list[xr.DataArray] = []
+        for simulation in self.simulations:
+            flood_depths.append(simulation.read_max_flood_depth(minimum_flood_depth))
+
+        # Merge all flood maps in regions
+        rp_map = self.merge_flood_depths(flood_depths)
+        assert rp_map.rio.crs is not None
+
+        return rp_map
+
     def read_max_flood_depth(self, minimum_flood_depth: float | int) -> xr.DataArray:
         """Reads the maximum flood depth map from the simulation output.
 
@@ -695,7 +828,7 @@ class SFINCSSimulation:
         end_time: datetime,
         spinup_seconds: int = 86400,
         write_gis_files: bool = True,
-        write_figures: bool = False,
+        write_figures: bool = True,
     ) -> None:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
 
@@ -789,6 +922,28 @@ class SFINCSSimulation:
             nodes=locations,
             timeseries=discharge_by_river,
         )
+
+    def set_coastal_waterlevel_forcing(self, timeseries: pd.DataFrame) -> None:
+        """Sets up coastal water level forcing for the SFINCS model from a timeseries.
+
+        Args:
+            timeseries: A DataFrame containing the water level timeseries for each node.
+                The columns should match the index of the locations GeoDataFrame.
+        """
+        # assert np.array_equal(locations.index, np.arange(1, len(locations) + 1))
+
+        # select only locations that are in the model
+        station_ids_in_model = self.sfincs_model.forcing["bzs"].index.values
+        timeseries = timeseries.loc[:, timeseries.columns.isin(station_ids_in_model)]
+
+        self.sfincs_model.setup_waterlevel_forcing(timeseries=timeseries)
+
+        self.sfincs_model.write_forcing()
+        self.sfincs_model.write_config()
+
+        if self.write_figures:
+            self.sfincs_model.plot_forcing(fn_out="forcing.png")
+            self.sfincs_model.plot_basemap(fn_out="basemap.png")
 
     def set_discharge_forcing_from_nodes(
         self, nodes: gpd.GeoDataFrame, timeseries: pd.DataFrame
