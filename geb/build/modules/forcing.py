@@ -115,7 +115,9 @@ def download_forecasts_ECMWF(
     for variable in ("ECMWF_API_KEY", "ECMWF_API_URL", "ECMWF_API_EMAIL"):
         if variable not in os.environ:
             raise ImportError(
-                f"{variable} not found in environment variables. Please set it to your ECMWF API key in .env file. See https://github.com/ecmwf/ecmwf-api-client"
+                f"{variable} not found in environment variables. "
+                f"Please set it as {variable}=XXXXX in your .env file. "
+                f"See https://github.com/ecmwf/ecmwf-api-client on how to obtain the keys."
             )
     server = ecmwfapi.ECMWFService("mars")  # Initialize ECMWF MARS service connection
 
