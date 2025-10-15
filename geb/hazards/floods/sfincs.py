@@ -17,11 +17,9 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
-import rioxarray as rxr
 from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.workflows import burn_river_rect, river_source_points
 from tqdm import tqdm
-from ...workflows.io import open_zarr, to_zarr
 
 from geb.hydrology.routing import get_river_width
 
@@ -151,6 +149,7 @@ class SFINCSRootModel:
             coastal: Whether to set up the model for coastal flooding. Defaults to False.
             include_mask: A GeoDataFrame defining areas to include as active cells. Required if coastal is True.
             bnd_exclude_mask: A GeoDataFrame defining areas to exclude from coastal boundary conditions. Required if coastal is True.
+            gtsm_stations: A GeoDataFrame containing locations of GTSM stations for coastal boundary conditions. Required if coastal is True.
 
         Returns:
             The SFINCSRootModel instance with the built model.

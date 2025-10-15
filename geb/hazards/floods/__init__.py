@@ -101,6 +101,8 @@ class Floods:
             region: The region geometry for the model (optional).
             coastal: Whether to setup the model for coastal flooding (default is False).
             bnd_exclude_mask: A geometry to exclude from the boundary cells (optional).
+            include_mask: A geometry to include as active cells (optional).
+            gtsm_stations: A GeoDataFrame containing locations of GTSM stations for coastal boundary conditions. Required if coastal is True.
         Returns:
             The built or read SFINCSRootModel instance.
         """
