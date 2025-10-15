@@ -11,7 +11,6 @@ import numpy.typing as npt
 import pandas as pd
 import pytest
 import xarray as xr
-import zarr
 import zarr.storage
 from zarr.codecs.numcodecs import FixedScaleOffset
 
