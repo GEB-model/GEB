@@ -5,9 +5,9 @@ import datetime
 import os
 import shutil
 import tempfile
+import threading
 import time
 import warnings
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -23,6 +23,7 @@ import requests
 import s3fs
 import xarray as xr
 import zarr
+import zarr.storage
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
 from rasterio.transform import Affine
@@ -624,24 +625,31 @@ class AsyncGriddedForcingReader:
     multiple timesteps sequentially.
     """
 
-    def __init__(self, filepath: Path, variable_name: str) -> None:
+    def __init__(
+        self, filepath: Path, variable_name: str, asynchronous: bool = True
+    ) -> None:
         """Initializes the AsyncGriddedForcingReader.
 
         Args:
             filepath: The path to the zarr file.
             variable_name: The name of the variable to read from the zarr file.
+            asynchronous: Whether to use asynchronous reading. Default is False.
         """
         self.variable_name = variable_name
         self.filepath = filepath
+        self.asynchronous = asynchronous
 
-        store = zarr.storage.LocalStore(self.filepath, read_only=True)
-        self.ds = zarr.open_group(store, mode="r")
+        self.store = zarr.storage.LocalStore(self.filepath, read_only=True)
+        self.var_store = zarr.storage.LocalStore(
+            self.filepath / self.variable_name, read_only=True
+        )
+        self.ds = zarr.open_group(self.store, mode="r")
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
                 message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
             )
-            self.var = self.ds[variable_name]
+            self.array = self.ds[self.variable_name]
 
         self.datetime_index = cftime.num2date(
             self.ds["time"][:],
@@ -654,11 +662,29 @@ class AsyncGriddedForcingReader:
         self.time_size = self.datetime_index.size
 
         all_async_readers.append(self)
-        self.preloaded_data_future = None
-        self.current_index = -1  # Initialize to -1 to indicate no data loaded yet
+        self.preloaded_data_future: asyncio.Task | None = None
+        self.current_start_index: int = (
+            -1
+        )  # Initialize to -1 to indicate no data loaded yet
+        self.current_end_index: int = (
+            -1
+        )  # Initialize to -1 to indicate no data loaded yet
+        self.current_data: npt.NDArray[Any] | None = None
 
-        self.loop = asyncio.new_event_loop()
-        self.executor = ThreadPoolExecutor(max_workers=1)
+        if self.asynchronous:
+            self.loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
+            self.thread: threading.Thread = threading.Thread(
+                target=self._run_loop, daemon=True
+            )
+            self.thread.start()
+        else:
+            self.loop = None
+            self.thread = None
+
+    def _run_loop(self) -> None:
+        """Run the asyncio event loop in a background thread."""
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
 
     def load(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
         """Load the data for the given index from the zarr file.
@@ -670,65 +696,105 @@ class AsyncGriddedForcingReader:
         Returns:
             The data for the given index from the zarr file.
         """
-        data: npt.NDArray[Any] = self.var[start_index:end_index, :]
+        data: npt.NDArray[np.generic] = self.array[start_index:end_index]
         return data
 
-    async def load_await(self, index: int) -> npt.NDArray[Any]:
+    async def load_await(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
         """Load the data for the given index from the zarr file asynchronously.
 
         Args:
-            index: The index of the timestep to read in the zarr file, along the time dimension.
+            start_index: The start index of the timestep to load in the zarr file, along the time dimension.
+            end_index: The final index of the timestep to load in the zarr file, along the time dimension.
 
         Returns:
-            An awaitable that resolves to the data for the given index from the zarr file.
+            The data for the given index range from the zarr file.
         """
-        return await self.loop.run_in_executor(self.executor, lambda: self.load(index))
+        array: zarr.AsyncArray = await zarr.AsyncArray.open(self.var_store)
+        values: npt.NDArray[np.generic] = await array.getitem(
+            (slice(start_index, end_index),)
+        )
+        return values
 
-    async def preload_next(self, index: int) -> None | npt.NDArray[Any]:
+    async def preload_next(
+        self, start_index: int, end_index: int, n: int
+    ) -> npt.NDArray[Any] | None:
         """Preload the next timestep asynchronously.
 
         Args:
-            index: The index of the timestep to read in the zarr file, along the time dimension.
+            start_index: The start index of the current timestep in the zarr file, along the time dimension.
+            end_index: The final index of the current timestep in the zarr file, along the time dimension.
+            n: The number of timesteps to skip ahead for preloading.
 
         Returns:
-            An awaitable that resolves to the data for the next index, or None if there is no next index.
+            The data for the next timestep range, or None if there is no next timestep in bounds.
         """
         # Preload the next timestep asynchronously
-        if index + 1 < self.time_size:
-            return await self.load_await(index + 1)
+        if end_index + n <= self.time_size:
+            return await self.load_await(start_index + n, end_index + n)
         return None
 
-    async def read_timestep_async(self, index: int) -> npt.NDArray[Any]:
+    async def read_timestep_async(
+        self, start_index: int, end_index: int, n: int
+    ) -> npt.NDArray[Any]:
         """Read the data for the given index from the zarr file asynchronously.
 
         Also preloads the next timestep asynchronously so that it is ready when needed.
 
         Args:
-            index: The index of the timestep to read in the zarr file, along the time dimension.
+            start_index: The index of the timestep to read in the zarr file, along the time dimension.
+            end_index: The final index of the timestep to read in the zarr file, along the time dimension.
+            n: The number of timesteps to read.
 
         Returns:
-            The data for the given index from the zarr file.
+            The data for the given index range from the zarr file.
 
+        Raises:
+            ValueError: If the indices are out of bounds.
         """
-        assert index < self.time_size, "Index out of bounds."
-        assert index >= 0, "Index out of bounds."
-        # Check if the requested data is already preloaded, if so, just return that data
-        if index == self.current_index:
-            return self.current_data
+        if start_index < 0 or end_index > self.time_size:
+            raise ValueError(
+                f"Index out of bounds: start_index={start_index}, end_index={end_index}, "
+                f"time_size={self.time_size}"
+            )
+        # Check if the requested data is already loaded (cache hit), if so, just return that data
+        # To simplify we don't do any fancy re-index if only one of start or end index matches
+        if (
+            self.current_data is not None
+            and start_index == self.current_start_index
+            and end_index == self.current_end_index
+        ):
+            data = self.current_data
         # Check if the data for the next timestep is preloaded, if so, await for it to complete
-        if self.preloaded_data_future is not None and self.current_index + 1 == index:
+        elif (
+            self.preloaded_data_future is not None
+            and self.current_start_index + n == start_index
+        ):
             data = await self.preloaded_data_future
-        # Load the requested data if not preloaded
+        # Load the requested data if not preloaded (cache miss)
         else:
-            data = await self.load_await(index)
+            # Cancel any pending preload task since we're not reading sequentially
+            if (
+                self.preloaded_data_future is not None
+                and not self.preloaded_data_future.done()
+            ):
+                self.preloaded_data_future.cancel()
+            data = await self.load_await(start_index, end_index)
 
-        # Initiate preloading the next timestep, do not await here, this returns a future
-        self.preloaded_data_future = asyncio.create_task(self.preload_next(index))
-        self.current_index = index
+        # Initiate preloading the next timestep, do not await here, this returns a task
+        # Only preload if we're not re-reading the same timestep
+        if (
+            start_index != self.current_start_index
+            or end_index != self.current_end_index
+        ):
+            self.preloaded_data_future = self.loop.create_task(
+                self.preload_next(start_index, end_index, n)
+            )
+        self.current_start_index = start_index
+        self.current_end_index = end_index
         self.current_data = data
         return data
 
-    def get_index(self, date: datetime.datetime) -> int:
+    def get_index(self, date: datetime.datetime, n: int) -> int:
         """Convert datetime object to dtype of time coordinate.
 
         There is a very high probability that the dataset is the same as
@@ -737,59 +803,80 @@ class AsyncGriddedForcingReader:
 
         Args:
             date: The date to convert.
+            n: The number of timesteps to preload ahead.
 
         Returns:
             The index of the given date in the zarr file.
 
+        Raises:
+            ValueError: If the date is not found in the dataset.
+
         """
         numpy_date: np.datetime64 = np.datetime64(date, "ns")
-        if self.datetime_index[self.current_index] == numpy_date:
-            return self.current_index
-        elif self.datetime_index[self.current_index + 1] == numpy_date:
-            return self.current_index + 1
+        if (
+            self.current_start_index != -1
+            and self.datetime_index[self.current_start_index] == numpy_date
+        ):
+            return self.current_start_index
+        elif (
+            self.current_start_index != -1
+            and self.current_start_index + n < self.time_size
+            and self.datetime_index[self.current_start_index + n] == numpy_date
+        ):
+            return self.current_start_index + n
         else:
-            indices = self.datetime_index == numpy_date
-            assert np.count_nonzero(indices) == 1, (
-                f"Date not found in the dataset. The first date available in {self.variable_name} ({self.filepath}) is {self.datetime_index[0]} and the last date is {self.datetime_index[-1]}, while requested date is {date}"
-            )
-            return indices.argmax()
+            indices = np.where(self.datetime_index == numpy_date)[0]
+            if indices.size == 0:
+                raise ValueError(
+                    f"Date not found in the dataset. The first date available in {self.variable_name} ({self.filepath}) is {self.datetime_index[0]} and the last date is {self.datetime_index[-1]}, while requested date is {date}"
+                )
+            return indices[0]
 
-    def read_timestep(
-        self, date: datetime.datetime, n: int = 1, asynchronous: bool = False
-    ) -> npt.NDArray[Any]:
+    def read_timestep(self, date: datetime.datetime, n: int = 1) -> npt.NDArray[Any]:
         """Read the data for the given date from the zarr file.
 
         Args:
             date: The date of the timestep to read.
             n: The number of timesteps to read. Defaults to 1.
-            asynchronous: If True, the data is read asynchronously. Defaults to False.
-
-        Note:
-            The asynchronous mode is currently broken.
 
         Returns:
-            The data for the given date from the zarr file.
+            The data for the given date from the zarr file (n, y, x).
+
+        Raises:
+            ValueError: If the requested date range extends beyond the available data.
         """
-        if asynchronous:
-            index = self.get_index(date)
-            fn = self.read_timestep_async(index)
-            data = self.loop.run_until_complete(fn)
-            return data
+        start_index = self.get_index(date, n)
+        end_index = start_index + n
+        if end_index > self.time_size:
+            raise ValueError(
+                f"Requested {n} timesteps starting from {date}, but only {self.time_size - start_index} "
+                f"timesteps are available in the dataset."
+            )
+        if self.asynchronous:
+            coro = self.read_timestep_async(start_index, end_index, n)
+            future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+            return future.result()  # This blocks until the data is ready
         else:
-            start_index = self.get_index(date)
-            end_index = start_index + n
             data = self.load(start_index, end_index)
             return data
 
     def close(self) -> None:
-        """Close the reader and clean up resources."""
-        # cancel the preloading of the next timestep
+        """Close the reader and clean up resources.
+
+        For asynchronous readers, this cancels any pending preload operations,
+        stops the event loop, and joins the background thread.
+        """
+        if not self.asynchronous or self.loop is None:
+            return
+
+        # Cancel the preloading of the next timestep
         if self.preloaded_data_future is not None:
             self.preloaded_data_future.cancel()
-        # close the executor
-        self.executor.shutdown(wait=False)
 
+        # Gently stop the event loop
         self.loop.call_soon_threadsafe(self.loop.stop)
+        if self.thread is not None:
+            self.thread.join()  # Wait for the thread to finish
 
     @property
     def x(self) -> npt.NDArray[Any]:
