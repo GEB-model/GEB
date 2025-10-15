@@ -589,7 +589,7 @@ def kv_brakensiek(
     clay: npt.NDArray[np.float32],
     sand: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
-    """Determine saturated hydraulic conductivity kv [m/day].
+    """Determine saturated hydraulic conductivity kv [m/s].
 
     Based on:
       Brakensiek, D.L., Rawls, W.J.,and Stephenson, G.R.: Modifying scs hydrologic
@@ -602,7 +602,7 @@ def kv_brakensiek(
         sand: sand percentage [%].
 
     Returns:
-        saturated hydraulic conductivity [m/day].
+        saturated hydraulic conductivity [m/s].
     """
     clay = np.clip(clay, 5, 60)
     sand = np.clip(sand, 5, 70)
@@ -621,7 +621,7 @@ def kv_brakensiek(
         + 0.001434 * sand**2 * thetas
         - 0.0000035 * clay**2 * sand
     )  # cm / hr
-    kv = kv * 24 / 100  # convert to m/day
+    kv = kv / 100 / 3600  # convert to m/s
     return kv
 
 
@@ -644,26 +644,23 @@ def kv_wosten(
         organic_matter: Organic matter percentage (OM).
 
     Returns:
-        float: The calculated Ks* value.
+        float: The calculated Ks* value [m/s].
     """
-    ks = (
-        np.exp(
-            7.755
-            + 0.0352 * silt
-            + np.float32(0.93) * is_topsoil
-            - 0.967 * bulk_density**2
-            - 0.000484 * clay**2
-            - 0.000322 * silt**2
-            + 0.001 * (1 / silt)
-            - 0.0748 * (1 / organic_matter)
-            - 0.643 * np.log(silt)
-            - 0.01398 * bulk_density * clay
-            - 0.1673 * bulk_density * organic_matter
-            + 0.02986 * np.float32(is_topsoil) * clay
-            - 0.03305 * np.float32(is_topsoil) * silt
-        )
-        / 100
-    )  # convert to m/day
+    ks = np.exp(
+        7.755
+        + 0.0352 * silt
+        + np.float32(0.93) * is_topsoil
+        - 0.967 * bulk_density**2
+        - 0.000484 * clay**2
+        - 0.000322 * silt**2
+        + 0.001 * (1 / silt)
+        - 0.0748 * (1 / organic_matter)
+        - 0.643 * np.log(silt)
+        - 0.01398 * bulk_density * clay
+        - 0.1673 * bulk_density * organic_matter
+        + 0.02986 * np.float32(is_topsoil) * clay
+        - 0.03305 * np.float32(is_topsoil) * silt
+    ) / (100 * 86400)  # convert to m/s
 
     return ks
 
@@ -671,23 +668,23 @@ def kv_wosten(
 def kv_cosby(
     sand: npt.NDArray[np.float32], clay: npt.NDArray[np.float32]
 ) -> npt.NDArray[np.float32]:
-    """Determine saturated hydraulic conductivity kv [m/day].
+    """Determine saturated hydraulic conductivity kv [m/s].
 
     based on:
       Cosby, B.J., Hornberger, G.M., Clapp, R.B., Ginn, T.R., 1984.
       A statistical exploration of the relationship of soil moisture characteristics to
       the physical properties of soils. Water Resour. Res. 20(6) 682-690.
+      https://doi.org/10.1029/WR020i006p00682
 
     Args:
         sand: sand percentage [%].
         clay: clay percentage [%].
 
     Returns:
-        kv: saturated hydraulic conductivity [m/day].
+        kv: saturated hydraulic conductivity [m/s].
 
     """
-    kv = (
-        60.96 * 10.0 ** (-0.6 + 0.0126 * sand - 0.0064 * clay) * 10.0 / 1000.0
-    )  # convert to m/day
+    kv = 60.96 * 10.0 ** (-0.6 + 0.0126 * sand - 0.0064 * clay) * 10.0  # mm / day
+    kv = kv / (1000 * 86400)  # convert to m/s
 
     return kv

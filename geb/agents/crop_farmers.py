@@ -270,7 +270,7 @@ class CropFarmers(AgentBaseClass):
         self.HRU_regions_map[~self.HRU.mask] = self.var.subdistrict_map[
             region_mask == 0
         ]
-        self.HRU_regions_map = self.HRU.compress(self.HRU_regions_map)
+        self.HRU_regions_map = self.HRU.convert_subgrid_to_HRU(self.HRU_regions_map)
 
         self.crop_prices = load_regional_crop_data_from_dict(
             self.model, "crops/crop_prices"
@@ -1140,7 +1140,8 @@ class CropFarmers(AgentBaseClass):
                 w=self.HRU.var.w,
                 ws=self.HRU.var.ws,
                 arno_beta=self.HRU.var.arno_beta,
-                saturated_hydraulic_conductivity=self.HRU.var.saturated_hydraulic_conductivity,
+                saturated_hydraulic_conductivity_m_per_day=self.HRU.var.saturated_hydraulic_conductivity_m_per_s
+                * np.float32(86400),
                 remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
                 irrigation_limit_reset_day_index=self.var.irrigation_limit_reset_day_index.data,
                 cumulative_water_deficit_m3=self.var.cumulative_water_deficit_m3.data,

@@ -591,7 +591,7 @@ class LandSurface(Module):
         """Setup soil properties for the land surface module."""
         # Soil properties
         self.HRU.var.soil_layer_height: npt.NDArray[np.float32] = (
-            self.HRU.convert_subgrid_to_HRU_numba(
+            self.HRU.convert_subgrid_to_HRU(
                 load_grid(
                     self.model.files["subgrid"]["soil/soil_layer_height"],
                     layer=None,
@@ -700,15 +700,15 @@ class LandSurface(Module):
             0, dtype=np.float32
         )
 
-        # self.HRU.var.saturated_hydraulic_conductivity: npt.NDArray[np.float32] = (
+        # self.HRU.var.saturated_hydraulic_conductivity_m_per_s: npt.NDArray[np.float32] = (
         #     kv_brakensiek(thetas=thetas, clay=self.HRU.var.clay, sand=self.HRU.var.sand)
         # )
 
-        # self.HRU.var.saturated_hydraulic_conductivity = kv_cosby(
+        # self.HRU.var.saturated_hydraulic_conductivity_m_per_s = kv_cosby(
         #     sand=self.HRU.var.sand, clay=self.HRU.var.clay
         # )  # m/day
 
-        self.HRU.var.saturated_hydraulic_conductivity = kv_wosten(
+        self.HRU.var.saturated_hydraulic_conductivity_m_per_s = kv_wosten(
             silt=self.HRU.var.silt,
             clay=self.HRU.var.clay,
             bulk_density=bulk_density,
@@ -716,8 +716,8 @@ class LandSurface(Module):
             is_topsoil=is_top_soil,
         )  # m/day
 
-        self.HRU.var.saturated_hydraulic_conductivity = (
-            self.HRU.var.saturated_hydraulic_conductivity
+        self.HRU.var.saturated_hydraulic_conductivity_m_per_s = (
+            self.HRU.var.saturated_hydraulic_conductivity_m_per_s
             * self.model.config["parameters"]["ksat_multiplier"]
         )  # calibration parameter
 
@@ -957,8 +957,7 @@ class LandSurface(Module):
             crop_map=self.HRU.var.crop_map,
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
             capillar_rise_m=capillar_rise_m,
-            saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity
-            / (24 * 3600),
+            saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
             lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
             bubbing_pressure_cm=self.HRU.var.bubbling_pressure_cm,
             frost_index=self.HRU.var.frost_index,
