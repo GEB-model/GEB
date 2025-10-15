@@ -1082,17 +1082,21 @@ class DecisionModule:
         n_agents: int,
         wealth: np.ndarray,
         income: np.ndarray,
-        expendature_cap,
+        expenditure_cap,
         amenity_value: np.ndarray,
         amenity_weight,
         risk_perception: np.ndarray,
-        expected_damages: np.ndarray,
-        premium: np.ndarray,
-        p_event: np.ndarray,
+        expected_damages_flood: np.ndarray,
+        expected_damages_wind: np.ndarray,
+        p_flood: np.ndarray,
+        p_wind: np.ndarray,
+        time_adapted,
+        loan_duration,
         T: np.ndarray,
         r: float,
         sigma: float,
-        deductable=0.1,
+        deductible: float = 0.1,
+        loading_factor: float = 0.3,
         **kwargs,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
@@ -1113,89 +1117,129 @@ class DecisionModule:
         Returns:
             EU_insure_array
         """
-        # multiply damages by deductable
-        expected_damages_insured = expected_damages * deductable
+        # compute insurer payouts
+        expected_damages_flood_insured = expected_damages_flood * deductible
+        expected_damages_wind_insured = expected_damages_wind * deductible
+
+        premium = self.Insurance_premium(
+            expected_damages_flood=expected_damages_flood_insured,
+            p_flood=p_flood,
+            expected_damages_wind=expected_damages_wind_insured,
+            p_wind=p_wind,
+            loading_factor=loading_factor,
+        )
 
         # weigh amenities
         amenity_value = amenity_value * amenity_weight
 
         # Ensure p floods is in increasing order
-        indices = np.argsort(p_floods)
-        expected_damages_insured = expected_damages_insured[indices]
-        p_floods = np.sort(p_floods)
+        indices = np.argsort(p_flood)
+        expected_damages_flood_insured = expected_damages_flood_insured[indices]
+        p_flood = np.sort(p_flood)
 
         # Preallocate arrays
-        n_floods, n_agents = expected_damages_insured.shape
-        p_all_events = np.full((p_floods.size + 3, n_agents), -1, dtype=np.float32)
+        n_events, n_agents = expected_damages_flood_insured.shape
+        p_all_events = np.full((p_flood.size + 3, n_agents), -1, dtype=np.float32)
 
         # calculate perceived risk
-        perc_risk = p_floods.repeat(n_agents).reshape(p_floods.size, n_agents)
+        perc_risk = p_flood.repeat(n_agents).reshape(p_flood.size, n_agents)
         perc_risk *= risk_perception
         p_all_events[1:-2, :] = perc_risk
+        p_all_events[p_all_events > 0.998] = 0.998
 
-        # Cap percieved probability at 0.998. People cannot percieve any flood
-        # event to occur more than once per year
-        if np.max(p_all_events > 0.998):
-            p_all_events[np.where(p_all_events > 0.998)] = 0.998
-
-        # Add lasts p to complete x axis to 1 for trapezoid function (integrate
-        # domain [0,1])
         p_all_events[-2, :] = p_all_events[-3, :] + 0.001
         p_all_events[-1, :] = 1
-
-        # Add 0 to ensure we integrate [0, 1]
         p_all_events[0, :] = 0
 
-        # Prepare arrays
         max_T = np.int32(np.max(T))
-
-        # Part njit, iterate through floods
         n_agents = np.int32(n_agents)
-        NPV_summed = self.IterateThroughFlood(
-            n_floods,
-            wealth,
-            income,
-            amenity_value,
-            max_T,
-            expected_damages_insured,
-            n_agents,
-            r,
+        NPV_summed = self.IterateThroughEvents(
+            n_events=n_events,
+            n_agents=n_agents,
+            discount_rate=r,
+            wealth=wealth,
+            income=income,
+            amenity_value=amenity_value,
+            max_T=max_T,
+            expected_damages=expected_damages_flood_insured,
+            mode="flood",
         )
-        # some usefull attributes for cost calculations
-        # get time discounted adaptation cost for each agent based on time since adaptation
-        discounts = 1 / (1 + r) ** np.arange(max_T)
-        # create cost array for years payment left
+
+        discounts = 1.0 / (1.0 + r) ** np.arange(1, max_T + 1)
         years = np.arange(max_T + 1)
         cost_array = np.full(years.size, -1, np.float32)
         for i, year in enumerate(years):
             cost_array[i] = np.sum(discounts[:year] * premium.mean())
-        # take the calculated adaptation cost based on decision horizon agents
-        time_discounted_adaptation_cost = np.take(cost_array, T)
 
-        # subtract from NPV array
-        NPV_summed -= time_discounted_adaptation_cost
-        # Filter out negative NPVs
+        loan_left = (loan_duration - time_adapted).astype(np.int32)
+        loan_left = np.maximum(loan_left, 0)
+        loan_left = np.minimum(loan_left, T)
+        # T = T.astype(np.int32)
+        time_discounted_premium_cost = np.take(cost_array, T)
+
+        NPV_summed -= time_discounted_premium_cost
+
         NPV_summed = np.maximum(1, NPV_summed)
         if (NPV_summed == 1).any():
             n_negative = np.sum(NPV_summed == 1)
             print(
-                f"[calcEU_insure] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
+                f"[calcEU_insure] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)} %)"
             )
-
-        # Calculate expected utility
         if sigma == 1:
             EU_store = np.log(NPV_summed)
         else:
-            EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
+            EU_store = NPV_summed ** (1 - sigma) / (1 - sigma)
 
-        # Use composite trapezoidal rule integrate EU over event probability
         y = EU_store
         x = p_all_events
-        EU_insure_array = np.trapz(y=y, x=x, axis=0)
+        EU_insure_array = np.trapezoid(y=y, x=x, axis=0)
 
-        # set EU of adapt to -np.inf for thuse unable to afford it [maybe move this earlier to reduce array sizes]
-        constrained = np.where(income * expendature_cap <= premium)
+        constrained = np.where(income * expenditure_cap <= premium)
         EU_insure_array[constrained] = -np.inf
-        EU_insure_array *= self.error_terms_stay
 
         return EU_insure_array
+
+    def Insurance_premium(
+        self,
+        expected_damages_flood: np.ndarray,
+        p_flood: np.ndarray,
+        expected_damages_wind: np.ndarray,
+        p_wind: np.ndarray,
+        loading_factor: float = 0.3,  # dummy value for now
+    ) -> np.ndarray:
+        """
+        This function calculates the insurance premium for each household based on the expected damages from flood and windstorm events.
+
+        Args:
+        expected_damages_flood: Expected damages from flood events.
+        p_flood: Probability of flood events.
+        expected_damages_wind: Expected damages from windstorm events.
+        p_wind: Probability of windstorm events.
+        loading_factor: The loading factor to account for administrative costs and profit margin.
+
+        Returns:
+        premium: np.ndarray (n_agents,) final premium for each household.
+        """
+
+        def calc_EAD(damages, probabilities):
+            idx = np.argsort(probabilities)
+            probabilities = probabilities[idx]
+            damages = damages[idx, :]
+            return np.trapz(damages, x=probabilities, axis=0)
+
+        # Calculate Expected Annual Damages (EAD) for flood and windstorm
+        EAD_flood = (
+            calc_EAD(expected_damages_flood, p_flood)
+            if expected_damages_flood.size
+            else np.zeros(expected_damages_wind.shape[1])
+        )
+        EAD_wind = (
+            calc_EAD(expected_damages_wind, p_wind)
+            if expected_damages_wind.size
+            else np.zeros(expected_damages_flood.shape[1])
+        )
+
+        EAD_total = EAD_flood + EAD_wind
+        premium = EAD_total * (1.0 + loading_factor)
+
+        return premium

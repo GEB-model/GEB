@@ -378,10 +378,10 @@ class Households(AgentBaseClass):
             np.zeros(self.n, np.int32), max_n=self.max_n
         )
 
-        # # initiate array with time with insurance
-        # self.var.time_with_insurance = DynamicArray(
-        #     np.zeros(self.n, np.int32), max_n=self.max_n
-        # )
+        # initiate array with time with insurance
+        self.var.time_with_insurance = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
+        )
 
         # initiate array with time since last flood
         self.var.years_since_last_flood = DynamicArray(
@@ -846,16 +846,6 @@ class Households(AgentBaseClass):
             sigma=1,
         )
 
-        # buildings_flooded = self.buildings.copy()
-        # buildings_flooded["flooded"] = np.nan_to_num(
-        #     buildings_flooded["flooded"]
-        # ).astype(bool)
-        # osm_ids_buildings = buildings_flooded.loc[:, "osm_id"].values
-        # osm_ids_agents = self.var.osm_id.astype(str)
-
-        # flooded_idx = np.where(buildings_flooded["flooded"])[0]
-        # flooded_agents_mask = np.isin(osm_ids_agents, osm_ids_buildings[flooded_idx])
-
         EU_adapt_shutters = self.decision_module.calcEU_shutters_windstorm(
             geom_id="NoID",
             # n_agents=self.n,
@@ -903,32 +893,35 @@ class Households(AgentBaseClass):
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,  # + 10
             expected_damages=w_damages_unprotected,
-            adapted=self.var.shutters_installed.data == 2,
+            adapted=self.var.adapted.data == 2,
             p_windstorm=1 / self.windstorm_return_periods,
             T=35,
             r=0.03,
             sigma=1,
         )
 
-        # EU_multirisk_insurance = self.decision_module.calcEU_insure_multirisk(
-        # geom_id="NoID",
-        # n_agents=self.n,
-        # wealth=self.var.wealth.data,
-        # income=self.var.income.data,
-        # expendature_cap=1,
-        # amenity_value=self.var.amenity_value.data,
-        # amenity_weight=1,
-        # risk_perception=self.var.risk_perception.data,
-        # premium=self.premium,
-        # expected_damages=damages_do_not_adapt,  # dummy, should be multirisk damages
-        # p_event=1 / self.return_periods,  # dummy, should be multirisk return period
-        # T=35,
-        # r=0.03,  # needs to be adapted for insurance
-        # sigma=1,  # needs to be discussed for insurance
-        # )
-
-        # EU_adapt_shutters = np.full(self.n, -np.inf, dtype=np.float32)
-        # EU_adapt_shutters[flooded_agents_mask] = EU_adapt_shutters[flooded_agents_mask]
+        EU_multirisk_insurance = self.decision_module.calcEU_insure_multirisk(
+            geom_id="NoID",
+            n_agents=self.n,
+            wealth=self.var.wealth.data,
+            income=self.var.income.data,
+            expenditure_cap=1,
+            amenity_value=self.var.amenity_value.data,
+            amenity_weight=1,
+            risk_perception=self.var.risk_perception.data,
+            expected_damages_flood=damages_do_not_adapt,
+            expected_damages_wind=w_damages_unprotected,
+            p_flood=1 / self.return_periods,  # dummy, should be multirisk damages
+            p_wind=1
+            / self.windstorm_return_periods,  # dummy, should be multirisk return period
+            time_adapted=self.var.time_with_insurance.data,
+            loan_duration=0,  # insurance premium to be calculated
+            T=35,
+            r=0.03,  # needs to be adapted for insurance
+            sigma=1,
+            deductible=0.1,
+            loading_factor=0.3,  # needs to be discussed for insurance
+        )
 
         # execute strategy (flood adaptation)
         household_adapting = np.where(EU_adapt > EU_do_not_adapt)[0]
@@ -936,30 +929,28 @@ class Households(AgentBaseClass):
         self.var.time_adapted[household_adapting] += 1
 
         # # execute strategy (windstorm adaptation)
-        # household_adapting_shutters = np.where(EU_adapt_shutters > EU_unprotected_w)[0]
-        # self.var.shutters_installed[household_adapting_shutters] = 1
-        # self.var.time_adapted_shutters[household_adapting_shutters] += 1
-
         household_adapting_shutters = np.where(EU_adapt_shutters > EU_unprotected_w)[0]
         self.var.adapted[household_adapting_shutters] = 2
         self.var.time_adapted_shutters[household_adapting_shutters] += 1
-        # # execute strategy (insurance uptake)
-        # household_adapting_insurance = np.where(
-        #     EU_multirisk_insurance > EU_do_not_adapt
-        # )[0]
-        # self.var.insurance_taken[household_adapting_insurance] = 1
-        # self.var.time_with_insurance[household_adapting_shutters] += 1
+
+        # execute strategy (multirisk insurance)
+        household_adopting_insurance = np.where(
+            EU_multirisk_insurance > EU_do_not_adapt
+        )[0]
+        self.var.adapted[household_adopting_insurance] = 3
+        self.var.time_with_insurance[household_adopting_insurance] += 1
 
         # update column in buildings
         self.update_building_adaptation_status(household_adapting, 1)
         self.update_building_adaptation_status(household_adapting_shutters, 2)
+        self.update_building_adaptation_status(household_adopting_insurance, 3)
 
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting)}")
         print(
             f"N households that adapted with Window Shutters: {len(household_adapting_shutters)}"
         )
-        # print(f"N households that took insurance: {len(households)}")
+        print(f"N households that took insurance: {len(household_adopting_insurance)}")
 
     def load_objects(self) -> None:
         # Load buildings
@@ -1429,42 +1420,50 @@ class Households(AgentBaseClass):
 
         return w_damages_unprotected, w_damages_shutters  # w_damages_strengthened
 
-    # def Insurance_premium(
-    #     self,
-    #     expected_damages_flood,
-    #     p_flood,
-    #     expected_damages_wind,
-    #     p_wind,
-    #     loading_factor=0.3,  # dummy value for now
-    # ) -> None:
-    #     """
-    #     This function calculates the insurance premium for each household based on the expected damages from flood and windstorm events.
+    def Insurance_premium(
+        self,
+        expected_damages_flood: np.ndarray,
+        p_flood: np.ndarray,
+        expected_damages_wind: np.ndarray,
+        p_wind: np.ndarray,
+        loading_factor: float = 0.3,  # dummy value for now
+    ) -> np.ndarray:
+        """
+        This function calculates the insurance premium for each household based on the expected damages from flood and windstorm events.
 
-    #     Args:
-    #         expected_damages_flood: Expected damages from flood events.
-    #         p_flood: Probability of flood events.
-    #         expected_damages_wind: Expected damages from windstorm events.
-    #         p_wind: Probability of windstorm events.
-    #         loading_factor: The loading factor to account for administrative costs and profit margin.
+        Args:
+            expected_damages_flood: Expected damages from flood events.
+            p_flood: Probability of flood events.
+            expected_damages_wind: Expected damages from windstorm events.
+            p_wind: Probability of windstorm events.
+            loading_factor: The loading factor to account for administrative costs and profit margin.
 
-    #     Returns:
-    #         premium: np.ndarray (n_agents,) final premium for each household.
-    #     """
+        Returns:
+            premium: np.ndarray (n_agents,) final premium for each household.
+        """
 
-    #     def calc_EAD(damages, probabilities):
-    #         idx = np.argsort(probabilities)
-    #         probabilities = probabilities[idx]
-    #         damages = damages[idx, :]
-    #         return np.trapz(damages, x=probabilities, axis=0)
+        def calc_EAD(damages, probabilities):
+            idx = np.argsort(probabilities)
+            probabilities = probabilities[idx]
+            damages = damages[idx, :]
+            return np.trapz(damages, x=probabilities, axis=0)
 
-    #     # Calculate Expected Annual Damages (EAD) for flood and windstorm
-    #     EAD_flood = calc_EAD(expected_damages_flood, p_flood)
-    #     EAD_wind = calc_EAD(expected_damages_wind, p_wind)
+        # Calculate Expected Annual Damages (EAD) for flood and windstorm
+        EAD_flood = (
+            calc_EAD(expected_damages_flood, p_flood)
+            if expected_damages_flood.size
+            else np.zeros(expected_damages_wind.shape[1])
+        )
+        EAD_wind = (
+            calc_EAD(expected_damages_wind, p_wind)
+            if expected_damages_wind.size
+            else np.zeros(expected_damages_flood.shape[1])
+        )
 
-    #     # Multi-risk EAD assuming independence between flood and windstorm events
-    #     premium = (EAD_flood + EAD_wind) * (1 + loading_factor)
+        EAD_total = EAD_flood + EAD_wind
+        premium = EAD_total * (1.0 + loading_factor)
 
-    #     return premium
+        return premium
 
     def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
