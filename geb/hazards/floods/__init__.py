@@ -371,6 +371,12 @@ class Floods:
         # build model for the different sfincs model regions
         lecz_regions = load_geom(self.model.files["geom"]["coastal/lecz_regions"])
 
+        # take the union of all regions as model region
+        model_domain = lecz_regions.unary_union.envelope
+        # create gpd.GeoDataFrame for the model domain
+        model_domain_gdf = gpd.GeoDataFrame(
+            geometry=[model_domain], crs=lecz_regions.crs
+        )
         # iterate over the different regions and create a coastal model for each region
         coastal_models = []
         for idx, region in lecz_regions.iterrows():
@@ -382,7 +388,7 @@ class Floods:
             try:
                 sfincs_root_model: SFINCSRootModel = self.build(
                     f"coastal_region_{idx}",
-                    region=region,
+                    region=model_domain_gdf,
                     coastal=True,
                     bnd_exclude_mask=bnd_exclude_mask,
                     include_mask=region,
@@ -409,13 +415,11 @@ class Floods:
                     for coastal_model in coastal_models
                 ]
             )
-            # simulation.run(
-            #     gpu=self.config["SFINCS"]["gpu"],
-            # )
-            flood_depth_return_period: xr.DataArray = (
-                simulation.read_max_flood_depth_coastal(
-                    self.config["minimum_flood_depth"]
-                )
+            simulation.run(
+                gpu=self.config["SFINCS"]["gpu"],
+            )
+            flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
+                self.config["minimum_flood_depth"]
             )
             rp_maps_coastal[return_period] = flood_depth_return_period
             to_zarr(
