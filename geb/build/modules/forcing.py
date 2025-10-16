@@ -24,6 +24,63 @@ from ..workflows.general import (
 )
 
 
+def plot_forcing(self, da, name) -> None:
+    """Plot forcing data with a temporal (timeline) plot and a spatial plot.
+
+    Args:
+        self: The class instance.
+        da: The xarray DataArray containing the forcing data. Must have dimensions 'time',
+        name: The name of the variable being plotted, used for titles and filenames.
+    """
+    fig, axes = plt.subplots(
+        4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5}
+    )  # Create 4 subplots stacked vertically
+
+    mask = self.grid["mask"]  # get the GEB grid
+    data = (
+        (da * ~mask).sum(dim=("y", "x")) / (~mask).sum()
+    ).compute()  # Area-weighted average
+    assert not np.isnan(data.values).any(), (
+        "data contains NaN values"
+    )  # ensure no NaNs in data
+
+    plot_timeline(da, data, name, axes[0])  # Plot the entire timeline on the first axis
+
+    for i in range(0, 3):  # plot the first three years on separate axes
+        year = data.time[0].dt.year + i  # get the year to plot
+        year_data = data.sel(
+            time=data.time.dt.year == year
+        )  # select data for that year
+        if year_data.size > 0:  # only plot if there is data for that year
+            plot_timeline(
+                da,  # original data
+                data.sel(time=da.time.dt.year == year),  # data for that year
+                f"{name} - {year.item()}",  # title
+                axes[i + 1],  # axis to plot on
+            )
+
+    fp = self.report_dir / (
+        name + "_timeline.png"
+    )  # file path for saving the timeline plot
+    fp.parent.mkdir(parents=True, exist_ok=True)  # ensure directory exists
+    plt.savefig(fp)  # save the timeline plot
+    plt.close(fig)  # close the figure to free memory
+
+    spatial_data = da.mean(dim="time")  # mean over time for spatial plot
+
+    spatial_data.plot()  # plot the spatial data
+
+    plt.title(name)  # title
+    plt.xlabel("Longitude")  # x-axis label
+    plt.ylabel("Latitude")  # y-axis label
+
+    spatial_fp: Path = self.report_dir / (
+        name + "_spatial.png"
+    )  # file path for saving the spatial plot
+    plt.savefig(spatial_fp)  # save the spatial plot
+    plt.close()  # close the plot to free memory
+
+
 def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
     """Plot forecast data with a temporal (timeline) plot and a spatial plot.
 
