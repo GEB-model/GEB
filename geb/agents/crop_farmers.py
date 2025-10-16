@@ -252,10 +252,10 @@ class CropFarmers(AgentBaseClass):
         ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
         self.var.water_costs_m3_reservoir = self.model.config["agent_settings"][
             "farmers"
-        ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
+        ]["expected_utility"]["water_price"]["water_costs_m3_reservoir"]
         self.var.water_costs_m3_groundwater = self.model.config["agent_settings"][
             "farmers"
-        ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
+        ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
 
         # Irr efficiency variables
         self.var.lifespan_irrigation = self.model.config["agent_settings"]["farmers"][
@@ -5015,7 +5015,31 @@ class CropFarmers(AgentBaseClass):
         if self.model.timing:
             print(timer)
 
-        self.report(self, locals())
+        # self.report(self, locals())
+        
+        # Water abstraction vectors are updated every time step.
+        # Unit water costs were initialized in spinup() as scalars and will be
+        # broadcasted to match the farmer-level abstraction arrays automatically.
+        channel_water_cost_yuan = (
+            self.var.channel_abstraction_m3_by_farmer * self.var.water_costs_m3_channel
+        )
+        groundwater_water_cost_yuan = (
+            self.var.groundwater_abstraction_m3_by_farmer
+            * self.var.water_costs_m3_groundwater
+        )
+        reservoir_water_cost_yuan = (
+            self.var.reservoir_abstraction_m3_by_farmer
+            * self.var.water_costs_m3_reservoir
+        )
+
+        # total irrigation water cost (all sources combined)
+        total_water_cost_yuan = (
+            channel_water_cost_yuan
+            + groundwater_water_cost_yuan
+            + reservoir_water_cost_yuan
+        )
+
+        self.report(locals())
 
     def remove_agents(
         self, farmer_indices: list[int], new_land_use_type: int
