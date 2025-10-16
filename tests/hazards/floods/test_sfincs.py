@@ -3,7 +3,7 @@
 import json
 import math
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -117,7 +117,8 @@ def build_sfincs(geb_model: GEBModel, nr_subgrid_pixels: int | None) -> SFINCSRo
         if "parameters"
         in geb_model.sfincs.model.config["hydrology"]["routing"]["river_depth"]
         else {},
-        mask_flood_plains=False,  # setting this to True sometimes leads to errors
+        mask_flood_plains=False,  # setting this to True sometimes leads to errors,
+        setup_outflow=False,
     )
 
     if nr_subgrid_pixels is None:
@@ -129,7 +130,7 @@ def build_sfincs(geb_model: GEBModel, nr_subgrid_pixels: int | None) -> SFINCSRo
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_SFINCS_precipitation(geb_model: GEBModel) -> None:
+def test_SFINCS_runoff(geb_model: GEBModel) -> None:
     """Test SFINCS with precipitation forcing.
 
     Args:
@@ -138,7 +139,6 @@ def test_SFINCS_precipitation(geb_model: GEBModel) -> None:
     with WorkingDirectory(working_directory):
         start_time: datetime = datetime(2000, 1, 1, 0)
         end_time: datetime = datetime(2000, 1, 10, 0)
-        no_rainfall_time = timedelta(days=1)
 
         sfincs_model: SFINCSRootModel = build_sfincs(geb_model, nr_subgrid_pixels=None)
 
@@ -151,26 +151,21 @@ def test_SFINCS_precipitation(geb_model: GEBModel) -> None:
 
         simulation.sfincs_model.set_config("storecumprcp", 1)
 
-        rainfall_rate: float = 1.0 / 1000  # mm/hr -> m/hr
+        rainfall_rate_mm_per_hr: float = 1.0  # mm/hr
+        rainfall_rate_m_per_hr = rainfall_rate_mm_per_hr / 1000.0
 
         precipitation: xr.DataArray = open_zarr(
             geb_model.files["other"]["climate/pr_kg_per_m2_per_s"]
         ).sel(time=slice(start_time, end_time))
         runoff_m: xr.DataArray = xr.full_like(
-            precipitation, rainfall_rate, dtype=np.float64
+            precipitation, rainfall_rate_m_per_hr, dtype=np.float64
         )
-        # set the first day to 0
-        runoff_m.loc[dict(time=slice(start_time, start_time + no_rainfall_time))] = 0
-
         mask: xr.DataArray = sfincs_model.sfincs_model.grid["msk"]
 
         simulation.set_runoff_forcing(
             runoff_m=runoff_m,
         )
 
-        assert (simulation.path / "sfincs.seff").exists()
-        assert (simulation.path / "sfincs.smax").exists()
-        assert (simulation.path / "sfincs.ks").exists()
         assert (simulation.path / "precip_2d.nc").exists()
         assert (simulation.path / "sfincs.inp").exists()
 
@@ -182,10 +177,9 @@ def test_SFINCS_precipitation(geb_model: GEBModel) -> None:
         flood_volume: float = simulation.get_flood_volume(flood_depth)
 
         runoff_volume: float = (
-            precipitation_grid.mean().compute().item()
-            * (end_time - start_time).total_seconds()
+            rainfall_rate_m_per_hr
             * sfincs_model.area
-            / 1000
+            * ((end_time - start_time).total_seconds() / 3600.0)
         )
 
         cumulative_runoff = simulation.get_cumulative_precipitation().compute()
@@ -193,6 +187,12 @@ def test_SFINCS_precipitation(geb_model: GEBModel) -> None:
 
         assert math.isclose(
             flood_volume,
+            runoff_volume,
+            abs_tol=0,
+            rel_tol=0.01,
+        )
+        assert math.isclose(
+            cumulative_runoff,
             runoff_volume,
             abs_tol=0,
             rel_tol=0.01,
