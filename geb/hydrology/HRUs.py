@@ -14,6 +14,7 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import cKDTree
 
+from geb.typing import ArrayFloat32, TwoDFloatArrayFloat32
 from geb.workflows.io import load_grid, open_zarr
 from geb.workflows.raster import compress
 
@@ -271,7 +272,7 @@ class Grid(BaseVariables):
 
         BaseVariables.__init__(self)
 
-    def full(self, *args: Any, **kwargs: Any) -> np.ndarray:
+    def full(self, *args: Any, **kwargs: Any) -> TwoDFloatArrayFloat32:
         """Return a full array with size of mask. Takes any other argument normally used in np.full.
 
         Args:
@@ -283,7 +284,7 @@ class Grid(BaseVariables):
         """
         return np.full(self.mask.shape, *args, **kwargs)
 
-    def full_compressed(self, *args: Any, **kwargs: Any) -> np.ndarray:
+    def full_compressed(self, *args: Any, **kwargs: Any) -> ArrayFloat32:
         """Return a full array with size of compressed array. Takes any other argument normally used in np.full.
 
         Args:

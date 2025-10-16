@@ -43,7 +43,7 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
                 natural_available_water_infiltration_m=np.float32(infiltration),
                 actual_irrigation_consumption_m=np.float32(irrigation),
                 land_use_type=np.int32(land_use_type),
-                reference_evapotranspiration_water_m_per_day=np.float32(et_ref),
+                reference_evapotranspiration_water_m=np.float32(et_ref),
                 topwater_m=topwater,
             )
         )
@@ -72,7 +72,7 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
             natural_available_water_infiltration_m=np.float32(0.0),
             actual_irrigation_consumption_m=np.float32(0.0),
             land_use_type=np.int32(PADDY_IRRIGATED),
-            reference_evapotranspiration_water_m_per_day=np.float32(0.0),
+            reference_evapotranspiration_water_m=np.float32(0.0),
             topwater_m=topwater,
         )
     )
@@ -86,7 +86,7 @@ def test_add_water_to_topwater_and_evaporate_open_water() -> None:
             natural_available_water_infiltration_m=np.float32(0.0),
             actual_irrigation_consumption_m=np.float32(0.0),
             land_use_type=np.int32(PADDY_IRRIGATED),
-            reference_evapotranspiration_water_m_per_day=np.float32(
+            reference_evapotranspiration_water_m=np.float32(
                 1.0
             ),  # Much larger than topwater
             topwater_m=topwater,

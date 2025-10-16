@@ -9,7 +9,7 @@ from geb.module import Module
 from geb.workflows import balance_check
 from geb.workflows.io import load_grid
 
-from .evapotranspiration import (  # noqa: F401
+from .evapotranspiration import (
     calculate_bare_soil_evaporation,
     calculate_transpiration,
 )
@@ -166,12 +166,12 @@ def land_surface_model(
         saturated_hydraulic_conductivity_m_per_s
     ) * 3600.0
 
-    reference_evapotranspiration_grass_m = np.zeros_like(pr_kg_per_m2_per_s)
-    reference_evapotranspiration_water_m = np.zeros_like(pr_kg_per_m2_per_s)
     runoff_m = np.zeros_like(pr_kg_per_m2_per_s)
     interflow_m = np.zeros_like(pr_kg_per_m2_per_s)
+    reference_evapotranspiration_water_m = np.zeros_like(pr_kg_per_m2_per_s)
 
     # total per day variables for water balance
+    reference_evapotranspiration_grass_m = np.zeros_like(snow_water_equivalent_m)
     rain_m = np.zeros_like(snow_water_equivalent_m)
     snow_m = np.zeros_like(snow_water_equivalent_m)
     sublimation_m = np.zeros_like(snow_water_equivalent_m)
@@ -205,8 +205,8 @@ def land_surface_model(
             )  # Wind speed at 10m height
 
             (
-                reference_evapotranspiration_grass_m[hour, i],
-                reference_evapotranspiration_water_m[hour, i],
+                reference_evapotranspiration_grass_m_hour_cell,
+                reference_evapotranspiration_water_m_hour_cell,
                 net_absorbed_radiation_vegetation_MJ_m2_dt,
                 actual_vapour_pressure_Pa,
             ) = get_reference_evapotranspiration(
@@ -216,6 +216,22 @@ def land_surface_model(
                 rlds_W_per_m2=rlds_W_per_m2_cell[hour],
                 rsds_W_per_m2=rsds_W_per_m2_cell[hour],
                 wind_10m_m_per_s=wind_10m_m_per_s,
+            )
+
+            # Ensure non-negative evapotranspiration values
+            # TODO: Use this to implement dew rather than clipping
+            reference_evapotranspiration_grass_m_hour_cell = max(
+                reference_evapotranspiration_grass_m_hour_cell, np.float32(0.0)
+            )
+            reference_evapotranspiration_water_m_hour_cell = max(
+                reference_evapotranspiration_water_m_hour_cell, np.float32(0.0)
+            )
+
+            reference_evapotranspiration_grass_m[i] += (
+                reference_evapotranspiration_grass_m_hour_cell
+            )
+            reference_evapotranspiration_water_m[hour, i] += (
+                reference_evapotranspiration_water_m_hour_cell
             )
 
             (
@@ -254,15 +270,13 @@ def land_surface_model(
 
             potential_bare_soil_evaporation_m: np.float32 = (
                 get_potential_bare_soil_evaporation(
-                    reference_evapotranspiration_grass_m[hour, i],
+                    reference_evapotranspiration_grass_m_hour_cell,
                     sublimation_m_cell_hour,
                 )
             )
 
             potential_evapotranspiration_m: np.float32 = get_potential_evapotranspiration(
-                reference_evapotranspiration_grass_m=reference_evapotranspiration_grass_m[
-                    hour, i
-                ],
+                reference_evapotranspiration_grass_m=reference_evapotranspiration_grass_m_hour_cell,
                 crop_factor=crop_factor[i],
                 CO2_induced_crop_factor_adustment=CO2_induced_crop_factor_adustment,
             )
@@ -297,9 +311,7 @@ def land_surface_model(
                     natural_available_water_infiltration_m=natural_available_water_infiltration_m,
                     actual_irrigation_consumption_m=actual_irrigation_consumption_m[i],
                     land_use_type=land_use_type[i],
-                    reference_evapotranspiration_water_m_per_day=reference_evapotranspiration_water_m[
-                        hour, i
-                    ],
+                    reference_evapotranspiration_water_m=reference_evapotranspiration_water_m_hour_cell,
                     topwater_m=topwater_m[i],
                 )
             )
@@ -761,6 +773,7 @@ class LandSurface(Module):
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
     ]:
         """Step function for the land surface module.
 
@@ -897,8 +910,8 @@ class LandSurface(Module):
             rain_m,
             snow_m,
             self.HRU.var.topwater_m,
-            reference_evapotranspiration_grass_m_dt,
-            reference_evapotranspiration_water_m_dt,
+            reference_evapotranspiration_grass_m,
+            reference_evapotranspiration_water_m,
             self.HRU.var.snow_water_equivalent_m,
             self.HRU.var.liquid_water_in_snow_m,
             sublimation_or_deposition_m,
@@ -1029,26 +1042,19 @@ class LandSurface(Module):
             crop_sub_stage[growing_crop_mask], growing_crop_mask
         ] += potential_transpiration_m[growing_crop_mask]
 
-        self.HRU.var.reference_evapotranspiration_water_m_per_day = np.sum(
-            reference_evapotranspiration_water_m_dt, axis=0
+        reference_evapotranspiration_water_m = self.hydrology.to_grid(
+            HRU_data=reference_evapotranspiration_water_m,
+            fn="weightedmean",
         )
-        self.HRU.var.reference_evapotranspiration_grass_m_per_day = np.sum(
-            reference_evapotranspiration_grass_m_dt, axis=0
-        )
-
-        self.grid.var.reference_evapotranspiration_water_m_per_day = (
-            self.hydrology.to_grid(
-                HRU_data=self.HRU.var.reference_evapotranspiration_water_m_per_day,
-                fn="weightedmean",
-            )
-        )
+        assert (reference_evapotranspiration_water_m >= 0).all()
 
         self.model.agents.crop_farmers.save_water_deficit(
-            self.HRU.var.reference_evapotranspiration_grass_m_per_day
+            reference_evapotranspiration_grass_m
         )
         self.report(locals())
 
         return (
+            reference_evapotranspiration_water_m,
             interflow_m,
             runoff_m,
             groundwater_recharge_m,

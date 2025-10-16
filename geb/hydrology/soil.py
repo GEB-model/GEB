@@ -15,7 +15,7 @@ def add_water_to_topwater_and_evaporate_open_water(
     natural_available_water_infiltration_m: np.float32,
     actual_irrigation_consumption_m: np.float32,
     land_use_type: np.int32,
-    reference_evapotranspiration_water_m_per_day: np.float32,
+    reference_evapotranspiration_water_m: np.float32,
     topwater_m: np.float32,
 ) -> tuple[np.float32, np.float32]:
     """Add available water from natural and innatural sources to the topwater and calculate open water evaporation.
@@ -24,7 +24,7 @@ def add_water_to_topwater_and_evaporate_open_water(
         natural_available_water_infiltration_m: The natural available water infiltration in m.
         actual_irrigation_consumption_m: The actual irrigation consumption in m.
         land_use_type: The land use type of the hydrological response unit.
-        reference_evapotranspiration_water_m_per_day: The reference evapotranspiration from water in m.
+        reference_evapotranspiration_water_m: The reference evapotranspiration from water in m.
         topwater_m: The topwater in m, which is the water available for evaporation and transpiration.
 
     Returns:
@@ -41,13 +41,13 @@ def add_water_to_topwater_and_evaporate_open_water(
     if land_use_type == PADDY_IRRIGATED:
         open_water_evaporation_m = min(
             max(np.float32(0.0), topwater_m),
-            reference_evapotranspiration_water_m_per_day,
+            reference_evapotranspiration_water_m,
         )
     elif land_use_type == SEALED:
         # evaporation from precipitation fallen on sealed area (ponds)
-        # estimated as 0.2 x reference_evapotranspiration_water_m_per_day
+        # estimated as 0.2 x reference evapotranspiration from water
         open_water_evaporation_m = min(
-            np.float32(0.2) * reference_evapotranspiration_water_m_per_day, topwater_m
+            np.float32(0.2) * reference_evapotranspiration_water_m, topwater_m
         )
     else:
         # no open water evaporation for other land use types (thus using default of 0)
