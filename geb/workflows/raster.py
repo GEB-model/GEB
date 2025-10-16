@@ -1,6 +1,6 @@
 """Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
 
-from typing import Any
+from typing import Any, overload
 
 import geopandas as gpd
 import numpy as np
@@ -34,6 +34,18 @@ def repeat_grid(data: npt.NDArray[Any], factor: int) -> npt.NDArray[Any]:
         The repeated 2D array.
     """
     return data.repeat(factor, axis=-2).repeat(factor, axis=-1)
+
+
+@overload
+def reclassify(
+    data_array: xr.DataArray, remap_dict: dict, method: str = "dict"
+) -> xr.DataArray: ...
+
+
+@overload
+def reclassify(
+    data_array: np.ndarray, remap_dict: dict, method: str = "dict"
+) -> np.ndarray: ...
 
 
 def reclassify(
