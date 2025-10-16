@@ -373,12 +373,12 @@ def run_sfincs_simulation(
             print("No GPU detected, running SFINCS without GPU support.")
 
     if gpu:
-        version: str = os.getenv(key="SFINCS_CONTAINER_GPU")
+        version: str | None = os.getenv(key="SFINCS_CONTAINER_GPU")
         assert version is not None, (
             "SFINCS_CONTAINER_GPU environment variable is not set"
         )
     else:
-        version: str = os.getenv(key="SFINCS_CONTAINER")
+        version: str | None = os.getenv(key="SFINCS_CONTAINER")
         assert version is not None, "SFINCS_CONTAINER environment variable is not set"
 
     if platform.system() == "Linux":
