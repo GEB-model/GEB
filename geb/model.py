@@ -8,6 +8,7 @@ from time import time
 from types import TracebackType
 from typing import Any, Literal, overload
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -88,7 +89,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
 
         self.store = Store(self)
-        self.forcing = Forcing(self)
 
         self.evaluator = Evaluate(self)  # initialize the evaluator
 
@@ -392,13 +392,14 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.in_spinup = in_spinup
         self.simulate_hydrology = simulate_hydrology
 
-        self.regions = load_geom(self.files["geom"]["regions"])
+        self.regions: gpd.GeoDataFrame = load_geom(self.files["geom"]["regions"])
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
         self.timestep_length = timestep_length
 
-        self.hydrology = Hydrology(self)
+        self.hydrology: Hydrology = Hydrology(self)
+        self.forcing: Forcing = Forcing(self)
 
         HazardDriver.__init__(self)
         ABM_Model.__init__(
@@ -833,7 +834,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
             # Close all async forcing readers
             if hasattr(self, "forcing"):
-                for forcing_loader in self.forcing._forcings.values():
+                for forcing_loader in self.forcing._loaders.values():
                     if hasattr(forcing_loader, "reader"):
                         forcing_loader.reader.close()
 

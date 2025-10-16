@@ -2,12 +2,11 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Literal, overload
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-import xarray as xr
 
 from geb.workflows.io import load_grid
 
@@ -196,7 +195,6 @@ class ForcingLoader(ABC):
             ValueError: If the data is invalid according to the validation criteria.
         """
         data: npt.NDArray[np.float32] = self.reader.read_timestep(time, n=self.n)
-        # data: npt.NDArray[np.float32] = data.mean(axis=0)
         interpolated: npt.NDArray[np.float32] = self.interpolate(data)
         valid: bool = self.validate(interpolated)
         if not valid:
@@ -584,20 +582,58 @@ class Forcing(Module):
     def __init__(self, model: "GEBModel") -> None:
         """Initialize the Forcing module.
 
-        The datasets themselves are loaded on demand when accessed via the `__getitem__` method.
-        This is to avoid loading datasets in memory that are not actually used in the simulation,
-        due to specific model configurations.
-
-        Also, sets up the forcing validation functions.
-
-        Notes:
+        All forcing loaders are initialized upfront to allow for efficient batch loading
+        and inter-variable dependencies during interpolation.
 
         Args:
             model: The GEB model instance.
         """
         self.model = model
         self.forcing_DEM = load_grid(model.files["other"]["climate/elevation_forcing"])
-        self._forcings = {}
+
+        # Initialize all forcing loaders upfront
+        self._initialize_loaders()
+
+    def _initialize_loaders(self) -> None:
+        """Initialize all forcing loaders.
+
+        This creates instances of all forcing loaders so they're ready to use.
+        """
+        grid_mask = ~self.model.hydrology.grid.mask
+        grid_DEM = self.model.hydrology.grid.decompress(
+            self.model.hydrology.grid.var.elevation
+        )
+
+        # Initialize all loaders
+        self._loaders: dict[str, ForcingLoader | CO2] = {
+            "pr_kg_per_m2_per_s": Precipitation(self.model, grid_mask=grid_mask),
+            "tas_2m_K": Temperature(
+                self.model,
+                forcing_DEM=self.forcing_DEM,
+                grid_DEM=grid_DEM,
+                grid_mask=grid_mask,
+                dewpoint=False,
+            ),
+            "dewpoint_tas_2m_K": Temperature(
+                self.model,
+                forcing_DEM=self.forcing_DEM,
+                grid_DEM=grid_DEM,
+                grid_mask=grid_mask,
+                dewpoint=True,
+            ),
+            "wind_u10m_m_per_s": Wind(self.model, direction="u", grid_mask=grid_mask),
+            "wind_v10m_m_per_s": Wind(self.model, direction="v", grid_mask=grid_mask),
+            "ps_pascal": Pressure(
+                self.model,
+                forcing_DEM=self.forcing_DEM,
+                grid_DEM=grid_DEM,
+                grid_mask=grid_mask,
+            ),
+            "rsds_W_per_m2": RSDS(self.model, grid_mask=grid_mask),
+            "rlds_W_per_m2": RLDS(self.model, grid_mask=grid_mask),
+            "SPEI": SPEI(self.model, grid_mask=grid_mask),
+            "CO2_ppm": CO2(self.model),
+        }
 
     @property
     def name(self) -> str:
@@ -608,118 +644,37 @@ class Forcing(Module):
         """
         return "forcing"
 
-    def load_forcing_ds(self, name: str) -> ForcingLoader | CO2:
-        """Load the reader for forcing dataset for a given name.
+    def __getitem__(self, name: str) -> ForcingLoader | CO2:
+        """Get the forcing loader for a given name.
 
         Args:
-            name: name of forcing dataset, e.g. "tas", "tasmin", "tasmax", "hurs", "ps", "rlds", "rsds", "sfcWind".
+            name: name of forcing dataset, e.g. "pr_kg_per_m2_per_s", "tas_2m_K", etc.
 
         Returns:
-            An AsyncGriddedForcingReader or xarray DataArray for the specified forcing dataset.
+            The forcing loader for the specified dataset.
 
+        Raises:
+            KeyError: If the forcing variable name is not recognized.
         """
-        if name == "pr_kg_per_m2_per_s":
-            reader: Precipitation = Precipitation(
-                self.model, grid_mask=~self.model.hydrology.grid.mask
+        if name not in self._loaders:
+            raise KeyError(
+                f"Forcing variable '{name}' not found. Available variables: {list(self._loaders.keys())}"
             )
-        elif name == "tas_2m_K":
-            reader: Temperature = Temperature(
-                self.model,
-                forcing_DEM=self.forcing_DEM,
-                grid_DEM=self.model.hydrology.grid.decompress(
-                    self.model.hydrology.grid.var.elevation
-                ),
-                grid_mask=~self.model.hydrology.grid.mask,
-                dewpoint=False,
-            )
-        elif name == "dewpoint_tas_2m_K":
-            reader: Temperature = Temperature(
-                self.model,
-                forcing_DEM=self.forcing_DEM,
-                grid_DEM=self.model.hydrology.grid.decompress(
-                    self.model.hydrology.grid.var.elevation
-                ),
-                grid_mask=~self.model.hydrology.grid.mask,
-                dewpoint=True,
-            )
-        elif name == "wind_u10m_m_per_s":
-            reader: Wind = Wind(
-                self.model, direction="u", grid_mask=~self.model.hydrology.grid.mask
-            )
-        elif name == "wind_v10m_m_per_s":
-            reader: Wind = Wind(
-                self.model, direction="v", grid_mask=~self.model.hydrology.grid.mask
-            )
-        elif name == "ps_pascal":
-            reader: Pressure = Pressure(
-                self.model,
-                forcing_DEM=self.forcing_DEM,
-                grid_DEM=self.model.hydrology.grid.decompress(
-                    self.model.hydrology.grid.var.elevation
-                ),
-                grid_mask=~self.model.hydrology.grid.mask,
-            )
-        elif name == "rsds_W_per_m2":
-            reader: RSDS = RSDS(self.model, grid_mask=~self.model.hydrology.grid.mask)
-        elif name == "rlds_W_per_m2":
-            reader: RLDS = RLDS(self.model, grid_mask=~self.model.hydrology.grid.mask)
-        elif name == "SPEI":
-            reader: SPEI = SPEI(self.model, grid_mask=~self.model.hydrology.grid.mask)
-        elif name == "CO2_ppm":
-            reader: CO2 = CO2(self.model)
-        else:
-            raise NotImplementedError(f"Forcing dataset '{name}' not implemented.")
-        return reader
+        return self._loaders[name]
 
-    def __setitem__(
-        self, name: str, reader: AsyncGriddedForcingReader | xr.DataArray
-    ) -> None:
-        """Set the forcing data for a given name.
-
-        Args:
-            name: name of forcing dataset, e.g. "tas", "tasmin", "tasmax", "hurs", "ps", "rlds", "rsds", "sfcWind".
-            reader: An AsyncGriddedForcingReader or xarray DataArray for the specified forcing dataset.
-        """
-        self._forcings[name] = reader
-
-    @overload
-    def __getitem__(self, name: Literal["pr_hourly", "CO2"]) -> xr.DataArray:
-        pass
-
-    @overload
-    def __getitem__(
-        self,
-        name: Literal[
-            "tas", "tasmin", "tasmax", "hurs", "ps", "rlds", "rsds", "sfcwind", "SPEI"
-        ],
-    ) -> AsyncGriddedForcingReader:
-        pass
-
-    def __getitem__(self, name: str) -> AsyncGriddedForcingReader | xr.DataArray:
-        """Get the forcing data for a given name.
-
-        Args:
-            name: name of forcing dataset, e.g. "tas", "tasmin", "tasmax", "hurs", "ps", "rlds", "rsds", "sfcWind".
-
-        Returns:
-            An AsyncGriddedForcingReader or xarray DataArray for the specified forcing dataset.
-        """
-        if name not in self._forcings.keys():
-            self[name] = self.load_forcing_ds(name)
-        return self._forcings[name]
-
-    def load(self, name: str, time: datetime | None = None) -> npt.NDArray[Any]:
+    def load(self, name: str, time: datetime | None = None) -> npt.NDArray[Any] | float:
         """Load forcing data for a given name and time.
 
         Args:
-            name: name of forcing dataset, e.g. "tas", "tasmin", "tasmax", "hurs", "ps", "rlds", "rsds", "sfcWind".
-            time: time of forcing data to be returned. Defaults to None, in  which case the current time of the model is used.
+            name: name of forcing dataset, e.g. "pr_kg_per_m2_per_s", "tas_2m_K", etc.
+            time: time of forcing data to be returned. Defaults to None, in which case
+                the current time of the model is used.
 
         Returns:
-            Forcing data as a numpy array.
+            Forcing data as a numpy array or float.
         """
         if time is None:
-            time: datetime = self.model.current_time
+            time = self.model.current_time
 
         return self[name].load(time)
 
