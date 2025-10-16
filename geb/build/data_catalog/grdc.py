@@ -1,6 +1,6 @@
 """Adapter for Global Runoff Data Centre."""
 
-import io
+import tempfile
 import zipfile
 from typing import Any
 
@@ -59,14 +59,17 @@ class GRDC(Adapter):
             assert len(netcdf_files) == 1, "Expected exactly one .nc file in the zip."
             nc_filename = netcdf_files[0]
 
-            # Read file content into memory
-            with zip_file.open(nc_filename) as file:
-                file_content = file.read()
+            # Extract to temporary file instead of reading into memory
+            with tempfile.NamedTemporaryFile(suffix=".nc") as tmp_file:
+                with zip_file.open(nc_filename) as zip_content:
+                    tmp_file.write(zip_content.read())
+                tmp_file_path = tmp_file.name
 
-        # Open dataset from memory buffer
-        Q_obs = xr.open_dataset(io.BytesIO(file_content), engine="h5netcdf")
+                # Open dataset from temporary file
+                # Load the dataset into memory to avoid issues with closed files
+                Q_obs: xr.Dataset = xr.open_dataset(tmp_file_path).load()
 
         # rename geo_x and geo_y to x and y
-        Q_obs = Q_obs.rename({"geo_x": "x", "geo_y": "y"})
+        Q_obs: xr.Dataset = Q_obs.rename({"geo_x": "x", "geo_y": "y"})
 
         return Q_obs
