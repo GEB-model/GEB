@@ -188,6 +188,7 @@ class SFINCSRootModel:
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
+        setup_outflow: bool = True,
     ) -> "SFINCSRootModel":
         """Build a SFINCS model.
 
@@ -211,6 +212,7 @@ class SFINCSRootModel:
             depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
+            setup_outflow: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
 
         Returns:
             The SFINCSRootModel instance with the built model.
@@ -282,13 +284,14 @@ class SFINCSRootModel:
             river_len=0,
         )
 
-        sf.setup_river_outflow(
-            rivers=rivers.to_crs(sf.crs),
-            keep_rivers_geom=True,
-            river_upa=0,
-            river_len=0,
-            btype="waterlevel",
-        )
+        if setup_outflow:
+            sf.setup_river_outflow(
+                rivers=rivers.to_crs(sf.crs),
+                keep_rivers_geom=True,
+                river_upa=0,
+                river_len=0,
+                btype="waterlevel",
+            )
 
         # find outflow points and save for later use
         outflow_points = river_source_points(
@@ -964,7 +967,7 @@ class SFINCSSimulation:
         Returns:
             True if the SFINCS model has an outflow boundary condition, False otherwise.
         """
-        return (self.sfincs_model.grid["msk"] == 2).any()
+        return (self.sfincs_model.grid["msk"] == 2).any().item()
 
     @property
     def active_cells(self) -> xr.DataArray:
