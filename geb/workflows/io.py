@@ -32,8 +32,6 @@ from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.blosc import BloscShuffle
 
-all_async_readers: list = []
-
 
 def load_table(fp: Path | str) -> pd.DataFrame:
     """Load a parquet file as a pandas DataFrame.
@@ -633,7 +631,7 @@ class AsyncGriddedForcingReader:
         Args:
             filepath: The path to the zarr file.
             variable_name: The name of the variable to read from the zarr file.
-            asynchronous: Whether to use asynchronous reading. Default is False.
+            asynchronous: Whether to use asynchronous reading. Default is True.
         """
         self.variable_name = variable_name
         self.filepath = filepath
@@ -661,7 +659,6 @@ class AsyncGriddedForcingReader:
         ).to_numpy()
         self.time_size = self.datetime_index.size
 
-        all_async_readers.append(self)
         self.preloaded_data_future: asyncio.Task | None = None
         self.current_start_index: int = (
             -1
@@ -673,17 +670,38 @@ class AsyncGriddedForcingReader:
 
         if self.asynchronous:
             self.loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
+            self.async_lock: asyncio.Lock | None = (
+                None  # Will be created in the event loop
+            )
+            self.async_array: zarr.AsyncArray | None = (
+                None  # Will be opened once in the event loop
+            )
+            self.async_ready = (
+                threading.Event()
+            )  # Signal when async components are ready
             self.thread: threading.Thread = threading.Thread(
                 target=self._run_loop, daemon=True
             )
             self.thread.start()
+            # Wait for the async components to be initialized
+            self.async_ready.wait()
         else:
             self.loop = None
+            self.async_lock = None
+            self.async_array = None
             self.thread = None
 
     def _run_loop(self) -> None:
         """Run the asyncio event loop in a background thread."""
         asyncio.set_event_loop(self.loop)
+        # Create the async lock in the event loop thread
+        self.async_lock = asyncio.Lock()
+        # Open the async array once and reuse it
+        self.async_array = asyncio.get_event_loop().run_until_complete(
+            zarr.AsyncArray.open(self.var_store)
+        )
+        # Signal that async components are ready
+        self.async_ready.set()
         self.loop.run_forever()
 
     def load(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
@@ -709,8 +727,8 @@ class AsyncGriddedForcingReader:
         Returns:
             The data for the given index range from the zarr file.
         """
-        array: zarr.AsyncArray = await zarr.AsyncArray.open(self.var_store)
-        values: npt.NDArray[np.generic] = await array.getitem(
+        # Use the pre-opened async array instead of opening a new one each time
+        values: npt.NDArray[np.generic] = await self.async_array.getitem(
             (slice(start_index, end_index),)
         )
         return values
@@ -756,43 +774,56 @@ class AsyncGriddedForcingReader:
                 f"Index out of bounds: start_index={start_index}, end_index={end_index}, "
                 f"time_size={self.time_size}"
             )
-        # Check if the requested data is already loaded (cache hit), if so, just return that data
-        # To simplify we don't do any fancy re-index if only one of start or end index matches
-        if (
-            self.current_data is not None
-            and start_index == self.current_start_index
-            and end_index == self.current_end_index
-        ):
-            data = self.current_data
-        # Check if the data for the next timestep is preloaded, if so, await for it to complete
-        elif (
-            self.preloaded_data_future is not None
-            and self.current_start_index + n == start_index
-        ):
-            data = await self.preloaded_data_future
-        # Load the requested data if not preloaded (cache miss)
-        else:
-            # Cancel any pending preload task since we're not reading sequentially
-            if (
-                self.preloaded_data_future is not None
-                and not self.preloaded_data_future.done()
-            ):
-                self.preloaded_data_future.cancel()
-            data = await self.load_await(start_index, end_index)
 
-        # Initiate preloading the next timestep, do not await here, this returns a task
-        # Only preload if we're not re-reading the same timestep
-        if (
-            start_index != self.current_start_index
-            or end_index != self.current_end_index
-        ):
-            self.preloaded_data_future = self.loop.create_task(
-                self.preload_next(start_index, end_index, n)
-            )
-        self.current_start_index = start_index
-        self.current_end_index = end_index
-        self.current_data = data
-        return data
+        # Acquire the async lock to protect shared state
+        async with self.async_lock:
+            # Check if the requested data is already loaded (cache hit), if so, just return that data
+            # To simplify we don't do any fancy re-index if only one of start or end index matches
+            if (
+                self.current_data is not None
+                and start_index == self.current_start_index
+                and end_index == self.current_end_index
+            ):
+                data = self.current_data
+            # Check if the data for the next timestep is preloaded, if so, await for it to complete
+            elif (
+                self.preloaded_data_future is not None
+                and self.current_start_index + n == start_index
+            ):
+                try:
+                    preloaded_data = await self.preloaded_data_future
+                    # Check if preload returned valid data (not None)
+                    if preloaded_data is not None:
+                        data = preloaded_data
+                    else:
+                        # Preload returned None, load directly
+                        data = await self.load_await(start_index, end_index)
+                except Exception:
+                    # If preload failed, load directly
+                    data = await self.load_await(start_index, end_index)
+            # Load the requested data if not preloaded (cache miss)
+            else:
+                # Cancel any pending preload task since we're not reading sequentially
+                if (
+                    self.preloaded_data_future is not None
+                    and not self.preloaded_data_future.done()
+                ):
+                    self.preloaded_data_future.cancel()
+                data = await self.load_await(start_index, end_index)
+
+            # Initiate preloading the next timestep, do not await here, this returns a task
+            # Only preload if we're not re-reading the same timestep
+            if (
+                start_index != self.current_start_index
+                or end_index != self.current_end_index
+            ):
+                self.preloaded_data_future = self.loop.create_task(
+                    self.preload_next(start_index, end_index, n)
+                )
+            self.current_start_index = start_index
+            self.current_end_index = end_index
+            self.current_data = data
+            return data
 
     def get_index(self, date: datetime.datetime, n: int) -> int:
         """Convert datetime object to dtype of time coordinate.
@@ -866,17 +897,7 @@ class AsyncGriddedForcingReader:
         For asynchronous readers, this cancels any pending preload operations,
         stops the event loop, and joins the background thread.
         """
-        if not self.asynchronous or self.loop is None:
-            return
-
-        # Cancel the preloading of the next timestep
-        if self.preloaded_data_future is not None:
-            self.preloaded_data_future.cancel()
-
-        # Gently stop the event loop
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        if self.thread is not None:
-            self.thread.join()  # Wait for the thread to finish
+        pass
 
     @property
     def x(self) -> npt.NDArray[Any]:

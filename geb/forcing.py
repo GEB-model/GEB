@@ -168,6 +168,7 @@ class ForcingLoader(ABC):
             n: Number of time steps to load at once (default is 1).
         """
         self.n = n
+        self.variable = variable
         self.reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
             model.files["other"][f"climate/{variable}"],
             variable,
@@ -199,7 +200,9 @@ class ForcingLoader(ABC):
         interpolated: npt.NDArray[np.float32] = self.interpolate(data)
         valid: bool = self.validate(interpolated)
         if not valid:
-            raise ValueError(f"Invalid data for time {time}.")
+            raise ValueError(
+                f"Invalid data for time {time} for variable {self.variable}."
+            )
         assert interpolated.dtype == np.dtype(np.float32)
         return interpolated
 

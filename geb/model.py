@@ -831,10 +831,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         ):
             Hydrology.finalize(self.hydrology)
 
-            from geb.workflows.io import all_async_readers
-
-            for reader in all_async_readers:
-                reader.close()
+            # Close all async forcing readers
+            if hasattr(self, "forcing"):
+                for forcing_loader in self.forcing._forcings.values():
+                    if hasattr(forcing_loader, "reader"):
+                        forcing_loader.reader.close()
 
     def __enter__(self) -> "GEBModel":
         """Enters the context of the model.
