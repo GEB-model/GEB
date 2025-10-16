@@ -4,6 +4,7 @@ from typing import Any
 
 from .base import Adapter
 from .destination_earth import DestinationEarth
+from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
 from .fao import GMIA
 from .gadm import GADM
@@ -40,6 +41,21 @@ data_catalog: dict[str, dict[str, Any]] = {
         "source": {
             "name": "ERA5",
             "author": "ECMWF",
+        },
+    },
+    "ecmwf_forecasts": {
+        "adapter": ECMWFForecasts(
+            folder="ecmwf_forecasts",
+            filename="ecmwf_{forecast_date}_{forecast_model}_{forecast_resolution}_{forecast_horizon}h_{forecast_timestep_hours}h.grb",
+            local_version=1,
+            cache="local",
+        ),
+        "url": None,
+        "source": {
+            "name": "ECMWF Forecasts",
+            "author": "ECMWF",
+            "url": "https://www.ecmwf.int/en/forecasts/access-forecasts/access-archive-datasets",
+            "license": "https://www.ecmwf.int/en/forecasts/accessing-forecasts/licences-available",
         },
     },
     "soilgrids": {

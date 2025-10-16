@@ -1,4 +1,3 @@
-import os
 import tempfile
 from datetime import date, datetime, timedelta
 from functools import partial
@@ -7,7 +6,6 @@ from typing import Any
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import ecmwfapi
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -24,546 +22,6 @@ from ...workflows.io import calculate_scaling, to_zarr
 from ..workflows.general import (
     resample_like,
 )
-
-
-def generate_forecast_steps(forecast_date: datetime) -> str:
-    """Generate ECMWF forecast step string based on the forecast date.
-
-    ECMWF does not have a consistent 1h timestep for the entire operational archive. Asking hourly data to the server when it does not exist, will result in an error.
-    Therefore, we need to adjust the requested steps based on the available data, which is different before and after 2016-11-23:
-    - Before 2016-11-23: 3-hourly steps from 0-144h, 6-hourly steps from 144-360h
-    - From 2016-11-23 onwards: hourly steps from 0-90h, 3-hourly steps from 90-144h, 6-hourly steps from 144-360h
-
-    Args:
-        forecast_date: The forecast initialization date and time.
-
-    Returns:
-        ECMWF MARS step string in the format "0/3/6/9/..." with actual step hours.
-
-    Notes:
-        Returns step hours as required by ECMWF MARS API.
-    """
-    cutoff_date = date(
-        2016, 11, 23
-    )  # cutoff date for the change in forecast step availability
-    steps = []  # list to hold the forecast steps
-
-    if (
-        forecast_date.date() < cutoff_date
-    ):  # Before 2016-11-23: 3-hourly from 0-144h, 6-hourly from 144-360h
-        steps.extend(range(0, 145, 3))  # 0, 3, 6, 9, ..., 144 (3-hourly)
-        steps.extend(range(150, 241, 6))  # 150, 156, 162, ..., 360 (6-hourly from 144h)
-    else:  # From 2016-11-23: hourly from 0-90h, 3-hourly from 90-144h, 6-hourly from 144-360h
-        steps.extend(range(0, 91))  # 0, 1, 2, 3, ..., 90 (hourly)
-        steps.extend(range(93, 145, 3))  # 93, 96, 99, ..., 144 (3-hourly from 90h)
-        steps.extend(range(150, 241, 6))  # 150, 156, 162, ..., 360 (6-hourly from 144h)
-
-    return "/".join(str(step) for step in steps)  # return step string for MARS request
-
-
-def download_forecasts_ECMWF(
-    self,
-    forecast_variables: list[float],
-    preprocessing_folder: Path,
-    bounds: tuple[float, float, float, float],
-    forecast_start: date | datetime,
-    forecast_end: date | datetime,
-    forecast_model: str,
-    forecast_resolution: float,
-    forecast_horizon: int,
-    forecast_timestep_hours: int,
-) -> None:
-    """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
-
-    This function downloads ECMWF forecast data for a specified variable and time period
-    from the MARS archive using the ECMWF API. It handles the download and processing of both
-    deterministic (cf) and ensemble (pf) forecasts returning them as an xarray DataArray.
-
-    This function requires the ECMWF_API_KEY, ECMWF_API_URL and ECMWF_API_EMAIL to be set in the environment variables.
-    You can do this by adding it to your .env file. For detailed instructions, see GEB documentation.
-
-    Your API key: https://api.ecmwf.int/v1/key/
-    MARS data archive: https://apps.ecmwf.int/mars-catalogue/
-    Extra Documentation: https://confluence.ecmwf.int/display/UDOC/MARS+content
-
-    Args:
-        self: The class instance.
-        forecast_variables: List of ECMWF parameter codes to download (see ECMWF documentation).
-        preprocessing_folder: Path to the folder where downloaded forecast files will be stored.
-        bounds: The bounding box in the format (min_lon, min_lat, max_lon, max_lat).
-        forecast_start: The forecast initialization time (date or datetime).
-        forecast_end: The forecast end time (date or datetime).
-        forecast_model: The ECMWF forecast model to use ("probabilistic_forecast" or "control_forecast").
-        forecast_resolution: The spatial resolution of the forecast data (degrees).
-        forecast_horizon: The forecast horizon in hours.
-        forecast_timestep_hours: The forecast timestep in hours.
-
-    Raises:
-        ImportError: If ECMWF_API_KEY, ECMWF_API_URL or ECMWF_API_EMAIL is not found in environment variables.
-        ValueError: If forecast dates are before 2010-01-01.
-        APIException: If there is an error accessing the ECMWF MARS service.
-    """
-    self.logger.info(
-        f"Downloading forecast variables {forecast_variables}"
-    )  # Log the forecast variables being downloaded
-
-    preprocessing_folder.mkdir(
-        parents=True, exist_ok=True
-    )  # Create the directory structure if it doesn't exist
-
-    # Check for ECMWF API key in environment variables
-    for variable in ("ECMWF_API_KEY", "ECMWF_API_URL", "ECMWF_API_EMAIL"):
-        if variable not in os.environ:
-            raise ImportError(
-                f"{variable} not found in environment variables. "
-                f"Please set it as {variable}=XXXXX in your .env file. "
-                f"See https://github.com/ecmwf/ecmwf-api-client on how to obtain the keys."
-            )
-    server = ecmwfapi.ECMWFService("mars")  # Initialize ECMWF MARS service connection
-
-    fc_area_buffer: float = 1  # spatial buffer around the forecasts
-    bounds = (  # Add buffer to bounding box coordinates
-        bounds[0] - fc_area_buffer,
-        bounds[1] - fc_area_buffer,
-        bounds[2] + fc_area_buffer,
-        bounds[3] + fc_area_buffer,
-    )
-    bounds_str: str = f"{bounds[3]}/{bounds[0]}/{bounds[1]}/{bounds[2]}"  # setup bounds -- > bounds should be in North/West/South/East format for MARS
-
-    forecast_date_list = pd.date_range(
-        forecast_start, forecast_end, freq="24H"
-    )  # Generate list of forecast dates at 24-hour intervals
-
-    earliest_allowed_date = date(2010, 1, 1)  # Set earliest allowed forecast date
-    for forecast_date in forecast_date_list:  # Loop through all forecast dates
-        if (
-            forecast_date.date() < earliest_allowed_date
-        ):  # Check if date is before allowed range
-            raise ValueError(
-                f"Forecast date {forecast_date.date()} is before 2010-01-01. "
-                "For historical data before 2010, please use hindcast data instead."
-            )
-
-    for (
-        forecast_date
-    ) in forecast_date_list:  # Loop through each forecast date to download
-        print(forecast_date)  # Print the current forecast date being processed
-
-        # Process MARS request parameters
-        mars_class: str = "od"  # operational data class
-        mars_expver: str = "1"  # operational version number
-        mars_levtype: str = "sfc"  # surface level data type
-        mars_param: str = "/".join(
-            str(var) for var in forecast_variables
-        )  # Join parameter codes with "/" separator
-
-        if forecast_timestep_hours == 1:  # Check if hourly timestep is requested
-            mars_step: str = generate_forecast_steps(
-                forecast_date
-            )  # Generate forecast steps based on date using helper function
-        elif forecast_timestep_hours >= 6:  # Check if 6+ hourly timestep is requested
-            mars_step: str = f"0/to/{forecast_horizon}/BY/{forecast_timestep_hours}"  # Create step string for multi-hour intervals
-        else:
-            raise ValueError(
-                f"Forecast timestep {forecast_timestep_hours} is not supported. Please use 1 or >=6."
-            )
-
-        mars_stream: str = "enfo"  # Ensemble forecast stream
-        mars_time: str = forecast_date.strftime(
-            "%H"
-        )  # Extract hour from forecast date for initialization time
-        mars_type: str = (
-            "pf" if forecast_model == "probabilistic_forecast" else "cf"
-        )  # Set forecast type: perturbed forecasts (pf) or control forecast (cf)
-        mars_grid: str = str(
-            forecast_resolution
-        )  # Convert spatial resolution to string
-        mars_area: str = (
-            bounds_str  # Set bounding box area in North/West/South/East format
-        )
-
-        # retrieve steps from mars
-        mars_request: dict[
-            str, Any
-        ] = {  # Build MARS request dictionary with all parameters
-            "class": mars_class,
-            "date": forecast_date.strftime("%Y-%m-%d"),
-            "expver": mars_expver,
-            "levtype": mars_levtype,
-            "param": mars_param,
-            "step": mars_step,
-            "stream": mars_stream,
-            "time": mars_time,
-            "type": mars_type,
-            "grid": mars_grid,
-            "area": mars_area,
-        }
-
-        forecast_datetime_str = forecast_date.strftime(
-            "%Y%m%dT%H%M%S"
-        )  # Format datetime as string for filename
-        if (
-            forecast_model == "probabilistic_forecast"
-        ):  # check if ensemble forecasts are requested
-            mars_request["number"] = "1/to/50"  # Add ensemble member numbers to request
-            output_filename: Path = (
-                preprocessing_folder / f"ENS_{forecast_datetime_str}.grb"
-            )  # Create output file path with .grb extension
-
-            if output_filename.exists():
-                print(
-                    f"Forecast file already downloaded in {preprocessing_folder}, skipping download."
-                )  # Log that the file already exists
-                continue  # Skip to next forecast date
-
-        else:
-            output_filename: Path = (
-                preprocessing_folder / f"CTRL_{forecast_datetime_str}.grb"
-            )  # Create output file path with .grb extension
-            if output_filename.exists():
-                print(
-                    f"Forecast file already downloaded in {preprocessing_folder}, skipping download."
-                )  # Log that the file already exists
-                continue  # Skip to next forecast date
-
-        print(
-            f"Requesting data from ECMWF MARS server.. {mars_request}"
-        )  # Log the MARS request parameters
-
-        try:
-            server.execute(  # Execute the MARS request to download data
-                mars_request,
-                output_filename,
-            )  # start the download
-        except ecmwfapi.api.APIException as e:
-            if "has no access to services/mars" in str(e):
-                raise ValueError(
-                    "\033[91mAccess denied to ECMWF MARS service. To get access, please visit https://confluence.ecmwf.int/display/WEBAPI/Access+MARS, "
-                    "register for an account if you don't have one, and request access to the MARS archive, usually through your country representative (see website). "
-                    "Once approved, ensure your API key, URL, and email are set in your .env file as ECMWF_API_KEY, ECMWF_API_URL, and ECMWF_API_EMAIL.\033[0m"
-                ) from e
-            else:
-                raise  # Re-raise other API exceptions
-
-
-def process_forecast_ECMWF(
-    self,
-    preprocessing_folder: Path,
-    bounds: tuple[float, float, float, float],
-    forecast_issue_date: date | datetime,
-) -> None | xr.Dataset:
-    """Process downloaded ECMWF forecast data.
-
-    We process forecasts for each initialization time separately. The forecast file contains all variables needed for GEB.
-
-    Args:
-        self: The class instance.
-        preprocessing_folder: Path to the folder containing the downloaded ECMWF forecast data.
-        bounds: The bounding box in the format (min_lon, min_lat, max_lon,
-                max_lat).
-        forecast_issue_date: The forecast initialization time (date or datetime).
-
-    Returns:
-        da: processed ECMWF forecast data as an xarray Dataset.
-
-    """
-    self.logger.info(
-        f"Processing ECMWF forecasts from {preprocessing_folder}"
-    )  # Log the processing folder path
-
-    # create variable folder path
-    variable_folder = (
-        preprocessing_folder  # Set the folder path containing forecast files
-    )
-    file = (
-        variable_folder / f"ENS_{forecast_issue_date.strftime('%Y%m%dT%H%M%S')}.grb"
-    )  # Create full file path using formatted date
-
-    self.logger.info(
-        f"Processing forecast file: {file.name}"
-    )  # Log the filename being processed
-
-    da: xr.Dataset = xr.open_dataset(  # Open GRIB file as xarray Dataset
-        file,
-        engine="cfgrib",  # Use cfgrib engine for GRIB files
-    ).rename(
-        {"latitude": "y", "longitude": "x", "number": "member"}
-    )  # Rename dimensions to standard names
-
-    # experimental! add control forecast if available
-    # ctrl_file = (
-    #     variable_folder / f"CTRL_{forecast_issue_date.strftime('%Y%m%dT%H%M%S')}.grb"
-    # )
-    # if ctrl_file.exists():
-    #     ctrl_da: xr.Dataset = xr.open_dataset(
-    #         ctrl_file,
-    #         engine="cfgrib",
-    #     ).rename(
-    #         {"latitude": "y", "longitude": "x", "number": "member"}
-    #     )  # Rename dimensions to standard names
-
-    #     da = xr.concat(
-    #         [da, ctrl_da], dim="member"
-    #     )  # add control forecast as an extra member
-    #     # name 0 coordinate as 51
-    #     da = da.assign_coords(member=da.member.where(da.member != 0, 51))
-
-    # ensure all the timesteps are hourly
-    if not (
-        da.step.diff("step").astype(np.int64) == 3600 * 1e9
-    ).all():  # Check if all time differences are exactly 1 hour (3600 seconds in nanoseconds)
-        # print all the unique timesteps in the time dimension
-        print(
-            f"Timesteps in the forecast are not hourly, resampling to hourly. Found timesteps: {np.unique(da.step.diff('step').astype(np.int64) / 1e9 / 3600)} hours"
-        )  # Log the current timesteps found in the data
-
-        da = da.resample(step="1H").interpolate(
-            "linear"
-        )  # Resample to hourly timesteps using linear interpolation
-        # convert back to float32
-        da = da.astype(np.float32)  # Convert data type back to float32 to save memory
-    else:
-        print(
-            "All timesteps are already hourly, no need to resample"
-        )  # Log that resampling is not needed
-
-    da["tp"] = da["tp"] * 1000  # Convert precipitation from meters to millimeters
-    da["tp"] = da["tp"] / 3600  # Convert precipitation from mm/hr to mm/s
-    da["tp"] = da["tp"].diff(
-        dim="step", n=1, label="lower"
-    )  # De-accumulate precipitation by taking differences between consecutive time steps
-    if (
-        len(list(da.data_vars)) > 1
-    ):  # Check if there are multiple variables (more than just precipitation)
-        da["ssrd"] = da["ssrd"].diff(
-            dim="step", n=1, label="lower"
-        )  # De-accumulate shortwave radiation
-        da["ssrd"] = (
-            da["ssrd"] / 3600
-        )  # Convert shortwave radiation from J/m2 to W/m2 by dividing by 3600 seconds
-        da["strd"] = da["strd"].diff(
-            dim="step", n=1, label="lower"
-        )  # De-accumulate longwave radiation
-        da["strd"] = (
-            da["strd"] / 3600
-        )  # Convert from J/m2 to W/m2 by dividing by 3600 seconds
-
-    da = da.assign_coords(
-        valid_time=da.time + da.step
-    )  # Create valid_time coordinate by adding forecast initialization time to forecast step
-    da = da.swap_dims(
-        {"step": "valid_time"}
-    )  # Swap step dimension with valid_time to make valid_time the main time dimension
-    da = da.drop_vars(
-        ["time", "step", "surface"]
-    )  # Remove unnecessary coordinate variables
-    da = da.rename(
-        {"valid_time": "time"}
-    )  # Rename valid_time back to time for consistency
-
-    buffer: float = 1  # Set spatial buffer in degrees
-
-    # Check if region crosses the meridian (longitude=0)
-    # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
-    if (
-        bounds[0] < 0 and bounds[2] > 0
-    ):  # Check if bounding box crosses the 0-degree meridian
-        # Need to handle the split across the meridian
-        # Get western hemisphere part (longitude < 0)
-        west_da: xr.DataArray = da.sel(  # Select western hemisphere data
-            y=slice(
-                bounds[3] + buffer, bounds[1] - buffer
-            ),  # Latitude slice (note: reversed for GRIB convention)
-            x=slice(
-                ((bounds[0] - buffer) + 360) % 360, 360
-            ),  # Longitude slice for western part
-        )
-        # Get eastern hemisphere part (longitude > 0)
-        east_da: xr.DataArray = da.sel(  # Select eastern hemisphere data
-            y=slice(bounds[3] + buffer, bounds[1] - buffer),  # Same latitude slice
-            x=slice(
-                0, ((bounds[2] + buffer) + 360) % 360
-            ),  # Longitude slice for eastern part
-        )
-        # Combine the two parts
-        da: xr.DataArray = xr.concat(
-            [west_da, east_da], dim="x"
-        )  # Concatenate western and eastern parts along longitude dimension
-    else:
-        # Regular case - doesn't cross meridian
-        if (
-            da.x.min() >= 0 and da.x.max() <= 360
-        ):  # Check if longitude coordinates are in 0-360 format (probably GRIB2 files)
-            da: xr.DataArray = da.sel(  # Select data using 0-360 longitude format
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),  # Latitude slice
-                x=slice(
-                    ((bounds[0] - buffer) + 360)
-                    % 360,  # Convert min longitude to 0-360 format
-                    ((bounds[2] + buffer) + 360)
-                    % 360,  # Convert max longitude to 0-360 format
-                ),
-            )
-        else:  # Longitude coordinates are in -180 to 180 format (probably GRIB1 files)
-            da: xr.DataArray = da.sel(  # Select data using -180 to 180 longitude format
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),  # Latitude slice
-                x=slice(
-                    bounds[0] - buffer, bounds[2] + buffer
-                ),  # Longitude slice with buffer
-            )
-
-    # Reorder x to be between -180 and 180 degrees
-    da: xr.DataArray = da.assign_coords(
-        x=((da.x + 180) % 360 - 180)
-    )  # Convert longitude coordinates to -180 to 180 format
-    da.attrs["_FillValue"] = np.nan  # Set fill value attribute for missing data
-    da: xr.DataArray = (
-        da.raster.mask_nodata()
-    )  # Mask no-data values using raster accessor
-
-    # assert that time is monotonically increasing with a constant step size
-    assert (
-        da.time.diff("time").astype(np.int64)
-        == (da.time[1] - da.time[0]).astype(np.int64)
-    ).all(), (
-        "time is not monotonically increasing with a constant step size"
-    )  # Validate that time dimension is properly ordered with constant intervals
-
-    da = da.rio.write_crs(4326)  # Set coordinate reference system to WGS84 (EPSG:4326)
-    da.raster.set_crs(4326)  # Also set CRS using raster accessor
-
-    # make sure forecasts are in same grid as original data
-    forcing_da = xr.open_dataarray(  # Open existing forcing data to get target grid
-        "input" + "/" + self.files["other"]["climate/pr_hourly"]
-    )
-
-    da = da.interp(  # Interpolate forecast data to match the target grid
-        x=forcing_da.x,  # Target longitude coordinates
-        y=forcing_da.y,  # Target latitude coordinates
-        method="linear",  # Use linear interpolation
-    )
-    # convert back to float32
-    da = da.astype(np.float32)  # Convert back to float32 to save memory
-
-    # Handling of nan values and interpolation
-    for variable_name in da.data_vars:  # Loop through all variables in the dataset
-        variable_data: xr.DataArray = da[variable_name]  # Get data for current variable
-        nan_percentage: float = float(
-            variable_data.isnull().mean().compute().item()
-            * 100  # Calculate percentage of NaN values
-        )
-        assert nan_percentage < 5, (  # Assert that less than 5% of data is missing
-            f"More than 5% of the data is missing for variable '{variable_name}' "
-            f"({nan_percentage:.2f}% missing) after regridding. Check the area and try to "
-            "increase the buffer around the forecasts (fc_area_buffer), as probably not "
-            "the whole area is downloaded"
-        )
-        # fill the nan values using interpolate_na_along_time_dim and interpolate_na in space
-        if nan_percentage > 0:  # Check if there are any NaN values to fill
-            self.logger.warning(
-                f"Found {nan_percentage:.2f}% missing values for variable '{variable_name}' after regridding. Interpolating missing values."
-            )  # Log warning about missing values
-            da = da.interpolate_na(
-                dim=["y", "x"], method="nearest"
-            )  # Interpolate NaN values spatially using nearest neighbor
-            da = da.interpolate_na(
-                dim=["time"], method="nearest"
-            )  # Interpolate NaN values temporally using nearest neighbor
-
-            # fill nans in last timesteps (due to de-accumulation) with mean of recent known values
-            recent_mean: xr.DataArray = (  # Calculate mean of recent time steps for gap filling
-                da[variable_name]
-                .isel(
-                    time=slice(-25, -1)
-                )  # Select last 25 time steps (excluding the very last one)
-                .mean(
-                    dim="time", skipna=True, keep_attrs=True
-                )  # Calculate mean, skipping NaN values
-            )
-            # Fill any remaining NaNs with the recent mean
-            da[variable_name] = da[variable_name].fillna(
-                recent_mean
-            )  # Fill remaining NaN values with calculated mean
-
-            nan_percentage_after: float = float(
-                da[variable_name].isnull().mean().compute().item()
-                * 100  # Check percentage of NaN values after interpolation
-            )
-            assert (
-                nan_percentage_after == 0
-            ), (  # Assert that all NaN values have been filled
-                f"Failed to interpolate all missing values for variable '{variable_name}'. "
-                f"{nan_percentage_after:.2f}% missing values remain."
-            )
-
-    return da
-
-
-def plot_forcing(self, da, name) -> None:
-    """Plot forcing data with a temporal (timeline) plot and a spatial plot.
-
-    Args:
-        self: The class instance.
-        da: The xarray DataArray containing the forcing data. Must have dimensions 'time',
-        name: The name of the variable being plotted, used for titles and filenames.
-    """
-    fig, axes = plt.subplots(
-        7, 1, figsize=(35, 10), gridspec_kw={"hspace": 0.5}
-    )  # Create 7 subplots stacked vertically
-
-    data = (da.mean(dim=("y", "x"))).compute()  # Area-weighted average
-    assert not np.isnan(data.values).any(), (
-        "data contains NaN values"
-    )  # ensure no NaNs in data
-
-    plot_timeline(da, data, name, axes[0])  # Plot the entire timeline on the first axis
-
-    for i in range(0, 3):  # plot the first three years on separate axes
-        year = data.time[0].dt.year + i  # get the year to plot
-        year_data = data.sel(
-            time=data.time.dt.year == year
-        )  # select data for that year
-        if year_data.size > 0:  # only plot if there is data for that year
-            plot_timeline(
-                da,  # original data
-                data.sel(time=da.time.dt.year == year),  # data for that year
-                f"{name} - {year.item()}",  # title
-                axes[i + 1],  # axis to plot on
-            )
-
-    # plot three weeks in the last year on separate axes
-    last_year = data.time[-1].dt.year
-    for i in range(3):
-        start_date = pd.Timestamp(f"{last_year.item()}-{i * 3 + 1}-01")
-        end_date = start_date + pd.Timedelta(days=7)
-        week_data = data.sel(time=slice(start_date, end_date))
-        if week_data.size > 0:
-            plot_timeline(
-                da,
-                week_data,
-                f"{name} - {start_date.date()} to {end_date.date()}",
-                axes[i + 4],
-            )
-
-    fp = self.report_dir / (
-        name + "_timeline.png"
-    )  # file path for saving the timeline plot
-    fp.parent.mkdir(parents=True, exist_ok=True)  # ensure directory exists
-    plt.savefig(fp)  # save the timeline plot
-    plt.close(fig)  # close the figure to free memory
-
-    spatial_data = da.mean(dim="time")  # mean over time for spatial plot
-
-    spatial_data.plot()  # plot the spatial data
-
-    plt.title(name)  # title
-    plt.xlabel("Longitude")  # x-axis label
-    plt.ylabel("Latitude")  # y-axis label
-
-    spatial_fp: Path = self.report_dir / (
-        name + "_spatial.png"
-    )  # file path for saving the spatial plot
-    plt.savefig(spatial_fp)  # save the spatial plot
-    plt.close()  # close the plot to free memory
 
 
 def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
@@ -967,9 +425,12 @@ class Forcing:
         return da
 
     def set_dewpoint_tas_2m_K(
-        self, da: xr.DataArray, *args: Any, **kwargs: Any
+        self,
+        da: xr.DataArray,
+        name: str = "climate/dewpoint_tas_2m_K",
+        *args: Any,
+        **kwargs: Any,
     ) -> xr.DataArray:
-        name: str = "climate/dewpoint_tas_2m_K"
         da.attrs = {
             "standard_name": "air_temperature_dow_point",
             "long_name": "Hourly Near-Surface Dewpoint Temperature",
@@ -1155,22 +616,22 @@ class Forcing:
         pr_hourly: xr.DataArray = xr.where(pr_hourly > 0, pr_hourly, 0, keep_attrs=True)
         pr_hourly: xr.DataArray = self.set_pr_kg_per_m2_per_s(pr_hourly)
 
-        hourly_tas: xr.DataArray = era5_loader("t2m")
-        self.set_tas_2m_K(hourly_tas)
+        tas: xr.DataArray = era5_loader("t2m")
+        self.set_tas_2m_K(tas)
 
-        hourly_dew_point_tas: xr.DataArray = era5_loader("d2m")
-        self.set_dewpoint_tas_2m_K(hourly_dew_point_tas)
+        dew_point_tas: xr.DataArray = era5_loader("d2m")
+        self.set_dewpoint_tas_2m_K(dew_point_tas)
 
-        hourly_rsds: xr.DataArray = (
+        rsds: xr.DataArray = (
             era5_loader("ssrd") / 3600  # convert from J/m2/(per timestep) to W/m2
-        ).compute()  # surface_solar_radiation_downwards
-        self.set_rsds_W_per_m2(hourly_rsds)
+        )  # surface_solar_radiation_downwards
+        self.set_rsds_W_per_m2(rsds)
 
         # surface_thermal_radiation_downwards
-        hourly_rlds: xr.DataArray = (
+        rlds: xr.DataArray = (
             era5_loader("strd") / 3600
         )  # convert from J/m2/(per timestep) to W/m2
-        self.set_rlds_W_per_m2(hourly_rlds)
+        self.set_rlds_W_per_m2(rlds)
 
         pressure: xr.DataArray = era5_loader("sp")
         self.set_ps_pascal(pressure)
@@ -1181,9 +642,7 @@ class Forcing:
         v_wind: xr.DataArray = era5_loader("v10")
         self.set_wind_10m_m_per_s(v_wind, direction="v")
 
-        elevation_forcing: xr.DataArray = self.get_elevation_forcing(
-            pr_hourly
-        ).compute()
+        elevation_forcing: xr.DataArray = self.get_elevation_forcing(pr_hourly)
         self.set_other(
             elevation_forcing,
             name="climate/elevation_forcing",
@@ -1468,7 +927,7 @@ class Forcing:
         forecast_resolution: float,
         forecast_horizon: int,
         forecast_timestep_hours: int,
-    ):
+    ) -> None:
         """Sets up forecast data for the model based on configuration.
 
         Args:
@@ -1512,17 +971,6 @@ class Forcing:
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
         """
-        preprocessing_folder = (
-            self.preprocessing_dir / "forecasts" / "ECMWF"
-        )  # Set up forecast data path
-        preprocessing_folder.mkdir(
-            parents=True, exist_ok=True
-        )  # Ensure directory exists
-
-        target = self.grid["mask"]  # Get the model's spatial mask grid
-        target.raster.set_crs(4326)  # Set coordinate reference system to WGS84
-        bounds = target.raster.bounds  # Extract geographic bounding box
-
         MARS_codes: dict[str, float] = {  # Complete set of weather variables
             "tp": 228.128,  # total precipitation
             "t2m": 167.128,  # 2 metre temperature
@@ -1534,29 +982,17 @@ class Forcing:
             "v10": 166.128,  # 10 metre v-component of wind
         }
 
-        # Configure arguments for the forecast download function
-        download_args: dict[str, Any] = {  # Dictionary to store download parameters
-            "preprocessing_folder": preprocessing_folder,  # Output directory path
-            "bounds": bounds,  # Geographic bounding box for data extraction
-            "forecast_start": forecast_start,  # Start date for forecast downloads
-            "forecast_end": forecast_end,  # End date for forecast downloads
-            "forecast_model": forecast_model,  # ECMWF model type (HRES, pf, etc.)
-            "forecast_resolution": forecast_resolution,  # Spatial resolution in degrees
-            "forecast_horizon": forecast_horizon,  # Forecast horizon in hours
-            "forecast_timestep_hours": forecast_timestep_hours,  # Temporal resolution in hours
-        }
-
-        # Configure arguments for the forecast processing function
-        process_args: dict[str, Any] = {  # Dictionary to store processing parameters
-            "preprocessing_folder": preprocessing_folder,  # Input directory with downloaded files
-            "bounds": bounds,  # Geographic bounds for spatial cropping
-        }
-
-        # Download the forecast data from ECMWF using MARS API
-        self.logger.info("Downloading ECMWF forecasts...")  # Log download start
-        download_forecasts_ECMWF(
-            self, list(MARS_codes.values()), **download_args
-        )  # Call download function with parameter codes
+        ECMWF_forecasts_store = self.new_data_catalog.fetch(
+            "ecmwf_forecasts",
+            forecast_variables=list(MARS_codes.values()),
+            bounds=self.bounds,
+            forecast_start=forecast_start,
+            forecast_end=forecast_end,
+            forecast_model=forecast_model,  # ECMWF model type (HRES, pf, etc.)
+            forecast_resolution=forecast_resolution,
+            forecast_horizon=forecast_horizon,  # Forecast horizon in hours
+            forecast_timestep_hours=forecast_timestep_hours,  # Temporal resolution in hours
+        )
 
         self.logger.info(
             "Processing ECMWF precipitation forecasts..."
@@ -1578,210 +1014,76 @@ class Forcing:
             self.logger.info(
                 f"Processing forecast issued at {forecast_issue_date}..."
             )  # Log current forecast being processed
-            process_args["forecast_issue_date"] = (
-                forecast_issue_date  # Add current date to processing arguments
-            )
 
-            # Process the raw GRIB forecast data into xarray format
-            ECMWF_forecast = process_forecast_ECMWF(
-                self, **process_args
-            )  # Call processing function
+            ECMWF_forecast = ECMWF_forecasts_store.read(
+                bounds=self.bounds,
+                forecast_issue_date=forecast_issue_date,
+                forecast_model=forecast_model,
+                forecast_resolution=forecast_resolution,
+                forecast_horizon=forecast_horizon,
+                forecast_timestep_hours=forecast_timestep_hours,
+                reproject_like=self.other[
+                    "climate/pr_kg_per_m2_per_s"
+                ],  # Reproject to grid of other climate data
+            )
 
             # Extract and process hourly precipitation data
-            pr_hourly = ECMWF_forecast["tp"]  # Get total precipitation variable
-
-            pr_hourly = pr_hourly.where(
-                pr_hourly >= 0, 0
-            )  # Handle negative values (caused by floating-point precision issues) by setting them to zero
-            pr_hourly = pr_hourly.rename(
+            pr = ECMWF_forecast["tp"].rename(
                 "precipitation"
-            )  # Change from "tp" to "precipitation"
-            # Store the processed hourly precipitation data
-            self.set_pr_hourly(  # Save hourly precipitation
-                pr_hourly,
-                name=f"forecasts/ECMWF/pr_hourly_{forecast_issue_date_str}",  # Use date-specific filename
-            )
-            # Load elevation grids for topographic corrections
-            (
-                elevation_forcing,
-                elevation_target,
-            ) = (  # Get elevation data for corrections
-                self.get_elevation_forcing_and_grid(  # Function to retrieve elevation grids
-                    self.grid["mask"],
-                    pr_hourly,
-                    forcing_name="ECMWF",
-                )
+            )  # Get total precipitation variable
+            pr = pr.where(
+                pr >= 0, 0
+            )  # Handle negative values (caused by floating-point precision issues) by setting them to zero
+            self.set_pr_kg_per_m2_per_s(
+                pr,
+                name=f"forecasts/ECMWF/pr_kg_per_m2_per_s_{forecast_issue_date_str}",  # Use date-specific filename
             )
 
-            pr = pr_hourly.resample(
-                time="D"
-            ).mean()  # Calculate daily mean precipitation
-            pr = resample_like(
-                pr, target, method="conservative"
-            )  # Resample to target grid using conservative method
-            pr = self.set_pr(
-                pr, f"forecasts/ECMWF/pr_{forecast_issue_date_str}"
-            )  # Store daily precipitation
-
-            hourly_tas = ECMWF_forecast["t2m"]  # Extract 2-meter temperature
-            hourly_tas = hourly_tas.rename(
-                "tas"
-            )  # Rename to standard climate variable name
-            tas_avg = hourly_tas.resample(
-                time="D"
-            ).mean()  # Calculate daily mean temperature
-            tas_avg = reproject_and_apply_lapse_rate_temperature(  # Correct temperature for elevation
-                tas_avg,
-                elevation_forcing,
-                elevation_target,  # Use elevation grids for correction
-            )
-            self.set_tas(
-                tas_avg, f"forecasts/ECMWF/tas_{forecast_issue_date_str}"
-            )  # Store average temperature
-            tasmax = hourly_tas.resample(
-                time="D"
-            ).max()  # Calculate daily maximum temperature
-            tasmax = (
-                reproject_and_apply_lapse_rate_temperature(  # Correct for topography
-                    tasmax, elevation_forcing, elevation_target
-                )
-            )
-            tasmax = tasmax.rename("tasmax")  # Ensure proper variable name
-            self.set_tasmax(  # Store maximum temperature
-                tasmax, f"forecasts/ECMWF/tasmax_{forecast_issue_date_str}"
-            )
-            tasmin = hourly_tas.resample(
-                time="D"
-            ).min()  # Calculate daily minimum temperature
-            tasmin = (
-                reproject_and_apply_lapse_rate_temperature(  # Correct for elevation
-                    tasmin, elevation_forcing, elevation_target
-                )
-            )
-            tasmin = tasmin.rename("tasmin")  # Ensure proper variable name
-            self.set_tasmin(  # Store minimum temperature
-                tasmin, f"forecasts/ECMWF/tasmin_{forecast_issue_date_str}"
+            tas = ECMWF_forecast["t2m"].rename("tas")  # Extract 2-meter temperature
+            self.set_tas_2m_K(
+                tas, name=f"forecasts/ECMWF/tas_2m_K_{forecast_issue_date_str}"
             )
 
-            hourly_dew_point_tas = ECMWF_forecast["d2m"]  # Extract dewpoint temperature
-            hourly_dew_point_tas = hourly_dew_point_tas.rename(
+            dew_point_tas = ECMWF_forecast["d2m"].rename(
                 "dew_point_tas"
-            )  # Rename for clarity
-            dew_point_tas = hourly_dew_point_tas.resample(
-                time="D"
-            ).mean()  # Calculate daily mean dewpoint
-            dew_point_tas = reproject_and_apply_lapse_rate_temperature(  # Correct dewpoint for elevation
-                dew_point_tas, elevation_forcing, elevation_target
-            )
-            water_vapour_pressure = (
-                0.6108
-                * np.exp(  # Magnus formula for vapor pressure
-                    17.27  # Magnus coefficient
-                    * (dew_point_tas - 273.15)  # Convert Kelvin to Celsius
-                    / (237.3 + (dew_point_tas - 273.15))  # Magnus denominator
-                )
-            )  # calculate water vapour pressure (kPa)
-            saturation_vapour_pressure = (
-                0.6108
-                * np.exp(  # Magnus formula for saturation
-                    17.27
-                    * (tas_avg - 273.15)
-                    / (237.3 + (tas_avg - 273.15))  # Using average temperature
-                )
-            )
-            assert (
-                water_vapour_pressure.shape == saturation_vapour_pressure.shape
-            )  # Ensure compatible shapes
-            relative_humidity = (
-                (  # RH = (e / e_sat) * 100
-                    water_vapour_pressure
-                    / saturation_vapour_pressure  # Ratio of actual to saturation vapor pressure
-                )
-                * 100
-            )  # Convert to percentage
-            original_crs = (  # Store original CRS if available
-                relative_humidity.rio.crs  # Get CRS from rioxarray
-                if hasattr(relative_humidity, "rio")  # Check if rioxarray is available
-                else None  # Default to None if no CRS info
-            )
-            relative_humidity = xr.where(  # Handle relative humidity values slightly above 100% (due to numerical precision)
-                (relative_humidity > 100)
-                & (relative_humidity <= 101),  # Values between 100-101%
-                100,  # Set to exactly 100%
-                relative_humidity,  # Keep original values otherwise
-                keep_attrs=True,  # Preserve data attributes
+            )  # Extract dewpoint temperature
+            self.set_dewpoint_tas_2m_K(
+                dew_point_tas,
+                name=f"forecasts/ECMWF/dewpoint_tas_2m_K_{forecast_issue_date_str}",
             )
 
-            if (
-                original_crs is not None
-                and (  # Restore CRS information if it was lost during calculations
-                    not hasattr(relative_humidity, "rio")  # CRS was lost
-                    or relative_humidity.rio.crs is None
-                )
-            ):
-                relative_humidity = relative_humidity.rio.write_crs(
-                    original_crs
-                )  # Restore CRS
-            relative_humidity = relative_humidity.rename(
-                "hurs"
-            )  # Rename to standard climate variable
-            self.set_hurs(  # Store relative humidity
-                relative_humidity, f"forecasts/ECMWF/hurs_{forecast_issue_date_str}"
+            rsds = ECMWF_forecast["ssrd"].rename("rsds")  # Extract shortwave radiation
+            self.set_rsds_W_per_m2(
+                rsds,
+                name=f"forecasts/ECMWF/rsds_W_per_m2_{forecast_issue_date_str}",
             )
-
-            hourly_rsds = ECMWF_forecast["ssrd"]  # Extract shortwave radiation
-            rsds = hourly_rsds.resample(  # Resample to daily resolution
-                time="D"
-            ).mean()  # get average W/m2 over the day
-            rsds = resample_like(
-                rsds, target, method="conservative"
-            )  # Resample to target grid
-            rsds = rsds.rename("rsds")  # Rename to standard variable name
-            self.set_rsds(
-                rsds, f"forecasts/ECMWF/rsds_{forecast_issue_date_str}"
-            )  # Store solar radiation
 
             # Process surface longwave (thermal) radiation downwards
-            hourly_rlds = ECMWF_forecast["strd"]  # Extract longwave radiation
-            rlds = hourly_rlds.resample(  # Resample to daily resolution
-                time="D"
-            ).mean()  # get average W/m2 over the day
-            rlds = resample_like(
-                rlds, target, method="conservative"
-            )  # Resample to target grid
-            rlds = rlds.rename("rlds")  # Rename to standard variable name
-            self.set_rlds(
-                rlds, f"forecasts/ECMWF/rlds_{forecast_issue_date_str}"
-            )  # Store longwave radiation
-
-            pressure = ECMWF_forecast["sp"]  # Extract surface pressure
-            pressure = pressure.resample(
-                time="D"
-            ).mean()  # Calculate daily mean pressure
-            pressure = reproject_and_apply_lapse_rate_pressure(  # Correct pressure for elevation
-                pressure,
-                elevation_forcing,
-                elevation_target,  # Use elevation grids
+            rlds = ECMWF_forecast["strd"].rename("rlds")  # Extract longwave radiation
+            self.set_rlds_W_per_m2(
+                rlds,
+                name=f"forecasts/ECMWF/rlds_W_per_m2_{forecast_issue_date_str}",
             )
-            pressure = pressure.rename("ps")  # Rename to standard variable name
 
-            self.set_ps(
-                pressure, f"forecasts/ECMWF/ps_{forecast_issue_date_str}"
-            )  # Store surface pressure
+            pressure = ECMWF_forecast["sp"].rename("ps")  # Extract surface pressure
+            self.set_ps_pascal(
+                pressure, name=f"forecasts/ECMWF/ps_pascal_{forecast_issue_date_str}"
+            )
 
-            u_wind = ECMWF_forecast["u10"]  # Extract u-component of wind at 10m
-            u_wind = u_wind.resample(time="D").mean()  # Calculate daily mean u-wind
-            v_wind = ECMWF_forecast["v10"]  # Extract v-component of wind at 10m
-            v_wind = v_wind.resample(time="D").mean()  # Calculate daily mean v-wind
-            wind_speed = np.sqrt(
-                u_wind**2 + v_wind**2
-            )  # Pythagorean theorem: |v| = sqrt(u² + v²) --> # Calculate wind speed magnitude from components (sfcWind: wind speed at 10 m height in m/s)
-            wind_speed = resample_like(
-                wind_speed, target, method="conservative"
-            )  # Resample to target grid
-            wind_speed = wind_speed.rename(
-                "sfcWind"
-            )  # Rename to standard variable name
-            self.set_sfcwind(  # Store surface wind speed
-                wind_speed, f"forecasts/ECMWF/sfcwind_{forecast_issue_date_str}"
+            u_wind = ECMWF_forecast["u10"].rename(
+                "u10"
+            )  # Extract u-component of wind at 10m
+            self.set_wind_10m_m_per_s(
+                u_wind,
+                direction="u",
+                name=f"forecasts/ECMWF/wind_u10m_m_per_s_{forecast_issue_date_str}",
+            )
+
+            v_wind = ECMWF_forecast["v10"].rename(
+                "v10"
+            )  # Extract v-component of wind at 10m
+            self.set_wind_10m_m_per_s(
+                v_wind,
+                direction="v",
+                name=f"forecasts/ECMWF/wind_v10m_m_per_s_{forecast_issue_date_str}",
             )
