@@ -914,12 +914,10 @@ class Hydrography:
     @build_method
     def setup_gtsm_station_data(self) -> None:
         """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
-        subbasins = gpd.read_parquet(
-            "input" + "/" + self.files["geom"]["routing/subbasins"]
-        )
-        if not subbasins["is_coastal_basin"].any():
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
+
         # Continue with GTSM hydrographs setup
         temporal_range = np.arange(1979, 2018, 1, dtype=np.int32)
         self.setup_gtsm_water_levels(temporal_range)
