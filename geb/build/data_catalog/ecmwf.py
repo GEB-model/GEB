@@ -295,7 +295,13 @@ class ECMWFForecasts(Adapter):
             preprocessing_folder: Path to the folder containing the downloaded ECMWF forecast data.
             bounds: The bounding box in the format (min_lon, min_lat, max_lon,
                     max_lat).
-            forecast_issue_date: The forecast initialization time (date or datetime).
+            forecast_issue_date: The forecast initialization time.
+            forecast_model: The ECMWF forecast model used ("probabilistic_forecast" or "control_forecast").
+            forecast_resolution: The spatial resolution of the forecast data (degrees).
+            forecast_horizon: The forecast horizon in hours.
+            forecast_timestep_hours: The forecast timestep in hours.
+            reproject_like: An xarray DataArray to use as a template for reprojecting
+                the forecast data.
 
         Returns:
             da: processed ECMWF forecast data as an xarray Dataset.
