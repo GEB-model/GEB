@@ -18,7 +18,7 @@ from affine import Affine
 from geb.build.workflows.general import calculate_cell_area
 from geb.hydrology.groundwater.model import (
     ModFlowSimulation,
-    distribute_well_rate_per_layer,
+    distribute_well_abstraction_m3_per_layer,
     get_groundwater_storage_m,
     get_water_table_depth,
 )
@@ -475,7 +475,7 @@ def test_get_groundwater_storage_m() -> None:
     np.testing.assert_allclose(storage, np.array([36.75, 31.75, 12.25, 9.75, 0.0]))
 
 
-def test_distribute_well_rate_per_layer() -> None:
+def test_distribute_well_abstraction_m3_per_layer() -> None:
     layer_boundary_elevation = np.array(
         [
             [100, 100, 100, 100, 100, 100, 100],
@@ -502,7 +502,7 @@ def test_distribute_well_rate_per_layer() -> None:
 
     well_rate = np.array([-10, -10, -10, -10, -0, -3000, -0], dtype=np.float64)
 
-    well_rate_per_layer = distribute_well_rate_per_layer(
+    well_rate_per_layer = distribute_well_abstraction_m3_per_layer(
         well_rate, layer_boundary_elevation, heads, specific_yield, area
     )
 
@@ -517,7 +517,7 @@ def test_distribute_well_rate_per_layer() -> None:
         ),
     )
 
-    well_rate_per_layer = distribute_well_rate_per_layer(
+    well_rate_per_layer = distribute_well_abstraction_m3_per_layer(
         well_rate,
         layer_boundary_elevation,
         heads,

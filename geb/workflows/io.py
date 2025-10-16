@@ -5,30 +5,32 @@ import datetime
 import os
 import shutil
 import tempfile
+import threading
 import time
 import warnings
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import TracebackType
 from typing import Any
 
 import cftime
+import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyproj
 import rasterio
 import requests
+import s3fs
 import xarray as xr
 import zarr
+import zarr.storage
 from dask.diagnostics import ProgressBar
 from pyproj import CRS
+from rasterio.transform import Affine
 from tqdm import tqdm
 from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.blosc import BloscShuffle
-
-all_async_readers: list = []
 
 
 def load_table(fp: Path | str) -> pd.DataFrame:
@@ -61,6 +63,74 @@ def load_array(fp: Path) -> np.ndarray:
         return zarr.load(fp)
     else:
         raise ValueError(f"Unsupported file format: {fp.suffix}")
+
+
+def load_grid(
+    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
+) -> np.ndarray | tuple[np.ndarray, Affine, str]:
+    """Load a raster grid from a .tif or .zarr file.
+
+    Args:
+        filepath: The path to the .tif or .zarr file.
+        layer: The layer to load from the .tif file. If None, all layers are loaded. Default is 1.
+        return_transform_and_crs: Whether to return the affine transform and CRS along with the data. Default is False.
+
+    Returns:
+        The raster data as a numpy array, or a tuple of the raster data, affine transform, and CRS string if return_transform_and_crs is True.
+
+    Raises:
+        ValueError: If the file format is not supported.
+    """
+    if filepath.suffix == ".tif":
+        warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
+        with rasterio.open(filepath) as src:
+            data: np.ndarray = src.read(layer)
+            data: np.ndarray = (
+                data.astype(np.float32) if data.dtype == np.float64 else data
+            )
+            if return_transform_and_crs:
+                return data, src.transform, src.crs
+            else:
+                return data
+    elif filepath.suffix == ".zarr":
+        store: zarr.storage._local.LocalStore = zarr.storage.LocalStore(
+            filepath, read_only=True
+        )
+        group: zarr.core.group.Group = zarr.open_group(store, mode="r")
+        data: np.ndarray = group[filepath.stem][:]
+        data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
+        if return_transform_and_crs:
+            x: np.ndarray = group["x"][:]
+            y: np.ndarray = group["y"][:]
+            x_diff: float = np.diff(x[:]).mean().item()
+            y_diff: float = np.diff(y[:]).mean().item()
+            transform: Affine = Affine(
+                a=x_diff,
+                b=0,
+                c=x[0] - x_diff / 2,
+                d=0,
+                e=y_diff,
+                f=y[0] - y_diff / 2,
+            )
+            wkt: str = group[filepath.stem].attrs["_CRS"]["wkt"]
+            return data, transform, wkt
+        else:
+            return data
+    else:
+        raise ValueError("File format not supported.")
+
+
+def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
+    """Load a geometry for the GEB model from disk.
+
+    Args:
+        filepath: Path to the geometry file.
+
+    Returns:
+        A GeoDataFrame containing the geometries.
+
+    """
+    return gpd.read_parquet(filepath)
 
 
 def calculate_scaling(
@@ -286,7 +356,7 @@ def to_zarr(
         x_chunksize: The chunk size for the x dimension. Default is 350.
         y_chunksize: The chunk size for the y dimension. Default is 350.
         time_chunksize: The chunk size for the time dimension. Default is 1.
-        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to Non
+        time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
             to disable sharding.
         byteshuffle: Whether to use byteshuffle compression. Default is True.
         filters: A list of filters to apply. Default is [].
@@ -553,24 +623,31 @@ class AsyncGriddedForcingReader:
     multiple timesteps sequentially.
     """
 
-    def __init__(self, filepath: Path, variable_name: str) -> None:
+    def __init__(
+        self, filepath: Path, variable_name: str, asynchronous: bool = True
+    ) -> None:
         """Initializes the AsyncGriddedForcingReader.
 
         Args:
             filepath: The path to the zarr file.
             variable_name: The name of the variable to read from the zarr file.
+            asynchronous: Whether to use asynchronous reading. Default is True.
         """
         self.variable_name = variable_name
         self.filepath = filepath
+        self.asynchronous = asynchronous
 
-        store = zarr.storage.LocalStore(self.filepath, read_only=True)
-        self.ds = zarr.open_group(store, mode="r")
+        self.store = zarr.storage.LocalStore(self.filepath, read_only=True)
+        self.var_store = zarr.storage.LocalStore(
+            self.filepath / self.variable_name, read_only=True
+        )
+        self.ds = zarr.open_group(self.store, mode="r")
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
                 message="Numcodecs codecs are not in the Zarr version 3 specification and may not be supported by other zarr implementations.",
             )
-            self.var = self.ds[variable_name]
+            self.array = self.ds[self.variable_name]
 
         self.datetime_index = cftime.num2date(
             self.ds["time"][:],
@@ -582,81 +659,173 @@ class AsyncGriddedForcingReader:
         ).to_numpy()
         self.time_size = self.datetime_index.size
 
-        all_async_readers.append(self)
-        self.preloaded_data_future = None
-        self.current_index = -1  # Initialize to -1 to indicate no data loaded yet
+        self.preloaded_data_future: asyncio.Task | None = None
+        self.current_start_index: int = (
+            -1
+        )  # Initialize to -1 to indicate no data loaded yet
+        self.current_end_index: int = (
+            -1
+        )  # Initialize to -1 to indicate no data loaded yet
+        self.current_data: npt.NDArray[Any] | None = None
 
-        self.loop = asyncio.new_event_loop()
-        self.executor = ThreadPoolExecutor(max_workers=1)
+        if self.asynchronous:
+            self.loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
+            self.async_lock: asyncio.Lock | None = (
+                None  # Will be created in the event loop
+            )
+            self.async_array: zarr.AsyncArray | None = (
+                None  # Will be opened once in the event loop
+            )
+            self.async_ready = (
+                threading.Event()
+            )  # Signal when async components are ready
+            self.thread: threading.Thread = threading.Thread(
+                target=self._run_loop, daemon=True
+            )
+            self.thread.start()
+            # Wait for the async components to be initialized
+            self.async_ready.wait()
+        else:
+            self.loop = None
+            self.async_lock = None
+            self.async_array = None
+            self.thread = None
 
-    def load(self, index: int) -> npt.NDArray[Any]:
+    def _run_loop(self) -> None:
+        """Run the asyncio event loop in a background thread."""
+        asyncio.set_event_loop(self.loop)
+        # Create the async lock in the event loop thread
+        self.async_lock = asyncio.Lock()
+        # Open the async array once and reuse it
+        self.async_array = asyncio.get_event_loop().run_until_complete(
+            zarr.AsyncArray.open(self.var_store)
+        )
+        # Signal that async components are ready
+        self.async_ready.set()
+        self.loop.run_forever()
+
+    def load(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
         """Load the data for the given index from the zarr file.
 
         Args:
-            index: The index of the timestep to load in the zarr file, along the time dimension.
+            start_index: The start index of the timestep to load in the zarr file, along the time dimension.
+            end_index: The final index of the timestep to load in the zarr file, along the time dimension.
 
         Returns:
             The data for the given index from the zarr file.
         """
-        data = self.var[index, :]
+        data: npt.NDArray[np.generic] = self.array[start_index:end_index]
         return data
 
-    async def load_await(self, index: int) -> npt.NDArray[Any]:
+    async def load_await(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
         """Load the data for the given index from the zarr file asynchronously.
 
         Args:
-            index: The index of the timestep to read in the zarr file, along the time dimension.
+            start_index: The start index of the timestep to load in the zarr file, along the time dimension.
+            end_index: The final index of the timestep to load in the zarr file, along the time dimension.
 
         Returns:
-            An awaitable that resolves to the data for the given index from the zarr file.
+            The data for the given index range from the zarr file.
         """
-        return await self.loop.run_in_executor(self.executor, lambda: self.load(index))
+        # Use the pre-opened async array instead of opening a new one each time
+        values: npt.NDArray[np.generic] = await self.async_array.getitem(
+            (slice(start_index, end_index),)
+        )
+        return values
 
-    async def preload_next(self, index: int) -> None | npt.NDArray[Any]:
+    async def preload_next(
+        self, start_index: int, end_index: int, n: int
+    ) -> npt.NDArray[Any] | None:
         """Preload the next timestep asynchronously.
 
         Args:
-            index: The index of the timestep to read in the zarr file, along the time dimension.
+            start_index: The start index of the current timestep in the zarr file, along the time dimension.
+            end_index: The final index of the current timestep in the zarr file, along the time dimension.
+            n: The number of timesteps to skip ahead for preloading.
 
         Returns:
-            An awaitable that resolves to the data for the next index, or None if there is no next index.
+            The data for the next timestep range, or None if there is no next timestep in bounds.
         """
         # Preload the next timestep asynchronously
-        if index + 1 < self.time_size:
-            return await self.load_await(index + 1)
+        if end_index + n <= self.time_size:
+            return await self.load_await(start_index + n, end_index + n)
         return None
 
-    async def read_timestep_async(self, index: int) -> npt.NDArray[Any]:
+    async def read_timestep_async(
+        self, start_index: int, end_index: int, n: int
+    ) -> npt.NDArray[Any]:
         """Read the data for the given index from the zarr file asynchronously.
 
         Also preloads the next timestep asynchronously so that it is ready when needed.
 
         Args:
-            index: The index of the timestep to read in the zarr file, along the time dimension.
+            start_index: The index of the timestep to read in the zarr file, along the time dimension.
+            end_index: The final index of the timestep to read in the zarr file, along the time dimension.
+            n: The number of timesteps to read.
 
         Returns:
-            The data for the given index from the zarr file.
+            The data for the given index range from the zarr file.
 
+        Raises:
+            ValueError: If the indices are out of bounds.
         """
-        assert index < self.time_size, "Index out of bounds."
-        assert index >= 0, "Index out of bounds."
-        # Check if the requested data is already preloaded, if so, just return that data
-        if index == self.current_index:
-            return self.current_data
-        # Check if the data for the next timestep is preloaded, if so, await for it to complete
-        if self.preloaded_data_future is not None and self.current_index + 1 == index:
-            data = await self.preloaded_data_future
-        # Load the requested data if not preloaded
-        else:
-            data = await self.load_await(index)
+        if start_index < 0 or end_index > self.time_size:
+            raise ValueError(
+                f"Index out of bounds: start_index={start_index}, end_index={end_index}, "
+                f"time_size={self.time_size}"
+            )
 
-        # Initiate preloading the next timestep, do not await here, this returns a future
-        self.preloaded_data_future = asyncio.create_task(self.preload_next(index))
-        self.current_index = index
-        self.current_data = data
-        return data
+        # Acquire the async lock to protect shared state
+        async with self.async_lock:
+            # Check if the requested data is already loaded (cache hit), if so, just return that data
+            # To simplify we don't do any fancy re-index if only one of start or end index matches
+            if (
+                self.current_data is not None
+                and start_index == self.current_start_index
+                and end_index == self.current_end_index
+            ):
+                data = self.current_data
+            # Check if the data for the next timestep is preloaded, if so, await for it to complete
+            elif (
+                self.preloaded_data_future is not None
+                and self.current_start_index + n == start_index
+            ):
+                try:
+                    preloaded_data = await self.preloaded_data_future
+                    # Check if preload returned valid data (not None)
+                    if preloaded_data is not None:
+                        data = preloaded_data
+                    else:
+                        # Preload returned None, load directly
+                        data = await self.load_await(start_index, end_index)
+                except Exception:
+                    # If preload failed, load directly
+                    data = await self.load_await(start_index, end_index)
+            # Load the requested data if not preloaded (cache miss)
+            else:
+                # Cancel any pending preload task since we're not reading sequentially
+                if (
+                    self.preloaded_data_future is not None
+                    and not self.preloaded_data_future.done()
+                ):
+                    self.preloaded_data_future.cancel()
+                data = await self.load_await(start_index, end_index)
 
-    def get_index(self, date: datetime.datetime) -> int:
+            # Initiate preloading the next timestep, do not await here, this returns a task
+            # Only preload if we're not re-reading the same timestep
+            if (
+                start_index != self.current_start_index
+                or end_index != self.current_end_index
+            ):
+                self.preloaded_data_future = self.loop.create_task(
+                    self.preload_next(start_index, end_index, n)
+                )
+            self.current_start_index = start_index
+            self.current_end_index = end_index
+            self.current_data = data
+            return data
+
+    def get_index(self, date: datetime.datetime, n: int) -> int:
         """Convert datetime object to dtype of time coordinate.
 
         There is a very high probability that the dataset is the same as
@@ -665,57 +834,88 @@ class AsyncGriddedForcingReader:
 
         Args:
             date: The date to convert.
+            n: The number of timesteps to preload ahead.
 
         Returns:
             The index of the given date in the zarr file.
 
+        Raises:
+            ValueError: If the date is not found in the dataset.
+
         """
         numpy_date: np.datetime64 = np.datetime64(date, "ns")
-        if self.datetime_index[self.current_index] == numpy_date:
-            return self.current_index
-        elif self.datetime_index[self.current_index + 1] == numpy_date:
-            return self.current_index + 1
+        if (
+            self.current_start_index != -1
+            and self.datetime_index[self.current_start_index] == numpy_date
+        ):
+            return self.current_start_index
+        elif (
+            self.current_start_index != -1
+            and self.current_start_index + n < self.time_size
+            and self.datetime_index[self.current_start_index + n] == numpy_date
+        ):
+            return self.current_start_index + n
         else:
-            indices = self.datetime_index == numpy_date
-            assert np.count_nonzero(indices) == 1, (
-                f"Date not found in the dataset. The first date available in {self.variable_name} ({self.filepath}) is {self.datetime_index[0]} and the last date is {self.datetime_index[-1]}, while requested date is {date}"
-            )
-            return indices.argmax()
+            indices = np.where(self.datetime_index == numpy_date)[0]
+            if indices.size == 0:
+                raise ValueError(
+                    f"Date not found in the dataset. The first date available in {self.variable_name} ({self.filepath}) is {self.datetime_index[0]} and the last date is {self.datetime_index[-1]}, while requested date is {date}"
+                )
+            return indices[0]
 
-    def read_timestep(
-        self, date: datetime.datetime, asynchronous: bool = False
-    ) -> npt.NDArray[Any]:
+    def read_timestep(self, date: datetime.datetime, n: int = 1) -> npt.NDArray[Any]:
         """Read the data for the given date from the zarr file.
 
         Args:
             date: The date of the timestep to read.
-            asynchronous: If True, the data is read asynchronously. Defaults to False.
-
-        Note:
-            The asynchronous mode is currently broken.
+            n: The number of timesteps to read. Defaults to 1.
 
         Returns:
-            The data for the given date from the zarr file.
+            The data for the given date from the zarr file (n, y, x).
+
+        Raises:
+            ValueError: If the requested date range extends beyond the available data.
         """
-        if asynchronous:
-            index = self.get_index(date)
-            fn = self.read_timestep_async(index)
-            data = self.loop.run_until_complete(fn)
-            return data
+        start_index = self.get_index(date, n)
+        end_index = start_index + n
+        if end_index > self.time_size:
+            raise ValueError(
+                f"Requested {n} timesteps starting from {date}, but only {self.time_size - start_index} "
+                f"timesteps are available in the dataset."
+            )
+        if self.asynchronous:
+            coro = self.read_timestep_async(start_index, end_index, n)
+            future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+            return future.result()  # This blocks until the data is ready
         else:
-            index = self.get_index(date)
-            data = self.load(index)
+            data = self.load(start_index, end_index)
             return data
 
     def close(self) -> None:
-        """Close the reader and clean up resources."""
-        # cancel the preloading of the next timestep
-        if self.preloaded_data_future is not None:
-            self.preloaded_data_future.cancel()
-        # close the executor
-        self.executor.shutdown(wait=False)
+        """Close the reader and clean up resources.
 
-        self.loop.call_soon_threadsafe(self.loop.stop)
+        For asynchronous readers, this cancels any pending preload operations,
+        stops the event loop, and joins the background thread.
+        """
+        pass
+
+    @property
+    def x(self) -> npt.NDArray[Any]:
+        """Get the x coordinates of the variable.
+
+        Returns:
+            The x coordinates of the variable.
+        """
+        return self.ds["x"][:]
+
+    @property
+    def y(self) -> npt.NDArray[Any]:
+        """Get the y coordinates of the variable.
+
+        Returns:
+            The y coordinates of the variable.
+        """
+        return self.ds["y"][:]
 
 
 class WorkingDirectory:
@@ -808,49 +1008,90 @@ def fetch_and_save(
     if not overwrite and file_path.exists():
         return True
 
-    attempts = 0
-    temp_file = None
+    if url.startswith("s3://"):
+        # Fetch from S3 without authentication
+        fs = s3fs.S3FileSystem(anon=True)
+        attempts = 0
+        temp_file = None
 
-    while attempts < max_retries:
-        try:
-            print(f"Downloading {url} to {file_path}")
-            # Attempt to make the request
-            response = session.get(url, stream=True, params=params, timeout=timeout)
-            response.raise_for_status()  # Raises HTTPError for bad status codes
+        while attempts < max_retries:
+            try:
+                print(f"Downloading {url} to {file_path}")
+                # Create a temporary file
+                temp_file = tempfile.NamedTemporaryFile(delete=False)
+                temp_file.close()
 
-            # Create a temporary file
-            temp_file = tempfile.NamedTemporaryFile(delete=False)
+                # Download from S3
+                fs.get(url, temp_file.name)
 
-            # Write to the temporary file
-            total_size = int(response.headers.get("content-length", 0))
-            progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-            for data in response.iter_content(chunk_size=chunk_size):
-                temp_file.write(data)
-                progress_bar.update(len(data))
-            progress_bar.close()
+                # Move the temporary file to the destination
+                shutil.move(temp_file.name, file_path)
+                return True
 
-            # Close the temporary file
-            temp_file.close()
+            except Exception as e:
+                # Log the error
+                print(
+                    f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
+                )
 
-            # Move the temporary file to the destination
-            shutil.move(temp_file.name, file_path)
+                # Remove the temporary file if it exists
+                if temp_file is not None and os.path.exists(temp_file.name):
+                    os.remove(temp_file.name)
 
-            return True  # Exit the function after successful write
+                # Increment the attempt counter and wait before retrying
+                attempts += 1
+                if attempts < max_retries:
+                    time.sleep(delay)
 
-        except requests.RequestException as e:
-            # Log the error
-            print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+        # If all attempts fail, raise an exception
+        raise RuntimeError(
+            f"Failed to download '{url}' from S3 to '{file_path}' after {max_retries} attempts."
+        )
 
-            # Remove the temporary file if it exists
-            if temp_file is not None and os.path.exists(temp_file.name):
-                os.remove(temp_file.name)
+    elif url.startswith("http://") or url.startswith("https://"):
+        attempts = 0
+        temp_file = None
 
-            # Increment the attempt counter and wait before retrying
-            attempts += 1
-            time.sleep(delay)
+        while attempts < max_retries:
+            try:
+                print(f"Downloading {url} to {file_path}")
+                # Attempt to make the request
+                response = session.get(url, stream=True, params=params, timeout=timeout)
+                response.raise_for_status()  # Raises HTTPError for bad status codes
 
-    # If all attempts fail, raise an exception
-    raise RuntimeError(
-        f"Failed to download '{url}' to '{file_path}' after {max_retries} attempts. "
-        "Please check the URL, network connectivity, and destination permissions."
-    )
+                # Create a temporary file
+                temp_file = tempfile.NamedTemporaryFile(delete=False)
+
+                # Write to the temporary file
+                total_size = int(response.headers.get("content-length", 0))
+                progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
+                for data in response.iter_content(chunk_size=chunk_size):
+                    temp_file.write(data)
+                    progress_bar.update(len(data))
+                progress_bar.close()
+
+                # Close the temporary file
+                temp_file.close()
+
+                # Move the temporary file to the destination
+                shutil.move(temp_file.name, file_path)
+
+                return True  # Exit the function after successful write
+
+            except requests.RequestException as e:
+                # Log the error
+                print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+
+                # Remove the temporary file if it exists
+                if temp_file is not None and os.path.exists(temp_file.name):
+                    os.remove(temp_file.name)
+
+                # Increment the attempt counter and wait before retrying
+                attempts += 1
+                time.sleep(delay)
+
+        # If all attempts fail, raise an exception
+        raise RuntimeError(
+            f"Failed to download '{url}' to '{file_path}' after {max_retries} attempts. "
+            "Please check the URL, network connectivity, and destination permissions."
+        )

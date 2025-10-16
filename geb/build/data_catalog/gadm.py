@@ -30,7 +30,7 @@ class GADM(Adapter):
         self.level = level
         super().__init__(*args, **kwargs)
 
-    def processor(self, url: str) -> Path:
+    def fetch(self, url: str) -> Path:
         """Process GADM Level 1 zip file to extract and convert to parquet.
 
         Args:

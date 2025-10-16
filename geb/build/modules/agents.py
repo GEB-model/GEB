@@ -353,7 +353,7 @@ class Agents:
         cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         oecd_idd = oecd_idd[cols_to_keep]
         # only done to check countries in region, could probably be done more efficiently
-        countries = self.new_data_catalog.get("GADM_level0").read(
+        countries = self.new_data_catalog.fetch("GADM_level0").read(
             geom=self.region.union_all(),
         )
         # setup donor countries for country missing in oecd data
@@ -420,11 +420,10 @@ class Agents:
             The resulting lending rates and inflation rates data are set as forcing data in the model with names of the form
             'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
         """
-        # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
-        inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
+        inflation_rates = self.new_data_catalog.fetch("wb_inflation_rate").read()
         inflation_rates_country_index = inflation_rates.set_index("Country Code")
-        price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
-        LCU_per_USD = self.data_catalog.get_dataframe("wb_LCU_per_USD")
+        price_ratio = self.new_data_catalog.fetch("world_bank_price_ratio").read()
+        LCU_per_USD = self.new_data_catalog.fetch("world_bank_LCU_per_USD").read()
 
         def filter_and_rename(df, additional_cols):
             # Select columns: 'Country Name', 'Country Code', and columns containing "YR"
@@ -1068,26 +1067,9 @@ class Agents:
                 f"Region database must contain {country_iso3_column} column ({self.data_catalog['GADM_level1'].path})"
             )
 
-            farm_sizes_per_region = (
-                self.data_catalog.get_dataframe("lowder_farm_sizes")
-                .dropna(subset=["Total"], axis=0)
-                .drop(["empty", "income class"], axis=1)
-            )
-            farm_sizes_per_region["Country"] = farm_sizes_per_region["Country"].ffill()
-            # Remove preceding and trailing white space from country names
-            farm_sizes_per_region["Country"] = farm_sizes_per_region[
-                "Country"
-            ].str.strip()
-            farm_sizes_per_region["Census Year"] = farm_sizes_per_region[
-                "Country"
-            ].ffill()
-
-            farm_sizes_per_region["ISO3"] = farm_sizes_per_region["Country"].map(
-                COUNTRY_NAME_TO_ISO3
-            )
-            assert not farm_sizes_per_region["ISO3"].isna().any(), (
-                f"Found {farm_sizes_per_region['ISO3'].isna().sum()} countries without ISO3 code"
-            )
+            farm_sizes_per_region = self.new_data_catalog.fetch(
+                "lowder_farm_size_distribution"
+            ).read()
 
             farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
             farm_size_donor_country = setup_donor_countries(self, farm_countries_list)
@@ -1477,12 +1459,11 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
-    def setup_buildings(self):
+    def setup_buildings(self) -> None:
         output = {}
-        GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4", geom=self.region, variables=["GDLcode", "iso_code"]
+        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "geometry"]
         )
-        GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
 
         fp_buildings = self.files["geom"]["assets/buildings"]
         buildings = gpd.read_parquet(f"{self.root}/{fp_buildings}")[
@@ -1533,14 +1514,9 @@ class Agents:
         all_buildings_model_region = self.setup_buildings()
 
         # load GDL region within model domain
-        GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4",
-            geom=self.region,
-            variables=["GDLcode", "iso_code"],
+        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
         )
-        GDL_regions = GDL_regions[
-            GDL_regions["GDLcode"] != "NA"
-        ]  # remove regions without GDL code
 
         # create list of attibutes to include (and include name to store to)
         rename = {
@@ -1589,9 +1565,7 @@ class Agents:
                 continue
 
             # load table with income distribution data
-            national_income_distribution = pd.read_parquet(
-                "input" / self.files["table"]["income/national_distribution"]
-            )
+            national_income_distribution = self.table["income/national_distribution"]
 
             # construct national income distribution
 
@@ -1919,12 +1893,9 @@ class Agents:
         )  # convert locations to geodataframe
 
         # GLOPOP-S uses the GDL regions. So we need to get the GDL region for each farmer using their location
-        GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
+        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "geometry"]
         )
-        if (GDL_regions["GDLcode"] == "NA").any():
-            self.logger.warning("GDL region has a 'NA', these rows will be deleted.")
-            GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
 
         # assign GDL region to each farmer based on their location. This is a heavy operation, so we include a progress bar to monitor progress.
         self.logger.info("Assigning GDL region to each farmer based on their location.")
@@ -2362,15 +2333,11 @@ class Agents:
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
     def setup_farmer_irrigation_source(self, irrigating_farmers, year) -> None:
-        fraction_sw_irrigation = "aeisw"
+        fraction_sw_irrigation_data = self.new_data_catalog.fetch(
+            "global_irrigation_area_surface_water"
+        ).read()
 
-        fraction_sw_irrigation_data = xr.open_dataarray(
-            self.data_catalog.get_source(
-                f"global_irrigation_area_{fraction_sw_irrigation}",
-            ).path
-        )
         fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
-            band=0,
             **get_window(
                 fraction_sw_irrigation_data.x,
                 fraction_sw_irrigation_data.y,
@@ -2379,14 +2346,11 @@ class Agents:
             ),
         ).raster.interpolate_na()
 
-        fraction_gw_irrigation = "aeigw"
-        fraction_gw_irrigation_data = xr.open_dataarray(
-            self.data_catalog.get_source(
-                f"global_irrigation_area_{fraction_gw_irrigation}",
-            ).path
-        )
+        fraction_gw_irrigation_data = self.new_data_catalog.fetch(
+            "global_irrigation_area_groundwater"
+        ).read()
+
         fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
-            band=0,
             **get_window(
                 fraction_gw_irrigation_data.x,
                 fraction_gw_irrigation_data.y,
