@@ -212,7 +212,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/hydrology/{erosion,groundwater}/**.py" = [
+"geb/hydrology/erosion/**.py" = [
     "ANN001",
     "ANN003",
     "ANN201",
