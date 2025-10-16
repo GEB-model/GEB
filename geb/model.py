@@ -399,7 +399,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.timestep_length = timestep_length
 
         self.hydrology: Hydrology = Hydrology(self)
-        self.forcing: Forcing = Forcing(self)
 
         HazardDriver.__init__(self)
         ABM_Model.__init__(
@@ -422,6 +421,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self._verify_spinup_time_range()
 
         if self.simulate_hydrology:
+            self.forcing: Forcing = Forcing(self)
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
             self.hydrology.landsurface.set_global_variables()
