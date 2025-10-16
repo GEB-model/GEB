@@ -65,7 +65,7 @@ def create_discharge_timeseries(
     nodes.index = list(np.arange(1, len(nodes) + 1))
     timeseries: pd.DataFrame = pd.DataFrame(
         {
-            "time": pd.date_range(start=start_time, end=end_time, freq="H"),
+            "time": pd.date_range(start=start_time, end=end_time, freq="h"),
             **{node_id: discharge_value for node_id in nodes.index},
         }
     ).set_index("time")
@@ -283,7 +283,7 @@ def test_SFINCS_discharge_grid_forcing(geb_model: GEBModel) -> None:
 
         # repeat for all timesteps
         discharge_grid = discharge_grid.expand_dims(
-            time=pd.date_range(start=start_time, end=end_time, freq="H")
+            time=pd.date_range(start=start_time, end=end_time, freq="h")
         )
 
         waterbody_ids: npt.NDArray[np.int32] = (

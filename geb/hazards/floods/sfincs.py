@@ -81,7 +81,7 @@ def set_river_outflow_boundary_condition(
     tstart, tstop = sf.get_model_time()
 
     # Define the time range (e.g., 1 month of hourly data)
-    time_range = pd.date_range(start=tstart, end=tstop, freq="H")
+    time_range = pd.date_range(start=tstart, end=tstop, freq="h")
 
     # Create DataFrame with constant elevation value
     elevation_time_series_constant = pd.DataFrame(
