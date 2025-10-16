@@ -21,6 +21,10 @@
 
 """Hydrology submodule for the GEB model. Holds all hydrology related submodules."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from geb.hydrology.HRUs import Data
@@ -35,6 +39,9 @@ from .routing import Routing
 from .runoff_concentration import concentrate_runoff
 from .water_demand import WaterDemand
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
+
 
 class Hydrology(Data, Module):
     """The hydrological module of the GEB model.
@@ -48,7 +55,7 @@ class Hydrology(Data, Module):
         model: The GEB model instance.
     """
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Create the hydrology module."""
         Data.__init__(self, model)
         Module.__init__(self, model)

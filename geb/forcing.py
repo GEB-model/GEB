@@ -1,8 +1,10 @@
 """Module to handle climate forcing data."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -12,6 +14,9 @@ from geb.workflows.io import load_grid
 
 from .module import Module
 from .workflows.io import AsyncGriddedForcingReader
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 def generate_bilinear_interpolation_weights(
@@ -158,7 +163,7 @@ def get_pressure_correction_factor(
 class ForcingLoader(ABC):
     """Abstract base class for loading and validating forcing data."""
 
-    def __init__(self, model: "GEBModel", variable: str, n: int) -> None:
+    def __init__(self, model: GEBModel, variable: str, n: int) -> None:
         """Initialize the ForcingLoader.
 
         Args:
@@ -233,7 +238,7 @@ class ForcingLoader(ABC):
 class Precipitation(ForcingLoader):
     """Loader for precipitation data with specific validation."""
 
-    def __init__(self, model: "GEBModel", grid_mask: npt.NDArray[np.bool_]) -> None:
+    def __init__(self, model: GEBModel, grid_mask: npt.NDArray[np.bool_]) -> None:
         """Initialize the Precipitation loader.
 
         Args:
@@ -261,7 +266,7 @@ class Temperature(ForcingLoader):
 
     def __init__(
         self,
-        model: "GEBModel",
+        model: GEBModel,
         forcing_DEM: npt.NDArray[np.float32],
         grid_DEM: npt.NDArray[np.float32],
         grid_mask: npt.NDArray[np.bool_],
@@ -337,7 +342,7 @@ class Wind(ForcingLoader):
     """
 
     def __init__(
-        self, model: "GEBModel", direction: str, grid_mask: npt.NDArray[np.bool_]
+        self, model: GEBModel, direction: str, grid_mask: npt.NDArray[np.bool_]
     ) -> None:
         """Initialize the Wind loader.
 
@@ -372,7 +377,7 @@ class Pressure(ForcingLoader):
 
     def __init__(
         self,
-        model: "GEBModel",
+        model: GEBModel,
         forcing_DEM: npt.NDArray[np.float32],
         grid_DEM: npt.NDArray[np.float32],
         grid_mask: npt.NDArray[np.bool_],
@@ -457,7 +462,7 @@ class Pressure(ForcingLoader):
 class RSDS(ForcingLoader):
     """Loader for surface downwelling shortwave radiation data with specific validation."""
 
-    def __init__(self, model: "GEBModel", grid_mask: npt.NDArray[np.bool_]) -> None:
+    def __init__(self, model: GEBModel, grid_mask: npt.NDArray[np.bool_]) -> None:
         """Initialize the RSDS loader.
 
         Args:
@@ -483,7 +488,7 @@ class RSDS(ForcingLoader):
 class RLDS(ForcingLoader):
     """Loader for surface downwelling longwave radiation data with specific validation."""
 
-    def __init__(self, model: "GEBModel", grid_mask: npt.NDArray[np.bool_]) -> None:
+    def __init__(self, model: GEBModel, grid_mask: npt.NDArray[np.bool_]) -> None:
         """Initialize the RLDS loader.
 
         Args:
@@ -509,7 +514,7 @@ class RLDS(ForcingLoader):
 class SPEI(ForcingLoader):
     """Loader for Standardized Precipitation-Evapotranspiration Index (SPEI) data with specific validation."""
 
-    def __init__(self, model: "GEBModel", grid_mask: npt.NDArray[np.bool_]) -> None:
+    def __init__(self, model: GEBModel, grid_mask: npt.NDArray[np.bool_]) -> None:
         """Initialize the SPEI loader.
 
         Args:
@@ -535,7 +540,7 @@ class SPEI(ForcingLoader):
 class CO2:
     """Loader for CO2 concentration data with specific validation."""
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize the CO2 loader."""
         self.df = pd.read_parquet(model.files["table"]["climate/CO2_ppm"])
 
@@ -579,7 +584,7 @@ class Forcing(Module):
         model: The GEB model instance.
     """
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize the Forcing module.
 
         All forcing loaders are initialized upfront to allow for efficient batch loading

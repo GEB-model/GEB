@@ -1,11 +1,13 @@
 """Storage classes for model data."""
 
+from __future__ import annotations
+
 import json
 import shutil
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import geopandas as gpd
 import numpy as np
@@ -13,6 +15,9 @@ import numpy.typing as npt
 import pandas as pd
 
 from geb.workflows.io import load_geom
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 class DynamicArray:
@@ -1108,7 +1113,7 @@ class Store:
     This class is use to store and restore the model's state in a structured way.
     """
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize the Store with a reference to the model.
 
         Args:

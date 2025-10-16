@@ -1,6 +1,8 @@
 """Module containing general agent functions and the base class for all agents."""
 
-from typing import Tuple
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -9,6 +11,9 @@ from numba import njit
 
 from geb.module import Module
 from geb.store import DynamicArray
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 @njit(cache=True)
@@ -117,7 +122,7 @@ def downscale_volume(
 class AgentBaseClass(Module, HoneybeesAgentBaseClass):
     """Base class for all agent classes."""
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize the agent base class.
 
         Args:

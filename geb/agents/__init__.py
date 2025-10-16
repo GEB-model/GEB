@@ -4,6 +4,10 @@ Agent classes for the GEB model.
 This package exposes agent implementations used to simulate actors in the model.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from geb.module import Module
 from geb.workflows import TimingModule
 
@@ -15,11 +19,14 @@ from .livestock_farmers import LiveStockFarmers
 from .market import Market
 from .reservoir_operators import ReservoirOperators
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology as Hydrology
+
 
 class Agents(Module):
     """This class initalizes all agent classes, and is used to activate the agents each timestep."""
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize the Agents module.
 
         Initalizes all agent classes and stores them in a list to be activated each timestep.

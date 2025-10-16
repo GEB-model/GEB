@@ -1,6 +1,8 @@
 """Routing algorithms for river networks."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -10,6 +12,9 @@ from numba import njit
 from geb.module import Module
 from geb.typing import ArrayFloat32
 from geb.workflows import balance_check
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
 
 
 def get_river_width(
@@ -834,7 +839,7 @@ class Routing(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model: "GEBModel", hydrology: "Hydrology") -> None:
+    def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the Routing module.
 
         Args:

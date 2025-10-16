@@ -197,15 +197,6 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/hydrology/erosion/**.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D102",
-    "D103",
-    "D100",
-    "D107"
-]
 "geb/build/{custom_models}/**.py" = [
     "ANN001",
     "ANN201",

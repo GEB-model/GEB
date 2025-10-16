@@ -1,5 +1,9 @@
 """Land surface module for GEB."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 import numpy.typing as npt
 import zarr
@@ -38,6 +42,9 @@ from .soil import (
     thetar_brakensiek,
     thetas_toth,
 )
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
 
 
 @njit(parallel=True, cache=True)
@@ -518,7 +525,7 @@ def land_surface_model(
 class LandSurface(Module):
     """Land surface module for GEB."""
 
-    def __init__(self, model: "GEBModel", hydrology: "Hydrology") -> None:
+    def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the potential evaporation module.
 
         Args:

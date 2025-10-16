@@ -1,9 +1,11 @@
 """This module contains classes and functions to handle Hydrological Response Units (HRUs) and grid cells."""
 
+from __future__ import annotations
+
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,6 +19,9 @@ from scipy.spatial import cKDTree
 from geb.typing import ArrayFloat32, TwoDFloatArrayFloat32
 from geb.workflows.io import load_grid, open_zarr
 from geb.workflows.raster import compress
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 def determine_nearest_river_cell(
@@ -226,7 +231,7 @@ class Grid(BaseVariables):
     Then, the mask is compressed by removing all masked cells, resulting in a compressed array.
     """
 
-    def __init__(self, data: "Data", model: "GEBModel") -> None:
+    def __init__(self, data: Data, model: GEBModel) -> None:
         """Initialize Grid class.
 
         Args:
@@ -493,7 +498,7 @@ class HRUs(BaseVariables):
         model: The GEB model.
     """
 
-    def __init__(self, data: "Data", model: "GEBModel") -> None:
+    def __init__(self, data: Data, model: GEBModel) -> None:
         """Initialize HRUs class.
 
         Args:
@@ -973,7 +978,7 @@ class HRUs(BaseVariables):
 class Data:
     """The base data class for the GEB model. This class contains the data for the normal grid, the HRUs, and has methods to convert between the grid and HRUs."""
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize Data class.
 
         Contains the data for the normal grid, the HRUs, and has methods to convert between the grid and HRUs.

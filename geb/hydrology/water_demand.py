@@ -21,6 +21,10 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 import numpy.typing as npt
 from honeybees.library.raster import write_to_array
@@ -28,6 +32,9 @@ from honeybees.library.raster import write_to_array
 from geb.module import Module
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import load_grid
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
 
 
 def weighted_sum_per_reservoir(
@@ -61,7 +68,7 @@ class WaterDemand(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model: "GEBModel", hydrology: "Hydrology") -> None:
+    def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the water demand module.
 
         Args:

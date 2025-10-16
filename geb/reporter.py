@@ -1,10 +1,12 @@
 """This module contains the Reporter class, which is used to report data to disk."""
 
+from __future__ import annotations
+
 import datetime
 import re
 import shutil
 from operator import attrgetter
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import geopandas as gpd
 import numpy as np
@@ -15,6 +17,9 @@ from honeybees.library.raster import coord_to_pixel
 from geb.module import Module
 from geb.store import DynamicArray
 from geb.workflows.methods import multi_level_merge
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 WATER_CIRCLE_REPORT_CONFIG = {
     "hydrology": {
@@ -148,7 +153,7 @@ def create_time_array(
 class Reporter:
     """This class is used to report data to disk."""
 
-    def __init__(self, model: "GEBModel", clean: bool) -> None:
+    def __init__(self, model: GEBModel, clean: bool) -> None:
         """The constructor for the Reporter class.
 
         Loops over the reporter configuration and creates the necessary files and data structures,
