@@ -11,7 +11,7 @@ from geb.build.workflows.merit_hydro import (
 )
 
 
-def test_tile_filename_and_package():
+def test_tile_filename_and_package() -> None:
     assert _tile_filename(30, -120, "elv") == "n30w120_elv.tif"
     assert _tile_filename(-5, 10, "dir") == "s05e010_dir.tif"
     assert _package_name(30, -120, "elv") == "elv_n30w120.tar"
@@ -25,7 +25,7 @@ def test_tile_filename_and_package():
         ((9.1, 14.9, -5.0, 0.0), (-5, 10)),
     ],
 )
-def test_tiles_for_bbox(bbox, expected_first):
+def test_tiles_for_bbox(bbox, expected_first) -> None:
     tiles = _tiles_for_bbox(*bbox)
     assert expected_first in tiles
     # All tiles should be aligned to 5 degrees
@@ -33,7 +33,7 @@ def test_tiles_for_bbox(bbox, expected_first):
         assert lat % 5 == 0 and lon % 5 == 0
 
 
-def test_group_tiles_by_package():
+def test_group_tiles_by_package() -> None:
     tiles = [(30, -120), (35, -115), (30, -115)]
     groups = _group_tiles_by_package(tiles, "elv")
     # All of these are in n30w120 package
@@ -41,14 +41,14 @@ def test_group_tiles_by_package():
     assert set(groups["elv_n30w120.tar"]) == set(tiles)
 
 
-def test_download_handles_missing_package(monkeypatch, tmp_path):
+def test_download_handles_missing_package(monkeypatch, tmp_path) -> None:
     # Mock requests
     class MockResp:
         def __init__(self, status_code: int = 200) -> None:
             self.status_code = status_code
             self.raw = MagicMock()
 
-        def close(self):
+        def close(self) -> None:
             pass
 
     class MockSession:

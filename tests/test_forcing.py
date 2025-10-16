@@ -5,7 +5,7 @@ from scipy.interpolate import RegularGridInterpolator
 from geb.forcing import generate_bilinear_interpolation_weights
 
 
-def test_bilinear_interpolation_ascending_coordinates():
+def test_bilinear_interpolation_ascending_coordinates() -> None:
     """Test bilinear interpolation with ascending source coordinates."""
     # Create a simple test grid with ascending coordinates
     src_x = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
@@ -42,7 +42,7 @@ def test_bilinear_interpolation_ascending_coordinates():
     np.testing.assert_allclose(our_result, scipy_result, rtol=1e-6, atol=1e-8)
 
 
-def test_bilinear_interpolation_descending_y_coordinates():
+def test_bilinear_interpolation_descending_y_coordinates() -> None:
     """Test bilinear interpolation with descending y-coordinates (common in climate data)."""
     # Create test grid with ascending x but descending y coordinates
     src_x = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
@@ -79,7 +79,7 @@ def test_bilinear_interpolation_descending_y_coordinates():
     np.testing.assert_allclose(our_result, scipy_result, rtol=1e-6, atol=1e-8)
 
 
-def test_bilinear_interpolation_descending_x_coordinates_error():
+def test_bilinear_interpolation_descending_x_coordinates_error() -> None:
     """Test that descending x-coordinates raise an appropriate error."""
     # Create test grid with descending x coordinates (should raise error)
     src_x = np.array([3.0, 2.0, 1.0, 0.0], dtype=np.float32)  # Descending
@@ -96,7 +96,7 @@ def test_bilinear_interpolation_descending_x_coordinates_error():
         generate_bilinear_interpolation_weights(src_x, src_y, tgt_x, tgt_y)
 
 
-def test_bilinear_interpolation_non_monotonic_x_coordinates_error():
+def test_bilinear_interpolation_non_monotonic_x_coordinates_error() -> None:
     """Test that non-monotonic x-coordinates raise an appropriate error."""
     # Create test grid with non-monotonic x coordinates
     src_x = np.array([0.0, 2.0, 1.0, 3.0], dtype=np.float32)  # Non-monotonic
@@ -113,7 +113,7 @@ def test_bilinear_interpolation_non_monotonic_x_coordinates_error():
         generate_bilinear_interpolation_weights(src_x, src_y, tgt_x, tgt_y)
 
 
-def test_bilinear_interpolation_climate_like_data():
+def test_bilinear_interpolation_climate_like_data() -> None:
     """Test with realistic climate data coordinates (latitude descending, longitude ascending)."""
     # Typical climate data: longitude ascending, latitude descending
     src_x = np.array(
@@ -159,7 +159,7 @@ def test_bilinear_interpolation_climate_like_data():
     np.testing.assert_allclose(our_result, scipy_result, rtol=1e-6, atol=1e-8)
 
 
-def test_bilinear_interpolation_edge_cases():
+def test_bilinear_interpolation_edge_cases() -> None:
     """Test edge cases like single grid cell and exact coordinate matches."""
     # Test case 1: Target points exactly on grid points
     src_x = np.array([0.0, 1.0, 2.0], dtype=np.float32)
@@ -192,7 +192,7 @@ def test_bilinear_interpolation_edge_cases():
     np.testing.assert_allclose(our_result, scipy_result, rtol=1e-6, atol=1e-8)
 
 
-def test_bilinear_interpolation_weights_properties():
+def test_bilinear_interpolation_weights_properties() -> None:
     """Test that interpolation weights have the correct mathematical properties."""
     src_x = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
     src_y = np.array([2.0, 1.0, 0.0], dtype=np.float32)  # Descending
@@ -220,7 +220,7 @@ def test_bilinear_interpolation_weights_properties():
     assert np.all(indices < n_src_points), "All indices should be within grid bounds"
 
 
-def test_bilinear_interpolation_bounds_error():
+def test_bilinear_interpolation_bounds_error() -> None:
     """Test that interpolation raises appropriate errors for out-of-bounds targets."""
     src_x = np.array([0.0, 1.0, 2.0], dtype=np.float32)  # Ascending
     src_y = np.array([0.0, 1.0], dtype=np.float32)
