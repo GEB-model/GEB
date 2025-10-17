@@ -14,7 +14,7 @@ import xarray as xr
 import zarr.storage
 from affine import Affine
 from numba import njit
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
 
 from geb.typing import ArrayFloat32, TwoDFloatArrayFloat32
 from geb.workflows.io import load_grid, open_zarr
@@ -56,7 +56,7 @@ def determine_nearest_river_cell(
         grid_cells_above_threshold_mask
     )
 
-    tree: cKDTree = cKDTree(grid_cells_above_threshold_indices)
+    tree: KDTree = KDTree(grid_cells_above_threshold_indices)
     distances, indices_in_above = tree.query(valid_indices)
 
     nearest_indices_in_valid: npt.NDArray[np.int32] = (
