@@ -108,15 +108,7 @@ class Hydrology(Data, Module):
 
         if __debug__:
             prev_storage: np.float64 = self.get_current_storage()
-            influx: np.float64 = (
-                (
-                    self.HRU.pr_kg_per_m2_per_s.astype(np.float64).mean(axis=0)
-                    * self.HRU.var.cell_area
-                ).sum()  # kg/s
-                * 0.001  # to m3/s
-                * (24 * 3600.0)  # to m3/day
-            )  # m3
-            influx += (
+            influx = (
                 self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
             ).sum()
 
@@ -134,7 +126,11 @@ class Hydrology(Data, Module):
             total_water_demand_loss_m3,
             actual_evapotranspiration_m,
             sublimation_or_deposition_m,
+            pr_total_m3,
         ) = self.landsurface.step()
+
+        if __debug__:
+            influx += pr_total_m3
 
         interflow_m = self.to_grid(HRU_data=interflow_m, fn="weightedmean")
         runoff_m = self.to_grid(HRU_data=runoff_m, fn="weightedmean")

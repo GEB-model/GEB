@@ -496,7 +496,7 @@ def test_multiverse() -> None:
 def test_share() -> None:
     with WorkingDirectory(working_directory):
         share_fn(
-            working_directory=".",
+            working_directory=Path("."),
             name="test",
             include_preprocessing=False,
             include_output=False,

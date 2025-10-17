@@ -330,7 +330,7 @@ def zarr_file(varname: str) -> Path:
     periods: int = 100
 
     times = pd.date_range("2000-01-01", periods=periods, freq="D")
-    data = np.empty((periods, size, size), dtype=np.int32)
+    data = np.empty((periods, size, size), dtype=np.float32)
     for i in range(periods):
         data[i][:] = i
     ds: xr.Dataset = xr.Dataset(
@@ -347,6 +347,7 @@ def zarr_file(varname: str) -> Path:
         encoding={
             varname: {
                 "chunks": (1, size, size),
+                "fill_value": np.nan,
             }
         },
         consolidated=False,
@@ -406,7 +407,7 @@ def test_read_timestep_async() -> None:
     assert (data0 == 0).all()
     assert (data1 == 1).all()
     assert (data2 == 2).all()
-    assert data0.dtype == np.int32
+    assert data0.dtype == np.float32
 
     sleep(3)
 
@@ -469,7 +470,7 @@ def test_read_timestep_sync() -> None:
     assert (data0 == 0).all()
     assert (data1 == 1).all()
     assert (data2 == 2).all()
-    assert data0.dtype == np.int32
+    assert data0.dtype == np.float32
     assert data0.shape == (1, 1000, 1000)
 
     # Test reading the same timestep twice
@@ -561,3 +562,19 @@ def test_read_multiple_timesteps() -> None:
 
     reader_sync.close()
     shutil.rmtree(temperature_file)
+
+
+def test_asyncreader_rapid_access() -> None:
+    """Test rapid access of timesteps using AsyncGriddedForcingReader.
+
+    This test verifies that the reader can handle rapid sequential access of timesteps
+    so no sleeps in between reads.
+    """
+    temperature_file: Path = zarr_file("temperature")
+    reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
+        temperature_file, variable_name="temperature", asynchronous=True
+    )
+    for day in range(1, 11):
+        data = reader.read_timestep(datetime(2000, 1, day))
+        assert (data == day - 1).all()
+    reader.close()
