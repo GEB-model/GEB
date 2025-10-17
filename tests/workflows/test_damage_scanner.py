@@ -16,6 +16,11 @@ from geb.workflows.damage_scanner import VectorScanner
 
 @fixture
 def flood_raster() -> xr.DataArray:
+    """Flood hazard raster for testing the VectorScanner.
+
+    Returns:
+        A DataArray representing flood hazard severities.
+    """
     x = np.zeros((10, 10), dtype=np.float32)
     x[:5, :5] = 0.5
     x[:5, 5:] = 3
@@ -36,6 +41,11 @@ def flood_raster() -> xr.DataArray:
 
 @fixture
 def buildings() -> gpd.GeoDataFrame:
+    """Building features for testing the VectorScanner.
+
+    Returns:
+        A GeoDataFrame containing building geometries and attributes.
+    """
     data = {
         "object_type": [
             "residential",
@@ -67,6 +77,11 @@ def buildings() -> gpd.GeoDataFrame:
 
 @fixture
 def vulnerability_curves() -> pd.DataFrame:
+    """Vulnerability curves for testing the VectorScanner.
+
+    Returns:
+        A DataFrame containing vulnerability curves for residential and commercial buildings.
+    """
     return pd.DataFrame(
         {
             "residential": [0.0, 0.2, 0.3],
@@ -83,6 +98,23 @@ def test_vector_scanner(
     vulnerability_curves: pd.DataFrame,
     clip: bool,
 ) -> None:
+    """Test the VectorScanner for calculating damages to buildings based on flood hazard.
+
+    This test verifies that the VectorScanner correctly computes damage values for
+    various building features under different flood hazard severities and building
+    types. It checks damage calculations for residential and commercial buildings
+    with different areas, hazard intensities, and clipping scenarios.
+
+    The test includes assertions for expected damage values based on predefined
+    vulnerability curves and hazard data. It covers cases with uniform hazard,
+    mixed hazards, no hazard, and NaN hazard values.
+
+    Args:
+        flood_raster: The flood hazard raster data.
+        buildings: GeoDataFrame containing building geometries and attributes.
+        vulnerability_curves: DataFrame with vulnerability curves for damage calculation.
+        clip: Boolean flag to clip the flood raster to a specific polygon.
+    """
     if clip:
         flood_raster = flood_raster.rio.clip(
             [Polygon([(1, 1), (1, 9), (9, 9), (9, 1)])]
@@ -128,6 +160,21 @@ def test_vector_scanner_missing_data(
     buildings: gpd.GeoDataFrame,
     vulnerability_curves: pd.DataFrame,
 ) -> None:
+    """Test the VectorScanner's handling of missing or incorrect data.
+
+    This test checks that the VectorScanner raises appropriate errors when
+    required data is missing or incorrect. It verifies the following scenarios:
+
+    - Missing 'maximum_damage' column in the buildings GeoDataFrame.
+    - Missing 'object_type' column in the buildings GeoDataFrame.
+    - Object types in the buildings GeoDataFrame that are not present in the
+      vulnerability curves DataFrame.
+
+    Args:
+        flood_raster: The flood hazard raster data.
+        buildings: GeoDataFrame containing building geometries and attributes.
+        vulnerability_curves: DataFrame with vulnerability curves for damage calculation.
+    """
     # Test missing 'maximum_damage' column
     buildings_missing_damage = buildings.drop(columns=["maximum_damage"])
     with pytest.raises(AssertionError):
