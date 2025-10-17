@@ -159,8 +159,9 @@ def Q_initial() -> npt.NDArray[np.float32]:
 
 
 def test_accuflux(
-    model: geb.model.Model,
-    forcing: geb.forcing.Forcing,
+    ldd: npt.NDArray[np.uint8],
+    mask: npt.NDArray[np.bool_],
+    Q_initial: npt.NDArray[np.float32],
 ) -> None:
     """Test accumulation flux calculation for routing.
 
