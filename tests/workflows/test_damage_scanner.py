@@ -71,7 +71,9 @@ def buildings() -> gpd.GeoDataFrame:
     ]
     data["geometry"] = polygons
 
-    gdf = gpd.GeoDataFrame(data, crs="EPSG:32631", geometry="geometry")
+    gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        data, crs="EPSG:32631", geometry="geometry"
+    )
     return gdf
 
 
@@ -176,7 +178,9 @@ def test_vector_scanner_missing_data(
         vulnerability_curves: DataFrame with vulnerability curves for damage calculation.
     """
     # Test missing 'maximum_damage' column
-    buildings_missing_damage = buildings.drop(columns=["maximum_damage"])
+    buildings_missing_damage: gpd.GeoDataFrame = buildings.copy().drop(
+        columns=["maximum_damage"]
+    )
     with pytest.raises(AssertionError):
         VectorScanner(
             features=buildings_missing_damage,
@@ -185,7 +189,9 @@ def test_vector_scanner_missing_data(
         )
 
     # Test missing 'object_type' column
-    buildings_missing_type = buildings.drop(columns=["object_type"])
+    buildings_missing_type: gpd.GeoDataFrame = buildings.copy().drop(
+        columns=["object_type"]
+    )
     with pytest.raises(AssertionError):
         VectorScanner(
             features=buildings_missing_type,
@@ -194,7 +200,7 @@ def test_vector_scanner_missing_data(
         )
 
     # Test object types not in vulnerability curves
-    buildings_wrong_type = buildings.copy()
+    buildings_wrong_type: gpd.GeoDataFrame = buildings.copy()
     buildings_wrong_type["object_type"] = "non_existent"
     with pytest.raises(AssertionError):
         VectorScanner(

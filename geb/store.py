@@ -307,7 +307,7 @@ class DynamicArray:
             func, modified_types, modified_args, kwargs
         )
 
-    def __setitem__(self, key: str, value: Any) -> None:
+    def __setitem__(self, key: int | slice, value: Any) -> None:
         """
         Set item(s) in the active portion of the array.
 
@@ -317,7 +317,7 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
-    def __getitem__(self, key: str) -> "DynamicArray | np.ndarray":
+    def __getitem__(self, key: int | slice) -> "DynamicArray | np.ndarray":
         """
         Retrieve item(s) or a sliced DynamicArray.
 
