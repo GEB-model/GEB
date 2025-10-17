@@ -18,6 +18,7 @@ from geb.agents.workflows.crop_farmers import (
 
 
 def test_cumulative_mean() -> None:
+    """Test the cumulative_mean function."""
     a = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     mean = a.mean()
     assert mean == 4.5
@@ -43,12 +44,18 @@ def test_cumulative_mean() -> None:
 
 
 def test_shift_and_update() -> None:
+    """Test the shift_and_update function."""
     a = np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8]])
     shift_and_update(a, np.array([9, 10, 11]))
     assert np.array_equal(a, np.array([[9, 0, 1], [10, 3, 4], [11, 6, 7]]))
 
 
 def test_get_deficit_between_dates() -> None:
+    """Test the get_deficit_between_dates function.
+
+    This is tested for various combinations of start and end dates, focussing
+    on edge cases like wrapping around the end of the year.
+    """
     cumulative_water_deficit_m3 = np.expand_dims(
         np.arange(0, 3660, 10, dtype=np.float32), axis=0
     )
@@ -81,6 +88,7 @@ def test_get_deficit_between_dates() -> None:
 
 
 def test_get_future_deficit() -> None:
+    """Test the get_future_deficit function."""
     cumulative_water_deficit_m3 = np.expand_dims(
         np.arange(0, 3660, 10, dtype=np.float32), axis=0
     )
@@ -545,6 +553,7 @@ def test_get_future_deficit() -> None:
 
 
 def test_adjust_irrigation_to_limit() -> None:
+    """Test the adjust_irrigation_to_limit function."""
     cumulative_water_deficit_m3 = np.array([[0.0, 15.0, 30.0]])
     # use full crop calendar with growing days 2 to match cumulative_water_deficit_m3
     crop_calendar = np.array([[[0, 0, 2, 0]]])
@@ -617,6 +626,7 @@ def test_adjust_irrigation_to_limit() -> None:
 
 
 def test_withdraw_groundwater() -> None:
+    """Test the withdraw_groundwater function."""
     available_groundwater_m3 = np.array([2000.0])
     water_withdrawal_m = np.array([0.0])
     remaining_irrigation_limit_m3 = np.array([np.nan])
@@ -690,6 +700,7 @@ def test_withdraw_groundwater() -> None:
 
 
 def test_withdraw_channel() -> None:
+    """Test the withdraw_channel function."""
     available_channel_storage_m3 = np.array([2000.0])
     water_withdrawal_m = np.array([0.0])
     remaining_irrigation_limit_m3 = np.array([np.nan])
@@ -731,6 +742,7 @@ def test_withdraw_channel() -> None:
 
 
 def test_withdraw_reservoir() -> None:
+    """Test the withdraw_reservoir function."""
     available_reservoir_storage_m3 = np.array([2000.0])
     water_withdrawal_m = np.array([0.0])
     remaining_irrigation_limit_m3 = np.array([np.nan])
@@ -786,6 +798,7 @@ def test_withdraw_reservoir() -> None:
 
 
 def test_withdraw_reservoir_limit_demand() -> None:
+    """Test the withdraw_reservoir function with limited demand."""
     # test with maximum abstraction reservoir
     available_reservoir_storage_m3 = np.array([2000.0])
     water_withdrawal_m = np.array([0.0])
@@ -823,6 +836,7 @@ def test_withdraw_reservoir_limit_demand() -> None:
 
 
 def test_withdraw_reservoir_maximum_abstraction() -> None:
+    """Test the withdraw_reservoir function with maximum abstraction."""
     # test with maximum abstraction reservoir
     available_reservoir_storage_m3 = np.array([2000.0])
     water_withdrawal_m = np.array([0.0])
@@ -860,6 +874,7 @@ def test_withdraw_reservoir_maximum_abstraction() -> None:
 
 
 def test_advance_crop_rotation_year() -> None:
+    """Test the advance_crop_rotation_year function."""
     current_crop_calendar_rotation_year_index = np.array([0, 1, 0, 6, 0])
     crop_calendar_rotation_years = np.array([1, 2, 2, 7, 10])
     advance_crop_rotation_year(

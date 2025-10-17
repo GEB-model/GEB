@@ -50,11 +50,11 @@ def clip_with_grid(ds, mask):
     return ds.isel(bounds), bounds
 
 
-def bounds_are_within(small_bounds, large_bounds, tollerance=0) -> bool:
-    assert small_bounds[0] + tollerance >= large_bounds[0], "Region bounds do not match"
-    assert small_bounds[1] + tollerance >= large_bounds[1], "Region bounds do not match"
-    assert small_bounds[2] <= large_bounds[2] + tollerance, "Region bounds do not match"
-    assert small_bounds[3] <= large_bounds[3] + tollerance, "Region bounds do not match"
+def bounds_are_within(small_bounds, large_bounds, tolerance=0) -> bool:
+    assert small_bounds[0] + tolerance >= large_bounds[0], "Region bounds do not match"
+    assert small_bounds[1] + tolerance >= large_bounds[1], "Region bounds do not match"
+    assert small_bounds[2] <= large_bounds[2] + tolerance, "Region bounds do not match"
+    assert small_bounds[3] <= large_bounds[3] + tolerance, "Region bounds do not match"
     return True
 
 

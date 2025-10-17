@@ -1,8 +1,16 @@
 """This module contains the Government agent class for GEB."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from .general import AgentBaseClass
+
+if TYPE_CHECKING:
+    from geb.agents import Agents
+    from geb.model import GEBModel
 
 
 class Government(AgentBaseClass):
@@ -13,7 +21,7 @@ class Government(AgentBaseClass):
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
 
-    def __init__(self, model: "GEBModel", agents: "Agents") -> None:
+    def __init__(self, model: GEBModel, agents: Agents) -> None:
         """Initialize the government agent.
 
         Args:

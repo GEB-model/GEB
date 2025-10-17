@@ -3,7 +3,7 @@ import calendar
 import numpy as np
 import numpy.typing as npt
 
-from ..hydrology.landcover import GRASSLAND_LIKE
+from ..hydrology.landcovers import GRASSLAND_LIKE
 from .general import AgentBaseClass, downscale_volume
 
 
@@ -76,7 +76,7 @@ class LiveStockFarmers(AgentBaseClass):
                 self.model.hydrology.grid.gt,
                 water_consumption.values,
                 self.model.hydrology.grid.mask,
-                self.model.hydrology.grid_to_HRU_uncompressed,
+                self.model.hydrology.mapping_grid_to_HRU_uncompressed,
                 downscale_mask,
                 self.HRU.var.land_use_ratio,
             )

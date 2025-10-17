@@ -18,7 +18,7 @@ from affine import Affine
 from geb.build.workflows.general import calculate_cell_area
 from geb.hydrology.groundwater.model import (
     ModFlowSimulation,
-    distribute_well_rate_per_layer,
+    distribute_well_abstraction_m3_per_layer,
     get_groundwater_storage_m,
     get_water_table_depth,
 )
@@ -150,6 +150,11 @@ default_params = {
 
 
 def test_modflow_simulation_initialization() -> None:
+    """Test initialization of MODFLOW simulation.
+
+    Verifies that the ModFlowSimulation object is correctly
+    initialized with the expected number of active cells and area.
+    """
     sim: ModFlowSimulation = ModFlowSimulation(**default_params)
     assert sim.n_active_cells == (~basin_mask).sum()
     # In the Netherlands, the average area of a cell with this gt is ~75.8 m2
@@ -157,6 +162,11 @@ def test_modflow_simulation_initialization() -> None:
 
 
 def test_step() -> None:
+    """Test single time step execution of MODFLOW simulation.
+
+    Verifies that the simulation step maintains water balance
+    between groundwater content, recharge, and drainage.
+    """
     parameters = deepcopy(default_params)
 
     sim: ModFlowSimulation = ModFlowSimulation(**parameters)
@@ -177,6 +187,11 @@ def test_step() -> None:
 
 
 def test_recharge() -> None:
+    """Test groundwater recharge functionality.
+
+    Verifies that recharge water is correctly added to groundwater
+    storage and maintains proper water balance.
+    """
     parameters = deepcopy(default_params)
     parameters["heads"] = parameters["heads"] - 2
 
@@ -205,6 +220,11 @@ def test_recharge() -> None:
 
 
 def test_drainage() -> None:
+    """Test groundwater drainage functionality.
+
+    Verifies that drainage occurs when water table is at surface
+    and that drainage is zero when heads are below drainage level.
+    """
     parameters = deepcopy(default_params)
     layer_boundary_elevation = parameters["layer_boundary_elevation"]
     topography = np.full((YSIZE, XSIZE), 0)
@@ -256,6 +276,11 @@ def test_drainage() -> None:
 
 
 def test_wells() -> None:
+    """Test groundwater well abstraction functionality.
+
+    Verifies that well abstraction correctly removes water from
+    groundwater storage and maintains water balance.
+    """
     parameters = deepcopy(default_params)
     parameters["heads"][:,] = compress(
         topography - 2, basin_mask
@@ -350,6 +375,11 @@ def visualize_modflow_results(
 
 
 def test_modflow_simulation_with_visualization() -> None:
+    """Test MODFLOW simulation with visualization output.
+
+    Runs a simulation with random recharge and abstraction,
+    generating visualization plots of the results.
+    """
     parameters = deepcopy(default_params)
     parameters["heads"][:,] = compress(topography, basin_mask)
     sim = ModFlowSimulation(**parameters)
@@ -380,6 +410,11 @@ def test_modflow_simulation_with_visualization() -> None:
 
 
 def test_modflow_simulation_with_restore() -> None:
+    """Test MODFLOW simulation state restoration.
+
+    Verifies that the simulation can be restored to a previous
+    state and continue simulation correctly.
+    """
     parameters = deepcopy(default_params)
     parameters["heads"][:,] = compress(topography, basin_mask)
     sim = ModFlowSimulation(**parameters)
@@ -420,6 +455,11 @@ def test_modflow_simulation_with_restore() -> None:
 
 
 def test_get_water_table_depth() -> None:
+    """Test calculation of water table depth.
+
+    Verifies that water table depth is correctly calculated
+    from layer boundaries, heads, and surface elevation.
+    """
     layer_boundary_elevation = np.array(
         [
             [100, 100, 100, 100, 100, 100, 100],
@@ -448,6 +488,11 @@ def test_get_water_table_depth() -> None:
 
 
 def test_get_groundwater_storage_m() -> None:
+    """Test calculation of groundwater storage in meters.
+
+    Verifies that groundwater storage is correctly calculated
+    from layer boundaries, heads, and specific yield.
+    """
     layer_boundary_elevation = np.array(
         [
             [100, 100, 100, 100, 100],
@@ -475,7 +520,12 @@ def test_get_groundwater_storage_m() -> None:
     np.testing.assert_allclose(storage, np.array([36.75, 31.75, 12.25, 9.75, 0.0]))
 
 
-def test_distribute_well_rate_per_layer() -> None:
+def test_distribute_well_abstraction_m3_per_layer() -> None:
+    """Test distribution of well abstraction across layers.
+
+    Verifies that well abstraction rates are correctly distributed
+    across groundwater layers based on available storage.
+    """
     layer_boundary_elevation = np.array(
         [
             [100, 100, 100, 100, 100, 100, 100],
@@ -502,7 +552,7 @@ def test_distribute_well_rate_per_layer() -> None:
 
     well_rate = np.array([-10, -10, -10, -10, -0, -3000, -0], dtype=np.float64)
 
-    well_rate_per_layer = distribute_well_rate_per_layer(
+    well_rate_per_layer = distribute_well_abstraction_m3_per_layer(
         well_rate, layer_boundary_elevation, heads, specific_yield, area
     )
 
@@ -517,7 +567,7 @@ def test_distribute_well_rate_per_layer() -> None:
         ),
     )
 
-    well_rate_per_layer = distribute_well_rate_per_layer(
+    well_rate_per_layer = distribute_well_abstraction_m3_per_layer(
         well_rate,
         layer_boundary_elevation,
         heads,

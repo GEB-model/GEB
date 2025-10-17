@@ -1,11 +1,17 @@
 """Several general functions to load and process data for the GEB model."""
 
+from __future__ import annotations
+
 import json
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 class DateIndex:
@@ -68,7 +74,7 @@ class DateIndex:
 
 
 def load_regional_crop_data_from_dict(
-    model: "GEBModel", name: str
+    model: GEBModel, name: str
 ) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
     """Load crop prices per state from the input data and return a dictionary of states containing 2D array of prices.
 

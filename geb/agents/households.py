@@ -14,7 +14,7 @@ from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
-from ..hydrology.landcover import (
+from ..hydrology.landcovers import (
     FOREST,
 )
 from ..store import DynamicArray

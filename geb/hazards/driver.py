@@ -25,7 +25,7 @@ class HazardDriver:
                 event["end_time"] - event["start_time"] for event in flood_events
             ]
             longest_flood_event_in_days = max(flood_event_lengths).days
-            self.initialize(longest_flood_event_in_days=longest_flood_event_in_days)
+            self.initialize(longest_flood_event_in_days=longest_flood_event_in_days + 1)
 
     def initialize(self, longest_flood_event_in_days: int) -> None:
         """Initializes the hazard driver.
@@ -41,7 +41,9 @@ class HazardDriver:
         """
         from geb.hazards.floods import Floods
 
-        self.sfincs: Floods = Floods(self, n_timesteps=longest_flood_event_in_days)
+        self.sfincs: Floods = Floods(
+            self, longest_flood_event_in_days=longest_flood_event_in_days
+        )
 
     def step(self) -> None:
         """Steps the hazard driver.
@@ -52,9 +54,7 @@ class HazardDriver:
         if self.config["hazards"]["floods"]["simulate"]:
             if self.simulate_hydrology:
                 self.sfincs.save_discharge()
-                self.sfincs.save_current_soil_moisture()
-                self.sfincs.save_max_soil_moisture()
-                self.sfincs.save_saturated_hydraulic_conductivity()
+                self.sfincs.save_runoff_m()
 
             for event in self.config["hazards"]["floods"]["events"]:
                 assert isinstance(event["start_time"], datetime), (
@@ -85,12 +85,11 @@ class HazardDriver:
                     and self.current_timestep == self.n_timesteps - 1
                 ):
                     event = copy.deepcopy(event)
-                    if isinstance(self.model.forcing["pr_hourly"], list):
-                        final_forcing_dataset = self.model.forcing["pr_hourly"][-1]
-                    else:
-                        final_forcing_dataset = self.model.forcing["pr_hourly"]
-                    end_of_forcing_date: datetime = pd.to_datetime(
-                        final_forcing_dataset.time[-1].item()
+
+                    end_of_forcing_date = pd.to_datetime(
+                        self.model.forcing["pr_kg_per_m2_per_s"].reader.datetime_index[
+                            -1
+                        ]
                     ).to_pydatetime()
                     if event["end_time"] > end_of_forcing_date:
                         print(

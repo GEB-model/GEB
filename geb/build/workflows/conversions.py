@@ -7,9 +7,16 @@ Contains several dictionaries to convert between different country coding system
 
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
+
 
 def setup_donor_countries(
-    geb_build_model: "GEBModel",
+    geb_build_model: GEBModel,
     countries_with_data: list[str],
     alternative_countries: list[str] | None = None,
 ) -> dict[str, str]:

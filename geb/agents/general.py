@@ -1,6 +1,8 @@
 """Module containing general agent functions and the base class for all agents."""
 
-from typing import Tuple
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -10,6 +12,9 @@ from numba import njit
 from geb.module import Module
 from geb.store import DynamicArray
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel
+
 
 @njit(cache=True)
 def downscale_volume(
@@ -17,7 +22,7 @@ def downscale_volume(
     model_gt: Tuple[float, float, float, float, float, float],
     data: npt.NDArray[np.float32],
     mask: npt.NDArray[np.bool_],
-    grid_to_HRU_uncompressed: npt.NDArray[np.int32],
+    mapping_grid_to_HRU_uncompressed: npt.NDArray[np.int32],
     downscale_mask: npt.NDArray[np.bool_],
     HRU_land_size: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
@@ -28,7 +33,7 @@ def downscale_volume(
         model_gt: Geotransform of the model (target) decompressed HRU grid.
         data: 2D array of data to be downscaled.
         mask: 2D boolean array where True indicates no data (e.g., water bodies).
-        grid_to_HRU_uncompressed: 1D array mapping each grid cell to an HRU index.
+        mapping_grid_to_HRU_uncompressed: 1D array mapping each grid cell to an HRU index.
         downscale_mask: 1D boolean array where True indicates HRUs to be excluded from downscaling.
         HRU_land_size: 1D array of land area for each HRU.
 
@@ -78,10 +83,10 @@ def downscale_volume(
                 for xvar in range(x_left, x_right):
                     if not mask[yvar, xvar]:
                         k = yvar * xvarsize + xvar
-                        HRU_right = grid_to_HRU_uncompressed[k]
+                        HRU_right = mapping_grid_to_HRU_uncompressed[k]
                         # assert HRU_right != -1
                         if k > 0:
-                            HRU_left = grid_to_HRU_uncompressed[k - 1]
+                            HRU_left = mapping_grid_to_HRU_uncompressed[k - 1]
                             # assert HRU_left != -1
                         else:
                             HRU_left = 0
@@ -96,10 +101,10 @@ def downscale_volume(
                     for xvar in range(x_left, x_right):
                         if not mask[yvar, xvar]:
                             k = yvar * xvarsize + xvar
-                            HRU_right = grid_to_HRU_uncompressed[k]
+                            HRU_right = mapping_grid_to_HRU_uncompressed[k]
                             # assert HRU_right != -1
                             if k > 0:
-                                HRU_left = grid_to_HRU_uncompressed[k - 1]
+                                HRU_left = mapping_grid_to_HRU_uncompressed[k - 1]
                                 # assert HRU_left != -1
                             else:
                                 HRU_left = 0
@@ -117,7 +122,7 @@ def downscale_volume(
 class AgentBaseClass(Module, HoneybeesAgentBaseClass):
     """Base class for all agent classes."""
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize the agent base class.
 
         Args:

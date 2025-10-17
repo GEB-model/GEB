@@ -1,20 +1,26 @@
 """This module contains the Reporter class, which is used to report data to disk."""
 
+from __future__ import annotations
+
 import datetime
 import re
 import shutil
 from operator import attrgetter
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import zarr
+import zarr.codecs
+import zarr.storage
 from honeybees.library.raster import coord_to_pixel
 
 from geb.module import Module
 from geb.store import DynamicArray
 from geb.workflows.methods import multi_level_merge
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 WATER_CIRCLE_REPORT_CONFIG = {
     "hydrology": {
@@ -27,14 +33,39 @@ WATER_CIRCLE_REPORT_CONFIG = {
             "type": "scalar",
         },
     },
-    "hydrology.snowfrost": {
+    "hydrology.landsurface": {
         "_water_circle_rain": {
-            "varname": ".rain",
+            "varname": ".rain_m",
             "type": "HRU",
             "function": "weightedsum",
         },
         "_water_circle_snow": {
-            "varname": ".snow",
+            "varname": ".snow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_transpiration": {
+            "varname": ".transpiration_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_bare_soil_evaporation": {
+            "varname": ".bare_soil_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_open_water_evaporation": {
+            "varname": ".open_water_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_interception_evaporation": {
+            "varname": ".interception_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_sublimation_or_deposition": {
+            "varname": ".sublimation_or_deposition_m",
             "type": "HRU",
             "function": "weightedsum",
         },
@@ -65,33 +96,6 @@ WATER_CIRCLE_REPORT_CONFIG = {
         "_water_circle_livestock_water_loss": {
             "varname": ".livestock_water_loss_m3",
             "type": "scalar",
-        },
-    },
-    "hydrology.landcover": {
-        "_water_circle_transpiration": {
-            "varname": ".actual_transpiration",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_bare_soil_evaporation": {
-            "varname": ".actual_bare_soil_evaporation",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_direct_evaporation": {
-            "varname": ".open_water_evaporation",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_interception_evaporation": {
-            "varname": ".interception_evaporation",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_snow_sublimation": {
-            "varname": ".snow_sublimation",
-            "type": "HRU",
-            "function": "weightedsum",
         },
     },
 }
@@ -150,7 +154,7 @@ def create_time_array(
 class Reporter:
     """This class is used to report data to disk."""
 
-    def __init__(self, model: "GEBModel", clean: bool) -> None:
+    def __init__(self, model: GEBModel, clean: bool) -> None:
         """The constructor for the Reporter class.
 
         Loops over the reporter configuration and creates the necessary files and data structures,
@@ -206,11 +210,12 @@ class Reporter:
                             for station_ID, station_info in stations.iterrows():
                                 xy_grid = station_info["snapped_grid_pixel_xy"]
                                 station_reporters[
-                                    f"discharge_daily_m3_s_{station_ID}"
+                                    f"discharge_hourly_m3_per_s_{station_ID}"
                                 ] = {
-                                    "varname": f"grid.var.discharge_m3_s",
+                                    "varname": f"grid.var.discharge_m3_s_per_substep",
                                     "type": "grid",
                                     "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
+                                    "substeps": 24,
                                 }
                             report_config = multi_level_merge(
                                 report_config,
@@ -244,7 +249,9 @@ class Reporter:
         else:
             self.activated = False
 
-    def create_variable(self, config: dict, module_name: str, name: str) -> None:
+    def create_variable(
+        self, config: dict, module_name: str, name: str
+    ) -> list | zarr.storage.LocalStore:
         """This function creates a variable for the reporter.
 
         For
@@ -572,7 +579,7 @@ class Reporter:
                         decompressed_array = self.hydrology.HRU.decompress(value)
                     else:
                         raise ValueError(f"Unknown varname type {config['varname']}")
-                    value = decompressed_array[int(args[1]), int(args[0])]
+                    value = decompressed_array[..., int(args[1]), int(args[0])]
                 elif function == "sample_lonlat":
                     if config["type"] == "grid":
                         gt = self.model.hydrology.grid.gt
@@ -684,16 +691,28 @@ class Reporter:
                 else:
                     raise ValueError(f"Function {function} not recognized")
 
-        if np.isnan(value):
-            value = None
-
         if module_name not in self.variables:
             self.variables[module_name] = {}
 
         if name not in self.variables[module_name]:
             self.variables[module_name][name] = []
 
-        self.variables[module_name][name].append((self.model.current_time, value))
+        if "substeps" in config:
+            assert len(value) == config["substeps"], (
+                f"Value for {module_name}.{name} has length {len(value)}, but {config['substeps']} substeps are expected."
+            )
+            self.variables[module_name][name].extend(
+                [
+                    (
+                        self.model.current_time
+                        + i * self.model.timestep_length / config["substeps"],
+                        v,
+                    )
+                    for i, v in enumerate(value)
+                ]
+            )
+        else:
+            self.variables[module_name][name].append((self.model.current_time, value))
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""

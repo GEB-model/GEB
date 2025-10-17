@@ -12,6 +12,7 @@ from geb.hydrology.HRUs import determine_nearest_river_cell, to_grid, to_HRU
 
 
 def test_determine_nearest_river_cell() -> None:
+    """Test whether the nearest river cell determination works as expected."""
     upstream_area = np.array(
         [
             [np.nan, np.nan, 10, np.nan, np.nan],
