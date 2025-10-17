@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Union
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import zarr.codecs
 import zarr.storage
 from honeybees.library.raster import coord_to_pixel
 
