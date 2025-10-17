@@ -37,11 +37,11 @@ def get_critical_soil_moisture_content(
 
     Args:
         p: The fraction of easily available soil water, between 0 and 1.
-        wfc_m: The field capacity in m³/m³.
-        wwp_m: The wilting point in m³/m³.
+        wfc_m: The field capacity in m.
+        wwp_m: The wilting point in m.
 
     Returns:
-        The critical soil moisture content in m³/m³.
+        The critical soil moisture content in m.
 
     """
     return (np.float32(1) - p) * (wfc_m - wwp_m) + wwp_m
@@ -202,9 +202,9 @@ def get_transpiration_factor_per_layer(
     Args:
         soil_layer_height_m: height of each soil layer in meters.
         effective_root_depth_m: root depth in meters, which is the maximum depth where roots can extract water.
-        w_m: soil water content in each layer in m³/m³.
-        wfc_m: field capacity in each layer in m³/m³.
-        wwp_m: wilting point in each layer in m³/m³.
+        w_m: soil water content in each layer in m.
+        wfc_m: field capacity in each layer in m.
+        wwp_m: wilting point in each layer in m.
         p: ratio of easily available soil water, which is a measure of how easily plants can extract water from the soil.
         correct_root_mass: If True, the root mass ratio is corrected assuming a triangular root distribution.
 
@@ -269,9 +269,9 @@ def get_transpiration_factor_per_layer(
 @njit(cache=True, inline="always")
 def calculate_transpiration(
     soil_is_frozen: bool,
-    wwp_m: npt.NDArray[np.float32],  # [m³/m³]
-    wfc_m: npt.NDArray[np.float32],  # [m³/m³]
-    wres_m: npt.NDArray[np.float32],  # [m³/m³]
+    wwp_m: npt.NDArray[np.float32],  # [m]
+    wfc_m: npt.NDArray[np.float32],  # [m]
+    wres_m: npt.NDArray[np.float32],  # [m]
     soil_layer_height_m: npt.NDArray[np.float32],  # [m]
     land_use_type: np.int32,
     root_depth_m: np.float32,  # [m]
@@ -280,7 +280,7 @@ def calculate_transpiration(
     potential_transpiration_m: np.float32,  # [m]
     potential_evapotranspiration_m: np.float32,  # [m]
     crop_group_number_per_group: npt.NDArray[np.float32],
-    w_m: npt.NDArray[np.float32],  # [m³/m³]
+    w_m: npt.NDArray[np.float32],  # [m]
     topwater_m: np.float32,  # [m]
     minimum_effective_root_depth_m: np.float32,  # [m]
     time_step_hours_h: np.float32 = np.float32(24),  # [h]
@@ -289,9 +289,9 @@ def calculate_transpiration(
 
     Args:
         soil_is_frozen: Boolean indicating whether the soil is frozen.
-        wwp_m: Wilting point soil moisture content [m³/m³], shape (N_SOIL_LAYERS,).
-        wfc_m: Field capacity soil moisture content [m³/m³], shape (N_SOIL_LAYERS,).
-        wres_m: Residual soil moisture content [m³/m³], shape (N_SOIL_LAYERS,).
+        wwp_m: Wilting point soil moisture content [m], shape (N_SOIL_LAYERS,).
+        wfc_m: Field capacity soil moisture content [m], shape (N_SOIL_LAYERS,).
+        wres_m: Residual soil moisture content [m], shape (N_SOIL_LAYERS,).
         soil_layer_height_m: Height of each soil layer [m], shape (N_SOIL_LAYERS,).
         land_use_type: Land use type of the hydrological response unit.
         root_depth_m: The root depth [m].
@@ -300,7 +300,7 @@ def calculate_transpiration(
         potential_transpiration_m: Potential transpiration [m].
         potential_evapotranspiration_m: Potential evapotranspiration [m].
         crop_group_number_per_group: Crop group numbers for each crop type.
-        w_m: Soil water content [m³/m³], shape (N_SOIL_LAYERS,).
+        w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
         minimum_effective_root_depth_m: Minimum effective root depth [m], used to ensure that the effective root depth is not less than this value. Crops can extract water up to this depth.
         time_step_hours_h: Time step [h] (default 24 for daily).
@@ -379,8 +379,8 @@ def calculate_bare_soil_evaporation(
     land_use_type: np.int32,
     potential_bare_soil_evaporation_m: np.float32,  # [m]
     open_water_evaporation_m: np.float32,  # [m]
-    w_m: npt.NDArray[np.float32],  # [m³/m³]
-    wres_m: npt.NDArray[np.float32],  # [m³/m³]
+    w_m: npt.NDArray[np.float32],  # [m]
+    wres_m: npt.NDArray[np.float32],  # [m]
 ) -> np.float32:
     """Calculate bare soil evaporation for a single soil cell.
 
@@ -389,8 +389,8 @@ def calculate_bare_soil_evaporation(
         land_use_type: Land use type of the hydrological response unit.
         potential_bare_soil_evaporation_m: Potential bare soil evaporation [m].
         open_water_evaporation_m: Open water evaporation [m], which is the water evaporated from open water areas.
-        w_m: Soil water content [m³/m³], shape (N_SOIL_LAYERS,).
-        wres_m: Residual soil moisture content [m³/m³], shape (N_SOIL_LAYERS,).
+        w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
+        wres_m: Residual soil moisture content [m], shape (N_SOIL_LAYERS,).
 
     Returns:
         The actual bare soil evaporation [m] for the cell.
@@ -427,9 +427,9 @@ def calculate_bare_soil_evaporation(
 @njit(cache=True, inline="always")
 def evapotranspirate(
     soil_is_frozen: bool,
-    wwp_m: npt.NDArray[np.float32],  # [m³/m³]
-    wfc_m: npt.NDArray[np.float32],  # [m³/m³]
-    wres_m: npt.NDArray[np.float32],  # [m³/m³]
+    wwp_m: npt.NDArray[np.float32],  # [m]
+    wfc_m: npt.NDArray[np.float32],  # [m]
+    wres_m: npt.NDArray[np.float32],  # [m]
     soil_layer_height_m: npt.NDArray[np.float32],  # [m]
     land_use_type: np.int32,
     root_depth_m: np.float32,  # [m]
@@ -440,7 +440,7 @@ def evapotranspirate(
     potential_evapotranspiration_m: np.float32,  # [m]
     frost_index: np.float32,
     crop_group_number_per_group: npt.NDArray[np.float32],
-    w_m: npt.NDArray[np.float32],  # [m³/m³]
+    w_m: npt.NDArray[np.float32],  # [m]
     topwater_m: np.float32,  # [m]
     open_water_evaporation_m: np.float32,  # [m]
     minimum_effective_root_depth_m: np.float32,  # [m]
@@ -450,9 +450,9 @@ def evapotranspirate(
 
     Args:
         soil_is_frozen: Boolean indicating whether the soil is frozen.
-        wwp_m: Wilting point soil moisture content [m³/m³], shape (N_SOIL_LAYERS,).
-        wfc_m: Field capacity soil moisture content [m³/m³], shape (N_SOIL_LAYERS,).
-        wres_m: Residual soil moisture content [m³/m³], shape (N_SOIL_LAYERS,).
+        wwp_m: Wilting point soil moisture content [m], shape (N_SOIL_LAYERS,).
+        wfc_m: Field capacity soil moisture content [m], shape (N_SOIL_LAYERS,).
+        wres_m: Residual soil moisture content [m], shape (N_SOIL_LAYERS,).
         soil_layer_height_m: Height of each soil layer [m], shape (N_SOIL_LAYERS,).
         land_use_type: Land use type of the hydrological response unit.
         root_depth_m: The root depth [m].
@@ -463,7 +463,7 @@ def evapotranspirate(
         potential_evapotranspiration_m: Potential evapotranspiration [m].
         frost_index: Frost index indicating whether the soil is frozen.
         crop_group_number_per_group: Crop group numbers for each crop type.
-        w_m: Soil water content [m³/m³], shape (N_SOIL_LAYERS,).
+        w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
         open_water_evaporation_m: Open water evaporation [m], which is the water evaporated from open water areas.
         minimum_effective_root_depth_m: Minimum effective root depth [m], used to ensure that the effective root depth is not less than this value. Crops can extract water up to this depth.
