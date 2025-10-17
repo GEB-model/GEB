@@ -1259,6 +1259,13 @@ class CropFarmers(AgentBaseClass):
             remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
             gross_irrigation_demand_m3_per_field_limit_adjusted=gross_irrigation_demand_m3_per_field_limit_adjusted,
+            # Add three water prices (calling end)
+            unit_cost_channel=np.float32(self.var.water_costs_m3_channel),
+            unit_cost_reservoir=np.float32(self.var.water_costs_m3_reservoir),
+            unit_cost_groundwater=np.float32(self.var.water_costs_m3_groundwater),
+            use_cost_priority=np.bool_(
+                self.model.config["agent_settings"]["farmers"].get("use_cost_priority", False)
+            ),
         )
 
         assert (water_withdrawal_m < 1).all()
@@ -5016,7 +5023,7 @@ class CropFarmers(AgentBaseClass):
             print(timer)
 
         # self.report(self, locals())
-        
+
         # Water abstraction vectors are updated every time step.
         # Unit water costs were initialized in spinup() as scalars and will be
         # broadcasted to match the farmer-level abstraction arrays automatically.
@@ -5039,7 +5046,8 @@ class CropFarmers(AgentBaseClass):
             + reservoir_water_cost_yuan
         )
 
-        self.report(locals())
+        # self.report(locals())
+        self.report(self, locals())
 
     def remove_agents(
         self, farmer_indices: list[int], new_land_use_type: int

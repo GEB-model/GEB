@@ -614,6 +614,11 @@ def abstract_water(
     remaining_irrigation_limit_m3: np.ndarray,
     gross_irrigation_demand_m3_per_field: np.ndarray,
     gross_irrigation_demand_m3_per_field_limit_adjusted: npt.NDArray[np.float32],
+    # NEW: unit costs (float32) for cost-priority allocation
+    unit_cost_channel: np.float32,
+    unit_cost_reservoir: np.float32,
+    unit_cost_groundwater: np.float32,
+    use_cost_priority: np.bool_,
 ):
     n_hydrological_response_units = cell_area.size
     water_withdrawal_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
@@ -675,6 +680,115 @@ def abstract_water(
                     / cell_area[field]
                 )
                 assert 1 >= irrigation_water_demand_field_m >= 0
+                     
+
+                if use_cost_priority:
+                    # ===== Cost-priority path: order only among available sources =====
+                    has_channel   = surface_irrigated[farmer]
+                    has_reservoir = has_channel and (command_area_farmer != -1)
+                    has_ground    = well_irrigated[farmer]
+
+                    BIG = np.float32(1e30)
+                    c0 = np.float32(unit_cost_channel)     if has_channel   else BIG  # 0: channel
+                    c1 = np.float32(unit_cost_reservoir)   if has_reservoir else BIG  # 1: reservoir
+                    c2 = np.float32(unit_cost_groundwater) if has_ground    else BIG  # 2: groundwater
+
+                    o0, o1, o2 = 0, 1, 2
+                    # Fixed-size 3-element ascending sort (Numba-friendly)
+                    if c1 < c0:
+                        c0, c1 = c1, c0
+                        o0, o1 = o1, o0
+                    if c2 < c0:
+                        c0, c1, c2 = c2, c0, c1
+                        o0, o1, o2 = o2, o0, o1
+                    elif c2 < c1:
+                        c1, c2 = c2, c1
+                        o1, o2 = o2, o1
+
+                    # Safety check for availability
+                    def _has_src(sid):
+                        if sid == 0:
+                            return has_channel
+                        elif sid == 1:
+                            return has_reservoir
+                        else:
+                            return has_ground
+
+                    # Try sources in ascending unit cost
+                    for kk in range(3):
+                        src = o0 if kk == 0 else (o1 if kk == 1 else o2)
+                        if not _has_src(src):
+                            continue
+
+                        if src == 1:
+                            # reservoir
+                            (
+                                irrigation_water_demand_field_m,
+                                irrigation_water_demand_field_m_limit_adjusted,
+                            ) = withdraw_reservoir(
+                                command_area=command_area_farmer,
+                                field=field,
+                                farmer=farmer,
+                                reservoir_abstraction_m3=reservoir_abstraction_m3,
+                                available_reservoir_storage_m3=available_reservoir_storage_m3,
+                                irrigation_water_demand_field_m=irrigation_water_demand_field_m,
+                                irrigation_water_demand_field_m_limit_adjusted=irrigation_water_demand_field_m_limit_adjusted,
+                                water_withdrawal_m=water_withdrawal_m,
+                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+                                maximum_abstraction_reservoir_m3_field=maximum_abstraction_reservoir_m3_by_field[field_index],
+                                cell_area=cell_area,
+                            )
+                            assert water_withdrawal_m[field] >= 0
+                            assert irrigation_water_demand_field_m >= 0
+
+                        elif src == 0:
+                            # channel
+                            irrigation_water_demand_field_m = withdraw_channel(
+                                available_channel_storage_m3=available_channel_storage_m3,
+                                grid_cell=grid_cell_nearest,
+                                cell_area=cell_area,
+                                field=field,
+                                farmer=farmer,
+                                water_withdrawal_m=water_withdrawal_m,
+                                irrigation_water_demand_field_m=irrigation_water_demand_field_m,
+                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+                                minimum_channel_storage_m3=np.float32(100.0),
+                            )
+                            assert water_withdrawal_m[field] >= 0
+                            assert irrigation_water_demand_field_m >= 0
+
+                        else:
+                            # groundwater
+                            irrigation_water_demand_field_m = withdraw_groundwater(
+                                farmer=farmer,
+                                field=field,
+                                grid_cell=grid_cell,
+                                groundwater_abstraction_m3=groundwater_abstraction_m3,
+                                available_groundwater_m3=available_groundwater_m3,
+                                cell_area=cell_area,
+                                groundwater_depth=groundwater_depth,
+                                well_depth=well_depth,
+                                irrigation_water_demand_field_m=irrigation_water_demand_field_m,
+                                water_withdrawal_m=water_withdrawal_m,
+                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
+                            )
+                            assert irrigation_water_demand_field_m >= 0
+                            assert water_withdrawal_m[field] >= 0
+
+                        # Early exit if this field's demand is satisfied
+                        if irrigation_water_demand_field_m <= np.float32(0):
+                            irrigation_water_demand_field_m = np.float32(0)
+                            irrigation_water_demand_field_m_limit_adjusted = np.maximum(
+                                irrigation_water_demand_field_m_limit_adjusted, np.float32(0)
+                            )
+                            break
+
+            else:
+                # ===== Switch off: fallback to original order (reservoir -> channel -> groundwater) =====
+
                 if surface_irrigated[farmer]:
                     # command areas
                     if command_area_farmer != -1:  # -1 means no command area
