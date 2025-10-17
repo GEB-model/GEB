@@ -59,3 +59,7 @@ Raises:
 ## Running code
 
 - Code can be run using uv. For example, run a script `uv run script.py`, or `uv run pytest`.
+
+## Checking and formatting
+
+- Code can be checked and formatted using ruff: `uv run ruff check` and `uv run ruff format`.
