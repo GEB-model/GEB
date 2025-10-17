@@ -246,12 +246,14 @@ def test_get_potential_bare_soil_evaporation() -> None:
 
 
 def test_get_CO2_induced_crop_factor_adustment() -> None:
+    """Test the CO2 induced crop factor adjustment calculation."""
     assert get_CO2_induced_crop_factor_adustment(369.41) == 1.0
     assert get_CO2_induced_crop_factor_adustment(550.0) == 0.95
     assert get_CO2_induced_crop_factor_adustment(550.0 + (550.0 - 369.41) == 0.9)
 
 
 def test_get_crop_factors_and_root_depths() -> None:
+    """Test the calculation of crop factors and root depths."""
     land_use_map = np.array(
         [
             PADDY_IRRIGATED,

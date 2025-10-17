@@ -233,15 +233,6 @@ preview = true
     "D100",
     "D107"
 ]
-"tests/**.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D103",
-    "D102",
-    "D100",
-    "D107"
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]

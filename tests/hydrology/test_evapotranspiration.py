@@ -18,6 +18,11 @@ from geb.hydrology.evapotranspiration import (
 
 
 def test_get_root_ratios() -> None:
+    """Test calculation of root ratios for soil layers.
+
+    Verifies that root ratios are correctly calculated based on
+    root depth and soil layer heights.
+    """
     soil_layer_height_m = np.array([0.1, 0.2, 0.3], dtype=np.float32)
 
     root_ratios = get_root_ratios(
@@ -50,6 +55,11 @@ def test_get_root_ratios() -> None:
 
 
 def test_get_root_mass_ratios() -> None:
+    """Test calculation of root mass ratios for soil layers.
+
+    Verifies that root mass ratios are correctly calculated
+    assuming a triangular root distribution.
+    """
     soil_layer_height_m = np.array([1, 1, 1], dtype=np.float32)
 
     root_depth_m = np.float32(0.5)
@@ -111,6 +121,11 @@ def test_get_root_mass_ratios() -> None:
 
 
 def test_get_transpiration_factor_per_layer() -> None:
+    """Test calculation of transpiration factor per soil layer.
+
+    Verifies that transpiration factors are correctly calculated
+    for each soil layer based on available water and root ratios.
+    """
     soil_layer_height_m = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
 
     transpiration_factor_per_layer = get_transpiration_factor_per_layer(
@@ -364,6 +379,11 @@ def test_get_transpiration_factor_per_layer() -> None:
 
 
 def test_get_transpiration_factor() -> None:
+    """Test calculation of transpiration factor.
+
+    Verifies that transpiration factor is correctly calculated
+    based on soil water content and critical moisture levels.
+    """
     critical_soil_moisture_content = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
     wwp = np.array([0.15, 0.15, 0.15, 0.15, 0.15, 0.15])  # wilting point
     w = np.array([0.3, 0.2, 0.175, 0.15, 0.1, 0.0])
@@ -381,6 +401,11 @@ def test_get_transpiration_factor() -> None:
 
 
 def test_get_fraction_easily_available_soil_water() -> None:
+    """Test calculation of fraction of easily available soil water.
+
+    Verifies that the fraction of easily available soil water
+    is correctly calculated based on crop group and evapotranspiration.
+    """
     potential_evapotranspiratios = (
         np.array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]) / 100
     )  # cm/day to m/day
@@ -429,6 +454,11 @@ def test_get_fraction_easily_available_soil_water() -> None:
 
 
 def test_get_critical_soil_moisture_content() -> None:
+    """Test calculation of critical soil moisture content.
+
+    Verifies that critical soil moisture content is correctly
+    calculated based on field capacity, wilting point, and p factor.
+    """
     p = np.array([0.3, 0.7, 1.0, 0.0])
     wfc = np.array([0.35, 0.35, 0.35, 0.35])  # field capacity
     wwp = np.array([0.15, 0.15, 0.15, 0.15])  # wilting point
