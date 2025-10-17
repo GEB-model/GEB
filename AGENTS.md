@@ -56,3 +56,6 @@ Raises:
 
 - When renaming variables, ensure callsites are updated and tests still pass.
 
+## Running code
+
+- Code can be run using uv. For example, run a script `uv run script.py`, or `uv run pytest`.
