@@ -206,7 +206,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/{sensitivity,multirun,module,calibrate}.py" = [
+"geb/{sensitivity,multirun,calibrate}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
