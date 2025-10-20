@@ -206,7 +206,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/build/modules/{crops,observations}.py" = [
+"geb/build/modules/{observations}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
