@@ -206,7 +206,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/build/modules/{agents,crops,forcing,observations}.py" = [
+"geb/build/modules/{crops,forcing,observations}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
