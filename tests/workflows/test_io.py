@@ -252,7 +252,12 @@ def test_get_window() -> None:
     assert (da_slice.y.values == y[0:4]).all()
 
     with pytest.raises(ValueError, match="buffer must be an integer"):
-        window = get_window(da.x, da.y, bounds, buffer=0.1)
+        window = get_window(
+            da.x,
+            da.y,
+            bounds,
+            buffer=0.1,  # ty: ignore[invalid-argument-type]
+        )
     with pytest.raises(ValueError, match="buffer must be greater than or equal to 0"):
         window = get_window(da.x, da.y, bounds, buffer=-1)
 

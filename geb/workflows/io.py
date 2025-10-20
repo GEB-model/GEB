@@ -8,9 +8,10 @@ import tempfile
 import threading
 import time
 import warnings
+from functools import partial
 from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import Any, overload
 
 import cftime
 import geopandas as gpd
@@ -60,9 +61,23 @@ def load_array(fp: Path) -> np.ndarray:
     if fp.suffix == ".npz":
         return np.load(fp)["data"]
     elif fp.suffix == ".zarr":
-        return zarr.load(fp)
+        zarr_object = zarr.load(fp)
+        assert isinstance(zarr_object, np.ndarray)
+        return zarr_object
     else:
         raise ValueError(f"Unsupported file format: {fp.suffix}")
+
+
+@overload
+def load_grid(
+    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
+) -> np.ndarray: ...
+
+
+@overload
+def load_grid(
+    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = True
+) -> tuple[np.ndarray, Affine, str]: ...
 
 
 def load_grid(
@@ -97,11 +112,17 @@ def load_grid(
             filepath, read_only=True
         )
         group: zarr.Group = zarr.open_group(store, mode="r")
-        data: np.ndarray = group[filepath.stem][:]
+        array: zarr.Array | zarr.Group = group[filepath.stem]
+        assert isinstance(array, zarr.Array)
+        data: np.ndarray = array[:]
         data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
         if return_transform_and_crs:
-            x: np.ndarray = group["x"][:]
-            y: np.ndarray = group["y"][:]
+            x: zarr.Array | zarr.Group = group["x"]
+            assert isinstance(x, zarr.Array)
+            x: np.ndarray = x[:]
+            y: zarr.Array | zarr.Group = group["y"]
+            assert isinstance(y, zarr.Array)
+            y: np.ndarray = y[:]
             x_diff: float = np.diff(x[:]).mean().item()
             y_diff: float = np.diff(y[:]).mean().item()
             transform: Affine = Affine(
@@ -436,7 +457,7 @@ def to_zarr(
         # to display maps in QGIS, the "other" dimensions must have a chunk size of 1
         chunks = tuple((chunks[dim] if dim in chunks else 1) for dim in da.dims)
 
-        array_encoding = {
+        array_encoding: dict[str, Any] = {
             "compressors": (compressor,),
             "chunks": chunks,
             "filters": filters,
@@ -444,23 +465,26 @@ def to_zarr(
 
         if shards is not None:
             shards = tuple(
-                (shards[dim] if dim in shards else getattr(da, dim).size)
+                (shards[dim] if dim in shards else getattr(da, str(dim)).size)
                 for dim in da.dims
             )
             array_encoding["shards"] = shards
 
+        assert isinstance(da.name, str)
         encoding: dict[str, dict[str, Any]] = {da.name: array_encoding}
         for coord in da.coords:
             encoding[coord] = {"compressors": (compressor,)}
 
-        arguments: dict[str, Any] = {
-            "store": tmp_zarr,
-            "mode": "w",
-            "encoding": encoding,
-            "zarr_format": 3,
-            "consolidated": False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
-            "write_empty_chunks": True,
-        }
+        to_zarr_partial = partial(
+            da.to_zarr,
+            store=tmp_zarr,
+            mode="w",
+            encoding=encoding,
+            zarr_format=3,
+            consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
+            write_empty_chunks=True,
+            delayed=False,
+        )
 
         if progress:
             # start writing after 10 seconds, and update every 0.1 seconds
@@ -468,9 +492,9 @@ def to_zarr(
                 minimum=0.1,
                 dt=float(os.environ.get("GEB_OVERRIDE_PROGRESSBAR_DT", 0.1)),
             ):
-                store = da.to_zarr(**arguments)
+                store = to_zarr_partial()
         else:
-            store = da.to_zarr(**arguments)
+            store = to_zarr_partial()
 
         store.close()
 
@@ -518,6 +542,9 @@ def get_window(
             or if x or y are empty,
             or the resulting slices are invalid.
     """
+    assert x.ndim == 1, "x must be 1-dimensional"
+    assert y.ndim == 1, "y must be 1-dimensional"
+
     if not isinstance(buffer, int):
         raise ValueError("buffer must be an integer")
     if buffer < 0:
@@ -540,22 +567,22 @@ def get_window(
         if raise_on_out_of_bounds:
             raise ValueError("xmin must be greater than x[0]")
         else:
-            bounds[0] = x[0]
+            bounds[0] = x[0].item()
     if bounds[2] > x[-1]:
         if raise_on_out_of_bounds:
             raise ValueError("xmax must be less than x[-1]")
         else:
-            bounds[2] = x[-1]
+            bounds[2] = x[-1].item()
     if bounds[1] < y[-1]:
         if raise_on_out_of_bounds:
             raise ValueError("ymin must be greater than y[-1]")
         else:
-            bounds[1] = y[-1]
+            bounds[1] = y[-1].item()
     if bounds[3] > y[0]:
         if raise_on_out_of_bounds:
             raise ValueError("ymax must be less than y[0]")
         else:
-            bounds[3] = y[0]
+            bounds[3] = y[0].item()
 
     # reverse the y array
     y_reversed = y[::-1]

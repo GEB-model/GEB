@@ -206,7 +206,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/build/workflows/{general,farmers,crop_calendars}.py" = [
+"geb/build/workflows/{farmers,crop_calendars}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
@@ -248,3 +248,4 @@ addopts = "--ignore=.venv"
 
 [tool.ty.environment]
 python-version = "3.13"
+extra-paths = ["./typings"]

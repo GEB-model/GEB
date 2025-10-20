@@ -505,8 +505,8 @@ class HRUs(BaseVariables):
             data: Data class for model. Contains the various types of grids used in the GEB Model.
             model: The GEB model.
         """
-        self.data = data
-        self.model = model
+        self.data: Data = data
+        self.model: GEBModel = model
 
         subgrid_mask = load_grid(self.model.files["subgrid"]["mask"])
         submask_height, submask_width = subgrid_mask.shape
@@ -1096,6 +1096,7 @@ class Data:
         ):  # check if data is simple float. Otherwise should be numpy array.
             outdata = HRU_data
         else:
+            assert isinstance(HRU_data, np.ndarray)
             if HRU_data.ndim == 1:
                 outdata = to_grid(
                     HRU_data,

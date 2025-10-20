@@ -7,7 +7,7 @@ import shutil
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 import geopandas as gpd
 import numpy as np
@@ -251,7 +251,11 @@ class DynamicArray:
         return self._data.__array_interface__()
 
     def __array_ufunc__(
-        self, ufunc: Callable, method: str, *inputs: tuple[Any], **kwargs: dict[Any]
+        self,
+        ufunc: Callable,
+        method: str,
+        *inputs: tuple[Any],
+        **kwargs: dict[str, Any],
     ) -> Any:
         """
         Handle NumPy ufuncs applied to DynamicArray instances.
@@ -281,7 +285,11 @@ class DynamicArray:
             return self.__class__(result, max_n=self._data.shape[0])
 
     def __array_function__(
-        self, func: Callable, types: tuple[Any], args: tuple[Any], kwargs: dict[Any]
+        self,
+        func: Callable,
+        types: tuple[Any],
+        args: tuple[Any],
+        kwargs: dict[str, Any],
     ) -> Any:
         """
         Delegate NumPy __array_function__ calls to the underlying NumPy array.
@@ -922,7 +930,7 @@ class Bucket:
         """
         self._validator = validator
 
-    def __iter__(self) -> tuple[str, Any]:
+    def __iter__(self) -> Iterator[tuple[str, Any]]:
         """Iterate over the items in the bucket.
 
         Yields:

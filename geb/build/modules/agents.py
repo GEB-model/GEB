@@ -21,6 +21,7 @@ from geb.agents.crop_farmers import (
 )
 from geb.build.methods import build_method
 from geb.workflows.io import fetch_and_save, get_window
+from geb.workflows.raster import clip_with_grid
 
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
@@ -30,7 +31,6 @@ from ..workflows.conversions import (
     setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
-from ..workflows.general import clip_with_grid
 from ..workflows.population import load_GLOPOP_S
 
 

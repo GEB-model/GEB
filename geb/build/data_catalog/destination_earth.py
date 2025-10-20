@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
-from geb.build.workflows.general import interpolate_na_along_time_dim
+from geb.workflows.raster import interpolate_na_along_time_dim
 
 from .base import Adapter
 

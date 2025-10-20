@@ -41,13 +41,19 @@ DEFAULT_RUN_ARGS: dict[str, Any] = {}
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_init() -> None:
+@pytest.mark.parametrize(
+    "clean_working_directory",
+    [False, True],
+)
+def test_init(clean_working_directory: bool) -> None:
     """Test model initialization from example configuration.
 
     Creates a new model directory from the 'geul' example, verifies that
     all required configuration files are created, and tests error handling
     when attempting to initialize in an existing directory without overwrite.
     """
+    if clean_working_directory and working_directory.exists():
+        shutil.rmtree(working_directory)
     working_directory.mkdir(parents=True, exist_ok=True)
 
     with WorkingDirectory(working_directory):

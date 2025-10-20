@@ -8,19 +8,17 @@ import xarray as xr
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
+    bounds_are_within,
+    calculate_cell_area,
     convert_nodata,
+    pad_xy,
     rasterize_like,
     repeat_grid,
+    resample_chunked,
+    resample_like,
     snap_to_grid,
 )
 
-from ..workflows.general import (
-    bounds_are_within,
-    calculate_cell_area,
-    pad_xy,
-    resample_chunked,
-    resample_like,
-)
 from ..workflows.soilgrids import load_soilgrids
 
 

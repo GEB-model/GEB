@@ -15,14 +15,13 @@ import numpy as np
 import numpy.typing as npt
 from affine import Affine
 
-from geb.build.workflows.general import calculate_cell_area
 from geb.hydrology.groundwater.model import (
     ModFlowSimulation,
     distribute_well_abstraction_m3_per_layer,
     get_groundwater_storage_m,
     get_water_table_depth,
 )
-from geb.workflows.raster import compress
+from geb.workflows.raster import calculate_cell_area, compress
 
 from ..testconfig import output_folder, tmp_folder
 

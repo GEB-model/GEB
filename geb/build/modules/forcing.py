@@ -17,11 +17,11 @@ from zarr.codecs.numcodecs import FixedScaleOffset
 from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
-
-from ...workflows.io import calculate_scaling, to_zarr
-from ..workflows.general import (
+from geb.workflows.raster import (
     resample_like,
 )
+
+from ...workflows.io import calculate_scaling, to_zarr
 
 
 def plot_forcing(self, da, name) -> None:

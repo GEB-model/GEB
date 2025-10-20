@@ -6,11 +6,7 @@ import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
-from geb.workflows.raster import convert_nodata, rasterize_like
-
-from ..workflows.general import (
-    resample_like,
-)
+from geb.workflows.raster import convert_nodata, rasterize_like, resample_like
 
 
 class GroundWater:

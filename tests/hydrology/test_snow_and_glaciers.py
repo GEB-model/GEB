@@ -1538,8 +1538,6 @@ def _plot_scenario_results(
     assert plot_path.exists()
 
 
-#
-#
 def _run_scenario(
     n_hours: int,
     precip_series: np.ndarray,
