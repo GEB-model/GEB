@@ -197,15 +197,6 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/build/{custom_models}/**.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D103",
-    "D102",
-    "D100",
-    "D107"
-]
 "geb/build/modules/{observations}.py" = [
     "ANN001",
     "ANN201",
