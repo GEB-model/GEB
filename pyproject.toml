@@ -206,15 +206,6 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/build/workflows/{farmers}.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D103",
-    "D102",
-    "D100",
-    "D107"
-]
 "geb/build/modules/{agents,crops,forcing,observations}.py" = [
     "ANN001",
     "ANN201",
