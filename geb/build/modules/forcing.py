@@ -1,8 +1,12 @@
+"""Forcing data processing and plotting methods for GEB."""
+
+from __future__ import annotations
+
 import tempfile
 from datetime import date, datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -23,8 +27,11 @@ from geb.workflows.raster import (
 
 from ...workflows.io import calculate_scaling, to_zarr
 
+if TYPE_CHECKING:
+    from geb.build import GEBModel
 
-def plot_forcing(self, da, name) -> None:
+
+def plot_forcing(self: GEBModel, da: xr.DataArray, name: str) -> None:
     """Plot forcing data with a temporal (timeline) plot and a spatial plot.
 
     Args:
@@ -81,18 +88,18 @@ def plot_forcing(self, da, name) -> None:
     plt.close()  # close the plot to free memory
 
 
-def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
+def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> None:
     """Plot forecast data with a temporal (timeline) plot and a spatial plot.
 
     Handles only ensemble forecasts for now. Makes a spatial plot for every single ensemble member.
 
     Args:
-        self: The class instance.
+        geb_build_model: The class instance.
         da: The xarray DataArray containing the forecast data. Must have dimensions 'time', 'y', 'x', and 'member'.
         name: The name of the variable being plotted, used for titles and filenames.
     """
     # pre-processing of plotting data
-    mask = self.grid["mask"]  # get the GEB grid
+    mask = geb_build_model.grid["mask"]  # get the GEB grid
     da_plot = da.copy()  # make a copy to avoid modifying the original data
     # Convert data to mm/hour if it's precipitation
     if "pr" in name.lower() and "kg m-2 s-1" in da_plot.attrs.get("units", ""):
@@ -102,12 +109,6 @@ def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
         da_plot = da_plot.copy()  # no conversion
         ylabel = da_plot.attrs.get("units", "")
 
-    if "pr_hourly" in da_plot.name:
-        da_plot = da_plot.interp(
-            x=mask.x,
-            y=mask.y,  # interp to GEB grid, if necessary
-            method="linear",
-        )
     n_members: int = da.sizes["member"]  # number of ensemble members
 
     # Timeline plot
@@ -150,7 +151,7 @@ def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
     ax_time.set_title(f"{name} - Ensemble Forecast Timeline")  # title
     ax_time.grid(True, alpha=0.3)  # light grid
 
-    fp = self.report_dir / (name + "_ensemble_timeline.png")  # File path
+    fp = geb_build_model.report_dir / (name + "_ensemble_timeline.png")  # File path
     fp.parent.mkdir(parents=True, exist_ok=True)  # ensure directory exists
     plt.tight_layout()  # tight layout
     plt.savefig(fp, dpi=300, bbox_inches="tight")  # save figure
@@ -224,7 +225,7 @@ def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
         )  # add country borders
 
         # Add region shapefile boundary with thick line
-        self.geom["mask"].boundary.plot(
+        geb_build_model.geom["mask"].boundary.plot(
             ax=ax, color="red", linewidth=3, transform=ccrs.PlateCarree()
         )
 
@@ -238,25 +239,27 @@ def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
     fig.suptitle(
         f"{name} - Ensemble Spatial Distribution (Max over Time)"
     )  # Overall title
-    spatial_fp: Path = self.report_dir / (name + "_ensemble_spatial.png")  # File path
+    spatial_fp: Path = geb_build_model.report_dir / (
+        name + "_ensemble_spatial.png"
+    )  # File path
     plt.savefig(spatial_fp, dpi=300, bbox_inches="tight")  # Save figure
     plt.close(fig)  # Close figure to free memory
 
 
-def _plot_data(self, da: xr.DataArray, name: str) -> None:
+def _plot_data(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> None:
     """Plot data using appropriate method based on data type.
 
     Uses plot_forecasts if 'forecast' is in the name, otherwise uses plot_forcing.
 
     Args:
-        self: The class instance.
+        geb_build_model: The class instance.
         da: Data to plot.
         name: Name for the plots and file outputs.
     """
     if "forecast" in name.lower():
-        plot_forecasts(self, da, name)  # plot forecasts
+        plot_forecasts(geb_build_model, da, name)  # plot forecasts
     else:
-        plot_forcing(self, da, name)  # plot historical forcing data
+        plot_forcing(geb_build_model, da, name)  # plot historical forcing data
 
 
 def plot_timeline(
@@ -282,7 +285,7 @@ def plot_timeline(
     )
 
 
-def get_chunk_size(da, target: float | int = 1e8) -> int:
+def get_chunk_size(da: xr.DataArray, target: float | int = 1e8) -> int:
     """Calculate the optimal chunk size for the given xarray DataArray based on the target size.
 
     Args:
@@ -303,6 +306,7 @@ class Forcing:
     """Contains methods to download and process climate forcing data for GEB."""
 
     def __init__(self) -> None:
+        """Initialize the Forcing class."""
         pass
 
     def set_xy_attrs(self, da: xr.DataArray) -> None:
@@ -317,6 +321,19 @@ class Forcing:
         *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
+        """Sets the Precipitation DataArray with appropriate attributes and scaling.
+
+        Uses scaling and rounding to store the precipitation values efficiently.
+
+        Args:
+            da: The xarray DataArray containing the precipitation data.
+            name: The name to assign to the DataArray in the model.
+            *args: Additional positional arguments to pass to the set_other method.
+            **kwargs: Additional keyword arguments to pass to the set_other method.
+
+        Returns:
+            The processed xarray DataArray with precipitation data.
+        """
         da.attrs = {
             "standard_name": "precipitation_flux",
             "long_name": "Precipitation",
@@ -364,6 +381,19 @@ class Forcing:
         *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
+        """Sets the Surface Downwelling Shortwave Radiation DataArray with appropriate attributes and scaling.
+
+        Uses scaling and rounding to store the radiation values efficiently.
+
+        Args:
+            da: The xarray DataArray containing the shortwave radiation data.
+            name: The name to assign to the DataArray in the model.
+            *args: Additional positional arguments to pass to the set_other method.
+            **kwargs: Additional keyword arguments to pass to the set_other method.
+
+        Returns:
+            The processed xarray DataArray with shortwave radiation data.
+        """
         da.attrs = {
             "standard_name": "surface_downwelling_shortwave_flux_in_air",
             "long_name": "Surface Downwelling Shortwave Radiation",
@@ -404,6 +434,19 @@ class Forcing:
         *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
+        """Sets the Surface Downwelling Longwave Radiation DataArray with appropriate attributes and scaling.
+
+        Uses scaling and rounding to store the radiation values efficiently.
+
+        Args:
+            da: The xarray DataArray containing the longwave radiation data.
+            name: The name to assign to the DataArray in the model.
+            *args: Additional positional arguments to pass to the set_other method.
+            **kwargs: Additional keyword arguments to pass to the set_other method.
+
+        Returns:
+            The processed xarray DataArray with longwave radiation data.
+        """
         da.attrs = {
             "standard_name": "surface_downwelling_longwave_flux_in_air",
             "long_name": "Surface Downwelling Longwave Radiation",
@@ -444,6 +487,19 @@ class Forcing:
         *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
+        """Sets the Near-Surface Air Temperature DataArray with appropriate attributes and scaling.
+
+        Uses scaling and rounding to store the temperature values efficiently.
+
+        Args:
+            da: The xarray DataArray containing the air temperature data.
+            name: The name to assign to the DataArray in the model.
+            *args: Additional positional arguments to pass to the set_other method.
+            **kwargs: Additional keyword arguments to pass to the set_other method.
+
+        Returns:
+            The processed xarray DataArray with air temperature data.
+        """
         da.attrs = {
             "standard_name": "air_temperature",
             "long_name": "Near-Surface Air Temperature",
@@ -488,6 +544,19 @@ class Forcing:
         *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
+        """Sets the Near-Surface Dewpoint Temperature DataArray with appropriate attributes and scaling.
+
+        Uses scaling and rounding to store the dewpoint temperature values efficiently.
+
+        Args:
+            da: The xarray DataArray containing the dewpoint temperature data.
+            name: The name to assign to the DataArray in the model.
+            *args: Additional positional arguments to pass to the set_other method.
+            **kwargs: Additional keyword arguments to pass to the set_other method.
+
+        Returns:
+            The processed xarray DataArray with dewpoint temperature data.
+        """
         da.attrs = {
             "standard_name": "air_temperature_dow_point",
             "long_name": "Hourly Near-Surface Dewpoint Temperature",
@@ -531,6 +600,19 @@ class Forcing:
         *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
+        """Sets the Surface Air Pressure DataArray with appropriate attributes and scaling.
+
+        Uses scaling and rounding to store the pressure values efficiently.
+
+        Args:
+            da: The xarray DataArray containing the surface air pressure data.
+            name: The name to assign to the DataArray in the model.
+            *args: Additional positional arguments to pass to the set_other method.
+            **kwargs: Additional keyword arguments to pass to the set_other method.
+
+        Returns:
+            The processed xarray DataArray with surface air pressure data.
+        """
         da.attrs = {
             "standard_name": "surface_air_pressure",
             "long_name": "Surface Air Pressure",
@@ -574,6 +656,20 @@ class Forcing:
         *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
+        """Sets the Near-Surface Wind Speed DataArray with appropriate attributes and scaling.
+
+        Uses scaling and rounding to store the wind speed values efficiently.
+
+        Args:
+            da: The xarray DataArray containing the wind speed data.
+            direction: The wind direction component (e.g., 'u' or 'v').
+            name: The name to assign to the DataArray in the model.
+            *args: Additional positional arguments to pass to the set_other method.
+            **kwargs: Additional keyword arguments to pass to the set_other method.
+
+        Returns:
+            The processed xarray DataArray with wind speed data.
+        """
         name: str = name.format(direction=direction)
         da.attrs = {
             "standard_name": "wind_speed",
@@ -615,6 +711,19 @@ class Forcing:
     def set_SPEI(
         self, da: xr.DataArray, name: str = "climate/SPEI", *args: Any, **kwargs: Any
     ) -> xr.DataArray:
+        """Sets the Standard Precipitation Evapotranspiration Index (SPEI) DataArray with appropriate attributes and scaling.
+
+        Uses scaling and rounding to store the SPEI values efficiently.
+
+        Args:
+            da: The xarray DataArray containing the SPEI data.
+            name: The name to assign to the DataArray in the model.
+            *args: Additional positional arguments to pass to the set_other method.
+            **kwargs: Additional keyword arguments to pass to the set_other method.
+
+        Returns:
+            The processed xarray DataArray with SPEI data.
+        """
         da.attrs = {
             "units": "-",
             "long_name": "Standard Precipitation Evapotranspiration Index",
@@ -656,6 +765,11 @@ class Forcing:
         return da
 
     def setup_forcing_ERA5(self) -> None:
+        """Sets up the ERA5 forcing data for GEB.
+
+        Sets:
+            The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
+        """
         era5_store: Adapter = self.new_data_catalog.fetch("era5")
         era5_loader: partial = partial(
             era5_store.read,
@@ -909,6 +1023,10 @@ class Forcing:
 
     @build_method(depends_on=["setup_forcing"])
     def setup_pr_GEV(self) -> None:
+        """Sets up the Generalized Extreme Value (GEV) parameters for the precipitation data.
+
+        Sets the c shape (ξ), loc location (μ), and scale (σ) parameters.
+        """
         pr: xr.DataArray = (
             self.other["climate/pr_kg_per_m2_per_s"] * 3600
         )  # convert to mm/hour
