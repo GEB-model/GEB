@@ -206,7 +206,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/build/workflows/{farmers,crop_calendars}.py" = [
+"geb/build/workflows/{farmers}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",

@@ -1,14 +1,42 @@
+"""Functions to parse crop calendars from MIRCA2000 data."""
+
 import calendar
 from datetime import date
+from pathlib import Path
+from typing import Any
 
 import numpy as np
+import numpy.typing as npt
+from hydromt.data_catalog import DataCatalog
 
 
-def get_day_index(date):
+def get_day_index(date: date) -> int:
+    """Get the day index (0-364) for a given date.
+
+    Args:
+        date: The date for which to get the day index.
+
+    Returns:
+        The day index (0-364).
+    """
     return date.timetuple().tm_yday - 1  # 0-indexed
 
 
-def get_growing_season_length(start_day_index, end_day_index):
+def get_growing_season_length(start_day_index: int, end_day_index: int) -> int:
+    """Calculate the length of the growing season in days.
+
+    Essentially calculates (end_day_index - start_day_index) mod 365, thus
+    wrapping around the year if necessary. If start and end are the same,
+    we assume the growing season lasts the entire year (365 days) rather
+    than 0 days.
+
+    Args:
+        start_day_index: The starting day index (0-364).
+        end_day_index: The ending day index (0-364).
+
+    Returns:
+        The length of the growing season in days.
+    """
     length = (end_day_index - start_day_index) % 365
     if length == 0:
         return 365
@@ -16,7 +44,23 @@ def get_growing_season_length(start_day_index, end_day_index):
         return length
 
 
-def parse_MIRCA_file(parsed_calendar, crop_calendar, MIRCA_units, is_irrigated):
+def parse_MIRCA_file(
+    parsed_calendar: dict[str, Any],
+    crop_calendar: Path,
+    MIRCA_units: npt.ArrayLike,
+    is_irrigated: bool,
+) -> dict[str, Any]:
+    """Parse a MIRCA2000 crop calendar file.
+
+    Args:
+        parsed_calendar: The dictionary to store the parsed calendar in.
+        crop_calendar: The path to the MIRCA2000 crop calendar file.
+        MIRCA_units: The list of MIRCA unit codes to parse.
+        is_irrigated: Whether the calendar is for irrigated crops.
+
+    Returns:
+        The updated parsed_calendar dictionary.
+    """
     with open(crop_calendar, "r") as f:
         lines = f.readlines()
         # remove all empty lines
@@ -166,7 +210,18 @@ def parse_MIRCA_file(parsed_calendar, crop_calendar, MIRCA_units, is_irrigated):
         return parsed_calendar
 
 
-def parse_MIRCA2000_crop_calendar(data_catalog, MIRCA_units):
+def parse_MIRCA2000_crop_calendar(
+    data_catalog: DataCatalog, MIRCA_units: npt.ArrayLike
+) -> dict[str, Any]:
+    """Parse MIRCA2000 crop calendars for given MIRCA units.
+
+    Args:
+        data_catalog: The data catalog containing the MIRCA2000 files.
+        MIRCA_units: The list of MIRCA unit codes to parse.
+
+    Returns:
+        A dictionary containing the parsed crop calendars.
+    """
     rainfed_crop_calendar_fp = data_catalog.get_source(
         "MIRCA2000_cropping_calendar_rainfed"
     ).path
