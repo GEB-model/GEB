@@ -483,7 +483,6 @@ def to_zarr(
             zarr_format=3,
             consolidated=False,  # consolidated metadata is off-spec for zarr, therefore we set it to False
             write_empty_chunks=True,
-            delayed=False,
         )
 
         if progress:
