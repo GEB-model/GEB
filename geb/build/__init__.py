@@ -478,20 +478,27 @@ def cluster_subbasins_by_area_and_proximity(
     area_tolerance: float,
     logger: logging.Logger,
 ) -> list[list[int]]:
-    """Cluster subbasins by following the coastline rather than by area and proximity.
+    """Cluster subbasins by following the coastline with performance optimizations.
 
     This function creates clusters of subbasins that:
     1. Start from coastal basins and follow the coastline
     2. Add nearby subbasins along the coast
-    3. Use distance thresholds to avoid overly large jumps
+    3. Use distance thresholds for cluster growth but allow global jumps between clusters
     4. Keep the algorithm simple and focused on coastline connectivity
+
+    Performance optimizations implemented:
+    - Lazy adjacency computation with caching (O(n) instead of O(n²))
+    - Fast coordinate-based distance calculations instead of shapely geometry
+    - Reduced logging frequency for large clusters
+    - Early termination conditions
+    - Set-based lookups instead of list iterations
 
     The algorithm:
     1. Identifies coastal basins (basins with no downstream neighbors)
-    2. Starts from an unused coastal basin
+    2. Starts from an unused coastal basin (first cluster) or closest to last added (subsequent)
     3. Follows the coastline by adding adjacent/nearby coastal and inland basins
-    4. Uses a maximum distance threshold (approx UK-NL distance ~180km)
-    5. Moves to the closest unused basin when current cluster is complete
+    4. Uses ~100km distance threshold for cluster growth, no limit for starting new clusters
+    5. Moves to the globally closest unused basin when current cluster is complete
 
     Args:
         data_catalog: Data catalog containing the MERIT basins.
@@ -533,37 +540,104 @@ def cluster_subbasins_by_area_and_proximity(
 
     logger.info("Pre-computing spatial relationships...")
 
-    # Pre-compute centroids for distance calculations
+    # Pre-compute centroids for distance calculations (much faster than geometry operations)
+    logger.info("Computing centroids...")
     centroids = {}
-    for subbasin_id in subbasin_ids:
-        centroids[subbasin_id] = subbasins.loc[subbasin_id].geometry.centroid
+    centroid_coords = {}  # Store as (x, y) tuples for faster distance calculations
+
+    # Create numpy arrays for vectorized distance calculations
+    import numpy as np
+
+    subbasin_list = list(subbasin_ids)
+    coords_array = np.zeros((len(subbasin_list), 2))
+    subbasin_to_idx = {}
+
+    for i, subbasin_id in enumerate(subbasin_list):
+        centroid = subbasins.loc[subbasin_id].geometry.centroid
+        centroids[subbasin_id] = centroid
+        centroid_coords[subbasin_id] = (centroid.x, centroid.y)
+        coords_array[i] = [centroid.x, centroid.y]
+        subbasin_to_idx[subbasin_id] = i
 
     # Build spatial index for fast neighbor finding
     subbasins_sindex = subbasins.sindex
+    subbasin_ids_set = set(subbasin_ids)  # Convert to set for O(1) lookups
 
-    # Pre-compute touching relationships
-    logger.info("Computing adjacency matrix...")
-    adjacency = {}
-    for subbasin_id in subbasin_ids:
-        adjacency[subbasin_id] = set()
+    # Lazy adjacency computation - compute touching relationships on-demand and cache
+    logger.info("Setting up lazy adjacency computation...")
+    adjacency_cache = {}
 
-        geom = subbasins.loc[subbasin_id].geometry
-        possible_matches_idx = list(subbasins_sindex.intersection(geom.bounds))
-        possible_matches = subbasins.iloc[possible_matches_idx]
+    # Fast distance lookup using numpy
+    def fast_distance(subbasin1: int, subbasin2: int) -> float:
+        """Ultra-fast distance calculation using pre-computed arrays."""
+        idx1, idx2 = subbasin_to_idx[subbasin1], subbasin_to_idx[subbasin2]
+        diff = coords_array[idx1] - coords_array[idx2]
+        return np.sqrt(np.sum(diff * diff))
 
-        for neighbor_id in possible_matches.index:
-            if neighbor_id != subbasin_id and neighbor_id in subbasin_ids:
-                if geom.touches(possible_matches.loc[neighbor_id].geometry):
-                    adjacency[subbasin_id].add(neighbor_id)
+    def find_nearest_basins(
+        center_subbasin: int, candidates: set[int], max_distance: float
+    ) -> list[tuple[int, float]]:
+        """Find all basins within max_distance from center, sorted by distance."""
+        if not candidates:
+            return []
+
+        center_idx = subbasin_to_idx[center_subbasin]
+        center_coords = coords_array[center_idx]
+
+        # Vectorized distance calculation for all candidates
+        candidate_indices = [subbasin_to_idx[cid] for cid in candidates]
+        candidate_coords = coords_array[candidate_indices]
+
+        # Calculate distances using broadcasting
+        diffs = candidate_coords - center_coords
+        distances = np.sqrt(np.sum(diffs * diffs, axis=1))
+
+        # Filter by distance and sort
+        valid_mask = distances <= max_distance
+        valid_candidates = [
+            list(candidates)[i] for i in range(len(candidates)) if valid_mask[i]
+        ]
+        valid_distances = distances[valid_mask]
+
+        # Sort by distance
+        sorted_indices = np.argsort(valid_distances)
+        return [(valid_candidates[i], valid_distances[i]) for i in sorted_indices]
+
+    def get_adjacent_basins(subbasin_id: int) -> set[int]:
+        """Get adjacent basins for a subbasin, with caching.
+
+        Args:
+            subbasin_id: The COMID of the subbasin to find adjacent basins for.
+
+        Returns:
+            Set of adjacent subbasin COMIDs.
+        """
+        if subbasin_id not in adjacency_cache:
+            adjacent = set()
+            geom = subbasins.loc[subbasin_id].geometry
+            possible_matches_idx = list(subbasins_sindex.intersection(geom.bounds))
+
+            # Only check subbasins that are in our working set
+            for idx in possible_matches_idx:
+                neighbor_id = subbasins.index[idx]
+                if neighbor_id != subbasin_id and neighbor_id in subbasin_ids_set:
+                    if geom.touches(subbasins.loc[neighbor_id].geometry):
+                        adjacent.add(neighbor_id)
+
+            adjacency_cache[subbasin_id] = adjacent
+
+        return adjacency_cache[subbasin_id]
 
     # Maximum distance threshold for cluster growth (not for starting new clusters)
     # Allow long jumps between clusters (EU → US) but limit growth within clusters
     MAX_CLUSTER_GROWTH_DISTANCE_DEGREES = 100.0 / 111.0  # ~100km converted to degrees
-    
+
     logger.info(
         f"Using cluster growth distance threshold: {MAX_CLUSTER_GROWTH_DISTANCE_DEGREES:.2f} degrees (~100 km)"
     )
-    logger.info("No distance threshold for starting new clusters - allowing global jumps")
+    logger.info(
+        "No distance threshold for starting new clusters - allowing global jumps"
+    )
 
     clusters = []
     used_subbasins = set()
@@ -599,16 +673,14 @@ def cluster_subbasins_by_area_and_proximity(
                 start_basin = next(iter(remaining_basins))
                 logger.info(f"  Starting from arbitrary basin {start_basin}")
         else:
-            # Subsequent clusters: start from basin closest to last added subbasin
+            # Subsequent clusters: start from basin closest to last added subbasin (vectorized)
             if last_added_subbasin is not None:
+                # Use fast vectorized distance calculation
                 min_distance = float("inf")
                 start_basin = None
-                last_centroid = centroids[last_added_subbasin]
 
                 for candidate_basin in remaining_basins:
-                    candidate_centroid = centroids[candidate_basin]
-                    distance = last_centroid.distance(candidate_centroid)
-
+                    distance = fast_distance(last_added_subbasin, candidate_basin)
                     if distance < min_distance:
                         min_distance = distance
                         start_basin = candidate_basin
@@ -630,35 +702,36 @@ def cluster_subbasins_by_area_and_proximity(
 
         logger.info(f"    Starting area: {current_area:,.0f} km²")
 
-        # Grow cluster along coastline/proximity with distance threshold
+        # Grow cluster along coastline/proximity with distance threshold (optimized)
         while current_area < min_area_threshold and remaining_basins:
-            # Find candidates: adjacent basins and nearby basins within growth distance threshold
-            candidates = []
-
+            # Get all adjacent basins for current cluster (lazy computation)
+            all_adjacent_basins = set()
             for cluster_basin in current_cluster:
-                cluster_centroid = centroids[cluster_basin]
+                adjacent_basins = get_adjacent_basins(cluster_basin)
+                all_adjacent_basins.update(adjacent_basins)
 
-                # Add adjacent basins with priority (distance 0)
-                for adj_basin in adjacency[cluster_basin]:
-                    if adj_basin in remaining_basins:
-                        candidates.append(
-                            (adj_basin, 0.0)
-                        )  # Priority distance 0 for adjacent
+            # Filter adjacent basins that are still available
+            available_adjacent = all_adjacent_basins.intersection(remaining_basins)
 
-                # Add nearby basins within cluster growth distance threshold
-                for candidate_basin in remaining_basins:
-                    if (
-                        candidate_basin not in adjacency[cluster_basin]
-                    ):  # Not already adjacent
-                        candidate_centroid = centroids[candidate_basin]
-                        distance = cluster_centroid.distance(candidate_centroid)
-                        
-                        # Only add if within cluster growth distance threshold
-                        if distance <= MAX_CLUSTER_GROWTH_DISTANCE_DEGREES:
-                            candidates.append((candidate_basin, distance))
+            # Start with adjacent basins (distance 0)
+            candidates = [(basin, 0.0) for basin in available_adjacent]
+
+            # Add nearby basins within cluster growth distance threshold using vectorized search
+            non_adjacent_remaining = remaining_basins - all_adjacent_basins
+            if non_adjacent_remaining and current_cluster:
+                # Use the most recently added basin as the search center for efficiency
+                search_center = current_cluster[-1]
+                nearby_basins = find_nearest_basins(
+                    search_center,
+                    non_adjacent_remaining,
+                    MAX_CLUSTER_GROWTH_DISTANCE_DEGREES,
+                )
+                candidates.extend(nearby_basins)
 
             if not candidates:
-                logger.info(f"    No more candidates within cluster growth distance threshold")
+                logger.info(
+                    f"    No more candidates within cluster growth distance threshold"
+                )
                 break
 
             # Sort candidates by distance (adjacent basins first, then by distance)
@@ -671,6 +744,11 @@ def cluster_subbasins_by_area_and_proximity(
                 if current_area + candidate_area <= max_area_threshold:
                     best_candidate = candidate_id
                     break
+
+            # Early termination if cluster is already at minimum size and no valid candidates
+            if best_candidate is None and current_area >= min_area_threshold:
+                logger.info(f"    Cluster reached minimum area, stopping growth")
+                break
 
             # If no candidate fits, and we're still below minimum, take the closest one
             if (
@@ -692,9 +770,11 @@ def cluster_subbasins_by_area_and_proximity(
             remaining_basins.remove(best_candidate)
             cluster_last_added = best_candidate  # Update last added subbasin
 
-            logger.info(
-                f"    Added basin {best_candidate} (area: {candidate_area:,.0f} km²), total: {current_area:,.0f} km²"
-            )
+            # Reduce logging frequency for large clusters (log every 10th addition for performance)
+            if len(current_cluster) <= 10 or len(current_cluster) % 10 == 0:
+                logger.info(
+                    f"    Added basin {best_candidate} (area: {candidate_area:,.0f} km²), total: {current_area:,.0f} km² [{len(current_cluster)} basins]"
+                )
 
         clusters.append(current_cluster)
         last_added_subbasin = cluster_last_added  # Set for next cluster starting point
@@ -772,146 +852,6 @@ def save_clusters_to_geoparquet(
     print(
         f"Saved {len(cluster_data)} subbasins in {len(clusters)} clusters to {output_path}"
     )
-
-
-def save_complete_basins_to_geoparquet(
-    clusters: list[list[int]],
-    data_catalog: DataCatalog,
-    river_graph: networkx.DiGraph,
-    output_path: str | Path,
-    cluster_prefix: str = "cluster",
-) -> None:
-    """Save complete basin areas (including all upstream subbasins) to a geoparquet file.
-
-    This function includes all upstream subbasins for each cluster, not just the downstream/coastal
-    basins. Each subbasin is marked with whether it's a downstream outlet basin or an upstream basin.
-
-    Args:
-        clusters: List of clusters, where each cluster is a list of downstream COMID values.
-        data_catalog: Data catalog containing the MERIT basins.
-        river_graph: River graph for finding upstream subbasins.
-        output_path: Path where to save the geoparquet file.
-        cluster_prefix: Prefix for cluster names.
-    """
-    print(f"Saving complete basin areas to geoparquet: {output_path}")
-
-    # Get all upstream subbasins for each cluster
-    all_basin_subbasins = []
-    cluster_basin_mapping = {}  # Maps subbasin_id to cluster info
-
-    for cluster_idx, downstream_subbasins in enumerate(clusters):
-        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
-
-        # Find all upstream subbasins for this cluster
-        cluster_all_subbasins = set()
-
-        for downstream_subbasin in downstream_subbasins:
-            # Get all upstream subbasins using NetworkX
-            upstream_subbasins = set(
-                networkx.ancestors(river_graph, downstream_subbasin)
-            )
-            upstream_subbasins.add(
-                downstream_subbasin
-            )  # Include the downstream basin itself
-            cluster_all_subbasins.update(upstream_subbasins)
-
-        # Store mapping for each subbasin in this cluster
-        for subbasin_id in cluster_all_subbasins:
-            cluster_basin_mapping[subbasin_id] = {
-                "cluster_idx": cluster_idx,
-                "cluster_id": cluster_id,
-                "is_downstream_outlet": subbasin_id in downstream_subbasins,
-                "downstream_outlets": downstream_subbasins,
-            }
-
-        all_basin_subbasins.extend(cluster_all_subbasins)
-
-    # Remove duplicates while preserving order
-    all_basin_subbasins = list(dict.fromkeys(all_basin_subbasins))
-
-    print(
-        f"Found {len(all_basin_subbasins)} total subbasins across all complete basins"
-    )
-
-    # Load subbasin geometries and upstream areas
-    subbasins = gpd.read_parquet(
-        data_catalog.get("merit_basins_catchments").path,
-        filters=[("COMID", "in", all_basin_subbasins)],
-    ).set_index("COMID")
-
-    upstream_areas = get_subbasin_upstream_areas(data_catalog, all_basin_subbasins)
-
-    # Calculate total basin areas for each cluster
-    cluster_total_areas = {}
-    for cluster_idx, downstream_subbasins in enumerate(clusters):
-        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
-        cluster_subbasins = [
-            sid
-            for sid, info in cluster_basin_mapping.items()
-            if info["cluster_id"] == cluster_id
-        ]
-        cluster_total_areas[cluster_id] = sum(
-            upstream_areas.get(sid, 0) for sid in cluster_subbasins
-        )
-
-    # Create comprehensive basin data
-    basin_data = []
-    for subbasin_id in all_basin_subbasins:
-        if subbasin_id in cluster_basin_mapping:
-            cluster_info = cluster_basin_mapping[subbasin_id]
-            cluster_id = cluster_info["cluster_id"]
-
-            basin_data.append(
-                {
-                    "COMID": subbasin_id,
-                    "cluster_id": cluster_id,
-                    "cluster_number": cluster_info["cluster_idx"],
-                    "is_downstream_outlet": cluster_info["is_downstream_outlet"],
-                    "total_basin_area_km2": cluster_total_areas[cluster_id],
-                    "subbasin_upstream_area_km2": upstream_areas.get(subbasin_id, 0),
-                    "num_downstream_outlets": len(cluster_info["downstream_outlets"]),
-                    "downstream_outlet_comids": ",".join(
-                        map(str, cluster_info["downstream_outlets"])
-                    ),
-                    "geometry": subbasins.loc[subbasin_id].geometry,
-                }
-            )
-
-    # Create GeoDataFrame
-    basin_gdf = gpd.GeoDataFrame(basin_data, crs=subbasins.crs)
-
-    # Save to geoparquet
-    basin_gdf.to_parquet(output_path)
-
-    # Print summary statistics
-    total_subbasins = len(basin_data)
-    total_outlets = sum(1 for item in basin_data if item["is_downstream_outlet"])
-    total_upstream = total_subbasins - total_outlets
-
-    print(f"Saved complete basin areas:")
-    print(f"  Total subbasins: {total_subbasins:,}")
-    print(f"  Downstream outlets: {total_outlets:,}")
-    print(f"  Upstream subbasins: {total_upstream:,}")
-    print(f"  Clusters: {len(clusters)}")
-
-    for i, cluster in enumerate(clusters):
-        cluster_id = f"{cluster_prefix}_{i:03d}"
-        cluster_subbasins = [
-            item for item in basin_data if item["cluster_id"] == cluster_id
-        ]
-        cluster_outlets = [
-            item for item in cluster_subbasins if item["is_downstream_outlet"]
-        ]
-        cluster_upstream = len(cluster_subbasins) - len(cluster_outlets)
-        cluster_area = cluster_total_areas[cluster_id]
-
-        print(
-            f"  {cluster_id}: {len(cluster_subbasins)} subbasins "
-            f"({len(cluster_outlets)} outlets, {cluster_upstream} upstream), "
-            f"{cluster_area:,.0f} km²"
-        )
-
-    print(f"File saved to: {output_path}")
 
 
 def create_cluster_visualization_map(
@@ -1467,6 +1407,160 @@ class DelayedReader(dict):
             super().__setitem__(key, value)
         else:
             raise ValueError("Value must be a file path (str or Path).")
+
+
+def save_clusters_as_merged_geometries(
+    clusters: list[list[int]],
+    data_catalog: DataCatalog,
+    river_graph: networkx.DiGraph,
+    output_path: str | Path,
+    cluster_prefix: str = "cluster",
+    include_upstream: bool = True,
+) -> None:
+    """Save clusters as merged geometries - one polygon outline per cluster.
+
+    This creates the most compact representation possible: each cluster becomes a single
+    dissolved polygon geometry representing the entire basin area.
+
+    Args:
+        clusters: List of clusters, where each cluster is a list of downstream COMID values.
+        data_catalog: Data catalog containing the MERIT basins.
+        river_graph: River graph for finding upstream subbasins.
+        output_path: Path where to save the geoparquet file.
+        cluster_prefix: Prefix for cluster names.
+        include_upstream: If True, include all upstream subbasins in the merged geometry.
+                         If False, only merge the downstream outlet subbasins.
+    """
+    print(f"Creating merged cluster geometries: {output_path}")
+    print(f"Include upstream basins: {include_upstream}")
+
+    merged_cluster_data = []
+
+    for cluster_idx, downstream_subbasins in enumerate(clusters):
+        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
+
+        print(f"  Processing cluster {cluster_idx + 1}/{len(clusters)}: {cluster_id}")
+
+        if include_upstream:
+            # Find all upstream subbasins for this cluster
+            cluster_all_subbasins = set()
+            for downstream_subbasin in downstream_subbasins:
+                upstream_subbasins = set(
+                    networkx.ancestors(river_graph, downstream_subbasin)
+                )
+                upstream_subbasins.add(downstream_subbasin)
+                cluster_all_subbasins.update(upstream_subbasins)
+
+            subbasins_to_merge = list(cluster_all_subbasins)
+            total_subbasins = len(subbasins_to_merge)
+            upstream_count = total_subbasins - len(downstream_subbasins)
+
+            print(
+                f"    Merging {total_subbasins:,} subbasins ({len(downstream_subbasins)} outlets + {upstream_count:,} upstream)"
+            )
+        else:
+            # Only merge downstream outlet subbasins
+            subbasins_to_merge = downstream_subbasins
+            total_subbasins = len(subbasins_to_merge)
+            upstream_count = 0
+
+            print(f"    Merging {total_subbasins} outlet subbasins only")
+
+        # Load geometries for subbasins in this cluster
+        cluster_geometries = gpd.read_parquet(
+            data_catalog.get("merit_basins_catchments").path,
+            filters=[("COMID", "in", subbasins_to_merge)],
+        ).set_index("COMID")
+
+        # Get upstream areas for statistics
+        upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasins_to_merge)
+        total_area = sum(upstream_areas.get(sid, 0) for sid in subbasins_to_merge)
+
+        # Dissolve/merge all geometries into a single polygon
+        print(
+            f"    Dissolving {len(cluster_geometries)} geometries into single polygon..."
+        )
+
+        # Union all geometries to create a single merged polygon
+        merged_geometry = cluster_geometries.geometry.union_all()
+
+        # Handle potential multipolygon results
+        if hasattr(merged_geometry, "geoms") and len(merged_geometry.geoms) > 1:
+            print(f"    Result is multipolygon with {len(merged_geometry.geoms)} parts")
+
+        # Calculate some useful statistics
+        outlet_areas = [upstream_areas.get(sid, 0) for sid in downstream_subbasins]
+        avg_outlet_area = sum(outlet_areas) / len(outlet_areas) if outlet_areas else 0
+
+        merged_cluster_data.append(
+            {
+                "cluster_id": cluster_id,
+                "cluster_number": cluster_idx,
+                "num_downstream_outlets": len(downstream_subbasins),
+                "num_upstream_subbasins": upstream_count,
+                "num_total_subbasins": total_subbasins,
+                "total_basin_area_km2": total_area,
+                "avg_outlet_area_km2": avg_outlet_area,
+                "downstream_outlet_comids": ",".join(map(str, downstream_subbasins)),
+                "geometry_type": merged_geometry.geom_type,
+                "num_geometry_parts": len(merged_geometry.geoms)
+                if hasattr(merged_geometry, "geoms")
+                else 1,
+                "geometry": merged_geometry,
+            }
+        )
+
+        print(f"    Complete: {total_area:,.0f} km² total area")
+
+    # Create GeoDataFrame with merged geometries
+    print("Creating final GeoDataFrame with merged geometries...")
+    merged_gdf = gpd.GeoDataFrame(merged_cluster_data, crs="EPSG:4326")
+
+    # Save to geoparquet
+    merged_gdf.to_parquet(output_path)
+
+    # Calculate and print summary statistics
+    total_area = merged_gdf["total_basin_area_km2"].sum()
+    total_outlets = merged_gdf["num_downstream_outlets"].sum()
+    total_upstream = merged_gdf["num_upstream_subbasins"].sum()
+    total_subbasins = merged_gdf["num_total_subbasins"].sum()
+
+    multipolygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "MultiPolygon"])
+    polygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "Polygon"])
+
+    print(f"\nSaved merged cluster geometries:")
+    print(f"  Total clusters: {len(clusters)}")
+    print(f"  Total area covered: {total_area:,.0f} km²")
+    print(
+        f"  Original subbasins merged: {total_subbasins:,} ({total_outlets:,} outlets + {total_upstream:,} upstream)"
+    )
+    print(
+        f"  Geometry types: {polygon_count} polygons, {multipolygon_count} multipolygons"
+    )
+    print(f"  Average area per cluster: {total_area / len(clusters):,.0f} km²")
+
+    # File size benefits
+    original_subbasins = total_subbasins
+    merged_records = len(clusters)
+    size_reduction = original_subbasins / merged_records if merged_records > 0 else 0
+
+    print(
+        f"  Size reduction: {size_reduction:.0f}x smaller ({original_subbasins:,} → {merged_records} records)"
+    )
+    print(f"  File saved to: {output_path}")
+
+    # Show individual cluster info
+    print(f"\nCluster details:")
+    for _, row in merged_gdf.iterrows():
+        geom_info = f" ({row['geometry_type']}"
+        if row["num_geometry_parts"] > 1:
+            geom_info += f", {row['num_geometry_parts']} parts"
+        geom_info += ")"
+
+        print(
+            f"  {row['cluster_id']}: {row['total_basin_area_km2']:,.0f} km², "
+            f"{row['num_total_subbasins']:,} subbasins merged{geom_info}"
+        )
 
 
 class GEBModel(

@@ -1238,8 +1238,8 @@ def init_multiple_fn(
         create_multi_basin_configs,
         get_all_downstream_subbasins_in_geom,
         get_river_graph,
+        save_clusters_as_merged_geometries,
         save_clusters_to_geoparquet,
-        save_complete_basins_to_geoparquet,
     )
     from geb.build.data_catalog import NewDataCatalog
 
@@ -1350,17 +1350,18 @@ def init_multiple_fn(
         cluster_prefix=cluster_prefix,
     )
 
-    # Save complete basin areas (including all upstream subbasins)
-    complete_basins_path = (
+    # Save clusters as merged geometries (complete basins as single polygons)
+    merged_basins_path = (
         save_geoparquet.parent / f"complete_basins_{save_geoparquet.stem}.geoparquet"
     )
-    logger.info(f"Saving complete basin areas to geoparquet: {complete_basins_path}")
-    save_complete_basins_to_geoparquet(
+    logger.info(f"Saving complete basins as merged geometries: {merged_basins_path}")
+    save_clusters_as_merged_geometries(
         clusters=clusters,
         data_catalog=data_catalog_instance,
         river_graph=river_graph,
-        output_path=complete_basins_path,
+        output_path=merged_basins_path,
         cluster_prefix=cluster_prefix,
+        include_upstream=True,  # Include all upstream subbasins in merged geometry
     )
 
     logger.info(f"Creating visualization map: {save_map}")
