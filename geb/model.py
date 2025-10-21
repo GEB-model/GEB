@@ -418,7 +418,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # in run mode, verify that the spinup time range matches the stored time range
         if in_spinup:
             self._store_spinup_time_range()
-        else:
+        elif load_data_from_store:
             self._verify_spinup_time_range()
 
         if self.simulate_hydrology:
