@@ -693,8 +693,8 @@ def assign_return_periods(
                 )
 
                 discharge_value = 2_000
-                rivers.loc[idx, f"{prefix}_{return_period}"] = discharge_value
-                # raise ValueError(
-                #     f"Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}."
-                # )
+            rivers.loc[idx, f"{prefix}_{return_period}"] = discharge_value
+            # raise ValueError(
+            #     f"Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}."
+            # )
     return rivers
