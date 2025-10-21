@@ -1135,7 +1135,7 @@ class Store:
             self.model.logger.debug(f"Saving {name}")
             bucket.save(path / name)
 
-    def load(self, path: None | Path = None) -> None:
+    def load(self, omit: None | str = None, path: None | Path = None) -> None:
         """Load the store data from disk into the model.
 
         If no path is provided, it defaults to the store path of the model.
@@ -1151,6 +1151,9 @@ class Store:
         for bucket_folder in path.iterdir():
             # Mac OS X creates a .DS_Store file in directories, which we ignore
             if bucket_folder.name == ".DS_Store":
+                continue
+            elif omit is not None and omit in bucket_folder.name:
+                self.model.logger.info(f"Skipping loading of bucket {bucket_folder}")
                 continue
             bucket = Bucket().load(bucket_folder)
 

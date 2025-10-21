@@ -376,6 +376,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         simulate_hydrology: bool = True,
         clean_report_folder: bool = False,
         load_data_from_store: bool = False,
+        omit: None | str = None,
     ) -> None:
         """Initializes the model.
 
@@ -388,6 +389,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             simulate_hydrology: Whether to simulate hydrology.
             clean_report_folder: Whether to clean the report folder before creating a new reporter.
             load_data_from_store: Whether to load data from the store.
+            omit: Name of the bucket to omit when loading data from the store.
 
         """
         self.in_spinup = in_spinup
@@ -412,7 +414,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.agents = Agents(self)
 
         if load_data_from_store:
-            self.store.load()
+            self.store.load(omit=omit)
 
         # in spinup mode, save the spinup time range to the store for later verification
         # in run mode, verify that the spinup time range matches the stored time range
@@ -623,6 +625,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
             load_data_from_store=True,
+            omit="agents",
             simulate_hydrology=False,
             clean_report_folder=False,
         )
