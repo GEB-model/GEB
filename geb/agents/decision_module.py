@@ -144,7 +144,7 @@ class DecisionModule:
     @staticmethod
     @njit(cache=True, parallel=True)
     def calcEU_adapt_numba(
-        expenditure_cap: float,
+        expenditure_cap: np.ndarray,
         loan_duration: int,
         n_agents: int,
         sigma: np.ndarray,
@@ -197,11 +197,7 @@ class DecisionModule:
         p_droughts = p_droughts[indices]
 
         # Identify agents able to afford the adaptation and that have not yet adapted
-        unconstrained_mask = (
-            (profits_no_event * expenditure_cap > total_annual_costs)
-            & (~adapted)
-            & (extra_constraint)
-        )
+        unconstrained_mask = (expenditure_cap) & (~adapted) & (extra_constraint)
 
         # Iterate only through agents who can afford to adapt
         unconstrained_indices = np.where(unconstrained_mask)[0]
