@@ -683,6 +683,8 @@ class Hydrography:
     @build_method
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
+        # load elevation data
+        elevation = self.other["DEM/fabdem"]
         # load the lecz mask
         lecz_mask = self.geom["coastal/lecz_mask"]
         # add small buffer to ensure connection of 'islands' with coastlines
@@ -697,6 +699,7 @@ class Hydrography:
         coastlines = self.geom["coastal/coastlines"]
         sfincs_regions = []
         lecz_regions = []
+        zsini = []
         for _, lecz_polygon in lecz_polygons.iterrows():
             # check if the lecz polygon intersects with the coastline
             if (
@@ -704,6 +707,13 @@ class Hydrography:
                 and lecz_polygon["area"] > 0.0006449015308288645
             ):
                 # if it does, create a sfincs region
+                # get the minimum elevation within the lecz polygon
+                mask = elevation.rio.clip_box(*lecz_polygon.geometry.bounds).where(
+                    elevation.rio.clip([lecz_polygon.geometry], drop=False).notnull(),
+                    drop=False,
+                )
+                zsini.append(float(mask.min().values))
+
                 # create a bounding box around the lecz polygon
                 lecz_polygon.geometry = lecz_polygon.geometry.buffer(0.00833333)
                 lecz_polygon_gpd = gpd.GeoDataFrame(
@@ -724,6 +734,7 @@ class Hydrography:
         bbox_gdf["idx"] = bbox_gdf.index
         lecz_gdf["idx"] = lecz_gdf.index
         lecz_gdf["area"] = lecz_gdf.geometry.area
+        lecz_gdf["zsini"] = zsini
         self.set_geom(bbox_gdf, name="coastal/model_regions")
         self.set_geom(lecz_gdf, name="coastal/lecz_regions")
 
