@@ -715,7 +715,6 @@ class Hydrography:
                 zsini.append(float(mask.min().values))
 
                 # create a bounding box around the lecz polygon
-                lecz_polygon.geometry = lecz_polygon.geometry.buffer(0.00833333)
                 lecz_polygon_gpd = gpd.GeoDataFrame(
                     geometry=[lecz_polygon.geometry], crs=lecz_mask.crs
                 )
