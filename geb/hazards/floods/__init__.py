@@ -391,10 +391,6 @@ class Floods:
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
-        # load osm land polygons to exclude from coastal boundary cells
-        bnd_exclude_mask = load_geom(
-            self.model.files["geom"]["coastal/land_polygons"],
-        )
         # load gtsm tide gauge locations for water level boundary conditions
         locations = (
             gpd.GeoDataFrame(
@@ -406,22 +402,33 @@ class Floods:
         # convert index to int
         locations.index = locations.index.astype(int)
 
-        # build model for the different sfincs model regions
+        # Load mask of lecz to activate cells for the different sfincs model regions
         lecz_regions = load_geom(self.model.files["geom"]["coastal/lecz_regions"])
 
+        # buffer lecz regions to ensure proper inclusion of coastline
+        lecz_regions["geometry"] = lecz_regions.buffer(0.00833333)
+
+        # load osm land polygons to exclude from coastal boundary cells
+        bnd_exclude_mask = load_geom(
+            self.model.files["geom"]["coastal/land_polygons"],
+        )
+
+        # add buffer of ~500m to ensure proper exclusion. Buffer should be smaller than that of lecz regions
+        bnd_exclude_mask["geometry"] = bnd_exclude_mask.buffer(0.004165)
+
         # take the union of all regions as model region
-        model_domain = lecz_regions.unary_union.envelope
+        model_domain = lecz_regions.union_all().envelope
         # create gpd.GeoDataFrame for the model domain
         model_domain_gdf = gpd.GeoDataFrame(
             geometry=[model_domain], crs=lecz_regions.crs
         )
         # iterate over the different regions and create a coastal model for each region
         coastal_models = []
-        for idx, region in lecz_regions.iterrows():
+        for idx, include_mask in lecz_regions.iterrows():
             print(f"Run coastal model for region {idx}.")
             # create geodataframe for the region
-            region = gpd.GeoDataFrame(
-                [region], geometry="geometry", crs=lecz_regions.crs
+            include_mask = gpd.GeoDataFrame(
+                [include_mask], geometry="geometry", crs=lecz_regions.crs
             )
             try:
                 sfincs_root_model: SFINCSRootModel = self.build(
@@ -429,7 +436,7 @@ class Floods:
                     region=model_domain_gdf,
                     coastal=True,
                     bnd_exclude_mask=bnd_exclude_mask,
-                    include_mask=region,
+                    include_mask=include_mask,
                     gtsm_stations=locations,
                 )
                 coastal_models.append(sfincs_root_model)
