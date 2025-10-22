@@ -37,21 +37,24 @@ class GlobalDataLabShapefile(Adapter):
         if not self.is_ready:
             download_path = self.root / "GDL Shapefiles V4.zip"
 
-            if not download_path.exists():
+            while not download_path.exists():
                 print(
-                    "This file requires manual download due to licensing restrictions."
+                    "\033[91mThis file requires manual download due to licensing restrictions. Please download GDL Shapefiles V4 from: "
+                    + url
+                    + f" and place it at: {download_path}\033[0m"
                 )
-                print("Please download GDL Shapefiles V4 from:")
-                print(url)
-                print(f"and place it at: {download_path}")
-                exit(1)
+                input(
+                    "\033[91mPress Enter after placing the file to continue...\033[0m"
+                )
 
             with zipfile.ZipFile(file=download_path, mode="r") as zip_ref:
                 zip_ref.extractall(self.root)
 
-            gdf = gpd.read_file(
+            gdf: gpd.GeoDataFrame = gpd.read_file(
                 self.root / "GDL Shapefiles V4" / "GDL Shapefiles V4.shp"
             )
+
+            print("Saving processed data...")
             gdf.to_parquet(
                 self.path,
                 engine="pyarrow",
