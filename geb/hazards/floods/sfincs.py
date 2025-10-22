@@ -274,16 +274,23 @@ class SFINCSRootModel:
             sf.setup_mask_active(
                 mask=include_mask,
                 zmin=-21,  # minimum elevation for valid cells
-                zmax=12,  # maximum elevation for valid cells (lecz is +10m, so no active cells in the mask should be above that)
-                # include_mask=include_mask,
+                zmax=25,  # Now set quite high to include dunes. Otherwise weird bounding mask shapes can occur.
                 drop_area=1,  # drops areas that are smaller than 1km2,
                 reset_mask=True,
             )
 
+            # set zsini based on the minimum elevation within the include_mask
+            sf.config["zsini"] = include_mask["zsini"].values[0]
+
+            # set the spinup period to 24 hours (also set in class init, move this to better place)
+            sf.config["tspinup"] = 24 * 3600
+
+            # setup the coastal boundary conditions
             sf.setup_mask_bounds(
                 btype="waterlevel",
                 zmax=2,  # maximum elevation for valid boundary cells
                 exclude_mask=bnd_exclude_mask,
+                all_touched=True,
             )
             sf.setup_waterlevel_forcing(locations=gtsm_stations)
 
@@ -610,7 +617,7 @@ class SFINCSRootModel:
         timeseries.columns = timeseries.columns.astype(int)
 
         # Align timeseries columns with locations index
-        timeseries = timeseries.iloc[300:-300]  # trim the first and last 300 rows
+        timeseries = timeseries.iloc[250:-250]  # trim the first and last 250 rows
 
         simulation: SFINCSSimulation = self.create_simulation(
             simulation_name=f"rp_{return_period}_coastal",
