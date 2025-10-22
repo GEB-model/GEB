@@ -1,3 +1,5 @@
+"""Module implementing hydrology evaluation functions for the GEB model."""
+
 import base64
 import os
 from pathlib import Path
@@ -30,6 +32,7 @@ class Hydrology:
     """Implements several functions to evaluate the hydrological module of GEB."""
 
     def __init__(self) -> None:
+        """Initialize the Hydrology evaluation module."""
         pass
 
     def plot_discharge(

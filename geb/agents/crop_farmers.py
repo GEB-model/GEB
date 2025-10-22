@@ -1,9 +1,13 @@
+"""This module contains the CropFarmers agent class for the GEB model."""
+
+from __future__ import annotations
+
 import calendar
 import copy
 import math
 import os
 from datetime import datetime
-from typing import Tuple
+from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 import numpy.typing as npt
@@ -39,6 +43,10 @@ from .workflows.crop_farmers import (
     get_gross_irrigation_demand_m3,
     plant,
 )
+
+if TYPE_CHECKING:
+    from geb.agents import Agents
+    from geb.model import GEBModel
 
 NO_IRRIGATION: int = -1
 CHANNEL_IRRIGATION: int = 0
@@ -114,7 +122,20 @@ class CropFarmers(AgentBaseClass):
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
 
-    def __init__(self, model, agents, reduncancy: float) -> None:
+    def __init__(self, model: GEBModel, agents: Agents, reduncancy: float) -> None:
+        """Initialize the CropFarmers agent module.
+
+        Args:
+            model: The GEB model.
+            agents: The class that includes all agent types (allowing easier communication between agents).
+            reduncancy: a lot of data is saved in pre-allocated NumPy arrays.
+                While this allows much faster operation, it does mean that the number of agents cannot
+                grow beyond the size of the pre-allocated arrays. This parameter allows you to specify
+                how much redundancy should be used. A lower redundancy means less memory is used, but the
+                model crashes if the redundancy is insufficient. The redundancy is specified as a fraction of
+                the number of agents, e.g. 0.2 means 20% more space is allocated than the number of agents.
+
+        """
         super().__init__(model)
         self.agents = agents
         self.config = (
