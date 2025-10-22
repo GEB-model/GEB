@@ -170,7 +170,7 @@ extend-select = ["I"]
 preview = true
 
 [tool.ruff.lint.extend-per-file-ignores]
-"geb/agents/{crop_farmers,decision_module,households,industry,livestock_farmers,market}.py" = [
+"geb/agents/{crop_farmers,decision_module,households,industry,market}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
