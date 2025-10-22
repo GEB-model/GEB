@@ -568,7 +568,7 @@ class Agents:
                 self.logger.info(
                     f"Missing inflation rates for {ISO3}, using donor country {donor_country}"
                 )
-                donor_country_inflation_rates = process_rates(
+                donor_country_inflation_rates = retrieve_inflation_rates(
                     inflation_rates,
                     years_inflation_rates,
                     donor_country,
@@ -586,7 +586,7 @@ class Agents:
                 np.array(local_inflation_rates) / np.array(USA_inflation_rates)
             ).tolist()
 
-            price_ratio_dict["data"][region_id] = process_rates(
+            price_ratio_dict["data"][region_id] = retrieve_inflation_rates(
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
 
@@ -605,7 +605,7 @@ class Agents:
                     self, countries_with_price_ratio_data
                 )
                 donor_country = donor_countries.get(ISO3, None)
-                price_ratio_dict["data"][region_id] = process_rates(
+                price_ratio_dict["data"][region_id] = retrieve_inflation_rates(
                     price_ratio_filtered,
                     years_price_ratio,
                     donor_country,
@@ -615,7 +615,7 @@ class Agents:
                     f"Missing price ratio data for {ISO3}, using donor country {donor_country}"
                 )
 
-            lcu_dict["data"][region_id] = process_rates(
+            lcu_dict["data"][region_id] = retrieve_inflation_rates(
                 lcu_filtered, years_lcu, region["ISO3"]
             )
 
@@ -630,7 +630,7 @@ class Agents:
                 )
                 donor_countries = setup_donor_countries(self, countries_with_lcu_data)
                 donor_country = donor_countries.get(ISO3, None)
-                lcu_dict["data"][region_id] = process_rates(
+                lcu_dict["data"][region_id] = retrieve_inflation_rates(
                     lcu_filtered,
                     years_lcu,
                     donor_country,

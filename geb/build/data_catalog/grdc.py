@@ -34,11 +34,11 @@ class GRDC(Adapter):
         Returns:
             GRDC: The adapter instance with the processed data.
         """
-        if not self.is_ready:
+        while not self.is_ready:
             print(
                 f"""\033[91mThis file requires manual download due to licensing restrictions. Download the Global Runoff Data Centre (GRDC) dataset via the GRDC station portal: {url}. You can use the map to draw a polygon or rectangle to obtain all (or a subset) of stations, then click download and fill out the required forms. Save the resulting "GRDC.zip" in {self.path}.\033[0m"""
             )
-            exit(1)
+            input("\033[91mPress Enter after placing the file to continue...\033[0m")
 
         return self
 

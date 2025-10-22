@@ -2,6 +2,8 @@
 
 import shutil
 import sqlite3
+import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -60,10 +62,13 @@ class Sword(Adapter):
                 gdfs.append(gpd.read_file(reaches))
 
             SWORD = pd.concat(gdfs, ignore_index=True)
-            SWORD.to_file(self.path)
+            temp_path = Path(tempfile.gettempdir()) / "sword.gpkg"
+            SWORD.to_file(temp_path)
 
-            # Connect to the GPKG
-            conn = sqlite3.connect(self.path)
+            time.sleep(5)  # wait a bit to ensure all file handles are closed
+
+            # Connect to the temporary GPKG
+            conn = sqlite3.connect(temp_path)
             cursor = conn.cursor()
 
             # Create an index on COMID
@@ -73,8 +78,15 @@ class Sword(Adapter):
             """)
 
             conn.commit()
-
-            shutil.rmtree(path=uncompressed_file)  # remove uncompressed folder
             conn.close()
+
+            # Move the temporary file to the final path
+            shutil.move(temp_path, self.path)
+
+            time.sleep(5)  # wait a bit to ensure all file handles are closed
+
+            shutil.rmtree(
+                path=uncompressed_file, ignore_errors=True
+            )  # remove uncompressed folder
 
         return self
