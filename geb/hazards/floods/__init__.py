@@ -364,7 +364,9 @@ class Floods:
             crs=flood_depth.rio.crs,
         )  # save the flood depth to a zarr file
 
-        self.model.agents.households.flood(flood_depth=flood_depth)
+        self.model.agents.households.flood(
+            flood_depth=flood_depth
+        )  # I need to add the warning in this line I think
 
     def build_mask_for_coastal_sfincs(self) -> gpd.GeoDataFrame:
         """Builds a mask to define the active cells and boundaries for the coastal SFINCS model.
@@ -634,7 +636,9 @@ class Floods:
             print(f"exptected annual damage is: {expected_annual_damage}")
 
         else:
-            self.run_single_event(start_time, end_time)
+            self.run_single_event(
+                start_time, end_time
+            )  # I need to add the warning in this line maybe
 
     def save_discharge(self) -> None:
         """Saves the current discharge for the current timestep.
