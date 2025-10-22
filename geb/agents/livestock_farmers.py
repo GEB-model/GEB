@@ -39,7 +39,6 @@ class LiveStockFarmers(AgentBaseClass):
             agents: The class that includes all agent types (allowing easier communication between agents).
             reduncancy: Number of extra agents to use. Not used here.
         """
-        assert reduncancy is None
         super().__init__(model)
 
         if self.model.simulate_hydrology:
