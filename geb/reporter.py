@@ -17,6 +17,7 @@ from honeybees.library.raster import coord_to_pixel
 
 from geb.module import Module
 from geb.store import DynamicArray
+from geb.typing import ArrayInt64
 from geb.workflows.methods import multi_level_merge
 
 if TYPE_CHECKING:
@@ -558,6 +559,7 @@ class Reporter:
                 assert isinstance(time_array, zarr.Array), (
                     "time_array must be a zarr.Array"
                 )
+                time_array: ArrayInt64 = time_array[:]
                 if (
                     np.isin(self.model.current_time_unix_s, time_array)
                     and value is not None

@@ -8,4 +8,6 @@ class Affine:
     e: float
     f: float
 
-    def __init__(self, a: float, b: float, c: float, d: float, e: float, f: float) -> None: ...
+    def __init__(
+        self, a: float, b: float, c: float, d: float, e: float, f: float
+    ) -> None: ...
