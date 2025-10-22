@@ -1,7 +1,9 @@
 """Data adapter for HydroLAKES data."""
 
 import re
+import tempfile
 from pathlib import Path
+from time import sleep
 from typing import Any
 
 import geopandas as gpd
@@ -186,11 +188,11 @@ class MeritBasins(Adapter):
         if not self.is_ready:
             download_path: Path = self.root
 
-            session = requests.Session()
+            session: requests.Session = requests.Session()
 
             files: dict[str, dict[str, str]] = FILES[self.variable]
-            downloaded_shp_files = []
-            all_downloaded_files = []
+            downloaded_shp_files: list[Path] = []
+            all_downloaded_files: list[Path] = []
             for continent, file_dict in files.items():
                 for ext, file_id in file_dict.items():
                     file_path = (
@@ -250,34 +252,46 @@ class MeritBasins(Adapter):
                         downloaded_shp_files.append(file_path)
                     all_downloaded_files.append(file_path)
 
-            gdfs = []
+            gdfs: list[gpd.GeoDataFrame] = []
             for shp_path in downloaded_shp_files:
-                gdf = gpd.read_file(shp_path)
+                gdf: gpd.GeoDataFrame = gpd.read_file(shp_path)
                 gdfs.append(gdf)
 
-            merged = pd.concat(gdfs, ignore_index=True)
+            merged: gpd.GeoDataFrame = pd.concat(gdfs, ignore_index=True)
 
             # clean memory
             for gdf in gdfs:
                 del gdf
             del gdfs
 
-            merged.set_crs("EPSG:4326", inplace=True)
+            merged: gpd.GeoDataFrame = merged.set_crs("EPSG:4326")
 
-            ascending = True
-            merged = merged.sort_values(
+            ascending: bool = True
+            merged: gpd.GeoDataFrame = merged.sort_values(
                 by="COMID", ascending=ascending
             )  # sort by COMID
 
-            merged.to_parquet(
-                self.path,
-                compression="gzip",
-                write_covering_bbox=True,
-                index=False,
-                sorting_columns=[SortingColumn(0, descending=not ascending)],
-                row_group_size=10_000,
-                schema_version="1.1.0",
-            )
+            # Use a temporary file to avoid partial writes in case of errors
+            with tempfile.NamedTemporaryFile(
+                dir=self.path.parent, suffix=".parquet", delete=False
+            ) as tmp_file:
+                tmp_path: Path = Path(tmp_file.name)
+                print(
+                    "Saving downloaded and processed data to temporary parquet file..."
+                )
+                merged.to_parquet(
+                    path=tmp_path,
+                    compression="gzip",
+                    write_covering_bbox=True,
+                    index=False,
+                    sorting_columns=[SortingColumn(0, descending=not ascending)],
+                    row_group_size=10_000,
+                    schema_version="1.1.0",
+                )
+                # Atomically move the temporary file to the final path
+                tmp_path.rename(self.path)
+
+            sleep(5)  # wait a bit to ensure all file handles are closed
 
             for file_path in all_downloaded_files:
                 file_path.unlink()  # remove downloaded files

@@ -41,7 +41,19 @@ DEFAULT_RUN_ARGS: dict[str, Any] = {}
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_init() -> None:
+@pytest.mark.parametrize(
+    "clean_working_directory",
+    [False, True],
+)
+def test_init(clean_working_directory: bool) -> None:
+    """Test model initialization from example configuration.
+
+    Creates a new model directory from the 'geul' example, verifies that
+    all required configuration files are created, and tests error handling
+    when attempting to initialize in an existing directory without overwrite.
+    """
+    if clean_working_directory and working_directory.exists():
+        shutil.rmtree(working_directory)
     working_directory.mkdir(parents=True, exist_ok=True)
 
     with WorkingDirectory(working_directory):
@@ -72,6 +84,11 @@ def test_init() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_build() -> None:
+    """Test the model build process with default arguments.
+
+    Runs the build function with default build arguments to ensure
+    the model can be properly built from configuration files.
+    """
     with WorkingDirectory(working_directory):
         build_fn(**DEFAULT_BUILD_ARGS)
 
@@ -81,6 +98,11 @@ def test_build() -> None:
     reason="Too heavy for GitHub Actions and needs GEB_TEST_ALL=yes.",
 )
 def test_build_dependencies() -> None:
+    """Test build dependencies by running individual build methods in sequence.
+
+    Tests that each build method can run successfully when its dependencies
+    have been built first, ensuring the build dependency graph is correct.
+    """
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
         build_config = parse_config(args["build_config"])
@@ -117,6 +139,11 @@ def test_build_dependencies() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_forcing() -> None:
+    """Test forcing data validation and consistency.
+
+    Verifies that forcing data is properly validated and that
+    different forcing sources produce consistent data shapes.
+    """
     with WorkingDirectory(working_directory):
         model: GEBModel = run_model_with_method(
             method=None,
@@ -144,6 +171,11 @@ def test_forcing() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_update_with_file() -> None:
+    """Test updating model configuration from a file.
+
+    Verifies that model parameters can be updated by loading
+    configuration from a file and that the changes are applied correctly.
+    """
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
         args["build_config"] = "update.yml"
@@ -152,6 +184,11 @@ def test_update_with_file() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_update_with_dict() -> None:
+    """Test updating model configuration from a dictionary.
+
+    Verifies that model parameters can be updated by passing
+    a dictionary of configuration values and that the changes are applied correctly.
+    """
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
         update = {"setup_land_use_parameters": {}}
@@ -180,6 +217,11 @@ def test_update_with_dict() -> None:
     ],
 )
 def test_update_with_method(method: str) -> None:
+    """Test updating model configuration using different methods.
+
+    Args:
+        method: The update method to test (e.g., 'file', 'dict').
+    """
     with WorkingDirectory(working_directory):
         args: dict[str, str | dict | Path | bool] = DEFAULT_BUILD_ARGS.copy()
 
@@ -193,12 +235,22 @@ def test_update_with_method(method: str) -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_spinup() -> None:
+    """Test model spinup phase.
+
+    Verifies that the model can run its spinup phase correctly,
+    initializing the system to a stable state before main simulation.
+    """
     with WorkingDirectory(working_directory):
         run_model_with_method(method="spinup", **DEFAULT_RUN_ARGS)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_run() -> None:
+    """Test basic model execution.
+
+    Verifies that the model can run a complete simulation
+    from initialization through execution without errors.
+    """
     args = DEFAULT_RUN_ARGS.copy()
 
     with WorkingDirectory(working_directory):
@@ -215,6 +267,13 @@ def test_run() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_alter() -> None:
+    """Test model alteration functionality.
+
+    Verifies that a model alternative can be made. A model alternative
+    references the original model while overwriting specific settings
+    or files. Verifies that the model can be run, but does not check the
+    outputs of the altered model.
+    """
     with WorkingDirectory(working_directory):
         args: dict[str, Any] = DEFAULT_BUILD_ARGS.copy()
         args["build_config"] = {
@@ -241,6 +300,10 @@ def test_alter() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_evaluate_water_circle() -> None:
+    """Test water balance evaluation.
+
+    Does not check the evaluation results itself. Just if it can be run.
+    """
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
@@ -252,6 +315,12 @@ def test_evaluate_water_circle() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_evaluate() -> None:
+    """Test model evaluation functionality.
+
+    Verifies that model outputs can be evaluated and analyzed
+    for correctness and consistency. Does not check the evaluation
+    results itself. Just if it can be run.
+    """
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         method_args = {
@@ -263,6 +332,11 @@ def test_evaluate() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_land_use_change() -> None:
+    """Test land use change functionality.
+
+    Verifies that land use changes can be applied to the model
+    and that the model can continue running after the land use changes.
+    """
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(CONFIG_DEFAULT)
@@ -302,6 +376,11 @@ def test_land_use_change() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_run_yearly() -> None:
+    """Test yearly model execution.
+
+    Verifies that the model can run simulations on a yearly
+    time step.
+    """
     with WorkingDirectory(working_directory):
         args = DEFAULT_RUN_ARGS.copy()
         config = parse_config(CONFIG_DEFAULT)
@@ -324,6 +403,11 @@ def test_run_yearly() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_estimate_return_periods() -> None:
+    """Test return period estimation.
+
+    Verifies that the model can estimate return periods for
+    extreme events and flood frequencies.
+    """
     with WorkingDirectory(working_directory):
         run_model_with_method(method="estimate_return_periods", **DEFAULT_RUN_ARGS)
 
@@ -494,9 +578,14 @@ def test_multiverse() -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_share() -> None:
+    """Test model sharing functionality.
+
+    Verfifies that the zip file created by the share function
+    exists and can be created without errors.
+    """
     with WorkingDirectory(working_directory):
         share_fn(
-            working_directory=".",
+            working_directory=Path("."),
             name="test",
             include_preprocessing=False,
             include_output=False,

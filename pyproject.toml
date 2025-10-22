@@ -170,7 +170,7 @@ extend-select = ["I"]
 preview = true
 
 [tool.ruff.lint.extend-per-file-ignores]
-"geb/agents/{crop_farmers,decision_module,households,industry,livestock_farmers,market,reservoir_operators}.py" = [
+"geb/agents/{crop_farmers,decision_module,households,industry,livestock_farmers,market}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
@@ -179,7 +179,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/agents/workflows/*.py" = [
+"geb/agents/workflows/crop_farmers.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
@@ -188,7 +188,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/{evaluate}/**.py" = [
+"geb/evaluate/hydrology.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
@@ -197,16 +197,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/hydrology/erosion/**.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D102",
-    "D103",
-    "D100",
-    "D107"
-]
-"geb/build/{custom_models}/**.py" = [
+"geb/build/modules/observations.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
@@ -215,34 +206,7 @@ preview = true
     "D100",
     "D107"
 ]
-"geb/build/workflows/{general,farmers,crop_calendars}.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D103",
-    "D102",
-    "D100",
-    "D107"
-]
-"geb/build/modules/{agents,crops,forcing,observations}.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D103",
-    "D102",
-    "D100",
-    "D107"
-]
-"geb/{sensitivity,multirun,module,calibrate}.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D103",
-    "D102",
-    "D100",
-    "D107"
-]
-"tests/**.py" = [
+"geb/{sensitivity,multirun,calibrate}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
@@ -266,3 +230,4 @@ addopts = "--ignore=.venv"
 
 [tool.ty.environment]
 python-version = "3.13"
+extra-paths = ["./typings"]

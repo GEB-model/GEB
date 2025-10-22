@@ -1,6 +1,13 @@
+"""Custom fairSTREAM model and survey utilities.
+
+This module defines helper classes to parse survey data and a custom
+``fairSTREAMModel`` that extends the base GEB model with fairSTREAM-specific
+build methods.
+"""
+
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Mapping, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,12 +34,27 @@ from .. import GEBModel
 
 
 class Survey:
-    """Base class for parsing and processing survey data."""
+    """Base class for parsing and processing survey data.
+
+    Subclasses should provide concrete implementations to load and parse
+    survey data into ``self.survey`` and ``self.samples`` pandas objects.
+    """
 
     def __init__(self) -> None:
-        self.mappers = {}
+        """Initialize an empty registry of value mappers.
 
-    def learn_structure(self, max_indegree=3) -> None:
+        Notes:
+            ``self.mappers`` stores per-variable mapping metadata created by
+            ``create_mapper`` and used by ``apply_mapper``.
+        """
+        self.mappers: dict[str, dict[str, Any]] = {}
+
+    def learn_structure(self, max_indegree: int = 3) -> None:
+        """Estimate the Bayesian network structure from the samples.
+
+        Args:
+            max_indegree: Maximum number of parents per node.
+        """
         print("Estimating network structure")
         est = HillClimbSearch(data=self.samples)
         self.structure = est.estimate(
@@ -43,7 +65,15 @@ class Survey:
             show_progress=True,
         )
 
-    def estimate_parameters(self, plot=False, save=False) -> None:
+    def estimate_parameters(
+        self, plot: bool = False, save: Path | str | bool = False
+    ) -> None:
+        """Fit conditional probability tables for the learned structure.
+
+        Args:
+            plot: If True, render a graph of the learned network.
+            save: When truthy and path-like, save the figure to this path.
+        """
         print("Learning network parameters")
         self.model = BayesianNetwork(self.structure)
         self.model.fit(
@@ -53,7 +83,7 @@ class Survey:
         )
         self.model.get_cpds()
 
-        edge_params = {}
+        edge_params: dict[tuple[str, str], dict[str, float]] = {}
         for edge in self.model.edges():
             # get correlation between two variables
             cross_tab = pd.crosstab(self.samples[edge[0]], self.samples[edge[1]])
@@ -78,7 +108,19 @@ class Survey:
             if plot:
                 plt.show()
 
-    def fix_naming(self, samples):
+    def fix_naming(self, samples: pd.DataFrame) -> pd.DataFrame:
+        """Normalize column names and string values for model compatibility.
+
+        Replaces whitespace with underscores, drops special characters from
+        column names, collapses duplicate underscores, and trims underscores.
+        Also replaces spaces within string values.
+
+        Args:
+            samples: DataFrame with survey or sample data.
+
+        Returns:
+            A new DataFrame with normalized column names and string values.
+        """
         # replace all spaces in column names with underscores, otherwise pgmpy will throw an error when saving/loading model
         samples.columns = (
             samples.columns.str.lower()  # lowercase everything
@@ -93,25 +135,50 @@ class Survey:
         samples = samples.replace(" ", "_", regex=True)
         return samples
 
-    def save(self, path) -> None:
+    def save(self, path: Path | str) -> None:
+        """Write the Bayesian network to disk.
+
+        Args:
+            path: Destination filepath.
+        """
         print("Saving model")
         self.model.save(str(path))
 
-    def read(self, path) -> None:
+    def read(self, path: Path | str) -> None:
+        """Load a Bayesian network from disk into ``self.model``.
+
+        Args:
+            path: Source filepath of the saved model.
+        """
         print("Loading model")
         self.model = BayesianNetwork().load(str(path), n_jobs=1)
 
     def create_mapper(
         self,
-        variable,
-        mean,
-        std,
-        nan_value=-1,
-        plot=False,
-        save=False,
-        distribution="normal",
-        invert=False,
+        variable: str,
+        mean: float,
+        std: float,
+        nan_value: int = -1,
+        plot: bool = False,
+        save: Path | str | bool = False,
+        distribution: str = "normal",
+        invert: bool = False,
     ) -> None:
+        """Create a probabilistic mapper for a discrete-coded variable.
+
+        The mapper converts integer-coded categories into draws from a normal
+        distribution, with per-category probability mass taken from the data.
+
+        Args:
+            variable: Name of the variable present in ``self.samples``.
+            mean: Mean of the target normal distribution.
+            std: Standard deviation of the target normal distribution.
+            nan_value: Value in the data that indicates missing data.
+            plot: If True, display a visualization of the mapping.
+            save: When truthy and path-like, save the plot to this path.
+            distribution: Target distribution name. Only "normal" is supported.
+            invert: If True, invert the mapped values relative to the mean.
+        """
         assert distribution == "normal", "Only normal distribution is implemented"
         values = self.get(variable).values
         values = values[values != nan_value]
@@ -155,7 +222,18 @@ class Survey:
             "invert": invert,
         }
 
-    def apply_mapper(self, variable, values):
+    def apply_mapper(
+        self, variable: str, values: Iterable[int] | np.ndarray
+    ) -> list[float]:
+        """Apply a previously created mapper to a sequence of integer codes.
+
+        Args:
+            variable: Name of the variable whose mapper to use.
+            values: Integer-coded categories to be mapped.
+
+        Returns:
+            A list of mapped float values drawn from the configured distribution.
+        """
         values_ = []
         for value in values:
             assert variable in self.mappers, (
@@ -178,7 +256,16 @@ class Survey:
             values_.append(value_)
         return values_
 
-    def bin(self, data, question):
+    def bin(self, data: pd.Series | np.ndarray, question: str) -> pd.Series:
+        """Bin a numeric series according to predefined edges and labels.
+
+        Args:
+            data: Numeric data to bin.
+            question: Key into ``self.bins`` to retrieve bin edges and labels.
+
+        Returns:
+            A pandas Series of categorical labels matching the configured bins.
+        """
         values = self.bins[question]
         assert len(values["bins"]) == len(values["labels"]) + 1, (
             "Bin bounds must be one longer than labels"
@@ -192,22 +279,22 @@ class Survey:
     def sample(
         self,
         n: int,
-        evidence: list = [],
-        evidence_columns: list = None,
+        evidence: list[Any] = [],
+        evidence_columns: list[str] | None = None,
         method: str = "rejection",
-        show_progress: str = True,
-    ):
+        show_progress: bool = True,
+    ) -> pd.DataFrame:
         """Sample from the Bayesian network.
 
         Args:
-            n: number of samples to generate
-            evidence: list of evidence values (i.e., all samples will have these values ...)
-            evidence_columns: list of evidence column names (i.e., ... for these columns)
-            method: sampling method, only 'rejection' is implemented.
-            show_progress: whether to show progress bar
+            n: Number of samples to generate.
+            evidence: Evidence values to condition on (same length as columns).
+            evidence_columns: Column names corresponding to each evidence value.
+            method: Sampling method. Only "rejection" is implemented.
+            show_progress: Whether to show a progress bar during sampling.
 
         Returns:
-            DataFrame with samples.
+            A DataFrame with sampled values for all variables.
         """
         assert method == "rejection", "Only rejection sampling is implemented"
         if show_progress:
@@ -235,17 +322,31 @@ class Survey:
         return sample
 
     @property
-    def variables(self):
+    def variables(self) -> list[str]:
+        """List of variable names present in the survey dataset.
+
+        Returns:
+            A list of variable names.
+        """
         return self.survey.columns.tolist()
 
-    def get(self, question):
+    def get(self, question: str) -> pd.Series:
+        """Return a column from the samples by name.
+
+        Args:
+            question: Column name in ``self.samples``.
+
+        Returns:
+            A pandas Series representing the requested variable.
+        """
         return self.samples[question]
 
 
 class FarmerSurvey(Survey):
-    """Parse and process perfomed farmer survey in the Bhima subbasin."""
+    """Parse and process performed farmer survey in the Bhima subbasin."""
 
     def __init__(self) -> None:
+        """Initialize farmer survey binning rules and renames."""
         super().__init__()
         # self.password = password
         self.bins = {
@@ -300,7 +401,16 @@ class FarmerSurvey(Survey):
             "Some people live day by day and do not plan some years ahead in making financial decision for their household, how similar do you feel you are to those people?": "discount_rate",
         }
 
-    def load_survey(self, path):
+    def load_survey(self, path: Path | str) -> pd.DataFrame:
+        """Load the farmer survey data from a zipped Excel workbook.
+
+        Args:
+            path: Path to the ZIP file containing the Excel sheet
+                ``survey_results_cleaned.xlsx``.
+
+        Returns:
+            The loaded survey table as a DataFrame.
+        """
         # Read the survey data
         with zipfile.ZipFile(path) as zf:
             with zf.open(
@@ -309,7 +419,19 @@ class FarmerSurvey(Survey):
                 df = pd.read_excel(excel_file)
         return df
 
-    def parse(self, path):
+    def parse(self, path: Path | str) -> pd.DataFrame:
+        """Parse and preprocess the farmer survey into binned samples.
+
+        This computes composite scores, converts areas from acres to hectares,
+        selects relevant columns, bins configured variables, removes invalid
+        entries, and normalizes naming.
+
+        Args:
+            path: Path to the survey ZIP file.
+
+        Returns:
+            A cleaned and binned DataFrame stored on ``self.samples``.
+        """
         self.survey = self.load_survey(path)
         self.survey["perceived self efficacy"] = self.survey[
             [
@@ -368,6 +490,7 @@ class IHDSSurvey(Survey):
     """Parse and process Indian IHDS survey data."""
 
     def __init__(self) -> None:
+        """Initialize IHDS survey binning rules and renames."""
         super().__init__()
         self.bins = {
             "age": {
@@ -426,11 +549,30 @@ class IHDSSurvey(Survey):
             "Monthly consumption per capita Rs": "monthly_consumption_per_capita",
         }
 
-    def load_survey(self, path):
+    def load_survey(self, path: Path | str) -> pd.DataFrame:
+        """Load IHDS survey data from CSV.
+
+        Args:
+            path: CSV filepath.
+
+        Returns:
+            Loaded DataFrame.
+        """
         df = pd.read_csv(path)
         return df
 
-    def parse(self, path):
+    def parse(self, path: Path | str) -> pd.DataFrame:
+        """Parse and preprocess IHDS survey data into binned samples.
+
+        Applies filters on consumption, removes negative values, bins selected
+        columns, and normalizes naming.
+
+        Args:
+            path: CSV filepath.
+
+        Returns:
+            A cleaned and binned DataFrame stored on ``self.samples``.
+        """
         self.survey = self.load_survey(path)
         self.samples = self.survey[
             [
@@ -454,7 +596,24 @@ class IHDSSurvey(Survey):
         self.samples = self.fix_naming(self.samples)
         return self.samples
 
-    def build_crop_calendar_pivots(self, path, regions, size_labels):
+    def build_crop_calendar_pivots(
+        self,
+        path: Path | str,
+        regions: pd.DataFrame,
+        size_labels: Sequence[str],
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Build pivot tables of crop calendars by state and size class.
+
+        Args:
+            path: CSV filepath for IHDS survey.
+            regions: Regions table including columns ``state_name``,
+                ``district_n``, ``sub_dist_1``, and ``region_id``.
+            size_labels: Ordered labels for farm size classes.
+
+        Returns:
+            Two pivot tables: (rainfed, irrigated), each indexed by
+            (state_name, size_class) with columns representing crop calendars.
+        """
         # 1. Load full survey
         self.survey = self.load_survey(path)
 
@@ -618,7 +777,7 @@ class IHDSSurvey(Survey):
                 _df["size_class"], categories=size_labels, ordered=True
             )
 
-        def make_pivot(data):
+        def make_pivot(data: pd.DataFrame) -> pd.DataFrame:
             return data.pivot_table(
                 index=["state_name", "size_class"],
                 columns="crop_calendar",
@@ -630,14 +789,14 @@ class IHDSSurvey(Survey):
         crop_cal_per_district_rainfed = make_pivot(df_rainfed)
         crop_cal_per_district_irrigated = make_pivot(df_irrigated)
 
-        def _fill_empty_size_classes(block):
+        def _fill_empty_size_classes(block: pd.DataFrame) -> pd.DataFrame:
             empty = block.eq(0).all(axis=1)
             out = block.copy()
             out.loc[empty] = np.nan
             out = out.ffill().bfill()
             return out.astype(int)
 
-        def fill_empty_rows(pivot):
+        def fill_empty_rows(pivot: pd.DataFrame) -> pd.DataFrame:
             return pivot.groupby(level=0, group_keys=False).apply(
                 _fill_empty_size_classes
             )
@@ -654,9 +813,15 @@ class fairSTREAMModel(GEBModel):
     """Custom GEB model with fairSTREAM-specific build methods. Some methods override the standard GEB methods."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Forward arguments to the base ``GEBModel`` initializer."""
         super().__init__(*args, **kwargs)
 
-    def get_farm_size(self):
+    def get_farm_size(self) -> np.ndarray:
+        """Compute farm sizes based on subgrid farm cell counts.
+
+        Returns:
+            Array of farm sizes (m^2) for each farm/agent.
+        """
         farms = self.subgrid["agents/farmers/farms"]
         farm_ids, farm_size_n_cells = np.unique(farms, return_counts=True)
         farm_size_n_cells = farm_size_n_cells[farm_ids != -1]
@@ -669,11 +834,27 @@ class fairSTREAMModel(GEBModel):
     @build_method(depends_on=["setup_create_farms", "setup_regions_and_land_use"])
     def setup_farmer_crop_calendar(
         self,
-        seasons,
-        crop_variables,
-        irrigation_status_per_tehsil_fn,
-        crop_data_per_tehsil_fn,
+        seasons: Mapping[str, int],
+        crop_variables: Mapping[int, Mapping[str, int]],
+        irrigation_status_per_tehsil_fn: Path | str,
+        crop_data_per_tehsil_fn: Path | str,
     ) -> None:
+        """Assign farmer crop calendars and irrigation adaptations.
+
+        This method infers irrigation sources (canal/well) based on spatial
+        overlays and groundwater depth, estimates interest rates by size class
+        and region, and assigns crop rotations per farmer using IHDS-based
+        preferences and observed calendars.
+
+        Args:
+            seasons: Mapping of season name to start day index (day-of-year).
+            crop_variables: Mapping from crop ID to per-season variables; must
+                include keys like ``"season_#i_duration"`` (days).
+            irrigation_status_per_tehsil_fn: Excel file with irrigation
+                statistics per tehsil and size class.
+            crop_data_per_tehsil_fn: Excel file with crop holding counts per
+                tehsil and size class.
+        """
         n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
@@ -705,7 +886,19 @@ class fairSTREAMModel(GEBModel):
 
         # Set all farmers within cells with rivers to canal irrigation
 
-        def get_rivers(da, axis, **kwargs: Any):
+        def get_rivers(da: np.ndarray, axis: int, **kwargs: Any) -> np.ndarray:
+            """Reducer for detecting open water in coarsened land use arrays.
+
+            Args:
+                da: Input array of land-use classes.
+                axis: Axis along which to reduce.
+                **kwargs: Additional keyword arguments accepted by xarray's
+                    reduction API; unused here but kept for compatibility.
+
+            Returns:
+                A boolean array indicating whether any cell equals OPEN_WATER
+                along the reduced axis.
+            """
             from geb.hydrology.landcovers import OPEN_WATER
 
             return np.any(da == OPEN_WATER, axis=axis)
@@ -802,7 +995,7 @@ class fairSTREAMModel(GEBModel):
             "sub_dist_1"
         ].ffill()
 
-        def match_region(row, regions):
+        def match_region(row: pd.Series, regions: pd.DataFrame) -> int:
             region_id = regions.loc[
                 (regions["state_name"] == row["state_name"])
                 & (regions["district_n"] == row["district_n"])

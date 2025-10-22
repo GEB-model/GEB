@@ -6,12 +6,14 @@ and read simulation results.
 
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -43,6 +45,9 @@ from .workflows.utils import (
     run_sfincs_simulation,
     to_sfincs_datetime,
 )
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 def set_river_outflow_boundary_condition(
@@ -115,7 +120,7 @@ def set_river_outflow_boundary_condition(
 class SFINCSRootModel:
     """Builds and updates SFINCS model files for flood hazard modeling."""
 
-    def __init__(self, model: "GEBModel", name: str) -> None:
+    def __init__(self, model: GEBModel, name: str) -> None:
         """Initializes the SFINCSRootModel with a GEBModel and event name.
 
         Sets up the constant parts of the model (grid, mask, rivers, etc.),

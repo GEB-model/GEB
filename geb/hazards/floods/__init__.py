@@ -1,10 +1,12 @@
 """Class to setup, run, and post-process the SFINCS hydrodynamic model."""
 
+from __future__ import annotations
+
 import json
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
@@ -27,6 +29,9 @@ from .sfincs import (
     set_river_outflow_boundary_condition,
 )
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology as Hydrology
+
 
 class Floods:
     """The class that implements all methods to setup, run, and post-process hydrodynamic flood models.
@@ -36,9 +41,7 @@ class Floods:
         n_timesteps: The number of timesteps to keep in memory for discharge calculations (default is 10).
     """
 
-    def __init__(
-        self, model: "GEBModel", longest_flood_event_in_days: int = 10
-    ) -> None:
+    def __init__(self, model: GEBModel, longest_flood_event_in_days: int = 10) -> None:
         """Initializes the Floods class.
 
         Args:

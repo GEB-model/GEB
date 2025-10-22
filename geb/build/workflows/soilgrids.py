@@ -5,9 +5,9 @@ import numpy as np
 import xarray as xr
 
 from geb.workflows.io import get_window
+from geb.workflows.raster import resample_chunked
 
 from ..data_catalog import NewDataCatalog
-from .general import resample_chunked
 
 
 def load_soilgrids(

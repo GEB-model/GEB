@@ -1,6 +1,7 @@
 """Data adapter for HydroLAKES data."""
 
 import shutil
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -74,7 +75,11 @@ class MeritSword(Adapter):
             ).load()
             MERIT_Basins_to_SWORD.to_zarr(self.path)
 
-            shutil.rmtree(path=uncompressed_file)  # remove uncompressed folder
+            time.sleep(5)  # wait a bit to ensure all file handles are closed
+
+            shutil.rmtree(
+                path=uncompressed_file, ignore_errors=True
+            )  # remove uncompressed folder
 
         return self
 

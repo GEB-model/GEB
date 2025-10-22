@@ -1,5 +1,9 @@
 """Land surface module for GEB."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 import numpy.typing as npt
 import zarr
@@ -38,6 +42,9 @@ from .soil import (
     thetar_brakensiek,
     thetas_toth,
 )
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
 
 
 @njit(parallel=True, cache=True)
@@ -518,7 +525,7 @@ def land_surface_model(
 class LandSurface(Module):
     """Land surface module for GEB."""
 
-    def __init__(self, model: "GEBModel", hydrology: "Hydrology") -> None:
+    def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the potential evaporation module.
 
         Args:
@@ -774,6 +781,7 @@ class LandSurface(Module):
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
+        np.float64,
     ]:
         """Step function for the land surface module.
 
@@ -879,6 +887,14 @@ class LandSurface(Module):
         )
 
         pr_kg_per_m2_per_s = self.HRU.pr_kg_per_m2_per_s
+        pr_total_m3 = (
+            (
+                pr_kg_per_m2_per_s.astype(np.float64).mean(axis=0)
+                * self.HRU.var.cell_area
+            ).sum()  # kg/s
+            * 0.001  # to m3/s
+            * (24 * 3600.0)  # to m3/day
+        )
 
         (
             groundwater_abstraction_m3,
@@ -1049,8 +1065,9 @@ class LandSurface(Module):
         assert (reference_evapotranspiration_water_m >= 0).all()
 
         self.model.agents.crop_farmers.save_water_deficit(
-            reference_evapotranspiration_grass_m
+            reference_evapotranspiration_grass_m, pr_kg_per_m2_per_s
         )
+        self.model.agents.crop_farmers.save_pr(pr_kg_per_m2_per_s)
         self.report(locals())
 
         return (
@@ -1064,4 +1081,5 @@ class LandSurface(Module):
             total_water_demand_loss_m3,
             actual_evapotranspiration_m,
             sublimation_or_deposition_m,
+            pr_total_m3,
         )

@@ -181,7 +181,7 @@ def create_river_raster_from_river_lines(
     return river_raster
 
 
-def get_SWORD_translation_IDs_and_lenghts(
+def get_SWORD_translation_IDs_and_lengths(
     data_catalog: NewDataCatalog, rivers: gpd.GeoDataFrame
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
     """Get the SWORD reach IDs and lengths for each river based on the MERIT basin ID.
@@ -559,7 +559,7 @@ class Hydrography:
         COMID_IDs_raster.data = river_raster_LR
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
 
-        SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lenghts(
+        SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lengths(
             self.new_data_catalog, rivers
         )
 

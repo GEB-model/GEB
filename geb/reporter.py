@@ -1,20 +1,27 @@
 """This module contains the Reporter class, which is used to report data to disk."""
 
+from __future__ import annotations
+
 import datetime
 import re
 import shutil
 from operator import attrgetter
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import zarr.codecs
 import zarr.storage
 from honeybees.library.raster import coord_to_pixel
 
 from geb.module import Module
 from geb.store import DynamicArray
+from geb.typing import ArrayInt64
 from geb.workflows.methods import multi_level_merge
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 WATER_CIRCLE_REPORT_CONFIG = {
     "hydrology": {
@@ -148,7 +155,7 @@ def create_time_array(
 class Reporter:
     """This class is used to report data to disk."""
 
-    def __init__(self, model: "GEBModel", clean: bool) -> None:
+    def __init__(self, model: GEBModel, clean: bool) -> None:
         """The constructor for the Reporter class.
 
         Loops over the reporter configuration and creates the necessary files and data structures,
@@ -519,7 +526,11 @@ class Reporter:
         self.process_value(module_name, name, value, config)
 
     def process_value(
-        self, module_name: str, name: str, value: np.ndarray, config: dict
+        self,
+        module_name: str,
+        name: str,
+        value: np.ndarray | int | float | np.floating | np.integer,
+        config: dict,
     ) -> None:
         """Exports an array of values to the export folder.
 
@@ -541,20 +552,35 @@ class Reporter:
                 else:
                     value = self.hydrology.grid.decompress(value)
 
-                zarr_group = zarr.open_group(self.variables[module_name][name])
+                zarr_group: zarr.Group = zarr.open_group(
+                    self.variables[module_name][name]
+                )
+                time_array = zarr_group.get("time")
+                assert isinstance(time_array, zarr.Array), (
+                    "time_array must be a zarr.Array"
+                )
+                time_array: ArrayInt64 = time_array[:]
                 if (
-                    np.isin(self.model.current_time_unix_s, zarr_group["time"][:])
+                    np.isin(self.model.current_time_unix_s, time_array)
                     and value is not None
                 ):
-                    time_index = np.where(
-                        zarr_group["time"][:] == self.model.current_time_unix_s
-                    )[0].item()
+                    time_index = np.where(time_array == self.model.current_time_unix_s)[
+                        0
+                    ].item()
                     if "substeps" in config:
                         time_index_start = np.where(time_index)[0][0]
                         time_index_end = time_index_start + config["substeps"]
-                        zarr_group[name][time_index_start:time_index_end, ...] = value
+                        data_array = zarr_group[name]
+                        assert isinstance(data_array, zarr.Array), (
+                            f"{name} must be a zarr.Array"
+                        )
+                        data_array[time_index_start:time_index_end, ...] = value
                     else:
-                        zarr_group[name][time_index, ...] = value
+                        data_array = zarr_group[name]
+                        assert isinstance(data_array, zarr.Array), (
+                            f"{name} must be a zarr.Array"
+                        )
+                        data_array[time_index, ...] = value
                 return None
             else:
                 function, *args = config["function"].split(",")
@@ -660,6 +686,7 @@ class Reporter:
                         config["_time_index"].dtype
                     )
                 ).item()
+                assert isinstance(value, (np.ndarray, DynamicArray))
                 if value.size < ds[name][index].size:
                     print("Padding array with NaNs or -1 - temporary solution")
                     value = np.pad(
@@ -692,6 +719,7 @@ class Reporter:
             self.variables[module_name][name] = []
 
         if "substeps" in config:
+            assert isinstance(value, np.ndarray)
             assert len(value) == config["substeps"], (
                 f"Value for {module_name}.{name} has length {len(value)}, but {config['substeps']} substeps are expected."
             )

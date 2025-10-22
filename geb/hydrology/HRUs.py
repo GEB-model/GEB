@@ -1,9 +1,11 @@
 """This module contains classes and functions to handle Hydrological Response Units (HRUs) and grid cells."""
 
+from __future__ import annotations
+
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,11 +14,14 @@ import xarray as xr
 import zarr.storage
 from affine import Affine
 from numba import njit
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
 
 from geb.typing import ArrayFloat32, TwoDFloatArrayFloat32
 from geb.workflows.io import load_grid, open_zarr
 from geb.workflows.raster import compress
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 def determine_nearest_river_cell(
@@ -51,7 +56,7 @@ def determine_nearest_river_cell(
         grid_cells_above_threshold_mask
     )
 
-    tree: cKDTree = cKDTree(grid_cells_above_threshold_indices)
+    tree: KDTree = KDTree(grid_cells_above_threshold_indices)
     distances, indices_in_above = tree.query(valid_indices)
 
     nearest_indices_in_valid: npt.NDArray[np.int32] = (
@@ -226,7 +231,7 @@ class Grid(BaseVariables):
     Then, the mask is compressed by removing all masked cells, resulting in a compressed array.
     """
 
-    def __init__(self, data: "Data", model: "GEBModel") -> None:
+    def __init__(self, data: Data, model: GEBModel) -> None:
         """Initialize Grid class.
 
         Args:
@@ -493,15 +498,15 @@ class HRUs(BaseVariables):
         model: The GEB model.
     """
 
-    def __init__(self, data: "Data", model: "GEBModel") -> None:
+    def __init__(self, data: Data, model: GEBModel) -> None:
         """Initialize HRUs class.
 
         Args:
             data: Data class for model. Contains the various types of grids used in the GEB Model.
             model: The GEB model.
         """
-        self.data = data
-        self.model = model
+        self.data: Data = data
+        self.model: GEBModel = model
 
         subgrid_mask = load_grid(self.model.files["subgrid"]["mask"])
         submask_height, submask_width = subgrid_mask.shape
@@ -973,7 +978,7 @@ class HRUs(BaseVariables):
 class Data:
     """The base data class for the GEB model. This class contains the data for the normal grid, the HRUs, and has methods to convert between the grid and HRUs."""
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize Data class.
 
         Contains the data for the normal grid, the HRUs, and has methods to convert between the grid and HRUs.
@@ -1091,6 +1096,7 @@ class Data:
         ):  # check if data is simple float. Otherwise should be numpy array.
             outdata = HRU_data
         else:
+            assert isinstance(HRU_data, np.ndarray)
             if HRU_data.ndim == 1:
                 outdata = to_grid(
                     HRU_data,

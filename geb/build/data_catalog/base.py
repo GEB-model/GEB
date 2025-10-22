@@ -85,7 +85,7 @@ class Adapter:
         if self.cache == "global":
             geb_data_root: str | None = os.getenv(key="GEB_DATA_ROOT", default=None)
             if geb_data_root:
-                catalog_root = Path(geb_data_root) / ".." / "data"
+                catalog_root = Path(geb_data_root) / ".." / "datacatalog"
             else:
                 catalog_root = Path.home() / ".geb_cache"
 

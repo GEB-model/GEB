@@ -1,11 +1,13 @@
 """Storage classes for model data."""
 
+from __future__ import annotations
+
 import json
 import shutil
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 import geopandas as gpd
 import numpy as np
@@ -13,6 +15,9 @@ import numpy.typing as npt
 import pandas as pd
 
 from geb.workflows.io import load_geom
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 class DynamicArray:
@@ -246,7 +251,11 @@ class DynamicArray:
         return self._data.__array_interface__()
 
     def __array_ufunc__(
-        self, ufunc: Callable, method: str, *inputs: tuple[Any], **kwargs: dict[Any]
+        self,
+        ufunc: Callable,
+        method: str,
+        *inputs: tuple[Any],
+        **kwargs: dict[str, Any],
     ) -> Any:
         """
         Handle NumPy ufuncs applied to DynamicArray instances.
@@ -276,7 +285,11 @@ class DynamicArray:
             return self.__class__(result, max_n=self._data.shape[0])
 
     def __array_function__(
-        self, func: Callable, types: tuple[Any], args: tuple[Any], kwargs: dict[Any]
+        self,
+        func: Callable,
+        types: tuple[Any],
+        args: tuple[Any],
+        kwargs: dict[str, Any],
     ) -> Any:
         """
         Delegate NumPy __array_function__ calls to the underlying NumPy array.
@@ -302,7 +315,7 @@ class DynamicArray:
             func, modified_types, modified_args, kwargs
         )
 
-    def __setitem__(self, key: str, value: Any) -> None:
+    def __setitem__(self, key: int | slice, value: Any) -> None:
         """
         Set item(s) in the active portion of the array.
 
@@ -312,7 +325,7 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
-    def __getitem__(self, key: str) -> "DynamicArray | np.ndarray":
+    def __getitem__(self, key: int | slice) -> "DynamicArray | np.ndarray":
         """
         Retrieve item(s) or a sliced DynamicArray.
 
@@ -917,7 +930,7 @@ class Bucket:
         """
         self._validator = validator
 
-    def __iter__(self) -> tuple[str, Any]:
+    def __iter__(self) -> Iterator[tuple[str, Any]]:
         """Iterate over the items in the bucket.
 
         Yields:
@@ -1108,7 +1121,7 @@ class Store:
     This class is use to store and restore the model's state in a structured way.
     """
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize the Store with a reference to the model.
 
         Args:

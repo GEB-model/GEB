@@ -25,6 +25,10 @@ Groundwater submodule for hydrology in GEB.
 Provides groundwater simulation and ModFlow integration utilities.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 import numpy.typing as npt
 
@@ -35,6 +39,9 @@ from geb.workflows import balance_check
 from ..routing import get_channel_ratio
 from .model import ModFlowSimulation
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
+
 
 class GroundWater(Module):
     """Implements groundwater hydrology submodel, responsible for flow, abstraction, outflow, and percolation.
@@ -42,7 +49,7 @@ class GroundWater(Module):
     This model communicates with the ModFlow simulation to manage groundwater flow and storage.
     """
 
-    def __init__(self, model: "GEBModel", hydrology: "Hydrology") -> None:
+    def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the groundwater model.
 
         Args:

@@ -21,7 +21,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
@@ -31,6 +33,8 @@ from geb.module import Module
 from geb.workflows import balance_check
 from geb.workflows.io import load_grid
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
 OFF: int = 0
 LAKE: int = 1
 RESERVOIR: int = 2
@@ -291,7 +295,7 @@ class LakesReservoirs(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model: "GEBModel", hydrology: "Hydrology") -> None:
+    def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initializes the Lakes and Reservoirs module.
 
         Args:

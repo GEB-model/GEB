@@ -21,6 +21,10 @@
 
 """Hydrology submodule for the GEB model. Holds all hydrology related submodules."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from geb.hydrology.HRUs import Data
@@ -35,6 +39,9 @@ from .routing import Routing
 from .runoff_concentration import concentrate_runoff
 from .water_demand import WaterDemand
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
+
 
 class Hydrology(Data, Module):
     """The hydrological module of the GEB model.
@@ -48,7 +55,7 @@ class Hydrology(Data, Module):
         model: The GEB model instance.
     """
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Create the hydrology module."""
         Data.__init__(self, model)
         Module.__init__(self, model)
@@ -101,15 +108,7 @@ class Hydrology(Data, Module):
 
         if __debug__:
             prev_storage: np.float64 = self.get_current_storage()
-            influx: np.float64 = (
-                (
-                    self.HRU.pr_kg_per_m2_per_s.astype(np.float64).mean(axis=0)
-                    * self.HRU.var.cell_area
-                ).sum()  # kg/s
-                * 0.001  # to m3/s
-                * (24 * 3600.0)  # to m3/day
-            )  # m3
-            influx += (
+            influx = (
                 self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
             ).sum()
 
@@ -127,7 +126,11 @@ class Hydrology(Data, Module):
             total_water_demand_loss_m3,
             actual_evapotranspiration_m,
             sublimation_or_deposition_m,
+            pr_total_m3,
         ) = self.landsurface.step()
+
+        if __debug__:
+            influx += pr_total_m3
 
         interflow_m = self.to_grid(HRU_data=interflow_m, fn="weightedmean")
         runoff_m = self.to_grid(HRU_data=runoff_m, fn="weightedmean")

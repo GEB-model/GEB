@@ -21,13 +21,15 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+from __future__ import annotations
+
 import hashlib
 import json
 import os
 import platform
 from pathlib import Path
 from time import time
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import flopy
 import numpy as np
@@ -43,6 +45,9 @@ from geb.typing import (
     TwoDFloatArrayFloat64,
 )
 from geb.workflows.io import WorkingDirectory
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 MODFLOW_VERSION: str = "6.6.2"
 
@@ -225,7 +230,7 @@ class ModFlowSimulation:
 
     def __init__(
         self,
-        model: "GEBModel",
+        model: GEBModel,
         topography: npt.NDArray[np.float32],
         gt: tuple[float, float, float, float, float, float],
         specific_storage: npt.NDArray[np.float32],

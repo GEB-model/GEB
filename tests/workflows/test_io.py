@@ -96,6 +96,13 @@ def encode_decode(
 
 
 def test_calculate_scaling() -> None:
+    """Test the calculate_scaling function with various precision and range scenarios.
+
+    Tests encoding/decoding with different precisions, offsets, and data ranges.
+    Verifies that the scaling calculations work correctly for signed and unsigned
+    integer types, and that edge cases like zero values and extreme ranges are handled.
+    Also tests that ValueError is raised for impossible precision/range combinations.
+    """
     for precision in [0.1, 0.01, 0.001, 0.0001]:
         data = ((np.random.rand(100) - 0.5) * 20).astype(np.float32)
         encode_decode(data, -10, 100, offset=0, precision=precision)
@@ -155,6 +162,13 @@ def test_calculate_scaling() -> None:
 
 
 def test_io() -> None:
+    """Test the to_zarr function with different data array configurations.
+
+    Tests saving xarray DataArrays to Zarr format with different coordinate
+    systems and dimensions. Verifies that arrays with spatial coordinates,
+    time dimensions, and other dimensions can be properly saved with CRS
+    information and fill values.
+    """
     x = np.linspace(-5, 5, 10)
     y = np.linspace(10, 0, 10)
 
@@ -187,6 +201,13 @@ def test_io() -> None:
 
 
 def test_get_window() -> None:
+    """Test the get_window function with various bounding box and buffer scenarios.
+
+    Tests window selection from coordinate arrays with different bounds,
+    buffer values, and edge cases. Verifies that proper slices are returned
+    for full windows, partial windows, and windows with buffers. Also tests
+    error handling for invalid buffer values and out-of-bounds coordinates.
+    """
     x = np.linspace(-5, 5, 11, dtype=np.int32)
     y = np.linspace(10, 0, 11, dtype=np.int32)
     values = np.arange(x.size * y.size).reshape(y.size, x.size).astype(np.int32)
@@ -231,7 +252,12 @@ def test_get_window() -> None:
     assert (da_slice.y.values == y[0:4]).all()
 
     with pytest.raises(ValueError, match="buffer must be an integer"):
-        window = get_window(da.x, da.y, bounds, buffer=0.1)
+        window = get_window(
+            da.x,
+            da.y,
+            bounds,
+            buffer=0.1,  # ty: ignore[invalid-argument-type]
+        )
     with pytest.raises(ValueError, match="buffer must be greater than or equal to 0"):
         window = get_window(da.x, da.y, bounds, buffer=-1)
 
@@ -329,8 +355,8 @@ def zarr_file(varname: str) -> Path:
 
     periods: int = 100
 
-    times = pd.date_range("2000-01-01", periods=periods, freq="D")
-    data = np.empty((periods, size, size), dtype=np.int32)
+    times: pd.DatetimeIndex = pd.date_range("2000-01-01", periods=periods, freq="D")
+    data: npt.NDArray[np.float32] = np.empty((periods, size, size), dtype=np.float32)
     for i in range(periods):
         data[i][:] = i
     ds: xr.Dataset = xr.Dataset(
@@ -347,6 +373,7 @@ def zarr_file(varname: str) -> Path:
         encoding={
             varname: {
                 "chunks": (1, size, size),
+                "fill_value": np.nan,
             }
         },
         consolidated=False,
@@ -406,7 +433,7 @@ def test_read_timestep_async() -> None:
     assert (data0 == 0).all()
     assert (data1 == 1).all()
     assert (data2 == 2).all()
-    assert data0.dtype == np.int32
+    assert data0.dtype == np.float32
 
     sleep(3)
 
@@ -469,7 +496,7 @@ def test_read_timestep_sync() -> None:
     assert (data0 == 0).all()
     assert (data1 == 1).all()
     assert (data2 == 2).all()
-    assert data0.dtype == np.int32
+    assert data0.dtype == np.float32
     assert data0.shape == (1, 1000, 1000)
 
     # Test reading the same timestep twice
@@ -561,3 +588,19 @@ def test_read_multiple_timesteps() -> None:
 
     reader_sync.close()
     shutil.rmtree(temperature_file)
+
+
+def test_asyncreader_rapid_access() -> None:
+    """Test rapid access of timesteps using AsyncGriddedForcingReader.
+
+    This test verifies that the reader can handle rapid sequential access of timesteps
+    so no sleeps in between reads.
+    """
+    temperature_file: Path = zarr_file("temperature")
+    reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
+        temperature_file, variable_name="temperature", asynchronous=True
+    )
+    for day in range(1, 11):
+        data = reader.read_timestep(datetime(2000, 1, day))
+        assert (data == day - 1).all()
+    reader.close()
