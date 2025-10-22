@@ -3,7 +3,6 @@
 Most of these tests are quite heavy and therefore skipped on GitHub Actions.
 """
 
-import json
 import os
 import shutil
 from datetime import date, datetime, time, timedelta
@@ -29,7 +28,6 @@ from geb.cli import (
 )
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.model import GEBModel
-from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
 from geb.workflows.io import WorkingDirectory, open_zarr
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -474,32 +472,9 @@ def test_multiverse() -> None:
             days=int(forecast_n_days) + 5
         )
 
-        input_folder: Path = Path(config["general"]["input_folder"])
-        files: Path = input_folder / "files.json"
-        files = json.loads(files.read_text())
-
-        precipitation: xr.DataArray = open_zarr(
-            input_folder / files["other"]["climate/pr_hourly"]
-        ).drop_encoding()
-        forecast: xr.DataArray = precipitation.sel(
-            time=slice(
-                forecast_date,
-                forecast_end_date,
-            )
-        )
-
-        # add member dimension
-        forecast: xr.DataArray = forecast.expand_dims(dim={"member": [0]}, axis=0)
-
-        forecasts_folder: Path = Path("data") / "forecasts"
-        forecasts_folder.mkdir(parents=True, exist_ok=True)
-
-        forecast.to_zarr(
-            forecasts_folder / forecast_date.strftime("%Y%m%dT%H%M%S.zarr"), mode="w"
-        )
-
         # inititate a forecast after three days
         config["general"]["forecasts"]["times"] = [forecast_date]
+        config["general"]["forecasts"]["provider"] = "test"
 
         # add flood event during the forecast period
         events: list = [
@@ -524,13 +499,62 @@ def test_multiverse() -> None:
         for i in range(forecast_after_n_days):
             geb.step()
 
+        hashes: dict[str, dict[str, int]] = {}
+        for bucket_name, bucket in geb.store.buckets.items():
+            hashes[bucket_name] = {}
+            for var_name, var in vars(bucket).items():
+                if isinstance(var, np.ndarray):
+                    hashes[bucket_name][var_name] = hash(var.tobytes())
+
+        # setup forecast data
+        for forecast_variable, loader in geb.forcing.loaders.items():
+            if not loader.supports_forecast:
+                continue
+            da: xr.DataArray = open_zarr(
+                geb.files["other"][f"climate/{forecast_variable}"]
+            ).drop_encoding()
+            forecast_da: xr.DataArray = da.sel(
+                time=slice(
+                    forecast_date,
+                    forecast_end_date,
+                )
+            ).chunk({"time": -1})
+
+            # add member dimension
+            forecast_da: xr.DataArray = forecast_da.expand_dims(
+                dim={"member": [0]}, axis=0
+            )
+
+            forecasts_folder: Path = (
+                geb.input_folder
+                / "other"
+                / "forecasts"
+                / config["general"]["forecasts"]["provider"]
+            )
+            forecasts_folder.mkdir(parents=True, exist_ok=True)
+
+            forecast_da.to_zarr(
+                forecasts_folder
+                / (
+                    forecast_variable
+                    + "_"
+                    + forecast_date.strftime("%Y%m%dT%H%M%S.zarr")
+                ),
+                mode="w",
+            )
+
         mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
             return_mean_discharge=True, forecast_issue_datetime=forecast_date
         )
 
-        end_date = round_up_to_start_of_next_day_unless_midnight(
-            pd.to_datetime(forecast.time[-1].item()).to_pydatetime()
-        ).date()
+        for bucket_name, bucket in geb.store.buckets.items():
+            for var_name, var in vars(bucket).items():
+                if isinstance(var, np.ndarray):
+                    assert hash(var.tobytes()) == hashes[bucket_name][var_name], (
+                        f"Bucket {bucket_name} variable {var_name} has changed after multiverse run."
+                    )
+
+        end_date = pd.to_datetime(forecast_da.time[-1].item()).to_pydatetime().date()
         steps_in_forecast = (end_date - geb.current_time.date()).days
 
         for i in range(steps_in_forecast):
