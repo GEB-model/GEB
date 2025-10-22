@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../models"
+		}
+	],
+	"settings": {
+		"autoDocstring.docstringFormat": "google-notypes",
+		"notebook.defaultFormatter": "charliermarsh.ruff"
+	}
+}
