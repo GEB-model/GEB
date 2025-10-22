@@ -581,8 +581,19 @@ class Households(AgentBaseClass):
 
         return ensemble_damage_maps
 
-    def create_flood_probability_maps(self, strategy=1):
-        """Creates flood probability maps based on the ensemble of flood maps for different warning strategies."""
+    def create_flood_probability_maps(
+        self, strategy=1
+    ) -> dict[Tuple[pd.Timestamp, int], xr.DataArray]:
+        """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
+
+        Args:
+            strategy: Identifier of the warning strategy (1 for water level ranges with measures,
+                2 for energy substations, 3 for vulnerable/emergency facilities).
+
+        Returns:
+            Dict[Tuple[datetime, int], xr.DataArray]: Dictionary mapping (day, range_id) tuples
+                to probability maps (xarray DataArray) for that forecast day and water level range.
+        """
         # Load the ensemble of flood maps
         ensemble_flood_maps = self.load_ensemble_flood_maps()
 
@@ -635,6 +646,7 @@ class Households(AgentBaseClass):
                 probability_maps[(day, range_id)] = probability
 
         return probability_maps
+        # Right now I am not using this for anything, but maybe useful later to replace the file loading
 
     def create_damage_probability_maps(self) -> None:
         """Creates an object-based (buildings) probability map based on the ensemble of damage maps."""
@@ -867,8 +879,19 @@ class Households(AgentBaseClass):
             driver="GPKG",
         )
 
-    def update_buildings_w_critical_infrastructure(self, critical_infrastructure):
-        """Updates the buildings layer with the attributes from the critical infrastructure layer based on spatial intersection."""
+    def update_buildings_w_critical_infrastructure(
+        self, critical_infrastructure
+    ) -> gpd.GeoDataFrame:
+        """Update buildings layer with critical infrastructure attributes via spatial intersection.
+
+        Args:
+            critical_infrastructure: Iterable of GeoDataFrames representing different sets of
+                critical infrastructure (e.g., vulnerable facilities, emergency facilities).
+
+        Returns:
+            gpd.GeoDataFrame: Copy of buildings with attributes from critical infrastructure
+                layers where spatial intersections occurred.
+        """
         buildings = self.var.buildings.copy()
 
         for critical_infrastructure_type in critical_infrastructure:
@@ -1140,7 +1163,20 @@ class Households(AgentBaseClass):
 
         Enforces single-message rule and allows only upward escalation:
         none -> measures -> evacuate
-        Evacuation only sent if evacuate is True *and* lead_time <= 48h.
+        Evacuation only sent if evacuate is True and lead_time <= 48h.
+
+        Args:
+            target_households: GeoDataFrame of household points targeted by the warning, must
+                contain a 'pointid' column with the household index.
+            measures: Set of recommended protective measures to communicate (strings).
+            evacuate: Whether evacuation should be advised for this warning.
+            source: Identifier of the source that triggered the warning.
+            communication_efficiency: Fraction (0-1) of targeted households that can be reached.
+            lt_threshold_evacuation: Lead time threshold (hours) below which evacuation warnings
+                are allowed.
+
+        Returns:
+            int: Number of households that were successfully warned.
         """
         n_target_households = len(target_households)
         if n_target_households == 0:
@@ -1203,87 +1239,22 @@ class Households(AgentBaseClass):
 
         return n_warned_households
 
-    def warning_communication2(self, target_households, range_id, warning_range=0.35):
-        # need to get the range measures from the other functions
-        """Communicates a warning to households based on the communication efficiency.
+    def household_decision_making(self, responsive_ratio=0.7):
+        """Simulate household emergency response decisions based on warnings and lead time.
 
-        changes risk perception --> to be moved to the update risk perception function;
-        and return the number of households that were warned.
+        Notes:
+            Implementation times for measures are loaded from the configuration file.
+            Households can only take measures they haven't already implemented.
+            If evacuation is recommended but lead time is insufficient for all measures,
+            the function attempts to fit in as many in-place measures as possible before
+            evacuating.
 
         Args:
-            target_households: The households that are targeted to receive the warning.
-
-        Returns:
-            The number of households that received the warning.
-        """
-        print("Communicating the warning...")
-
-        # Get the measures and evacuation advice from the dict with wl ranges and measures
-        wlranges_and_measures = self.var.wlranges_and_measures
-        measures = wlranges_and_measures[range_id]["measure"]
-        evacuate = wlranges_and_measures[range_id]["evacuate"]
-
-        # Total number of target households
-        n_target_households = len(target_households)
-
-        # Get lead time in hours
-        start_time = self.model.config["hazards"]["floods"]["events"][0][
-            "start_time"
-        ].date()
-        current_time = self.model.current_time.date()
-        lead_time = (start_time - current_time).total_seconds() / 3600
-
-        # If no target households, return 0 warned households
-        if n_target_households == 0:
-            return 0
-
-        # Get random indices to change the warning state
-        n_warned_households = int(n_target_households * warning_range)
-        position_indices = np.random.choice(
-            n_target_households, n_warned_households, replace=False
-        )
-        selected_households = target_households.iloc[position_indices]
-
-        warned_ids = []
-        for _, row in selected_households.iterrows():
-            # Get the 'original' index of the household point
-            household_id = row["pointid"]
-
-            # If the household has already evacuated, do not communicate the warning
-            if self.var.evacuated[household_id] == 1:
-                continue
-
-            # Get current recommended measures as a set
-            received = self.var.recommended_measures[household_id]
-            # this should be the set where you store the recommended measures
-
-            # If the household did not get the warning yet, issue warning with recommended measures
-            # (if received already contains the measures, do not warn again)
-            if not received.issuperset(measures):
-                self.var.warning_reached[household_id] = 1
-                self.var.recommended_measures[household_id].update(measures)
-                warned_ids.append(household_id)
-
-            # If evacuation is advised and household did not get the evacuation warning yet, and lead time ≤ 48h, issue evacuation warning
-            if evacuate and "evacuate" not in received and lead_time <= 48:
-                self.var.warning_reached[household_id] = 1
-                self.var.recommended_measures[household_id].add("evacuate")
-                warned_ids.append(household_id)
-
-        print(f"Warning targeted to reach {n_target_households} households.")
-        print(f"Warning reached {len(set(warned_ids))} households.")
-
-        return n_warned_households
-        # Need to add the evacuation warning from second warning strategy in case the leadtime is <48h and there is no evacuation warning coming from the first strategy
-
-    def household_decision_making(self, responsive_ratio=0.7):
-        """Summary.
-
-        This function simulates the decision-making process of households that received warnings,
-        based on recommended measures, lead time, and implementation times.
+            responsive_ratio: Threshold for household responsiveness (0-1). Households with
+                response_probability below this value are considered responsive and will
+                act on warnings. Default is 0.7.
         """
         print("Running emergency response decision-making for households...")
-        # Need to fix description of functions
 
         # Initialize an empty list to log actions taken
         actions_log = []
@@ -1299,7 +1270,6 @@ class Households(AgentBaseClass):
         evacuation_time = implementation_times["evacuate"]
 
         # Filter households that did not evacuate, were warned and are responsive
-        # (AND FILTER OUT WHO TOOK ACTION, BUT THERE IS THE PROBLEM WITH EVACUATION...)
         not_evacuated_ids = self.var.evacuated == 0
         warned_ids = self.var.warning_reached == 1
         responsive_ids = self.var.response_probability < responsive_ratio
@@ -1773,21 +1743,11 @@ class Households(AgentBaseClass):
 
         return damages_do_not_adapt, damages_adapt
 
-    def flood(self, flood_depth: xr.DataArray) -> float:
-        if self.config["warning_response"]:
-            self.change_household_locations()  # ideally this should be done in the setup_population when building the model
-        self.get_critical_infrastructure()
-        self.critical_infrastructure_warning_strategy()
-        self.water_level_warning_strategy()
-        self.household_decision_making()
-
-        print("test")
-
     def flood(self, flood_map: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
 
         Args:
-            flood_depth: The flood map containing water levels for the flood event [m].
+            flood_map: The flood map containing water levels for the flood event [m].
 
         Returns:
             The total flood damages for the event for all assets and land use types.
@@ -1804,9 +1764,9 @@ class Households(AgentBaseClass):
         assert len(household_points) == self.var.risk_perception.size
 
         household_points["protect_building"] = False
-        household_points.loc[
-            self.var.risk_perception.data >= 0.1, "protect_building"
-        ] = True  # need to change this
+
+        # household_points.loc[self.var.risk_perception.data >= 0.1, "protect_building"] = True
+        # this risk perception no longer used in the warning model
 
         buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
             buildings, household_points, how="left", exclusive=True
