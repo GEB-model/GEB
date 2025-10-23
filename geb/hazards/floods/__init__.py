@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +17,8 @@ import zarr
 from shapely.geometry import shape
 from shapely.geometry.point import Point
 
+from geb.module import Module
+from geb.typing import ArrayFloat32
 from geb.workflows.io import load_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
@@ -33,7 +35,7 @@ if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology as Hydrology
 
 
-class Floods:
+class Floods(Module):
     """The class that implements all methods to setup, run, and post-process hydrodynamic flood models.
 
     Args:
@@ -48,8 +50,10 @@ class Floods:
             model: The GEB model instance.
             longest_flood_event_in_days: The number of timesteps to keep in memory for discharge calculations (default is 10).
         """
-        self.model = model
-        self.config = (
+        super().__init__(model)
+
+        self.model: GEBModel = model
+        self.config: dict[str, Any] = (
             self.model.config["hazards"]["floods"]
             if "floods" in self.model.config["hazards"]
             else {}
@@ -58,10 +62,34 @@ class Floods:
         self.HRU = model.hydrology.HRU
 
         if self.model.simulate_hydrology:
-            self.hydrology = model.hydrology
-            self.longest_flood_event_in_days = longest_flood_event_in_days
-            self.discharge_per_timestep = deque(maxlen=self.longest_flood_event_in_days)
-            self.runoff_m_per_timestep = deque(maxlen=self.longest_flood_event_in_days)
+            self.hydrology: Hydrology = model.hydrology
+            self.longest_flood_event_in_days: int = longest_flood_event_in_days
+
+            self.var.discharge_per_timestep: deque[ArrayFloat32] = deque(
+                maxlen=self.longest_flood_event_in_days
+            )
+            self.var.runoff_m_per_timestep: deque[ArrayFloat32] = deque(
+                maxlen=self.longest_flood_event_in_days
+            )
+
+    @property
+    def name(self) -> str:
+        """The name of the module."""
+        return "floods"
+
+    def spinup(self) -> None:
+        """Spinup method for the Floods module.
+
+        Currently, this method does nothing as flood simulations do not require spinup.
+        """
+        pass
+
+    def step(self) -> None:
+        """Steps the Floods module.
+
+        Currently, this method does nothing as flood simulations are handled in the HazardDriver.
+        """
+        pass
 
     def get_utm_zone(self, region_file: Path | str) -> str:
         """Determine the UTM zone based on the centroid of the region geometry.
@@ -168,18 +196,11 @@ class Floods:
             ValueError: If the forcing method is unknown.
         """
         # Save the flood depth to a zarr file
-        if (
-            self.model.multiverse_name
-        ):  # in case of multiverse simulations, save in subfolder
-            sfincs_simulation_name = (
-                self.model.forecast_issue_date
-                + " - "
-                + self.model.multiverse_name
-                + " - "
-                + f"{start_time.strftime(format='%Y%m%dT%H%M%S')} - {end_time.strftime(format='%Y%m%dT%H%M%S')}"
+        sfincs_simulation_name: str = f"{start_time.strftime(format='%Y%m%dT%H%M%S')} - {end_time.strftime(format='%Y%m%dT%H%M%S')}"
+        if self.model.multiverse_name:
+            sfincs_simulation_name: str = (
+                self.model.multiverse_name + "/" + sfincs_simulation_name
             )
-        else:
-            sfincs_simulation_name = f"{start_time.strftime(format='%Y%m%dT%H%M%S')} - {end_time.strftime(format='%Y%m%dT%H%M%S')}"
 
         simulation: SFINCSSimulation = sfincs_model.create_simulation(
             simulation_name=sfincs_simulation_name,
@@ -188,30 +209,30 @@ class Floods:
             write_figures=self.config.get("write_figures", False),
         )
 
-        n_timesteps: int = min(
-            self.longest_flood_event_in_days, len(self.discharge_per_timestep)
-        )
-        routing_substeps: int = self.discharge_per_timestep[0].shape[0]
+        routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]
         if self.config["forcing_method"] == "headwater_points":
             forcing_grid = self.hydrology.grid.decompress(
-                np.vstack(self.discharge_per_timestep)
+                np.vstack(self.var.discharge_per_timestep)
             )
         elif self.config["forcing_method"] == "runoff":
             forcing_grid = self.hydrology.grid.decompress(
-                np.vstack(self.runoff_m_per_timestep)
+                np.vstack(self.var.runoff_m_per_timestep)
+            )
+        else:
+            raise ValueError(
+                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'runoff'."
             )
 
-        # convert the discharge grid to an xarray DataArray
+        substep_size: timedelta = self.model.timestep_length / routing_substeps
+
+        # convert the forcing grid to an xarray DataArray
         forcing_grid: xr.DataArray = xr.DataArray(
             data=forcing_grid,
             coords={
                 "time": pd.date_range(
-                    end=self.model.current_time
-                    + self.model.timestep_length
-                    - self.model.timestep_length / routing_substeps,
-                    periods=n_timesteps * routing_substeps,
-                    freq=self.model.timestep_length / routing_substeps,
-                    inclusive="right",
+                    end=self.model.current_time + (routing_substeps - 1) * substep_size,
+                    periods=len(self.var.discharge_per_timestep) * routing_substeps,
+                    freq=substep_size,
                 ),
                 "y": self.hydrology.grid.lat,
                 "x": self.hydrology.grid.lon,
@@ -219,7 +240,15 @@ class Floods:
             dims=["time", "y", "x"],
             name="forcing",
         )
-        forcing_grid = forcing_grid.rio.write_crs(self.model.crs)
+
+        # ensure that we have forcing data for the entire event period
+        assert (
+            pd.to_datetime(forcing_grid.time.values[-1]).to_pydatetime() + substep_size
+            >= end_time
+        )
+        assert pd.to_datetime(forcing_grid.time.values[0]).to_pydatetime() <= start_time
+
+        forcing_grid: xr.DataArray = forcing_grid.rio.write_crs(self.model.crs)
 
         if self.config["forcing_method"] == "headwater_points":
             simulation.set_headwater_forcing_from_grid(
@@ -529,13 +558,15 @@ class Floods:
         saves the current discharge at the beginning of each timestep,
         so it can be used later when setting up the SFINCS model.
         """
-        self.discharge_per_timestep.append(
+        self.var.discharge_per_timestep.append(
             self.hydrology.grid.var.discharge_m3_s_per_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
 
     def save_runoff_m(self) -> None:
         """Saves the current runoff for the current timestep."""
-        self.runoff_m_per_timestep.append(self.model.hydrology.grid.var.total_runoff_m)
+        self.var.runoff_m_per_timestep.append(
+            self.model.hydrology.grid.var.total_runoff_m
+        )  # this is a deque, so it will automatically remove the oldest runoff
 
     @property
     def discharge_spinup_ds(self) -> xr.DataArray:

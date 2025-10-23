@@ -34,7 +34,7 @@ class Agents(Module):
         Args:
             model: The GEB model instance.
         """
-        Module.__init__(self, model)
+        super().__init__(model)
 
         self.households = Households(model, self, 0.1)
         self.crop_farmers = CropFarmers(model, self, 0.1)
