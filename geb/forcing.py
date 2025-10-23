@@ -209,7 +209,7 @@ class ForcingLoader(ABC):
 
     @in_forecast_mode.setter
     def in_forecast_mode(self, value: bool) -> None:
-        self._in_forecast_mode: bool = value
+        self._in_forecast_mode = value
 
     @property
     def supports_forecast(self) -> bool:
