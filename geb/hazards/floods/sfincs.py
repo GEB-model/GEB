@@ -6,12 +6,14 @@ and read simulation results.
 
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -43,6 +45,9 @@ from .workflows.utils import (
     run_sfincs_simulation,
     to_sfincs_datetime,
 )
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 def set_river_outflow_boundary_condition(
@@ -81,7 +86,7 @@ def set_river_outflow_boundary_condition(
     tstart, tstop = sf.get_model_time()
 
     # Define the time range (e.g., 1 month of hourly data)
-    time_range = pd.date_range(start=tstart, end=tstop, freq="H")
+    time_range = pd.date_range(start=tstart, end=tstop, freq="h")
 
     # Create DataFrame with constant elevation value
     elevation_time_series_constant = pd.DataFrame(
@@ -115,7 +120,7 @@ def set_river_outflow_boundary_condition(
 class SFINCSRootModel:
     """Builds and updates SFINCS model files for flood hazard modeling."""
 
-    def __init__(self, model: "GEBModel", name: str) -> None:
+    def __init__(self, model: GEBModel, name: str) -> None:
         """Initializes the SFINCSRootModel with a GEBModel and event name.
 
         Sets up the constant parts of the model (grid, mask, rivers, etc.),
@@ -188,6 +193,7 @@ class SFINCSRootModel:
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
+        setup_outflow: bool = True,
     ) -> "SFINCSRootModel":
         """Build a SFINCS model.
 
@@ -211,6 +217,7 @@ class SFINCSRootModel:
             depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
+            setup_outflow: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
 
         Returns:
             The SFINCSRootModel instance with the built model.
@@ -282,13 +289,14 @@ class SFINCSRootModel:
             river_len=0,
         )
 
-        sf.setup_river_outflow(
-            rivers=rivers.to_crs(sf.crs),
-            keep_rivers_geom=True,
-            river_upa=0,
-            river_len=0,
-            btype="waterlevel",
-        )
+        if setup_outflow:
+            sf.setup_river_outflow(
+                rivers=rivers.to_crs(sf.crs),
+                keep_rivers_geom=True,
+                river_upa=0,
+                river_len=0,
+                btype="waterlevel",
+            )
 
         # find outflow points and save for later use
         outflow_points = river_source_points(
@@ -812,50 +820,28 @@ class SFINCSSimulation:
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
 
-    def set_precipitation_forcing_grid(
+    def set_runoff_forcing(
         self,
-        current_water_storage_grid: xr.DataArray,
-        max_water_storage_grid: xr.DataArray,
-        saturated_hydraulic_conductivity_grid: xr.DataArray,
-        precipitation_grid: xr.DataArray,
+        runoff_m: xr.DataArray,
     ) -> None:
         """Sets up precipitation forcing for the SFINCS model from a gridded dataset.
 
         Args:
-            current_water_storage_grid: xarray DataArray containing current soil water capacity [m].
-            max_water_storage_grid: xarray DataArray containing maximum water storage [m].
-            saturated_hydraulic_conductivity_grid: xarray DataArray containing saturated hydraulic conductivity [m/s].
-            precipitation_grid: xarray DataArray containing precipitation values in kg/m²/s (equivalent to mm/s).
+            runoff_m: xarray DataArray containing runoff values in m per time step.
         """
-        assert precipitation_grid.raster.crs is not None, (
-            "precipitation_grid should have a crs"
-        )
+        assert runoff_m.raster.crs is not None, "precipitation_grid should have a crs"
         assert (
-            pd.to_datetime(precipitation_grid.time[0].item()).to_pydatetime()
-            <= self.start_time
+            pd.to_datetime(runoff_m.time[0].item()).to_pydatetime() <= self.start_time
         )
-        assert (
-            pd.to_datetime(precipitation_grid.time[-1].item()).to_pydatetime()
-            >= self.end_time
-        )
+        assert pd.to_datetime(runoff_m.time[-1].item()).to_pydatetime() >= self.end_time
 
-        precipitation_grid: xr.DataArray = precipitation_grid.sel(
+        runoff_m: xr.DataArray = runoff_m.sel(
             time=slice(self.start_time, self.end_time)
         )
 
         self.sfincs_model.setup_precip_forcing_from_grid(
-            precip=(precipitation_grid * 3600).to_dataset(name="precip")
-        )  # convert from kg/m2/s to mm/h
-
-        # self._setup_infiltration_capacity(
-        #     max_water_storage=max_water_storage_grid,
-        #     current_water_storage=current_water_storage_grid,
-        #     saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_grid,
-        # )
-        # warning
-        logging.warning(
-            "Infiltration capacity setup is currently disabled due to an issue."
-        )
+            precip=(runoff_m * 1000).to_dataset(name="precip")
+        )  # convert from m/h to mm/h for SFINCS
 
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
@@ -893,85 +879,6 @@ class SFINCSSimulation:
     #         )
 
     #     self.sfincs_model.write_forcing()
-
-    def _setup_infiltration_capacity(
-        self,
-        max_water_storage: xr.DataArray,
-        current_water_storage: xr.DataArray,
-        saturated_hydraulic_conductivity: xr.DataArray,
-        initial_substractiion: float = 0.0,
-    ) -> None:
-        """Set up infiltration parameters in the SFINCS model.
-
-        Uses the curve number method with recovery.
-
-        Args:
-            sfincs_model: SfincsModel object to update.
-            max_water_storage: xarray DataArray containing maximum water storage [m].
-            current_water_storage: xarray DataArray containing soil water capacity [m].
-            saturated_hydraulic_conductivity: xarray DataArray containing saturated hydraulic conductivity [m/s].
-            initial_substractiion: Initial abstraction ratio [-].
-                Is removed from rainfall before infiltration. Defaults to 0.0.
-        """
-        remaining_water_storage = max_water_storage - current_water_storage
-        remaining_water_storage = remaining_water_storage.compute()
-
-        # maximum water storage (smax in SFINCS)
-        max_water_storage = max_water_storage.raster.reproject_like(
-            self.sfincs_model.grid, method="average"
-        )
-        assert not np.isnan(max_water_storage.values[self.active_cells]).any(), (
-            "max_water_storage contains NaN values in active cells"
-        )
-        max_water_storage = max_water_storage.to_dataset(name="smax")
-        self.sfincs_model.set_grid(max_water_storage, name="smax")
-        self.sfincs_model.set_config("smaxfile", "sfincs.smax")
-
-        # remaining water storage (seff in SFINCS)
-        remaining_water_storage = remaining_water_storage.raster.reproject_like(
-            self.sfincs_model.grid, method="nearest"
-        )
-        assert not np.isnan(remaining_water_storage.values[self.active_cells]).any(), (
-            "current_water_storage contains NaN values in active cells"
-        )
-        remaining_water_storage = remaining_water_storage.to_dataset(name="seff")
-        self.sfincs_model.set_grid(remaining_water_storage, name="seff")
-        self.sfincs_model.set_config("sefffile", "sfincs.seff")
-
-        # saturated hydraulic conductivity (ks in SFINCS)
-        saturated_hydraulic_conductivity = (
-            (
-                saturated_hydraulic_conductivity.raster.reproject_like(
-                    self.sfincs_model.grid, method="average"
-                )
-            )
-            * 3600
-            * 1000
-        )  # convert from m/s to mm/h for SFINCS
-        assert not np.isnan(
-            saturated_hydraulic_conductivity.values[self.active_cells]
-        ).any(), "saturated_hydraulic_conductivity contains NaN values in active cells"
-
-        saturated_hydraulic_conductivity: xr.Dataset = (
-            saturated_hydraulic_conductivity.to_dataset(name="ks")
-        )
-        self.sfincs_model.set_grid(
-            saturated_hydraulic_conductivity, name="ks"
-        )  # convert from m/s to mm/h
-        self.sfincs_model.set_config("ksfile", "sfincs.ks")
-
-        # initial abstraction ratio
-        assert initial_substractiion >= 0.0, "initial_substraction must be non-negative"
-        assert initial_substractiion < 1.0, "initial_substraction must be < 1.0"
-
-        self.sfincs_model.set_config("sfacinf", initial_substractiion)
-
-        # remove constant infiltration rate if present
-        self.sfincs_model.config.pop("qinf", None)
-
-        # write grids and config
-        self.sfincs_model.write_grid(data_vars=["smax", "seff", "ks"])
-        self.sfincs_model.write_config()
 
     def run(self, gpu: bool | str) -> None:
         """Runs the SFINCS simulation.
@@ -1065,7 +972,7 @@ class SFINCSSimulation:
         Returns:
             True if the SFINCS model has an outflow boundary condition, False otherwise.
         """
-        return (self.sfincs_model.grid["msk"] == 2).any()
+        return (self.sfincs_model.grid["msk"] == 2).any().item()
 
     @property
     def active_cells(self) -> xr.DataArray:
@@ -1084,12 +991,3 @@ class SFINCSSimulation:
         """
         self.sfincs_model.read_results()
         return self.sfincs_model.results["cumprcp"].isel(timemax=-1)
-
-    def get_cumulative_infiltration(self) -> xr.DataArray:
-        """Reads the cumulative infiltration from the SFINCS model results.
-
-        Returns:
-            An xarray DataArray containing the cumulative infiltration.
-        """
-        self.sfincs_model.read_results()
-        return self.sfincs_model.results["cuminf"].isel(timemax=-1)

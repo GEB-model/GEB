@@ -1,3 +1,5 @@
+"""Crops data processing and setup methods for GEB."""
+
 import json
 import os
 from pathlib import Path
@@ -24,6 +26,7 @@ class Crops:
     """Contains all build methods for setting up crops for GEB."""
 
     def __init__(self) -> None:
+        """Initialize the Crops module."""
         pass
 
     @build_method(depends_on=[])
@@ -32,6 +35,32 @@ class Crops:
         crop_data: dict,
         type: str = "MIRCA2000",
     ) -> None:
+        """Validate and set crop data used by the model.
+
+        Requires crop data to contain specific fields depending on the type.
+
+        For both types, the following fields are required:
+        - name
+        - reference_yield_kg_m2
+        - is_paddy (whether the crop is a paddy irrigated)
+        - rd_rain (maximum root depth for rainfed crops)
+        - rd_irr (maximum root depth for irrigated crops)
+        - crop_group_number (adaptation level to drought, 0-5). See WOFOST documentation.
+
+        For 'GAEZ' type, the following additional fields are required:
+        - d1, d2a, d2b, d3a, d3b, d4 (lengths of growth stages)
+        - KyT, Ky1, Ky2a, Ky2b, Ky3a, Ky3b, Ky4 (crop coefficients for growth stages)
+
+        For 'MIRCA2000' type, the following additional fields are required:
+        - a, b, P0, P1 (parameters for yield response to water)
+        - l_ini, l_dev, l_mid, l_late (lengths of growth stages)
+        - kc_initial, kc_mid, kc_end (crop coefficients for growth stages)
+
+        Args:
+            crop_data: Dictionary keyed by crop id with metadata for each crop.
+            type: Source/type of crop parameters ('MIRCA2000' or 'GAEZ').
+
+        """
         assert type in ("MIRCA2000", "GAEZ")
         for crop_id, crop_values in crop_data.items():
             assert "name" in crop_values
@@ -129,19 +158,20 @@ class Crops:
         crop_prices: str | int | float,
         translate_crop_names: dict | None = None,
         adjust_currency: bool = False,
-    ):
-        """Processes crop price data, performing adjustments, variability determination, and interpolation/extrapolation as needed.
+    ) -> dict:
+        """Process crop price inputs into model-ready time series or constants.
 
         Args:
-            crop_prices: If 'FAO_stat', fetches crop price data from FAO statistics. Otherwise, it can be a constant value for crop prices.
-            translate_crop_names: A dictionary mapping crop names to their translated names.
-            adjust_currency: If True, adjusts the crop prices based on currency conversion rates.
+            crop_prices: Either 'FAO_stat' to fetch FAO data, a path to JSON prices,
+                or a constant numeric price (USD/kg, nominal for the years in question).
+            translate_crop_names: Optional mapping from model crop name to list/alias used in source.
+            adjust_currency: Whether to convert to USD using currency conversion when available.
 
         Returns:
-            A dictionary containing processed crop data in a time series format or as a constant value.
+            A dictionary with either type='time_series' and per-region series or type='constant'.
 
         Raises:
-            ValueError: If crop_prices is neither a valid file path nor an integer/float.
+            ValueError: If crop_prices is not a valid path, number, or 'FAO_stat'.
 
         Notes:
             The function performs the following steps:
@@ -177,10 +207,6 @@ class Crops:
             GLOBIOM_regions["ISO3"] = GLOBIOM_regions["Country"].map(
                 GLOBIOM_NAME_TO_ISO3
             )
-            # For my personal branch
-            GLOBIOM_regions.loc[
-                GLOBIOM_regions["Country"] == "Switzerland", "Region37"
-            ] = "EU_MidWest"
             assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
             ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
@@ -667,7 +693,12 @@ class Crops:
 
         return costs
 
-    def inter_and_extrapolate_prices(self, data, unique_regions, adjust_currency=False):
+    def inter_and_extrapolate_prices(
+        self,
+        data: pd.DataFrame,
+        unique_regions: pd.DataFrame,
+        adjust_currency: bool = False,
+    ) -> pd.DataFrame:
         """Interpolates and extrapolates crop prices for different regions based on the given data and predefined crop categories.
 
         Args:
@@ -748,8 +779,15 @@ class Crops:
         self,
         cultivation_costs: Optional[Union[str, int, float]] = 0,
         translate_crop_names: Optional[Dict[str, str]] = None,
-        adjust_currency=False,
+        adjust_currency: bool = False,
     ) -> None:
+        """Set cultivation costs per crop and region for the model run.
+
+        Args:
+            cultivation_costs: 'FAO_stat', file path, or constant (USD/kg, nominal).
+            translate_crop_names: Optional mapping to aggregate/rename source crop columns.
+            adjust_currency: Whether to convert to USD using currency conversion when available.
+        """
         cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
             translate_crop_names=translate_crop_names,
@@ -770,8 +808,15 @@ class Crops:
         self,
         crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
         translate_crop_names: Optional[Dict[str, str]] = None,
-        adjust_currency=False,
+        adjust_currency: bool = False,
     ) -> None:
+        """Set crop prices per crop and region for the model run.
+
+        Args:
+            crop_prices: 'FAO_stat', file path, or constant (USD/kg, nominal).
+            translate_crop_names: Optional mapping to aggregate/rename source crop columns.
+            adjust_currency: Whether to convert to USD using currency conversion when available.
+        """
         crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,
@@ -781,7 +826,12 @@ class Crops:
         self.set_dict(crop_prices, name="crops/cultivation_costs")
 
     @build_method(depends_on=[])
-    def determine_crop_area_fractions(self, resolution="5-arcminute") -> None:
+    def determine_crop_area_fractions(self, resolution: str = "5-arcminute") -> None:
+        """Compute MIRCA crop area fractions and summarize per region.
+
+        Args:
+            resolution: Resolution tag for plotting/output naming.
+        """
         output_folder = "plot/mirca_crops"
         os.makedirs(output_folder, exist_ok=True)
 
@@ -920,10 +970,11 @@ class Crops:
     @build_method(depends_on=[])
     def setup_farmer_crop_calendar_multirun(
         self,
-        reduce_crops=False,
-        replace_base=False,
-        export=False,
+        reduce_crops: bool = False,
+        replace_base: bool = False,
+        export: bool = False,
     ) -> None:
+        """Generate crop calendars for multiple years for multirun scenarios."""
         years = [2000, 2005, 2010, 2015]
         nr_runs = 20
 
@@ -936,12 +987,24 @@ class Crops:
     @build_method(depends_on=["setup_create_farms"])
     def setup_farmer_crop_calendar(
         self,
-        year=2000,
-        reduce_crops=False,
-        replace_base=False,
-        minimum_area_ratio=0.01,
-        replace_crop_calendar_unit_code={},
+        year: int = 2000,
+        reduce_crops: bool = False,
+        replace_base: bool = False,
+        minimum_area_ratio: float = 0.01,
+        replace_crop_calendar_unit_code: dict = {},
     ) -> None:
+        """Build per-farmer crop calendars for a single reference year.
+
+        Args:
+            year: Reference year (calendar year).
+            reduce_crops: If True, reduce the number of crops per calendar based on area.
+            replace_base: If True, replace base crop definitions with alternatives.
+            minimum_area_ratio: Threshold for considering a crop present in a unit.
+            replace_crop_calendar_unit_code: Optional mapping to replace MIRCA unit codes.
+
+        Raises:
+            ValueError: If no rotations are found for a crop in a unit or no valid neighbor data is found.
+        """
         n_farmers = self.array["agents/farmers/id"].size
 
         MIRCA_unit_grid = xr.open_dataarray(
@@ -1087,9 +1150,10 @@ class Crops:
                     ]
                     all_farmers_assigned.append(farmer_idx)
 
-        def check_crop_calendar(crop_calendar_per_farmer) -> None:
+        def check_crop_calendar(crop_calendar_per_farmer: np.ndarray) -> None:
+            """Validate that no overlapping crops exist per farmer calendar."""
             # this part asserts that the crop calendar is correctly set up
-            # particulary that no two crops are planted at the same time
+            # particularly that no two crops are planted at the same time
             for farmer_crop_calender in crop_calendar_per_farmer:
                 farmer_crop_calender = farmer_crop_calender[
                     farmer_crop_calender[:, -1] != -1
@@ -1141,7 +1205,11 @@ class Crops:
         POTATOES_FLOOD = 35
 
         # Manual replacement of certain crops
-        def replace_crop(crop_calendar_per_farmer, crop_values, replaced_crop_values):
+        def replace_crop(
+            crop_calendar_per_farmer: np.ndarray,
+            crop_values: np.ndarray | list[int],
+            replaced_crop_values: np.ndarray | list[int],
+        ) -> np.ndarray:
             # Find the most common crop value among the given crop_values
             crop_instances = crop_calendar_per_farmer[:, :, 0][
                 np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
@@ -1183,7 +1251,9 @@ class Crops:
 
             return crop_calendar_per_farmer
 
-        def unify_crop_variants(crop_calendar_per_farmer, target_crop):
+        def unify_crop_variants(
+            crop_calendar_per_farmer: np.ndarray, target_crop: int
+        ) -> np.ndarray:
             # Create a mask for all entries whose first value == target_crop
             mask = crop_calendar_per_farmer[..., 0] == target_crop
 
@@ -1209,8 +1279,10 @@ class Crops:
             return crop_calendar_per_farmer
 
         def insert_other_variant_crop(
-            crop_calendar_per_farmer, base_crops, resistant_crops
-        ):
+            crop_calendar_per_farmer: np.ndarray,
+            base_crops: int | list[int],
+            resistant_crops: tuple[int, int] | list[int] | np.ndarray,
+        ) -> np.ndarray:
             # find crop rotation mask
             base_crop_rotation_mask = (
                 crop_calendar_per_farmer[:, :, 0] == base_crops
@@ -1303,7 +1375,7 @@ class Crops:
             unique_values, counts = np.unique(values, return_counts=True)
 
             # this part asserts that the crop calendar is correctly set up
-            # particulary that no two crops are planted at the same time
+            # particularly that no two crops are planted at the same time
             for farmer_crop_calender in crop_calendar_per_farmer:
                 farmer_crop_calender = farmer_crop_calender[
                     farmer_crop_calender[:, -1] != -1
@@ -1371,14 +1443,31 @@ class Crops:
 
     def assign_crops(
         self,
-        crop_calendar,
-        farmer_locations,
-        farmer_mirca_units,
-        year,
-        MIRCA_unit_grid,
-        minimum_area_ratio,
-        replace_crop_calendar_unit_code={},
-    ):
+        crop_calendar: dict,
+        farmer_locations: np.ndarray,
+        farmer_mirca_units: np.ndarray,
+        year: int,
+        MIRCA_unit_grid: xr.DataArray,
+        minimum_area_ratio: float,
+        replace_crop_calendar_unit_code: dict = {},
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Assign crops and irrigation status to farmers for a given year.
+
+        Args:
+            crop_calendar: Mapping from MIRCA unit to list of rotations (fraction, matrix).
+            farmer_locations: Array of farmer pixel coordinates (x, y) order.
+            farmer_mirca_units: Array mapping farmer index to MIRCA unit id.
+            year: Year to select fractions from raster inputs.
+            MIRCA_unit_grid: Grid of MIRCA unit ids aligned with fraction rasters.
+            minimum_area_ratio: Minimum fraction for a crop to be considered when sampling.
+            replace_crop_calendar_unit_code: Optional remapping for MIRCA unit ids.
+
+        Returns:
+            A tuple of (farmer_crops, farmer_irrigated) arrays.
+
+        Raises:
+            ValueError: If no valid neighbor data is found while assigning crops.
+        """
         # Define the directory and file paths
         data_dir = self.preprocessing_dir / "crops" / "MIRCA2000"
         # Load the DataArrays

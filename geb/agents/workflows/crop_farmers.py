@@ -4,10 +4,9 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit, prange
 
+from geb.hydrology.evapotranspiration import get_root_ratios
 from geb.hydrology.soil import (
-    get_fraction_easily_available_soil_water,
     get_infiltration_capacity,
-    get_root_ratios,
 )
 
 
@@ -401,21 +400,19 @@ def withdraw_groundwater(
 @njit(cache=True, inline="always")
 def get_potential_irrigation_consumption_m(
     topwater: np.float32,
-    available_infiltration: np.float32,
-    potential_evapotranspiration: np.float32,
-    root_depth: np.float32,
+    root_depth_m: np.float32,
     soil_layer_height: np.float32,
     field_capacity,
     wilting_point,
     w,
     ws,
     arno_beta: np.float32,
-    saturated_hydraulic_conductivity: np.float32,
+    saturated_hydraulic_conductivity_m_per_day: np.float32,
     fraction_irrigated_field: np.float32,
     max_paddy_water_level_farmer,
     crop_group: np.float32,
     is_paddy: np.bool_,
-    minimum_effective_root_depth: np.float32,
+    minimum_effective_root_depth_m: np.float32,
     depletion_factor: np.float32 = np.float32(0.5),
 ) -> np.float32:
     assert np.float32(0) <= fraction_irrigated_field <= np.float32(1)
@@ -425,14 +422,14 @@ def get_potential_irrigation_consumption_m(
         # make sure all fields are paddy irrigateds
         # always irrigate to 0.05 m for paddy fields
         potential_irrigation_consumption_m = max(
-            max_paddy_water_level_farmer - (topwater + available_infiltration),
+            max_paddy_water_level_farmer - topwater,
             np.float32(0),
         )
     else:
         # use a minimum root depth of 25 cm, following AQUACROP recommendation
         # see: Reference manual for AquaCrop v7.1 – Chapter 3
         effective_root_depth: np.float32 = np.maximum(
-            minimum_effective_root_depth, root_depth
+            minimum_effective_root_depth_m, root_depth_m
         )
         root_ratios: npt.NDArray[np.float32] = get_root_ratios(
             effective_root_depth,
@@ -447,11 +444,14 @@ def get_potential_irrigation_consumption_m(
         # often refered to as TAW (see AquaCrop v7.1, Chapter 3)
         maximum_available_water = field_capacity_root_zone - wilting_point_root_zone
 
-        # calculate the depletion coefficient (P_{sto}), which is the fraction of
-        # total available water (TAW) at which stomata start to close
-        p: np.float32 = get_fraction_easily_available_soil_water(
-            crop_group, potential_evapotranspiration
-        )
+        # # calculate the depletion coefficient (P_{sto}), which is the fraction of
+        # # total available water (TAW) at which stomata start to close
+        # p: np.float32 = get_fraction_easily_available_soil_water(
+        #     crop_group, potential_evapotranspiration
+        # )
+        # TODO: Re-enable some dynamic p but not based on PET since this gives
+        # issues when used in irrigation
+        p = np.float32(0.5)
 
         readily_available_water_root_zone = maximum_available_water * p
 
@@ -463,9 +463,7 @@ def get_potential_irrigation_consumption_m(
             potential_irrigation_consumption_m = np.float32(0)
 
         infiltration_capacity = get_infiltration_capacity(
-            w=w,
-            ws=ws,
-            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity,
+            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_m_per_day,
         )
         potential_irrigation_consumption_m = np.minimum(
             potential_irrigation_consumption_m, infiltration_capacity
@@ -486,16 +484,14 @@ def get_gross_irrigation_demand_m3(
     cell_area: npt.NDArray[np.float32],
     crop_map: npt.NDArray[np.int32],
     topwater: npt.NDArray[np.float32],
-    available_infiltration: npt.NDArray[np.float32],
-    potential_evapotranspiration: npt.NDArray[np.float32],
-    root_depth: npt.NDArray[np.float32],
+    root_depth_m: npt.NDArray[np.float32],
     soil_layer_height: npt.NDArray[np.float32],
     field_capacity: npt.NDArray[np.float64],
     wilting_point: npt.NDArray[np.float64],
     w: npt.NDArray[np.float64],
     ws: npt.NDArray[np.float64],
     arno_beta: npt.NDArray[np.float32],
-    saturated_hydraulic_conductivity: npt.NDArray[np.float32],
+    saturated_hydraulic_conductivity_m_per_day: npt.NDArray[np.float32],
     remaining_irrigation_limit_m3: npt.NDArray[np.float32],
     irrigation_limit_reset_day_index: npt.NDArray[np.int32],
     cumulative_water_deficit_m3: npt.NDArray[np.float32],
@@ -504,7 +500,7 @@ def get_gross_irrigation_demand_m3(
     paddy_irrigated_crops: npt.NDArray[np.bool_],
     current_crop_calendar_rotation_year_index: npt.NDArray[np.int32],
     max_paddy_water_level: npt.NDArray[np.float32],
-    minimum_effective_root_depth: np.float32,
+    minimum_effective_root_depth_m: np.float32,
 ) -> tuple[
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
@@ -538,23 +534,21 @@ def get_gross_irrigation_demand_m3(
 
             consumption_m: np.float32 = get_potential_irrigation_consumption_m(
                 topwater=topwater[field],
-                available_infiltration=available_infiltration[field],
-                potential_evapotranspiration=potential_evapotranspiration[field],
-                root_depth=root_depth[field],
+                root_depth_m=root_depth_m[field],
                 soil_layer_height=soil_layer_height[:, field],
                 field_capacity=field_capacity[:, field],
                 wilting_point=wilting_point[:, field],
                 w=w[:, field],
                 ws=ws[:, field],
                 arno_beta=arno_beta[field],
-                saturated_hydraulic_conductivity=saturated_hydraulic_conductivity[
+                saturated_hydraulic_conductivity_m_per_day=saturated_hydraulic_conductivity_m_per_day[
                     :, field
                 ],
                 fraction_irrigated_field=fraction_irrigated_field[farmer],
                 max_paddy_water_level_farmer=max_paddy_water_level[farmer],
                 crop_group=crop_group_numbers[crop],
                 is_paddy=paddy_irrigated_crops[crop],
-                minimum_effective_root_depth=minimum_effective_root_depth,
+                minimum_effective_root_depth_m=minimum_effective_root_depth_m,
             )
 
             assert consumption_m < 1

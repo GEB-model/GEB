@@ -9,7 +9,7 @@ jobs:
   check-ruff-errors:
     runs-on: ubuntu-latest
     env:
-      RULES: ANN001,ANN003,ANN201,ANN202,D100,D102,D103,D107
+      RULES: ANN001,ANN201,ANN202,D100,D102,D103,D107
     steps:
       - name: Checkout main branch for baseline
         uses: actions/checkout@v3

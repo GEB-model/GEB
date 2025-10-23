@@ -2,7 +2,7 @@ import calendar
 
 import numpy as np
 
-from ..hydrology.landcover import SEALED
+from ..hydrology.landcovers import SEALED
 from .general import AgentBaseClass, downscale_volume
 
 
@@ -77,7 +77,7 @@ class Industry(AgentBaseClass):
                     self.grid.gt,
                     water_demand.values,
                     self.grid.mask,
-                    self.model.hydrology.grid_to_HRU_uncompressed,
+                    self.model.hydrology.mapping_grid_to_HRU_uncompressed,
                     downscale_mask,
                     self.HRU.var.land_use_ratio,
                 )
@@ -110,7 +110,7 @@ class Industry(AgentBaseClass):
                     self.grid.gt,
                     water_consumption.values,
                     self.grid.mask,
-                    self.model.hydrology.grid_to_HRU_uncompressed,
+                    self.model.hydrology.mapping_grid_to_HRU_uncompressed,
                     downscale_mask,
                     self.HRU.var.land_use_ratio,
                 )

@@ -13,6 +13,12 @@ from .testconfig import tmp_folder
 
 
 def test_1D_dynamic_array_slice() -> None:
+    """Test slicing operations on a 1D DynamicArray.
+
+    Tests various slicing operations including full slice, single element access,
+    range slicing, boolean indexing, and array indexing. Verifies that slicing
+    returns appropriate types (DynamicArray vs ndarray) and preserves metadata.
+    """
     a = DynamicArray(np.array([1, 2, 3]), max_n=10)
 
     sliced = a[:]
@@ -39,6 +45,12 @@ def test_1D_dynamic_array_slice() -> None:
 
 
 def test_2D_dynamic_array_slice() -> None:
+    """Test slicing operations on a 2D DynamicArray.
+
+    Tests various 2D slicing operations including full slices, column/row selection,
+    boolean indexing, and array indexing. Verifies that slicing returns appropriate
+    types and correctly handles extra dimensions metadata.
+    """
     a = DynamicArray(
         np.array([[1, 2], [3, 4], [5, 6]]), max_n=10, extra_dims_names=["extra"]
     )
@@ -85,6 +97,11 @@ def test_2D_dynamic_array_slice() -> None:
 
 
 def test_dynamic_array_copy() -> None:
+    """Test the copy functionality of DynamicArray.
+
+    Verifies that copying creates an independent instance with the same data
+    and metadata. Tests that modifications to the original do not affect the copy.
+    """
     a = DynamicArray(
         np.array([[1, 2], [3, 4], [5, 6]]), max_n=10, extra_dims_names=["extra"]
     )
@@ -102,6 +119,13 @@ def test_dynamic_array_copy() -> None:
 
 
 def test_dynamic_array_operations() -> None:
+    """Test comprehensive DynamicArray operations and functionality.
+
+    Tests initialization, arithmetic operations (addition, subtraction, multiplication,
+    division, power), comparison operations, array methods, reshaping, size management,
+    and various numpy ufunc operations. Verifies that operations preserve metadata
+    and behave correctly with scalars and other arrays.
+    """
     # Test initialization with max_n
     a = DynamicArray(np.array([1, 2, 3]), max_n=10)
     a_ = DynamicArray(dtype=np.int64, n=3, max_n=10)

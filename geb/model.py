@@ -8,6 +8,7 @@ from time import time
 from types import TracebackType
 from typing import Any, Literal, overload
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -23,12 +24,11 @@ from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
 from geb.workflows.dt import round_up_to_start_of_next_day_unless_midnight
-from geb.workflows.io import open_zarr
+from geb.workflows.io import load_geom, open_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
 from .hydrology import Hydrology
-from .hydrology.HRUs import load_geom
 
 
 class GEBModel(Module, HazardDriver, ABM_Model):
@@ -89,7 +89,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
 
         self.store = Store(self)
-        self.forcing = Forcing(self)
 
         self.evaluator = Evaluate(self)  # initialize the evaluator
 
@@ -393,13 +392,13 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.in_spinup = in_spinup
         self.simulate_hydrology = simulate_hydrology
 
-        self.regions = load_geom(self.files["geom"]["regions"])
+        self.regions: gpd.GeoDataFrame = load_geom(self.files["geom"]["regions"])
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
         self.timestep_length = timestep_length
 
-        self.hydrology = Hydrology(self)
+        self.hydrology: Hydrology = Hydrology(self)
 
         HazardDriver.__init__(self)
         ABM_Model.__init__(
@@ -422,9 +421,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             self._verify_spinup_time_range()
 
         if self.simulate_hydrology:
+            self.forcing: Forcing = Forcing(self)
             self.hydrology.routing.set_router()
             self.hydrology.groundwater.initalize_modflow_model()
-            self.hydrology.soil.set_global_variables()
+            self.hydrology.landsurface.set_global_variables()
 
         if create_reporter:
             self.reporter = Reporter(self, clean=clean_report_folder)
@@ -832,10 +832,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         ):
             Hydrology.finalize(self.hydrology)
 
-            from geb.workflows.io import all_async_readers
-
-            for reader in all_async_readers:
-                reader.close()
+            # Close all async forcing readers
+            if hasattr(self, "forcing"):
+                for forcing_loader in self.forcing._loaders.values():
+                    if hasattr(forcing_loader, "reader"):
+                        forcing_loader.reader.close()
 
     def __enter__(self) -> "GEBModel":
         """Enters the context of the model.

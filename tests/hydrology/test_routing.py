@@ -67,6 +67,11 @@ def test_update_node_kinematic_2() -> None:
 
 
 def test_update_node_kinematic_no_flow() -> None:
+    """Test kinematic wave update with zero flow conditions.
+
+    Verifies that when all inflows are zero, the discharge
+    is set to the minimum value (1e-30) to avoid numerical issues.
+    """
     Q_new, evaporation_m3_s = update_node_kinematic(
         Qin=0,
         Qold=0,
@@ -81,35 +86,12 @@ def test_update_node_kinematic_no_flow() -> None:
     assert math.isclose(Q_new, 1e-30, abs_tol=1e-12)
 
 
-# def test_storage_discharge_conversions():
-#     # one should be the inverse of the other
-#     river_alpha = np.array([100, 200, 300, 300])
-#     river_beta = np.array([0.1, 0.2, 0.3, 0.3])
-#     river_storage = np.array([1000, 2000, 3000, 3000])
-#     river_length = np.array([2, 4, 6, 6])
-#     waterbody_id = np.array([-1, -1, -1, 0])
-
-#     discharge = calculate_discharge_from_storage(
-#         river_storage=river_storage,
-#         river_length=river_length,
-#         river_alpha=river_alpha,
-#         river_beta=river_beta,
-#     )
-
-#     storage_check = calculate_river_storage_from_discharge(
-#         discharge=discharge,
-#         river_length=river_length,
-#         river_alpha=river_alpha,
-#         river_beta=river_beta,
-#         waterbody_id=waterbody_id,
-#     )
-
-#     assert np.allclose(river_storage[:-1], storage_check[:-1], rtol=1e-9)
-#     # storage should be 0 for the waterbody
-#     assert storage_check[-1] == 0
-
-
 def test_get_channel_ratio() -> None:
+    """Test calculation of channel ratio for routing.
+
+    Verifies that the channel ratio is correctly computed
+    based on channel width and length parameters.
+    """
     river_width = np.array([1, 2, 3, 4, 5])
     river_length = np.array([1000, 2000, 3000, 4000, 5000])
     cell_area = 10000
@@ -181,6 +163,11 @@ def test_accuflux(
     mask: npt.NDArray[np.bool_],
     Q_initial: npt.NDArray[np.float32],
 ) -> None:
+    """Test accumulation flux calculation for routing.
+
+    Verifies that the accuflux function correctly accumulates
+    water fluxes through the routing network over time.
+    """
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
 
     router: Accuflux = Accuflux(
@@ -236,6 +223,11 @@ def test_accuflux_with_longer_dt(
     mask: npt.NDArray[np.bool_],
     Q_initial: npt.NDArray[np.float32],
 ) -> None:
+    """Test accumulation flux with longer time step.
+
+    Verifies that accuflux correctly handles longer time steps
+    in the routing calculations.
+    """
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router: Accuflux = Accuflux(
         dt=15,
@@ -290,6 +282,11 @@ def test_accuflux_with_sideflow(
     ldd: npt.NDArray[np.uint8],
     Q_initial: npt.NDArray[np.float32],
 ) -> None:
+    """Test accumulation flux with side flow inputs.
+
+    Verifies that accuflux correctly incorporates side flow
+    contributions into the routing calculations.
+    """
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router = Accuflux(
         dt=1,
@@ -348,6 +345,11 @@ def test_accuflux_with_water_bodies(
     ldd: npt.NDArray[np.uint8],
     Q_initial: npt.NDArray[np.float32],
 ) -> None:
+    """Test accumulation flux with water bodies.
+
+    Verifies that accuflux correctly handles routing through
+    water bodies like lakes and reservoirs.
+    """
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
 
     waterbody_id = np.array(
@@ -436,6 +438,11 @@ def test_kinematic(
     ldd: npt.NDArray[np.uint8],
     Q_initial: npt.NDArray[np.float32],
 ) -> None:
+    """Test kinematic wave routing implementation.
+
+    Verifies that the kinematic wave routing correctly
+    simulates water flow through river networks.
+    """
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router: KinematicWave = KinematicWave(
         river_network=river_network,
