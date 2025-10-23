@@ -259,7 +259,7 @@ class ForcingLoader(ABC):
                 forecast_data: npt.NDArray[np.float32] = self.ds_forecast.isel(
                     time=slice(None, self.n - substeps_to_forecast)
                 ).values
-                data: npt.NDArray[np.float32] = np.concat(
+                data: npt.NDArray[np.float32] = np.concatenate(
                     [non_forecast_data, forecast_data], axis=0
                 )
             else:
