@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from geb.typing import ArrayFloat32
+
 from ..hydrology.landcovers import SEALED
 from .general import AgentBaseClass, downscale_volume
 
@@ -52,14 +54,29 @@ class Industry(AgentBaseClass):
 
     @property
     def name(self) -> str:
+        """The name of the module.
+
+        Used to save data to disk.
+
+        Returns:
+            The name of the module.
+        """
         return "agents.industry"
 
     def spinup(self) -> None:
+        """Set initial water demand and efficiency during spinup."""
         water_demand, efficiency = self.update_water_demand()
         self.var.current_water_demand = water_demand
         self.var.current_efficiency = efficiency
 
-    def update_water_demand(self):
+    def update_water_demand(self) -> tuple[ArrayFloat32, ArrayFloat32]:
+        """Update the water demand for industry at the HRU level.
+
+        Returns:
+            A tuple containing:
+            - The updated water demand (in m3/day).
+            - The updated efficiency [0-1].
+        """
         if self.config.get("disable_water_demand", False):
             self.model.logger.info(
                 "[Industry] Water demand and efficiency set to 0 due to config setting."
@@ -150,7 +167,17 @@ class Industry(AgentBaseClass):
             self.var.last_water_demand_update = self.model.current_time
             return water_demand, efficiency
 
-    def water_demand(self):
+    def water_demand(self) -> tuple[ArrayFloat32, ArrayFloat32]:
+        """Get the current water demand for industry at the HRU level.
+
+        Updates the water demand only if data for this timestep is available.
+        Otherwise, assumes the last known water demand.
+
+        Returns:
+            A tuple containing:
+            - The current water demand (in m3/day).
+            - The current efficiency [0-1].
+        """
         if (
             np.datetime64(self.model.current_time, "ns")
             in self.model.industry_water_consumption_ds.time
