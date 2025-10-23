@@ -10,7 +10,7 @@ import numpy as np
 import statsmodels.api as sm
 from numpy.linalg import LinAlgError
 
-from geb.typing import TwoDFloatArrayFloat32
+from geb.typing import TwoDArrayFloat32
 
 from ..data import load_regional_crop_data_from_dict
 from ..store import DynamicArray
@@ -192,7 +192,7 @@ class Market(AgentBaseClass):
 
         print(self.var.parameters)
 
-    def get_modelled_crop_prices(self) -> TwoDFloatArrayFloat32:
+    def get_modelled_crop_prices(self) -> TwoDArrayFloat32:
         """Calculate and return crop prices based on the estimated price model.
 
         This method uses the previously estimated OLS model parameters to predict
@@ -300,7 +300,7 @@ class Market(AgentBaseClass):
         self.report(locals())
 
     @property
-    def crop_prices(self) -> TwoDFloatArrayFloat32:
+    def crop_prices(self) -> TwoDArrayFloat32:
         """Get the crop prices for the current timestep per region.
 
         If dynamic market is enabled, it returns the modelled crop prices. Otherwise, it returns the static crop prices.

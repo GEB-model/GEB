@@ -19,10 +19,10 @@ from scipy.spatial import KDTree
 from geb.typing import (
     ArrayFloat32,
     ArrayInt32,
-    ThreeDFloatArrayFloat32,
-    TwoDBoolArray,
-    TwoDFloatArrayFloat32,
-    TwoDIntArrayInt32,
+    ThreeDArrayFloat32,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
+    TwoDArrayInt32,
 )
 from geb.workflows.io import load_grid, open_zarr
 from geb.workflows.raster import compress
@@ -284,7 +284,7 @@ class Grid(BaseVariables):
 
         BaseVariables.__init__(self)
 
-    def full(self, *args: Any, **kwargs: Any) -> TwoDFloatArrayFloat32:
+    def full(self, *args: Any, **kwargs: Any) -> TwoDArrayFloat32:
         """Return a full array with size of mask. Takes any other argument normally used in np.full.
 
         Args:
@@ -426,7 +426,7 @@ class Grid(BaseVariables):
         return self.compress(self.model.forcing.load("wind_v10m_m_per_s"))
 
     @property
-    def spei_uncompressed(self) -> TwoDFloatArrayFloat32:
+    def spei_uncompressed(self) -> TwoDArrayFloat32:
         """Get uncompressed version of SPEI.
 
         We want to get the closest SPEI value, so if we are in the second
@@ -459,9 +459,9 @@ class Grid(BaseVariables):
             ):
                 spei_time: datetime = current_time.replace(day=1)
 
-        spei: ThreeDFloatArrayFloat32 = self.model.forcing.load("SPEI", dt=spei_time)
+        spei: ThreeDArrayFloat32 = self.model.forcing.load("SPEI", dt=spei_time)
         assert spei.ndim == 3 and spei.shape[0] == 1
-        spei: TwoDFloatArrayFloat32 = spei[0]
+        spei: TwoDArrayFloat32 = spei[0]
         return spei
 
     @property
@@ -592,9 +592,9 @@ class HRUs(BaseVariables):
     @staticmethod
     @njit(cache=True)
     def create_HRUs_numba(
-        farms: TwoDIntArrayInt32,
-        land_use_classes: TwoDIntArrayInt32,
-        mask: TwoDBoolArray,
+        farms: TwoDArrayInt32,
+        land_use_classes: TwoDArrayInt32,
+        mask: TwoDArrayBool,
         scaling: int,
     ) -> tuple[
         ArrayInt32,
@@ -602,7 +602,7 @@ class HRUs(BaseVariables):
         ArrayInt32,
         ArrayInt32,
         ArrayInt32,
-        TwoDIntArrayInt32,
+        TwoDArrayInt32,
     ]:
         """Numba helper function to create HRUs.
 

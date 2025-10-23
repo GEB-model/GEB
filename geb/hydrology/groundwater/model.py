@@ -41,8 +41,8 @@ from xmipy import XmiWrapper
 from geb.typing import (
     ArrayFloat32,
     ArrayFloat64,
-    TwoDFloatArrayFloat32,
-    TwoDFloatArrayFloat64,
+    TwoDArrayFloat32,
+    TwoDArrayFloat64,
 )
 from geb.workflows.io import WorkingDirectory
 
@@ -54,8 +54,8 @@ MODFLOW_VERSION: str = "6.6.2"
 
 @njit(cache=True)
 def get_water_table_depth(
-    layer_boundary_elevation: TwoDFloatArrayFloat32,
-    head: TwoDFloatArrayFloat64,
+    layer_boundary_elevation: TwoDArrayFloat32,
+    head: TwoDArrayFloat64,
     elevation: ArrayFloat32,
     min_remaining_layer_storage_m: np.float32,
 ) -> ArrayFloat64:
@@ -104,9 +104,9 @@ def get_water_table_depth(
 
 @njit(cache=True)
 def get_groundwater_storage_m(
-    layer_boundary_elevation: TwoDFloatArrayFloat32,
-    head: TwoDFloatArrayFloat64,
-    specific_yield: TwoDFloatArrayFloat32,
+    layer_boundary_elevation: TwoDArrayFloat32,
+    head: TwoDArrayFloat64,
+    specific_yield: TwoDArrayFloat32,
     min_remaining_layer_storage_m: np.float32 = np.float32(0.0),
 ) -> ArrayFloat64:
     """Calculate the groundwater storage in meters.
@@ -140,12 +140,12 @@ def get_groundwater_storage_m(
 @njit(cache=True)
 def distribute_well_abstraction_m3_per_layer(
     well_rate: ArrayFloat64,
-    layer_boundary_elevation: TwoDFloatArrayFloat32,
-    heads: TwoDFloatArrayFloat64,
-    specific_yield: TwoDFloatArrayFloat32,
+    layer_boundary_elevation: TwoDArrayFloat32,
+    heads: TwoDArrayFloat64,
+    specific_yield: TwoDArrayFloat32,
     area: ArrayFloat32,
     min_remaining_layer_storage_m: np.float64 = np.float64(0.0),
-) -> TwoDFloatArrayFloat64:
+) -> TwoDArrayFloat64:
     """Distribute the well abstraction rate over the layers.
 
     Abstraction is done from the top layer to the bottom layer.
@@ -324,7 +324,7 @@ class ModFlowSimulation:
         nrows: int,
         ncols: int,
         gt: tuple[float, float, float, float, float, float],
-    ) -> tuple[TwoDFloatArrayFloat64, TwoDFloatArrayFloat64]:
+    ) -> tuple[TwoDArrayFloat64, TwoDArrayFloat64]:
         """Create the vertices of the model grid.
 
         Args:
@@ -373,9 +373,9 @@ class ModFlowSimulation:
     def get_simulation(
         self,
         gt: tuple[float, float, float, float, float, float],
-        hydraulic_conductivity: TwoDFloatArrayFloat32,
-        specific_storage: TwoDFloatArrayFloat32,
-        specific_yield: TwoDFloatArrayFloat32,
+        hydraulic_conductivity: TwoDArrayFloat32,
+        specific_storage: TwoDArrayFloat32,
+        specific_yield: TwoDArrayFloat32,
     ) -> flopy.mf6.MFSimulation:
         """Create a MODFLOW 6 simulation instance.
 
@@ -763,7 +763,7 @@ class ModFlowSimulation:
         return self.mf6.get_var_address("X", self.name)
 
     @property
-    def heads(self) -> TwoDFloatArrayFloat64:
+    def heads(self) -> TwoDArrayFloat64:
         """Get the heads of the model grid for all layers.
 
         Returns:
@@ -776,7 +776,7 @@ class ModFlowSimulation:
         return heads
 
     @heads.setter
-    def heads(self, value: TwoDFloatArrayFloat64) -> None:
+    def heads(self, value: TwoDArrayFloat64) -> None:
         """Set the heads of the model grid.
 
         Args:

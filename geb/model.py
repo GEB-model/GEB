@@ -109,7 +109,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         self.hydrology.groundwater.modflow.restore(self.hydrology.grid.var.heads)
 
         # restore the discharge from the store
-        self.hydrology.routing.router.Q_prev = (
+        self.hydrology.routing.router.Q_prev_m3_s = (
             self.hydrology.routing.grid.var.discharge_m3_s.copy()
         )
         self.current_timestep = timestep

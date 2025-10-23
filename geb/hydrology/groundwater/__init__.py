@@ -33,7 +33,7 @@ import numpy as np
 import numpy.typing as npt
 
 from geb.module import Module
-from geb.typing import ArrayFloat32, ArrayFloat64, TwoDFloatArrayFloat64
+from geb.typing import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
 from geb.workflows import balance_check
 
 from ..routing import get_channel_ratio
@@ -127,7 +127,7 @@ class GroundWater(Module):
 
         self.grid.var.capillar = self.grid.full_compressed(0, dtype=np.float32)
 
-    def heads_update_callback(self, heads: TwoDFloatArrayFloat64) -> None:
+    def heads_update_callback(self, heads: TwoDArrayFloat64) -> None:
         """Callback function to update groundwater heads after ModFlow simulation step.
 
         This is done to ensure the value is always in sync with ModFlow.
