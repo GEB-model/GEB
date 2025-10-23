@@ -172,10 +172,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
-        forecast_variables: list[str] = [
-            "pr_kg_per_m2_per_s"
-        ]  # list of forecast variables to include in the multiverse
-
         if return_mean_discharge:
             mean_discharge: dict[
                 Any, float
