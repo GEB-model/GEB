@@ -6,7 +6,8 @@ from typing import Tuple
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
-import osmnx as ox
+
+# import osmnx as ox -- need to update the uv with osmnx
 import pandas as pd
 import rasterio
 import xarray as xr
@@ -434,6 +435,7 @@ class Households(AgentBaseClass):
         # Associate households with their postal codes to use it later in the warning function
         PC4: gpd.GeoDataFrame = gpd.read_parquet("data/postal_codes_4.parquet")
         PC4["postcode"] = PC4["postcode"].astype("int32")
+        # need to change it to postal_code_6
 
         new_locations = gpd.sjoin(
             new_locations,
@@ -1633,11 +1635,6 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "building_unprotected"}
         )
 
-        # create another column (curve) in the buildings structure curve for protected buildings
-        self.buildings_structure_curve["building_protected"] = (
-            self.buildings_structure_curve["building_unprotected"] * 0.85
-        )
-
         # create another column (curve) in the buildings structure curve for flood-proofed buildings
         self.buildings_structure_curve["building_flood_proofed"] = (
             self.buildings_structure_curve["building_unprotected"] * 0.85
@@ -1655,6 +1652,25 @@ class Households(AgentBaseClass):
         # create another column (curve) in the buildings content curve for protected buildings
         self.buildings_content_curve["building_protected"] = (
             self.buildings_content_curve["building_unprotected"] * 0.7
+        )
+
+        # need to adjust the vulnerability curves
+        # create another column (curve) in the buildings content curve for
+        # protected buildings with sandbags
+        self.buildings_content_curve["building_with_sandbags"] = (
+            self.buildings_content_curve["building_unprotected"] * 0.85
+        )
+
+        # create another column (curve) in the buildings content curve for
+        # protected buildings with elevated possessions
+        self.buildings_content_curve["building_elevated_possessions"] = (
+            self.buildings_content_curve["building_unprotected"] * 0.85
+        )
+
+        # create another column (curve) in the buildings content curve for
+        # protected buildings with both sandbags and elevated possessions
+        self.buildings_content_curve["building_all_forecast_based"] = (
+            self.buildings_content_curve["building_unprotected"] * 0.85
         )
 
         # create damage curves for adaptation
@@ -1704,10 +1720,10 @@ class Households(AgentBaseClass):
         self.assign_household_attributes()
         if self.config["warning_response"]:
             self.change_household_locations()  # ideally this should be done in the setup_population when building the model
-        self.get_critical_infrastructure()
-        self.critical_infrastructure_warning_strategy()
-        self.water_level_warning_strategy()
-        self.household_decision_making()
+        # self.get_critical_infrastructure()
+        # self.critical_infrastructure_warning_strategy()
+        # self.water_level_warning_strategy()
+        # self.household_decision_making()
 
     def calculate_building_flood_damages(self) -> Tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
@@ -1798,11 +1814,11 @@ class Households(AgentBaseClass):
 
         return damages_do_not_adapt, damages_adapt
 
-    def flood(self, flood_map: xr.DataArray) -> float:
+    def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
 
         Args:
-            flood_map: The flood map containing water levels for the flood event [m].
+            flood_depth: The flood map containing water levels for the flood event [m].
 
         Returns:
             The total flood damages for the event for all assets and land use types.
@@ -1816,35 +1832,69 @@ class Households(AgentBaseClass):
             flood_depth.rio.crs
         )
 
-        assert len(household_points) == self.var.risk_perception.size
+        assert len(household_points) == self.var.actions_taken.shape[0]
 
-        household_points["protect_building"] = False
+        # add columns for protective actions
+        household_points["sandbags"] = False
+        household_points["elevated_possessions"] = False
+
+        # mark households that took protective actions
+        household_points.loc[
+            self.var.actions_taken[:, 0] == 1, "elevated_possessions"
+        ] = True
+        household_points.loc[self.var.actions_taken[:, 1] == 1, "sandbags"] = True
 
         # household_points.loc[self.var.risk_perception.data >= 0.1, "protect_building"] = True
         # this risk perception no longer used in the warning model
 
+        # need to check if this is working
         buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
             buildings, household_points, how="left", exclusive=True
         )
         # I need to check if this is working
 
-        buildings["object_type"] = "building_unprotected"
-        buildings.loc[buildings["protect_building"], "object_type"] = (
-            "building_protected"
+        # buildings["object_type"] = "building_unprotected"
+        # buildings.loc[buildings["protect_building"], "object_type"] = (
+        #     "building_protected"
+        # )
+
+        buildings.loc[buildings["elevated_possessions"], "object_type"] = (
+            "building_elevated_possessions"
         )
+        buildings.loc[buildings["sandbags"], "object_type"] = "building_with_sandbags"
+        buildings.loc[
+            buildings["elevated_possessions"] & buildings["sandbags"], "object_type"
+        ] = "building_all_forecast_based"
 
         # Create the folder to save damage maps if it doesn't exist
         damage_folder: Path = self.model.output_folder / "damage_maps"
         damage_folder.mkdir(parents=True, exist_ok=True)
 
-        # Compute damages for buildings content and save it to a gpkg file
-        category_name: str = "buildings_content"
-        filename: str = f"damage_map_{category_name}.gpkg"
+        # Compute damages for buildings content
+
+        # buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+        # buildings_centroid["object_type"] = buildings_centroid[
+        #     "protect_building"
+        # ].apply(lambda x: "building_protected" if x else "building_unprotected")
+        # buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-        buildings_centroid["object_type"] = buildings_centroid[
-            "protect_building"
-        ].apply(lambda x: "building_protected" if x else "building_unprotected")
+        buildings_centroid["object_type"] = np.select(
+            [
+                (
+                    buildings_centroid["elevated_possessions"]
+                    & buildings_centroid["sandbags"]
+                ),
+                buildings_centroid["elevated_possessions"],
+                buildings_centroid["sandbags"],
+            ],
+            [
+                "building_all_forecast_based",
+                "building_elevated_possessions",
+                "building_with_sandbags",
+            ],
+            default="building_unprotected",
+        )
         buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         damages_buildings_content = VectorScanner(
@@ -1854,12 +1904,15 @@ class Households(AgentBaseClass):
         )
 
         total_damages_content = damages_buildings_content.sum()
+
+        # save it to a gpkg file
+        category_name: str = "buildings_content"
+        filename: str = f"damage_map_{category_name}.gpkg"
+        damages_buildings_content.to_file(damage_folder / filename, driver="GPKG")
+
         print(f"damages to building content are: {total_damages_content}")
 
-        # Compute damages for buildings structure and save it to a gpkg file
-        category_name: str = "buildings_structure"
-        filename: str = f"damage_map_{category_name}.gpkg"
-
+        # Compute damages for buildings structure
         damages_buildings_structure: pd.Series = VectorScanner(
             features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),
             hazard=flood_depth,
@@ -1869,6 +1922,12 @@ class Households(AgentBaseClass):
         total_damage_structure = damages_buildings_structure.sum()
 
         print(f"damages to building structure are: {total_damage_structure}")
+
+        # save it to a gpkg file
+        category_name: str = "buildings_structure"
+        filename: str = f"damage_map_{category_name}.gpkg"
+        damages_buildings_structure.to_file(damage_folder / filename, driver="GPKG")
+
         print(
             f"Total damages to buildings are: {total_damages_content + total_damage_structure}"
         )
