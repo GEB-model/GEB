@@ -591,6 +591,30 @@ class ModFlowSimulation:
         )
 
         # Storage
+        # Somehow modeltime is not available when loading_packge is set to False (the default) and what it should be.
+        # when loading_package is set to True, the model builds find but the simulation doesn't work.
+        # TODO: See if this is fixed in a future version of flopy/modflow6, and perhaps file an issue.
+        # flopy.mf6.ModflowGwfsto(
+        #     groundwater_flow,
+        #     save_flows=self.save_flows,
+        #     iconvert=1,
+        #     ss={
+        #         "filename": "ss.bin",
+        #         "data": specific_storage.astype(np.float64),
+        #         "binary": True,
+        #     },
+        #     sy={
+        #         "filename": "sy.bin",
+        #         "data": specific_yield.astype(np.float64),
+        #         "binary": True,
+        #     },
+        #     steady_state=False,
+        #     transient=True,
+        #     loading_package=False,
+        #     pname="sto",
+        #     filename="model.sto",
+        # )
+
         flopy.mf6.ModflowGwfsto(
             groundwater_flow,
             save_flows=self.save_flows,
