@@ -1,5 +1,7 @@
 """Data adapter for obtaining ERA5 data from the Destination Earth."""
 
+import base64
+import os
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -17,6 +19,32 @@ class DestinationEarth(Adapter):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize the ERA5 data adapter."""
         super().__init__(*args, **kwargs)
+
+    def get_authentication_header(self) -> dict[str, str]:
+        """Generate the authentication header for Destination Earth access.
+
+        Returns:
+            A dictionary containing the Authorization header for HTTP requests.
+
+        Raises:
+            ValueError: If the DESTINATION_EARTH_KEY environment variable is not set.
+        """
+        DESTINATION_EARTH_KEY: str | None = os.getenv(key="DESTINATION_EARTH_KEY")
+        if DESTINATION_EARTH_KEY is None:
+            print("ERROR: DESTINATION_EARTH_KEY environment variable is not set.")
+            print(
+                "Please set your Personal Access Token in your .env file or export it in your shell."
+            )
+            raise ValueError("DESTINATION_EARTH_KEY environment variable is not set.")
+
+        auth_string: str = f"edh:{DESTINATION_EARTH_KEY}"
+        # Base64 encode the "username:password" string (edh:<PAT>)
+        encoded_auth: str = base64.b64encode(auth_string.encode("utf-8")).decode(
+            "utf-8"
+        )
+
+        auth_headers: dict[str, str] = {"Authorization": f"Basic {encoded_auth}"}
+        return auth_headers
 
     def fetch(self, url: str) -> "DestinationEarth":
         """Set the URL for the Destination Earth data source.
@@ -50,7 +78,7 @@ class DestinationEarth(Adapter):
         """
         da: xr.DataArray = xr.open_dataset(
             self.url,
-            storage_options={"client_kwargs": {"trust_env": True}},
+            storage_options={"headers": self.get_authentication_header()},
             chunks={},
             engine="zarr",
         )[variable].rename({"valid_time": "time", "latitude": "y", "longitude": "x"})
