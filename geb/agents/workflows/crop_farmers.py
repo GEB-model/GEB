@@ -1,3 +1,5 @@
+"""Contains several functions for crop farmer module."""
+
 from typing import Union
 
 import numpy as np

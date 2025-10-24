@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import xarray as xr
 
 from geb.workflows.io import load_grid
 
@@ -163,16 +164,20 @@ def get_pressure_correction_factor(
 class ForcingLoader(ABC):
     """Abstract base class for loading and validating forcing data."""
 
-    def __init__(self, model: GEBModel, variable: str, n: int) -> None:
+    def __init__(
+        self, model: GEBModel, variable: str, n: int, supports_forecast: bool = True
+    ) -> None:
         """Initialize the ForcingLoader.
 
         Args:
             model: The GEB model instance.
             variable: The variable name to load (e.g., "pr" for precipitation).
             n: Number of time steps to load at once (default is 1).
+            supports_forecast: Whether the loader supports forecast mode.
         """
-        self.n = n
-        self.variable = variable
+        self.model: GEBModel = model
+        self.n: int = n
+        self.variable: str = variable
         self.reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
             model.files["other"][f"climate/{variable}"],
             variable,
@@ -184,14 +189,47 @@ class ForcingLoader(ABC):
             model.hydrology.grid.lon,
             model.hydrology.grid.lat,
         )
-        self.xsize = model.hydrology.grid.lon.size
-        self.ysize = model.hydrology.grid.lat.size
+        self.xsize: int = model.hydrology.grid.lon.size
+        self.ysize: int = model.hydrology.grid.lat.size
 
-    def load(self, time: datetime) -> npt.NDArray[Any]:
+        self._supports_forecast = supports_forecast
+
+        self._in_forecast_mode: bool = False
+        self.ds_forecast: xr.DataArray | None = None
+        self.forecast_issue_datetime: datetime | None = None
+
+    @property
+    def in_forecast_mode(self) -> bool:
+        """Indicates whether the loader is in forecast mode.
+
+        Returns:
+            True if in forecast mode, False otherwise.
+        """
+        return self._in_forecast_mode
+
+    @in_forecast_mode.setter
+    def in_forecast_mode(self, value: bool) -> None:
+        self._in_forecast_mode = value
+
+    @property
+    def supports_forecast(self) -> bool:
+        """Indicates whether the loader supports forecast mode.
+
+        Returns:
+            True if forecast mode is supported, False otherwise.
+        """
+        return self._supports_forecast
+
+    def load(self, dt: datetime) -> npt.NDArray[Any]:
         """Load and validate forcing data for a given time.
 
+        If in forecast mode and the time is after the forecast issue date,
+        the data is loaded from the forecast dataset.
+
+        Otherwise, data is loaded from the standard reader.
+
         Args:
-            time: The datetime for which to load the data.
+            dt: The datetime for which to load the data.
 
         Returns:
             The interpolated and validated data as a numpy array.
@@ -199,15 +237,74 @@ class ForcingLoader(ABC):
         Raises:
             ValueError: If the data is invalid according to the validation criteria.
         """
-        data: npt.NDArray[np.float32] = self.reader.read_timestep(time, n=self.n)
+        # check if we are in forecasting mode, and if the end of the timestep is after the
+        # start of the forecast
+        if (
+            self.in_forecast_mode
+            and dt + self.model.timestep_length >= self.forecast_issue_datetime
+        ):
+            # find how many substeps to load from the normal data source
+            substeps_to_forecast: int = int(
+                (self.forecast_issue_datetime - dt).total_seconds()
+                / (self.model.timestep_length / self.n).total_seconds()
+            )
+            # if some substeps are before the forecast, load them from the normal reader
+            if substeps_to_forecast > 0:
+                # TODO: The reader breaks when loading less than n timesteps, so we load n and slice
+                # the data
+                non_forecast_data: npt.NDArray[np.float32] = self.reader.read_timestep(
+                    dt, n=self.n
+                )[:substeps_to_forecast, :, :]
+
+                forecast_data: npt.NDArray[np.float32] = self.ds_forecast.isel(
+                    time=slice(None, self.n - substeps_to_forecast)
+                ).values
+                data: npt.NDArray[np.float32] = np.concatenate(
+                    [non_forecast_data, forecast_data], axis=0
+                )
+            else:
+                # if the current day is already fully in forecast, load all from forecast
+                data: npt.NDArray[np.float32] = self.ds_forecast.sel(
+                    time=slice(
+                        dt,
+                        dt
+                        + self.model.timestep_length
+                        - self.model.timestep_length / self.n,
+                    )
+                ).values
+        else:
+            data: npt.NDArray[np.float32] = self.reader.read_timestep(dt, n=self.n)
+
         interpolated: npt.NDArray[np.float32] = self.interpolate(data)
         valid: bool = self.validate(interpolated)
         if not valid:
             raise ValueError(
-                f"Invalid data for time {time} for variable {self.variable}."
+                f"Invalid data for time {dt} for variable {self.variable}."
             )
         assert interpolated.dtype == np.dtype(np.float32)
         return interpolated
+
+    def set_forecast(self, forecast_issue_datetime: datetime, da: xr.DataArray) -> None:
+        """Sets the loader to forecast mode.
+
+        This means that data from before the forecast issue date will be loaded
+        normally, while data from the forecast issue date onwards will be loaded
+        from the forecast data file. Data beyond the available forecast data will
+        raise an error.
+
+        Args:
+            forecast_issue_datetime: The datetime when the forecast starts.
+            da: The xarray DataArray containing the forecast data.
+        """
+        self.in_forecast_mode: bool = True
+        self.forecast_issue_datetime: datetime = forecast_issue_datetime
+        self.ds_forecast: xr.DataArray = da
+
+    def unset_forecast(self) -> None:
+        """Unset forecast mode."""
+        self.in_forecast_mode: bool = False
+        self.ds_forecast: None = None
+        self.forecast_issue_datetime: None = None
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
         """Interpolate data to the model grid using bilinear interpolation.
@@ -229,9 +326,40 @@ class ForcingLoader(ABC):
         )
         return output
 
-    @abstractmethod
     def validate(self, v: npt.NDArray[np.float32]) -> bool:
-        """Validate the data array."""
+        """Validate the data array.
+
+        Args:
+            v: The data array to validate.
+
+        Returns:
+            True, indicating that by default all data is valid.
+
+        Raises:
+            ValueError: If the data shape does not match the expected grid shape.
+        """
+        if v.shape[0] != self.n:
+            raise ValueError(f"Data time dimension does not match expected n {self.n}.")
+        if v.shape[1] != self.ysize or v.shape[2] != self.xsize:
+            raise ValueError(
+                f"Data shape {v.shape[1:]} does not match expected grid shape "
+                f"({self.ysize}, {self.xsize})."
+            )
+        if not self.validate_values(v):
+            raise ValueError("Data validation failed.")
+
+        return True
+
+    @abstractmethod
+    def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
+        """Validate the data array.
+
+        Args:
+            v: The data array to validate.
+
+        Returns:
+            True if valid, otherwise raises ValueError.
+        """
         pass
 
 
@@ -248,7 +376,7 @@ class Precipitation(ForcingLoader):
         self.grid_mask = grid_mask
         super().__init__(model, "pr_kg_per_m2_per_s", 24)
 
-    def validate(self, v: npt.NDArray[np.float32]) -> bool:
+    def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate precipitation data.
 
         Args:
@@ -296,7 +424,7 @@ class Temperature(ForcingLoader):
         else:
             super().__init__(model, "tas_2m_K", 24)
 
-    def validate(self, v: npt.NDArray[np.float32]) -> bool:
+    def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate temperature data.
 
         Args:
@@ -359,7 +487,7 @@ class Wind(ForcingLoader):
         self.grid_mask = grid_mask
         super().__init__(model, f"wind_{direction}10m_m_per_s", 24)
 
-    def validate(self, v: npt.NDArray[np.float32]) -> bool:
+    def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate wind data.
 
         Args:
@@ -408,7 +536,7 @@ class Pressure(ForcingLoader):
 
         super().__init__(model, "ps_pascal", 24)
 
-    def validate(self, v: npt.NDArray[np.float32]) -> bool:
+    def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate surface pressure data.
 
         Args:
@@ -472,7 +600,7 @@ class RSDS(ForcingLoader):
         self.grid_mask = grid_mask
         super().__init__(model, "rsds_W_per_m2", 24)
 
-    def validate(self, v: npt.NDArray[np.float32]) -> bool:
+    def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate surface downwelling shortwave radiation data.
 
         Args:
@@ -498,7 +626,7 @@ class RLDS(ForcingLoader):
         self.grid_mask = grid_mask
         super().__init__(model, "rlds_W_per_m2", 24)
 
-    def validate(self, v: npt.NDArray[np.float32]) -> bool:
+    def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate surface downwelling longwave radiation data.
 
         Args:
@@ -522,9 +650,9 @@ class SPEI(ForcingLoader):
             grid_mask: The mask of the model grid (True for valid points, False for invalid).
         """
         self.grid_mask = grid_mask
-        super().__init__(model, "SPEI", 1)
+        super().__init__(model, "SPEI", 1, supports_forecast=False)
 
-    def validate(self, v: npt.NDArray[np.float32]) -> bool:
+    def validate_values(self, v: npt.NDArray[np.float32]) -> bool:
         """Validate SPEI data.
 
         Args:
@@ -557,12 +685,12 @@ class CO2:
             ValueError: If the data is invalid according to the validation criteria.
         """
         data: float = self.df.loc[time.year].item()
-        valid: bool = self.validate(data)
+        valid: bool = self.validate_values(data)
         if not valid:
             raise ValueError(f"Invalid CO2 data for time {time}.")
         return data
 
-    def validate(self, v: float) -> bool:
+    def validate_values(self, v: float) -> bool:
         """Validate CO2 concentration data.
 
         Args:
@@ -572,6 +700,15 @@ class CO2:
             True if valid, otherwise raises ValueError.
         """
         return v > 270 and v < 2000
+
+    @property
+    def supports_forecast(self) -> bool:
+        """Indicates whether the loader supports forecast mode.
+
+        Returns:
+            False as CO2 loader does not support forecast mode.
+        """
+        return False
 
 
 class Forcing(Module):
@@ -667,21 +804,30 @@ class Forcing(Module):
             )
         return self._loaders[name]
 
-    def load(self, name: str, time: datetime | None = None) -> npt.NDArray[Any] | float:
+    def load(self, name: str, dt: datetime | None = None) -> npt.NDArray[Any] | float:
         """Load forcing data for a given name and time.
 
         Args:
             name: name of forcing dataset, e.g. "pr_kg_per_m2_per_s", "tas_2m_K", etc.
-            time: time of forcing data to be returned. Defaults to None, in which case
+            dt: time of forcing data to be returned. Defaults to None, in which case
                 the current time of the model is used.
 
         Returns:
             Forcing data as a numpy array or float.
         """
-        if time is None:
-            time = self.model.current_time
+        if dt is None:
+            dt: datetime = self.model.current_time
 
-        return self[name].load(time)
+        return self[name].load(dt)
+
+    @property
+    def loaders(self) -> dict[str, ForcingLoader | CO2]:
+        """Get all forcing loaders.
+
+        Returns:
+            A dictionary of all forcing loaders.
+        """
+        return self._loaders
 
     def spinup(self) -> None:
         """Prepare the forcing module for the simulation.

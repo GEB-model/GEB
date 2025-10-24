@@ -1,5 +1,10 @@
+"""This module contains the Market agent class for simulating market dynamics in the GEB model."""
+
+from __future__ import annotations
+
 import json
 import warnings
+from typing import TYPE_CHECKING
 
 import numpy as np
 import statsmodels.api as sm
@@ -8,6 +13,10 @@ from numpy.linalg import LinAlgError
 from ..data import load_regional_crop_data_from_dict
 from ..store import DynamicArray
 from .general import AgentBaseClass
+
+if TYPE_CHECKING:
+    from geb.agents import Agents
+    from geb.model import GEBModel
 
 
 class Market(AgentBaseClass):
@@ -21,7 +30,13 @@ class Market(AgentBaseClass):
         Currently assume single market for all crops.
     """
 
-    def __init__(self, model, agents) -> None:
+    def __init__(self, model: GEBModel, agents: Agents) -> None:
+        """Initialize the Market agent module.
+
+        Args:
+            model: The GEB model.
+            agents: The class that includes all agent types (allowing easier communication between agents).
+        """
         super().__init__(model)
         self.agents = agents
         self.config = (

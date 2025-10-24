@@ -1,20 +1,39 @@
+"""This module contains the Industry agent class for simulating industrial water demand in the GEB model."""
+
+from __future__ import annotations
+
 import calendar
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ..hydrology.landcovers import SEALED
 from .general import AgentBaseClass, downscale_volume
 
+if TYPE_CHECKING:
+    from geb.agents import Agents
+    from geb.model import GEBModel
+
 
 class Industry(AgentBaseClass):
-    """This class is used to simulate the government.
+    """This class is used to simulate industry.
+
+    Note:
+        Currently, this module is not actually agent-based but rather
+        uses aggregated pre-defined water demand data.
 
     Args:
         model: The GEB model.
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
 
-    def __init__(self, model, agents) -> None:
+    def __init__(self, model: GEBModel, agents: Agents) -> None:
+        """Initialize the Industry agent module.
+
+        Args:
+            model: The GEB model.
+            agents: The class that includes all agent types (allowing easier communication between agents).
+        """
         super().__init__(model)
 
         if self.model.simulate_hydrology:

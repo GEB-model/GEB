@@ -1,3 +1,5 @@
+"""This module contains the classes and functions processing observational data during model building."""
+
 import os
 from pathlib import Path
 
@@ -126,6 +128,7 @@ class Observations:
     """Collects, parses and processes observational data for model evaluation."""
 
     def __init__(self) -> None:
+        """Initialize the Observations class."""
         pass
 
     @build_method(depends_on=["setup_hydrography"])

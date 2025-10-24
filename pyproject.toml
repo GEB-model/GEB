@@ -170,14 +170,12 @@ extend-select = ["I"]
 preview = true
 
 [tool.ruff.lint.extend-per-file-ignores]
-"geb/agents/{crop_farmers,decision_module,households,industry,livestock_farmers,market}.py" = [
+"geb/agents/{crop_farmers,decision_module,households,industry,market}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
     "D102",
     "D103",
-    "D100",
-    "D107"
 ]
 "geb/agents/workflows/crop_farmers.py" = [
     "ANN001",
@@ -185,8 +183,6 @@ preview = true
     "ANN202",
     "D102",
     "D103",
-    "D100",
-    "D107"
 ]
 "geb/evaluate/hydrology.py" = [
     "ANN001",
@@ -194,8 +190,6 @@ preview = true
     "ANN202",
     "D102",
     "D103",
-    "D100",
-    "D107"
 ]
 "geb/build/modules/observations.py" = [
     "ANN001",
@@ -203,8 +197,6 @@ preview = true
     "ANN202",
     "D103",
     "D102",
-    "D100",
-    "D107"
 ]
 "geb/{sensitivity,multirun,calibrate}.py" = [
     "ANN001",
@@ -212,8 +204,6 @@ preview = true
     "ANN202",
     "D103",
     "D102",
-    "D100",
-    "D107"
 ]
 
 [tool.ruff.lint.isort]

@@ -94,7 +94,6 @@ class Router:
         dt: The time step in seconds, must be greater than 0.
         river_network: The river network as a FlwdirRaster object, which contains the flow
             direction and other information about the river network.
-        Q_initial: The initial discharge array, which is a 1D array which is only valid for the masked.
         is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
         waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
 
@@ -144,7 +143,6 @@ class Router:
         self,
         dt: float | int,
         river_network: pyflwdir.FlwdirRaster,
-        Q_initial: np.ndarray,
         waterbody_id: np.ndarray,
         is_waterbody_outflow: np.ndarray,
     ) -> None:
@@ -153,7 +151,6 @@ class Router:
         Args:
             dt: Number of seconds in the time step, must be > 0
             river_network: The river network as a FlwdirRaster object
-            Q_initial: Initial discharge array, which is a 1D array that is only valid for the masked.
             waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
                 -1 indicates no waterbody.
             is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
@@ -215,10 +212,6 @@ class Router:
             == 1
         ).all()
         self.is_waterbody_outflow = is_waterbody_outflow
-
-        assert Q_initial.shape == self.idxs_up_to_downstream.shape
-        assert np.isnan(Q_initial[self.waterbody_id != -1]).all()
-        self.Q_prev = Q_initial
 
 
 @njit(cache=True)
@@ -314,7 +307,6 @@ class KinematicWave(Router):
         self,
         dt: float | int,
         river_network: pyflwdir.FlwdirRaster,
-        Q_initial: npt.NDArray[np.float32],
         river_width: npt.NDArray[np.float32],
         river_length: npt.NDArray[np.float32],
         river_alpha: npt.NDArray[np.float32],
@@ -328,7 +320,6 @@ class KinematicWave(Router):
             dt: length of the time step in seconds.
             river_network: The river network as a FlwdirRaster object, which contains the flow
                 direction and other information about the river network.
-            Q_initial: Initial discharge array, which is a 1D array that is only valid for the masked.
             river_width: The width of the river in each cell.
             river_length: The length of the river in each cell,.
             river_alpha: The alpha parameter for the kinematic wave equation.
@@ -336,9 +327,7 @@ class KinematicWave(Router):
             waterbody_id: A 1D array with the same shape as the grid, which is the waterbody ID for each cell.
             is_waterbody_outflow: A 1D array with the same shape as the grid, which is True for the outflow cells.
         """
-        super().__init__(
-            dt, river_network, Q_initial, waterbody_id, is_waterbody_outflow
-        )
+        super().__init__(dt, river_network, waterbody_id, is_waterbody_outflow)
 
         self.river_width = river_width.ravel()
         self.river_length = river_length.ravel()
@@ -377,28 +366,32 @@ class KinematicWave(Router):
         return river_storage
 
     def get_available_storage(
-        self, maximum_abstraction_ratio: float = 0.9
-    ) -> npt.NDArray[np.float32]:
+        self, Q: ArrayFloat32, maximum_abstraction_ratio: float = 0.9
+    ) -> ArrayFloat32:
         """Get the available storage of the river network, which is the sum of the available storage in each cell.
 
         Args:
+            Q: The discharge in each cell, in m3/s.
             maximum_abstraction_ratio: he maximum abstraction ratio, default is 0.9.
                 This is the ratio of the available storage that can be used for abstraction.
 
         Returns:
             The available storage of the river network [m3].
         """
-        return self.get_total_storage() * maximum_abstraction_ratio
+        return self.get_total_storage(Q) * maximum_abstraction_ratio
 
-    def get_total_storage(self) -> npt.NDArray[np.float32]:
+    def get_total_storage(self, Q: ArrayFloat32) -> ArrayFloat32:
         """Get the total storage of the river network, which is the sum of the available storage in each cell.
+
+        Args:
+            Q: The discharge in each cell, in m3/s.
 
         Returns:
             The total storage of the river network [m3].
 
         """
         total_storage = self.calculate_river_storage_from_discharge(
-            discharge=self.Q_prev,
+            discharge=Q,
             river_alpha=self.river_alpha,
             river_length=self.river_length,
             river_beta=self.river_beta,
@@ -534,6 +527,7 @@ class KinematicWave(Router):
 
     def step(
         self,
+        Q_prev: ArrayFloat32,
         sideflow_m3: npt.NDArray[np.float32],
         evaporation_m3: npt.NDArray[np.float32],
         waterbody_storage_m3: npt.NDArray[np.float32],
@@ -552,6 +546,7 @@ class KinematicWave(Router):
         evaporation, and waterbody outflow. Uses an implicit version of the kinematic wave equation.
 
         Args:
+            Q_prev: Old discharge array, which is a 1D array with dicharge for each grid cell in the river network.
             sideflow_m3: Sideflow in m3 for each grid cell in the river network.
             evaporation_m3: Evaporation in m3 for each grid cell in the river network.
             waterbody_storage_m3: Storage of each waterbody in m3.
@@ -567,7 +562,7 @@ class KinematicWave(Router):
         """
         Q, actual_evaporation_m3, over_abstraction_m3, waterbody_inflow_m3 = self._step(
             dt=self.dt,
-            Qold=self.Q_prev,
+            Qold=Q_prev,
             sideflow_m3=sideflow_m3,
             evaporation_m3=evaporation_m3,
             waterbody_storage_m3=waterbody_storage_m3,
@@ -580,8 +575,6 @@ class KinematicWave(Router):
             river_beta=self.river_beta,
             river_length=self.river_length,
         )
-
-        self.Q_prev = Q
 
         # Because some pits may also be waterbodies (where Q is NaN), we use nansum
         outflow_at_pits_m3 = np.nansum(Q[self.is_pit] * self.dt)
@@ -628,20 +621,21 @@ class Accuflux(Router):
         super().__init__(dt, river_network, *args, **kwargs)
 
     def get_available_storage(
-        self, maximum_abstraction_ratio: float = 0.9
+        self, Q: ArrayFloat32, maximum_abstraction_ratio: float = 0.9
     ) -> npt.NDArray[np.float32]:
         """Get the available storage of the river network, which is the sum of the available storage in each cell.
 
         Available storage in lakes and reservoirs is set to 0.
 
         Args:
+            Q: The discharge in each cell, in m3/s.
             maximum_abstraction_ratio: The maximum abstraction ratio, default is 0.9.
                 This is the ratio of the available storage that can be used for abstraction.
 
         Returns:
             The available storage of the river network.
         """
-        available_storage = self.Q_prev * self.dt * maximum_abstraction_ratio
+        available_storage = Q * self.dt * maximum_abstraction_ratio
         available_storage[self.waterbody_id != -1] = 0.0
         assert not np.isnan(available_storage).any()
         return available_storage
@@ -760,6 +754,7 @@ class Accuflux(Router):
 
     def step(
         self,
+        Q_prev: npt.NDArray[np.float32],
         sideflow_m3: npt.NDArray[np.float32],
         evaporation_m3: npt.NDArray[np.float32],
         waterbody_storage_m3: npt.NDArray[np.float32],
@@ -778,6 +773,7 @@ class Accuflux(Router):
         for each cell. Sideflow and waterbody outflow is added to the discharge.
 
         Args:
+            Q_prev: Previous discharge array, which is a 1D array with discharge for each grid cell in the river network.
             sideflow_m3: Sideflow in m3 for each grid cell in the river network.
             evaporation_m3: Evaporation in m3 for each grid cell in the river network.
             waterbody_storage_m3: Storage of each waterbody in m3.
@@ -793,13 +789,13 @@ class Accuflux(Router):
                 outflow_at_pits_m3: Outflow at pits in m3.
         """
         outflow_at_pits_m3 = (
-            self.get_total_storage()[self.is_pit].sum()
+            self.get_total_storage(Q_prev)[self.is_pit].sum()
             + sideflow_m3[self.is_pit].sum()
             - evaporation_m3[self.is_pit].sum()
         )
         Q, actual_evaporation_m3, over_abstraction_m3, waterbody_inflow_m3 = self._step(
             dt=self.dt,
-            Qold=self.Q_prev,
+            Qold=Q_prev,
             sideflow_m3=sideflow_m3,
             evaporation_m3=evaporation_m3,
             waterbody_storage_m3=waterbody_storage_m3,
@@ -810,8 +806,6 @@ class Accuflux(Router):
             waterbody_id=self.waterbody_id,
         )
 
-        self.Q_prev = Q
-
         return (
             Q,
             actual_evaporation_m3,
@@ -821,14 +815,17 @@ class Accuflux(Router):
             outflow_at_pits_m3,
         )
 
-    def get_total_storage(self) -> npt.NDArray[np.float32]:
+    def get_total_storage(self, Q: ArrayFloat32) -> npt.NDArray[np.float32]:
         """Get the total storage of the river network, which is the sum of the available storage in each cell.
+
+        Args:
+            Q: The discharge in each cell, in m3/s.
 
         Returns:
             The total storage of the river network [m3].
 
         """
-        return self.get_available_storage(maximum_abstraction_ratio=1.0)
+        return self.get_available_storage(Q, maximum_abstraction_ratio=1.0)
 
 
 class Routing(Module):
@@ -899,7 +896,6 @@ class Routing(Module):
             self.router = KinematicWave(
                 dt=3600,
                 river_network=self.river_network,
-                Q_initial=self.grid.var.discharge_m3_s_substep,
                 river_width=river_width,
                 river_length=self.grid.var.river_length,
                 river_alpha=self.grid.var.river_alpha,
@@ -911,7 +907,6 @@ class Routing(Module):
             self.router = Accuflux(
                 dt=3600,
                 river_network=self.river_network,
-                Q_initial=self.grid.var.discharge_m3_s_substep,
                 waterbody_id=self.grid.var.waterBodyID,
                 is_waterbody_outflow=is_waterbody_outflow,
             )
@@ -1084,7 +1079,7 @@ class Routing(Module):
         if __debug__:
             pre_storage: np.ndarray = self.hydrology.lakes_reservoirs.var.storage.copy()
             pre_river_storage_m3: npt.NDArray[np.float32] = (
-                self.router.get_total_storage()
+                self.router.get_total_storage(self.grid.var.discharge_m3_s_substep)
             )
 
         channel_abstraction_m3_per_hour: np.ndarray = channel_abstraction_m3 / 24
@@ -1234,6 +1229,7 @@ class Routing(Module):
                 waterbody_inflow_m3,
                 outflow_at_pits_m3_routing_step,
             ) = self.router.step(
+                Q_prev=self.grid.var.discharge_m3_s_substep,
                 sideflow_m3=side_flow_channel_m3_per_hour.astype(np.float32),
                 evaporation_m3=potential_evaporation_in_rivers_m3_per_hour,
                 waterbody_storage_m3=self.hydrology.lakes_reservoirs.var.storage,
@@ -1259,7 +1255,10 @@ class Routing(Module):
                 self.grid.var.discharge_m3_s_substep.copy()
             )
 
-            assert (self.router.get_available_storage() >= 0.0).all()
+            assert (
+                self.router.get_available_storage(self.grid.var.discharge_m3_s_substep)
+                >= 0.0
+            ).all()
 
             if __debug__:
                 # Discharge at outlets and lakes and reservoirs
@@ -1277,7 +1276,9 @@ class Routing(Module):
 
         if __debug__:
             # TODO: make dependent on routing step length
-            river_storage_m3: npt.NDArray[np.float32] = self.router.get_total_storage()
+            river_storage_m3: npt.NDArray[np.float32] = self.router.get_total_storage(
+                self.grid.var.discharge_m3_s_substep
+            )
             balance_check(
                 how="sum",
                 influxes=[
