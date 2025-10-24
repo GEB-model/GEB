@@ -239,7 +239,10 @@ def test_spinup() -> None:
     initializing the system to a stable state before main simulation.
     """
     with WorkingDirectory(working_directory):
-        run_model_with_method(method="spinup", **DEFAULT_RUN_ARGS)
+        args: dict[str, Any] = DEFAULT_RUN_ARGS.copy()
+        args["config"] = parse_config(CONFIG_DEFAULT)
+        args["config"]["hazards"]["floods"]["simulate"] = True
+        run_model_with_method(method="spinup", **args)
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -460,27 +463,27 @@ def test_multiverse() -> None:
         forecast_n_days: int = 5
         forecast_n_hours: int = 13
 
-        forecast_date: datetime = (
+        forecast_issue_date: datetime = (
             datetime.combine(date=config["general"]["start_time"], time=time.min)
             + timedelta(days=forecast_after_n_days)
             + timedelta(hours=forecast_n_hours)
         )
-        forecast_end_date = forecast_date + timedelta(
+        forecast_end_date = forecast_issue_date + timedelta(
             days=int(forecast_n_days), hours=forecast_n_hours
         )
-        config["general"]["end_time"] = forecast_date + timedelta(
+        config["general"]["end_time"] = forecast_issue_date + timedelta(
             days=int(forecast_n_days) + 5
         )
 
         # inititate a forecast after three days
-        config["general"]["forecasts"]["times"] = [forecast_date]
+        config["general"]["forecasts"]["times"] = [forecast_issue_date]
         config["general"]["forecasts"]["provider"] = "test"
 
         # add flood event during the forecast period
         events: list = [
             {
-                "start_time": forecast_date + timedelta(days=1),
-                "end_time": forecast_date + timedelta(days=2, hours=12),
+                "start_time": forecast_issue_date + timedelta(days=1),
+                "end_time": forecast_issue_date + timedelta(days=2, hours=12),
             },
             {
                 "start_time": forecast_end_date - timedelta(days=1, hours=0),
@@ -515,7 +518,7 @@ def test_multiverse() -> None:
             ).drop_encoding()
             forecast_da: xr.DataArray = da.sel(
                 time=slice(
-                    forecast_date,
+                    forecast_issue_date,
                     forecast_end_date,
                 )
             ).chunk({"time": -1})
@@ -538,13 +541,13 @@ def test_multiverse() -> None:
                 / (
                     forecast_variable
                     + "_"
-                    + forecast_date.strftime("%Y%m%dT%H%M%S.zarr")
+                    + forecast_issue_date.strftime("%Y%m%dT%H%M%S.zarr")
                 ),
                 mode="w",
             )
 
         mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
-            return_mean_discharge=True, forecast_issue_datetime=forecast_date
+            return_mean_discharge=True, forecast_issue_datetime=forecast_issue_date
         )
 
         for bucket_name, bucket in geb.store.buckets.items():
@@ -572,15 +575,22 @@ def test_multiverse() -> None:
         geb.close()
 
         flood_map_folder: Path = Path("output") / "flood_maps"
+        forecast_folder: Path = (
+            flood_map_folder
+            / f"forecast_{forecast_issue_date.strftime('%Y%m%dT%H%M%S')}"
+            / "member_0"
+        )
 
+        # the first flood event in the multiverse is of equal length as in the main simulation
+        # so the flood maps should be identical
         flood_map_first_event: xr.DataArray = xr.open_dataarray(
             flood_map_folder
             / f"{events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
         flood_map_first_event_multiverse: xr.DataArray = xr.open_dataarray(
-            flood_map_folder
-            / f"0 - {events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
+            forecast_folder
+            / f"{events[0]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[0]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
         np.testing.assert_array_equal(
@@ -589,14 +599,17 @@ def test_multiverse() -> None:
             err_msg="Flood maps for the first event do not match across multiverse members.",
         )
 
+        # the second flood event in the multiverse is shorter than in the main simulation
+        # because the forecast ends before the flood event ends
         flood_map_second_event: xr.DataArray = xr.open_dataarray(
             flood_map_folder
             / f"{events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {events[1]['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
+        # the name of the file is midnight before (or on) the end time of the forecast
         flood_map_second_event_multiverse: xr.DataArray = xr.open_dataarray(
-            flood_map_folder
-            / f"0 - {events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {forecast_end_date.strftime('%Y%m%dT%H%M%S')}.zarr"
+            forecast_folder
+            / f"{events[1]['start_time'].strftime('%Y%m%dT%H%M%S')} - {forecast_end_date.replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y%m%dT%H%M%S')}.zarr"
         )
 
 

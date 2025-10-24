@@ -8,13 +8,13 @@ import pandas as pd
 from honeybees.library.raster import pixels_to_coords
 from numba import njit
 
-from geb.typing import ArrayInt32, TwoDIntArrayInt32
+from geb.typing import ArrayInt32, TwoDArrayInt32
 
 
 @njit(cache=True)
 def create_farms_numba(
-    cultivated_land: TwoDIntArrayInt32, ids: ArrayInt32, farm_sizes: ArrayInt32
-) -> TwoDIntArrayInt32:
+    cultivated_land: TwoDArrayInt32, ids: ArrayInt32, farm_sizes: ArrayInt32
+) -> TwoDArrayInt32:
     """Creates random farms considering the farm size distribution.
 
     Args:
@@ -104,7 +104,7 @@ def create_farms(
     agents: pd.DataFrame,
     cultivated_land_tehsil: np.ndarray,
     farm_size_key: str = "farm_size_n_cells",
-) -> TwoDIntArrayInt32:
+) -> TwoDArrayInt32:
     """Create a farm ownership map based on agent sizes and cultivated land.
 
     The function assigns unique agent IDs to cultivated land cells such that
@@ -423,8 +423,8 @@ def get_farm_distribution(
 
 
 def get_farm_locations(
-    farms: TwoDIntArrayInt32, method: str = "centroid"
-) -> TwoDIntArrayInt32:
+    farms: TwoDArrayInt32, method: str = "centroid"
+) -> TwoDArrayInt32:
     """Get farm locations from farm map.
 
     Args:

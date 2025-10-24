@@ -67,7 +67,7 @@ def set_river_outflow_boundary_condition(
         simulation_root: Path to the simulation directory.
         write_figures: Whether to generate and save forcing plots. Defaults to True.
     """
-    outflow = gpd.read_file(model_root / "gis/outflow_points.gpkg")
+    outflow: gpd.GeoDataFrame = gpd.read_file(model_root / "gis/outflow_points.gpkg")
     # only one point location is expected
     assert len(outflow) == 1, "Only one outflow point is expected"
 
@@ -86,17 +86,19 @@ def set_river_outflow_boundary_condition(
     tstart, tstop = sf.get_model_time()
 
     # Define the time range (e.g., 1 month of hourly data)
-    time_range = pd.date_range(start=tstart, end=tstop, freq="h")
+    time_range: pd.DatetimeIndex = pd.date_range(start=tstart, end=tstop, freq="h")
 
     # Create DataFrame with constant elevation value
-    elevation_time_series_constant = pd.DataFrame(
+    elevation_time_series_constant: pd.DataFrame = pd.DataFrame(
         data={"water_level": elevation},  # Use extracted elevation value
         index=time_range,
     )
 
     # Extract a unique index from the outflow point. Here, we use 1 as an example.
-    outflow_index = 1  # This should be the index or a suitable ID of the outflow point
-    elevation_time_series_constant.columns = [
+    outflow_index: int = (
+        1  # This should be the index or a suitable ID of the outflow point
+    )
+    elevation_time_series_constant.columns: list[int] = [
         outflow_index
     ]  # Use an integer as column name
 
@@ -108,7 +110,7 @@ def set_river_outflow_boundary_condition(
         timeseries=elevation_time_series_constant,  # Constant time series
         locations=outflow,  # Outflow point
     )
-    sf.set_root(simulation_root, mode="w+")
+    sf.set_root(str(simulation_root), mode="w+")
 
     sf.write_forcing()
 
@@ -132,7 +134,7 @@ class SFINCSRootModel:
                 Also used to create the path to write the file to disk.
         """
         self.model = model
-        self._name = name
+        self._name: str = name
 
     @property
     def name(self) -> str:

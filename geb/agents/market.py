@@ -10,6 +10,8 @@ import numpy as np
 import statsmodels.api as sm
 from numpy.linalg import LinAlgError
 
+from geb.typing import TwoDArrayFloat32
+
 from ..data import load_regional_crop_data_from_dict
 from ..store import DynamicArray
 from .general import AgentBaseClass
@@ -72,9 +74,23 @@ class Market(AgentBaseClass):
 
     @property
     def name(self) -> str:
+        """Get the name of the module.
+
+        This is used for saving data to disk
+
+        Returns:
+            The name of the module.
+        """
         return "agents.market"
 
     def spinup(self) -> None:
+        """Initialize market arrays for production, income, and model parameters.
+
+        This method sets up the data structures needed to track market dynamics over
+        the simulation period. It initializes arrays for crop production, farmer income,
+        and the parameters of the price model. It also loads and processes
+        historical inflation data to adjust prices over time.
+        """
         n_crops = len(self.agents.crop_farmers.var.crop_ids.keys())
         n_years = (
             self.model.config["general"]["end_time"].year
@@ -86,7 +102,7 @@ class Market(AgentBaseClass):
             dtype=np.float32,
             fill_value=np.nan,
             extra_dims=(n_years,),
-            extra_dims_names=("years",),
+            extra_dims_names=["years"],
         )
         self.var.total_farmer_income = DynamicArray(
             n=n_crops,
@@ -94,7 +110,7 @@ class Market(AgentBaseClass):
             dtype=np.float32,
             fill_value=np.nan,
             extra_dims=(n_years,),
-            extra_dims_names=("years",),
+            extra_dims_names=["years"],
         )
 
         self.var.parameters = DynamicArray(
@@ -103,7 +119,7 @@ class Market(AgentBaseClass):
             dtype=np.float32,
             fill_value=np.nan,
             extra_dims=(2,),
-            extra_dims_names=("params",),
+            extra_dims_names=["params"],
         )
 
         with open(self.model.files["dict"]["socioeconomics/inflation_rates"], "r") as f:
@@ -122,6 +138,16 @@ class Market(AgentBaseClass):
                 self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
 
     def estimate_price_model(self) -> None:
+        """Estimate the parameters of the crop price model using OLS regression.
+
+        This method fits a log-log ordinary least squares (OLS) model to estimate
+        the relationship between crop production and price. The model is specified as:
+        log(price) = β₀ + β₁ * log(production)
+
+        The estimated parameters (β₀ and β₁) are stored for each crop. The model
+        is fitted using data from the beginning of the simulation up to the
+        current year. It handles cases where the regression fails to converge.
+        """
         estimation_start_year = 1  # skip first year
         estimation_end_year = (
             self.model.current_time.year
@@ -166,7 +192,22 @@ class Market(AgentBaseClass):
 
         print(self.var.parameters)
 
-    def get_modelled_crop_prices(self) -> np.ndarray:
+    def get_modelled_crop_prices(self) -> TwoDArrayFloat32:
+        """Calculate and return crop prices based on the estimated price model.
+
+        This method uses the previously estimated OLS model parameters to predict
+        crop prices for the current year. The prediction is based on the previous
+        year's production levels. The formula for the prediction is:
+        price = exp(β₀ + β₁ * log(production))
+
+        The predicted prices are then adjusted for inflation using a cumulative
+        inflation factor.
+
+        Returns:
+            A 2D numpy array of predicted crop prices for each region and crop,
+            adjusted for inflation (USD/ton). Infilation is included based on the
+            current year index.
+        """
         number_of_regions = self._crop_prices[1].shape[1]
 
         price_pred_per_region = np.full(
@@ -201,6 +242,13 @@ class Market(AgentBaseClass):
         )
 
     def track_production_and_price(self) -> None:
+        """Aggregate and record total crop production and farmer income for the current timestep.
+
+        This method is called at each timestep to update the yearly production and
+        income totals. It aggregates the harvested yield and income from all
+        crop farmers and stores it in the respective yearly arrays. Income is
+        adjusted for inflation before being stored.
+        """
         if self.model.current_day_of_year == 1:
             self.var.production[:, self.year_index] = 0
             self.var.total_farmer_income[:, self.year_index] = 0
@@ -223,7 +271,12 @@ class Market(AgentBaseClass):
         )
 
     def step(self) -> None:
-        """This function is run each timestep."""
+        """Execute the market agent's actions for the current timestep.
+
+        This function tracks production and income daily. It also triggers the
+        re-estimation of the price model at the end of the spinup period and
+        at regular 5-year intervals thereafter.
+        """
         if not self.model.simulate_hydrology:
             return
         self.track_production_and_price()
@@ -247,7 +300,14 @@ class Market(AgentBaseClass):
         self.report(locals())
 
     @property
-    def crop_prices(self) -> np.ndarray:
+    def crop_prices(self) -> TwoDArrayFloat32:
+        """Get the crop prices for the current timestep per region.
+
+        If dynamic market is enabled, it returns the modelled crop prices. Otherwise, it returns the static crop prices.
+
+        Returns:
+            The crop prices for the current timestep per region. The first dimension corresponds to regions, and the second to crop IDs.
+        """
         if (
             not self.model.in_spinup
             and "dynamic_market" in self.config
@@ -255,26 +315,16 @@ class Market(AgentBaseClass):
         ):
             return self.get_modelled_crop_prices()
         else:
-            if self._crop_prices[0] is None:
-                print("WARNING: Using static crop prices")
-                return np.full(
-                    (
-                        len(self.model.regions),
-                        len(self.agents.crop_farmers.var.crop_ids),
-                    ),
-                    self._crop_prices[1],
-                )
-            else:
-                index = self._crop_prices[0].get(self.model.current_time)
-                return self._crop_prices[1][index]
+            index = self._crop_prices[0].get(self.model.current_time)
+            return self._crop_prices[1][index]
 
     @property
     def year_index(self) -> int:
-        # print("time is:")
-        # print(
-        #     self.model.current_time.year
-        #     - self.model.config["general"]["spinup_time"].year
-        # )
+        """Get the current year index since the start of the simulation.
+
+        Returns:
+            The current year index.
+        """
         return (
             self.model.current_time.year
             - self.model.config["general"]["spinup_time"].year

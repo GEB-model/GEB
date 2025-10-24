@@ -16,7 +16,14 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import KDTree
 
-from geb.typing import ArrayFloat32, TwoDFloatArrayFloat32
+from geb.typing import (
+    ArrayFloat32,
+    ArrayInt32,
+    ThreeDArrayFloat32,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
+    TwoDArrayInt32,
+)
 from geb.workflows.io import load_grid, open_zarr
 from geb.workflows.raster import compress
 
@@ -277,7 +284,7 @@ class Grid(BaseVariables):
 
         BaseVariables.__init__(self)
 
-    def full(self, *args: Any, **kwargs: Any) -> TwoDFloatArrayFloat32:
+    def full(self, *args: Any, **kwargs: Any) -> TwoDArrayFloat32:
         """Return a full array with size of mask. Takes any other argument normally used in np.full.
 
         Args:
@@ -379,47 +386,47 @@ class Grid(BaseVariables):
         return data
 
     @property
-    def pr_kg_per_m2_per_s(self) -> npt.NDArray[np.float32]:
+    def pr_kg_per_m2_per_s(self) -> ArrayFloat32:
         """Get precipitation rate for grid in kg/m²/s."""
         return self.compress(self.model.forcing.load("pr_kg_per_m2_per_s"))
 
     @property
-    def ps_pascal(self) -> npt.NDArray[np.float32]:
+    def ps_pascal(self) -> ArrayFloat32:
         """Get surface pressure for grid in Pa."""
         return self.compress(self.model.forcing.load("ps_pascal"))
 
     @property
-    def rlds_W_per_m2(self) -> npt.NDArray[np.float32]:
+    def rlds_W_per_m2(self) -> ArrayFloat32:
         """Get downward longwave radiation for grid in W/m²."""
         return self.compress(self.model.forcing.load("rlds_W_per_m2"))
 
     @property
-    def rsds_W_per_m2(self) -> npt.NDArray[np.float32]:
+    def rsds_W_per_m2(self) -> ArrayFloat32:
         """Get downward shortwave radiation for grid in W/m²."""
         return self.compress(self.model.forcing.load("rsds_W_per_m2"))
 
     @property
-    def tas_2m_K(self) -> npt.NDArray[np.float32]:
+    def tas_2m_K(self) -> ArrayFloat32:
         """Get air temperature at 2m for grid in K."""
         return self.compress(self.model.forcing.load("tas_2m_K"))
 
     @property
-    def dewpoint_tas_2m_K(self) -> npt.NDArray[np.float32]:
+    def dewpoint_tas_2m_K(self) -> ArrayFloat32:
         """Get dewpoint temperature at 2m for grid in K."""
         return self.compress(self.model.forcing.load("dewpoint_tas_2m_K"))
 
     @property
-    def wind_u10m_m_per_s(self) -> npt.NDArray[np.float32]:
+    def wind_u10m_m_per_s(self) -> ArrayFloat32:
         """Get u-component of wind at 10m for grid in m/s."""
         return self.compress(self.model.forcing.load("wind_u10m_m_per_s"))
 
     @property
-    def wind_v10m_m_per_s(self) -> npt.NDArray[np.float32]:
+    def wind_v10m_m_per_s(self) -> ArrayFloat32:
         """Get v-component of wind at 10m for grid in m/s."""
         return self.compress(self.model.forcing.load("wind_v10m_m_per_s"))
 
     @property
-    def spei_uncompressed(self) -> npt.NDArray[np.float32]:
+    def spei_uncompressed(self) -> TwoDArrayFloat32:
         """Get uncompressed version of SPEI.
 
         We want to get the closest SPEI value, so if we are in the second
@@ -452,38 +459,38 @@ class Grid(BaseVariables):
             ):
                 spei_time: datetime = current_time.replace(day=1)
 
-        spei = self.model.forcing.load("SPEI", time=spei_time)
+        spei: ThreeDArrayFloat32 = self.model.forcing.load("SPEI", dt=spei_time)
         assert spei.ndim == 3 and spei.shape[0] == 1
-        spei = spei[0]
+        spei: TwoDArrayFloat32 = spei[0]
         return spei
 
     @property
-    def gev_c(self) -> npt.NDArray[np.float32]:
+    def gev_c(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of SPEI for grid."""
         return open_zarr(self.model.files["other"]["climate/gev_c"])
 
     @property
-    def gev_loc(self) -> npt.NDArray[np.float32]:
+    def gev_loc(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of SPEI for grid."""
         return open_zarr(self.model.files["other"]["climate/gev_loc"])
 
     @property
-    def gev_scale(self) -> npt.NDArray[np.float32]:
+    def gev_scale(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of SPEI for grid."""
         return open_zarr(self.model.files["other"]["climate/gev_scale"])
 
     @property
-    def pr_gev_c(self) -> npt.NDArray[np.float32]:
+    def pr_gev_c(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of rainfall distribution for grid."""
         return load_grid(self.model.files["grid"]["climate/pr_gev_c"])
 
     @property
-    def pr_gev_loc(self) -> npt.NDArray[np.float32]:
+    def pr_gev_loc(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of rainfall distribution for grid."""
         return load_grid(self.model.files["grid"]["climate/pr_gev_loc"])
 
     @property
-    def pr_gev_scale(self) -> npt.NDArray[np.float32]:
+    def pr_gev_scale(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of rainfall distribution for grid."""
         return load_grid(self.model.files["grid"]["climate/pr_gev_scale"])
 
@@ -585,17 +592,17 @@ class HRUs(BaseVariables):
     @staticmethod
     @njit(cache=True)
     def create_HRUs_numba(
-        farms: npt.NDArray[np.int32],
-        land_use_classes: npt.NDArray[np.int32],
-        mask: npt.NDArray[np.bool_],
+        farms: TwoDArrayInt32,
+        land_use_classes: TwoDArrayInt32,
+        mask: TwoDArrayBool,
         scaling: int,
     ) -> tuple[
-        npt.NDArray[np.int32],
-        npt.NDArray[np.float32],
-        npt.NDArray[np.int32],
-        npt.NDArray[np.int32],
-        npt.NDArray[np.int32],
-        npt.NDArray[np.int32],
+        ArrayInt32,
+        ArrayFloat32,
+        ArrayInt32,
+        ArrayInt32,
+        ArrayInt32,
+        TwoDArrayInt32,
     ]:
         """Numba helper function to create HRUs.
 

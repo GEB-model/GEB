@@ -195,7 +195,7 @@ def test_accuflux(
         waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
-        Q_prev=Q_initial[mask],
+        Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
@@ -254,7 +254,7 @@ def test_accuflux_with_longer_dt(
         waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
-        Q_prev=Q_initial[mask],
+        Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
@@ -312,7 +312,7 @@ def test_accuflux_with_sideflow(
         waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
-        Q_prev=Q_initial[mask],
+        Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),
@@ -398,7 +398,7 @@ def test_accuflux_with_water_bodies(
         waterbody_inflow_m3,
         outflow_at_pits_m3,
     ) = router.step(
-        Q_prev=Q_initial[mask],
+        Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=waterbody_storage_m3,
@@ -466,7 +466,7 @@ def test_kinematic(
     )[mask]
 
     router.step(
-        Q_prev=Q_initial[mask],
+        Q_prev_m3_s=Q_initial[mask],
         sideflow_m3=sideflow,
         evaporation_m3=np.zeros_like(sideflow, dtype=np.float32),
         waterbody_storage_m3=np.ndarray(0, dtype=np.float64),

@@ -1,6 +1,7 @@
 """Workflow helpers used in the GEB."""
 
 from time import time
+from typing import Iterable
 
 import numpy as np
 
@@ -56,10 +57,10 @@ class TimingModule:
 def balance_check(
     name: str,
     how: str = "cellwise",
-    influxes: list = [],
-    outfluxes: list = [],
-    prestorages: list = [],
-    poststorages: list = [],
+    influxes: Iterable = [],
+    outfluxes: Iterable = [],
+    prestorages: Iterable = [],
+    poststorages: Iterable = [],
     tolerance: float = 1e-10,
     error_identifiers: dict = {},
     raise_on_error: bool = False,

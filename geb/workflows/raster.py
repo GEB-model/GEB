@@ -24,8 +24,8 @@ from scipy.interpolate import griddata
 from shapely.geometry import Polygon
 
 from geb.typing import (
-    TwoDFloatArrayFloat32,
-    TwoDFloatArrayFloat64,
+    TwoDArrayFloat32,
+    TwoDArrayFloat64,
 )
 
 
@@ -446,8 +446,8 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
     """
 
     def fillna_nearest_2d(
-        arr: TwoDFloatArrayFloat32 | TwoDFloatArrayFloat64, dims: tuple[str, ...]
-    ) -> TwoDFloatArrayFloat32 | TwoDFloatArrayFloat64:
+        arr: TwoDArrayFloat32 | TwoDArrayFloat64, dims: tuple[str, ...]
+    ) -> TwoDArrayFloat32 | TwoDArrayFloat64:
         """Fill NaN values in a 2D array using nearest neighbor interpolation.
 
         Args:
@@ -662,7 +662,7 @@ def resample_chunked(
 
 def calculate_cell_area(
     affine_transform: Affine, shape: tuple[int, int]
-) -> TwoDFloatArrayFloat32:
+) -> TwoDArrayFloat32:
     """Calculate the area of each cell in a grid given its affine transform.
 
     Must be in a geographic coordinate system (degrees).

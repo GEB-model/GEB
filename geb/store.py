@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import pickle
 import shutil
+from collections import deque
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
@@ -993,6 +995,7 @@ class Bucket:
                 dict,
                 datetime,
                 np.generic,
+                deque,
             ),
         )
         super().__setattr__(name, value)
@@ -1050,6 +1053,11 @@ class Bucket:
                 np.save((path / name).with_suffix(".npy"), value)
             elif isinstance(value, np.generic):
                 np.save((path / name).with_suffix(".npy"), value)
+            elif isinstance(value, deque):
+                # TODO: Remove this option when we use the BMI of SFINCS and deques
+                # are no longer needed.
+                with open((path / name).with_suffix(".pkl"), "wb") as f:
+                    pickle.dump(value, f)
             else:
                 raise ValueError(f"Cannot save value of type {type(value)} for {name}")
 
@@ -1109,6 +1117,15 @@ class Bucket:
             elif filename.suffix == ".json":
                 with open(filename, "r") as f:
                     setattr(self, filename.stem, json.load(f))
+            elif filename.suffix == ".pkl":
+                # TODO: Remove this option when we use the BMI of SFINCS and deques
+                # are no longer needed.
+                with open(filename, "rb") as f:
+                    setattr(
+                        self,
+                        filename.stem,
+                        pickle.load(f),
+                    )
             else:
                 raise ValueError(f"Cannot load value {filename}")
 
