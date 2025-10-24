@@ -69,6 +69,7 @@ dependencies = [
     "pystac-client>=0.9.0",
     "ecmwf-api-client>=1.6.5",
     "ruff>=0.14.0",
+    "snakemake>=9.13.4",
 ]
 requires-python = ">=3.12, <3.14"
 readme = "README.md"
@@ -192,13 +193,6 @@ preview = true
     "D103",
 ]
 "geb/build/modules/observations.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D103",
-    "D102",
-]
-"geb/{sensitivity,multirun,calibrate}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",
