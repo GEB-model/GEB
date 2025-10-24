@@ -1,7 +1,5 @@
 """Data adapter for obtaining ERA5 data from the Destination Earth."""
 
-from __future__ import annotations
-
 import base64
 import os
 from datetime import datetime, timedelta
@@ -48,7 +46,7 @@ class DestinationEarth(Adapter):
         auth_headers: dict[str, str] = {"Authorization": f"Basic {encoded_auth}"}
         return auth_headers
 
-    def fetch(self, url: str) -> DestinationEarth:
+    def fetch(self, url: str) -> "DestinationEarth":
         """Set the URL for the Destination Earth data source.
 
         Args:
