@@ -105,7 +105,7 @@ def parse_config(
             Loader=DetectDuplicateKeysYamlLoader,
         )
         if config is None:
-            config: dict[str, Any] = {}
+            config = {}
         current_directory = current_directory / Path(config_path).parent
 
     if "inherits" in config:
