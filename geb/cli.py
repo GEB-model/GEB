@@ -24,10 +24,7 @@ from geb import __version__
 from geb.build import GEBModel as GEBModelBuild
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
-from geb.multirun import multi_run as geb_multi_run
-from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 from geb.workflows.io import WorkingDirectory
 from geb.workflows.methods import multi_level_merge
 
@@ -417,51 +414,6 @@ def exec(method: str, *args: Any, **kwargs: Any) -> None:
         **kwargs: Keyword arguments to pass to the method.
     """
     run_model_with_method(method=method, *args, **kwargs)
-
-
-@cli.command()
-@click_config
-@working_directory_option
-def calibrate(config: str | dict[str, Any], working_directory: Path) -> None:
-    """Function to run model calibration.
-
-    Args:
-        config: Path to the model configuration file or a dict with the config.
-        working_directory: Working directory for the model.
-    """
-    with WorkingDirectory(working_directory):
-        config = parse_config(config)
-        geb_calibrate(config, working_directory)
-
-
-@cli.command()
-@click_config
-@working_directory_option
-def sensitivity(config: str | dict[str, Any], working_directory: Path) -> None:
-    """Function to run sensitivity analysis.
-
-    Args:
-        config: Path to the model configuration file or a dict with the config.
-        working_directory: Working directory for the model.
-    """
-    with WorkingDirectory(working_directory):
-        config = parse_config(config)
-        geb_sensitivity_analysis(config, working_directory)
-
-
-@cli.command()
-@click_config
-@working_directory_option
-def multirun(config: str | dict[str, Any], working_directory: Path) -> None:
-    """Function to run multiple model configurations.
-
-    Args:
-        config: Path to the model configuration file or a dict with the config.
-        working_directory: Working directory for the model.
-    """
-    with WorkingDirectory(working_directory):
-        config = parse_config(config)
-        geb_multi_run(config, working_directory)
 
 
 def click_build_options(
@@ -1339,7 +1291,9 @@ def data_catalog(method: str) -> None:
 @click.argument(
     "workflow_name",
     required=True,
-    type=click.Choice(["calibrate", "sensitivity", "multirun"], case_sensitive=True),
+    type=click.Choice(
+        ["calibrate", "sensitivity", "multirun", "benchmark"], case_sensitive=True
+    ),
 )
 @click.option(
     "--cores",
@@ -1405,7 +1359,7 @@ def workflow(
 
     with WorkingDirectory(working_directory):
         # Build snakemake command
-        cmd = ["snakemake"]
+        cmd: list[str] = ["snakemake", "--directory", str(working_directory)]
 
         # Determine and add snakefile and configfile from GEB package
         snakefile = geb_dir / "workflow" / f"Snakefile_{workflow_name}"
@@ -1448,11 +1402,6 @@ def workflow(
                         f"Warning: Invalid config override '{override}'. Expected format: KEY=VALUE",
                         err=True,
                     )
-
-        # Auto-set BASE_DIR to empty string (current directory) if not explicitly set
-        # Use empty string instead of "." to avoid Snakemake warnings about "./" prefix
-        if "BASE_DIR" not in config_overrides_dict:
-            config_overrides_dict["BASE_DIR"] = ""
 
         if config_overrides_dict:
             cmd.append("--config")

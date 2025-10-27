@@ -5,6 +5,10 @@ This module contains rules specific to calibration workflows using DEAP:
 - Fitness aggregation and selection
 - Offspring creation
 - Pareto front computation
+
+The calibration workflow uses RUNS_DIR (defined in common.smk) to organize
+individual model runs in the format: {RUNS_DIR}/{gen}_{ind}/
+This pattern is similar to benchmark's {BENCHMARK_DIR}/{catchment}/ pattern.
 """
 
 import random
@@ -12,22 +16,43 @@ import yaml
 import numpy as np
 from deap import base, creator, tools, algorithms
 import array
+from pathlib import Path
 
-# Calibration-specific configuration
-NGEN = config.get("NGEN", 5)  # Number of generations
-MU = config.get("MU", 10)  # Population size
-LAMBDA = config.get("LAMBDA", 20)  # Offspring size per generation
+# Load model configuration to get calibration settings
+def load_model_config():
+    """Load the model.yml configuration file."""
+    model_file = Path("model.yml")
+    if not model_file.exists():
+        raise FileNotFoundError(f"Model configuration file not found: {model_file}")
+    
+    with open(model_file, "r") as f:
+        return yaml.safe_load(f)
 
-# Parameter configuration (will be read from config later, but for now use defaults)
-# These define the parameter space to explore
-PARAMETERS = config.get("PARAMETERS", {
-    "param1": {"min": 0.0, "max": 1.0},
-    "param2": {"min": 0.0, "max": 1.0},
-})
+MODEL_CONFIG = load_model_config()
+CALIBRATION_CONFIG = MODEL_CONFIG["calibration"]
+
+# Calibration-specific configuration from model.yml
+NGEN = CALIBRATION_CONFIG["DEAP"]["ngen"]  # Number of generations
+MU = CALIBRATION_CONFIG["DEAP"]["mu"]  # Population size
+LAMBDA = CALIBRATION_CONFIG["DEAP"]["lambda_"]  # Offspring size per generation
+
+# Parameter configuration from model.yml calibration section
+PARAMETERS = {}
+for param_name, param_config in CALIBRATION_CONFIG["parameters"].items():
+    PARAMETERS[param_name] = {
+        "min": param_config["min"],
+        "max": param_config["max"],
+        "variable": param_config["variable"]
+    }
+
 N_PARAMETERS = len(PARAMETERS)
 
+# Fitness configuration from calibration targets
+CALIBRATION_TARGETS = CALIBRATION_CONFIG["calibration_targets"]
+weights = [CALIBRATION_TARGETS[target] for target in CALIBRATION_TARGETS.keys()]
+
 # Initialize DEAP components
-creator.create("FitnessMulti", base.Fitness, weights=(1.0,))  # Single objective for now
+creator.create("FitnessMulti", base.Fitness, weights=weights)
 creator.create("Individual", array.array, typecode="d", fitness=creator.FitnessMulti)
 
 toolbox = base.Toolbox()
@@ -40,12 +65,15 @@ toolbox.register(
     N_PARAMETERS,
 )
 toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-toolbox.register("mate", tools.cxBlend, alpha=0.15)
-toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=0.3, indpb=0.3)
+toolbox.register("mate", tools.cxBlend, alpha=CALIBRATION_CONFIG["DEAP"]["blend_alpha"])
+toolbox.register("mutate", tools.mutGaussian, 
+                 mu=0, 
+                 sigma=CALIBRATION_CONFIG["DEAP"]["gaussian_sigma"], 
+                 indpb=CALIBRATION_CONFIG["DEAP"]["gaussian_indpb"])
 toolbox.register("select", tools.selNSGA2)
 
 # Set random seed for reproducibility
-random.seed(config.get("SEED", 42))
+random.seed(42)
 
 # Generate initial population (generation 0)
 def generate_initial_population():
@@ -67,25 +95,25 @@ INITIAL_POPULATION = generate_initial_population()
 # Generate parameters for generation 0 (initial population)
 rule generate_initial_parameters:
     input:
-        f"{BASE_DIR}/base_build.done" if BASE_DIR else "base_build.done"
+        "base_build.done"
     output:
-        f"{BASE_DIR}/generation_0_population.yml" if BASE_DIR else "generation_0_population.yml"
+        "generation_0_population.yml"
     run:
         # Save initial population
-        import os
-        if BASE_DIR:
-            os.makedirs(BASE_DIR, exist_ok=True)
         with open(output[0], "w") as f:
             yaml.dump({"individuals": INITIAL_POPULATION}, f, default_flow_style=False)
 
 # Generate parameter file for a specific individual
 rule generate_individual_parameters:
     input:
-        pop_file=lambda wildcards: f"{BASE_DIR}/generation_{wildcards.gen}_population.yml" if BASE_DIR else f"generation_{wildcards.gen}_population.yml"
+        pop_file=lambda wildcards: "generation_0_population.yml" if int(wildcards.gen) == 0 else f"generation_{int(wildcards.gen) - 1}_next.yml",
+        # Ensure previous generation's checkpoint is complete before creating params for the next generation.
+        # This is the key to resolving the cyclic dependency for generational workflows.
+        checkpoint_done=lambda wildcards: checkpoints.create_next_generation.get(gen=int(wildcards.gen) - 1).output if int(wildcards.gen) > 0 else []
     output:
         params=f"{RUNS_DIR}/{{gen}}_{{ind}}/parameters.yml"
     run:
-        import os
+        import yaml
         
         # Load the population file
         with open(input.pop_file, "r") as f:
@@ -119,22 +147,22 @@ rule generate_individual_parameters:
         }
         
         # Save parameters as YAML
-        os.makedirs(os.path.dirname(output.params), exist_ok=True)
+        Path(output.params).parent.mkdir(parents=True, exist_ok=True)
         with open(output.params, "w") as f:
             yaml.dump(params_data, f, default_flow_style=False, sort_keys=False)
 
 # Aggregate fitness for a generation and create next generation
-# This is a checkpoint because it creates files (offspring population) that will be needed
-# as input for the next generation's rules
 checkpoint create_next_generation:
     input:
         fitness_files=lambda wildcards: [
             f"{RUNS_DIR}/{wildcards.gen}_{i:03d}/fitness.yml"
             for i in range(MU if int(wildcards.gen) == 0 else LAMBDA)
         ],
-        prev_pop=lambda wildcards: f"{BASE_DIR}/generation_{int(wildcards.gen)}_population.yml" if BASE_DIR else f"generation_{int(wildcards.gen)}_population.yml"
+        prev_pop=lambda wildcards: "generation_0_population.yml" if int(wildcards.gen) == 0 else f"generation_{int(wildcards.gen) - 1}_next.yml"
     output:
-        next_pop=f"{BASE_DIR}/generation_{{gen,[0-9]+}}_selected.yml" if BASE_DIR else "generation_{gen,[0-9]+}_selected.yml"
+        selected_pop="generation_{gen}_selected.yml",
+        summary="generation_{gen}_summary.yml",
+        next_pop="generation_{gen}_next.yml"
     run:
         gen = int(wildcards.gen)
         
@@ -149,7 +177,7 @@ checkpoint create_next_generation:
                 fitness_data = yaml.safe_load(f)
             
             # Find corresponding individual
-            label = f"{gen:02d}_{i:03d}"
+            label = f"{gen}_{i:03d}"
             ind_data = None
             for ind in pop_data["individuals"]:
                 if ind["label"] == label:
@@ -161,7 +189,7 @@ checkpoint create_next_generation:
                 individuals_with_fitness.append(ind_data)
         
         # Save current generation with fitness
-        with open(output.next_pop, "w") as f:
+        with open(output.selected_pop, "w") as f:
             yaml.dump({"individuals": individuals_with_fitness}, f, default_flow_style=False)
         
         # If not the last generation, create offspring
@@ -177,7 +205,9 @@ checkpoint create_next_generation:
             selected = toolbox.select(deap_individuals, MU)
             
             # Create offspring using varOr
-            offspring = algorithms.varOr(selected, toolbox, LAMBDA, cxpb=0.7, mutpb=0.3)
+            offspring = algorithms.varOr(selected, toolbox, LAMBDA, 
+                                       cxpb=CALIBRATION_CONFIG["DEAP"]["crossover_prob"], 
+                                       mutpb=CALIBRATION_CONFIG["DEAP"]["mutation_prob"])
             
             # Ensure bounds
             for child in offspring:
@@ -188,16 +218,19 @@ checkpoint create_next_generation:
             offspring_data = []
             for i, child in enumerate(offspring):
                 offspring_data.append({
-                    "label": f"{gen+1:02d}_{i:03d}",
+                    "label": f"{gen+1}_{i:03d}",
                     "generation": gen + 1,
                     "individual_id": f"{i:03d}",
                     "values": [float(x) for x in child]
                 })
             
-            # Save offspring population
-            pop_file = f"{BASE_DIR}/generation_{gen+1}_population.yml" if BASE_DIR else f"generation_{gen+1}_population.yml"
-            with open(pop_file, "w") as f:
+            # Save offspring population for the next generation
+            with open(output.next_pop, "w") as f:
                 yaml.dump({"individuals": offspring_data}, f, default_flow_style=False)
+        else:
+            # Last generation - create empty population file
+            with open(output.next_pop, "w") as f:
+                yaml.dump({"individuals": []}, f, default_flow_style=False)
         
         # Save generation summary
         summary_data = {
@@ -212,35 +245,32 @@ checkpoint create_next_generation:
                           for i in range(len(individuals_with_fitness[0]["fitness"]))],
         }
         
-        summary_file = f"{BASE_DIR}/generation_{gen}_summary.yml" if BASE_DIR else f"generation_{gen}_summary.yml"
-        with open(summary_file, "w") as f:
+        with open(output.summary, "w") as f:
             yaml.dump(summary_data, f, default_flow_style=False)
 
-# Helper function to aggregate all generation selected files
-def get_all_generation_selected_files(wildcards):
-    """Get all generation selected files by iterating through checkpoints."""
-    selected_files = []
-    for gen in range(NGEN):
-        if gen > 0:
-            # Wait for the checkpoint from previous generation
-            checkpoints.create_next_generation.get(gen=gen-1)
-        selected_file = f"{BASE_DIR}/generation_{gen}_selected.yml" if BASE_DIR else f"generation_{gen}_selected.yml"
-        selected_files.append(selected_file)
-    return selected_files
+
+# Helper function to aggregate all generation selected files from the checkpoint
+def aggregate_checkpoint_outputs(wildcards):
+    """Get all generation_selected.yml files by iterating through checkpoints."""
+    # Trigger the final checkpoint to ensure all generations are complete
+    checkpoints.create_next_generation.get(gen=NGEN - 1)
+    # Now we can safely construct the list of all selected files
+    return [f"generation_{gen}_selected.yml" for gen in range(NGEN)]
+
 
 # Final aggregation
 rule complete_calibration:
     input:
-        get_all_generation_selected_files
+        aggregate_checkpoint_outputs
     output:
-        touch(f"{BASE_DIR}/calibration_complete.done" if BASE_DIR else "calibration_complete.done")
+        touch("calibration_complete.done")
     run:
         print(f"Calibration complete: {NGEN} generations")
         
         # Create final summary with Pareto front
         all_individuals = []
         for gen in range(NGEN):
-            selected_file = f"{BASE_DIR}/generation_{gen}_selected.yml" if BASE_DIR else f"generation_{gen}_selected.yml"
+            selected_file = f"generation_{gen}_selected.yml"
             with open(selected_file, "r") as f:
                 gen_data = yaml.safe_load(f)
                 all_individuals.extend(gen_data["individuals"])
@@ -265,7 +295,7 @@ rule complete_calibration:
                 "fitness": list(ind.fitness.values)
             })
         
-        pareto_file = f"{BASE_DIR}/pareto_front.yml" if BASE_DIR else "pareto_front.yml"
+        pareto_file = "pareto_front.yml"
         with open(pareto_file, "w") as f:
             yaml.dump({"pareto_front": pareto_data}, f, default_flow_style=False)
         

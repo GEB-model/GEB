@@ -1,65 +1,51 @@
-"""Common rules and functions shared across GEB workflows.
+"""Common rules and functions shared across GEB workflows."""
 
-This module contains reusable rules for:
-- Base model initialization and building
-- Parameter file generation
-- Individual model execution (init, spinup, run, evaluate)
-"""
-
-import os
 from pathlib import Path
 
-# Common configuration
-REGION = config.get("REGION", "geul")
-BASE_DIR = config.get("BASE_DIR", f"tests/tmp/snakemake/{REGION}")
-
-# Handle empty BASE_DIR (current directory case)
-if BASE_DIR:
-    RUNS_DIR = f"{BASE_DIR}/runs"
-else:
-    RUNS_DIR = "runs"
+# Common configuration - can be customized by workflows
+RUNS_DIR = config.get("RUNS_DIR", "runs")
 
 # Initialize the base model (done once)
 rule init_base:
     output:
-        touch(f"{BASE_DIR}/base_init.done" if BASE_DIR else "base_init.done")
+        touch("base_init.done")
     log:
-        f"{BASE_DIR}/logs/base_init.log" if BASE_DIR else "logs/base_init.log"
+        "logs/base_init.log"
     shell:
         """
         mkdir -p $(dirname {log})
-        uv run geb init --overwrite 2>&1 | tee {log}
+        geb init --overwrite 2>&1 | tee {log}
         """
 
 # Build the base model
 rule build_base:
     input:
-        f"{BASE_DIR}/base_init.done" if BASE_DIR else "base_init.done"
+        "base_init.done"
     output:
-        touch(f"{BASE_DIR}/base_build.done" if BASE_DIR else "base_build.done")
+        touch("base_build.done")
     log:
-        f"{BASE_DIR}/logs/base_build.log" if BASE_DIR else "logs/base_build.log"
+        "logs/base_build.log"
     shell:
         """
-        uv run geb build 2>&1 | tee {log}
+        geb build 2>&1 | tee {log}
         """
 
 # Initialize individual run directory
 rule init_individual:
     input:
         params=f"{RUNS_DIR}/{{gen}}_{{ind}}/parameters.yml",
-        base_build=f"{BASE_DIR}/base_build.done" if BASE_DIR else "base_build.done"
+        base_build="base_build.done"
     output:
         touch(f"{RUNS_DIR}/{{gen}}_{{ind}}/init.done")
     log:
         f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/init.log"
     run:
-        import os
         import yaml
         
         # Create run directory and logs
-        run_dir = f"{RUNS_DIR}/{wildcards.gen}_{wildcards.ind}"
-        os.makedirs(f"{run_dir}/logs", exist_ok=True)
+        run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "logs").mkdir(parents=True, exist_ok=True)
         
         # Create empty build.yml and update.yml
         with open(f"{run_dir}/build.yml", "w") as f:
@@ -82,7 +68,7 @@ rule alter_individual:
         f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/alter.log"
     shell:
         """
-        uv run geb alter --from-model ../../. -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
+        geb alter --from-model ../../. -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
         """
 
 # Apply parameters to individual config
@@ -96,7 +82,6 @@ rule set_individual_parameters:
         f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/set_params.log"
     run:
         import yaml
-        import os
         
         # Load parameters
         with open(input.params, "r") as f:
@@ -105,29 +90,21 @@ rule set_individual_parameters:
         actual_params = params_data["parameters"]
         
         # Get the directory for this individual
-        run_dir = os.path.join(RUNS_DIR, f"{wildcards.gen}_{wildcards.ind}")
+        run_dir = Path(RUNS_DIR) / f"{wildcards.gen}_{wildcards.ind}"
         
-        # Build geb set command for each parameter using working directory
-        commands = []
-        for param_name, param_value in actual_params.items():
-            commands.append(f"uv run geb set -c model.yml --working-directory {run_dir} {param_name}={param_value}")
-
-        # Set reporting to null
-        commands.append(f"uv run geb set -c model.yml --working-directory {run_dir} report=null")
-
-        # Overwrite reporting but now with specific parameters
-        commands.append(f"uv run geb set -c model.yml --working-directory {run_dir} report._discharge_stations=true")
+        # Build single geb set command with all parameters
+        param_args = " ".join(f"{param_name}={param_value}" for param_name, param_value in actual_params.items())
+        cmd = f"geb set -c model.yml --working-directory {run_dir} {param_args} report=null report._discharge_stations=true"
         
-        # Execute all set commands
+        # Execute the set command
         import subprocess
         with open(log[0], "w") as log_file:
-            for cmd in commands:
-                log_file.write(f"Running: {cmd}\n")
-                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-                log_file.write(result.stdout)
-                log_file.write(result.stderr)
-                if result.returncode != 0:
-                    raise RuntimeError(f"Failed to set parameter: {cmd}")
+            log_file.write(f"Running: {cmd}\n")
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            log_file.write(result.stdout)
+            log_file.write(result.stderr)
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to set parameters: {cmd}")
 
 # Run spinup for an individual
 rule spinup_individual:
@@ -139,7 +116,7 @@ rule spinup_individual:
         f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/spinup.log"
     shell:
         """
-        uv run geb spinup -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
+        geb spinup -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
         """
 
 # Run main simulation for an individual
@@ -152,7 +129,7 @@ rule run_individual:
         f"{RUNS_DIR}/{{gen}}_{{ind}}/logs/run.log"
     shell:
         """
-        uv run geb run -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
+        geb run -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
         """
 
 # Evaluate an individual
@@ -166,7 +143,7 @@ rule evaluate_individual:
     shell:
         """
         # Use geb evaluate to compute metrics
-        uv run geb evaluate -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
+        geb evaluate -wd {RUNS_DIR}/{wildcards.gen}_{wildcards.ind} 2>&1 | tee {log}
         
         # TODO: Extract fitness score from evaluation results
         # For now, create a dummy fitness file
@@ -175,3 +152,4 @@ rule evaluate_individual:
         # Clean up simulation_root directory to save disk space
         rm -rf {RUNS_DIR}/{wildcards.gen}_{wildcards.ind}/simulation_root
         """
+

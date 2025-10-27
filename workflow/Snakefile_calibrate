@@ -1,39 +1,7 @@
-"""Snakemake workflow for GEB model calibration using DEAP.
-
-This workflow runs a multi-objective calibration using evolutionary algorithms.
-It generates populations of parameter sets, runs GEB for each individual,
-evaluates performance, and iterates to find optimal parameter combinations.
-
-Unlike the original calibrate.py, this uses Snakemake's DAG to manage dependencies
-and parallel execution. Each generation must complete before the next begins,
-as offspring are selected based on parent fitness.
-
-Usage:
-    # Using profile (recommended)
-    snakemake --profile profiles/calibrate
-
-    # Direct execution
-    snakemake -s workflow/Snakefile_calibrate --cores all
-
-    # With custom config
-    snakemake -s workflow/Snakefile_calibrate --cores all --config REGION=geul NGEN=10 MU=20
-
-    # Via GEB CLI (once integrated)
-    geb workflow calibrate --cores all
-"""
+"""Snakemake workflow for GEB model calibration using DEAP."""
 
 # Configuration - can be overridden via command line or config file
-configfile: "workflow/config/calibrate.yml"
-
-# Import configuration
-REGION = config.get("REGION", "geul")
-BASE_DIR = config.get("BASE_DIR", f"tests/tmp/snakemake/calibrate/{REGION}")
-
-# Handle empty BASE_DIR (current directory case)
-if BASE_DIR:
-    RUNS_DIR = f"{BASE_DIR}/runs"
-else:
-    RUNS_DIR = "runs"
+# configfile: "workflow/config/calibrate.yml"  # Now using model.yml calibration section
 
 # Include common rules shared across workflows
 include: "rules/common.smk"
@@ -44,4 +12,4 @@ include: "rules/calibrate.smk"
 # Main target
 rule all:
     input:
-        f"{BASE_DIR}/calibration_complete.done" if BASE_DIR else "calibration_complete.done"
+        "calibration_complete.done"
