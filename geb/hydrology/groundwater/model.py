@@ -591,7 +591,7 @@ class ModFlowSimulation:
         )
 
         # Storage
-        # Somehow modeltime is not available when loading_packge is set to False (the default) and what it should be.
+        # Somehow modeltime is not available when loading_package is set to False (the default) and what it should be.
         # when loading_package is set to True, the model builds find but the simulation doesn't work.
         # TODO: See if this is fixed in a future version of flopy/modflow6, and perhaps file an issue.
         # flopy.mf6.ModflowGwfsto(
