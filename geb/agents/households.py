@@ -945,6 +945,11 @@ class Households(AgentBaseClass):
         self.update_building_adaptation_status(household_adapting_shutters, 2)
         self.update_building_adaptation_status(household_adopting_insurance, 3)
 
+        # ds = xr.open_zarr(
+        #     "C:/Users/nxu279/GitHub/GEB_try/models/etaple/base/output/flood_maps/coastal_0500.zarr"
+        # )
+        # ds.rio.to_raster("C:/Users/nxu279/GitHub/Data/coastal_0500.tif")
+
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting)}")
         print(
