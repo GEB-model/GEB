@@ -209,47 +209,18 @@ class Households(AgentBaseClass):
         self.buildings.loc[buildings_mask, "flooded"] = True
         self.buildings["flooded"].fillna(False, inplace=True)
 
-    # def update_building_adaptation_status(
-    #     self, household_adapting: np.ndarray, strategy_column: str
-    # ) -> None:
-    #     """Update the floodproofing status of buildings based on adapting households."""
-    #     # Extract and clean OSM IDs from adapting households
-    #     osm_ids = pd.DataFrame(
-    #         np.unique(self.var.osm_id.data[household_adapting])
-    #     ).dropna()
-    #     osm_ids = osm_ids.astype(int).astype(str)
-    #     osm_ids[strategy_column] = True
-    #     osm_ids = osm_ids.set_index(0)
-
-    #     # Extract and clean OSM way IDs from adapting households
-    #     osm_way_ids = pd.DataFrame(
-    #         np.unique(self.var.osm_way_id.data[household_adapting])
-    #     ).dropna()
-    #     osm_way_ids = osm_way_ids.astype(int).astype(str)
-    #     osm_way_ids[strategy_column] = True
-    #     osm_way_ids = osm_way_ids.set_index(0)
-
-    #     # Add/Update the flood_proofed status in buildings based on OSM way IDs
-    #     self.buildings[strategy_column] = (
-    #         self.buildings["osm_way_id"].astype(str).map(osm_way_ids[strategy_column])
-    #     )
-    #     self.buildings[strategy_column] = self.buildings[strategy_column].fillna(
-    #         self.buildings["osm_id"].astype(str).map(osm_ids[strategy_column])
-    #     )
-
-    #     # Replace NaNs with False (i.e., buildings not in the adapting households list)
-    #     self.buildings[strategy_column] = self.buildings[strategy_column].fillna(False)
-
     def update_building_adaptation_status(
-        self, household_adapting: np.ndarray, adaptation_type: int
+        self, household_adapting: np.ndarray, adaptation_type: str
     ) -> None:
         """Update buildings based on categorical adaptation array (1=dryfloodproofing, 2=shutters)."""
+        col_name = f"adaptation_{adaptation_type}"
+
         # Extract and clean OSM IDs from adapting households
         osm_ids = pd.DataFrame(
             np.unique(self.var.osm_id.data[household_adapting])
         ).dropna()
         osm_ids = osm_ids.astype(int).astype(str)
-        osm_ids["adaptation_type"] = adaptation_type
+        osm_ids["adapted"] = 1
         osm_ids = osm_ids.set_index(0)
 
         # Extract and clean OSM way IDs from adapting households
@@ -257,22 +228,16 @@ class Households(AgentBaseClass):
             np.unique(self.var.osm_way_id.data[household_adapting])
         ).dropna()
         osm_way_ids = osm_way_ids.astype(int).astype(str)
-        osm_way_ids["adaptation_type"] = adaptation_type
+        osm_way_ids["adapted"] = 1
         osm_way_ids = osm_way_ids.set_index(0)
 
-        if "adaptation_status" not in self.buildings.columns:
-            self.buildings["adaptation_status"] = 0
+        if col_name not in self.buildings.columns:
+            self.buildings[col_name] = 0
 
-        self.buildings["adaptation_status"] = (
-            (
-                self.buildings["osm_way_id"]
-                .astype(str)
-                .map(osm_way_ids["adaptation_type"])
-            )
-            .fillna(
-                self.buildings["osm_id"].astype(str).map(osm_ids["adaptation_type"])
-            )
-            .fillna(self.buildings["adaptation_status"])
+        self.buildings[col_name] = (
+            (self.buildings["osm_way_id"].astype(str).map(osm_way_ids["adapted"]))
+            .fillna(self.buildings["osm_id"].astype(str).map(osm_ids["adapted"]))
+            .fillna(self.buildings[col_name])
             .astype(int)
         )
 
@@ -341,11 +306,12 @@ class Households(AgentBaseClass):
 
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented, 2=shutters installed]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
-
-        # # initiate array for adaptation status insurance [0=not adapted, 1=insurance taken]
-        # self.var.insurance_taken = DynamicArray(
-        #     np.zeros(self.n, np.int32), max_n=self.max_n
-        # )
+        self.var.adapted_shutters = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
+        )
+        self.var.adapted_insurance = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
+        )
 
         # initiate array for warning range [0=not reached, 1=reached]
         self.var.warning_reached = DynamicArray(
@@ -848,7 +814,6 @@ class Households(AgentBaseClass):
 
         EU_adapt_shutters = self.decision_module.calcEU_shutters_windstorm(
             geom_id="NoID",
-            # n_agents=self.n,
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
@@ -864,6 +829,7 @@ class Households(AgentBaseClass):
             T=35,
             r=0.03,
             sigma=1,
+            # adapted_shutters=self.var.adapted_shutters.data == 1,
         )
 
         EU_do_not_adapt = self.decision_module.calcEU_do_nothing_flood(
@@ -893,7 +859,7 @@ class Households(AgentBaseClass):
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,  # + 10
             expected_damages=w_damages_unprotected,
-            adapted=self.var.adapted.data == 2,
+            adapted=self.var.adapted_shutters.data == 1,
             p_windstorm=1 / self.windstorm_return_periods,
             T=35,
             r=0.03,
@@ -921,29 +887,34 @@ class Households(AgentBaseClass):
             sigma=1,
             deductible=0.1,
             loading_factor=0.3,  # needs to be discussed for insurance
+            adapted=self.var.adapted_insurance.data == 1,
         )
 
         # execute strategy (flood adaptation)
-        household_adapting = np.where(EU_adapt > EU_do_not_adapt)[0]
-        self.var.adapted[household_adapting] = 1
-        self.var.time_adapted[household_adapting] += 1
+        household_adapting_flood = np.where(EU_adapt > EU_do_not_adapt)[0]
+        self.var.adapted[household_adapting_flood] = 1
+        self.var.time_adapted[household_adapting_flood] += 1
 
         # # execute strategy (windstorm adaptation)
         household_adapting_shutters = np.where(EU_adapt_shutters > EU_unprotected_w)[0]
-        self.var.adapted[household_adapting_shutters] = 2
+        self.var.adapted_shutters[household_adapting_shutters] = 1
         self.var.time_adapted_shutters[household_adapting_shutters] += 1
 
         # execute strategy (multirisk insurance)
         household_adopting_insurance = np.where(
             EU_multirisk_insurance > EU_do_not_adapt
         )[0]
-        self.var.adapted[household_adopting_insurance] = 3
+        self.var.adapted_insurance[household_adopting_insurance] = 1
         self.var.time_with_insurance[household_adopting_insurance] += 1
 
         # update column in buildings
-        self.update_building_adaptation_status(household_adapting, 1)
-        self.update_building_adaptation_status(household_adapting_shutters, 2)
-        self.update_building_adaptation_status(household_adopting_insurance, 3)
+        self.update_building_adaptation_status(
+            household_adapting_flood, "floodproofing"
+        )
+        self.update_building_adaptation_status(household_adapting_shutters, "shutters")
+        self.update_building_adaptation_status(
+            household_adopting_insurance, "insurance"
+        )
 
         # ds = xr.open_zarr(
         #     "C:/Users/nxu279/GitHub/GEB_try/models/etaple/base/output/flood_maps/coastal_0500.zarr"
@@ -951,7 +922,7 @@ class Households(AgentBaseClass):
         # ds.rio.to_raster("C:/Users/nxu279/GitHub/Data/coastal_0500.tif")
 
         # print percentage of households that adapted
-        print(f"N households that adapted: {len(household_adapting)}")
+        print(f"N households that adapted: {len(household_adapting_flood)}")
         print(
             f"N households that adapted with Window Shutters: {len(household_adapting_shutters)}"
         )

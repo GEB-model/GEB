@@ -863,7 +863,8 @@ class DecisionModule:
         EU_do_nothing_array = np.trapezoid(y=y, x=x, axis=0)
 
         # People who already adapted cannot not adapt
-        EU_do_nothing_array[np.where(adapted == 1)] = -np.inf
+        adapted_mask = np.asarray(adapted).astype(bool)
+        EU_do_nothing_array[adapted_mask] = -np.inf
 
         return EU_do_nothing_array
 
@@ -1036,7 +1037,6 @@ class DecisionModule:
         # Prepare arrays
         max_T = np.int32(np.max(T))
 
-        # Part njit, iterate through floods
         n_agents = np.int32(n_agents)
         NPV_summed = self.IterateThroughEvents(
             n_events=n_windstorm,
@@ -1071,7 +1071,8 @@ class DecisionModule:
         EU_do_nothing_w_array = np.trapezoid(y=y, x=x, axis=0)
 
         # People who already adapted cannot not adapt
-        EU_do_nothing_w_array[np.where(adapted == 2)] = -np.inf
+        # adapted_mask = np.asarray(adapted).astype(bool)
+        EU_do_nothing_w_array[np.where(adapted == 1)] = -np.inf
 
         # EU_do_nothing_array *= self.error_terms_stay
         return EU_do_nothing_w_array
@@ -1097,6 +1098,7 @@ class DecisionModule:
         sigma: float,
         deductible: float = 0.1,
         loading_factor: float = 0.3,
+        adapted: np.ndarray = None,
         **kwargs,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
@@ -1197,6 +1199,10 @@ class DecisionModule:
         constrained = np.where(income * expenditure_cap <= premium)
         EU_insure_array[constrained] = -np.inf
 
+        # if adapted is not None:
+        #     adapted_mask = np.asarray(adapted).astype(bool)
+        #     EU_insure_array[adapted_mask] = -np.inf
+
         return EU_insure_array
 
     def Insurance_premium(
@@ -1225,7 +1231,7 @@ class DecisionModule:
             idx = np.argsort(probabilities)
             probabilities = probabilities[idx]
             damages = damages[idx, :]
-            return np.trapz(damages, x=probabilities, axis=0)
+            return np.trapezoid(damages, x=probabilities, axis=0)
 
         # Calculate Expected Annual Damages (EAD) for flood and windstorm
         EAD_flood = (
