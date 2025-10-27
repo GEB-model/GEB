@@ -1,7 +1,11 @@
+"""This module contains the Households agent class for simulating household behavior in the GEB model."""
+
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import TYPE_CHECKING, Tuple
 
 import geopandas as gpd
 import numpy as np
@@ -16,7 +20,7 @@ from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
-from ..hydrology.landcover import (
+from ..hydrology.landcovers import (
     FOREST,
 )
 from ..store import DynamicArray
@@ -24,6 +28,10 @@ from ..workflows.damage_scanner import VectorScanner
 from ..workflows.io import load_array, load_table, open_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
+
+if TYPE_CHECKING:
+    from geb.agents import Agents
+    from geb.model import GEBModel
 
 
 def from_landuse_raster_to_polygon(mask, transform, crs) -> gpd.GeoDataFrame:
@@ -51,7 +59,19 @@ def from_landuse_raster_to_polygon(mask, transform, crs) -> gpd.GeoDataFrame:
 class Households(AgentBaseClass):
     """This class implements the household agents."""
 
-    def __init__(self, model, agents, reduncancy: float) -> None:
+    def __init__(self, model: GEBModel, agents: Agents, reduncancy: float) -> None:
+        """Initialize the Households agent module.
+
+        Args:
+            model: The GEB model.
+            agents: The class that includes all agent types (allowing easier communication between agents).
+            reduncancy: a lot of data is saved in pre-allocated NumPy arrays.
+                While this allows much faster operation, it does mean that the number of agents cannot
+                grow beyond the size of the pre-allocated arrays. This parameter allows you to specify
+                how much redundancy should be used. A lower redundancy means less memory is used, but the
+                model crashes if the redundancy is insufficient. The redundancy is specified as a fraction of
+                the number of agents, e.g. 0.2 means 20% more space is allocated than the number of agents.
+        """
         super().__init__(model)
 
         self.agents = agents
@@ -66,7 +86,10 @@ class Households(AgentBaseClass):
             if "households" in self.model.config["agent_settings"]
             else {}
         )
-        self.decision_module = DecisionModule(self, model=None)
+        self.decision_module = DecisionModule(
+            model=self.model,
+            agents=self.agents,
+        )
 
         if self.config["adapt"]:
             self.load_flood_maps()

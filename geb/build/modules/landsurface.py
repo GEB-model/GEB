@@ -7,15 +7,18 @@ import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
-from geb.workflows.raster import rasterize_like, repeat_grid
-
-from ..workflows.general import (
+from geb.workflows.raster import (
     bounds_are_within,
     calculate_cell_area,
+    convert_nodata,
     pad_xy,
+    rasterize_like,
+    repeat_grid,
     resample_chunked,
     resample_like,
+    snap_to_grid,
 )
+
 from ..workflows.soilgrids import load_soilgrids
 
 
@@ -135,11 +138,16 @@ class LandSurface:
             if DEM["name"] == "fabdem":
                 DEM_raster = fabdem
             else:
-                DEM_raster = xr.open_dataarray(
-                    self.data_catalog.get_source(DEM["name"]).path,
-                )
+                if DEM["name"] == "gebco":
+                    DEM_raster = self.new_data_catalog.fetch("gebco").read()
+                else:
+                    DEM_raster = xr.open_dataarray(
+                        self.data_catalog.get_source(DEM["name"]).path,
+                    )
+                if "bands" in DEM_raster.dims:
+                    DEM_raster = DEM_raster.isel(band=0)
+
                 DEM_raster = DEM_raster.isel(
-                    band=0,
                     **get_window(
                         DEM_raster.x,
                         DEM_raster.y,
@@ -152,9 +160,9 @@ class LandSurface:
                         raise_on_out_of_bounds=False,
                         raise_on_buffer_out_of_bounds=False,
                     ),
-                ).raster.mask_nodata()
+                )
 
-            DEM_raster = DEM_raster.astype(np.float32)
+            DEM_raster = convert_nodata(DEM_raster.astype(np.float32), np.nan)
             self.set_other(
                 DEM_raster,
                 name=f"DEM/{DEM['name']}",
@@ -176,7 +184,7 @@ class LandSurface:
         region_database: str = "GADM_level1",
         unique_region_id: str = "GID_1",
         ISO3_column: str = "GID_0",
-        land_cover: str = "esa_worldcover_2021_v200",
+        land_cover: str = "esa_worldcover_2021",
     ) -> None:
         """Sets up the (administrative) regions and land use data for GEB.
 
@@ -189,7 +197,7 @@ class LandSurface:
             unique_region_id: The name of a column in the region database that contains a unique region ID. Default is 'UID',
                 which is the unique identifier for the GADM database.
             ISO3_column: The name of a column in the region database that contains the ISO3 code for the region. Default is 'ISO3'.
-            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021_v200'.
+            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021'.
 
         Notes:
             This method sets up the regions and land use data for GEB. It first retrieves the region data from
@@ -201,13 +209,13 @@ class LandSurface:
             identified and set as a grid in the model.
         """
         regions: gpd.GeoDataFrame = (
-            self.new_data_catalog.get(region_database)
+            self.new_data_catalog.fetch(region_database)
             .read(geom=self.region.union_all())
             .rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
         )
 
         global_countries: gpd.GeoDataFrame = (
-            self.new_data_catalog.get("GADM_level0")
+            self.new_data_catalog.fetch("GADM_level0")
             .read()
             .rename(columns={"GID_0": "ISO3"})
         )
@@ -276,14 +284,12 @@ class LandSurface:
         region_mask = self.set_region_subgrid(region_mask, name="mask")
 
         bounds = self.geom["regions"].total_bounds
-        land_use = (
-            xr.open_dataarray(
-                self.data_catalog.get_source(land_cover).path,
-                chunks={"x": 1000, "y": 1000},
-                mask_and_scale=False,
-            )
-            .sel(x=slice(bounds[0], bounds[2]), y=slice(bounds[3], bounds[1]))
-            .isel(band=0)
+        xmin = bounds[0] - 0.1
+        ymin = bounds[1] - 0.1
+        xmax = bounds[2] + 0.1
+        ymax = bounds[3] + 0.1
+        land_use: xr.DataArray = self.new_data_catalog.fetch(land_cover).read(
+            xmin, ymin, xmax, ymax
         )
 
         reprojected_land_use: xr.DataArray = resample_chunked(
@@ -350,22 +356,22 @@ class LandSurface:
         )
 
         land_use_classes = full_region_land_use_classes.isel(region_subgrid_slice)
-        land_use_classes = self.snap_to_grid(land_use_classes, self.subgrid)
+        land_use_classes = snap_to_grid(land_use_classes, self.subgrid)
         self.set_subgrid(land_use_classes, name="landsurface/land_use_classes")
 
         cultivated_land = cultivated_land_full_region.isel(region_subgrid_slice)
-        cultivated_land = self.snap_to_grid(cultivated_land, self.subgrid)
+        cultivated_land = snap_to_grid(cultivated_land, self.subgrid)
         self.set_subgrid(cultivated_land, name="landsurface/cultivated_land")
 
     @build_method(depends_on=[])
     def setup_land_use_parameters(
         self,
-        land_cover: str = "esa_worldcover_2021_v200",
+        land_cover: str = "esa_worldcover_2021",
     ) -> None:
         """Sets up the land use parameters for the model.
 
         Args:
-            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021_v200'.
+            land_cover: The name of the land cover dataset to use. Default is 'esa_worldcover_2021'.
 
         Notes:
             This method sets up the land use parameters for the model by retrieving land use data from the CWATM dataset and
@@ -393,20 +399,17 @@ class LandSurface:
         """
         bounds = self.geom["routing/subbasins"].total_bounds
         buffer = 0.1
-        landcover_classification = (
-            xr.open_dataarray(
-                self.data_catalog.get_source(land_cover).path,
-                chunks={"x": 3000, "y": 3000},
-                mask_and_scale=False,
-            )
-            .sel(
-                x=slice(bounds[0] - buffer, bounds[2] + buffer),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-            )
-            .isel(band=0)
-        )
 
-        self.set_other(
+        xmin = bounds[0] - buffer
+        ymin = bounds[1] - buffer
+        xmax = bounds[2] + buffer
+        ymax = bounds[3] + buffer
+
+        landcover_classification: xr.DataArray = self.new_data_catalog.fetch(
+            land_cover
+        ).read(xmin, ymin, xmax, ymax)
+
+        landcover_classification = self.set_other(
             landcover_classification,
             name="landcover/classification",
         )
@@ -498,7 +501,9 @@ class LandSurface:
             form 'soil/storage_depth{soil_layer}'. The percolation impeded and crop group data are set as attributes of the model
             with names 'soil/percolation_impeded' and 'soil/cropgrp', respectively.
         """
-        ds = load_soilgrids(self.data_catalog, self.subgrid, self.region)
+        ds: xr.Dataset = load_soilgrids(
+            self.new_data_catalog, self.subgrid["mask"], self.region
+        )
 
         self.set_subgrid(ds["silt"], name="soil/silt")
         self.set_subgrid(ds["clay"], name="soil/clay")

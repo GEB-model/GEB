@@ -1,3 +1,5 @@
+"""The groundwater model using MODFLOW."""
+
 # --------------------------------------------------------------------------------
 # This file contains code that has been adapted from an original source available
 # in a public repository under the GNU General Public License. The original code
@@ -19,14 +21,15 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+from __future__ import annotations
+
 import hashlib
 import json
 import os
 import platform
-from contextlib import contextmanager
 from pathlib import Path
 from time import time
-from typing import Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import flopy
 import numpy as np
@@ -35,23 +38,45 @@ from numba import njit
 from pyproj import CRS, Transformer
 from xmipy import XmiWrapper
 
+from geb.typing import (
+    ArrayFloat32,
+    ArrayFloat64,
+    TwoDArrayFloat32,
+    TwoDArrayFloat64,
+)
+from geb.workflows.io import WorkingDirectory
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
+
 MODFLOW_VERSION: str = "6.6.2"
-
-
-@contextmanager
-def cd(newdir):
-    prevdir = os.getcwd()
-    os.chdir(os.path.expanduser(newdir))
-    try:
-        yield
-    finally:
-        os.chdir(prevdir)
 
 
 @njit(cache=True)
 def get_water_table_depth(
-    layer_boundary_elevation, head, elevation, min_remaining_layer_storage_m
-):
+    layer_boundary_elevation: TwoDArrayFloat32,
+    head: TwoDArrayFloat64,
+    elevation: ArrayFloat32,
+    min_remaining_layer_storage_m: np.float32,
+) -> ArrayFloat64:
+    """Calculate the water table depth.
+
+    Iterates from the bottom layer to the top layer, checking if the head is below the top of the layer.
+    If it is, the water table depth is calculated as the difference between the elevation and the head.
+
+    For each layer, the min_remaining_layer_storage_m is subtracted from the head to ensure that a minimum amount of water
+    is not considered as part of the water table.
+
+    Args:
+        layer_boundary_elevation: Elevation of the layer boundaries, in m.
+        head: The heads of the model grid, in m.
+        elevation: The topography or surface elevation of the model grid, in m.
+        min_remaining_layer_storage_m: The minimum remaining layer storage in m.
+            More storage cannot be abstracted with wells.
+
+    Returns:
+        The water table depth, in m.
+    """
     water_table_depth = np.zeros(head.shape[1])
     for cell_ix in range(head.shape[1]):
         for layer_ix in range(head.shape[0] - 1, -1, -1):
@@ -79,11 +104,23 @@ def get_water_table_depth(
 
 @njit(cache=True)
 def get_groundwater_storage_m(
-    layer_boundary_elevation,
-    head,
-    specific_yield,
-    min_remaining_layer_storage_m=0.0,
-):
+    layer_boundary_elevation: TwoDArrayFloat32,
+    head: TwoDArrayFloat64,
+    specific_yield: TwoDArrayFloat32,
+    min_remaining_layer_storage_m: np.float32 = np.float32(0.0),
+) -> ArrayFloat64:
+    """Calculate the groundwater storage in meters.
+
+    Args:
+        layer_boundary_elevation: Elevation of the layer boundaries, in m.
+        head: The heads of the model grid, in m.
+        specific_yield: The specific yield of the model grid, in m-1.
+        min_remaining_layer_storage_m: The minimum remaining layer storage in m.
+            More storage cannot be abstracted with wells.
+
+    Returns:
+        The groundwater storage, in m.
+    """
     storage = np.zeros(head.shape[1])
     for cell_ix in range(head.shape[1]):
         for layer_ix in range(head.shape[0]):
@@ -101,14 +138,31 @@ def get_groundwater_storage_m(
 
 
 @njit(cache=True)
-def distribute_well_rate_per_layer(
-    well_rate,
-    layer_boundary_elevation,
-    heads,
-    specific_yield,
-    area,
-    min_remaining_layer_storage_m=0.0,
-):
+def distribute_well_abstraction_m3_per_layer(
+    well_rate: ArrayFloat64,
+    layer_boundary_elevation: TwoDArrayFloat32,
+    heads: TwoDArrayFloat64,
+    specific_yield: TwoDArrayFloat32,
+    area: ArrayFloat32,
+    min_remaining_layer_storage_m: np.float64 = np.float64(0.0),
+) -> TwoDArrayFloat64:
+    """Distribute the well abstraction rate over the layers.
+
+    Abstraction is done from the top layer to the bottom layer.
+    If the layer is dry, the next layer is considered until the well rate is fully distributed.
+
+    Args:
+        well_rate: The well rate, in m3/step. Negative values indicate abstraction.
+        layer_boundary_elevation: Elevation of the layer boundaries, in m.
+        heads: The heads of the model grid, in m.
+        specific_yield: The specific yield of the model grid, in m-1.
+        area: The area of each cell, in m2.
+        min_remaining_layer_storage_m: The minimum remaining layer storage in m.
+            More storage cannot be abstracted with wells.
+
+    Returns:
+        The well rate per layer, in m3/step.
+    """
     nlay, ncells = heads.shape
     well_rate_per_layer = np.zeros((nlay, ncells))
     for cell_ix in range(ncells):
@@ -142,7 +196,7 @@ def distribute_well_rate_per_layer(
 
         assert remaining_well_rate > -1e-10, (
             "Well rate could not be distributed, layers are too dry"
-        )  # leaving some tollerance for numerical errors
+        )  # leaving some tolerance for numerical errors
 
     assert np.allclose(well_rate_per_layer.sum(axis=0), well_rate)
     return well_rate_per_layer
@@ -176,7 +230,7 @@ class ModFlowSimulation:
 
     def __init__(
         self,
-        model,
+        model: GEBModel,
         topography: npt.NDArray[np.float32],
         gt: tuple[float, float, float, float, float, float],
         specific_storage: npt.NDArray[np.float32],
@@ -190,6 +244,24 @@ class ModFlowSimulation:
         verbose: bool = False,
         never_load_from_disk: bool = False,
     ) -> None:
+        """Initialize the MODFLOW model.
+
+        Args:
+            model: The GEB model instance.
+            topography: The topography or surface elevation of the model grid (m).
+            gt: The geotransform of the model grid (GDAL-style).
+            specific_storage: The specific storage of the model grid (m-1).
+            specific_yield: The specific yield of the model grid (-).
+            layer_boundary_elevation: The elevation of the layer boundaries (m).
+            basin_mask: A boolean mask indicating the active cells in the model grid.
+            hydraulic_conductivity: The hydraulic conductivity of the model grid (m/day).
+            heads: The initial heads of the model grid (m).
+            heads_update_callback: A callback function to update the heads in the GEB model after each time step.
+            min_remaining_layer_storage_m: The minimum remaining layer storage in m, defaults to 0.1. More storage cannot be abstracted with wells.
+            verbose: Whether to print debug information, defaults to False.
+            never_load_from_disk: Whether to never load the model from disk, defaults to False. If set to False, the model input
+                will be loaded from disk if it exists and the input parameters have not changed.
+        """
         self.name = "MODEL"  # MODFLOW requires the name to be uppercase
         self.model = model
         self.heads_update_callback = heads_update_callback
@@ -247,14 +319,29 @@ class ModFlowSimulation:
 
         self.load_bmi(heads)
 
-    def create_vertices(self, nrows, ncols, gt):
+    def create_vertices(
+        self,
+        nrows: int,
+        ncols: int,
+        gt: tuple[float, float, float, float, float, float],
+    ) -> tuple[TwoDArrayFloat64, TwoDArrayFloat64]:
+        """Create the vertices of the model grid.
+
+        Args:
+            nrows: The number of rows in the model grid.
+            ncols: The number of columns in the model grid.
+            gt: The geotransform of the model grid (GDAL-style).
+
+        Returns:
+            A tuple of two 2D arrays containing the x and y coordinates of the vertices.
+        """
         x_coordinates = np.linspace(gt[0], gt[0] + gt[1] * ncols, ncols + 1)
         y_coordinates = np.linspace(gt[3], gt[3] + gt[5] * nrows, nrows + 1)
 
         center_longitude = (x_coordinates[0] + x_coordinates[-1]) / 2
         center_latitude = (y_coordinates[0] + y_coordinates[-1]) / 2
 
-        utm_crs = CRS.from_dict(
+        utm_crs: CRS = CRS.from_dict(
             {
                 "proj": "utm",
                 "ellps": "WGS84",
@@ -268,7 +355,9 @@ class ModFlowSimulation:
         x_vertices, y_vertices = np.meshgrid(x_coordinates, y_coordinates)
 
         # convert to modflow coordinates
-        transformer = Transformer.from_crs("EPSG:4326", utm_crs, always_xy=True)
+        transformer: Transformer = Transformer.from_crs(
+            crs_from="EPSG:4326", crs_to=utm_crs, always_xy=True
+        )
 
         # Transform the points
         x_transformed, y_transformed = transformer.transform(
@@ -283,17 +372,36 @@ class ModFlowSimulation:
 
     def get_simulation(
         self,
-        gt,
-        hydraulic_conductivity,
-        specific_storage,
-        specific_yield,
-    ):
+        gt: tuple[float, float, float, float, float, float],
+        hydraulic_conductivity: TwoDArrayFloat32,
+        specific_storage: TwoDArrayFloat32,
+        specific_yield: TwoDArrayFloat32,
+    ) -> flopy.mf6.MFSimulation:
+        """Create a MODFLOW 6 simulation instance.
+
+        Specific Storage is is the volume of water that a unit volume of
+        a saturated aquifer material will release from or take into storage
+        under a unit change in hydraulic head.
+
+        Specific Yield is the volume of water that a unit volume of
+        a saturated aquifer material will yield by gravity drainage. Also
+        the 'drainable porosity'.
+
+        Args:
+            gt: The geotransform of the model grid (GDAL-style).
+            hydraulic_conductivity: The hydraulic conductivity of the model grid (m/day).
+            specific_storage: The specific storage of the model grid (m-1).
+            specific_yield: The specific yield of the model grid (-).
+
+        Returns:
+            The MODFLOW 6 simulation instance.
+        """
         sim = flopy.mf6.MFSimulation(
             sim_name=self.name,
             version="mf6",
             sim_ws=os.path.realpath(self.working_directory),
         )
-        number_of_periods = 100_000
+        number_of_periods: int = 100_000
         flopy.mf6.ModflowTdis(
             sim, nper=number_of_periods, perioddata=[(1.0, 1, 1)] * number_of_periods
         )
@@ -511,10 +619,25 @@ class ModFlowSimulation:
         return sim
 
     def write_hash_to_disk(self) -> None:
+        """Write the hash of the model input to disk.
+
+        This is used to check if the model input has changed next run
+        and if the model can be loaded from disk.
+        """
         with open(self.hash_file, "wb") as f:
             f.write(self.hash)
 
-    def load_from_disk(self, arguments) -> bool:
+    def load_from_disk(self, arguments: dict[str, Any]) -> bool:
+        """Check if the model input has changed and load from disk if not.
+
+        If self.never_load_from_disk is True, the model will never be loaded from disk.
+
+        Args:
+            arguments: The input arguments to hash.
+
+        Returns:
+            True if the model input has not changed and the model can be loaded from disk, False otherwise.
+        """
         hashable_dict = {}
         for key, value in arguments.items():
             if isinstance(value, np.ndarray):
@@ -566,7 +689,7 @@ class ModFlowSimulation:
         else:
             raise ValueError(f"Platform {platform.system()} not supported.")
 
-        with cd(self.working_directory):
+        with WorkingDirectory(self.working_directory):
             # XmiWrapper requires the real path (no symlinks etc.)
             # include the version in the folder name to allow updating the version
             # so that the user will automatically get the new version
@@ -631,11 +754,21 @@ class ModFlowSimulation:
         assert not np.isnan(self.heads).any()
 
     @property
-    def head_tag(self):
+    def head_tag(self) -> str:
+        """Get the tag (name) for the heads variable in the modflow model.
+
+        Returns:
+            The tag for the heads variable.
+        """
         return self.mf6.get_var_address("X", self.name)
 
     @property
-    def heads(self):
+    def heads(self) -> TwoDArrayFloat64:
+        """Get the heads of the model grid for all layers.
+
+        Returns:
+            The heads of the model grid, in m.
+        """
         heads = self.mf6.get_value_ptr(self.head_tag).reshape(
             self.nlay, self.n_active_cells
         )
@@ -643,22 +776,37 @@ class ModFlowSimulation:
         return heads
 
     @heads.setter
-    def heads(self, value) -> None:
+    def heads(self, value: TwoDArrayFloat64) -> None:
+        """Set the heads of the model grid.
+
+        Args:
+            value: The heads to set, in m.
+        """
         self.mf6.get_value_ptr(self.head_tag)[:] = value.ravel()
 
     @property
-    def groundwater_depth(self):
-        groundwater_depth = get_water_table_depth(
+    def groundwater_depth(self) -> ArrayFloat64:
+        """Get the groundwater depth.
+
+        Returns:
+            The groundwater depth, in m.
+        """
+        groundwater_depth_m = get_water_table_depth(
             self.layer_boundary_elevation,
             self.heads,
             self.topography,
             min_remaining_layer_storage_m=self.min_remaining_layer_storage_m,
         )
-        assert (groundwater_depth >= 0).all()
-        return groundwater_depth
+        assert (groundwater_depth_m >= 0).all()
+        return groundwater_depth_m
 
     @property
-    def groundwater_content_m(self):
+    def groundwater_content_m(self) -> ArrayFloat64:
+        """Get the groundwater content in meters.
+
+        Returns:
+            The groundwater content, in m.
+        """
         groundwater_content_m = get_groundwater_storage_m(
             self.layer_boundary_elevation, self.heads, self.specific_yield
         )
@@ -666,11 +814,21 @@ class ModFlowSimulation:
         return groundwater_content_m
 
     @property
-    def groundwater_content_m3(self):
+    def groundwater_content_m3(self) -> ArrayFloat64:
+        """Get the groundwater content in cubic meters.
+
+        Returns:
+            The groundwater content, in m3.
+        """
         return self.groundwater_content_m * self.area
 
     @property
-    def available_groundwater_m(self):
+    def available_groundwater_m(self) -> ArrayFloat64:
+        """Get the available groundwater content in meters.
+
+        Returns:
+            The available groundwater content, in m.
+        """
         groundwater_available_m = get_groundwater_storage_m(
             self.layer_boundary_elevation,
             self.heads,
@@ -681,43 +839,88 @@ class ModFlowSimulation:
         return groundwater_available_m
 
     @property
-    def available_groundwater_m3(self):
+    def available_groundwater_m3(self) -> ArrayFloat64:
+        """Get the available groundwater content in cubic meters.
+
+        Returns:
+            The available groundwater content, in m3.
+        """
         return self.available_groundwater_m * self.area
 
     @property
-    def potential_well_rate_tag(self):
+    def potential_well_rate_tag(self) -> str:
+        """Get the tag (name) for the potential well rate variable in the modflow model.
+
+        Returns:
+            The tag for the potential well rate variable.
+        """
         return self.mf6.get_var_address("Q", self.name, "WEL_0")
 
     @property
-    def actual_well_rate_tag(self):
+    def actual_well_rate_tag(self) -> str:
+        """Get the tag (name) for the actual simulated well rate variable in the modflow model.
+
+        This rate can be lower than the potential well rate if not enough groundwater is available.
+
+        Returns:
+            The tag for the actual well rate variable.
+        """
         return self.mf6.get_var_address("SIMVALS", self.name, "WEL_0")
 
     @property
-    def potential_well_rate(self):
+    def potential_well_rate(self) -> ArrayFloat64:
+        """Get the potential well rate, value in m3/step.
+
+        The potential well rate is the rate that is requested by the user. If more
+        groundwater is requested than is available, the actual well rate will be lower.
+
+        Returns:
+            The potential well rate, value in m3/step.
+        """
         return self.mf6.get_value_ptr(self.potential_well_rate_tag)
 
     @property
-    def actual_well_rate(self):
+    def actual_well_rate(self) -> ArrayFloat64:
+        """Get the actual simulated well rate, value in m3/step."""
         return self.mf6.get_value_ptr(self.actual_well_rate_tag)
 
     @potential_well_rate.setter
-    def potential_well_rate(self, well_rate) -> None:
-        well_rate_per_layer = distribute_well_rate_per_layer(
+    def potential_well_rate(self, well_rate: ArrayFloat64) -> None:
+        """Set the potential well rate, value in m3/step.
+
+        Negative values indicate abstraction. Positive values result in injection.
+
+        Args:
+            well_rate: The potential well rate to set, value in m3/step.
+        """
+        well_rate_per_layer = distribute_well_abstraction_m3_per_layer(
             well_rate,
             self.layer_boundary_elevation,
             self.heads,
             self.specific_yield,
             self.area,
-            min_remaining_layer_storage_m=self.min_remaining_layer_storage_m,
+            min_remaining_layer_storage_m=np.float64(
+                self.min_remaining_layer_storage_m
+            ),
         ).ravel()
         self.mf6.get_value_ptr(self.potential_well_rate_tag)[:] = well_rate_per_layer
 
     @property
-    def drainage_tag(self):
+    def drainage_tag(self) -> str:
+        """Get the tag (name) for the drainage variable in the modflow model.
+
+        Returns:
+            The tag for the drainage variable.
+        """
         return self.mf6.get_var_address("SIMVALS", self.name, "DRN_0")
 
     @property
-    def drainage_m3(self):
+    def drainage_m3(self) -> npt.NDArray[np.float64]:
+        """Get the drainage, value in m3/step.
+
+        Returns:
+            The drainage, value in m3/step.
+        """
         drainage = -self.mf6.get_value_ptr(self.drainage_tag)
         assert not np.isnan(drainage).any()
         # TODO: This assert can become more strict when soil depth is considered
@@ -729,7 +932,12 @@ class ModFlowSimulation:
         return self.drainage_m3 / self.area
 
     @property
-    def recharge_tag(self):
+    def recharge_tag(self) -> str:
+        """Get the tag (name) for the recharge variable in the modflow model.
+
+        Returns:
+            The tag for the recharge variable.
+        """
         return self.mf6.get_var_address("RECHARGE", self.name, "RCH_0")
 
     @property
@@ -739,32 +947,53 @@ class ModFlowSimulation:
         return recharge
 
     @_recharge_m.setter
-    def recharge_m(self, value) -> None:
+    def recharge_m(self, value: ArrayFloat32) -> None:
+        """Set the recharge, value in m/step.
+
+        Args:
+            value: The recharge to set, value in m/step.
+        """
         assert not np.isnan(value).any()
         self.mf6.get_value_ptr(self.recharge_tag)[:] = value
 
     @property
-    def recharge_m3(self):
+    def recharge_m3(self) -> npt.NDArray[np.float64]:
+        """Get the recharge, value in m3/step.
+
+        Returns:
+            The recharge, value in m3/step.
+        """
         return self._recharge_m * self.area
 
     @property
-    def max_iter(self):
+    def max_iter(self) -> int:
+        """Get the maximum number of iterations allowed for the solver.
+
+        Returns:
+            The maximum number of iterations.
+        """
         mxit_tag = self.mf6.get_var_address("MXITER", "SLN_1")
         return self.mf6.get_value_ptr(mxit_tag)[0]
 
     def prepare_time_step(self) -> None:
-        dt = self.mf6.get_time_step()
+        """Prepare the model for the next time step."""
+        dt: float = self.mf6.get_time_step()
         self.mf6.prepare_time_step(dt)
 
-    # def set_recharge_m(self, recharge):
-    #     """Set recharge, value in m/day."""
-    #     self.recharge_m = recharge
+    def set_recharge_m3(self, recharge: ArrayFloat32) -> None:
+        """Set recharge, value in m3/step.
 
-    def set_recharge_m3(self, recharge) -> None:
+        Args:
+            recharge: The recharge to set, value in m3/step.
+        """
+        assert not np.isnan(recharge).any()
+        assert (recharge >= 0).all()
         self.recharge_m = recharge / self.area
 
-    def set_groundwater_abstraction_m3(self, groundwater_abstraction) -> None:
-        """Set well rate, value in m3/day."""
+    def set_groundwater_abstraction_m3(
+        self, groundwater_abstraction: ArrayFloat64
+    ) -> None:
+        """Set well rate, value in m3/step."""
         assert not np.isnan(groundwater_abstraction).any()
 
         assert (self.available_groundwater_m3 >= groundwater_abstraction).all(), (
@@ -776,6 +1005,11 @@ class ModFlowSimulation:
         self.potential_well_rate = well_rate
 
     def step(self) -> None:
+        """Perform a single time step of the model.
+
+        Raises:
+            StopIteration: If the model has reached the end time.
+        """
         if self.mf6.get_current_time() == self.end_time:
             raise StopIteration("MODFLOW used all iteration steps.")
 
@@ -860,7 +1094,17 @@ class ModFlowSimulation:
             self.prepare_time_step()
 
     def finalize(self) -> None:
+        """Finalize the model.
+
+        This method should be called at the end of the model run to ensure that all
+        resources are properly released.
+        """
         self.mf6.finalize()
 
-    def restore(self, heads) -> None:
+    def restore(self, heads: ArrayFloat64) -> None:
+        """Restore the model to a previous state by setting the heads.
+
+        Args:
+            heads: The heads to set, in m.
+        """
         self.heads = heads

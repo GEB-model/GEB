@@ -7,7 +7,7 @@
 
 ## Clarity
 - [ ] All variable names are clear and understandable by a non-domain expert.
-- [ ] Units are included unless super widely used default and in SI units (for example all hydrology units are standard in m).
+- [ ] Units should be included and preferably as SI units.
 - [ ] All monetary units are nominal USD (face value) for the respective years.
 
 ## Testing

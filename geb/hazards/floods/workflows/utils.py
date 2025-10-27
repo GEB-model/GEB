@@ -373,14 +373,13 @@ def run_sfincs_simulation(
             print("No GPU detected, running SFINCS without GPU support.")
 
     if gpu:
-        version: str = os.getenv(
-            key="SFINCS_SIF_GPU", default="mvanormondt/sfincs-gpu:coldeze_combo_ccall"
+        version: str | None = os.getenv(key="SFINCS_CONTAINER_GPU")
+        assert version is not None, (
+            "SFINCS_CONTAINER_GPU environment variable is not set"
         )
     else:
-        version: str = os.getenv(
-            key="SFINCS_SIF",
-            default="deltares/sfincs-cpu:sfincs-v2.2.0-col-dEze-Release",
-        )
+        version: str | None = os.getenv(key="SFINCS_CONTAINER")
+        assert version is not None, "SFINCS_CONTAINER environment variable is not set"
 
     if platform.system() == "Linux":
         # If not a apptainer image, add docker:// prefix

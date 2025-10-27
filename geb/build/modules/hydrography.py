@@ -17,7 +17,7 @@ from shapely.geometry import LineString, Point
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
-from geb.workflows.raster import rasterize_like
+from geb.workflows.raster import rasterize_like, snap_to_grid
 
 
 def get_all_upstream_subbasin_ids(
@@ -84,7 +84,7 @@ def get_subbasins_geometry(
         A GeoDataFrame containing the subbasins geometry for the given subbasin IDs.
             The index of the GeoDataFrame is the subbasin ID (COMID).
     """
-    subbasins: gpd.GeoDataFrame = data_catalog.get("merit_basins_catchments").read(
+    subbasins: gpd.GeoDataFrame = data_catalog.fetch("merit_basins_catchments").read(
         filters=[
             ("COMID", "in", subbasin_ids),
         ],
@@ -108,7 +108,7 @@ def get_rivers(
         A GeoDataFrame containing the rivers for the given subbasin IDs.
     """
     rivers: gpd.GeoDataFrame = (
-        data_catalog.get("merit_basins_rivers")
+        data_catalog.fetch("merit_basins_rivers")
         .read(
             columns=[
                 "COMID",
@@ -181,7 +181,7 @@ def create_river_raster_from_river_lines(
     return river_raster
 
 
-def get_SWORD_translation_IDs_and_lenghts(
+def get_SWORD_translation_IDs_and_lengths(
     data_catalog: NewDataCatalog, rivers: gpd.GeoDataFrame
 ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
     """Get the SWORD reach IDs and lengths for each river based on the MERIT basin ID.
@@ -201,7 +201,7 @@ def get_SWORD_translation_IDs_and_lenghts(
             and M is the number of rivers. Each element is the length of the SWORD reach for that river.
     """
     MERIT_Basins_to_SWORD: xr.Dataset = (
-        data_catalog.get("merit_sword").read().sel(mb=rivers.index.tolist())
+        data_catalog.fetch("merit_sword").read().sel(mb=rivers.index.tolist())
     )
 
     SWORD_reach_IDs = np.full((40, len(rivers)), dtype=np.int64, fill_value=-1)
@@ -239,7 +239,7 @@ def get_SWORD_river_widths(
     unique_SWORD_reach_ids = np.unique(SWORD_reach_IDs[SWORD_reach_IDs != -1])
 
     SWORD = (
-        data_catalog.get("sword")
+        data_catalog.fetch("sword")
         .read(
             sql=f"""SELECT * FROM sword WHERE reach_id IN ({",".join([str(ID) for ID in unique_SWORD_reach_ids])})"""
         )
@@ -392,12 +392,12 @@ class Hydrography:
 
         # elevation (we only set this later, because it has to be done after setting the mask)
         elevation = elevation_coarsened.mean()
-        elevation = self.snap_to_grid(elevation, self.grid["mask"])
+        elevation = snap_to_grid(elevation, self.grid["mask"])
 
         self.set_grid(elevation, name="landsurface/elevation")
 
         elevation_std = elevation_coarsened.std()
-        elevation_std = self.snap_to_grid(elevation_std, self.grid["mask"])
+        elevation_std = snap_to_grid(elevation_std, self.grid["mask"])
         self.set_grid(
             elevation_std,
             name="landsurface/elevation_standard_deviation",
@@ -405,7 +405,7 @@ class Hydrography:
 
         # outflow elevation
         outflow_elevation = elevation_coarsened.min()
-        outflow_elevation = self.snap_to_grid(outflow_elevation, self.grid["mask"])
+        outflow_elevation = snap_to_grid(outflow_elevation, self.grid["mask"])
         self.set_grid(outflow_elevation, name="routing/outflow_elevation")
 
         slope = self.full_like(
@@ -559,7 +559,7 @@ class Hydrography:
         COMID_IDs_raster.data = river_raster_LR
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
 
-        SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lenghts(
+        SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lengths(
             self.new_data_catalog, rivers
         )
 
@@ -612,7 +612,7 @@ class Hydrography:
             the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
             with any custom reservoir capacity data from the data catalog.
         """
-        waterbodies: gpd.GeoDataFrame = self.new_data_catalog.get("hydrolakes").read(
+        waterbodies: gpd.GeoDataFrame = self.new_data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
             columns=[
                 "waterbody_id",
@@ -914,12 +914,10 @@ class Hydrography:
     @build_method
     def setup_gtsm_station_data(self) -> None:
         """This function sets up COAST-RP and the GTSM station data (surge and waterlevel) for the model."""
-        subbasins = gpd.read_parquet(
-            "input" + "/" + str(self.files["geom"]["routing/subbasins"])
-        )
-        if not subbasins["is_coastal_basin"].any():
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
             self.logger.info("No coastal basins found, skipping GTSM hydrographs setup")
             return
+
         # Continue with GTSM hydrographs setup
         temporal_range = np.arange(1979, 2018, 1, dtype=np.int32)
         self.setup_gtsm_water_levels(temporal_range)
