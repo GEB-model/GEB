@@ -416,13 +416,15 @@ class Households(AgentBaseClass):
         Also, it associates the household points with their postal codes.
         This is done to get the correct geometry for the warning function
         """
-        crs: str = self.model.sfincs.crs
+        # crs: str = self.model.sfincs.crs
+        crs = self.model.config["hazards"]["floods"]["crs"]
+
         locations = self.var.household_points.copy()
         locations.to_crs(
             crs, inplace=True
         )  # Change to a projected CRS to get a distance in meters
 
-        buildings_centroid = self.var.buildings_centroid[["geometry"]].copy()
+        buildings_centroid = self.buildings_centroid[["geometry"]].copy()
         buildings_centroid.to_crs(crs, inplace=True)  # Change to the same projected CRS
 
         # Copy the geometry to a new column otherwise it gets lost in the spatial join
@@ -456,13 +458,15 @@ class Households(AgentBaseClass):
         )
 
         # Associate households with their postal codes to use it later in the warning function
-        PC4: gpd.GeoDataFrame = gpd.read_parquet("data/postal_codes_4.parquet")
-        PC4["postcode"] = PC4["postcode"].astype("int32")
-        # need to change it to postal_code_6
+        postal_codes: gpd.GeoDataFrame = gpd.read_parquet(
+            self.model.files["geom"]["postal_codes"]
+        )
+        postal_codes["postcode"] = postal_codes["postcode"].astype(str)
+        # need to change it to postal_codes_6
 
         new_locations = gpd.sjoin(
             new_locations,
-            PC4[["postcode", "geometry"]],
+            postal_codes[["postcode", "geometry"]],
             how="left",
             predicate="intersects",
         )
@@ -588,8 +592,6 @@ class Households(AgentBaseClass):
         ensemble_flood_maps = xr.concat(ensemble_per_day, dim="day")
 
         return ensemble_flood_maps
-
-    # This is a test
 
     def load_ensemble_damage_maps(self):
         start_time = (
@@ -772,7 +774,7 @@ class Households(AgentBaseClass):
 
         # Load households and postal codes
         households = self.var.household_points.copy()
-        PC4 = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
+        postal_codes = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
         # Maybe load this as a global var (?) instead of loading it each time
 
         for day in days:
@@ -785,12 +787,14 @@ class Households(AgentBaseClass):
                 )
 
                 # Get the pixel values for each postal code
-                stats = zonal_stats(PC4, prob_map, raster_out=True, nodata=np.nan)
+                stats = zonal_stats(
+                    postal_code, prob_map, raster_out=True, nodata=np.nan
+                )
 
                 # Iterate through each postal code and check how many pixels exceed the threshold
                 for i, postalcode in enumerate(stats):
                     pixel_values = postalcode["mini_raster_array"]
-                    pc4_code = PC4.iloc[i]["postcode"]
+                    postal_code = postal_codes.iloc[i]["postcode"]
 
                     # Only get the values that are within the postal code
                     postalcode_pixels = pixel_values[~pixel_values.mask]
@@ -802,18 +806,18 @@ class Households(AgentBaseClass):
                     n_total = len(postalcode_pixels)
 
                     if n_total == 0:
-                        print("No valid pixels found for postal code {pc4_code}")
+                        print(f"No valid pixels found for postal code {postal_code}")
                     else:
                         percentage = n_above / n_total
 
                     if percentage >= area_threshold:
                         print(
-                            f"Warning issued to postal code {pc4_code} on {day} for range {range_id}: {percentage:.0%} of pixels > {prob_threshold}"
+                            f"Warning issued to postal code {postal_code} on {day} for range {range_id}: {percentage:.0%} of pixels > {prob_threshold}"
                         )
 
                         # Filter the affected households based on the postal code
                         affected_households = households[
-                            households["postcode"] == pc4_code
+                            households["postcode"] == postal_code
                         ]
 
                         # Get the measures and evacuation flag from the json dictionary to use in the warning communication function
@@ -833,7 +837,7 @@ class Households(AgentBaseClass):
                         warnings_log.append(
                             {
                                 "day": day,
-                                "postcode": pc4_code,
+                                "postcode": postal_code,
                                 "range": range_id,
                                 "n_affected_households": len(affected_households),
                                 "n_warned_households": n_warned_households,
@@ -963,19 +967,24 @@ class Households(AgentBaseClass):
 
         return buildings
 
-    def assign_energy_substations_to_postal_codes(self, substations, pc4):
+    def assign_energy_substations_to_postal_codes(self, substations, postal_codes):
         # -- Need to improve this with Thiessen polygons or similar
-        PC4_with_substations = gpd.sjoin_nearest(
-            pc4, substations[["fid", "geometry"]], how="left", distance_col="distance"
+        postal_codes_with_substations = gpd.sjoin_nearest(
+            postal_codes,
+            substations[["fid", "geometry"]],
+            how="left",
+            distance_col="distance",
         )
         # Rename the fid_right column for clarity
-        PC4_with_substations.rename(
+        postal_codes_with_substations.rename(
             columns={"fid_right": "substation_id"},
             inplace=True,
         )
-        return PC4_with_substations
+        return postal_codes_with_substations
 
-    def assign_critical_facilities_to_postal_codes(self, critical_facilities, pc4):
+    def assign_critical_facilities_to_postal_codes(
+        self, critical_facilities, postal_codes
+    ):
         # Use the centroid of the critical facilities to assign them to postal codes
         critical_facilities_centroid = critical_facilities.copy()
         critical_facilities_centroid["geometry"] = (
@@ -989,24 +998,28 @@ class Households(AgentBaseClass):
         )
 
         # Spatial join to assign postal codes to critical facilities based on their centroid
-        critical_facilities_with_PC6 = gpd.sjoin(
+        critical_facilities_with_postal_codes = gpd.sjoin(
             critical_facilities_centroid[["id", "geometry"]],
-            pc4,
+            postal_codes,
             how="left",
             predicate="within",
         )
 
         # Rename the id column for clarity and drop fid so it can save to gpkg
-        critical_facilities_with_PC6 = critical_facilities_with_PC6.rename(
-            columns={"id": "facility_id"}
-        ).drop(columns=["fid"])
-
-        # Save the critical facilities with postal codes to a file
-        critical_facilities_with_PC6.to_file(
-            os.path.join(self.model.output_folder, "critical_facilities_with_PC6.gpkg")
+        critical_facilities_with_postal_codes = (
+            critical_facilities_with_postal_codes.rename(
+                columns={"id": "facility_id"}
+            ).drop(columns=["fid"])
         )
 
-        return critical_facilities_with_PC6
+        # Save the critical facilities with postal codes to a file
+        critical_facilities_with_postal_codes.to_file(
+            os.path.join(
+                self.model.output_folder, "critical_facilities_with_postal_codes.gpkg"
+            )
+        )
+
+        return critical_facilities_with_postal_codes
 
     def critical_infrastructure_warning_strategy(self, prob_threshold=0.6):
         """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities."""
@@ -1022,7 +1035,7 @@ class Households(AgentBaseClass):
         substations = gpd.read_parquet(
             self.model.files["geoms"]["assets/energy_substations"]
         )
-        PC4 = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
+        postal_codes = gpd.read_parquet(self.model.files["geoms"]["postal_codes"])
         critical_facilities = gpd.read_file(
             os.path.join(self.model.output_folder, "vulnerable_facilities.gpkg")
         )
@@ -1033,8 +1046,8 @@ class Households(AgentBaseClass):
         strategy_id = 2
 
         # Assign substations to postal codes based on distance  -- This should only be done once when loading the assets in the model
-        PC4_with_substations = self.assign_energy_substations_to_postal_codes(
-            substations, PC4
+        postal_codes_with_substations = self.assign_energy_substations_to_postal_codes(
+            substations, postal_codes
         )
 
         # Create flood probability maps associated to the critical hit of energy substations
@@ -1070,16 +1083,20 @@ class Households(AgentBaseClass):
             print(f"Critical hits for energy substations: {len(critical_hits_energy)}")
 
             # Get the postcodes that will be affected by the critical hits of energy substations
-            affected_postcodes_energy = PC4_with_substations[
-                PC4_with_substations["substation_id"].isin(critical_hits_energy["fid"])
+            affected_postcodes_energy = postal_codes_with_substations[
+                postal_codes_with_substations["substation_id"].isin(
+                    critical_hits_energy["fid"]
+                )
             ]["postcode"].unique()
 
         ## For vulnerable and emergency facilities:
         strategy_id = 3
 
         # Assign critical facilities to postal codes based on intersection -- This should only be done once when loading the assets, need to fix it
-        critical_facilities_with_PC6 = self.assign_critical_facilities_to_postal_codes(
-            critical_facilities, PC4
+        critical_facilities_with_postal_codes = (
+            self.assign_critical_facilities_to_postal_codes(
+                critical_facilities, postal_codes
+            )
         )
 
         # Create flood probability map for vulnerable and emergency facilities
@@ -1121,8 +1138,8 @@ class Households(AgentBaseClass):
             )
 
             # Get the postcodes that will be affected by the critical hits of facilities
-            affected_postcodes_facilities = critical_facilities_with_PC6[
-                critical_facilities_with_PC6["facility_id"].isin(
+            affected_postcodes_facilities = critical_facilities_with_postal_codes[
+                critical_facilities_with_postal_codes["facility_id"].isin(
                     critical_hits_facilities["id"]
                 )
             ]["postcode"].unique()
@@ -1743,10 +1760,6 @@ class Households(AgentBaseClass):
         self.assign_household_attributes()
         if self.config["warning_response"]:
             self.change_household_locations()  # ideally this should be done in the setup_population when building the model
-        # self.get_critical_infrastructure()
-        # self.critical_infrastructure_warning_strategy()
-        # self.water_level_warning_strategy()
-        # self.household_decision_making()
 
     def calculate_building_flood_damages(self) -> Tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.

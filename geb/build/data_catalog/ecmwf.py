@@ -253,7 +253,7 @@ class ECMWFForecasts(Adapter):
                 forecast_model == "probabilistic_forecast"
             ):  # check if ensemble forecasts are requested
                 mars_request["number"] = (
-                    "1/to/3"  # Add ensemble member numbers to request
+                    "1/to/50"  # Add ensemble member numbers to request
                 )
 
             print(
