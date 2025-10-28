@@ -221,10 +221,20 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             "Forecast end datetime could not be determined. Please check the forecast files."
         )  # ensure that forecast end datetime was found
 
+        forecast_end_dt = pd.to_datetime(forecast_end_dt).to_pydatetime()
+        forecast_end_day = forecast_end_dt.date()
+        if (
+            forecast_end_dt.hour == 0
+            and forecast_end_dt.minute == 0
+            and forecast_end_dt.second == 0
+        ):
+            forecast_end_day -= datetime.timedelta(
+                days=1
+            )  # if forecast ends at midnight, set to previous day, because we need data for the entire day
+
         self.n_timesteps = (
-            pd.to_datetime(forecast_end_dt).to_pydatetime().date()
-            - self.start_time.date()
-        ).days  # set the number of timesteps to the end of the forecast
+            forecast_end_day - self.start_time.date()
+        ).days + 1  # set the number of timesteps to the end of the forecast
 
         for member in forecast_members:  # loop over all forecast members
             self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
@@ -244,13 +254,24 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                     self.hydrology.routing.grid.var.discharge_m3_s.mean()
                 ).item()  # calculate the mean discharge for the member
 
+            # restore the model to the state before the forecast for the next member
+            # so the n_timesteps is restored to the number of timesteps at
+            # the end of the forecast period
             self.restore(
                 store_location=store_location,
                 timestep=store_timestep,
-                n_timesteps=store_n_timesteps,
+                n_timesteps=self.n_timesteps,
             )  # restore the initial state of the multiverse
 
         print("Forecast finished, restoring all conditions...")  # debugging print
+
+        # after ALL forecast members have been processed, restore the model to the state before the multiverse
+        # so the n_timesteps is restored to the number of the full model run
+        self.restore(
+            store_location=store_location,
+            timestep=store_timestep,
+            n_timesteps=store_n_timesteps,
+        )  # restore the initial state of the multiverse
 
         # after all forecast members have been processed, restore the original forcing data
         for loader in self.forcing.loaders.values():
@@ -323,10 +344,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                         return_mean_discharge=True,
                     )  # run the multiverse for the current timestep
 
-            if self.config["agent_settings"]["households"]["warning_response"]:
-                self.agents.households.water_level_warning_strategy()
-                # simulate household response to warning
-                # self.agents.households.infrastructure_warning_strategy()
+                    if self.config["agent_settings"]["households"]["warning_response"]:
+                        self.agents.households.water_level_warning_strategy()
+                        # self.get_critical_infrastructure()
+                        # self.critical_infrastructure_warning_strategy()
+                        self.agents.households.household_decision_making()
 
         t0 = time()
         self.agents.step()
