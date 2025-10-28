@@ -223,18 +223,10 @@ class GEBModel(Module, HazardDriver, ABM_Model):
 
         forecast_end_dt = pd.to_datetime(forecast_end_dt).to_pydatetime()
         forecast_end_day = forecast_end_dt.date()
-        if (
-            forecast_end_dt.hour == 0
-            and forecast_end_dt.minute == 0
-            and forecast_end_dt.second == 0
-        ):
-            forecast_end_day -= datetime.timedelta(
-                days=1
-            )  # if forecast ends at midnight, set to previous day, because we need data for the entire day
 
         self.n_timesteps = (
             forecast_end_day - self.start_time.date()
-        ).days + 1  # set the number of timesteps to the end of the forecast
+        ).days  # set the number of timesteps to the end of the forecast
 
         for member in forecast_members:  # loop over all forecast members
             self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
