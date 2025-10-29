@@ -10,15 +10,6 @@ fabdem:
     source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
     source_version: 1-2
   path: ../../data_catalogue/topography/fabdem.vrt
-GRDC:
-  crs: 4326
-  data_type: GeoDataset
-  driver: netcdf
-  meta:
-    category: hydrology
-    source_license: https://grdc.bafg.de/downloads/policy_guidelines.pdf
-    source_url: https://grdc.bafg.de/
-  path: rivers/discharge/GRDC/GRDC_global.zip
 geul_dem:
   data_type: RasterDataset
   driver: raster
@@ -89,19 +80,6 @@ MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
     resolution: ['5-arcminute', '30-arcminute']
     crop: ['Barley', 'Cassava', 'Cocoa', 'Coffee', 'Cotton', 'Fodder', 'Groundnuts', 'Maize', 'Millet', 'Oil_palm', 'Others_annual', 'Others_perennial', 'Potatoes', 'Pulses', 'Rapeseed', 'Rice', 'Rye', 'Sorghum', 'Soybeans', 'Sugar_beet', 'Sugar_cane', 'Sunflower', 'Wheat']
     ir_or_rf: [ir, rf]
-global_irrigation_area_{irrigation_type}:
-  data_type: RasterDataset
-  driver: raster
-  path: irrigation/gmia_v5_{irrigation_type}_pct_aei.asc
-  crs: 4326
-  meta:
-    paper_doi: 10.5194/hess-14-1863-2010
-    paper_ref: Siebert et al. (2010)
-    source_license: CC BY 4.0
-    source_url: https://www.fao.org/aquastat/en/geospatial-information/global-maps-irrigated-areas/latest-version/
-    source_version: 5
-  placeholders:
-    irrigation_type: [aei, aai, aeisw, aeigw]
 GTSM:
   data_type: Dataset
   path: GTSM/reanalysis_waterlevel_10min_{}_{}_v1.nc
@@ -124,13 +102,6 @@ GTSM_surge:
     source_url: https://cds.climate.copernicus.eu/cdsapp#!/dataset/sis-water-level-change-timeseries-cmip6?tab=overview
     source_version: 1.0
     unit: m+MSL
-COAST_HG:
-  path: COAST_RP/COAST-HG_RP100.nc
-  data_type: GeoDataset
-  meta:
-    category: extreme water levels
-    paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
-    paper_ref: Dullaart et al. (2023)
 COAST_RP:
   path: COAST_RP/COAST-RP.pkl
   data_type: Dataset
@@ -138,27 +109,6 @@ COAST_RP:
     category: extreme water levels
     paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
     paper_ref: Dullaart et al. (2023)
-COAST_RP_stations:
-  path: COAST_RP/pxyn_coastal_points.xyn
-  data_type: Dataset
-  meta:
-      category: station ids
-      paper_doi: https://doi.org/10.5194/nhess-23-1847-2023
-      paper_ref: Dullaart et al. (2023)
-gebco:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  filesystem: local
-  meta:
-    category: topography
-    paper_doi: 10.5285/a29c5465-b138-234d-e053-6c86abc040b9
-    paper_ref: Weatherall et al (2020)
-    source_license: Public domain (free for any use including commercial)
-    source_url: https://www.bodc.ac.uk/data/open_download/gebco/gebco_2024/geotiff/
-    source_version: 2020
-    unit: m+MSL
-  path: topography/gebco.vrt
 cwatm_soil_5min:
   crs: 4326
   data_type: RasterDataset
@@ -220,52 +170,6 @@ oecd_idd:
     socioeconomic/OECD/OECD.WISE.INE,DSD_WISE_IDD@DF_IDD,1.0+.A.INC_DISP.MEDIAN+MEAN.XDC_HH_EQ._T.METH2012.D_CUR..csv
   driver: csv
   data_type: DataFrame
-wb_inflation_rate:
-  meta:
-    category: economics
-    source_author: World Bank
-    source_license: CC-BY-4.0
-    source_url: https://data.worldbank.org/indicator/FP.CPI.TOTL.ZG
-    sorce_version: 5551656
-  path: socioeconomic/WB inflation rates/API_FP.CPI.TOTL.ZG_DS2_en_csv_v2_402281.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    skiprows: 4
-wb_lending_rate:
-  meta:
-    category: economics
-    source_author: World Bank
-    source_license: CC-BY-4.0
-    source_url: https://data.worldbank.org/indicator/FR.INR.LEND
-    sorce_version: 5553913
-  path: socioeconomic/WB lending interest rates/API_FR.INR.LEND_DS2_en_csv_v2_3789.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    skiprows: 4
-world_bank_price_ratio:
-  meta:
-    category: economics
-    source_author: World Bank
-    source_license: CC-BY-4.0
-    source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
-  path: socioeconomic/price_ratio/API_PA.NUS.PPPC.RF_DS2_en_csv_v2_4549.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    skiprows: 4
-wb_LCU_per_USD:
-  meta:
-    category: economics
-    source_author: World Bank
-    source_license: CC-BY-4.0
-    source_url: https://data.worldbank.org/indicator/PA.NUS.PPPC.RF
-  path: socioeconomic/currency_conversion/API_PA.NUS.FCRF_DS2_en_csv_v2_399523.csv
-  driver: csv
-  data_type: DataFrame
-  driver_kwargs:
-    skiprows: 4
 gcam_electricity_rates:
   meta:
     category: economics
@@ -275,21 +179,6 @@ gcam_electricity_rates:
   path: socioeconomic/electricity_rates/GCAM_Electricity_Rates.csv
   driver: csv
   data_type: DataFrame
-india_cencus:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: project_data/fairstream/census/tehsils.geojson
-GDL_regions_v4:
-  data_type: GeoDataFrame
-  driver: vector
-  path: "admin/GDL_regions_v4.gpkg"
-  meta:
-    category: geography
-    source_author: Global Data Lab
-    source_url: https://globaldatalab.org/
-    source_version: 4
-    source_license: https://globaldatalab.org/termsofuse/
 GLOPOP-S:
   data_type: Dataset
   path: population/GLOPOP-S/synthpop_{region}_grid.dat.gz
@@ -311,89 +200,6 @@ AQUASTAT_municipal_withdrawal:
   path: water_demand/AQUASTAT_municipal_withdrawal.xlsx
   meta:
     source_license: CC BY 4.0
-esa_worldcover_2020_v100:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  filesystem: s3
-  storage_options:
-    anon: true
-  meta:
-    category: landuse
-    source_license: CC BY 4.0
-    source_url: https://doi.org/10.5281/zenodo.5571936
-    source_version: v100
-  path: s3://esa-worldcover/v100/2020/ESA_WorldCover_10m_2020_v100_Map_AWS.vrt
-  rename:
-    ESA_WorldCover_10m_2020_v100_Map_AWS: landuse
-esa_worldcover_2021_v200:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  meta:
-    category: landuse
-    source_license: CC BY 4.0
-    source_url: https://doi.org/10.5281/zenodo.5571936
-    source_version: v200
-  path: landsurface/ESA_WorldCover_10m_2021_v200_Map_AWS.vrt
-  rename:
-    ESA_WorldCover_10m_2021_v200_Map_AWS: landuse
-CHELSA-BIOCLIM+_monthly_{variable}_{month}_{year}:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  placeholders:
-    variable: [clt, cmi, hurs, pet, pr, rsds, sfcWind, tas, tasmax, tasmin, vpd]
-    year: ['1979', '1980', '1981', '1982', '1983', '1984', '1985', '1986', '1987', '1988', '1989', '1990', '1991', '1992', '1993', '1994', '1995', '1996', '1997', '1998', '1999', '2000', '2001', '2002', '2003', '2004', '2005', '2006', '2007', '2008', '2009', '2010', '2011', '2012', '2013', '2014', '2015', '2016', '2017', '2018']
-    month: ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
-  driver_kwargs:
-    mask_nodata: true
-  meta:
-    category: climate
-    source_license: CC0 1.0
-    source_url: https://www.doi.org/10.16904/envidat.332
-  path: https://os.zhdk.cloud.switch.ch/chelsav2/GLOBAL/monthly/{variable}/CHELSA_{variable}_{month}_{year}_V.2.1.tif
-global_wind_atlas:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: https://globalwindatlas.info/api/gis/global/wind-speed/10
-  meta:
-    category: climate
-    source_license: CC BY 4.0
-    source_url: https://globalwindatlas.info/
-lowder_farm_sizes:
-  data_type: DataFrame
-  driver: excel
-  driver_kwargs:
-    sheet_name: WEB table 3
-    skiprows: 4
-    skipfooter: 2
-    header: null
-    names: 
-      - Country
-      - Census Year
-      - Holdings/ agricultural area
-      - Total
-      - < 1 Ha
-      - 1 - 2 Ha
-      - 2 - 5 Ha
-      - 5 - 10 Ha
-      - 10 - 20 Ha
-      - 20 - 50 Ha
-      - 50 - 100 Ha
-      - 100 - 200 Ha
-      - 200 - 500 Ha
-      - 500 - 1000 Ha
-      - "> 1000 Ha"
-      - empty
-      - income class
-  path: socioeconomic/farm_sizes/1-s2.0-S0305750X15002703-mmc1.xlsx
-  meta:
-    paper_doi: https://doi.org/10.1016/j.worlddev.2015.10.041
-    paper_ref: Lowder Sarah K. et al. 2016
-    source_license: CC BY-NC-ND 4.0
-    source_url: https://doi.org/10.1016/j.worlddev.2015.10.041
 preferences_individual:
   path: socioeconomic/social/cleaned_individual_data.csv
   driver: csv
@@ -455,123 +261,6 @@ FAO_crop_price:
     Item: crop
   unit_mult:
     price_per_kg: 0.001  # tonne to kg
-hydraulic_conductivity_globgm:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: groundwater/hydraulic_conductivity_aquifer_filled_30sec.nc
-  meta:
-    category: groundwater
-    history: Extracted from pcrglowb
-    paper_doi: https://doi.org/10.5194/gmd-17-275-2024
-    paper_ref: Verkaik et al. (2024)
-    source_license: CC BY 4.0
-    source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
-    unit: md-1
-specific_yield_aquifer_globgm:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: groundwater/specific_yield_aquifer_filled_30sec.nc
-  meta:
-    category: groundwater
-    history: Extracted from pcrglobwb
-    paper_doi: https://doi.org/10.5194/gmd-17-275-2024
-    paper_ref: Verkaik et al. (2024)
-    source_license: CC BY 4.0
-    source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
-    unit: dimensionless
-water_table_depth_globgm:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: groundwater/globgm-wtd-ss.tif
-  meta:
-    category: groundwater
-    history: Obtained from GLOBGM
-    paper_doi: https://doi.org/10.5194/gmd-17-275-2024
-    paper_ref: Verkaik et al. (2024)
-    source_license: CC BY 4.0
-    source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
-    unit: m
-head_{layer}_globgm:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  path: groundwater/globgm-heads-{layer}-layer-ss.tif
-  meta:
-    category: groundwater
-    history: Obtained from GLOBGM
-    paper_doi: https://doi.org/10.5194/gmd-17-275-2024
-    paper_ref: Verkaik et al. (2024)
-    source_license: CC BY 4.0
-    source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
-    unit: m
-  placeholders:
-    layer: ['lower', 'upper']
-recession_coefficient_globgm:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: groundwater/recession_coefficient_30sec.nc
-  meta:
-    category: groundwater
-    history: Extracted from pcrglobwb
-    paper_doi: https://doi.org/10.5194/gmd-17-275-2024
-    paper_ref: Verkaik et al. (2024)
-    source_license: CC BY 4.0
-    source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
-    unit: dimensionless
-thickness_confining_layer_globgm:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: groundwater/confining_layer_thickness_version_2016_remapbil_to_30sec.nc
-  meta:
-    category: groundwater
-    history: Extracted from pcrglobwb
-    paper_doi: https://doi.org/10.5194/gmd-17-275-2024
-    paper_ref: Verkaik et al. (2024)
-    source_license: CC BY 4.0
-    source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
-    unit: m
-total_groundwater_thickness_globgm:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: groundwater/thickness_05min_remapbil_to_30sec_filled_with_pcr_correct_lat.nc
-  meta:
-    category: groundwater
-    history: Extracted from pcrglobwb
-    paper_doi: https://doi.org/10.5194/gmd-17-275-2024
-    paper_ref: Verkaik et al. (2024)
-    source_license: CC BY 4.0
-    source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
-    unit: m
-dem_globgm:
-  crs: 4326
-  data_type: RasterDataset
-  driver: netcdf
-  path: groundwater/topography_parameters_30sec_february_2021_global_covered_with_zero.nc
-  meta:
-    category: groundwater
-    history: Extracted from pcrglobwb
-    paper_doi: https://doi.org/10.5194/gmd-17-275-2024
-    paper_ref: Verkaik et al. (2024)
-    source_license: CC BY 4.0
-    source_url: https://geo.public.data.uu.nl/vault-globgm/research-globgm%5B1669042611%5D/original/input/version_1.0/
-    unit: m
-why_map:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  meta:
-    category: groundwater
-    paper_doi: https://doi.org/10.1007/978-90-481-3426-7_10
-    paper_ref: Richts et al. (2011)
-    source_url: https://www.whymap.org/whymap/EN/Maps_Data/Gwr/gwr_node_en.html
-    source_license: Creative Commons Attribution-ShareAlike Licence (CC BY-SA)
-  path: groundwater/why_map.tif
 fan_initial_groundwater_depth_{continent}:
   crs: 4326
   data_type: RasterDataset
@@ -586,51 +275,6 @@ fan_initial_groundwater_depth_{continent}:
   nodata: 2
   placeholders:
     continent: ['Eurasia', 'Africa', 'North_America', 'Oceania', 'South_America']
-soilgrids_2020_{variable}_{depth}:
-  data_type: RasterDataset
-  driver: raster
-  path: https://files.isric.org/soilgrids/latest/data/{variable}/{variable}_{depth}_mean.vrt
-  meta:
-    category: soil
-    notes: "soilthickness is based on 1) soilgrids (global) and 2) dataset for Eurasia\
-      \ (ESDAC, 2004; Panagos et al., 2012): ESDAC, 2004. The european soil database\
-      \ distribution version 2.0, european commission and the European soil bureau\
-      \ network.  esdac.jrc.ec.europa.eu, accessed: 2017-11-17.  Panagos, P., Van\
-      \ Liedekerke, M., Jones, A., Montanarella, L., 2012. European soil data centre:\
-      \ Response to european policy support  and public data requirements. Land Use\
-      \ Policy 29 (2), 329\xE2\u20AC\u201C338. \n"
-    paper_doi: https://doi.org/10.5194/soil-2020-65
-    paper_ref: de Sousa et al. (2020)
-    source_license: CC BY 4.0
-    source_url: https://www.isric.org/explore/soilgrids/soilgrids-access
-    source_version: 2020
-  placeholders:
-    depth: ['0-5cm', '5-15cm', '15-30cm', '30-60cm', '60-100cm', '100-200cm']
-    variable: ['bdod', 'cec', 'cfvo', 'clay', 'nitrogen', 'ocd', 'ocs', 'phh2o', 'sand', 'silt', 'soc']
-soilgrids_2017_{variable}:
-  data_type: RasterDataset
-  driver: raster
-  path: https://files.isric.org/soilgrids/former/2017-03-10/data/{variable}_M_250m_ll.tif
-  meta:
-    category: soil
-    paper_doi: https://doi.org/10.1371/journal.pone.0169748
-    paper_ref: de Sousa et al. (2020)
-    source_license: CC BY 4.0
-    source_url: https://www.isric.org/explore/soilgrids
-    source_version: 2017
-  placeholders:
-    variable: ["BDTICM"]
-  unit_mult:
-    BDTICM_M_250m_ll: 0.01
-GLOBIOM_regions_59:
-  data_type: DataFrame
-  driver: excel
-  path: GLOBIOM/Region_Country_Mapping.xlsx
-  meta:
-    source_url: https://iiasa.ac.at/models-tools-data/globiom
-    source_license: Creative Commons Attribution-NonCommercial 4.0 International
-  driver_kwargs:
-    sheet_name: Region59
 GLOBIOM_regions_37:
   data_type: DataFrame
   driver: excel
@@ -640,41 +284,3 @@ GLOBIOM_regions_37:
     source_license: Creative Commons Attribution-NonCommercial 4.0 International
   driver_kwargs:
     sheet_name: Region37
-ISIMIP:
-  data_type: Dataset
-  path: "placeholder"
-  meta:
-    category: climate
-    source_author: ISIMIP
-    source_license: CC BY 4.0
-    source_url: https://www.isimip.org
-ERA5_hourly:
-  data_type: Dataset
-  path: "placeholder"
-  meta:
-    category: climate
-    source_author: ECMWF
-    source_license: CC-BY licence
-    source_url: https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels
-osm_land_polygons:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: osm/land-polygons-split-4326/land_polygons.shp
-  meta:
-    category: landsurface
-    source_author: OpenStreetMap contributors
-    source_url: https://osmdata.openstreetmap.de/data/land-polygons.html
-    source_license: Data Commons Open Database License (ODbL)   
-osm_coastlines:
-  crs: 4326
-  data_type: GeoDataFrame
-  driver: vector
-  path: osm/coastlines-split-4326/lines.shp
-  meta:
-    category: landsurface
-    source_author: OpenStreetMap contributors
-    source_url: https://osmdata.openstreetmap.de/data/coastlines.html
-    source_license: Data Commons Open Database License (ODbL)
-
-
