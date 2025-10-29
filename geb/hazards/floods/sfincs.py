@@ -910,7 +910,6 @@ class SFINCSSimulation:
         for COMID, (ys, xs) in xy_per_river_segment.items():
             river_upstream_area = upstream_area[ys, xs]
             up_to_downstream_ids = np.argsort(river_upstream_area)
-            upstream_area_up_to_down = river_upstream_area[up_to_downstream_ids]
 
             ys_up_to_down: npt.NDArray[np.int64] = ys[up_to_downstream_ids]
             xs_up_to_down: npt.NDArray[np.int64] = xs[up_to_downstream_ids]
