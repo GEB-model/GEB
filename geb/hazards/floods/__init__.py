@@ -449,7 +449,7 @@ class Floods:
         rp_maps_coastal = {}
         for return_period in self.config["return_periods"]:
             print(
-                f"Run coastal model for return period {return_period} years for all rivers."
+                f"Run coastal model for return period {return_period} years for all coastal regions."
             )
 
             simulation: MultipleSFINCSSimulations = MultipleSFINCSSimulations(
