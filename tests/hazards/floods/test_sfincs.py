@@ -206,7 +206,7 @@ def test_SFINCS_runoff(geb_model: GEBModel) -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_SFINCS_accumulated_runoff(geb_model: GEBModel) -> None:
-    """Test SFINCS with precipitation forcing.
+    """Test SFINCS with accumulated runoff forcing.
 
     Args:
         geb_model: A GEB model instance with SFINCS instance.
