@@ -206,7 +206,7 @@ class Floods(Module):
             simulation_name=sfincs_simulation_name,
             start_time=start_time,
             end_time=end_time,
-            write_figures=self.config.get("write_figures", False),
+            write_figures=self.config["write_figures"],
         )
 
         routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]
