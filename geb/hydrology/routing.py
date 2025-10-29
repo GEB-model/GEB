@@ -1317,7 +1317,7 @@ class Routing(Module):
 
         # outside debug, we return NaN for routing loss
         else:
-            routing_loss: np.float32 = np.float32(np.nan)
+            routing_loss: np.float64 = np.float64(np.nan)
 
         self.report(locals())
 
