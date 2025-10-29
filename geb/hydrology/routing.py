@@ -924,7 +924,7 @@ class Routing(Module):
         # Channel Manning's n
         self.grid.var.river_mannings = (
             self.grid.load(self.model.files["grid"]["routing/mannings"])
-            * self.model.config["parameters"]["manningsN"]
+            * self.model.config["parameters"]["mannings_n_multiplier"]
         )
         assert (self.grid.var.river_mannings > 0).all()
 

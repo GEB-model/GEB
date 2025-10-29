@@ -1161,7 +1161,6 @@ class CropFarmers(AgentBaseClass):
                 wilting_point=self.HRU.var.wwp,
                 w=self.HRU.var.w,
                 ws=self.HRU.var.ws,
-                arno_beta=self.HRU.var.arno_beta,
                 saturated_hydraulic_conductivity_m_per_day=self.HRU.var.saturated_hydraulic_conductivity_m_per_s
                 * np.float32(86400),
                 remaining_irrigation_limit_m3=self.var.remaining_irrigation_limit_m3.data,

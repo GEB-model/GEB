@@ -731,22 +731,43 @@ def set_fn(
         config: Path to the model configuration file.
         working_directory: Working directory for the model.
         **kwargs: Keyword arguments to set in the config file.
+
+    Raises:
+        KeyError: If a specified key does not exist in the config and cannot be created.
     """
     with WorkingDirectory(working_directory):
         config_dict: dict[str, Any] = parse_config(config)
         for key, value in kwargs.items():
-            keys = key.split(".")
+            if key.endswith("+"):
+                key: str = key[:-1]
+                create: bool = True
+            else:
+                create: bool = False
+
+            keys: list[str] = key.split(".")
             d = config_dict
+
             for k in keys[:-1]:
                 if k not in d or not isinstance(d[k], dict):
-                    d[k] = {}
-                d = d[k]
+                    if create:
+                        d[k] = {}
+                    else:
+                        raise KeyError(
+                            f"Key '{k}' not found in config. If you want to create it, use the '+' suffix for the KEY."
+                        )
+                d: dict[str, Any] = d[k]
+
             if value == "null":
                 value = None
             elif value == "true":
                 value = True
             elif value == "false":
                 value = False
+
+            if not create and keys[-1] not in d:
+                raise KeyError(
+                    f"Key '{keys[-1]}' not found in config. If you want to create it, use the '+' suffix for the KEY."
+                )
             d[keys[-1]] = value
 
         with open(config, "w") as f:
@@ -762,6 +783,9 @@ def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
 
     Accepts parameter assignments in the form key=value, where keys can use
     dot notation for nested values (e.g., model.param1=0.5).
+
+    By default, only existing keys can be updated. To create new keys,
+    append a '+' to the key (e.g., model.new_param+=10).
 
     Args:
         ctx: Click context containing extra arguments.
