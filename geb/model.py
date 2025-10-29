@@ -199,6 +199,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             / "other"
             / "forecasts"
             / "ECMWF"
+            / self.forecast_issue_date
             / f"{'pr_hourly'}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
         )  # open the forecast data for the variable
         forecast_members = [i.item() for i in forecast_data.member.values]
@@ -214,6 +215,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                     / "other"
                     / "forecasts"
                     / "ECMWF"
+                    / self.forecast_issue_date
                     / f"{var}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
                 )  # open the forecast data for the variable
 
@@ -306,7 +308,13 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             and self.current_time.date()
         ):
             forecast_files: list[Path] = list(
-                (self.input_folder / "other" / "forecasts" / "ECMWF").glob("*.zarr")
+                (
+                    self.input_folder
+                    / "other"
+                    / "forecasts"
+                    / "ECMWF"
+                    / self.forecast_issue_date
+                ).glob("*.zarr")
             )  # get all forecast files in the input folder
             forecast_issue_dates: list[
                 datetime.date

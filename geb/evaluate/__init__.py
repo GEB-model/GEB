@@ -7,9 +7,10 @@ Contains the Evaluate class which contains evaluation routines for model runs.
 from pathlib import Path
 
 from .hydrology import Hydrology
+from .meteorological_forecasts import MeteorologicalForecasts
 
 
-class Evaluate(Hydrology):
+class Evaluate(Hydrology, MeteorologicalForecasts):
     """The main class that implements all evaluation procedures for the GEB model.
 
     Args:
@@ -47,6 +48,7 @@ class Evaluate(Hydrology):
                 "plot_discharge",
                 "evaluate_discharge",
                 "evaluate_hydrodynamics",
+                "evaluate_forecasts",
             ]
         else:
             assert isinstance(methods, (list, tuple)), (

@@ -6,13 +6,17 @@ import time
 import zipfile
 from calendar import monthrange
 from datetime import date, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from typing import Any, List
 from urllib.parse import urlparse
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import contextily as ctx
 import ecmwfapi
+import imageio.v2 as imageio
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -22,6 +26,7 @@ import xarray as xr
 import xclim.indices as xci
 from dateutil.relativedelta import relativedelta
 from isimip_client.client import ISIMIPClient
+from matplotlib.colors import ListedColormap
 from tqdm import tqdm
 from zarr.codecs.numcodecs import FixedScaleOffset
 
@@ -928,11 +933,227 @@ def plot_forecasts(self, da: xr.DataArray, name: str) -> None:
     )
     cbar.set_label(cbar_label)  # label for colorbar
     fig.suptitle(
-        f"{name} - Ensemble Spatial Distribution (Max over Time)"
+        f"{name} - Ensemble Spatial Distribution (Max over Time)", y=0.99
     )  # Overall title
     spatial_fp: Path = self.report_dir / (name + "_ensemble_spatial.png")  # File path
     plt.savefig(spatial_fp, dpi=300, bbox_inches="tight")  # Save figure
     plt.close(fig)  # Close figure to free memory
+
+
+def plot_gif(
+    self,
+    da: xr.DataArray,
+    name: str,
+    interpolation: str = "none",
+    accumulated: bool = False,
+) -> None:
+    """Create a GIF animation of the data over time.
+
+    Args:
+        self: The class instance.
+        da: The xarray DataArray containing the data to animate. Must have dimensions 'time', 'y', and 'x'.
+        name: The name of the variable being animated, used for titles and filenames.
+        interpolation: The interpolation method to use for displaying the data. Default is 'none'.
+        accumulated: Whether to plot accumulated precipitation (True) or instantaneous (False). Default is False
+    """
+    percentiles = [25, 50, 75, 90, 95]
+    # Use xarray's quantile function to calculate percentiles across the ensemble dimension
+    ensemble_dim = None
+    time_dim = None
+
+    for dim in da.dims:
+        if (
+            "member" in dim.lower()
+            or "ensemble" in dim.lower()
+            or "perturbation" in dim.lower()
+        ):
+            ensemble_dim = dim
+
+    percentiles_decimal = [
+        p / 100 for p in percentiles
+    ]  # Convert to 0-1 range for xarray
+
+    # Calculate all percentiles at once
+    ensemble_percentiles_xr = da.quantile(
+        percentiles_decimal, dim=ensemble_dim, keep_attrs=True
+    )
+
+    ensemble_percentiles_xr = ensemble_percentiles_xr.rename({"quantile": "percentile"})
+    ensemble_percentiles_xr = ensemble_percentiles_xr.assign_coords(
+        percentile=percentiles
+    )
+
+    # Add metadata
+    ensemble_percentiles_xr.attrs.update(
+        {
+            "long_name": f"{name} ensemble percentiles",
+            "description": f"Percentiles ({percentiles}) computed across ensemble members",
+            "source_variable": name,
+            "percentiles": percentiles,
+            "ensemble_members": f"Derived from {da.sizes[ensemble_dim] if ensemble_dim else 1} members",
+            "computation_method": "xarray.quantile across ensemble dimension",
+        }
+    )
+    # === Define variable to plot  ===
+    mask = self.grid["mask"]  # get the GEB grid
+    da_plot = (
+        ensemble_percentiles_xr.copy()
+    )  # make a copy to avoid modifying the original data
+    # Convert data to mm/hour if it's precipitation
+    if "pr" in name.lower() and "kg m-2 s-1" in da_plot.attrs.get("units", ""):
+        da_plot = da_plot * 3600  # convert to mm/hour
+        if accumulated == True:
+            da_plot = da_plot.cumsum(dim="time")  # convert to accumulated precipitation
+            ylabel = "mm"  # set y-axis label
+            name += "_accumulated"
+            viridis = cm.get_cmap("viridis")
+            viridis_colors = viridis(
+                np.linspace(0, 1, 25)
+            )  # The more colors, the smoother the gradient but more movement in cbar during animation
+            light_blue = np.array([0.7, 0.9, 1.0, 1.0])  # RGBA: light blue
+            orange_colors = np.array(
+                [
+                    [1.0, 0.8, 0.0, 1.0],  # Yellow-orange
+                    [1.0, 0.6, 0.0, 1.0],  # Orange
+                    [1.0, 0.4, 0.0, 1.0],  # Dark orange
+                    [0.9, 0.3, 0.0, 1.0],  # Red-orange
+                    [0.8, 0.2, 0.0, 1.0],  # Dark red-orange
+                ]
+            )
+            custom_colors = np.vstack(
+                [light_blue.reshape(1, -1), viridis_colors, orange_colors]
+            )
+            custom_cmap = ListedColormap(custom_colors)
+        else:
+            ylabel = "mm/hour"  # set y-axis label
+            viridis = cm.get_cmap("viridis")
+            viridis_colors = viridis(
+                np.linspace(0, 1, 20)
+            )  # how more colors, how smoother
+            light_blue = np.array([0.7, 0.9, 1.0, 1.0])  # RGBA
+            custom_colors = np.vstack([light_blue.reshape(1, -1), viridis_colors])
+            custom_cmap = ListedColormap(custom_colors)
+    else:
+        da_plot = da_plot.copy()  # no conversion
+        ylabel = da_plot.attrs.get("units", "")
+
+    if "pr_hourly" in da_plot.name:
+        da_plot = da_plot.interp(
+            x=mask.x,
+            y=mask.y,  # interp to GEB grid, if necessary
+            method="linear",
+        )
+
+    # === Settings for the imshow plot ===
+    vmin = float(da_plot.min())
+    vmax = float(da_plot.max())
+
+    data_extent = [
+        da_plot.x.min().values,
+        da_plot.x.max().values,
+        da_plot.y.min().values,
+        da_plot.y.max().values,
+    ]
+
+    y_coords = da_plot.y.values
+    if y_coords[0] < y_coords[-1]:  # Y is increasing
+        origin = "lower"
+        print("Using origin='lower' - Y coordinates increase")
+    else:  # Y is decreasing
+        origin = "upper"
+        print("Using origin='upper' - Y coordinates decrease")
+
+    interpolation = interpolation  # or 'none', 'bicubic' for smoother interpolation
+
+    # === Generating Animation ===
+    frames = []
+    times = da_plot["time"].values
+
+    for i, t in enumerate(times):
+        fig, axes = plt.subplots(
+            1,
+            len(percentiles),
+            figsize=(25, 5),
+            constrained_layout=True,
+            subplot_kw={"projection": ccrs.PlateCarree()},
+        )
+
+        for j, p in enumerate(percentiles):
+            ax = axes[j]
+            im = ax.imshow(
+                da_plot.sel(percentile=p, time=t).values,
+                extent=data_extent,
+                cmap=custom_cmap,
+                vmin=vmin,
+                vmax=vmax,
+                alpha=0.6,
+                origin=origin,
+                aspect="auto",
+                transform=ccrs.PlateCarree(),
+                zorder=2,
+                interpolation=interpolation,  # or bilinear for smoother
+            )
+
+            self.geom["mask"].boundary.plot(
+                ax=ax,
+                color="black",
+                linewidth=0.5,
+                alpha=0.8,
+                zorder=1,
+                label="Catchment Boundary",
+                transform=ccrs.PlateCarree(),
+            )
+
+            try:
+                ctx.add_basemap(
+                    ax,
+                    crs="EPSG:4326",
+                    source=ctx.providers.OpenStreetMap.Mapnik,
+                    zorder=0,
+                )
+
+            except Exception as e:
+                print(f"Warning: Could not add basemap: {e}")
+
+            ax.set_title(f"{p}th percentile", fontsize=14)
+            ax.tick_params(labelsize=12)
+
+            if j == 0:
+                ax.legend(loc="upper left", fontsize=12, framealpha=0.8)
+
+            if j == len(axes) // 2:
+                ax.set_xlabel("Longitude", fontsize=12)
+            else:
+                ax.set_xlabel("")
+
+            if j == 0:
+                ax.set_ylabel("Latitude", fontsize=12)
+            else:
+                ax.set_ylabel("")
+
+        cbar = fig.colorbar(
+            im, ax=axes, orientation="vertical", fraction=0.4, pad=0.01, shrink=0.8
+        )
+        cbar.set_label(f"{ylabel}", fontsize=12)
+
+        if hasattr(t, "astype"):
+            # For numpy datetime64
+            time_str = str(t)[:19].replace("T", " ")  # YYYY-MM-DD HH:MM:SS
+        else:
+            time_str = str(t)
+
+        fig.suptitle(f"{name} forecast - {time_str}", fontsize=16, y=0.95)
+
+        buf = BytesIO()
+        plt.savefig(buf, format="png", dpi=150)
+        plt.close(fig)
+        buf.seek(0)
+        frames.append(imageio.imread(buf))
+        buf.close()
+
+    # === Saving GIF ===
+    gif_fp = self.report_dir / f"{name}_animation.gif"  # File path for GIF
+    imageio.mimsave(gif_fp, frames, fps=5, p=0)
 
 
 def _plot_data(self, da: xr.DataArray, name: str) -> None:
@@ -1407,6 +1628,29 @@ class Forcing:
         # plot data (only forecasts)
         if "forecast" in name.lower():
             _plot_data(self, da, name)
+
+            # Check if GIF files already exist before creating them
+            gif_fp_regular = self.report_dir / f"{name.replace('/', '_')}_animation.gif"
+            gif_fp_accumulated = (
+                self.report_dir / f"{name.replace('/', '_')}_animation_accumulated.gif"
+            )
+            if not gif_fp_regular.exists():
+                plot_gif(self, da, name, accumulated=False)
+                self.logger.info(f"Creating a GIF animation: {gif_fp_regular.name}")
+            else:
+                self.logger.info(
+                    f"GIF file {gif_fp_regular.name} already exists, skipping regular animation creation"
+                )
+
+            if not gif_fp_accumulated.exists():
+                plot_gif(self, da, name, accumulated=True)
+                self.logger.info(
+                    f"Creating an GIF animation: {gif_fp_accumulated.name}"
+                )
+            else:
+                self.logger.info(
+                    f"GIF file {gif_fp_accumulated.name} already exists, skipping accumulated animation creation"
+                )
 
         return da
 
@@ -2978,7 +3222,7 @@ class Forcing:
             # Store the processed hourly precipitation data
             self.set_pr_hourly(  # Save hourly precipitation
                 pr_hourly,
-                name=f"forecasts/ECMWF/pr_hourly_{forecast_issue_date_str}",  # Use date-specific filename
+                name=f"forecasts/ECMWF/{forecast_issue_date_str}/pr_hourly_{forecast_issue_date_str}",  # Use date-specific filename
             )
             # Load elevation grids for topographic corrections
             (
@@ -2999,7 +3243,8 @@ class Forcing:
                 pr, target, method="conservative"
             )  # Resample to target grid using conservative method
             pr = self.set_pr(
-                pr, f"forecasts/ECMWF/pr_{forecast_issue_date_str}"
+                pr,
+                f"forecasts/ECMWF/{forecast_issue_date_str}/pr_{forecast_issue_date_str}",
             )  # Store daily precipitation
 
             hourly_tas = ECMWF_forecast["t2m"]  # Extract 2-meter temperature
@@ -3015,7 +3260,8 @@ class Forcing:
                 elevation_target,  # Use elevation grids for correction
             )
             self.set_tas(
-                tas_avg, f"forecasts/ECMWF/tas_{forecast_issue_date_str}"
+                tas_avg,
+                f"forecasts/ECMWF/{forecast_issue_date_str}/tas_{forecast_issue_date_str}",
             )  # Store average temperature
             tasmax = hourly_tas.resample(
                 time="D"
@@ -3027,7 +3273,8 @@ class Forcing:
             )
             tasmax = tasmax.rename("tasmax")  # Ensure proper variable name
             self.set_tasmax(  # Store maximum temperature
-                tasmax, f"forecasts/ECMWF/tasmax_{forecast_issue_date_str}"
+                tasmax,
+                f"forecasts/ECMWF/{forecast_issue_date_str}/tasmax_{forecast_issue_date_str}",
             )
             tasmin = hourly_tas.resample(
                 time="D"
@@ -3039,7 +3286,8 @@ class Forcing:
             )
             tasmin = tasmin.rename("tasmin")  # Ensure proper variable name
             self.set_tasmin(  # Store minimum temperature
-                tasmin, f"forecasts/ECMWF/tasmin_{forecast_issue_date_str}"
+                tasmin,
+                f"forecasts/ECMWF/{forecast_issue_date_str}/tasmin_{forecast_issue_date_str}",
             )
 
             hourly_dew_point_tas = ECMWF_forecast["d2m"]  # Extract dewpoint temperature
@@ -3105,7 +3353,8 @@ class Forcing:
                 "hurs"
             )  # Rename to standard climate variable
             self.set_hurs(  # Store relative humidity
-                relative_humidity, f"forecasts/ECMWF/hurs_{forecast_issue_date_str}"
+                relative_humidity,
+                f"forecasts/ECMWF/{forecast_issue_date_str}/hurs_{forecast_issue_date_str}",
             )
 
             hourly_rsds = ECMWF_forecast["ssrd"]  # Extract shortwave radiation
@@ -3117,7 +3366,8 @@ class Forcing:
             )  # Resample to target grid
             rsds = rsds.rename("rsds")  # Rename to standard variable name
             self.set_rsds(
-                rsds, f"forecasts/ECMWF/rsds_{forecast_issue_date_str}"
+                rsds,
+                f"forecasts/ECMWF/{forecast_issue_date_str}/rsds_{forecast_issue_date_str}",
             )  # Store solar radiation
 
             # Process surface longwave (thermal) radiation downwards
@@ -3130,7 +3380,8 @@ class Forcing:
             )  # Resample to target grid
             rlds = rlds.rename("rlds")  # Rename to standard variable name
             self.set_rlds(
-                rlds, f"forecasts/ECMWF/rlds_{forecast_issue_date_str}"
+                rlds,
+                f"forecasts/ECMWF/{forecast_issue_date_str}/rlds_{forecast_issue_date_str}",
             )  # Store longwave radiation
 
             pressure = ECMWF_forecast["sp"]  # Extract surface pressure
@@ -3145,7 +3396,8 @@ class Forcing:
             pressure = pressure.rename("ps")  # Rename to standard variable name
 
             self.set_ps(
-                pressure, f"forecasts/ECMWF/ps_{forecast_issue_date_str}"
+                pressure,
+                f"forecasts/ECMWF/{forecast_issue_date_str}/ps_{forecast_issue_date_str}",
             )  # Store surface pressure
 
             u_wind = ECMWF_forecast["u10"]  # Extract u-component of wind at 10m
@@ -3162,5 +3414,6 @@ class Forcing:
                 "sfcWind"
             )  # Rename to standard variable name
             self.set_sfcwind(  # Store surface wind speed
-                wind_speed, f"forecasts/ECMWF/sfcwind_{forecast_issue_date_str}"
+                wind_speed,
+                f"forecasts/ECMWF/{forecast_issue_date_str}/sfcwind_{forecast_issue_date_str}",
             )

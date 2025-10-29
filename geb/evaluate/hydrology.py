@@ -1430,7 +1430,6 @@ class Hydrology:
 
             xmin, ymin, xmax, ymax = region.total_bounds
             catchment_extent = [xmin, xmax, ymin, ymax]
-            print("extent:", catchment_extent)
 
             xmin, ymin, xmax, ymax = observation_final.rio.bounds()
             flood_extent = [xmin, xmax, ymin, ymax]
@@ -1477,7 +1476,6 @@ class Hydrology:
                 simulation_masked = simulation_final.where(simulation_final == 1)
                 hits = simulation_masked.where(observation_final)
                 misses_masked = misses.where(misses == 1)
-                print(self.model.config["general"]["forecasts"]["use"])
 
                 if visualization_type == "OSM":
                     # Ensure all arrays have the same shape by squeezing extra dimensions
@@ -1733,85 +1731,192 @@ class Hydrology:
         def create_forecast_performance_plots(
             performance_df: pd.DataFrame, event_name: str, save_folder: Path
         ) -> None:
-            """
-            Create performance metric plots across forecast initializations.
+            """Create performance metric plots showing spread and mean across forecast initializations.
 
             Generates line plots showing how performance metrics vary across different
-            forecast initialization times for a given flood event.
+            forecast initialization times for a given flood event. Shows both the spread
+            of the ensemble (min-max range) with transparent fill and the ensemble mean as a black line.
+
+            Notes:
+                The spread is calculated using the minimum and maximum values across ensemble
+                members for each forecast initialization. If only one member exists for a
+                forecast initialization, no spread is shown for that time point.
 
             Args:
                 performance_df: DataFrame containing performance metrics with forecast
-                    initialization times as index and metrics as columns.
+                    initialization times and ensemble members. Must include columns:
+                    'forecast_init', 'hit_rate', 'false_alarm_rate', 'csi', 'flooded_area_km2'.
                 event_name: Name of the flood event being analyzed.
-                save_folder: Directory to save the performance plots.
+                save_folder: Directory to save the performance plots (meters).
+
+            Raises:
+                ValueError: If required columns are missing from performance_df.
             """
-            # Convert index to datetime for better plotting
-            performance_df.index = pd.to_datetime(
-                performance_df.index, format="%Y%m%dT%H%M%S"
+            # Validate required columns
+            required_columns = [
+                "forecast_init",
+                "hit_rate",
+                "false_alarm_rate",
+                "csi",
+                "flooded_area_km2",
+            ]
+            missing_columns = [
+                col for col in required_columns if col not in performance_df.columns
+            ]
+            if missing_columns:
+                raise ValueError(
+                    f"Missing required columns in performance_df: {missing_columns}"
+                )
+
+            # Group by forecast initialization and calculate statistics
+            grouped_stats = (
+                performance_df.groupby("forecast_init")[
+                    ["hit_rate", "false_alarm_rate", "csi", "flooded_area_km2"]
+                ]
+                .agg(["mean", "min", "max", "std", "count"])
+                .reset_index()
             )
+
+            # Convert forecast_init to datetime for better plotting
+            grouped_stats["forecast_init_dt"] = pd.to_datetime(
+                grouped_stats["forecast_init"], format="%Y%m%dT%H%M%S"
+            )
+
+            # Sort by datetime for proper line plotting
+            grouped_stats = grouped_stats.sort_values("forecast_init_dt")
 
             # Create subplots for different metrics
             fig, axes = plt.subplots(2, 2, figsize=(15, 10))
             fig.suptitle(
-                f"Forecast Performance Metrics - {event_name}",
+                f"Forecast Performance Metrics with Ensemble Spread - {event_name}",
                 fontsize=16,
                 fontweight="bold",
             )
 
+            # Define colors for spread (transparent) and metric-specific colors
+            spread_colors = {
+                "hit_rate": "#2E86AB",
+                "false_alarm_rate": "#A23B72",
+                "csi": "#F18F01",
+                "flooded_area_km2": "#636EFA",
+            }
+
             # Hit Rate
-            axes[0, 0].plot(
-                performance_df.index,
-                performance_df["hit_rate"],
-                marker="o",
-                linewidth=2,
-                markersize=6,
-                color="#2E86AB",
+            ax = axes[0, 0]
+            metric = "hit_rate"
+
+            # Plot spread (min-max range) with transparent fill
+            ax.fill_between(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "min")],
+                grouped_stats[(metric, "max")],
+                color=spread_colors[metric],
+                alpha=0.3,
+                label="Ensemble member range (Min-Max)",
             )
-            axes[0, 0].set_title("Hit Rate (%)", fontweight="bold")
-            axes[0, 0].set_ylabel("Hit Rate (%)")
-            axes[0, 0].grid(True, alpha=0.3)
-            axes[0, 0].set_ylim(0, 100)
+
+            # Plot mean as black line
+            ax.plot(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "mean")],
+                color="black",
+                linewidth=2,
+                marker="o",
+                markersize=6,
+                label="Ensemble Mean",
+            )
+
+            ax.set_title("Hit Rate (%)", fontweight="bold")
+            ax.set_ylabel("Hit Rate (%)")
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim(0, 100)
+            ax.legend()
 
             # False Alarm Rate
-            axes[0, 1].plot(
-                performance_df.index,
-                performance_df["false_alarm_rate"],
-                marker="s",
-                linewidth=2,
-                markersize=6,
-                color="#A23B72",
+            ax = axes[0, 1]
+            metric = "false_alarm_rate"
+
+            ax.fill_between(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "min")],
+                grouped_stats[(metric, "max")],
+                color=spread_colors[metric],
+                alpha=0.3,
+                label="Ensemble member range (Min-Max)",
             )
-            axes[0, 1].set_title("False Alarm Rate (%)", fontweight="bold")
-            axes[0, 1].set_ylabel("False Alarm Rate (%)")
-            axes[0, 1].grid(True, alpha=0.3)
-            axes[0, 1].set_ylim(0, 100)
+
+            ax.plot(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "mean")],
+                color="black",
+                linewidth=2,
+                marker="s",
+                markersize=6,
+                label="Ensemble Mean",
+            )
+
+            ax.set_title("False Alarm Rate (%)", fontweight="bold")
+            ax.set_ylabel("False Alarm Rate (%)")
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim(0, 100)
+            ax.legend()
 
             # Critical Success Index
-            axes[1, 0].plot(
-                performance_df.index,
-                performance_df["csi"],
-                marker="^",
-                linewidth=2,
-                markersize=6,
-                color="#F18F01",
+            ax = axes[1, 0]
+            metric = "csi"
+
+            ax.fill_between(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "min")],
+                grouped_stats[(metric, "max")],
+                color=spread_colors[metric],
+                alpha=0.3,
+                label="Ensemble member range (Min-Max)",
             )
-            axes[1, 0].set_title("Critical Success Index (%)", fontweight="bold")
-            axes[1, 0].set_ylabel("CSI (%)")
-            axes[1, 0].grid(True, alpha=0.3)
-            axes[1, 0].set_ylim(0, 100)
+
+            ax.plot(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "mean")],
+                color="black",
+                linewidth=2,
+                marker="^",
+                markersize=6,
+                label="Ensemble Mean",
+            )
+
+            ax.set_title("Critical Success Index (%)", fontweight="bold")
+            ax.set_ylabel("CSI (%)")
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim(0, 100)
+            ax.legend()
 
             # Flooded Area
-            axes[1, 1].plot(
-                performance_df.index,
-                performance_df["flooded_area_km2"],
-                marker="d",
-                linewidth=2,
-                markersize=6,
-                color="#636EFA",
+            ax = axes[1, 1]
+            metric = "flooded_area_km2"
+
+            ax.fill_between(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "min")],
+                grouped_stats[(metric, "max")],
+                color=spread_colors[metric],
+                alpha=0.3,
+                label="Ensemble member range (Min-Max)",
             )
-            axes[1, 1].set_title("Flooded Area (km²)", fontweight="bold")
-            axes[1, 1].set_ylabel("Area (km²)")
-            axes[1, 1].grid(True, alpha=0.3)
+
+            ax.plot(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "mean")],
+                color="black",
+                linewidth=2,
+                marker="d",
+                markersize=6,
+                label="Ensemble Mean",
+            )
+
+            ax.set_title("Flooded Area (km²)", fontweight="bold")
+            ax.set_ylabel("Area (km²)")
+            ax.grid(True, alpha=0.3)
+            ax.legend()
 
             # Format x-axis for all subplots
             for ax in axes.flat:
@@ -1822,20 +1927,11 @@ class Hydrology:
 
             # Save the plot
             plot_filename = (
-                f"{event_name.replace(':', '_')}_forecast_performance_summary.png"
+                f"{event_name.replace(':', '_')}_forecast_performance_spread.png"
             )
             fig.savefig(save_folder / plot_filename, dpi=300, bbox_inches="tight")
             print(
-                f"Forecast performance summary saved as: {save_folder / plot_filename}"
-            )
-
-            # Also save the DataFrame as Excel for further analysis
-            excel_filename = (
-                f"{event_name.replace(':', '_')}_forecast_performance_metrics.xlsx"
-            )
-            performance_df.to_excel(save_folder / excel_filename)
-            print(
-                f"Performance metrics DataFrame saved as: {save_folder / excel_filename}"
+                f"Forecast performance spread plot saved as: {save_folder / plot_filename}"
             )
 
         self.config = self.model.config["hazards"]
@@ -1844,31 +1940,39 @@ class Hydrology:
 
         eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
 
-        # check if run file exists, if not, raise an error
-        flood_maps_folder = self.model.output_folder / "flood_maps"
-        if not flood_maps_folder.exists():
-            raise FileNotFoundError(
-                "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
-            )
-
-        # check if observation file exists, if not, raise an error
-        if not Path(self.config["floods"]["event_observation_file"]).exists():
-            raise FileNotFoundError(
-                f"Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
-            )
-        if Path(self.config["floods"]["event_observation_file"]).suffix != ".zarr":
-            raise ValueError(
-                f"Flood observation file is not in the correct format. Please provide a .zarr file."
-            )
-
         # Calculate performance metrics for every event in config file
         for event in self.config["floods"]["events"]:
             event_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}"
             print(f"event: {event_name}")
 
             # Create event-specific folder
-            event_folder = eval_hydrodynamics_folders / event_name
-            event_folder.mkdir(parents=True, exist_ok=True)
+            if self.model.config["general"]["forecasts"]["use"]:
+                event_folder = eval_hydrodynamics_folders / "forecasts" / event_name
+                event_folder.mkdir(parents=True, exist_ok=True)
+                flood_maps_folder = (
+                    self.model.output_folder / "flood_maps" / "forecasts"
+                )
+            else:
+                event_folder = eval_hydrodynamics_folders / event_name
+                event_folder.mkdir(parents=True, exist_ok=True)
+                flood_maps_folder = self.model.output_folder / "flood_maps"
+
+            # check if run file exists, if not, raise an error
+
+            if not flood_maps_folder.exists():
+                raise FileNotFoundError(
+                    "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
+                )
+
+            # check if observation file exists, if not, raise an error
+            if not Path(self.config["floods"]["event_observation_file"]).exists():
+                raise FileNotFoundError(
+                    f"Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
+                )
+            if Path(self.config["floods"]["event_observation_file"]).suffix != ".zarr":
+                raise ValueError(
+                    f"Flood observation file is not in the correct format. Please provide a .zarr file."
+                )
 
             # Find all flood maps corresponding to the event
             all_flood_map_files = list(flood_maps_folder.glob("*.zarr"))
@@ -1879,7 +1983,6 @@ class Hydrology:
                 forecast_init, member, event_start, event_end, parsed_event_name = (
                     parse_flood_forecast_initialisation(flood_map_path.name)
                 )
-
                 # Check if file matches current event
                 if parsed_event_name == event_name:
                     flood_map_files.append(flood_map_path)
@@ -1918,8 +2021,9 @@ class Hydrology:
                 # Identify unique forecast initializations
                 for flood_map_name in flood_map_files:
                     # Parse the flood map filename to extract components
+                    print(f"flood_map_name: {flood_map_name}")
                     forecast_init, member, event_start, event_end, parsed_event_name = (
-                        parse_flood_forecast_initialisation(flood_map_name)
+                        parse_flood_forecast_initialisation(flood_map_name.name)
                     )
                     unique_forecast_inits.add(forecast_init)
 
@@ -1931,83 +2035,73 @@ class Hydrology:
                         f"Found {len(unique_forecast_inits_list)} unique forecast initializations: {unique_forecast_inits_list}"
                     )
 
-                    # Process each unique forecast initialization
-                    for forecast_init in unique_forecast_inits_list:
-                        print(f"Processing forecast initialization: {forecast_init}")
+                # Process each unique forecast initialization
+                for forecast_init in unique_forecast_inits_list:
+                    print(f"Processing forecast initialization: {forecast_init}")
 
-                        # Create forecast initialization folder
-                        forecast_folder = event_folder / forecast_init
-                        forecast_folder.mkdir(parents=True, exist_ok=True)
+                    # Create forecast initialization folder
+                    forecast_folder = event_folder / forecast_init
+                    forecast_folder.mkdir(parents=True, exist_ok=True)
 
-                        # Find all files matching this forecast initialization
-                        matching_files = []
-                        for flood_map_path in flood_map_files:
-                            file_forecast_init, _, _, _, parsed_event_name = (
-                                parse_flood_forecast_initialisation(flood_map_path.name)
-                            )
+                    matching_flood_maps = []
+                    for flood_map_path in flood_map_files:
+                        file_forecast_init, _, _, _, parsed_event_name = (
+                            parse_flood_forecast_initialisation(flood_map_path.name)
+                        )
+                        # Only include files that match current forecast init and event
+                        if (
+                            file_forecast_init == forecast_init
+                            and parsed_event_name == event_name
+                        ):
+                            matching_flood_maps.append(flood_map_path)
 
-                            # Check if file matches current event and forecast init
-                            if (
-                                file_forecast_init == forecast_init
-                                and parsed_event_name == event_name
-                            ):
-                                matching_files.append(flood_map_path)
-
-                        forecast_metrics_list = []
-                        # Process each member in this forecast initialization
-                        for flood_map_path in matching_files:
-                            print(f"    Evaluating: {flood_map_path.name}")
-
-                            try:
-                                metrics = calculate_performance_metrics(
-                                    observation=self.config["floods"][
-                                        "event_observation_file"
-                                    ],
-                                    flood_map_path=flood_map_path,
-                                    visualization_type="OSM",
-                                    output_folder=forecast_folder,
-                                )
-
-                                # Add metadata to metrics
-                                forecast_init_parsed, member, _, _, _ = (
-                                    parse_flood_forecast_initialisation(
-                                        flood_map_path.name
-                                    )
-                                )
-                                metrics_with_metadata = {
-                                    "forecast_init": forecast_init_parsed,
-                                    "member": member,
-                                    "filename": flood_map_path.name,
-                                    **metrics,
-                                }
-
-                                performance_metrics_list.append(metrics_with_metadata)
-                                forecast_metrics_list.append(metrics)
-                                print(
-                                    f"    Successfully evaluated: {flood_map_path.name}"
-                                )
-
-                            except Exception as e:
-                                print(
-                                    f"    Error evaluating {flood_map_path.name}: {str(e)}"
-                                )
-
-                if len(forecast_metrics_list) > 1:
-                    ensemble_metrics = {
-                        "hit_rate": np.mean(
-                            [m["hit_rate"] for m in forecast_metrics_list]
-                        ),
-                        "false_alarm_rate": np.mean(
-                            [m["false_alarm_rate"] for m in forecast_metrics_list]
-                        ),
-                        "csi": np.mean([m["csi"] for m in forecast_metrics_list]),
-                        "flooded_area_km2": np.mean(
-                            [m["flooded_area_km2"] for m in forecast_metrics_list]
-                        ),
-                    }
                     print(
-                        f"    Ensemble mean metrics calculated for {len(forecast_metrics_list)} members"
+                        f"Found {len(matching_flood_maps)} flood maps for forecast initialization {forecast_init}"
                     )
+                    # Evaluate each matching flood map
+                    forecast_metrics_list = []
+
+                    for flood_map_path in matching_flood_maps:
+                        print(f"   Evaluating: {flood_map_path.name}")
+
+                        metrics = calculate_performance_metrics(
+                            observation=self.config["floods"]["event_observation_file"],
+                            flood_map_path=flood_map_path,
+                            visualization_type="OSM",
+                            output_folder=forecast_folder,
+                        )
+                        print("   Flood map evaluation complete.")
+                        # Add metadata to metrics
+                        forecast_init_parsed, member, _, _, _ = (
+                            parse_flood_forecast_initialisation(flood_map_path.name)
+                        )
+                        metrics_with_metadata = {
+                            "forecast_init": forecast_init_parsed,
+                            "member": member,
+                            "filename": flood_map_path.name,
+                            **metrics,
+                        }
+
+                        performance_metrics_list.append(metrics_with_metadata)
+                        forecast_metrics_list.append(metrics)
+                        print(f"   Successfully evaluated: {flood_map_path.name}")
+
+                    if len(forecast_metrics_list) > 1:
+                        ensemble_metrics = {
+                            "hit_rate": np.mean(
+                                [m["hit_rate"] for m in forecast_metrics_list]
+                            ),
+                            "false_alarm_rate": np.mean(
+                                [m["false_alarm_rate"] for m in forecast_metrics_list]
+                            ),
+                            "csi": np.mean([m["csi"] for m in forecast_metrics_list]),
+                            "flooded_area_km2": np.mean(
+                                [m["flooded_area_km2"] for m in forecast_metrics_list]
+                            ),
+                        }
+                        print(
+                            f"    Ensemble mean metrics calculated for {len(forecast_metrics_list)} members"
+                        )
 
                 if performance_metrics_list:
                     performance_df = pd.DataFrame(performance_metrics_list)
@@ -2019,14 +2113,12 @@ class Hydrology:
 
                     # Create forecast performance plots
                     create_forecast_performance_plots(
-                        summary_df, event_name, event_folder
+                        performance_df, event_name, event_folder
                     )
 
                     # Save detailed performance metrics
-                    detailed_filename = f"{event_name.replace(':', '_')}_detailed_performance_metrics.xlsx"
-                    performance_df.to_excel(
-                        event_folder / detailed_filename, index=False
-                    )
+                    detailed_filename = f"{event_name.replace(':', '_')}_detailed_performance_metrics.csv"
+                    performance_df.to_csv(event_folder / detailed_filename, index=False)
                     print(
                         f"Detailed performance metrics saved as: {event_folder / detailed_filename}"
                     )
