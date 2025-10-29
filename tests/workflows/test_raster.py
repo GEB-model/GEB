@@ -3,6 +3,7 @@
 import geopandas as gpd
 import numpy as np
 import pytest
+import rioxarray  # noqa: F401
 import xarray as xr
 from rasterio.transform import from_bounds
 from shapely.geometry import Polygon

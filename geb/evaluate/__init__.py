@@ -4,10 +4,16 @@ Evaluation utilities for the GEB model.
 Contains the Evaluate class which contains evaluation routines for model runs.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .hydrology import Hydrology
 from .meteorological_forecasts import MeteorologicalForecasts
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 class Evaluate(Hydrology, MeteorologicalForecasts):
@@ -17,8 +23,9 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
         model: The GEB model instance.
     """
 
-    def __init__(self, model) -> None:
-        self.model = model
+    def __init__(self, model: GEBModel) -> None:
+        """Initialize the Evaluate class."""
+        self.model: GEBModel = model
 
     def run(
         self,
