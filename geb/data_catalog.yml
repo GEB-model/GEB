@@ -82,7 +82,7 @@ MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
     ir_or_rf: [ir, rf]
 GTSM:
   data_type: Dataset
-  path: GTSM/reanalysis_waterlevel_10min_{}_{}_v1.nc
+  path: GTSM/reanalysis_waterlevel_10min_{}_{}_v3.nc
   meta:
     category: water level
     paper_doi: doi:10.1038/ncomms11969
@@ -93,7 +93,7 @@ GTSM:
     unit: m+MSL
 GTSM_surge:
   data_type: Dataset
-  path: GTSM/reanalysis_surge_10min_{}_{}_v2.nc
+  path: GTSM/reanalysis_surge_10min_{}_{}_v3.nc
   meta:
     category: surge water level
     paper_doi: doi:10.1038/ncomms11969
