@@ -1689,12 +1689,12 @@ class GEBModel(
                 get_subbasin_id_from_coordinate(self.new_data_catalog, lon, lat)
             ]
         elif "geom" in region:
-            regions = self.data_catalog.get_geodataframe(region["geom"]["source"])
+            regions = self.new_data_catalog.fetch(region["geom"]["source"]).read()
             regions = regions[
                 regions[region["geom"]["column"]] == region["geom"]["key"]
             ]
             sink_subbasin_ids = get_sink_subbasin_id_for_geom(
-                self.data_catalog, regions, river_graph
+                self.new_data_catalog, regions, river_graph
             )
         else:
             raise ValueError(f"Region {region} not understood.")
