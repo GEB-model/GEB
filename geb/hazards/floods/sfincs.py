@@ -840,6 +840,10 @@ class SFINCSSimulation:
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
 
+        if self.write_figures:
+            self.sfincs_model.plot_basemap(fn_out="src_points_check.png")
+            self.sfincs_model.plot_forcing(fn_out="forcing.png")
+
     def set_runoff_forcing(
         self,
         runoff_m: xr.DataArray,
