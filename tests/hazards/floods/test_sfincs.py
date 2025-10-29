@@ -13,7 +13,6 @@ import numpy.typing as npt
 import pandas as pd
 import pytest
 import xarray as xr
-from pyflwdir import FlwdirRaster
 
 from geb.cli import CONFIG_DEFAULT, parse_config, run_model_with_method
 from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
@@ -223,6 +222,7 @@ def test_SFINCS_accumulated_runoff(geb_model: GEBModel) -> None:
             start_time=start_time,
             end_time=end_time,
             spinup_seconds=0,
+            write_figures=True,
         )
 
         runoff_rate_mm_per_hr: float = 1.0  # mm/hr
