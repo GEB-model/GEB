@@ -400,8 +400,11 @@ class ModFlowSimulation:
             sim_name=self.name,
             version="mf6",
             sim_ws=os.path.realpath(self.working_directory),
+            verbosity_level=0,
+            write_headers=False,  # avoid writing flopy headers (not needed),
+            print_input=False,  # avoid printing all input arrays/settings
         )
-        number_of_periods: int = 100_000
+        number_of_periods: int = 1
         flopy.mf6.ModflowTdis(
             sim, nper=number_of_periods, perioddata=[(1.0, 1, 1)] * number_of_periods
         )
@@ -515,40 +518,109 @@ class ModFlowSimulation:
             nvert=len(vertices),
             vertices=vertices,
             cell2d=cell2d,
-            top=self.model.hydrology.grid.decompress(
-                self.layer_boundary_elevation[0]
-            ).tolist(),
-            botm=self.model.hydrology.grid.decompress(
-                self.layer_boundary_elevation[1:]
-            ).tolist(),
-            idomain=domain.tolist(),
+            top={
+                "filename": "top.bin",
+                "factor": 1.0,
+                "data": self.model.hydrology.grid.decompress(
+                    self.layer_boundary_elevation[0]
+                ).tolist(),
+                "iprn": 1,
+                "binary": True,
+            },
+            botm={
+                "filename": "botm.bin",
+                "factor": 1.0,
+                "data": self.model.hydrology.grid.decompress(
+                    self.layer_boundary_elevation[1:]
+                ).tolist(),
+                "iprn": 1,
+                "binary": True,
+            },
+            idomain={
+                "filename": "idomain.bin",
+                "factor": 1.0,
+                "data": domain.tolist(),
+                "iprn": 1,
+                "binary": True,
+            },
         )
 
         # Node property flow
-        k = self.model.hydrology.grid.decompress(hydraulic_conductivity)
+        k: TwoDArrayFloat32 = self.model.hydrology.grid.decompress(
+            hydraulic_conductivity
+        )
 
         # Initial conditions
-        flopy.mf6.ModflowGwfic(groundwater_flow, strt=np.full_like(k, np.nan))
+        flopy.mf6.ModflowGwfic(
+            groundwater_flow,
+            strt={
+                "filename": "strt.bin",
+                "factor": 1.0,
+                "data": np.full_like(k, np.nan, dtype=np.float64),
+                "iprn": 1,
+                "binary": True,
+            },
+        )
 
         # Create icelltype array (assuming convertible cells i.e., that can be converted between confined and unconfined)
         icelltype = np.ones_like(domain, dtype=np.int32)
         flopy.mf6.ModflowGwfnpf(
             groundwater_flow,
             save_flows=self.save_flows,
-            icelltype=icelltype,
-            k=k,
+            print_flows=self.save_flows,
+            icelltype={
+                "filename": "icelltype.bin",
+                "data": icelltype,
+                "iprn": 11,
+                "binary": True,
+            },
+            k={
+                "filename": "k.bin",
+                "factor": 1.0,
+                "data": k.astype(np.float64),
+                "iprn": 1,
+                "binary": True,
+            },
         )
 
-        sy = self.model.hydrology.grid.decompress(specific_yield)
-        ss = self.model.hydrology.grid.decompress(specific_storage)
+        specific_storage: TwoDArrayFloat32 = self.model.hydrology.grid.decompress(
+            specific_storage
+        )
+        specific_yield: TwoDArrayFloat32 = self.model.hydrology.grid.decompress(
+            specific_yield
+        )
 
         # Storage
+        # Somehow modeltime is not available when loading_package is set to False (the default) and what it should be.
+        # when loading_package is set to True, the model builds fine but the simulation doesn't work.
+        # TODO: See if this is fixed in a future version of flopy/modflow6, and perhaps file an issue.
+        # flopy.mf6.ModflowGwfsto(
+        #     groundwater_flow,
+        #     save_flows=self.save_flows,
+        #     iconvert=1,
+        #     ss={
+        #         "filename": "ss.bin",
+        #         "data": specific_storage.astype(np.float64),
+        #         "binary": True,
+        #     },
+        #     sy={
+        #         "filename": "sy.bin",
+        #         "data": specific_yield.astype(np.float64),
+        #         "binary": True,
+        #     },
+        #     steady_state=False,
+        #     transient=True,
+        #     loading_package=False,
+        #     pname="sto",
+        #     filename="model.sto",
+        # )
+
         flopy.mf6.ModflowGwfsto(
             groundwater_flow,
             save_flows=self.save_flows,
             iconvert=1,
-            ss=ss,
-            sy=sy,
+            ss=specific_storage.astype(np.float64),
+            sy=specific_yield.astype(np.float64),
             steady_state=False,
             transient=True,
         )
@@ -565,7 +637,15 @@ class ModFlowSimulation:
             fixed_cell=True,
             save_flows=self.save_flows,
             maxbound=len(recharge),
-            stress_period_data=recharge,
+            stress_period_data={
+                0: {
+                    "filename": "recharge.bin",
+                    "factor": 1.0,
+                    "data": recharge,
+                    "iprn": 1,
+                    "binary": True,
+                },
+            },
         )
 
         # Wells
@@ -579,7 +659,15 @@ class ModFlowSimulation:
         wells = flopy.mf6.ModflowGwfwel(
             groundwater_flow,
             maxbound=len(wells),
-            stress_period_data=wells,
+            stress_period_data={
+                0: {
+                    "filename": "wells.bin",
+                    "factor": 1.0,
+                    "data": wells,
+                    "iprn": 1,
+                    "binary": True,
+                },
+            },
             save_flows=self.save_flows,
         )
 
@@ -604,9 +692,35 @@ class ModFlowSimulation:
         flopy.mf6.ModflowGwfdrn(
             groundwater_flow,
             maxbound=len(drainage),
-            stress_period_data=drainage,
+            stress_period_data={
+                0: {
+                    "filename": "drainage.bin",
+                    "factor": 1.0,
+                    "data": drainage,
+                    "iprn": 1,
+                    "binary": True,
+                },
+            },
             print_flows=self.save_flows,
             save_flows=self.save_flows,
+        )
+
+        output_control = flopy.mf6.ModflowGwfoc(
+            groundwater_flow,
+            pname="oc",
+            head_filerecord=f"{self.name}.hds",
+            budget_filerecord=f"{self.name}.cbc",
+            saverecord=[
+                ("HEAD", "LAST"),  # Saves the HEAD file at last timestep
+                ("BUDGET", "LAST"),  # Saves the BUDGET file at last timestep
+            ],
+            printrecord=[
+                ("HEAD", "LAST"),  # Prints to LST file only at the last step
+                (
+                    "BUDGET",
+                    "LAST",
+                ),  # Prints budget summary to LST file only at the last step
+            ],
         )
 
         sim.simulation_data.set_sci_note_upper_thres(
@@ -1007,12 +1121,12 @@ class ModFlowSimulation:
     def step(self) -> None:
         """Perform a single time step of the model.
 
-        Raises:
-            StopIteration: If the model has reached the end time.
+        This method on purpose does not advance the time step of MODFLOW, but
+        instead re-solves the current time step. This allows the input files
+        to be as simple as possible, without the need to specify multiple time steps
+        in advance. We instead use the BMI interface to set the data for the
+        'current' time step, and then re-solve the time step.
         """
-        if self.mf6.get_current_time() == self.end_time:
-            raise StopIteration("MODFLOW used all iteration steps.")
-
         t0 = time()
         # loop over subcomponents
         n_solutions = self.mf6.get_subcomponent_count()
@@ -1031,8 +1145,6 @@ class ModFlowSimulation:
                 # raise RuntimeError("MODFLOW did not converge")
 
             self.mf6.finalize_solve(solution_id)
-
-        self.mf6.finalize_time_step()
 
         assert not np.isnan(self.heads).any()
         assert np.array_equal(self.actual_well_rate, self.potential_well_rate)
@@ -1087,11 +1199,6 @@ class ModFlowSimulation:
             )
 
         self.heads_update_callback(self.heads)
-
-        # If next step exists, prepare timestep. Otherwise the data set through the bmi
-        # will be overwritten when preparing the next timestep.
-        if self.mf6.get_current_time() < self.end_time:
-            self.prepare_time_step()
 
     def finalize(self) -> None:
         """Finalize the model.

@@ -24,27 +24,28 @@ from geb import __version__
 from geb.build import GEBModel as GEBModelBuild
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
-from geb.multirun import multi_run as geb_multi_run
-from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
 from geb.workflows.io import WorkingDirectory
 from geb.workflows.methods import multi_level_merge
 
-PROFILING_DEFAULT = False
-OPTIMIZE_DEFAULT = False
-TIMING_DEFAULT = False
-WORKING_DIRECTORY_DEFAULT = Path(".")
-CONFIG_DEFAULT = "model.yml"
-UPDATE_DEFAULT = "update.yml"
-BUILD_DEFAULT = "build.yml"
-DATA_CATALOG_DEFAULT = Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"
-DATA_PROVIDER_DEFAULT = os.environ.get("GEB_DATA_PROVIDER", "default")
-DATA_ROOT_DEFAULT = os.environ.get(
-    "GEB_DATA_ROOT",
-    Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / ".." / "data_catalog",
+PROFILING_DEFAULT: bool = False
+OPTIMIZE_DEFAULT: bool = False
+TIMING_DEFAULT: bool = False
+WORKING_DIRECTORY_DEFAULT: Path = Path(".")
+CONFIG_DEFAULT: Path = Path("model.yml")
+UPDATE_DEFAULT: Path = Path("update.yml")
+BUILD_DEFAULT: Path = Path("build.yml")
+DATA_CATALOG_DEFAULT: Path = (
+    Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"
 )
-ALTER_FROM_MODEL_DEFAULT = "../base"
+DATA_PROVIDER_DEFAULT: str = os.environ.get("GEB_DATA_PROVIDER", "default")
+DATA_ROOT_DEFAULT: Path = Path(
+    os.environ.get(
+        "GEB_DATA_ROOT",
+        Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / ".." / "data_catalog",
+    )
+)
+ALTER_FROM_MODEL_DEFAULT: Path = Path("../base")
 
 
 class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
@@ -99,10 +100,12 @@ def parse_config(
     if isinstance(config_path, dict):
         config = config_path
     else:
-        config = yaml.load(
+        config: dict | None = yaml.load(
             open(current_directory / config_path, "r"),
             Loader=DetectDuplicateKeysYamlLoader,
         )
+        if config is None:
+            config = {}
         current_directory = current_directory / Path(config_path).parent
 
     if "inherits" in config:
@@ -186,7 +189,8 @@ def click_config(func: Callable[..., Any]) -> Callable[..., Any]:
     @click.option(
         "--config",
         "-c",
-        default=CONFIG_DEFAULT,
+        type=click.Path(path_type=Path),
+        default=Path(CONFIG_DEFAULT),
         help=f"Path of the model configuration file. Defaults to '{CONFIG_DEFAULT}'.",
     )
     @functools.wraps(func)
@@ -220,7 +224,8 @@ def working_directory_option(func: Callable[..., Any]) -> Callable[..., Any]:
     @click.option(
         "--working-directory",
         "-wd",
-        default=WORKING_DIRECTORY_DEFAULT,
+        type=click.Path(path_type=Path),
+        default=Path(WORKING_DIRECTORY_DEFAULT),
         help="Working directory for model. Default is the current directory.",
     )
     @functools.wraps(func)
@@ -411,53 +416,8 @@ def exec(method: str, *args: Any, **kwargs: Any) -> None:
     run_model_with_method(method=method, *args, **kwargs)
 
 
-@cli.command()
-@click_config
-@working_directory_option
-def calibrate(config: str | dict[str, Any], working_directory: Path) -> None:
-    """Function to run model calibration.
-
-    Args:
-        config: Path to the model configuration file or a dict with the config.
-        working_directory: Working directory for the model.
-    """
-    with WorkingDirectory(working_directory):
-        config = parse_config(config)
-        geb_calibrate(config, working_directory)
-
-
-@cli.command()
-@click_config
-@working_directory_option
-def sensitivity(config: str | dict[str, Any], working_directory: Path) -> None:
-    """Function to run sensitivity analysis.
-
-    Args:
-        config: Path to the model configuration file or a dict with the config.
-        working_directory: Working directory for the model.
-    """
-    with WorkingDirectory(working_directory):
-        config = parse_config(config)
-        geb_sensitivity_analysis(config, working_directory)
-
-
-@cli.command()
-@click_config
-@working_directory_option
-def multirun(config: str | dict[str, Any], working_directory: Path) -> None:
-    """Function to run multiple model configurations.
-
-    Args:
-        config: Path to the model configuration file or a dict with the config.
-        working_directory: Working directory for the model.
-    """
-    with WorkingDirectory(working_directory):
-        config = parse_config(config)
-        geb_multi_run(config, working_directory)
-
-
 def click_build_options(
-    build_config: str = BUILD_DEFAULT, build_config_help_extra: str | None = None
+    build_config: Path = BUILD_DEFAULT, build_config_help_extra: str | None = None
 ) -> Any:
     """Decorator to add build options to a click command.
 
@@ -490,15 +450,16 @@ def click_build_options(
         @click.option(
             "--build-config",
             "-b",
-            default=build_config,
+            type=click.Path(path_type=Path),
+            default=Path(build_config),
             help=build_config_help,
         )
         @working_directory_option
         @click.option(
             "--data-catalog",
             "-d",
-            type=str,
-            default=DATA_CATALOG_DEFAULT,
+            type=click.Path(path_type=Path),
+            default=Path(DATA_CATALOG_DEFAULT),
             help=f"""Path to data catalog YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to {DATA_CATALOG_DEFAULT}""",
         )
         @click.option(
@@ -511,8 +472,8 @@ def click_build_options(
         @click.option(
             "--data-root",
             "-r",
-            type=str,
-            default=DATA_ROOT_DEFAULT,
+            type=click.Path(path_type=Path),
+            default=Path(DATA_ROOT_DEFAULT),
             help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
         @functools.wraps(func)
@@ -520,11 +481,11 @@ def click_build_options(
             """Wrapper function for build options.
 
             Args:
-                *args: Positional arguments.
-                **kwargs: Keyword arguments.
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
 
             Returns:
-                The result of the wrapped function.
+            The result of the wrapped function.
             """
             return func(*args, **kwargs)
 
@@ -581,17 +542,17 @@ def customize_data_catalog(data_catalog: Path, data_root: None | Path = None) ->
 
         with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
             yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
-        return tmp.name
+        return Path(tmp.name)
     else:
         return data_catalog
 
 
 def get_builder(
-    config: str | Path,
-    data_catalog: str | Path,
+    config: Path | dict[str, Any],
+    data_catalog: Path,
     custom_model: str | None,
     data_provider: str | None,
-    data_root: str | Path | None,
+    data_root: Path | None,
 ) -> GEBModelBuild:
     """Get model builder.
 
@@ -710,13 +671,15 @@ def init_fn(
 @click.option(
     "--build-config",
     "-b",
-    default=BUILD_DEFAULT,
+    type=click.Path(path_type=Path),
+    default=Path(BUILD_DEFAULT),
     help=f"Path of the model build configuration file. Defaults to '{BUILD_DEFAULT}'.",
 )
 @click.option(
     "--update-config",
     "-u",
-    default=UPDATE_DEFAULT,
+    type=click.Path(path_type=Path),
+    default=Path(UPDATE_DEFAULT),
     help="Path of the model update configuration file.",
 )
 @click.option(
@@ -743,13 +706,102 @@ def init(*args: Any, **kwargs: Any) -> None:
     init_fn(*args, **kwargs)
 
 
+def set_fn(
+    config: Path,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    **kwargs: Any,
+) -> None:
+    """Set model configuration values by updating a YAML configuration file.
+
+    This function loads the existing configuration from the specified file,
+    updates it with the provided keyword arguments (supporting nested keys
+    using dot notation, e.g., 'section.subsection.key'), and saves the
+    modified configuration back to the file.
+
+        config: Path to the model configuration file (as a string or Path object).
+        working_directory: Working directory for the model.
+        **kwargs: Keyword arguments representing keys and values to set in the config.
+                  Keys can be nested using dots (e.g., 'model.lr' sets 'lr' under 'model').
+
+    Note:
+        If a nested key does not exist, intermediate dictionaries are created automatically.
+        The file is overwritten with the updated configuration in YAML format.
+
+    Args:
+        config: Path to the model configuration file.
+        working_directory: Working directory for the model.
+        **kwargs: Keyword arguments to set in the config file.
+    """
+    with WorkingDirectory(working_directory):
+        config_dict: dict[str, Any] = parse_config(config)
+        for key, value in kwargs.items():
+            keys = key.split(".")
+            d = config_dict
+            for k in keys[:-1]:
+                if k not in d or not isinstance(d[k], dict):
+                    d[k] = {}
+                d = d[k]
+            if value == "null":
+                value = None
+            elif value == "true":
+                value = True
+            elif value == "false":
+                value = False
+            d[keys[-1]] = value
+
+        with open(config, "w") as f:
+            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+
+
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
+@click_config
+@working_directory_option
+@click.pass_context
+def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
+    """Set model configuration values.
+
+    Accepts parameter assignments in the form key=value, where keys can use
+    dot notation for nested values (e.g., model.param1=0.5).
+
+    Args:
+        ctx: Click context containing extra arguments.
+        config: Path to the model configuration file.
+        working_directory: Working directory for the model.
+
+    """
+    # Parse extra arguments as key=value pairs
+    params = {}
+    for arg in ctx.args:
+        if "=" in arg:
+            key, value = arg.split("=", 1)
+            # Try to convert value to appropriate type
+            try:
+                # Try int first
+                value = int(value)
+            except ValueError:
+                try:
+                    # Try float
+                    value = float(value)
+                except ValueError:
+                    # Keep as string
+                    pass
+            params[key] = value
+        else:
+            click.echo(
+                f"Warning: Ignoring invalid argument '{arg}'. Expected format: key=value",
+                err=True,
+            )
+
+    set_fn(config=config, working_directory=working_directory, **params)
+
+
 def build_fn(
-    data_catalog: Path | str = DATA_CATALOG_DEFAULT,
-    config: Path | str | dict[str, Any] = CONFIG_DEFAULT,
-    build_config: Path | str = BUILD_DEFAULT,
-    working_directory: Path | str = WORKING_DIRECTORY_DEFAULT,
+    data_catalog: Path = DATA_CATALOG_DEFAULT,
+    config: Path | dict[str, Any] = CONFIG_DEFAULT,
+    build_config: Path | dict[str, Any] = BUILD_DEFAULT,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: str = DATA_ROOT_DEFAULT,
+    data_root: Path = DATA_ROOT_DEFAULT,
 ) -> None:
     """Build model.
 
@@ -798,13 +850,13 @@ def build(*args: Any, **kwargs: Any) -> None:
 
 
 def alter_fn(
-    data_catalog: Path | str = DATA_CATALOG_DEFAULT,
-    config: Path | str | dict[str, Any] = CONFIG_DEFAULT,
-    build_config: Path | str = BUILD_DEFAULT,
-    working_directory: Path | str = WORKING_DIRECTORY_DEFAULT,
-    from_model: str = ALTER_FROM_MODEL_DEFAULT,
+    data_catalog: Path = DATA_CATALOG_DEFAULT,
+    config: Path = CONFIG_DEFAULT,
+    build_config: Path | dict[str, Any] = BUILD_DEFAULT,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    from_model: Path = ALTER_FROM_MODEL_DEFAULT,
     data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: str = DATA_ROOT_DEFAULT,
+    data_root: Path = DATA_ROOT_DEFAULT,
 ) -> None:
     """Create alternative version from base model with only changed files.
 
@@ -827,10 +879,25 @@ def alter_fn(
     with WorkingDirectory(working_directory):
         original_config: Path = from_model / config
 
-        config_dict: dict[str, str] = {"inherits": str(original_config)}
-        with open(config, "w") as f:
-            # do not sort keys, to keep the order of the config file
-            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+        # if config does not exist, create a new config that inherits from the original model
+        if not config.exists():
+            original_config: Path = from_model / config
+
+            config_dict: dict[str, str] = {"inherits": str(original_config)}
+            with open(config, "w") as f:
+                # do not sort keys, to keep the order of the config file
+                yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+
+        # if config exists, we just make sure it inherits from the original model
+        # if this is set already, we just leave it as is and assume the user knows what they are doing
+        else:
+            # Read existing config
+            with open(config, "r") as f:
+                raw_config = yaml.load(f, Loader=DetectDuplicateKeysYamlLoader)
+            if "inherits" not in raw_config:
+                raw_config["inherits"] = str(from_model / config)
+            with open(config, "w") as f:
+                yaml.dump(raw_config, f, default_flow_style=False, sort_keys=False)
 
         config_from_original_model = parse_config(from_model / config)
         input_folder: Path = Path(config_from_original_model["general"]["input_folder"])
@@ -876,6 +943,7 @@ def alter_fn(
 @click_build_options()
 @click.option(
     "--from-model",
+    type=click.Path(path_type=Path),
     default=ALTER_FROM_MODEL_DEFAULT,
     help="Folder for the existing model.",
 )
@@ -891,12 +959,12 @@ def alter(*args: Any, **kwargs: Any) -> None:
 
 
 def update_fn(
-    data_catalog: Path | str = DATA_CATALOG_DEFAULT,
-    config: Path | str | dict[str, Any] = CONFIG_DEFAULT,
-    build_config: Path | str = BUILD_DEFAULT,
-    working_directory: Path | str = WORKING_DIRECTORY_DEFAULT,
+    data_catalog: Path = DATA_CATALOG_DEFAULT,
+    config: Path | dict[str, Any] = CONFIG_DEFAULT,
+    build_config: Path = BUILD_DEFAULT,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     data_provider: str = DATA_PROVIDER_DEFAULT,
-    data_root: str = DATA_ROOT_DEFAULT,
+    data_root: Path = DATA_ROOT_DEFAULT,
 ) -> None:
     """Update model.
 
@@ -914,16 +982,16 @@ def update_fn(
         ValueError: if build_config is not a str or dict.
     """
     with WorkingDirectory(working_directory):
-        if isinstance(build_config, str):
-            build_config_list: list[str] = build_config.split("::")
-            build_config_file: str = build_config_list[0]
+        if isinstance(build_config, Path):
+            build_config_list: list[str] = str(build_config).split("::")
+            build_config_file: Path = Path(build_config_list[0])
 
             try:
-                build_config: dict[Any] = parse_config(build_config_file)
+                build_config: dict[str, Any] = parse_config(build_config_file)
             except FileNotFoundError:
-                if ":" in build_config_file and "::" not in build_config_file:
+                if ":" in str(build_config_file) and "::" not in str(build_config_file):
                     raise FileNotFoundError(
-                        f"Build config file '{build_config_file}' not found. Did you mean '{build_config_file.replace(':', '::')}'?"
+                        f"Build config file '{str(build_config_file)}' not found. Did you mean '{str(build_config_file).replace(':', '::')}'?"
                     )
                 raise
 
@@ -1048,7 +1116,7 @@ def evaluate(
     include_yearly_plots: bool,
     correct_q_obs: bool,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
-    config: dict | str = CONFIG_DEFAULT,
+    config: dict[str, Any] | Path = CONFIG_DEFAULT,
     profiling: bool = PROFILING_DEFAULT,
     optimize: bool = OPTIMIZE_DEFAULT,
     timing: bool = TIMING_DEFAULT,
@@ -1215,6 +1283,140 @@ def data_catalog(method: str) -> None:
         data_catalog.fetch_global()
     else:
         raise ValueError(f"Unknown method '{method}'.")
+
+
+@cli.command(
+    context_settings=dict(ignore_unknown_options=True, allow_interspersed_args=False)
+)
+@click.argument(
+    "workflow_name",
+    required=True,
+    type=click.Choice(
+        ["calibrate", "sensitivity", "multirun", "benchmark"], case_sensitive=True
+    ),
+)
+@click.option(
+    "--cores",
+    "-c",
+    default="all",
+    help="Number of cores to use. Default is 'all'.",
+)
+@click.option(
+    "--profile",
+    "-p",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Snakemake profile to use. If not specified, uses profiles/{workflow_name}.",
+)
+@click.option(
+    "--dryrun",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Perform a dry run without executing jobs.",
+)
+@click.option(
+    "--config-override",
+    "-co",
+    multiple=True,
+    help="Override config values (e.g., -co REGION=geul -co NGEN=10).",
+)
+@working_directory_option
+@click.argument("snakemake_args", nargs=-1, type=click.UNPROCESSED)
+def workflow(
+    workflow_name: str,
+    cores: str,
+    profile: Path | None,
+    dryrun: bool,
+    config_override: tuple[str, ...],
+    working_directory: Path,
+    snakemake_args: tuple[str, ...],
+) -> None:
+    """Run a Snakemake workflow for GEB.
+
+    Available workflows:
+    - calibrate: Evolutionary algorithm calibration
+    - sensitivity: Sensitivity analysis
+    - multirun: Multiple scenario runs
+
+    Examples:
+        geb workflow calibrate --cores 8
+        geb workflow calibrate --profile profiles/cluster
+        geb workflow calibrate -co REGION=geul -co NGEN=10
+        geb workflow sensitivity --dryrun
+
+    Args:
+        workflow_name: Name of the workflow to run.
+        cores: Number of cores to use.
+        profile: Snakemake profile directory.
+        dryrun: Whether to perform a dry run.
+        config_override: Config values to override.
+        working_directory: Working directory for the workflow.
+        snakemake_args: Additional arguments to pass to snakemake.
+    """
+    # Get GEB package directory for workflow files
+    geb_dir = Path(os.environ.get("GEB_PACKAGE_DIR")).parent
+
+    with WorkingDirectory(working_directory):
+        # Build snakemake command
+        cmd: list[str] = ["snakemake", "--directory", str(working_directory)]
+
+        # Determine and add snakefile and configfile from GEB package
+        snakefile = geb_dir / "workflow" / f"Snakefile_{workflow_name}"
+        if not snakefile.exists():
+            click.echo(f"Error: Workflow file {snakefile} not found.", err=True)
+            sys.exit(1)
+        cmd.extend(["-s", str(snakefile)])
+
+        # Add workflow config file
+        configfile = geb_dir / "workflow" / "config" / f"{workflow_name}.yml"
+        if configfile.exists():
+            cmd.extend(["--configfile", str(configfile)])
+
+        # Add profile if specified and exists
+        if profile is not None:
+            if not profile.is_absolute():
+                # Try relative to GEB package directory first
+                profile_candidate = geb_dir / profile
+                if profile_candidate.exists():
+                    profile = profile_candidate
+            if Path(profile).exists():
+                cmd.extend(["--profile", str(profile)])
+        else:
+            # No profile specified, use default settings
+            cmd.extend(["--cores", cores])
+
+        # Add dry run flag
+        if dryrun:
+            cmd.append("-n")
+
+        # Process config overrides
+        config_overrides_dict = {}
+        if config_override:
+            for override in config_override:
+                if "=" in override:
+                    key, value = override.split("=", 1)
+                    config_overrides_dict[key] = value
+                else:
+                    click.echo(
+                        f"Warning: Invalid config override '{override}'. Expected format: KEY=VALUE",
+                        err=True,
+                    )
+
+        if config_overrides_dict:
+            cmd.append("--config")
+            for key, value in config_overrides_dict.items():
+                cmd.append(f"{key}={value}")
+
+        # Add additional snakemake arguments
+        cmd.extend(snakemake_args)
+
+        # Print command
+        click.echo(f"Running: {' '.join(cmd)}")
+
+        # Execute snakemake in the working directory
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
 
 
 if __name__ == "__main__":
