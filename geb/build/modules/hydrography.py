@@ -680,7 +680,7 @@ class Hydrography:
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method
+    @build_method(depends_on=["setup_lecz_mask", "setup_coastlines"])
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
         # load elevation data
@@ -906,22 +906,6 @@ class Hydrography:
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_geom(waterbodies, name="waterbodies/waterbody_data")
-
-    @build_method
-    def setup_coastal_model_regions(self) -> None:
-        """Sets up the coastal model regions for the model.
-
-        This function subdivides the coastal geoms into smaller regions that are used to simulate coastal flooding.
-        """
-        self.logger.info("Setting up coastal model regions")
-        # load river basins and coastline data
-        basins = self.geoms["routing/subbasins"]
-        # get coastal basins
-        coastal_basins = basins[basins["is_coastal_basin"]]
-        coastal_basins.to_file("output/coastal_basins.geojson", driver="GeoJSON")
-
-        # TODO: Implement coastal model region setup
-        pass
 
     def setup_gtsm_water_levels(self, temporal_range: npt.NDArray[np.int32]) -> None:
         """Sets up the GTSM hydrographs for station within the model bounds.
