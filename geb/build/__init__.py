@@ -54,7 +54,6 @@ GDAL_HTTP_ENV_OPTS = {
     "GDAL_HTTP_RETRY_DELAY": "2",  # Delay (seconds) between retries
     "GDAL_HTTP_TIMEOUT": "30",  # Timeout in seconds
     "GDAL_CACHEMAX": 1 * 1024**3,  # 1 GB cache size
-    "GDAL_MAX_BAND_COUNT": "200000",  # Increase max band count
 }
 defenv(**GDAL_HTTP_ENV_OPTS)
 
@@ -334,17 +333,13 @@ def get_subbasin_id_from_coordinate(
         )
         .set_index("COMID")
     )
-    COMID = gpd.read_parquet(
-        data_catalog.get("merit_basins_catchments").path,
-        bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
-    ).set_index("COMID")
 
     # get only the points where the point is inside the basin
     COMID = COMID[COMID.geometry.contains(Point(lon, lat))]
 
     if len(COMID) == 0:
         raise ValueError(
-            f"The point is not in a basin. Note, that there are some holes in the MERIT basins dataset ({data_catalog.get('merit_basins_catchments').path}), ensure that the point is in a basin."
+            f"The point is not in a basin. Note, that there are some holes in the MERIT basins dataset ({data_catalog.fetch('merit_basins_catchments').path}), ensure that the point is in a basin."
         )
     assert len(COMID) == 1, "The point is not in a single basin"
     # get the COMID value from the GeoDataFrame
@@ -370,7 +365,7 @@ def get_sink_subbasin_id_for_geom(
         A list of COMID values for the sink subbasins.
     """
     subbasins = gpd.read_parquet(
-        data_catalog.get("merit_basins_catchments").path,
+        data_catalog.fetch("merit_basins_catchments").path,
         bbox=tuple([float(c) for c in geom.total_bounds]),
     ).set_index("COMID")
 
@@ -399,7 +394,6 @@ def get_sink_subbasin_id_for_geom(
 def get_all_downstream_subbasins_in_geom(
     data_catalog: DataCatalog,
     geom: gpd.GeoDataFrame,
-    river_graph: networkx.DiGraph,
     logger: logging.Logger,
 ) -> list[int]:
     """Find all downstream subbasins (with NextDownID = 0) that intersect with the given geometry.
@@ -407,7 +401,6 @@ def get_all_downstream_subbasins_in_geom(
     Args:
         data_catalog: Data catalog containing the MERIT basins.
         geom: GeoDataFrame containing the geometry to find the downstream subbasins for.
-        river_graph: The river graph containing all subbasins and their connections.
         logger: Logger for progress tracking.
 
     Returns:
@@ -417,7 +410,7 @@ def get_all_downstream_subbasins_in_geom(
 
     # Get all subbasins that intersect with the geometry
     subbasins = gpd.read_parquet(
-        data_catalog.get("merit_basins_catchments").path,
+        data_catalog.fetch("merit_basins_catchments").path,
         bbox=tuple([float(c) for c in geom.total_bounds]),
     ).set_index("COMID")
 
@@ -432,7 +425,7 @@ def get_all_downstream_subbasins_in_geom(
 
     # Get river network data to find downstream basins (NextDownID = 0)
     river_network: pd.DataFrame = (
-        data_catalog.get("merit_basins_rivers")
+        data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "NextDownID", "uparea"])
         .set_index("COMID")
     )
@@ -463,7 +456,7 @@ def get_subbasin_upstream_areas(
     """
     # Use filters to only read the rows we need - much faster than reading all data
     river_network: pd.DataFrame = (
-        data_catalog.get("merit_basins_rivers")
+        data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "uparea"], filters=[("COMID", "in", subbasin_ids)])
         .set_index("COMID")
     )
@@ -489,24 +482,10 @@ def cluster_subbasins_by_area_and_proximity(
     """Cluster subbasins by following the coastline with performance optimizations.
 
     This function creates clusters of subbasins that:
-    1. Start from coastal basins and follow the coastline
-    2. Add nearby subbasins along the coast
-    3. Use distance thresholds for cluster growth but allow global jumps between clusters
-    4. Keep the algorithm simple and focused on coastline connectivity
-
-    Performance optimizations implemented:
-    - Lazy adjacency computation with caching (O(n) instead of O(n²))
-    - Fast coordinate-based distance calculations instead of shapely geometry
-    - Reduced logging frequency for large clusters
-    - Early termination conditions
-    - Set-based lookups instead of list iterations
-
-    The algorithm:
-    1. Identifies coastal basins (basins with no downstream neighbors)
-    2. Starts from an unused coastal basin (first cluster) or closest to last added (subsequent)
-    3. Follows the coastline by adding adjacent/nearby coastal and inland basins
-    4. Uses ~100km distance threshold for cluster growth, no limit for starting new clusters
-    5. Moves to the globally closest unused basin when current cluster is complete
+    1. Starts from coastal basins and follow the coastline
+    2. Adds nearby subbasins along the coast
+    3. Uses distance thresholds for cluster growth but allow jumps between clusters (100km threshold)
+    4. Moves to the globally closest unused basin when current cluster is complete
 
     Args:
         data_catalog: Data catalog containing the MERIT basins.
@@ -522,7 +501,7 @@ def cluster_subbasins_by_area_and_proximity(
 
     # Load subbasin geometries and river graph to identify coastal basins
     subbasins = gpd.read_parquet(
-        data_catalog.get("merit_basins_catchments").path,
+        data_catalog.fetch("merit_basins_catchments").path,
         filters=[("COMID", "in", subbasin_ids)],
     ).set_index("COMID")
 
@@ -577,7 +556,15 @@ def cluster_subbasins_by_area_and_proximity(
 
     # Fast distance lookup using numpy
     def fast_distance(subbasin1: int, subbasin2: int) -> float:
-        """Ultra-fast distance calculation using pre-computed arrays."""
+        """Fast distance calculation using pre-computed arrays.
+
+        Args:
+            subbasin1: COMID of the first subbasin.
+            subbasin2: COMID of the second subbasin.
+
+        Returns:
+            Euclidean distance between the centroids of the two subbasins in degrees.
+        """
         idx1, idx2 = subbasin_to_idx[subbasin1], subbasin_to_idx[subbasin2]
         diff = coords_array[idx1] - coords_array[idx2]
         return np.sqrt(np.sum(diff * diff))
@@ -585,7 +572,17 @@ def cluster_subbasins_by_area_and_proximity(
     def find_nearest_basins(
         center_subbasin: int, candidates: set[int], max_distance: float
     ) -> list[tuple[int, float]]:
-        """Find all basins within max_distance from center, sorted by distance."""
+        """Find all basins within max_distance from center, sorted by distance.
+
+        Args:
+            center_subbasin: COMID of the center subbasin.
+            candidates: Set of candidate COMID values to search.
+            max_distance: Maximum distance (in degrees) to include.
+
+        Returns:
+            List[tuple[int, float]]: A list of tuples (COMID, distance) for candidates
+            within max_distance, sorted by ascending distance.
+        """
         if not candidates:
             return []
 
@@ -637,14 +634,13 @@ def cluster_subbasins_by_area_and_proximity(
         return adjacency_cache[subbasin_id]
 
     # Maximum distance threshold for cluster growth (not for starting new clusters)
-    # Allow long jumps between clusters (EU → US) but limit growth within clusters
     MAX_CLUSTER_GROWTH_DISTANCE_DEGREES = 100.0 / 111.0  # ~100km converted to degrees
 
     logger.info(
         f"Using cluster growth distance threshold: {MAX_CLUSTER_GROWTH_DISTANCE_DEGREES:.2f} degrees (~100 km)"
     )
     logger.info(
-        "No distance threshold for starting new clusters - allowing global jumps"
+        "No distance threshold for starting new clusters - allowing large jumps but then forming a new cluster"
     )
 
     clusters = []
@@ -827,7 +823,7 @@ def save_clusters_to_geoparquet(
 
     # Load subbasin geometries
     subbasins = gpd.read_parquet(
-        data_catalog.get("merit_basins_catchments").path,
+        data_catalog.fetch("merit_basins_catchments").path,
         filters=[("COMID", "in", all_subbasin_ids)],
     ).set_index("COMID")
 
@@ -889,7 +885,7 @@ def create_cluster_visualization_map(
 
     # Load subbasin geometries
     subbasins = gpd.read_parquet(
-        data_catalog.get("merit_basins_catchments").path,
+        data_catalog.fetch("merit_basins_catchments").path,
         filters=[("COMID", "in", all_subbasin_ids)],
     ).set_index("COMID")
 
@@ -955,45 +951,18 @@ def create_cluster_visualization_map(
 
     # Add dark satellite/terrain background
     try:
-        # Try dark satellite imagery first
+        # Try dark satellite imagery first; let contextily choose zoom automatically
         ctx.add_basemap(
             ax,
-            crs=cluster_gdf_mercator.crs.to_string(),
+            crs=cluster_gdf_mercator.crs,  # pass CRS object instead of string
             source=ctx.providers.CartoDB.DarkMatter,  # Dark background
-            zoom="auto",
             alpha=0.8,  # Slightly transparent to not overpower subbasins
         )
         print("Added dark CartoDB background")
-    except Exception as e:
-        print(f"Could not add CartoDB background: {e}")
-        try:
-            # Fallback to Stamen Toner (dark background)
-            ctx.add_basemap(
-                ax,
-                crs=cluster_gdf_mercator.crs.to_string(),
-                source=ctx.providers.Stamen.Toner,
-                zoom="auto",
-                alpha=0.7,
-            )
-            print("Added Stamen Toner background")
-        except Exception as e2:
-            print(f"Could not add Stamen background: {e2}")
-            try:
-                # Final fallback to OpenStreetMap with dark styling
-                ctx.add_basemap(
-                    ax,
-                    crs=cluster_gdf_mercator.crs.to_string(),
-                    source=ctx.providers.OpenStreetMap.Mapnik,
-                    zoom="auto",
-                    alpha=0.5,  # Very transparent to darken it
-                )
-                print("Added OpenStreetMap background (darkened)")
-                # Make the plot background even darker
-                ax.set_facecolor("#2F2F2F")
-            except Exception as e3:
-                print(f"Could not add any background: {e3}")
-                # Set a dark gray background if all else fails
-                ax.set_facecolor("#2F2F2F")
+    except Exception as e3:
+        print(f"Could not add any background: {e3}")
+        # Set a dark gray background if all else fails
+        ax.set_facecolor("#2F2F2F")
 
     # Customize the plot with dark theme
     ax.set_title(
@@ -1110,39 +1079,158 @@ def create_multi_basin_configs(
     return cluster_directories
 
 
-def get_touching_subbasins(
-    data_catalog: DataCatalog, subbasins: gpd.GeoDataFrame
-) -> gpd.GeoDataFrame:
-    """Find all subbasins that touch the given subbasins.
+def save_clusters_as_merged_geometries(
+    clusters: list[list[int]],
+    data_catalog: DataCatalog,
+    river_graph: networkx.DiGraph,
+    output_path: str | Path,
+    cluster_prefix: str = "cluster",
+    include_upstream: bool = True,
+) -> None:
+    """Save clusters as merged geometries - one polygon outline per cluster.
+
+    This creates the most compact representation possible: each cluster becomes a single
+    dissolved polygon geometry representing the entire basin area.
 
     Args:
+        clusters: List of clusters, where each cluster is a list of downstream COMID values.
         data_catalog: Data catalog containing the MERIT basins.
-        subbasins: GeoDataFrame containing the subbasins to find touching subbasins for.
-
-    Returns:
-        A GeoDataFrame containing all subbasins that touch the given subbasins.
+        river_graph: River graph for finding upstream subbasins.
+        output_path: Path where to save the geoparquet file.
+        cluster_prefix: Prefix for cluster names.
+        include_upstream: If True, include all upstream subbasins in the merged geometry.
+                         If False, only merge the downstream outlet subbasins.
     """
-    bbox = subbasins.total_bounds
-    buffer: float = 0.1
-    buffered_bbox = (
-        bbox[0] - buffer,
-        bbox[1] - buffer,
-        bbox[2] + buffer,
-        bbox[3] + buffer,
-    )
-    potentially_touching_basins = gpd.read_parquet(
-        data_catalog.get("merit_basins_catchments").path,
-        bbox=buffered_bbox,
-        filters=[
-            ("COMID", "not in", subbasins.index.tolist()),
-        ],
-    )
-    # get all touching subbasins
-    touching_subbasins = potentially_touching_basins[
-        potentially_touching_basins.geometry.touches(subbasins.union_all())
-    ]
+    print(f"Creating merged cluster geometries: {output_path}")
+    print(f"Include upstream basins: {include_upstream}")
 
-    return touching_subbasins.set_index("COMID")
+    merged_cluster_data = []
+
+    for cluster_idx, downstream_subbasins in enumerate(clusters):
+        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
+
+        print(f"  Processing cluster {cluster_idx + 1}/{len(clusters)}: {cluster_id}")
+
+        if include_upstream:
+            # Find all upstream subbasins for this cluster
+            cluster_all_subbasins = set()
+            for downstream_subbasin in downstream_subbasins:
+                upstream_subbasins = set(
+                    networkx.ancestors(river_graph, downstream_subbasin)
+                )
+                upstream_subbasins.add(downstream_subbasin)
+                cluster_all_subbasins.update(upstream_subbasins)
+
+            subbasins_to_merge = list(cluster_all_subbasins)
+            total_subbasins = len(subbasins_to_merge)
+            upstream_count = total_subbasins - len(downstream_subbasins)
+
+            print(
+                f"    Merging {total_subbasins:,} subbasins ({len(downstream_subbasins)} outlets + {upstream_count:,} upstream)"
+            )
+        else:
+            # Only merge downstream outlet subbasins
+            subbasins_to_merge = downstream_subbasins
+            total_subbasins = len(subbasins_to_merge)
+            upstream_count = 0
+
+            print(f"    Merging {total_subbasins} outlet subbasins only")
+
+        # Load geometries for subbasins in this cluster
+        cluster_geometries = gpd.read_parquet(
+            data_catalog.fetch("merit_basins_catchments").path,
+            filters=[("COMID", "in", subbasins_to_merge)],
+        ).set_index("COMID")
+
+        # Get upstream areas for statistics
+        upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasins_to_merge)
+        total_area = sum(upstream_areas.get(sid, 0) for sid in subbasins_to_merge)
+
+        # Dissolve/merge all geometries into a single polygon
+        print(
+            f"    Dissolving {len(cluster_geometries)} geometries into single polygon..."
+        )
+
+        # Union all geometries to create a single merged polygon
+        merged_geometry = cluster_geometries.geometry.union_all()
+
+        # Handle potential multipolygon results
+        if hasattr(merged_geometry, "geoms") and len(merged_geometry.geoms) > 1:
+            print(f"    Result is multipolygon with {len(merged_geometry.geoms)} parts")
+
+        # Calculate some useful statistics
+        outlet_areas = [upstream_areas.get(sid, 0) for sid in downstream_subbasins]
+        avg_outlet_area = sum(outlet_areas) / len(outlet_areas) if outlet_areas else 0
+
+        merged_cluster_data.append(
+            {
+                "cluster_id": cluster_id,
+                "cluster_number": cluster_idx,
+                "num_downstream_outlets": len(downstream_subbasins),
+                "num_upstream_subbasins": upstream_count,
+                "num_total_subbasins": total_subbasins,
+                "total_basin_area_km2": total_area,
+                "avg_outlet_area_km2": avg_outlet_area,
+                "downstream_outlet_comids": ",".join(map(str, downstream_subbasins)),
+                "geometry_type": merged_geometry.geom_type,
+                "num_geometry_parts": len(merged_geometry.geoms)
+                if hasattr(merged_geometry, "geoms")
+                else 1,
+                "geometry": merged_geometry,
+            }
+        )
+
+        print(f"    Complete: {total_area:,.0f} km² total area")
+
+    # Create GeoDataFrame with merged geometries
+    print("Creating final GeoDataFrame with merged geometries...")
+    merged_gdf = gpd.GeoDataFrame(merged_cluster_data, crs="EPSG:4326")
+
+    # Save to geoparquet
+    merged_gdf.to_parquet(output_path)
+
+    # Calculate and print summary statistics
+    total_area = merged_gdf["total_basin_area_km2"].sum()
+    total_outlets = merged_gdf["num_downstream_outlets"].sum()
+    total_upstream = merged_gdf["num_upstream_subbasins"].sum()
+    total_subbasins = merged_gdf["num_total_subbasins"].sum()
+
+    multipolygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "MultiPolygon"])
+    polygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "Polygon"])
+
+    print(f"\nSaved merged cluster geometries:")
+    print(f"  Total clusters: {len(clusters)}")
+    print(f"  Total area covered: {total_area:,.0f} km²")
+    print(
+        f"  Original subbasins merged: {total_subbasins:,} ({total_outlets:,} outlets + {total_upstream:,} upstream)"
+    )
+    print(
+        f"  Geometry types: {polygon_count} polygons, {multipolygon_count} multipolygons"
+    )
+    print(f"  Average area per cluster: {total_area / len(clusters):,.0f} km²")
+
+    # File size benefits
+    original_subbasins = total_subbasins
+    merged_records = len(clusters)
+    size_reduction = original_subbasins / merged_records if merged_records > 0 else 0
+
+    print(
+        f"  Size reduction: {size_reduction:.0f}x smaller ({original_subbasins:,} → {merged_records} records)"
+    )
+    print(f"  File saved to: {output_path}")
+
+    # Show individual cluster info
+    print(f"\nCluster details:")
+    for _, row in merged_gdf.iterrows():
+        geom_info = f" ({row['geometry_type']}"
+        if row["num_geometry_parts"] > 1:
+            geom_info += f", {row['num_geometry_parts']} parts"
+        geom_info += ")"
+
+        print(
+            f"  {row['cluster_id']}: {row['total_basin_area_km2']:,.0f} km², "
+            f"{row['num_total_subbasins']:,} subbasins merged{geom_info}"
+        )
 
 
 def get_coastline_nodes(
@@ -1415,160 +1503,6 @@ class DelayedReader(dict):
             super().__setitem__(key, value)
         else:
             raise ValueError("Value must be a file path (str or Path).")
-
-
-def save_clusters_as_merged_geometries(
-    clusters: list[list[int]],
-    data_catalog: DataCatalog,
-    river_graph: networkx.DiGraph,
-    output_path: str | Path,
-    cluster_prefix: str = "cluster",
-    include_upstream: bool = True,
-) -> None:
-    """Save clusters as merged geometries - one polygon outline per cluster.
-
-    This creates the most compact representation possible: each cluster becomes a single
-    dissolved polygon geometry representing the entire basin area.
-
-    Args:
-        clusters: List of clusters, where each cluster is a list of downstream COMID values.
-        data_catalog: Data catalog containing the MERIT basins.
-        river_graph: River graph for finding upstream subbasins.
-        output_path: Path where to save the geoparquet file.
-        cluster_prefix: Prefix for cluster names.
-        include_upstream: If True, include all upstream subbasins in the merged geometry.
-                         If False, only merge the downstream outlet subbasins.
-    """
-    print(f"Creating merged cluster geometries: {output_path}")
-    print(f"Include upstream basins: {include_upstream}")
-
-    merged_cluster_data = []
-
-    for cluster_idx, downstream_subbasins in enumerate(clusters):
-        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
-
-        print(f"  Processing cluster {cluster_idx + 1}/{len(clusters)}: {cluster_id}")
-
-        if include_upstream:
-            # Find all upstream subbasins for this cluster
-            cluster_all_subbasins = set()
-            for downstream_subbasin in downstream_subbasins:
-                upstream_subbasins = set(
-                    networkx.ancestors(river_graph, downstream_subbasin)
-                )
-                upstream_subbasins.add(downstream_subbasin)
-                cluster_all_subbasins.update(upstream_subbasins)
-
-            subbasins_to_merge = list(cluster_all_subbasins)
-            total_subbasins = len(subbasins_to_merge)
-            upstream_count = total_subbasins - len(downstream_subbasins)
-
-            print(
-                f"    Merging {total_subbasins:,} subbasins ({len(downstream_subbasins)} outlets + {upstream_count:,} upstream)"
-            )
-        else:
-            # Only merge downstream outlet subbasins
-            subbasins_to_merge = downstream_subbasins
-            total_subbasins = len(subbasins_to_merge)
-            upstream_count = 0
-
-            print(f"    Merging {total_subbasins} outlet subbasins only")
-
-        # Load geometries for subbasins in this cluster
-        cluster_geometries = gpd.read_parquet(
-            data_catalog.get("merit_basins_catchments").path,
-            filters=[("COMID", "in", subbasins_to_merge)],
-        ).set_index("COMID")
-
-        # Get upstream areas for statistics
-        upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasins_to_merge)
-        total_area = sum(upstream_areas.get(sid, 0) for sid in subbasins_to_merge)
-
-        # Dissolve/merge all geometries into a single polygon
-        print(
-            f"    Dissolving {len(cluster_geometries)} geometries into single polygon..."
-        )
-
-        # Union all geometries to create a single merged polygon
-        merged_geometry = cluster_geometries.geometry.union_all()
-
-        # Handle potential multipolygon results
-        if hasattr(merged_geometry, "geoms") and len(merged_geometry.geoms) > 1:
-            print(f"    Result is multipolygon with {len(merged_geometry.geoms)} parts")
-
-        # Calculate some useful statistics
-        outlet_areas = [upstream_areas.get(sid, 0) for sid in downstream_subbasins]
-        avg_outlet_area = sum(outlet_areas) / len(outlet_areas) if outlet_areas else 0
-
-        merged_cluster_data.append(
-            {
-                "cluster_id": cluster_id,
-                "cluster_number": cluster_idx,
-                "num_downstream_outlets": len(downstream_subbasins),
-                "num_upstream_subbasins": upstream_count,
-                "num_total_subbasins": total_subbasins,
-                "total_basin_area_km2": total_area,
-                "avg_outlet_area_km2": avg_outlet_area,
-                "downstream_outlet_comids": ",".join(map(str, downstream_subbasins)),
-                "geometry_type": merged_geometry.geom_type,
-                "num_geometry_parts": len(merged_geometry.geoms)
-                if hasattr(merged_geometry, "geoms")
-                else 1,
-                "geometry": merged_geometry,
-            }
-        )
-
-        print(f"    Complete: {total_area:,.0f} km² total area")
-
-    # Create GeoDataFrame with merged geometries
-    print("Creating final GeoDataFrame with merged geometries...")
-    merged_gdf = gpd.GeoDataFrame(merged_cluster_data, crs="EPSG:4326")
-
-    # Save to geoparquet
-    merged_gdf.to_parquet(output_path)
-
-    # Calculate and print summary statistics
-    total_area = merged_gdf["total_basin_area_km2"].sum()
-    total_outlets = merged_gdf["num_downstream_outlets"].sum()
-    total_upstream = merged_gdf["num_upstream_subbasins"].sum()
-    total_subbasins = merged_gdf["num_total_subbasins"].sum()
-
-    multipolygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "MultiPolygon"])
-    polygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "Polygon"])
-
-    print(f"\nSaved merged cluster geometries:")
-    print(f"  Total clusters: {len(clusters)}")
-    print(f"  Total area covered: {total_area:,.0f} km²")
-    print(
-        f"  Original subbasins merged: {total_subbasins:,} ({total_outlets:,} outlets + {total_upstream:,} upstream)"
-    )
-    print(
-        f"  Geometry types: {polygon_count} polygons, {multipolygon_count} multipolygons"
-    )
-    print(f"  Average area per cluster: {total_area / len(clusters):,.0f} km²")
-
-    # File size benefits
-    original_subbasins = total_subbasins
-    merged_records = len(clusters)
-    size_reduction = original_subbasins / merged_records if merged_records > 0 else 0
-
-    print(
-        f"  Size reduction: {size_reduction:.0f}x smaller ({original_subbasins:,} → {merged_records} records)"
-    )
-    print(f"  File saved to: {output_path}")
-
-    # Show individual cluster info
-    print(f"\nCluster details:")
-    for _, row in merged_gdf.iterrows():
-        geom_info = f" ({row['geometry_type']}"
-        if row["num_geometry_parts"] > 1:
-            geom_info += f", {row['num_geometry_parts']} parts"
-        geom_info += ")"
-
-        print(
-            f"  {row['cluster_id']}: {row['total_basin_area_km2']:,.0f} km², "
-            f"{row['num_total_subbasins']:,} subbasins merged{geom_info}"
-        )
 
 
 class GEBModel(

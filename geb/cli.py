@@ -18,7 +18,9 @@ from pstats import Stats
 from typing import Any, Callable
 
 import click
+import geopandas as gpd
 import yaml
+from shapely.geometry import box
 
 from geb import __version__
 from geb.build import GEBModel as GEBModelBuild
@@ -1455,8 +1457,6 @@ def init_multiple_fn(
     area_tolerance: float,
     cluster_prefix: str,
     overwrite: bool,
-    data_catalog: str | Path,
-    data_provider: str,
     save_geoparquet: str | Path | None,
     save_map: str | Path | None,
 ) -> None:
@@ -1473,7 +1473,6 @@ def init_multiple_fn(
         area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
         cluster_prefix: Prefix for cluster directory names.
         overwrite: If True, overwrite existing directories and files.
-        data_catalog: Path to the data catalog file.
         data_provider: Data provider to use.
         save_geoparquet: Path to save clusters as geoparquet file. If None, no file is saved.
         save_map: Path to save visualization map as PNG file. If None, no map is created.
@@ -1522,10 +1521,6 @@ def init_multiple_fn(
             "geometry_bounds must be in format 'xmin,ymin,xmax,ymax' with numeric values"
         )
 
-    # Create a geometry from the bounding box
-    import geopandas as gpd
-    from shapely.geometry import box
-
     bbox_geom = gpd.GeoDataFrame(
         geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
     )
@@ -1544,7 +1539,7 @@ def init_multiple_fn(
 
     logger.info("Finding downstream subbasins in geometry...")
     downstream_subbasins = get_all_downstream_subbasins_in_geom(
-        data_catalog_instance, bbox_geom, river_graph, logger
+        data_catalog_instance, bbox_geom, logger
     )
 
     if not downstream_subbasins:
@@ -1661,7 +1656,7 @@ def init_multiple_fn(
 )
 @click.option(
     "--geometry-bounds",
-    default="-180.0,-90.0,180.0,90.0",  # World: "-180.0,-90.0,180.0,90.0" Western Europe: "-10.0,35.0,20.0,70.0" Europe: "-10.0,35.0,40.0,70.0"
+    default="-10.0,35.0,40.0,70.0",  # World: "-180.0,-90.0,180.0,90.0" Western Europe: "-10.0,35.0,20.0,70.0" Europe: "-10.0,35.0,40.0,70.0"
     required=True,
     type=str,
     help="Bounding box as 'xmin,ymin,xmax,ymax' to select subbasins (e.g., '5.0,50.0,15.0,55.0' for parts of Europe). Defaults to Western Europe coverage.",
@@ -1684,10 +1679,10 @@ def init_multiple_fn(
     help="Prefix for cluster directory names. Defaults to 'cluster'.",
 )
 @click.option(
-    "--no-overwrite",
+    "--overwrite",
     is_flag=True,
-    default=False,
-    help="If set, do not overwrite existing cluster directories and files.",
+    default=True,
+    help="If set, overwrite existing cluster directories and files.",
 )
 @click.option(
     "--data-catalog",
@@ -1720,7 +1715,7 @@ def init_multiple(
     target_area_km2: float,
     area_tolerance: float,
     cluster_prefix: str,
-    no_overwrite: bool,
+    overwrite: bool,
     data_catalog: str,
     data_provider: str,
     save_geoparquet: str | None,
@@ -1747,9 +1742,7 @@ def init_multiple(
         target_area_km2=target_area_km2,
         area_tolerance=area_tolerance,
         cluster_prefix=cluster_prefix,
-        overwrite=not no_overwrite,
-        data_catalog=data_catalog,
-        data_provider=data_provider,
+        overwrite=overwrite,
         save_geoparquet=save_geoparquet,
         save_map=save_map,
     )
