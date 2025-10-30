@@ -735,10 +735,9 @@ class LandSurface(Module):
             is_topsoil=is_top_soil,
         )  # m/day
 
-        self.HRU.var.saturated_hydraulic_conductivity_m_per_s = (
-            self.HRU.var.saturated_hydraulic_conductivity_m_per_s
-            * self.model.config["parameters"]["ksat_multiplier"]
-        )  # calibration parameter
+        self.HRU.var.saturated_hydraulic_conductivity_m_per_s *= self.model.config[
+            "parameters"
+        ]["saturated_hydraulic_conductivity_multiplier"]  # calibration parameter
 
         # soil water depletion fraction, Van Diepen et al., 1988: WOFOST 6.0, p.86, Doorenbos et. al 1978
         # crop groups for formular in van Diepen et al, 1988
@@ -748,25 +747,6 @@ class LandSurface(Module):
         self.HRU.var.natural_crop_groups: npt.NDArray[np.float32] = (
             self.hydrology.to_HRU(data=natural_crop_groups)
         )
-
-        self.HRU.var.arno_beta = self.HRU.full_compressed(np.nan, dtype=np.float32)
-
-        # Improved Arno's scheme parameters: Hageman and Gates 2003
-        # arno_beta defines the shape of soil water capacity distribution curve as a function of  topographic variability
-        # b = max( (oh - o0)/(oh + omax), 0.01)
-        # oh: the standard deviation of orography, o0: minimum std dev, omax: max std dev
-        elevation_std = self.grid.load(
-            self.model.files["grid"]["landsurface/elevation_standard_deviation"]
-        )
-        elevation_std = self.hydrology.to_HRU(data=elevation_std, fn=None)
-
-        # TODO: Look into this parameter. What is the maximum std at varying grid resolutions?
-        self.HRU.var.arno_beta = (elevation_std - 0.0) / (elevation_std + 300.0)
-
-        self.HRU.var.arno_beta += self.model.config["parameters"][
-            "arno_beta_add"
-        ]  # calibration parameter
-        self.HRU.var.arno_beta = np.clip(self.HRU.var.arno_beta, 0.01, 0.5)
 
     def step(
         self,
@@ -866,6 +846,10 @@ class LandSurface(Module):
             crop_root_depths=crop_root_depths,
             get_crop_sub_stage=get_crop_sub_stage,
         )
+
+        crop_factor *= self.model.config["parameters"][
+            "crop_factor_multiplier"
+        ]  # calibration parameter
 
         interception_capacity_m_forest_HRU = self.hydrology.to_HRU(
             data=self.grid.var.interception_capacity_forest[

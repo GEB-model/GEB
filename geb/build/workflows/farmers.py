@@ -8,10 +8,10 @@ import pandas as pd
 from honeybees.library.raster import pixels_to_coords
 from numba import njit
 
-from geb.typing import ArrayInt32, TwoDArrayInt32
+from geb.typing import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 
 
-@njit(cache=True)
+@njit(cache=True, parallel=False)
 def create_farms_numba(
     cultivated_land: TwoDArrayInt32, ids: ArrayInt32, farm_sizes: ArrayInt32
 ) -> TwoDArrayInt32:
@@ -25,17 +25,17 @@ def create_farms_numba(
     Returns:
         farms: map of farms. Each unique ID is land owned by a single farmer. Non-cultivated land is represented by -1.
     """
-    current_farm_counter = 0
-    cur_farm_size = 0
-    farm_done = False
+    current_farm_counter: int = 0
+    cur_farm_size: int = 0
+    farm_done: bool = False
 
-    farm_id = ids[current_farm_counter]
-    farm_size = farm_sizes[current_farm_counter]
-    farms = np.where(cultivated_land, -1, -2).astype(np.int32)
+    farm_id: np.int32 = ids[current_farm_counter]
+    farm_size: np.int32 = farm_sizes[current_farm_counter]
+    farms: TwoDArrayInt32 = np.where(cultivated_land, -1, -2).astype(np.int32)
     ysize, xsize = farms.shape
     for y in range(farms.shape[0]):
         for x in range(farms.shape[1]):
-            f = farms[y, x]
+            f: np.int32 = farms[y, x]
             if f == -1:
                 assert farm_size > 0
 
@@ -77,32 +77,32 @@ def create_farms_numba(
 
                     if random() < 0.5:
                         ylow -= 1
-                        ysearch = 1
+                        ysearch: int = 1
                     else:
                         yhigh += 1
-                        ysearch = 0
+                        ysearch: int = 0
 
                     if random() < 0.5:
                         xlow -= 1
-                        xsearch = 1
+                        xsearch: int = 1
                     else:
                         xhigh += 1
-                        xsearch = 0
+                        xsearch: int = 0
 
                 if farm_done:
-                    farm_done = False
+                    farm_done: bool = False
                     current_farm_counter += 1
-                    farm_id = ids[current_farm_counter]
-                    farm_size = farm_sizes[current_farm_counter]
+                    farm_id: np.int32 = ids[current_farm_counter]
+                    farm_size: np.int32 = farm_sizes[current_farm_counter]
 
     assert np.count_nonzero(farms == -1) == 0
-    farms = np.where(farms != -2, farms, -1)
+    farms: TwoDArrayInt32 = np.where(farms != -2, farms, -1)
     return farms
 
 
 def create_farms(
     agents: pd.DataFrame,
-    cultivated_land_tehsil: np.ndarray,
+    cultivated_land_tehsil: TwoDArrayBool,
     farm_size_key: str = "farm_size_n_cells",
 ) -> TwoDArrayInt32:
     """Create a farm ownership map based on agent sizes and cultivated land.
@@ -120,16 +120,20 @@ def create_farms(
         A 2D array of farm IDs where each cultivated cell is assigned to exactly one agent
         and non-cultivated cells are -1.
     """
-    assert cultivated_land_tehsil.sum().compute().item() == agents[farm_size_key].sum()
+    assert cultivated_land_tehsil.sum() == agents[farm_size_key].sum()
 
-    agents = agents.sample(frac=1)
-    farms = create_farms_numba(
-        cultivated_land_tehsil.squeeze().values,  # using first (and should be only) layer
+    agents: pd.DataFrame = agents.sample(
+        frac=1
+    )  # shuffle agents to randomize farm placement order
+    farms: TwoDArrayInt32 = create_farms_numba(
+        cultivated_land_tehsil.squeeze(),  # using first (and should be only) layer
         ids=agents.index.to_numpy(),
         farm_sizes=agents[farm_size_key].to_numpy(),
-    ).astype(np.int32)
-    unique_farms = np.unique(farms)
-    unique_farms = unique_farms[unique_farms != -1]
+    )
+
+    # some tests to ensure correctness
+    unique_farms: ArrayInt32 = np.unique(farms)
+    unique_farms: ArrayInt32 = unique_farms[unique_farms != -1]
     assert np.array_equal(np.sort(agents.index.to_numpy()), unique_farms)
     assert unique_farms.size == len(agents)
     assert agents[farm_size_key].sum() == np.count_nonzero(farms != -1)
