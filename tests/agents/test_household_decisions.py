@@ -3,7 +3,7 @@
 import numpy as np
 from pytest import fixture
 
-from geb.agents.decision_module_flood import (
+from geb.agents.decision_module import (
     DecisionModule,
 )  # update to now decision model after merge
 
@@ -65,15 +65,15 @@ def test_expenditure_cap(decision_template: dict) -> None:
     decision_module = DecisionModule(model=None, agents=None)
 
     # quick basic test
-    EU_do_not_adapt = decision_module.calcEU_do_nothing(**decision_template)
+    EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
     assert all(EU_do_not_adapt > -np.inf), (
         "Expected all EU_do_not_adapt values to be greater than -inf as there are no budget constraints"
     )
 
     # make sure an expendature cap results in no adaptation
     decision_template["expendature_cap"] = 0
-    EU_adapt = decision_module.calcEU_adapt(**decision_template)
-    EU_do_not_adapt = decision_module.calcEU_do_nothing(**decision_template)
+    EU_adapt = decision_module.calcEU_adapt_flood(**decision_template)
+    EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
     assert all(EU_adapt == -np.inf), "Expected all EU_adapt values to be -inf"
     assert all(EU_do_not_adapt > EU_adapt), (
         "Expected all EU_do_not_adapt values to be greater than EU_adapt"
@@ -84,8 +84,8 @@ def test_expenditure_cap(decision_template: dict) -> None:
 
     # make sure setting expenditure cap to high results in all agents being able to afford adaptation
     decision_template["expendature_cap"] = 10
-    EU_adapt = decision_module.calcEU_adapt(**decision_template)
-    EU_do_not_adapt = decision_module.calcEU_do_nothing(**decision_template)
+    EU_adapt = decision_module.calcEU_adapt_flood(**decision_template)
+    EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
     assert all(EU_adapt > -np.inf), (
         "Expected all EU_adapt values to be greater than -inf"
     )
@@ -104,11 +104,11 @@ def test_risk_perception(decision_template: dict) -> None:
     decision_module = DecisionModule(model=None, agents=None)
     decision_template["expendature_cap"] = 10  # ensure all can adapt
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 0.01)
-    EU_do_nothing_low_risk_perception = decision_module.calcEU_do_nothing(
+    EU_do_nothing_low_risk_perception = decision_module.calcEU_do_nothing_flood(
         **decision_template
     )
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 10)
-    EU_do_nothing_high_risk_perception = decision_module.calcEU_do_nothing(
+    EU_do_nothing_high_risk_perception = decision_module.calcEU_do_nothing_flood(
         **decision_template
     )
     # make sure EU_do_nothing_high_risk_perception EU of adaptation is
@@ -132,15 +132,15 @@ def test_damages(decision_template: dict) -> None:
     decision_template["expected_damages_adapt"] *= 0
 
     # calculate EU
-    EU_adapt = decision_module.calcEU_adapt(**decision_template)
-    EU_do_not_adapt = decision_module.calcEU_do_nothing(**decision_template)
+    EU_adapt = decision_module.calcEU_adapt_flood(**decision_template)
+    EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
     assert all(EU_adapt > EU_do_not_adapt), (
         "Expected all EU_adapt values to be greater than EU_do_not_adapt"
     )
 
     # now check with no effect of adaptation on damage
     decision_template["expected_damages_adapt"] = decision_template["expected_damages"]
-    EU_adapt_no_effect = decision_module.calcEU_adapt(**decision_template)
+    EU_adapt_no_effect = decision_module.calcEU_adapt_flood(**decision_template)
     assert all(EU_adapt_no_effect < EU_do_not_adapt), (
         "Expected all EU_adapt_no_effect values to be less than EU_do_not_adapt"
     )
@@ -160,8 +160,8 @@ def test_time_adapted(decision_template: dict) -> None:
     # set damages to equal
     decision_template["expected_damages_adapt"] = decision_template["expected_damages"]
     # calculate EU
-    EU_adapt = decision_module.calcEU_adapt(**decision_template)
-    EU_do_not_adapt = decision_module.calcEU_do_nothing(**decision_template)
+    EU_adapt = decision_module.calcEU_adapt_flood(**decision_template)
+    EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
     assert all(EU_adapt < EU_do_not_adapt), (
         "Expected all EU_adapt values to be less than EU_do_not_adapt, as there is no damage reduction but adaptation costs are incurred."
     )
@@ -173,8 +173,8 @@ def test_time_adapted(decision_template: dict) -> None:
     decision_template["expected_damages_adapt"] = decision_template["expected_damages"]
 
     # calculate EU
-    EU_adapt = decision_module.calcEU_adapt(**decision_template)
-    EU_do_not_adapt = decision_module.calcEU_do_nothing(**decision_template)
+    EU_adapt = decision_module.calcEU_adapt_flood(**decision_template)
+    EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
     assert all(EU_adapt == EU_do_not_adapt), (
         "Expected all EU_adapt values to be equal to EU_do_not_adapt as there are no costs incurred anymore"
     )
@@ -194,11 +194,11 @@ def test_loan_duration(decision_template: dict) -> None:
 
     # set loan duration short
     decision_template["loan_duration"] = 5
-    EU_adapt_short = decision_module.calcEU_adapt(**decision_template)
+    EU_adapt_short = decision_module.calcEU_adapt_flood(**decision_template)
 
     # set loan duration long
     decision_template["loan_duration"] = 10
-    EU_adapt_long = decision_module.calcEU_adapt(**decision_template)
+    EU_adapt_long = decision_module.calcEU_adapt_flood(**decision_template)
 
     assert all(EU_adapt_short > EU_adapt_long), (
         "Expected all EU_adapt_long values to be less than EU_adapt_short due to higher interest costs incurred"
@@ -218,11 +218,11 @@ def test_time_discounting(decision_template: dict) -> None:
 
     # set time discounting low
     decision_template["r"] = 0.01
-    EU_adapt_low = decision_module.calcEU_adapt(**decision_template)
+    EU_adapt_low = decision_module.calcEU_adapt_flood(**decision_template)
 
     # set time discounting high
     decision_template["r"] = 0.1
-    EU_adapt_high = decision_module.calcEU_adapt(**decision_template)
+    EU_adapt_high = decision_module.calcEU_adapt_flood(**decision_template)
 
     assert all(EU_adapt_low > EU_adapt_high), (
         "Expected all EU_adapt_high values to be less than EU_adapt_low due to higher time discounting"
@@ -242,14 +242,14 @@ def test_decision_horizon(decision_template: dict) -> None:
 
     # set time discounting to zero (no adaptation costs should be incurred in year zero)
     decision_template["T"] = 0
-    EU_adapt_low = decision_module.calcEU_adapt(**decision_template)
-    EU_do_not_adapt_low = decision_module.calcEU_do_nothing(**decision_template)
+    EU_adapt_low = decision_module.calcEU_adapt_flood(**decision_template)
+    EU_do_not_adapt_low = decision_module.calcEU_do_nothing_flood(**decision_template)
     assert all(EU_adapt_low == EU_do_not_adapt_low), (
         "Expected all EU_adapt_low values to be equal to EU_do_not_adapt_low as there are no costs incurred anymore"
     )
     # set time discounting high
     decision_template["T"] = 20
-    EU_adapt_high = decision_module.calcEU_adapt(**decision_template)
+    EU_adapt_high = decision_module.calcEU_adapt_flood(**decision_template)
 
     assert all(EU_adapt_low < EU_adapt_high), (
         "Expected all EU_adapt_high values to be greater than EU_adapt_low due to summation over longer time period"

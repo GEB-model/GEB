@@ -54,6 +54,7 @@ GDAL_HTTP_ENV_OPTS = {
     "GDAL_HTTP_RETRY_DELAY": "2",  # Delay (seconds) between retries
     "GDAL_HTTP_TIMEOUT": "30",  # Timeout in seconds
     "GDAL_CACHEMAX": 1 * 1024**3,  # 1 GB cache size
+    "GDAL_MAX_BAND_COUNT": "200000",  # Increase max band count
 }
 defenv(**GDAL_HTTP_ENV_OPTS)
 
@@ -264,7 +265,7 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
     print("Loading MERIT basins river network...")
 
     river_network: pd.DataFrame = (
-        data_catalog.get("merit_basins_rivers")
+        data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "NextDownID"])
         .set_index("COMID")
     )
@@ -326,6 +327,13 @@ def get_subbasin_id_from_coordinate(
     # xmin == xmax and ymin == ymax
     # geoparquet uses < and >, not <= and >=, so we need to add
     # a small value to the coordinates to avoid missing the point
+    COMID: gpd.GeoDataFrame = (
+        data_catalog.fetch("merit_basins_catchments")
+        .read(
+            bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
+        )
+        .set_index("COMID")
+    )
     COMID = gpd.read_parquet(
         data_catalog.get("merit_basins_catchments").path,
         bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
@@ -1703,7 +1711,7 @@ class GEBModel(
         xmax += buffer
         ymax += buffer
 
-        ldd: xr.DataArray = self.new_data_catalog.get(
+        ldd: xr.DataArray = self.new_data_catalog.fetch(
             "merit_hydro_dir",
             xmin=xmin,
             xmax=xmax,
@@ -1761,7 +1769,7 @@ class GEBModel(
             ldd.attrs["_FillValue"],
         )
 
-        ldd_elevation: xr.DataArray = self.new_data_catalog.get(
+        ldd_elevation: xr.DataArray = self.new_data_catalog.fetch(
             "merit_hydro_elv",
             xmin=xmin,
             xmax=xmax,
@@ -1827,7 +1835,7 @@ class GEBModel(
         NEARBY_OUTFLOW: int = 2
 
         rivers: gpd.GeoDataFrame = (
-            self.new_data_catalog.get(
+            self.new_data_catalog.fetch(
                 "merit_basins_rivers",
             )
             .read(
@@ -2147,47 +2155,6 @@ class GEBModel(
             return "ssp585"
         else:
             raise ValueError(f"SSP {self.ssp} not supported.")
-
-    def snap_to_grid(
-        self,
-        ds: xr.DataArray | xr.Dataset,
-        reference: xr.DataArray | xr.Dataset,
-        relative_tollerance: float = 0.02,
-        ydim: str = "y",
-        xdim: str = "x",
-    ) -> xr.Dataset | xr.DataArray:
-        """Snaps the coordinates of a dataset to a reference dataset.
-
-        Some datasets have a slightly different grid than the model grid, usually
-        because of different rounding errors when creating the grid, and floating
-        point precision issues. This method checks if the coordinates are more or
-        less the same, and if so, snaps the coordinates of the dataset to the
-        reference dataset.
-
-        Args:
-            ds: The dataset to snap.
-            reference: The reference dataset.
-            relative_tollerance: The relative tolerance for snapping.
-            ydim: The name of the y dimension.
-            xdim: The name of the x dimension.
-
-        Returns:
-            The snapped dataset.
-        """
-        # make sure all datasets have more or less the same coordinates
-        assert np.isclose(
-            ds.coords[ydim].values,
-            reference[ydim].values,
-            atol=abs(ds.rio.resolution()[1] * relative_tollerance),
-            rtol=0,
-        ).all()
-        assert np.isclose(
-            ds.coords[xdim].values,
-            reference[xdim].values,
-            atol=abs(ds.rio.resolution()[0] * relative_tollerance),
-            rtol=0,
-        ).all()
-        return ds.assign_coords({ydim: reference[ydim], xdim: reference[xdim]})
 
     def setup_coastal_water_levels(
         self,
@@ -2545,6 +2512,7 @@ class GEBModel(
             self.files["other"][name] = fp
 
             fp_with_root: Path = Path(self.root, fp)
+
             da: xr.DataArray = to_zarr(
                 da,
                 fp_with_root,

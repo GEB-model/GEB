@@ -1,0 +1,10 @@
+# Benchmark configuration
+CATCHMENTS:
+  rhine: 23007593
+  # mekong: 44046390
+  # pungwe: 12040165
+  # upper_mississippi: 74042267
+  # bhima: 45089281  # 45093530 is the entire Krishna
+
+# Evaluation methods to run for each catchment
+EVALUATION_METHODS: "plot_discharge,evaluate_discharge"

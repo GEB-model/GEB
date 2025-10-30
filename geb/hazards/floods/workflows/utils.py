@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -130,7 +131,31 @@ def read_flood_depth(
         f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "
         f"Mean flood depth: {float(flood_depth_m.mean().values):.2f} m"
     )
+    # Create basemap plot
+    fig, ax = model.plot_basemap(
+        fn_out=None,
+        variable="",  # No variable to plot, only basemap
+        plot_geoms=False,
+        zoomlevel=12,
+        figsize=(11, 7),
+    )
 
+    # Plot flood depth with colorbar
+    cbar_kwargs = {"shrink": 0.6, "anchor": (0, 0)}
+    flood_depth_m.plot(
+        x="x",
+        y="y",
+        ax=ax,
+        vmin=0,
+        vmax=float(flood_depth_m.max().values),
+        cmap=plt.cm.viridis,
+        cbar_kwargs=cbar_kwargs,
+    )
+
+    ax.set_title("Maximum Water Depth over all time steps")
+
+    output_path: Path = model_root / "flood_depth_all_time_steps.png"
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
     return flood_depth_m
 
 
@@ -338,7 +363,25 @@ def run_sfincs_simulation(
             result: subprocess.CompletedProcess[bytes] = subprocess.run(
                 args=["nvidia-smi"], capture_output=True
             )
-            gpu: bool = result.returncode == 0
+            maybe_gpu: bool = result.returncode == 0
+
+            # if no GPU is found, there is no need to check further, set gpu to False
+            if not maybe_gpu:
+                gpu: bool = False
+            else:
+                # otherwise, check if we are in a SLURM job. We may be on a cluster
+                # where a GPU is physically present, but not allocated to the job
+                # and therefore not available for use.
+                in_SLURM_job: bool = "SLURM_JOB_ID" in os.environ
+                if in_SLURM_job:
+                    # in a SLURM job, if the job has access to the GPU
+                    gpu_ids: str | None = os.getenv(key="CUDA_VISIBLE_DEVICES")
+                    if gpu_ids is not None and len(gpu_ids) > 0:
+                        gpu: bool = True
+                    else:
+                        gpu: bool = False
+                else:
+                    gpu: bool = True
         else:
             gpu: bool = False
 
@@ -348,14 +391,13 @@ def run_sfincs_simulation(
             print("No GPU detected, running SFINCS without GPU support.")
 
     if gpu:
-        version: str = os.getenv(
-            key="SFINCS_SIF_GPU", default="mvanormondt/sfincs-gpu:coldeze_combo_ccall"
+        version: str | None = os.getenv(key="SFINCS_CONTAINER_GPU")
+        assert version is not None, (
+            "SFINCS_CONTAINER_GPU environment variable is not set"
         )
     else:
-        version: str = os.getenv(
-            key="SFINCS_SIF",
-            default="deltares/sfincs-cpu:sfincs-v2.2.0-col-dEze-Release",
-        )
+        version: str | None = os.getenv(key="SFINCS_CONTAINER")
+        assert version is not None, "SFINCS_CONTAINER environment variable is not set"
 
     if platform.system() == "Linux":
         # If not a apptainer image, add docker:// prefix
