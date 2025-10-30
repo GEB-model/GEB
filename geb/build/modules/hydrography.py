@@ -8,11 +8,12 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyflwdir
+import rasterio
 import xarray as xr
 from pyflwdir import FlwdirRaster
 from rasterio.features import rasterize
 from scipy.ndimage import value_indices
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
