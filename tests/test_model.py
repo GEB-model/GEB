@@ -525,7 +525,7 @@ def test_multiverse() -> None:
 
             # add member dimension
             forecast_da: xr.DataArray = forecast_da.expand_dims(
-                dim={"member": [0]}, axis=0
+                dim={"member": [0, 1]}, axis=0
             )
 
             forecasts_folder: Path = (

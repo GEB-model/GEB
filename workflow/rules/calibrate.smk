@@ -133,7 +133,7 @@ rule generate_individual_parameters:
         # Convert normalized parameters to actual values
         actual_params = {}
         for i, (param_name, param_config) in enumerate(PARAMETERS.items()):
-            actual_params[param_name] = float(
+            actual_params[param_config["variable"]] = float(
                 param_config["min"] + individual_data["values"][i] * (param_config["max"] - param_config["min"])
             )
         

@@ -408,7 +408,6 @@ def get_potential_irrigation_consumption_m(
     wilting_point,
     w,
     ws,
-    arno_beta: np.float32,
     saturated_hydraulic_conductivity_m_per_day: np.float32,
     fraction_irrigated_field: np.float32,
     max_paddy_water_level_farmer,
@@ -492,7 +491,6 @@ def get_gross_irrigation_demand_m3(
     wilting_point: npt.NDArray[np.float64],
     w: npt.NDArray[np.float64],
     ws: npt.NDArray[np.float64],
-    arno_beta: npt.NDArray[np.float32],
     saturated_hydraulic_conductivity_m_per_day: npt.NDArray[np.float32],
     remaining_irrigation_limit_m3: npt.NDArray[np.float32],
     irrigation_limit_reset_day_index: npt.NDArray[np.int32],
@@ -542,7 +540,6 @@ def get_gross_irrigation_demand_m3(
                 wilting_point=wilting_point[:, field],
                 w=w[:, field],
                 ws=ws[:, field],
-                arno_beta=arno_beta[field],
                 saturated_hydraulic_conductivity_m_per_day=saturated_hydraulic_conductivity_m_per_day[
                     :, field
                 ],

@@ -94,7 +94,7 @@ rule set_individual_parameters:
         
         # Build single geb set command with all parameters
         param_args = " ".join(f"{param_name}={param_value}" for param_name, param_value in actual_params.items())
-        cmd = f"geb set -c model.yml --working-directory {run_dir} {param_args} report=null report._discharge_stations=true"
+        cmd = f"geb set -c model.yml --working-directory {run_dir} {param_args} report=null report._discharge_stations+=true"
         
         # Execute the set command
         import subprocess

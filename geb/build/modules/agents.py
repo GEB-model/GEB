@@ -22,7 +22,7 @@ from geb.agents.crop_farmers import (
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
-from geb.typing import ArrayBool
+from geb.typing import ArrayBool, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import fetch_and_save, get_window
 from geb.workflows.raster import clip_with_grid
 
@@ -995,28 +995,32 @@ class Agents:
             Finally, the method sets the array data for each column of the `farmers` DataFrame as agents data in the model
             with names of the form 'agents/farmers/{column}'.
         """
-        regions = self.geom["regions"]
-        region_ids = self.region_subgrid["region_ids"]
-        full_region_cultivated_land = self.region_subgrid[
+        regions: gpd.GeoDataFrame = self.geom["regions"]
+        region_ids: TwoDArrayInt32 = self.region_subgrid["region_ids"]
+        full_region_cultivated_land: xr.DataArray = self.region_subgrid[
             "landsurface/full_region_cultivated_land"
         ]
 
-        farms = self.full_like(region_ids, fill_value=-1, nodata=-1)
-        for region_id in regions["region_id"]:
-            self.logger.info(f"Creating farms for region {region_id}")
-            region = region_ids == region_id
+        farms: TwoDArrayInt32 = self.full_like(
+            region_ids, fill_value=-1, nodata=-1, dtype=np.int32
+        )
+        for region_id in tqdm(regions["region_id"]):
+            region: xr.DataArray = region_ids == region_id
             region_clip, bounds = clip_with_grid(region, region)
 
-            cultivated_land_region = full_region_cultivated_land.isel(bounds)
-            cultivated_land_region = xr.where(
-                region_clip, cultivated_land_region, 0, keep_attrs=True
+            cultivated_land_region: xr.DataArray = full_region_cultivated_land.isel(
+                bounds
             )
-            # TODO: Why does nodata value disappear?
-            # self.dict['areamaps/region_id_mapping'][farmers['region_id']]
-            farmer_region_ids = farmers["region_id"]
-            farmers_region = farmers[farmer_region_ids == region_id]
-            farms_region = create_farms(
-                farmers_region, cultivated_land_region, farm_size_key="area_n_cells"
+            cultivated_land_region: xr.DataArray = xr.where(
+                region_clip, x=cultivated_land_region, y=False, keep_attrs=True
+            )
+            cultivated_land_region_values: TwoDArrayBool = cultivated_land_region.values
+
+            farmers_region: pd.DataFrame = farmers[farmers["region_id"] == region_id]
+            farms_region: TwoDArrayInt32 = create_farms(
+                farmers_region,
+                cultivated_land_region_values,
+                farm_size_key="area_n_cells",
             )
             assert (
                 farms_region.min() >= -1
@@ -1024,11 +1028,11 @@ class Agents:
             farms[bounds] = xr.where(
                 region_clip, farms_region, farms.isel(bounds), keep_attrs=True
             )
-            # farms = farms.compute()  # perhaps this helps with memory issues?
+            farms: xr.DataArray = farms.compute()
 
-        farmers = farmers.drop("area_n_cells", axis=1)
+        farmers: pd.DataFrame = farmers.drop("area_n_cells", axis=1)
 
-        cut_farms = np.unique(
+        cut_farms: ArrayInt32 = np.unique(
             xr.where(
                 self.region_subgrid["mask"],
                 farms.copy().values,
@@ -1036,17 +1040,19 @@ class Agents:
                 keep_attrs=True,
             )
         )
-        cut_farm_indices = cut_farms[cut_farms != -1]
+        cut_farm_indices: ArrayInt32 = cut_farms[cut_farms != -1]
 
         assert farms.min() >= -1  # -1 is nodata value, all farms should be positive
-        subgrid_farms = farms.raster.clip_bbox(self.subgrid["mask"].raster.bounds)
+        subgrid_farms: xr.DataArray = farms.raster.clip_bbox(
+            self.subgrid["mask"].raster.bounds
+        )
 
-        subgrid_farms_in_study_area = xr.where(
+        subgrid_farms_in_study_area: xr.DataArray = xr.where(
             np.isin(subgrid_farms, cut_farm_indices), -1, subgrid_farms, keep_attrs=True
         )
-        farmers = farmers[~farmers.index.isin(cut_farm_indices)]
+        farmers: pd.DataFrame = farmers[~farmers.index.isin(cut_farm_indices)]
 
-        remap_farmer_ids = np.full(
+        remap_farmer_ids: ArrayInt32 = np.full(
             farmers.index.max() + 2, -1, dtype=np.int32
         )  # +1 because 0 is also a farm, +1 because no farm is -1, set to -1 in next step
         remap_farmer_ids[farmers.index] = np.arange(len(farmers))
@@ -1054,14 +1060,14 @@ class Agents:
             subgrid_farms_in_study_area.values
         ]
 
-        farmers = farmers.reset_index(drop=True)
+        farmers: pd.DataFrame = farmers.reset_index(drop=True)
 
         assert np.setdiff1d(np.unique(subgrid_farms_in_study_area), -1).size == len(
             farmers
         )
         assert farmers.iloc[-1].name == subgrid_farms_in_study_area.max()
 
-        subgrid_farms_in_study_area_ = self.full_like(
+        subgrid_farms_in_study_area_: TwoDArrayInt32 = self.full_like(
             self.subgrid["mask"],
             fill_value=-1,
             nodata=-1,

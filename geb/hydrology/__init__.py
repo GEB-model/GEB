@@ -64,7 +64,6 @@ class Hydrology(Data, Module):
             return
 
         self.dynamic_water_bodies = False
-        self.crop_factor_calibration_factor = 1
 
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)

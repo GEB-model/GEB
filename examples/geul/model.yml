@@ -70,16 +70,16 @@ calibration:
         variable: parameters.mannings_n_multiplier
         min: 0.1
         max: 10.0
-    crop_factor:
+    crop_factor_multiplier:
         variable: parameters.crop_factor_multiplier
         min: 0.5
         max: 2
-    saturated_hydraulic_conductivity:
+    saturated_hydraulic_conductivity_multiplier:
         variable: parameters.saturated_hydraulic_conductivity_multiplier
         min: 0.5
         max: 2
-    reservoir_release_factor:
-        variable: parameters.reservoir_release_factor
+    reservoir_M_factor:
+        variable: agents.reservoir_operators.reservoir_M_factor
         min: 0.05
         max: 0.4
     return_fraction:

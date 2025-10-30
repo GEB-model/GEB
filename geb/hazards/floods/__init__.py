@@ -18,7 +18,7 @@ from shapely.geometry import shape
 from shapely.geometry.point import Point
 
 from geb.module import Module
-from geb.typing import ArrayFloat32
+from geb.typing import ArrayFloat32, TwoDArrayInt32
 from geb.workflows.io import load_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
@@ -206,7 +206,7 @@ class Floods(Module):
             simulation_name=sfincs_simulation_name,
             start_time=start_time,
             end_time=end_time,
-            write_figures=self.config.get("write_figures", False),
+            write_figures=self.config["write_figures"],
         )
 
         routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]
@@ -214,7 +214,7 @@ class Floods(Module):
             forcing_grid = self.hydrology.grid.decompress(
                 np.vstack(self.var.discharge_per_timestep)
             )
-        elif self.config["forcing_method"] == "runoff":
+        elif self.config["forcing_method"] in ("runoff", "accumulated_runoff"):
             forcing_grid = self.hydrology.grid.decompress(
                 np.vstack(self.var.runoff_m_per_timestep)
             )
@@ -261,9 +261,27 @@ class Floods(Module):
             simulation.set_runoff_forcing(
                 runoff_m=forcing_grid,
             )
+
+        elif self.config["forcing_method"] == "accumulated_runoff":
+            river_ids: TwoDArrayInt32 = self.hydrology.grid.load(
+                self.model.files["grid"]["routing/river_ids"], compress=False
+            )
+            simulation.set_accumulated_runoff_forcing(
+                runoff_m=forcing_grid,
+                river_network=self.model.hydrology.routing.river_network,
+                mask=~self.model.hydrology.grid.mask,
+                river_ids=river_ids,
+                upstream_area=self.model.hydrology.grid.decompress(
+                    self.model.hydrology.grid.var.upstream_area
+                ),
+                cell_area=self.model.hydrology.grid.decompress(
+                    self.model.hydrology.grid.var.cell_area
+                ),
+                river_geometry=self.rivers,
+            )
         else:
             raise ValueError(
-                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'runoff'."
+                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points', 'runoff' and 'accumulated_runoff'."
             )
 
         # Set up river outflow boundary condition for all simulations
