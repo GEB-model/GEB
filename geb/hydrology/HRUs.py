@@ -592,6 +592,15 @@ class HRUs(BaseVariables):
         )
 
     @property
+    def linear_mapping(self) -> TwoDArrayInt32:
+        """Get the linear mapping from uncompressed to compressed indices.
+
+        Returns:
+            linear_mapping: Linear mapping array.
+        """
+        return self.var.linear_mapping
+
+    @property
     def compressed_size(self) -> int:
         """Gets the compressed size of a full HRU array.
 

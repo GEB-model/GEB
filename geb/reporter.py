@@ -619,9 +619,13 @@ class Reporter:
                     # first need to convert to their pixel index in x and y
                     if function == "sample_lonlat":
                         if type_ == "grid":
-                            gt = self.model.hydrology.grid.gt
+                            gt: tuple[float, float, float, float, float, float] = (
+                                self.model.hydrology.grid.gt
+                            )
                         elif type_ == "HRU":
-                            gt = self.hydrology.HRU.gt
+                            gt: tuple[float, float, float, float, float, float] = (
+                                self.hydrology.HRU.gt
+                            )
                         else:
                             raise ValueError(
                                 f"Unknown varname type {config['varname']}"
@@ -629,8 +633,8 @@ class Reporter:
                         px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
                     else:
                         # for sample_xy, args are pixel indices
-                        px = int(args[0])
-                        py = int(args[1])
+                        px: int = int(args[0])
+                        py: int = int(args[1])
 
                     # both for the grid and HRU, the data is stored efficiently, so that
                     # all data is in a 1D array, and we need to map the pixel coordinates
@@ -643,16 +647,16 @@ class Reporter:
                         )
                     elif type_ == "HRU":
                         linear_mapping: TwoDArrayInt32 = (
-                            self.hydrology.HRU.var.unmerged_HRU_indices
+                            self.hydrology.HRU.linear_mapping
                         )
                     else:
                         raise ValueError(f"Unknown varname type {config['varname']}")
 
                     try:
-                        idx = self.hydrology.grid.linear_mapping[py, px]
+                        idx: int = linear_mapping[py, px]
                     except IndexError:
                         raise IndexError(
-                            f"Coordinate ({px}, {py}) is outside the model domain, which has shape {self.hydrology.grid.linear_mapping.shape}."
+                            f"Coordinate ({px}, {py}) is outside the model domain, which has shape {linear_mapping.shape}."
                         )
                     if idx == -1:
                         raise IndexError(
