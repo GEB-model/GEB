@@ -1184,7 +1184,7 @@ class Agents:
                 ((region_ids == UID) & (cultivated_land)).sum().compute()
             )
 
-            # in the later corrections, it is imporant that the total cultivated land is
+            # in the later corrections, it is important that the total cultivated land is
             # quite precise, so we first convert to float64 before summing
             total_cultivated_land_area_lu: np.float64 = (
                 (((region_ids == UID) & (cultivated_land)) * cell_area)
