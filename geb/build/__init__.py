@@ -1233,6 +1233,41 @@ def save_clusters_as_merged_geometries(
         )
 
 
+def get_touching_subbasins(
+    data_catalog: DataCatalog, subbasins: gpd.GeoDataFrame
+) -> gpd.GeoDataFrame:
+    """Find all subbasins that touch the given subbasins.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        subbasins: GeoDataFrame containing the subbasins to find touching subbasins for.
+
+    Returns:
+        A GeoDataFrame containing all subbasins that touch the given subbasins.
+    """
+    bbox = subbasins.total_bounds
+    buffer: float = 0.1
+    buffered_bbox = (
+        bbox[0] - buffer,
+        bbox[1] - buffer,
+        bbox[2] + buffer,
+        bbox[3] + buffer,
+    )
+    potentially_touching_basins = gpd.read_parquet(
+        data_catalog.get_source("MERIT_Basins_cat").path,
+        bbox=buffered_bbox,
+        filters=[
+            ("COMID", "not in", subbasins.index.tolist()),
+        ],
+    )
+    # get all touching subbasins
+    touching_subbasins = potentially_touching_basins[
+        potentially_touching_basins.geometry.touches(subbasins.union_all())
+    ]
+
+    return touching_subbasins.set_index("COMID")
+
+
 def get_coastline_nodes(
     coastline_graph: networkx.Graph, STUDY_AREA_OUTFLOW: int, NEARBY_OUTFLOW: int
 ) -> set:
