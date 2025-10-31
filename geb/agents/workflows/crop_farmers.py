@@ -786,69 +786,70 @@ def abstract_water(
                             )
                             break
 
-            else:
+                else:
                 # ===== Switch off: fallback to original order (reservoir -> channel -> groundwater) =====
 
-                if surface_irrigated[farmer]:
-                    # command areas
-                    if command_area_farmer != -1:  # -1 means no command area
-                        (
-                            irrigation_water_demand_field_m,
-                            irrigation_water_demand_field_m_limit_adjusted,
-                        ) = withdraw_reservoir(
-                            command_area=command_area_farmer,
+                    if surface_irrigated[farmer]:
+                        # command areas
+                        if command_area_farmer != -1:  # -1 means no command area
+                            (
+                                irrigation_water_demand_field_m,
+                                irrigation_water_demand_field_m_limit_adjusted,
+                            ) = withdraw_reservoir(
+                                command_area=command_area_farmer,
+                                field=field,
+                                farmer=farmer,
+                                reservoir_abstraction_m3=reservoir_abstraction_m3,
+                                available_reservoir_storage_m3=available_reservoir_storage_m3,
+                                irrigation_water_demand_field_m=irrigation_water_demand_field_m,
+                                irrigation_water_demand_field_m_limit_adjusted=irrigation_water_demand_field_m_limit_adjusted,
+                                water_withdrawal_m=water_withdrawal_m,
+                                remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                                reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+                                maximum_abstraction_reservoir_m3_field=maximum_abstraction_reservoir_m3_by_field[
+                                    field_index
+                                ],
+                                cell_area=cell_area,
+                            )
+                            assert water_withdrawal_m[field] >= 0
+                            assert irrigation_water_demand_field_m >= 0
+
+                        irrigation_water_demand_field_m = withdraw_channel(
+                            available_channel_storage_m3=available_channel_storage_m3,
+                            grid_cell=grid_cell_nearest,
+                            cell_area=cell_area,
                             field=field,
                             farmer=farmer,
-                            reservoir_abstraction_m3=reservoir_abstraction_m3,
-                            available_reservoir_storage_m3=available_reservoir_storage_m3,
-                            irrigation_water_demand_field_m=irrigation_water_demand_field_m,
-                            irrigation_water_demand_field_m_limit_adjusted=irrigation_water_demand_field_m_limit_adjusted,
                             water_withdrawal_m=water_withdrawal_m,
+                            irrigation_water_demand_field_m=irrigation_water_demand_field_m,
                             remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-                            reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
-                            maximum_abstraction_reservoir_m3_field=maximum_abstraction_reservoir_m3_by_field[
-                                field_index
-                            ],
-                            cell_area=cell_area,
+                            channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+                            minimum_channel_storage_m3=100.0,
                         )
                         assert water_withdrawal_m[field] >= 0
                         assert irrigation_water_demand_field_m >= 0
 
-                    irrigation_water_demand_field_m = withdraw_channel(
-                        available_channel_storage_m3=available_channel_storage_m3,
-                        grid_cell=grid_cell_nearest,
-                        cell_area=cell_area,
-                        field=field,
-                        farmer=farmer,
-                        water_withdrawal_m=water_withdrawal_m,
-                        irrigation_water_demand_field_m=irrigation_water_demand_field_m,
-                        remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-                        channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
-                        minimum_channel_storage_m3=100.0,
-                    )
-                    assert water_withdrawal_m[field] >= 0
-                    assert irrigation_water_demand_field_m >= 0
-
-                if well_irrigated[farmer]:
-                    irrigation_water_demand_field_m = withdraw_groundwater(
-                        farmer=farmer,
-                        field=field,
-                        grid_cell=grid_cell,
-                        groundwater_abstraction_m3=groundwater_abstraction_m3,
-                        available_groundwater_m3=available_groundwater_m3,
-                        cell_area=cell_area,
-                        groundwater_depth=groundwater_depth,
-                        well_depth=well_depth,
-                        irrigation_water_demand_field_m=irrigation_water_demand_field_m,
-                        water_withdrawal_m=water_withdrawal_m,
-                        remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-                        groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
-                    )
-                    assert irrigation_water_demand_field_m >= 0
-                    assert water_withdrawal_m[field] >= 0
+                    if well_irrigated[farmer]:
+                        irrigation_water_demand_field_m = withdraw_groundwater(
+                            farmer=farmer,
+                            field=field,
+                            grid_cell=grid_cell,
+                            groundwater_abstraction_m3=groundwater_abstraction_m3,
+                            available_groundwater_m3=available_groundwater_m3,
+                            cell_area=cell_area,
+                            groundwater_depth=groundwater_depth,
+                            well_depth=well_depth,
+                            irrigation_water_demand_field_m=irrigation_water_demand_field_m,
+                            water_withdrawal_m=water_withdrawal_m,
+                            remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+                            groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
+                        )
+                        assert irrigation_water_demand_field_m >= 0
+                        assert water_withdrawal_m[field] >= 0
 
                 assert (
-                    irrigation_water_demand_field_m >= -1e15
+                    # irrigation_water_demand_field_m >= -1e15
+                    irrigation_water_demand_field_m >= -1e-15
                 )  # Make sure irrigation water demand is zero, or positive. Allow very small error.
 
                 assert water_consumption_m[field] >= 0
