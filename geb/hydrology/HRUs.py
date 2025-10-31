@@ -281,8 +281,19 @@ class Grid(BaseVariables):
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
         self.var.cell_area = self.compress(self.cell_area_uncompressed)
+        self.linear_mapping = self.create_linear_mapping(self.mask)
 
         BaseVariables.__init__(self)
+
+    def create_linear_mapping(self, mask: TwoDArrayBool) -> TwoDArrayInt32:
+        """Create a linear mapping from uncompressed to compressed indices.
+
+        Returns:
+            mapping: Linear mapping array.
+        """
+        mapping = np.full(mask.shape, -1, dtype=np.int32)
+        mapping[~mask] = np.arange(self.compressed_size, dtype=np.int32)
+        return mapping
 
     def full(self, *args: Any, **kwargs: Any) -> TwoDArrayFloat32:
         """Return a full array with size of mask. Takes any other argument normally used in np.full.
@@ -568,7 +579,7 @@ class HRUs(BaseVariables):
             self.var.land_owners,
             self.var.HRU_to_grid,
             self.var.grid_to_HRU,
-            self.var.unmerged_HRU_indices,
+            self.var.linear_mapping,
         ) = self.create_HRUs()
 
         upstream_area = load_grid(self.model.files["grid"]["routing/upstream_area"])
@@ -618,7 +629,7 @@ class HRUs(BaseVariables):
             land_use_owner: Owner of HRU.
             HRU_to_grid: Maps HRUs to index of compressed cell index.
             var_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-            unmerged_HRU_indices: The index of the HRU to the subcell.
+            linear_mapping: The index of the HRU to the subcell.
         """
         assert farms.size == mask.size * scaling * scaling
         assert farms.size == land_use_classes.size
@@ -631,7 +642,7 @@ class HRUs(BaseVariables):
         land_use_array = np.full(farms.size, -1, dtype=np.int32)
         land_use_size = np.full(farms.size, -1, dtype=np.int32)
         land_use_owner = np.full(farms.size, -1, dtype=np.int32)
-        unmerged_HRU_indices = np.full(farms.shape, -1, dtype=np.int32)
+        linear_mapping = np.full(farms.shape, -1, dtype=np.int32)
 
         HRU = 0
         var_cell_count_compressed = 0
@@ -679,7 +690,7 @@ class HRUs(BaseVariables):
                         else:
                             land_use_size[HRU - 1] += 1
 
-                        unmerged_HRU_indices[
+                        linear_mapping[
                             y * scaling + sort_idx[i] // scaling,
                             x * scaling + sort_idx[i] % scaling,
                         ] = HRU - 1
@@ -708,7 +719,7 @@ class HRUs(BaseVariables):
                         else:
                             land_use_size[HRU - 1] += 1
 
-                        unmerged_HRU_indices[
+                        linear_mapping[
                             y * scaling + sort_idx[i] // scaling,
                             x * scaling + sort_idx[i] % scaling,
                         ] = HRU - 1
@@ -730,7 +741,7 @@ class HRUs(BaseVariables):
             land_use_owner,
             HRU_to_grid,
             grid_to_HRU,
-            unmerged_HRU_indices,
+            linear_mapping,
         )
 
     def create_HRUs(
@@ -752,7 +763,7 @@ class HRUs(BaseVariables):
             land_use_owner: Owner of HRU.
             HRU_to_grid: Maps HRUs to index of compressed cell index.
             grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
-            unmerged_HRU_indices: The index of the HRU to the subcell.
+            linear_mapping: The index of the HRU to the subcell.
         """
         land_use_classes = load_grid(
             self.model.files["subgrid"]["landsurface/land_use_classes"]
@@ -806,7 +817,7 @@ class HRUs(BaseVariables):
             nanvalue = False
         else:
             nanvalue = np.nan
-        outarray = HRU_array[self.var.unmerged_HRU_indices]
+        outarray = HRU_array[self.var.linear_mapping]
         outarray[self.mask] = nanvalue
         return outarray
 
@@ -814,7 +825,7 @@ class HRUs(BaseVariables):
     @njit(cache=True)
     def convert_subgrid_to_HRU_numba(
         array: npt.NDArray[np.generic],
-        unmerged_HRU_indices: npt.NDArray[np.int32],
+        linear_mapping: npt.NDArray[np.int32],
         outarray: npt.NDArray[np.generic],
         nodatavalue: int | float | np.generic,
         method: str,
@@ -823,7 +834,7 @@ class HRUs(BaseVariables):
 
         Args:
             array: Uncompressed array.
-            unmerged_HRU_indices: The index of the HRU to the subcell.
+            linear_mapping: The index of the HRU to the subcell.
             outarray: Array to store the output data. Must be of size of the HRUs.
             nodatavalue: Value to use for nodata.
             method: Method to use for compression. "last" uses the last value found in the uncompressed array. "mean" uses the mean value found in the uncompressed array.
@@ -835,26 +846,26 @@ class HRUs(BaseVariables):
             ValueError: If method is not implemented.
         """
         array = array.ravel()
-        unmerged_HRU_indices = unmerged_HRU_indices.ravel()
+        linear_mapping = linear_mapping.ravel()
         if method == "last":
             if np.isnan(nodatavalue):
                 for i in range(array.size):
                     value = array[i]
                     if not np.isnan(value):
-                        HRU = unmerged_HRU_indices[i]
+                        HRU = linear_mapping[i]
                         outarray[HRU] = value
             else:
                 for i in range(array.size):
                     value = array[i]
                     if value != nodatavalue:
-                        HRU = unmerged_HRU_indices[i]
+                        HRU = linear_mapping[i]
                         outarray[HRU] = value
         elif method == "mean":
-            array = array[unmerged_HRU_indices != -1]
-            unmerged_HRU_indices = unmerged_HRU_indices[unmerged_HRU_indices != -1]
-            outarray[:] = np.bincount(
-                unmerged_HRU_indices, weights=array
-            ) / np.bincount(unmerged_HRU_indices)
+            array = array[linear_mapping != -1]
+            linear_mapping = linear_mapping[linear_mapping != -1]
+            outarray[:] = np.bincount(linear_mapping, weights=array) / np.bincount(
+                linear_mapping
+            )
         else:
             raise ValueError("Method not implemented")
         return outarray
@@ -896,7 +907,7 @@ class HRUs(BaseVariables):
         if array.ndim == 2:
             self.convert_subgrid_to_HRU_numba(
                 array,
-                self.var.unmerged_HRU_indices,
+                self.var.linear_mapping,
                 output_data,
                 nodatavalue=fill_value,
                 method=method,
@@ -905,7 +916,7 @@ class HRUs(BaseVariables):
             for i in range(array.shape[0]):
                 self.convert_subgrid_to_HRU_numba(
                     array[i],
-                    self.var.unmerged_HRU_indices,
+                    self.var.linear_mapping,
                     output_data[i],
                     nodatavalue=fill_value,
                     method=method,
@@ -1186,7 +1197,7 @@ class Data:
             New HRU index.
 
         """
-        HRU = self.HRU.var.unmerged_HRU_indices[HRU_indices]
+        HRU = self.HRU.var.linear_mapping[HRU_indices]
         assert (
             HRU == HRU[0]
         ).all()  # assert all indices belong to same HRU - so only works for single grid cell at this moment
@@ -1194,15 +1205,15 @@ class Data:
         assert HRU != -1
 
         all_HRU_indices = np.where(
-            self.HRU.var.unmerged_HRU_indices == HRU
+            self.HRU.var.linear_mapping == HRU
         )  # this could probably be speed up
         assert (
             all_HRU_indices[0].size > HRU_indices[0].size
         )  # ensure that not all indices are split off
         ratio = HRU_indices[0].size / all_HRU_indices[0].size
 
-        self.HRU.var.unmerged_HRU_indices[self.HRU.var.unmerged_HRU_indices > HRU] += 1
-        self.HRU.var.unmerged_HRU_indices[HRU_indices] += 1
+        self.HRU.var.linear_mapping[self.HRU.var.linear_mapping > HRU] += 1
+        self.HRU.var.linear_mapping[HRU_indices] += 1
 
         self.HRU.var.HRU_to_grid = self.split_HRU_data(self.HRU.var.HRU_to_grid, HRU)
         self.HRU.var.grid_to_HRU[self.HRU.var.HRU_to_grid[HRU] :] += 1
