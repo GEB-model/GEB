@@ -36,9 +36,9 @@ hazards:
         end_time: 2021-07-20 09:00:00
 
 report:
-  hydrology.soil:
-    actual_bare_soil_evaporation_weighted_sum:
-      varname: .actual_bare_soil_evaporation
+  hydrology.landsurface:
+    bare_soil_evaporation_weighted_sum_m:
+      varname: .bare_soil_evaporation_m
       type: HRU
       function: weightednanmean
   hydrology.routing:
