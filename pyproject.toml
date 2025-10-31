@@ -19,7 +19,7 @@ authors = [
     {name = "Rafaella Oliveira", email = "r.gouveialoureirooliveira@vu.nl"},
 ]
 dependencies = [
-    "cartopy>=0.24.1",
+    "cartopy==0.24.1",  # pin until https://github.com/SciTools/cartopy/issues/2577 is fixed
     "cfgrib>=0.9.14",
     "click>=8.1.8",
     "contextily>=1.6.2",
