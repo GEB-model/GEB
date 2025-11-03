@@ -532,7 +532,6 @@ def cluster_subbasins_by_area_and_proximity(
     centroid_coords = {}  # Store as (x, y) tuples for faster distance calculations
 
     # Create numpy arrays for vectorized distance calculations
-    import numpy as np
 
     subbasin_list = list(subbasin_ids)
     coords_array = np.zeros((len(subbasin_list), 2))
