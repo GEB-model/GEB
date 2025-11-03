@@ -52,6 +52,7 @@ GDAL_HTTP_ENV_OPTS = {
     "GDAL_HTTP_RETRY_DELAY": "2",  # Delay (seconds) between retries
     "GDAL_HTTP_TIMEOUT": "30",  # Timeout in seconds
     "GDAL_CACHEMAX": 1 * 1024**3,  # 1 GB cache size
+    "GDAL_MAX_BAND_COUNT": "200000",  # Increase max band count
 }
 defenv(**GDAL_HTTP_ENV_OPTS)
 
@@ -1254,6 +1255,41 @@ def save_clusters_as_merged_geometries(
             f"  {row['cluster_id']}: {row['total_basin_area_km2']:,.0f} km², "
             f"{row['num_total_subbasins']:,} subbasins merged{geom_info}"
         )
+
+
+def get_touching_subbasins(
+    data_catalog: DataCatalog, subbasins: gpd.GeoDataFrame
+) -> gpd.GeoDataFrame:
+    """Find all subbasins that touch the given subbasins.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        subbasins: GeoDataFrame containing the subbasins to find touching subbasins for.
+
+    Returns:
+        A GeoDataFrame containing all subbasins that touch the given subbasins.
+    """
+    bbox = subbasins.total_bounds
+    buffer: float = 0.1
+    buffered_bbox = (
+        bbox[0] - buffer,
+        bbox[1] - buffer,
+        bbox[2] + buffer,
+        bbox[3] + buffer,
+    )
+    potentially_touching_basins = gpd.read_parquet(
+        data_catalog.get_source("MERIT_Basins_cat").path,
+        bbox=buffered_bbox,
+        filters=[
+            ("COMID", "not in", subbasins.index.tolist()),
+        ],
+    )
+    # get all touching subbasins
+    touching_subbasins = potentially_touching_basins[
+        potentially_touching_basins.geometry.touches(subbasins.union_all())
+    ]
+
+    return touching_subbasins.set_index("COMID")
 
 
 def get_coastline_nodes(
