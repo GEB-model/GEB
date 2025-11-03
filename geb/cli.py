@@ -1726,7 +1726,7 @@ def init_multiple(
     Example for parts of Europe:
         geb init_multiple --geometry-bounds="5.0,50.0,15.0,55.0"
 
-    By default, the whole world is covered. Use --geometry-bounds to specify a region.
+    By default, a region covering Europe is used. Use --geometry-bounds to specify a different region.
     """
     init_multiple_fn(
         config=config,
