@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-from typing import Tuple
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
