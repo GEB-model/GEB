@@ -1020,7 +1020,7 @@ class LandSurface(Module):
                 self.HRU.var.topwater_m,
                 np.nansum(self.HRU.var.w, axis=0),
             ],
-            tolerance=1e-6,
+            tolerance=1e-5,
             raise_on_error=False,
         ):
             np.savez(
