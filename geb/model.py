@@ -741,6 +741,17 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
     @property
+    def diagnostics_folder(self) -> Path:
+        """Get the folder where diagnostic output files will be saved.
+
+        Returns:
+            Path to the folder where diagnostic output files will be saved.
+        """
+        folder = self.output_folder / "diagnostics"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    @property
     def crs(self) -> int:
         """Get the coordinate reference system (CRS) of the model."""
         return 4326
