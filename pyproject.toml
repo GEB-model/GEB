@@ -71,7 +71,7 @@ dependencies = [
     "ruff>=0.14.0",
     "snakemake>=9.13.4",
 ]
-requires-python = ">=3.12, <3.14"
+requires-python = ">=3.13, <3.14"
 readme = "README.md"
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -119,9 +119,6 @@ plantfate = [
     "pybind11>=2.13.6",
 ]
 
-[tool.ruff]
-target-version = "py313"
-
 [tool.ruff.lint]
 select = [
     "ANN002",
@@ -165,7 +162,19 @@ select = [
     "D416",
     "D417",
     "D419",
-    "F401"
+    "F401",
+    "UP006",
+    "UP007",
+    "UP008",
+    "UP009",
+    "UP010",
+    "UP012",
+    "UP017",
+    "UP022",
+    "UP029",
+    "UP037",
+    "UP044",
+    "UP045",
 ]
 extend-select = ["I"]
 preview = true

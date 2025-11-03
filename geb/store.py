@@ -327,7 +327,7 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
-    def __getitem__(self, key: int | slice) -> "DynamicArray | np.ndarray":
+    def __getitem__(self, key: int | slice) -> DynamicArray | np.ndarray:
         """
         Retrieve item(s) or a sliced DynamicArray.
 
@@ -374,7 +374,7 @@ class DynamicArray:
         else:
             return self.data.__getitem__(key)
 
-    def copy(self) -> "DynamicArray":
+    def copy(self) -> DynamicArray:
         """
         Create a deep copy of this DynamicArray.
 
@@ -482,7 +482,7 @@ class DynamicArray:
         other: Any,
         operation: str,
         inplace: bool = False,
-    ) -> "DynamicArray":
+    ) -> DynamicArray:
         """
         Helper to perform binary/unary array operations delegating to NumPy.
 
@@ -512,7 +512,7 @@ class DynamicArray:
         else:
             return self.__class__(result, max_n=self._data.shape[0])
 
-    def __add__(self, other: Any) -> "DynamicArray":
+    def __add__(self, other: Any) -> DynamicArray:
         """Addition operator.
 
         Args:
@@ -523,7 +523,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__add__")
 
-    def __radd__(self, other: Any) -> "DynamicArray":
+    def __radd__(self, other: Any) -> DynamicArray:
         """Right-hand addition operator.
 
         Args:
@@ -534,7 +534,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__radd__")
 
-    def __iadd__(self, other: Any) -> "DynamicArray":
+    def __iadd__(self, other: Any) -> DynamicArray:
         """In-place addition operator.
 
         Args:
@@ -545,7 +545,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__add__", inplace=True)
 
-    def __sub__(self, other: Any) -> "DynamicArray":
+    def __sub__(self, other: Any) -> DynamicArray:
         """Subtraction operator.
 
         Args:
@@ -556,7 +556,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__sub__")
 
-    def __rsub__(self, other: Any) -> "DynamicArray":
+    def __rsub__(self, other: Any) -> DynamicArray:
         """Right-hand subtraction operator.
 
         Args:
@@ -568,7 +568,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rsub__")
 
-    def __isub__(self, other: Any) -> "DynamicArray":
+    def __isub__(self, other: Any) -> DynamicArray:
         """In-place subtraction operator.
 
         Args:
@@ -580,7 +580,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__sub__", inplace=True)
 
-    def __mul__(self, other: Any) -> "DynamicArray":
+    def __mul__(self, other: Any) -> DynamicArray:
         """Multiplication operator.
 
         Args:
@@ -592,7 +592,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mul__")
 
-    def __rmul__(self, other: Any) -> "DynamicArray":
+    def __rmul__(self, other: Any) -> DynamicArray:
         """Right-hand multiplication operator.
 
         Args:
@@ -604,7 +604,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rmul__")
 
-    def __imul__(self, other: Any) -> "DynamicArray":
+    def __imul__(self, other: Any) -> DynamicArray:
         """In-place multiplication operator.
 
         Args:
@@ -616,7 +616,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mul__", inplace=True)
 
-    def __truediv__(self, other: Any) -> "DynamicArray":
+    def __truediv__(self, other: Any) -> DynamicArray:
         """True division operator.
 
         Args:
@@ -628,7 +628,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__truediv__")
 
-    def __rtruediv__(self, other: Any) -> "DynamicArray":
+    def __rtruediv__(self, other: Any) -> DynamicArray:
         """Right-hand true division operator.
 
         Args:
@@ -640,7 +640,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rtruediv__")
 
-    def __itruediv__(self, other: Any) -> "DynamicArray":
+    def __itruediv__(self, other: Any) -> DynamicArray:
         """In-place true division operator.
 
         Args:
@@ -652,7 +652,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__truediv__", inplace=True)
 
-    def __floordiv__(self, other: Any) -> "DynamicArray":
+    def __floordiv__(self, other: Any) -> DynamicArray:
         """Floor division operator.
 
         Args:
@@ -664,7 +664,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__floordiv__")
 
-    def __rfloordiv__(self, other: Any) -> "DynamicArray":
+    def __rfloordiv__(self, other: Any) -> DynamicArray:
         """Right-hand floor division operator.
 
         Args:
@@ -676,7 +676,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rfloordiv__")
 
-    def __ifloordiv__(self, other: Any) -> "DynamicArray":
+    def __ifloordiv__(self, other: Any) -> DynamicArray:
         """In-place floor division operator.
 
         Args:
@@ -688,7 +688,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__floordiv__", inplace=True)
 
-    def __mod__(self, other: Any) -> "DynamicArray":
+    def __mod__(self, other: Any) -> DynamicArray:
         """Modulo operator.
 
         Args:
@@ -700,7 +700,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mod__")
 
-    def __rmod__(self, other: Any) -> "DynamicArray":
+    def __rmod__(self, other: Any) -> DynamicArray:
         """Right-hand modulo operator.
 
         Args:
@@ -712,7 +712,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rmod__")
 
-    def __imod__(self, other: Any) -> "DynamicArray":
+    def __imod__(self, other: Any) -> DynamicArray:
         """In-place modulo operator.
 
         Args:
@@ -723,7 +723,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mod__", inplace=True)
 
-    def __pow__(self, other: Any) -> "DynamicArray":
+    def __pow__(self, other: Any) -> DynamicArray:
         """Power operator.
 
         Args:
@@ -734,7 +734,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__")
 
-    def __rpow__(self, other: Any) -> "DynamicArray":
+    def __rpow__(self, other: Any) -> DynamicArray:
         """Right-hand power operator.
 
         Args:
@@ -745,7 +745,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rpow__")
 
-    def __ipow__(self, other: Any) -> "DynamicArray":
+    def __ipow__(self, other: Any) -> DynamicArray:
         """In-place power operator.
 
         Returns:
@@ -753,7 +753,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__", inplace=True)
 
-    def _compare(self, value: Any, operation: str) -> "DynamicArray":
+    def _compare(self, value: Any, operation: str) -> DynamicArray:
         """
         Helper for comparison operations.
 
@@ -770,7 +770,7 @@ class DynamicArray:
             )
         return self.__class__(getattr(self.data, operation)(value))
 
-    def __eq__(self, value: Any) -> "DynamicArray":
+    def __eq__(self, value: Any) -> DynamicArray:
         """Equality comparison.
 
         Args:
@@ -781,7 +781,7 @@ class DynamicArray:
         """
         return self._compare(value, "__eq__")
 
-    def __ne__(self, value: Any) -> "DynamicArray":
+    def __ne__(self, value: Any) -> DynamicArray:
         """Inequality comparison.
 
         Args:
@@ -792,7 +792,7 @@ class DynamicArray:
         """
         return self._compare(value, "__ne__")
 
-    def __gt__(self, value: Any) -> "DynamicArray":
+    def __gt__(self, value: Any) -> DynamicArray:
         """Greater-than comparison.
 
         Args:
@@ -803,7 +803,7 @@ class DynamicArray:
         """
         return self._compare(value, "__gt__")
 
-    def __ge__(self, value: Any) -> "DynamicArray":
+    def __ge__(self, value: Any) -> DynamicArray:
         """Greater-than-or-equal comparison.
 
         Args:
@@ -814,7 +814,7 @@ class DynamicArray:
         """
         return self._compare(value, "__ge__")
 
-    def __lt__(self, value: Any) -> "DynamicArray":
+    def __lt__(self, value: Any) -> DynamicArray:
         """Less-than comparison.
 
         Args:
@@ -825,7 +825,7 @@ class DynamicArray:
         """
         return self._compare(value, "__lt__")
 
-    def __le__(self, value: Any) -> "DynamicArray":
+    def __le__(self, value: Any) -> DynamicArray:
         """Less-than-or-equal comparison.
 
         Args:
@@ -836,7 +836,7 @@ class DynamicArray:
         """
         return self._compare(value, "__le__")
 
-    def __and__(self, other: npt.NDArray[Any]) -> "DynamicArray":
+    def __and__(self, other: npt.NDArray[Any]) -> DynamicArray:
         """Bitwise and / logical and operator.
 
         Returns:
@@ -844,7 +844,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__and__")
 
-    def __or__(self, other: npt.NDArray[Any]) -> "DynamicArray":
+    def __or__(self, other: npt.NDArray[Any]) -> DynamicArray:
         """Bitwise or / logical or operator.
 
         Returns:
@@ -853,7 +853,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__or__")
 
-    def __neg__(self) -> "DynamicArray":
+    def __neg__(self) -> DynamicArray:
         """Unary negation.
 
         Returns:
@@ -862,7 +862,7 @@ class DynamicArray:
         """
         return self._perform_operation(None, "__neg__")
 
-    def __pos__(self) -> "DynamicArray":
+    def __pos__(self) -> DynamicArray:
         """Unary plus (no-op).
 
         Returns:
@@ -871,7 +871,7 @@ class DynamicArray:
         """
         return self._perform_operation(None, "__pos__")
 
-    def __invert__(self) -> "DynamicArray":
+    def __invert__(self) -> DynamicArray:
         """Bitwise invert / logical not.
 
         Returns:
@@ -892,7 +892,7 @@ class DynamicArray:
         )
 
     @classmethod
-    def load(cls, path: Path) -> "DynamicArray":
+    def load(cls, path: Path) -> DynamicArray:
         """
         Load a DynamicArray previously saved with `save`.
 
@@ -1061,7 +1061,7 @@ class Bucket:
             else:
                 raise ValueError(f"Cannot save value of type {type(value)} for {name}")
 
-    def load(self, path: Path) -> "Bucket":
+    def load(self, path: Path) -> Bucket:
         """Load the bucket data from disk to the Bucket instance.
 
         Args:

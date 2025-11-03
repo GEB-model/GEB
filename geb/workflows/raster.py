@@ -1,7 +1,7 @@
 """Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
 
 from collections.abc import Mapping
-from typing import Any, Literal, Union, overload
+from typing import Any, Literal, overload
 
 import dask
 import geopandas as gpd
@@ -356,9 +356,7 @@ def pad_xy(
     miny: float,
     maxx: float,
     maxy: float,
-    constant_values: Union[
-        float, tuple[int, int], Mapping[Any, tuple[int, int]], None
-    ] = None,
+    constant_values: float | tuple[int, int] | Mapping[Any, tuple[int, int]] | None = None,
     return_slice: bool = False,
 ) -> xr.DataArray:
     """Pad the array to x,y bounds.
@@ -386,8 +384,8 @@ def pad_xy(
     resolution_x, resolution_y = array_rio.resolution()
     y_before = y_after = 0
     x_before = x_after = 0
-    y_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.y_dim]
-    x_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.x_dim]
+    y_coord: xarray.DataArray | np.ndarray = array_rio._obj[array_rio.y_dim]
+    x_coord: xarray.DataArray | np.ndarray = array_rio._obj[array_rio.x_dim]
 
     if top - resolution_y < maxy:
         new_y_coord: np.ndarray = np.arange(bottom, maxy, -resolution_y)[::-1]

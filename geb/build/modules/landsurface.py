@@ -284,12 +284,15 @@ class LandSurface:
         region_mask = self.set_region_subgrid(region_mask, name="mask")
 
         bounds = self.geom["regions"].total_bounds
-        xmin = bounds[0] - 0.1
-        ymin = bounds[1] - 0.1
-        xmax = bounds[2] + 0.1
-        ymax = bounds[3] + 0.1
-        land_use: xr.DataArray = self.new_data_catalog.fetch(land_cover).read(
-            xmin, ymin, xmax, ymax
+        xmin: float = bounds[0] - 0.1
+        ymin: float = bounds[1] - 0.1
+        xmax: float = bounds[2] + 0.1
+        ymax: float = bounds[3] + 0.1
+
+        land_use: xr.DataArray = (
+            self.new_data_catalog.fetch(land_cover)
+            .read(xmin, ymin, xmax, ymax)
+            .chunk({"x": 1000, "y": 1000})
         )
 
         reprojected_land_use: xr.DataArray = resample_chunked(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
@@ -18,8 +18,8 @@ if TYPE_CHECKING:
 
 @njit(cache=True)
 def downscale_volume(
-    data_gt: Tuple[float, float, float, float, float, float],
-    model_gt: Tuple[float, float, float, float, float, float],
+    data_gt: tuple[float, float, float, float, float, float],
+    model_gt: tuple[float, float, float, float, float, float],
     data: npt.NDArray[np.float32],
     mask: npt.NDArray[np.bool_],
     mapping_grid_to_HRU_uncompressed: npt.NDArray[np.int32],

@@ -6,7 +6,7 @@ import datetime
 import re
 import shutil
 from operator import attrgetter
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
@@ -437,7 +437,7 @@ class Reporter:
     def maybe_report_value(
         self,
         module_name: str,
-        name: Union[str, tuple[str, Any]],
+        name: str | tuple[str, Any],
         module: Any,
         local_variables: dict,
         config: dict,

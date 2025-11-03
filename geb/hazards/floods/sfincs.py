@@ -60,7 +60,7 @@ if TYPE_CHECKING:
 
 
 def set_river_outflow_boundary_condition(
-    sf: "SfincsModel",
+    sf: SfincsModel,
     model_root: Path,
     simulation_root: Path,
     write_figures: bool = True,
@@ -173,7 +173,7 @@ class SFINCSRootModel:
         """
         return Path(self.path / "sfincs.inp").is_file()
 
-    def read(self) -> "SFINCSRootModel":
+    def read(self) -> SFINCSRootModel:
         """Reads an existing SFINCS model from the model root directory.
 
         Returns:
@@ -205,7 +205,7 @@ class SFINCSRootModel:
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
         setup_outflow: bool = True,
-    ) -> "SFINCSRootModel":
+    ) -> SFINCSRootModel:
         """Build a SFINCS model.
 
         Notes:
@@ -556,7 +556,7 @@ class SFINCSRootModel:
         self,
         *args: Any,
         **kwargs: Any,
-    ) -> "SFINCSSimulation":
+    ) -> SFINCSSimulation:
         """Sets forcing for a SFINCS model based on the provided parameters.
 
         Creates a new simulation directory and creteas a new sfincs model
@@ -579,7 +579,7 @@ class SFINCSRootModel:
 
     def create_simulation_for_return_period(
         self, return_period: int | float
-    ) -> "MultipleSFINCSSimulations":
+    ) -> MultipleSFINCSSimulations:
         """Creates multiple SFINCS simulations for a specified return period.
 
         The method groups rivers by their calculation group and creates a separate
@@ -666,7 +666,7 @@ class SFINCSRootModel:
 class MultipleSFINCSSimulations:
     """Manages multiple SFINCS simulations as a single entity."""
 
-    def __init__(self, simulations: list["SFINCSSimulation"]) -> None:
+    def __init__(self, simulations: list[SFINCSSimulation]) -> None:
         """Simulates running multiple SFINCS simulations as one.
 
         Args:

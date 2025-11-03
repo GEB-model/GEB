@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
@@ -1030,7 +1030,7 @@ class Households(AgentBaseClass):
         self.construct_income_distribution()
         self.assign_household_attributes()
 
-    def calculate_building_flood_damages(self) -> Tuple[np.ndarray, np.ndarray]:
+    def calculate_building_flood_damages(self) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
         It iterates over the return periods and calculates the damages for each household
@@ -1262,7 +1262,7 @@ class Households(AgentBaseClass):
 
     def water_demand(
         self,
-    ) -> Tuple[
+    ) -> tuple[
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
