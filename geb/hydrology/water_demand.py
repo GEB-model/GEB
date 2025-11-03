@@ -211,6 +211,7 @@ class WaterDemand(Module):
                 This is added to the channel flow in the routing module.
             Irrigation loss to evaporation per HRU [m].
             Total water demand loss [m3].
+            The actual irrigation consumption [m].
         """
         timer: TimingModule = TimingModule("Water demand")
 
