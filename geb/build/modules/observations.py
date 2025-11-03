@@ -29,7 +29,7 @@ def plot_snapping(
     rivers: gpd.GeoDataFrame,
     upstream_area: xr.DataArray,
     Q_obs_station_coords: tuple[float, float],
-    closest_point_coords: Tuple[float, float],
+    closest_point_coords: tuple[float, float],
     closest_river_segment: gpd.GeoDataFrame,
     grid_pixel_coords: Tuple[float, float],
 ) -> None:
