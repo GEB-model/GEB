@@ -1026,13 +1026,42 @@ def create_multi_basin_configs(
 
     Args:
         clusters: List of clusters, where each cluster is a list of COMID values.
-        working_directory: Working directory for the models.
+        working_directory: Working directory for the models (large_scale directory).
         cluster_prefix: Prefix for cluster directory names.
 
     Returns:
         List of paths to created cluster directories.
     """
     print(f"Creating configuration files for {len(clusters)} clusters...")
+
+    # Create full build.yml in large_scale directory
+    print("Creating build.yml in large_scale directory...")
+    build_config_path = working_directory / "build.yml"
+    # Read build config from geul example and automatically copy it
+    geul_build_path = (
+        Path(__file__).parent.parent.parent / "examples" / "geul" / "build.yml"
+    )
+
+    print(f"Reading build configuration from: {geul_build_path}")
+
+    # Copy geul build.yml content directly to large_scale build.yml
+    with open(geul_build_path, "r") as src, open(build_config_path, "w") as dst:
+        dst.write(src.read())
+
+    print(f"  Created build.yml in {working_directory}")
+
+    # Create model.yml in large_scale directory that inherits from reasonable default
+    print("Creating model.yml in large_scale directory...")
+    model_config_path = working_directory / "model.yml"
+
+    # Define the model configuration content with inheritance from reasonable default
+    model_config_content = """inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
+"""
+
+    with open(model_config_path, "w") as f:
+        f.write(model_config_content)
+
+    print(f"  Created model.yml in {working_directory}")
 
     cluster_directories = []
 
@@ -1047,7 +1076,7 @@ def create_multi_basin_configs(
         base_dir.mkdir(parents=True, exist_ok=True)
         cluster_directories.append(cluster_dir)
 
-        # Create build.yml with inheritance in base folder
+        # Create build.yml with inheritance in base folder (inherit from large_scale build.yml)
         build_config_path = base_dir / "build.yml"
         with open(build_config_path, "w") as f:
             f.write("inherits: ../../build.yml\n")
@@ -1058,7 +1087,9 @@ def create_multi_basin_configs(
             f.write("inherits: ../../model.yml\n\n")
             f.write("general:\n")
             f.write("  region:\n")
-            f.write(f"    subbasin: {cluster}\n")
+            # Convert all cluster values to regular Python integers
+            cluster_ints = [int(subbasin_id) for subbasin_id in cluster]
+            f.write(f"    subbasin: {cluster_ints}\n")
 
         print(
             f"  Created configuration files in {base_dir.relative_to(working_directory)}"
