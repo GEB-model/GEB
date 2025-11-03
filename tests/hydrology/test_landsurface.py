@@ -8,7 +8,15 @@ from geb.workflows import balance_check
 
 
 def test_land_surface_model_with_error_case() -> None:
-    """Test the land surface model with inputs that caused a water balance error."""
+    """Test the land surface model with inputs that caused a water balance error.
+
+    To extract the input data, run the extract_landsurface_data.py script with the path
+    to the landsurface_model_error.npz file and the desired cell index.
+
+    For example, the following code was generated for cell index 1675495:
+
+    tests/hydrology/extract_landsurface_data.py /path/to/landsurface_model_error.npz 1675495
+    """
     # Set the global N_SOIL_LAYERS variable required by the numba function
     landsurface.N_SOIL_LAYERS: int = 6
 
