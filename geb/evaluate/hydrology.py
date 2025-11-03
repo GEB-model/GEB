@@ -3,7 +3,7 @@
 import base64
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
 
 import branca.colormap as cm
 import contextily as ctx
@@ -105,7 +105,7 @@ class Hydrology:
         run_name: str = "default",
         include_spinup: bool = False,
         include_yearly_plots: bool = False,
-        correct_Q_obs=False,
+        correct_Q_obs: bool = False,
     ) -> None:
         """Evaluate the discharge grid from GEB against observations from the Q_obs database.
 
@@ -373,7 +373,7 @@ class Hydrology:
 
             KGE, NSE, R = calculate_validation_metrics()
 
-            def plot_validation_graphs(ID) -> None:
+            def plot_validation_graphs(ID: Any) -> None:
                 """Plot the validation results for the current station."""
                 # scatter plot
                 fig, ax = plt.subplots()
@@ -707,7 +707,7 @@ class Hydrology:
 
         plot_validation_map()
 
-        def create_folium_map(evaluation_gdf) -> folium.Map:
+        def create_folium_map(evaluation_gdf: gpd.GeoDataFrame) -> folium.Map:
             """Create a Folium map with evaluation results and station markers.
 
             Returns:
@@ -925,12 +925,7 @@ class Hydrology:
 
     def skill_score_graphs(
         self,
-        run_name: str = "default",
-        include_spinup: bool = False,
-        spinup_name: str = "spinup",
         export: bool = True,
-        include_yearly_plots: bool = False,
-        correct_Q_obs: bool = False,
     ) -> None:
         """Create skill score boxplot graphs for hydrological model evaluation metrics.
 
@@ -944,15 +939,7 @@ class Hydrology:
             graph creation and return early.
 
         Args:
-            run_name: Name of the simulation run to evaluate (used in file paths).
-            include_spinup: Whether the spinup run was included in the evaluation
-                (currently not used in this method).
-            spinup_name: Name of the spinup run (currently not used in this method).
             export: Whether to save the skill score graphs to PNG files.
-            include_yearly_plots: Whether yearly plots were created in the evaluation
-                (parameter accepted for compatibility but not used in this method).
-            correct_Q_obs: Whether observed discharge values were corrected in the evaluation
-                (parameter accepted for compatibility but not used in this method).
         """
         eval_result_folder = (
             Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
@@ -1335,19 +1322,25 @@ class Hydrology:
             FileNotFoundError: If the flood map folder does not exist in the output directory.
         """
 
-        def calculate_hit_rate(model, observations) -> float:
+        def calculate_hit_rate(
+            model: xr.DataArray, observations: xr.DataArray
+        ) -> float:
             miss = np.sum(((model == 0) & (observations == 1)).values)
             hit = np.sum(((model == 1) & (observations == 1)).values)
             hit_rate = hit / (hit + miss)
             return float(hit_rate)
 
-        def calculate_false_alarm_ratio(model, observations) -> float:
+        def calculate_false_alarm_ratio(
+            model: xr.DataArray, observations: xr.DataArray
+        ) -> float:
             false_alarm = np.sum(((model == 1) & (observations == 0)).values)
             hit = np.sum(((model == 1) & (observations == 1)).values)
             false_alarm_ratio = false_alarm / (false_alarm + hit)
             return float(false_alarm_ratio)
 
-        def calculate_critical_success_index(model, observations) -> float:
+        def calculate_critical_success_index(
+            model: xr.DataArray, observations: xr.DataArray
+        ) -> float:
             hit = np.sum(((model == 1) & (observations == 1)).values)
             false_alarm = np.sum(((model == 1) & (observations == 0)).values)
             miss = np.sum(((model == 0) & (observations == 1)).values)
@@ -1355,7 +1348,9 @@ class Hydrology:
             return float(csi)
 
         # Main function for the peformance metrics
-        def calculate_performance_metrics(observation, flood_map_path) -> None:
+        def calculate_performance_metrics(
+            observation: Union[Path, str], flood_map_path: Union[Path, str]
+        ) -> None:
             # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)
             obs = rxr.open_rasterio(observation)

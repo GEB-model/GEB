@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Tuple
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -23,15 +24,38 @@ This module contains the Observations class.
 
 
 def plot_snapping(
-    station_id,
-    output_folder,
-    rivers,
-    upstream_area,
-    Q_obs_station_coords,
-    closest_point_coords,
-    closest_river_segment,
-    grid_pixel_coords,
+    station_id: int | str,
+    output_folder: Path,
+    rivers: gpd.GeoDataFrame,
+    upstream_area: xr.DataArray,
+    Q_obs_station_coords: Tuple[float, float],
+    closest_point_coords: Tuple[float, float],
+    closest_river_segment: gpd.GeoDataFrame,
+    grid_pixel_coords: Tuple[float, float],
 ) -> None:
+    """Create and save a map visualizing gauge snapping results.
+
+    This function produces a map centered on the observed gauge location that shows:
+    - the original gauge location,
+    - the closest point on the river centerline,
+    - the selected grid pixel,
+    - the upstream area raster (within the map extent), and
+    - the closest river segment.
+
+    The resulting figure is saved as a PNG file named "snapping_discharge_{station_id}.png"
+    inside the provided output_folder.
+
+    Args:
+        station_id: Identifier or name of the station used in the plot title and output filename.
+        output_folder: Path to the directory where the PNG file will be saved.
+        rivers: GeoDataFrame containing river centerlines used for plotting.
+        upstream_area: xarray DataArray with upstream area values used for background plotting.
+        Q_obs_station_coords: Tuple (lon, lat) of the original observed station coordinates.
+        closest_point_coords: Tuple (lon, lat) of the closest point on the river centerline to the station.
+        closest_river_segment: GeoDataFrame containing the selected river segment to highlight.
+        grid_pixel_coords: Tuple (lon, lat) of the snapped grid pixel coordinates.
+
+    """
     fig, ax = plt.subplots(
         subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
     )
@@ -122,12 +146,17 @@ def plot_snapping(
     )
     # plt.show()
     plt.close()
+    plt.close()
 
 
 # add external stations to Q_obs
 def add_station_Q_obs(
-    station_id, station_name, Q_obs, station_coords, station_dataframe
-):
+    station_id: int,
+    station_name: str,
+    Q_obs: xr.Dataset,
+    station_coords: Tuple[float, float],
+    station_dataframe: pd.DataFrame,
+) -> xr.Dataset:
     """This function adds a new station to the Q_obs dataset (in this case GRDC).
 
     It should be a dataframe with the first row (lon, lat) and data should start at index 3 (row4).
@@ -157,7 +186,24 @@ def add_station_Q_obs(
     return Q_obs_merged
 
 
-def process_station_data(station, Q_station, dt_format, startrow):
+def process_station_data(
+    station: str, Q_station: pd.DataFrame, dt_format: str, startrow: int
+) -> Tuple[pd.DataFrame, Tuple[float, float]]:
+    """Parse and preprocess a station CSV read into a DataFrame.
+
+    Args:
+        station: Filename or identifier of the station (used in error messages).
+        Q_station: Raw station DataFrame where the first row contains coordinates and data starts at row index `startrow`.
+        dt_format: Datetime format string for parsing the date column.
+        startrow: Row index where time series data begins (0-based).
+
+    Returns:
+        A tuple with the cleaned station DataFrame indexed by time and a tuple with station (lon, lat) as floats.
+
+    Raises:
+        ValueError: If the processed station DataFrame does not contain exactly one data column (expected 'Q'),
+                    or if the first row does not contain exactly two coordinates (longitude and latitude) that can be parsed as floats.
+    """
     # process data
     station_coords = Q_station.iloc[
         0
@@ -190,7 +236,7 @@ def process_station_data(station, Q_station, dt_format, startrow):
         raise ValueError(
             f"File {station} does not have 2 coordinates. .csv files of discharge stations should have the coordinates in the first row of the file"
         )
-    return Q_station, station_coords
+    return Q_station, (station_coords[0], station_coords[1])
 
 
 def clip_Q_obs(Q_obs_merged: xr.Dataset, region_mask: gpd.GeoDataFrame) -> xr.Dataset:
@@ -241,10 +287,10 @@ def get_distance_to_stations(
 
 
 def select_river_segment(
-    max_uparea_difference_ratio,
-    max_spatial_difference_degrees,
-    Q_obs_uparea,
-    rivers_sorted,
+    max_uparea_difference_ratio: float,
+    max_spatial_difference_degrees: float,
+    Q_obs_uparea: float,
+    rivers_sorted: pd.DataFrame,
 ) -> pd.DataFrame | bool:
     """This function selects the closest river segment to the Q_obs station based on the spatial distance.
 
