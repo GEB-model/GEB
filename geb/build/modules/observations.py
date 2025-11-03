@@ -293,7 +293,7 @@ def get_distance_to_stations(
 def select_river_segment(
     max_uparea_difference_ratio: float,
     max_spatial_difference_degrees: float,
-    Q_obs_uparea: float,
+    Q_obs_uparea_m2: float,
     rivers_sorted: pd.DataFrame,
 ) -> pd.DataFrame | bool:
     """This function selects the closest river segment to the Q_obs station based on the spatial distance.
@@ -306,24 +306,24 @@ def select_river_segment(
     Args:
         max_uparea_difference_ratio: The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area.
         max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment.
-        Q_obs_uparea: Upstream area reported for the observational station (in m2). Used to compare against river segment upstream areas to enforce the upstream area ratio criterion.
+        Q_obs_uparea_m2 : Upstream area reported for the observational station (in m2). Used to compare against river segment upstream areas to enforce the upstream area ratio criterion.
         rivers_sorted: GeoDataFrame of river segments sorted by spatial distance to the station; must contain the 'uparea_m2' attribute and will be filtered/queried to find the matching segment.
 
     Returns:
         The closest river segment to the Q_obs station that meets the criteria or False if no segment is found.
     """
     if np.isnan(
-        Q_obs_uparea
+        Q_obs_uparea_m2
     ):  # if Q_obs upstream area is NaN, only just select the closest river segment
         closest_river_segment = rivers_sorted.head(1)
     else:
         # add upstream area criteria
         upstream_area_diff = (
-            max_uparea_difference_ratio * Q_obs_uparea
+            max_uparea_difference_ratio * Q_obs_uparea_m2
         )  # 30% difference
         closest_river_segment = rivers_sorted[
-            (rivers_sorted["uparea_m2"] > (Q_obs_uparea - upstream_area_diff))
-            & (rivers_sorted["uparea_m2"] < (Q_obs_uparea + upstream_area_diff))
+            (rivers_sorted["uparea_m2"] > (Q_obs_uparea_m2 - upstream_area_diff))
+            & (rivers_sorted["uparea_m2"] < (Q_obs_uparea_m2 + upstream_area_diff))
         ].head(1)
 
         if closest_river_segment.empty:
@@ -522,7 +522,7 @@ class Observations:
                 geometry=[shapely.geometry.Point(Q_obs_station_coords)],
                 crs=rivers.crs,
             )  # create a point geometry for the station
-            Q_obs_uparea = (
+            Q_obs_uparea_m2 = (
                 Q_obs_station.area.values.item()
             ) * 1e6  # get the upstream area of the station
             Q_obs_rivername = Q_obs_station.river_name.values.item()
@@ -536,12 +536,12 @@ class Observations:
             closest_river_segment = select_river_segment(
                 max_uparea_difference_ratio=max_uparea_difference_ratio,
                 max_spatial_difference_degrees=max_spatial_difference_degrees,
-                Q_obs_uparea=Q_obs_uparea,
+                Q_obs_uparea_m2=Q_obs_uparea_m2,
                 rivers_sorted=rivers_sorted,
             )
             if closest_river_segment is False:
                 self.logger.warning(
-                    f"No river segment found within the max_uparea_difference_ratio ({max_uparea_difference_ratio}) and max_spatial_difference_degrees ({max_spatial_difference_degrees}) for station {Q_obs_station_name} with upstream area {Q_obs_uparea} m2. Skipping this station."
+                    f"No river segment found within the max_uparea_difference_ratio ({max_uparea_difference_ratio}) and max_spatial_difference_degrees ({max_spatial_difference_degrees}) for station {Q_obs_station_name} with upstream area {Q_obs_uparea_m2} m2. Skipping this station."
                 )
                 continue
 
@@ -628,7 +628,7 @@ class Observations:
                     "Q_obs_station_name": Q_obs_station_name,
                     "Q_obs_station_ID": int(station_id),
                     "Q_obs_river_name": Q_obs_rivername,
-                    "Q_obs_upstream_area_m2": Q_obs_uparea,
+                    "Q_obs_upstream_area_m2": Q_obs_uparea_m2,
                     "Q_obs_station_coords": Q_obs_station_coords,
                     "closest_point_coords": closest_point_coords,
                     "subgrid_pixel_coords": subgrid_pixel_coords,
@@ -639,7 +639,7 @@ class Observations:
                     ),
                     "GEB_upstream_area_from_grid": float(GEB_upstream_area_from_grid),
                     "Q_obs_to_GEB_upstream_area_ratio": float(
-                        GEB_upstream_area_from_subgrid / Q_obs_uparea
+                        GEB_upstream_area_from_subgrid / Q_obs_uparea_m2
                     ),
                     "snapping_distance_degrees": closest_river_segment.station_distance.iloc[
                         0
