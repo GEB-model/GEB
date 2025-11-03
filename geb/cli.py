@@ -1473,7 +1473,6 @@ def init_multiple_fn(
         area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
         cluster_prefix: Prefix for cluster directory names.
         overwrite: If True, overwrite existing directories and files.
-        data_provider: Data provider to use.
         save_geoparquet: Path to save clusters as geoparquet file. If None, no file is saved.
         save_map: Path to save visualization map as PNG file. If None, no map is created.
 
