@@ -280,7 +280,6 @@ def land_surface_model(
             potential_bare_soil_evaporation_m: np.float32 = (
                 get_potential_bare_soil_evaporation(
                     reference_evapotranspiration_grass_m_hour_cell,
-                    sublimation_m_cell_hour,
                 )
             )
 

@@ -1,21 +1,30 @@
 """Tests for the land surface model in GEB."""
 
 import numpy as np
+import pytest
 
 from geb.hydrology import landsurface
 from geb.hydrology.landsurface import land_surface_model
 from geb.workflows import balance_check
 
 
-def test_land_surface_model_with_error_case() -> None:
-    """Test the land surface model with inputs that caused a water balance error.
+@pytest.mark.parametrize(
+    "asfloat64,tolerance",
+    [
+        (False, 1e-6),  # float32 inputs, looser tolerance
+        (True, 1e-8),  # float64 inputs, tighter tolerance
+    ],
+    ids=["float32", "float64"],
+)
+def test_land_surface_model_with_error_case(asfloat64: bool, tolerance: float) -> None:
+    """Test the land surface model with a previously failing mass balance case.
+
+    Parameterized to run with float32 (default) and float64 inputs. When asfloat64=True,
+    all floating inputs are cast to float64 before calling the model; a tighter tolerance
+    is used for the balance check.
 
     To extract the input data, run the extract_landsurface_data.py script with the path
     to the landsurface_model_error.npz file and the desired cell index.
-
-    For example, the following code was generated for cell index 1675495:
-
-    tests/hydrology/extract_landsurface_data.py /path/to/landsurface_model_error.npz 1675495
     """
     # Set the global N_SOIL_LAYERS variable required by the numba function
     landsurface.N_SOIL_LAYERS: int = 6
@@ -411,50 +420,56 @@ def test_land_surface_model_with_error_case() -> None:
 
     # Reshape for single cell test
     land_use_type = np.array([land_use_type_data], dtype=np.int32)
-    root_depth_m = np.array([root_depth_m_data], dtype=np.float32)
-    topwater_m = np.array([topwater_m_data], dtype=np.float32)
-    snow_water_equivalent_m = np.array([snow_water_equivalent_m_data], dtype=np.float32)
-    liquid_water_in_snow_m = np.array([liquid_water_in_snow_m_data], dtype=np.float32)
-    snow_temperature_C = np.array([snow_temperature_C_data], dtype=np.float32)
-    interception_storage_m = np.array([interception_storage_m_data], dtype=np.float32)
-    interception_capacity_m = np.array([interception_capacity_m_data], dtype=np.float32)
-    crop_factor = np.array([crop_factor_data], dtype=np.float32)
     crop_map = np.array([crop_map_data], dtype=np.int32)
+
+    # Choose dtypes based on parameter
+    flt = np.float64 if asfloat64 else np.float32
+
+    root_depth_m = np.array([root_depth_m_data], dtype=flt)
+    topwater_m = np.array([topwater_m_data], dtype=flt)
+    snow_water_equivalent_m = np.array([snow_water_equivalent_m_data], dtype=flt)
+    liquid_water_in_snow_m = np.array([liquid_water_in_snow_m_data], dtype=flt)
+    snow_temperature_C = np.array([snow_temperature_C_data], dtype=flt)
+    interception_storage_m = np.array([interception_storage_m_data], dtype=flt)
+    interception_capacity_m = np.array([interception_capacity_m_data], dtype=flt)
+    crop_factor = np.array([crop_factor_data], dtype=flt)
     actual_irrigation_consumption_m = np.array(
-        [actual_irrigation_consumption_m_data], dtype=np.float32
+        [actual_irrigation_consumption_m_data], dtype=flt
     )
-    capillar_rise_m = np.array([capillar_rise_m_data], dtype=np.float32)
-    frost_index = np.array([frost_index_data], dtype=np.float32)
-    natural_crop_groups = np.array([natural_crop_groups_data], dtype=np.float32)
+    capillar_rise_m = np.array([capillar_rise_m_data], dtype=flt)
+    frost_index = np.array([frost_index_data], dtype=flt)
+    natural_crop_groups = np.array([natural_crop_groups_data], dtype=flt)
 
-    # 2D arrays: add cell dimension
-    w = w_data.reshape(-1, 1)
-    wres = wres_data.reshape(-1, 1)
-    wwp = wwp_data.reshape(-1, 1)
-    wfc = wfc_data.reshape(-1, 1)
-    ws = ws_data.reshape(-1, 1)
-    delta_z = delta_z_data.reshape(-1, 1)
+    # 2D arrays: add cell dimension and set dtype
+    w = w_data.reshape(-1, 1).astype(flt)
+    wres = wres_data.reshape(-1, 1).astype(flt)
+    wwp = wwp_data.reshape(-1, 1).astype(flt)
+    wfc = wfc_data.reshape(-1, 1).astype(flt)
+    ws = ws_data.reshape(-1, 1).astype(flt)
+    delta_z = delta_z_data.reshape(-1, 1).astype(flt)
     saturated_hydraulic_conductivity_m_per_s = (
-        saturated_hydraulic_conductivity_m_per_s_data.reshape(-1, 1)
+        saturated_hydraulic_conductivity_m_per_s_data.reshape(-1, 1).astype(flt)
     )
-    lambda_pore_size_distribution = lambda_pore_size_distribution_data.reshape(-1, 1)
-    bubbing_pressure_cm = bubbing_pressure_cm_data.reshape(-1, 1)
-    soil_layer_height = soil_layer_height_data.reshape(-1, 1)
+    lambda_pore_size_distribution = lambda_pore_size_distribution_data.reshape(
+        -1, 1
+    ).astype(flt)
+    bubbing_pressure_cm = bubbing_pressure_cm_data.reshape(-1, 1).astype(flt)
+    soil_layer_height = soil_layer_height_data.reshape(-1, 1).astype(flt)
 
-    # Time series: add cell dimension
-    pr_kg_per_m2_per_s = pr_kg_per_m2_per_s_data.reshape(24, 1)
-    tas_2m_K = tas_2m_K_data.reshape(24, 1)
-    dewpoint_tas_2m_K = dewpoint_tas_2m_K_data.reshape(24, 1)
-    ps_pascal = ps_pascal_data.reshape(24, 1)
-    rlds_W_per_m2 = rlds_W_per_m2_data.reshape(24, 1)
-    rsds_W_per_m2 = rsds_W_per_m2_data.reshape(24, 1)
-    wind_u10m_m_per_s = wind_u10m_m_per_s_data.reshape(24, 1)
-    wind_v10m_m_per_s = wind_v10m_m_per_s_data.reshape(24, 1)
+    # Time series: add cell dimension and set dtype
+    pr_kg_per_m2_per_s = pr_kg_per_m2_per_s_data.reshape(24, 1).astype(flt)
+    tas_2m_K = tas_2m_K_data.reshape(24, 1).astype(flt)
+    dewpoint_tas_2m_K = dewpoint_tas_2m_K_data.reshape(24, 1).astype(flt)
+    ps_pascal = ps_pascal_data.reshape(24, 1).astype(flt)
+    rlds_W_per_m2 = rlds_W_per_m2_data.reshape(24, 1).astype(flt)
+    rsds_W_per_m2 = rsds_W_per_m2_data.reshape(24, 1).astype(flt)
+    wind_u10m_m_per_s = wind_u10m_m_per_s_data.reshape(24, 1).astype(flt)
+    wind_v10m_m_per_s = wind_v10m_m_per_s_data.reshape(24, 1).astype(flt)
 
-    # Scalars remain as is
-    CO2_ppm = CO2_ppm_data
-    minimum_effective_root_depth_m = minimum_effective_root_depth_m_data
-    crop_group_number_per_group = crop_group_number_per_group_data
+    # Scalars by dtype
+    CO2_ppm = flt(CO2_ppm_data)
+    minimum_effective_root_depth_m = flt(minimum_effective_root_depth_m_data)
+    crop_group_number_per_group = crop_group_number_per_group_data.astype(flt)
 
     # Capture previous values before calling the model (arrays get modified in-place)
     snow_water_equivalent_prev = snow_water_equivalent_m.copy()
@@ -526,45 +541,45 @@ def test_land_surface_model_with_error_case() -> None:
 
     # Construct the balance check parameters
     influxes = [
-        pr_kg_per_m2_per_s.sum(axis=0) * 3.6,  # from kg/m2/s to m/hr and sum over hours
-        actual_irrigation_consumption_m,
-        capillar_rise_m,
+        (pr_kg_per_m2_per_s.sum(axis=0) * 3.6).astype(np.float64),  # kg/m2/s -> m/hr
+        actual_irrigation_consumption_m.astype(np.float64),
+        capillar_rise_m.astype(np.float64),
     ]
 
     outfluxes = [
-        -sublimation_or_deposition_m,
-        interception_evaporation_m,
-        open_water_evaporation_m,
-        runoff_m.sum(axis=0),  # sum over hours
-        interflow_m.sum(axis=0),  # sum over hours
-        groundwater_recharge_m,
-        bare_soil_evaporation_m,
-        transpiration_m,
+        (-sublimation_or_deposition_m).astype(np.float64),
+        interception_evaporation_m.astype(np.float64),
+        open_water_evaporation_m.astype(np.float64),
+        runoff_m.sum(axis=0).astype(np.float64),  # sum over hours
+        interflow_m.sum(axis=0).astype(np.float64),  # sum over hours
+        groundwater_recharge_m.astype(np.float64),
+        bare_soil_evaporation_m.astype(np.float64),
+        transpiration_m.astype(np.float64),
     ]
 
     prestorages = [
-        snow_water_equivalent_prev,  # prev state
-        liquid_water_in_snow_prev,  # prev state
-        interception_storage_prev,  # prev state
-        topwater_m_prev,  # prev state
-        np.nansum(w_prev, axis=0),  # prev state summed
+        snow_water_equivalent_prev.astype(np.float64),
+        liquid_water_in_snow_prev.astype(np.float64),
+        interception_storage_prev.astype(np.float64),
+        topwater_m_prev.astype(np.float64),
+        np.nansum(w_prev, axis=0).astype(np.float64),
     ]
 
     poststorages = [
-        snow_water_equivalent_m_out,
-        liquid_water_in_snow_m_out,
-        interception_storage_m_out,
-        topwater_m_out,
-        np.nansum(w, axis=0),  # post state after in-place modification
+        snow_water_equivalent_m_out.astype(np.float64),
+        liquid_water_in_snow_m_out.astype(np.float64),
+        interception_storage_m_out.astype(np.float64),
+        topwater_m_out.astype(np.float64),
+        np.nansum(w, axis=0).astype(np.float64),
     ]
 
-    # Check that the balance fails as expected (this was the error case)
+    # Check that the balance closes within tolerance
     assert balance_check(
-        name="land surface test",
+        name=f"land surface test {'float64' if asfloat64 else 'float32'}",
         how="cellwise",
         influxes=influxes,
         outfluxes=outfluxes,
         prestorages=prestorages,
         poststorages=poststorages,
-        tolerance=1e-6,
+        tolerance=tolerance,
     )
