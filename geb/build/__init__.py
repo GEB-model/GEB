@@ -474,7 +474,7 @@ def get_subbasin_upstream_areas(
 def cluster_subbasins_by_area_and_proximity(
     data_catalog: DataCatalog,
     subbasin_ids: list[int],
-    target_area_km2: float,  # Approximate Danube basin area
+    target_area_km2: float,  # Target cumulative upstream area per cluster in km² (e.g., Danube basin ~817,000 km²; use appropriate value for other basins)
     area_tolerance: float,
     logger: logging.Logger,
 ) -> list[list[int]]:
@@ -532,7 +532,6 @@ def cluster_subbasins_by_area_and_proximity(
     centroid_coords = {}  # Store as (x, y) tuples for faster distance calculations
 
     # Create numpy arrays for vectorized distance calculations
-    import numpy as np
 
     subbasin_list = list(subbasin_ids)
     coords_array = np.zeros((len(subbasin_list), 2))
