@@ -240,14 +240,18 @@ def process_station_data(
 
 
 def clip_Q_obs(Q_obs_merged: xr.Dataset, region_mask: gpd.GeoDataFrame) -> xr.Dataset:
-    """Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries.
+    """
+    Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries.
 
     Args:
-        Q_obs_merged: Dataset with discharge observations.
-        region_mask: Shapefile of the region to clip the Q_obs stations to
+        Q_obs_merged (xr.Dataset):
+            Dataset with discharge observations.
+        region_mask (gpd.GeoDataFrame):
+            Shapefile of the region to clip the Q_obs stations to.
 
     Returns:
-        The clipped discharge observations dataset with only stations within the region shapefile.
+        xr.Dataset:
+            The clipped discharge observations dataset with only stations within the region shapefile.
     """
     # Convert Q_obs points to GeoDataFrame
     Q_obs_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
