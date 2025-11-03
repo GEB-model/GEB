@@ -30,7 +30,7 @@ def plot_snapping(
     Q_obs_station_coords: tuple[float, float],
     closest_point_coords: tuple[float, float],
     closest_river_segment: gpd.GeoDataFrame,
-    grid_pixel_coords: Tuple[float, float],
+    grid_pixel_coords: tuple[float, float],
 ) -> None:
     """Create and save a map visualizing gauge snapping results.
 
