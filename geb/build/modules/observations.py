@@ -153,12 +153,12 @@ def add_station_Q_obs(
     station_id: int,
     station_name: str,
     Q_obs: xr.Dataset,
-    station_coords: Tuple[float, float],
+    station_coords: tuple[float, float],
     station_dataframe: pd.DataFrame,
 ) -> xr.Dataset:
     """This function adds a new station to the Q_obs dataset (in this case GRDC).
 
-    It should be a dataframe with the first row (lon, lat) and data should start at index 3 (row4).
+    The new station .csv file should be loaded as a dataframe with the first row being (lon, lat), and discharge data should start at index 3 (row4).
 
     Returns:
         The updated dataset with discharge observations with the new station added.
@@ -187,7 +187,7 @@ def add_station_Q_obs(
 
 def process_station_data(
     station: str, Q_station: pd.DataFrame, dt_format: str, startrow: int
-) -> Tuple[pd.DataFrame, Tuple[float, float]]:
+) -> tuple[pd.DataFrame, tuple[float, float]]:
     """Parse and preprocess a station CSV read into a DataFrame.
 
     Args:
@@ -243,14 +243,13 @@ def clip_Q_obs(Q_obs_merged: xr.Dataset, region_mask: gpd.GeoDataFrame) -> xr.Da
     Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries.
 
     Args:
-        Q_obs_merged (xr.Dataset):
+        Q_obs_merged:
             Dataset with discharge observations.
-        region_mask (gpd.GeoDataFrame):
+        region_mask:
             Shapefile of the region to clip the Q_obs stations to.
 
     Returns:
-        xr.Dataset:
-            The clipped discharge observations dataset with only stations within the region shapefile.
+        The clipped discharge observations dataset with only stations within the region shapefile.
     """
     # Convert Q_obs points to GeoDataFrame
     Q_obs_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
