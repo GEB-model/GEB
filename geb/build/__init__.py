@@ -22,6 +22,7 @@ import pandas as pd
 import pyflwdir
 import rasterio
 import xarray as xr
+import yaml
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
@@ -1082,18 +1083,26 @@ def create_multi_basin_configs(
 
         # Create build.yml with inheritance in base folder (inherit from large_scale build.yml)
         build_config_path = base_dir / "build.yml"
-        with open(build_config_path, "w") as f:
-            f.write("inherits: ../../build.yml\n")
 
+        # Create the build configuration dictionary
+        build_config = {"inherits": "../../build.yml"}
+
+        with open(build_config_path, "w") as f:
+            yaml.dump(build_config, f, default_flow_style=False, sort_keys=False)
         # Create model.yml with inheritance and cluster-specific subbasins in base folder
         model_config_path = base_dir / "model.yml"
+
+        # Convert all cluster values to regular Python integers
+        cluster_ints = [int(subbasin_id) for subbasin_id in cluster]
+
+        # Create the configuration dictionary
+        model_config = {
+            "inherits": "../../model.yml",
+            "general": {"region": {"subbasin": cluster_ints}},
+        }
+
         with open(model_config_path, "w") as f:
-            f.write("inherits: ../../model.yml\n\n")
-            f.write("general:\n")
-            f.write("  region:\n")
-            # Convert all cluster values to regular Python integers
-            cluster_ints = [int(subbasin_id) for subbasin_id in cluster]
-            f.write(f"    subbasin: {cluster_ints}\n")
+            yaml.dump(model_config, f, default_flow_style=False, sort_keys=False)
 
         print(
             f"  Created configuration files in {base_dir.relative_to(working_directory)}"

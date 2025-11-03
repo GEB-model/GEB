@@ -1681,16 +1681,6 @@ def init_multiple_fn(
     help="If set, overwrite existing cluster directories and files.",
 )
 @click.option(
-    "--data-catalog",
-    default=DATA_CATALOG_DEFAULT,
-    help="Path to the data catalog file.",
-)
-@click.option(
-    "--data-provider",
-    default=DATA_PROVIDER_DEFAULT,
-    help="Data provider to use.",
-)
-@click.option(
     "--save-geoparquet",
     type=click.Path(),
     help="Save clusters to geoparquet file at this path. If not specified, saves to 'models/clusters.geoparquet'.",
