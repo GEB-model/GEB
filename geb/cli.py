@@ -1661,7 +1661,7 @@ def init_multiple_fn(
     "--target-area-km2",
     default=34000.0,
     type=float,
-    help="Target cumulative upstream area per cluster in km2. Defaults to Danube basin area (~817,000 km2).",
+    help="Target cumulative upstream area per cluster in km². Defaults to 34,000 km².",
 )
 @click.option(
     "--area-tolerance",
