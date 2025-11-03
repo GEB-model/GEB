@@ -124,6 +124,171 @@ def plot_snapping(
     plt.close()
 
 
+# add external stations to Q_obs
+def add_station_Q_obs(
+    station_id, station_name, Q_obs, station_coords, station_dataframe
+):
+    """This function adds a new station to the Q_obs dataset (in this case GRDC).
+
+    It should be a dataframe with the first row (lon, lat) and data should start at index 3 (row4).
+
+    Returns:
+        The updated dataset with discharge observations with the new station added.
+    """
+    # Convert the pandas DataFrame to an xarray Dataset
+    new_station_ds = xr.Dataset(
+        {
+            "runoff_mean": (
+                ["time"],
+                station_dataframe["Q"].values,
+            ),  # Add the 'Q' column as runoff_mean
+            "station_name": ("id", [station_name]),  # Station name
+            "x": ("id", [station_coords[0]]),  # Longitude
+            "y": ("id", [station_coords[1]]),  # Latitude
+        },
+        coords={
+            "time": station_dataframe.index,  # Use the index as the time dimension
+            "id": [station_id],  # Assign the station ID
+        },
+    )
+    # Add the new station to the Q_obs dataset
+    Q_obs_merged = xr.concat([Q_obs, new_station_ds], dim="id")
+
+    return Q_obs_merged
+
+
+def process_station_data(station, Q_station, dt_format, startrow):
+    # process data
+    station_coords = Q_station.iloc[
+        0
+    ].tolist()  # get the coordinates from the first row
+
+    station_coords = [float(i) for i in station_coords]  # convert to float
+
+    Q_station = Q_station.iloc[startrow:]  # remove the first rows
+    Q_station.rename(
+        columns={
+            Q_station.columns[0]: "date",
+            Q_station.columns[1]: "Q",
+        },
+        inplace=True,
+    )
+    Q_station["date"] = pd.to_datetime(Q_station["date"], format=dt_format)
+    Q_station.set_index("date", inplace=True)
+    Q_station["Q"] = Q_station["Q"].astype(float)  # convert to float
+    Q_station = Q_station.resample("D", label="left").mean()
+    Q_station.index.name = "time"  # rename index to time
+
+    # delete missing values in the dataframe
+    Q_station.dropna(inplace=True)  # drop missing time steps
+
+    # checks
+    if Q_station.shape[1] != 1:
+        raise ValueError(f"File {station} does not have 1 column")
+
+    if len(station_coords) != 2:
+        raise ValueError(
+            f"File {station} does not have 2 coordinates. .csv files of discharge stations should have the coordinates in the first row of the file"
+        )
+    return Q_station, station_coords
+
+
+def clip_Q_obs(Q_obs_merged: xr.Dataset, region_mask: gpd.GeoDataFrame) -> xr.Dataset:
+    """Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries.
+
+    Args:
+        Q_obs_merged: Dataset with discharge observations.
+        region_mask: Shapefile of the region to clip the Q_obs stations to
+
+    Returns:
+        The clipped discharge observations dataset with only stations within the region shapefile.
+    """
+    # Convert Q_obs points to GeoDataFrame
+    Q_obs_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+        {
+            "id": Q_obs_merged.id.values,
+            "x": Q_obs_merged.x.values,
+            "y": Q_obs_merged.y.values,
+        },
+        geometry=gpd.points_from_xy(Q_obs_merged.x.values, Q_obs_merged.y.values),
+        crs="EPSG:4326",
+    )
+
+    # Filter Q_obs stations that are in the region shapefile
+    Q_obs_gdf: gpd.GeoDataFrame = Q_obs_gdf[
+        Q_obs_gdf.geometry.within(region_mask.geometry.unary_union)
+    ]
+
+    # select the Q_obs stations from the Q_obs dataset that are in the region shapefile
+    Q_obs_merged = Q_obs_merged.sel(id=Q_obs_gdf.id.values)
+
+    return Q_obs_merged
+
+
+def get_distance_to_stations(
+    rivers: shapely.geometry.base.BaseGeometry, Q_obs_location: gpd.GeoDataFrame
+) -> float:
+    """This function returns the distance of each river section to the station.
+
+    Args:
+        rivers: A row of the rivers GeoDataFrame (a shapely geometry object).
+        Q_obs_location: A GeoDataFrame containing the station location as a Point geometry.
+
+    Returns:
+        Distance in degrees between the river section and the station.
+    """
+    return float(rivers.distance(Q_obs_location).values.item())
+
+
+def select_river_segment(
+    max_uparea_difference_ratio,
+    max_spatial_difference_degrees,
+    Q_obs_uparea,
+    rivers_sorted,
+) -> pd.DataFrame | bool:
+    """This function selects the closest river segment to the Q_obs station based on the spatial distance.
+
+    It returns false if the spatial distance is larger than the max_spatial_difference_degrees.
+    If the difference between the upstream area from MERIT (from the river centerlines)
+    and the Q_obs upstream area is larger than the max_uparea_difference_ratio,
+    it will select the closest river segment within the correct upstream area range.
+
+    Args:
+        max_uparea_difference_ratio: The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area.
+        max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment.
+        Q_obs_uparea: Upstream area reported for the observational station (in m2). Used to compare against river segment upstream areas to enforce the upstream area ratio criterion.
+        rivers_sorted: GeoDataFrame of river segments sorted by spatial distance to the station; must contain the 'uparea_m2' attribute and will be filtered/queried to find the matching segment.
+
+    Returns:
+        The closest river segment to the Q_obs station that meets the criteria or False if no segment is found.
+    """
+    if np.isnan(
+        Q_obs_uparea
+    ):  # if Q_obs upstream area is NaN, only just select the closest river segment
+        closest_river_segment = rivers_sorted.head(1)
+    else:
+        # add upstream area criteria
+        upstream_area_diff = (
+            max_uparea_difference_ratio * Q_obs_uparea
+        )  # 30% difference
+        closest_river_segment = rivers_sorted[
+            (rivers_sorted["uparea_m2"] > (Q_obs_uparea - upstream_area_diff))
+            & (rivers_sorted["uparea_m2"] < (Q_obs_uparea + upstream_area_diff))
+        ].head(1)
+
+        if closest_river_segment.empty:
+            return False  # no river segment found within the upstream area criteria
+
+        if (
+            closest_river_segment.iloc[0].station_distance
+            > max_spatial_difference_degrees
+        ):
+            # No river segment found within the max_spatial_difference_degrees, returning with False
+            return False
+
+    return closest_river_segment
+
+
 class Observations:
     """Collects, parses and processes observational data for model evaluation."""
 
@@ -170,71 +335,6 @@ class Observations:
         )
         snapping_discharge_folder.mkdir(parents=True, exist_ok=True)
 
-        # add external stations to Q_obs
-        def add_station_Q_obs(station_name, station_coords, station_dataframe):
-            """This function adds a new station to the Q_obs dataset (in this case GRDC).
-
-            It should be a dataframe with the first row (lon, lat) and data should start at index 3 (row4).
-
-            Returns:
-                The updated dataset with discharge observations with the new station added.
-            """
-            # Convert the pandas DataFrame to an xarray Dataset
-            new_station_ds = xr.Dataset(
-                {
-                    "runoff_mean": (
-                        ["time"],
-                        station_dataframe["Q"].values,
-                    ),  # Add the 'Q' column as runoff_mean
-                    "station_name": ("id", [station_name]),  # Station name
-                    "x": ("id", [station_coords[0]]),  # Longitude
-                    "y": ("id", [station_coords[1]]),  # Latitude
-                },
-                coords={
-                    "time": station_dataframe.index,  # Use the index as the time dimension
-                    "id": [station_id],  # Assign the station ID
-                },
-            )
-            # Add the new station to the Q_obs dataset
-            Q_obs_merged = xr.concat([Q_obs, new_station_ds], dim="id")
-
-            return Q_obs_merged
-
-        def process_station_data(Q_station, dt_format, startrow):
-            # process data
-            station_coords = Q_station.iloc[
-                0
-            ].tolist()  # get the coordinates from the first row
-
-            station_coords = [float(i) for i in station_coords]  # convert to float
-
-            Q_station = Q_station.iloc[startrow:]  # remove the first rows
-            Q_station.rename(
-                columns={
-                    Q_station.columns[0]: "date",
-                    Q_station.columns[1]: "Q",
-                },
-                inplace=True,
-            )
-            Q_station["date"] = pd.to_datetime(Q_station["date"], format=dt_format)
-            Q_station.set_index("date", inplace=True)
-            Q_station["Q"] = Q_station["Q"].astype(float)  # convert to float
-            Q_station = Q_station.resample("D", label="left").mean()
-            Q_station.index.name = "time"  # rename index to time
-
-            # delete missing values in the dataframe
-            Q_station.dropna(inplace=True)  # drop missing time steps
-
-            # checks
-            if Q_station.shape[1] != 1:
-                raise ValueError(f"File {station} does not have 1 column")
-
-            if len(station_coords) != 2:
-                raise ValueError(
-                    f"File {station} does not have 2 coordinates. .csv files of discharge stations should have the coordinates in the first row of the file"
-                )
-            return Q_station, station_coords
-
         Q_obs_merged = Q_obs.copy()  # Ensure Q_obs_merged is always defined
 
         if custom_river_stations is not None:
@@ -258,7 +358,7 @@ class Observations:
                     )  # read the csv file with no header and comma delimiter
 
                     Q_station, station_coords = process_station_data(
-                        Q_station, dt_format="%Y-%m-%d %H:%M:%S", startrow=3
+                        station, Q_station, dt_format="%Y-%m-%d %H:%M:%S", startrow=3
                     )
                     # Check for missing or invalid dates
                     if Q_station.index.isnull().any():
@@ -270,7 +370,7 @@ class Observations:
                     if station_name not in Q_obs.station_name.values:
                         station_id = int(Q_obs.id.max() + 1)  # ID for the new station
                         Q_obs_merged = add_station_Q_obs(
-                            station_name, station_coords, Q_station
+                            station_id, station_name, Q_obs, station_coords, Q_station
                         )  # name, coordinates, dataframe
                     else:
                         station_id = int(
@@ -278,42 +378,6 @@ class Observations:
                                 0
                             ]
                         )  # get the id of the station in the Q_obs dataset
-
-        # Clip the Q_obs dataset to the region shapefile
-        def clip_Q_obs(
-            Q_obs_merged: xr.Dataset, region_mask: gpd.GeoDataFrame
-        ) -> xr.Dataset:
-            """Clip Q_obs stations based on a region shapefile, to keep only Q_obs stations within the catchment boundaries.
-
-            Args:
-                Q_obs_merged: Dataset with discharge observations.
-                region_mask: Shapefile of the region to clip the Q_obs stations to
-
-            Returns:
-                The clipped discharge observations dataset with only stations within the region shapefile.
-            """
-            # Convert Q_obs points to GeoDataFrame
-            Q_obs_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
-                {
-                    "id": Q_obs_merged.id.values,
-                    "x": Q_obs_merged.x.values,
-                    "y": Q_obs_merged.y.values,
-                },
-                geometry=gpd.points_from_xy(
-                    Q_obs_merged.x.values, Q_obs_merged.y.values
-                ),
-                crs="EPSG:4326",
-            )
-
-            # Filter Q_obs stations that are in the region shapefile
-            Q_obs_gdf: gpd.GeoDataFrame = Q_obs_gdf[
-                Q_obs_gdf.geometry.within(region_mask.geometry.unary_union)
-            ]
-
-            # select the Q_obs stations from the Q_obs dataset that are in the region shapefile
-            Q_obs_merged = Q_obs_merged.sel(id=Q_obs_gdf.id.values)
-
-            return Q_obs_merged
 
         Q_obs_clipped = clip_Q_obs(
             Q_obs_merged, region_mask
@@ -414,74 +478,16 @@ class Observations:
             Q_obs_rivername = Q_obs_station.river_name.values.item()
 
             # find river section closest to the Q_obs station
-            def get_distance_to_stations(rivers):
-                """This function returns the distance of each river section to the station.
-
-                Args:
-                    rivers: A row of the rivers GeoDataFrame.
-
-                Returns:
-                    Distance in degrees between the river section and the station.
-                """
-                return rivers.distance(Q_obs_location).values.item()
-
             rivers["station_distance"] = rivers.geometry.apply(
-                get_distance_to_stations
+                lambda geom: get_distance_to_stations(geom, Q_obs_location)
             )  # distance in degrees
             rivers_sorted = rivers.sort_values(by="station_distance")
-
-            def select_river_segment(
-                max_uparea_difference_ratio, max_spatial_difference_degrees
-            ) -> pd.DataFrame | bool:
-                """This function selects the closest river segment to the Q_obs station based on the spatial distance.
-
-                It returns false if the spatial distance is larger than the max_spatial_difference_degrees.
-                If the difference between the upstream area from MERIT (from the river centerlines)
-                and the Q_obs upstream area is larger than the max_uparea_difference_ratio,
-                it will select the closest river segment within the correct upstream area range.
-
-                Args:
-                    max_uparea_difference_ratio: The maximum allowed difference in upstream area between the Q_obs station and the GEB river segment, as a ratio of the Q_obs upstream area.
-                    max_spatial_difference_degrees: The maximum allowed spatial difference in degrees between the Q_obs station and the GEB river segment.
-
-                Returns:
-                    The closest river segment to the Q_obs station that meets the criteria or False if no segment is found.
-                """
-                if np.isnan(
-                    Q_obs_uparea
-                ):  # if Q_obs upstream area is NaN, only just select the closest river segment
-                    closest_river_segment = rivers_sorted.head(1)
-                else:
-                    # add upstream area criteria
-                    upstream_area_diff = (
-                        max_uparea_difference_ratio * Q_obs_uparea
-                    )  # 30% difference
-                    closest_river_segment = rivers_sorted[
-                        (
-                            rivers_sorted["uparea_m2"]
-                            > (Q_obs_uparea - upstream_area_diff)
-                        )
-                        & (
-                            rivers_sorted["uparea_m2"]
-                            < (Q_obs_uparea + upstream_area_diff)
-                        )
-                    ].head(1)
-
-                    if closest_river_segment.empty:
-                        return False  # no river segment found within the upstream area criteria
-
-                    if (
-                        closest_river_segment.iloc[0].station_distance
-                        > max_spatial_difference_degrees
-                    ):
-                        # No river segment found within the max_spatial_difference_degrees, returning with False
-                        return False
-
-                return closest_river_segment
 
             closest_river_segment = select_river_segment(
                 max_uparea_difference_ratio=max_uparea_difference_ratio,
                 max_spatial_difference_degrees=max_spatial_difference_degrees,
+                Q_obs_uparea=Q_obs_uparea,
+                rivers_sorted=rivers_sorted,
             )
             if closest_river_segment is False:
                 self.logger.warning(
