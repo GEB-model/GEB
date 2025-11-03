@@ -1040,7 +1040,11 @@ def create_multi_basin_configs(
     build_config_path = working_directory / "build.yml"
     # Read build config from geul example and automatically copy it
     geul_build_path = (
-        Path(__file__).parent.parent.parent / "examples" / "geul" / "build.yml"
+        Path(os.environ.get("GEB_PACKAGE_DIR"))
+        / ".."
+        / "examples"
+        / "geul"
+        / "build.yml"
     )
 
     print(f"Reading build configuration from: {geul_build_path}")
