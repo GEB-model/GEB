@@ -9,7 +9,6 @@ import json
 import logging
 import math
 import os
-import shutil
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -23,7 +22,6 @@ import pandas as pd
 import pyflwdir
 import rasterio
 import xarray as xr
-import yaml
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
@@ -1021,9 +1019,6 @@ def create_cluster_visualization_map(
 
 def create_multi_basin_configs(
     clusters: list[list[int]],
-    base_config_path: Path,
-    base_build_config_path: Path,
-    base_update_config_path: Path,
     working_directory: Path,
     cluster_prefix: str = "cluster",
 ) -> list[Path]:
@@ -1031,9 +1026,6 @@ def create_multi_basin_configs(
 
     Args:
         clusters: List of clusters, where each cluster is a list of COMID values.
-        base_config_path: Path to the base model config file.
-        base_build_config_path: Path to the base build config file.
-        base_update_config_path: Path to the base update config file.
         working_directory: Working directory for the models.
         cluster_prefix: Prefix for cluster directory names.
 
@@ -1044,33 +1036,33 @@ def create_multi_basin_configs(
 
     cluster_directories = []
 
-    # Load the base configuration
-    print("Loading base configuration files...")
-    with open(base_config_path, "r") as f:
-        base_config = yaml.load(f, Loader=yaml.SafeLoader)
-
     for i, cluster in enumerate(clusters):
         print(
             f"Creating cluster {i + 1}/{len(clusters)}: {cluster_prefix}_{i:03d} ({len(cluster)} subbasins)"
         )
 
-        # Create cluster directory
+        # Create cluster directory and base subdirectory
         cluster_dir = working_directory / f"{cluster_prefix}_{i:03d}"
-        cluster_dir.mkdir(parents=True, exist_ok=True)
+        base_dir = cluster_dir / "base"
+        base_dir.mkdir(parents=True, exist_ok=True)
         cluster_directories.append(cluster_dir)
 
-        # Modify config for this cluster
-        cluster_config = base_config.copy()
-        cluster_config["general"]["region"]["subbasin"] = cluster
+        # Create build.yml with inheritance in base folder
+        build_config_path = base_dir / "build.yml"
+        with open(build_config_path, "w") as f:
+            f.write("inherits: ../../build.yml\n")
 
-        # Write cluster config files
-        cluster_config_path = cluster_dir / "model.yml"
-        with open(cluster_config_path, "w") as f:
-            yaml.dump(cluster_config, f, default_flow_style=False, sort_keys=False)
+        # Create model.yml with inheritance and cluster-specific subbasins in base folder
+        model_config_path = base_dir / "model.yml"
+        with open(model_config_path, "w") as f:
+            f.write("inherits: ../../model.yml\n\n")
+            f.write("general:\n")
+            f.write("  region:\n")
+            f.write(f"    subbasin: {cluster}\n")
 
-        # Copy build and update configs
-        shutil.copy(base_build_config_path, cluster_dir / "build.yml")
-        shutil.copy(base_update_config_path, cluster_dir / "update.yml")
+        print(
+            f"  Created configuration files in {base_dir.relative_to(working_directory)}"
+        )
 
     print(
         f"Successfully created {len(clusters)} cluster configurations in {working_directory}"
@@ -1231,41 +1223,6 @@ def save_clusters_as_merged_geometries(
             f"  {row['cluster_id']}: {row['total_basin_area_km2']:,.0f} km², "
             f"{row['num_total_subbasins']:,} subbasins merged{geom_info}"
         )
-
-
-def get_touching_subbasins(
-    data_catalog: DataCatalog, subbasins: gpd.GeoDataFrame
-) -> gpd.GeoDataFrame:
-    """Find all subbasins that touch the given subbasins.
-
-    Args:
-        data_catalog: Data catalog containing the MERIT basins.
-        subbasins: GeoDataFrame containing the subbasins to find touching subbasins for.
-
-    Returns:
-        A GeoDataFrame containing all subbasins that touch the given subbasins.
-    """
-    bbox = subbasins.total_bounds
-    buffer: float = 0.1
-    buffered_bbox = (
-        bbox[0] - buffer,
-        bbox[1] - buffer,
-        bbox[2] + buffer,
-        bbox[3] + buffer,
-    )
-    potentially_touching_basins = gpd.read_parquet(
-        data_catalog.get_source("MERIT_Basins_cat").path,
-        bbox=buffered_bbox,
-        filters=[
-            ("COMID", "not in", subbasins.index.tolist()),
-        ],
-    )
-    # get all touching subbasins
-    touching_subbasins = potentially_touching_basins[
-        potentially_touching_basins.geometry.touches(subbasins.union_all())
-    ]
-
-    return touching_subbasins.set_index("COMID")
 
 
 def get_coastline_nodes(

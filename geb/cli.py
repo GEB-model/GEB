@@ -1504,11 +1504,11 @@ def init_multiple_fn(
     if not large_scale_dir.exists():
         large_scale_dir.mkdir(parents=True, exist_ok=True)
 
-    # Always create geoparquet and map files in models directory if not specified
+    # Always create geoparquet and map files in large_scale directory if not specified
     if save_geoparquet is None:
-        save_geoparquet = models_dir / f"{cluster_prefix}_clusters.geoparquet"
+        save_geoparquet = large_scale_dir / f"{cluster_prefix}_clusters.geoparquet"
     if save_map is None:
-        save_map = models_dir / f"{cluster_prefix}_clusters_map.png"
+        save_map = large_scale_dir / f"{cluster_prefix}_clusters_map.png"
 
     # Parse geometry bounds
     try:
@@ -1580,9 +1580,6 @@ def init_multiple_fn(
     # Create cluster configurations
     cluster_directories = create_multi_basin_configs(
         clusters=clusters,
-        base_config_path=example_folder / CONFIG_DEFAULT,
-        base_build_config_path=example_folder / BUILD_DEFAULT,
-        base_update_config_path=example_folder / UPDATE_DEFAULT,
         working_directory=large_scale_dir,
         cluster_prefix=cluster_prefix,
     )
