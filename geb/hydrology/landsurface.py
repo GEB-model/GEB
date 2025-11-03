@@ -204,8 +204,10 @@ def land_surface_model(
         snow_temperature_C_cell = snow_temperature_C[i]
 
         for hour in range(24):
-            tas_C = tas_2m_K_cell[hour] - np.float32(273.15)
-            dewpoint_tas_C = tas_2m_K_cell[hour] - np.float32(273.15)
+            tas_C: np.float32 = tas_2m_K_cell[hour] - np.float32(273.15)
+            dewpoint_tas_C: np.float32 = dewpoint_tas_2m_K_cell[hour] - np.float32(
+                273.15
+            )
 
             wind_10m_m_per_s: np.float32 = np.sqrt(
                 wind_u10m_m_per_s_cell[hour] ** 2 + wind_v10m_m_per_s_cell[hour] ** 2
