@@ -3,7 +3,7 @@
 import base64
 import os
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
 import branca.colormap as cm
 import contextily as ctx
@@ -1349,7 +1349,7 @@ class Hydrology:
 
         # Main function for the peformance metrics
         def calculate_performance_metrics(
-            observation: Union[Path, str], flood_map_path: Union[Path, str]
+            observation: Path | str, flood_map_path: Path | str
         ) -> None:
             # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)

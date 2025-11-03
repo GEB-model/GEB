@@ -246,7 +246,7 @@ def clip_Q_obs(Q_obs_merged: xr.Dataset, region_mask: gpd.GeoDataFrame) -> xr.Da
         Q_obs_merged:
             Dataset with discharge observations.
         region_mask:
-            Shapefile of the region to clip the Q_obs stations to.
+            Geometry of the region to clip the Q_obs stations to.
 
     Returns:
         The clipped discharge observations dataset with only stations within the region shapefile.
