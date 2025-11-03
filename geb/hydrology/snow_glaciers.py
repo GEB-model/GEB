@@ -636,11 +636,16 @@ def snow_model(
     # Add new snowfall to the previous state's SWE
     swe_after_snowfall_m = snow_water_equivalent_m + snowfall_m_per_hour
 
-    # Apply sublimation/deposition
-    swe_after_sublimation_m = (
-        swe_after_snowfall_m + sublimation_deposition_rate_m_per_hour
+    # Apply sublimation/deposition with water-balance limiter:
+    # Do not allow sublimation to exceed available SWE in this timestep.
+    # Positive values (deposition) are not limited here.
+    applied_sublimation_deposition_rate_m_per_hour = np.maximum(
+        -swe_after_snowfall_m, sublimation_deposition_rate_m_per_hour
     )
-    swe_after_sublimation_m = np.maximum(np.float32(0.0), swe_after_sublimation_m)
+
+    swe_after_sublimation_m = (
+        swe_after_snowfall_m + applied_sublimation_deposition_rate_m_per_hour
+    )
 
     # Water balance check: sublimation/deposition
     water_after_sublimation_m = swe_after_sublimation_m + liquid_water_in_snow_m
@@ -714,7 +719,7 @@ def snow_model(
         actual_melt_m_per_hour,
         melt_runoff_m_per_hour,
         rainfall_that_resulted_in_runoff_m_per_hour,
-        sublimation_deposition_rate_m_per_hour,
+        applied_sublimation_deposition_rate_m_per_hour,
         actual_refreezing_m_per_hour,
         snow_surface_temperature_C,
         net_shortwave_radiation_W_per_m2,
