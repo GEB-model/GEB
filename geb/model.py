@@ -413,7 +413,7 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         # in run mode, verify that the spinup time range matches the stored time range
         if in_spinup:
             self._store_spinup_time_range()
-        elif not load_data_from_store:
+        elif load_data_from_store:
             self._verify_spinup_time_range()
 
         if self.simulate_hydrology:
@@ -629,11 +629,11 @@ class GEBModel(Module, HazardDriver, ABM_Model):
         subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
         if subbasins["is_coastal_basin"].any():
             generate_storm_surge_hydrographs(self)
-            rp_maps_coastal = self.sfincs.get_coastal_return_period_maps()
+            rp_maps_coastal = self.floods.get_coastal_return_period_maps()
         else:
             rp_maps_coastal = None
-        rp_maps_riverine = self.sfincs.get_riverine_return_period_maps()
-        self.sfincs.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
+        rp_maps_riverine = self.floods.get_riverine_return_period_maps()
+        self.floods.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
 
     def evaluate(self, *args: Any, **kwargs: Any) -> None:
         """Call the evaluator to evaluate the model results."""
