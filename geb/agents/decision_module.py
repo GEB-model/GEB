@@ -182,6 +182,82 @@ class DecisionModule:
 
         return NPV_summed
 
+    @staticmethod
+    @njit(cache=True)
+    def IterateThroughMultiHazard(
+        NPV_summed: np.ndarray,
+        n_windstorms: int,
+        n_floods: int,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        amenity_value: np.ndarray,
+        max_T: int,
+        expected_damages_flood: np.ndarray,
+        expected_damages_wind: np.ndarray,
+        r: float,
+    ) -> np.ndarray:
+        """This function calculates the NPV of each multi-hazard event.
+
+        Args:
+            NPV_summed: Array containing the summed time discounted NPV for each multi-hazard event i for each agent
+            n_windstorms: number of windstorm events included in model run
+            n_floods: number of flood events included in model run
+            wealth: array containing the wealth of each household
+            income: array containing the income of each household
+            amenity_value: array containing the amenity value of each household
+            max_T: time horizon (same for each agent)
+            expected_damages_flood: array containing the expected damages of each household under all flood events i
+            expected_damages_wind: array containing the expected damages of each household under all windstorm events i
+            r: time discounting rate"
+
+        Returns:
+            NPV_summed_mh: Array containing the summed time discounted NPV for each multi-hazard event i for each agent
+        """
+        n_agents = wealth.shape[0]
+        n_events = n_floods + n_windstorms
+        expected_damages_total = np.zeros((n_events, n_agents), dtype=np.float32)
+
+        # Combine expected damages from floods and windstorms
+        for i in range(n_events):
+            if i < n_floods:
+                expected_damages_total[i] = expected_damages_flood[i]
+            else:
+                expected_damages_total[i] = expected_damages_wind[i - n_floods]
+
+        # No windstorm in t=0
+        NPV_t0 = (wealth + income + amenity_value).astype(
+            np.float32
+        )  # no hazard in t=0
+
+        # Iterate through all hazard evenets
+        for i, index in enumerate(np.arange(1, n_events + 3)):
+            # Check if we are in the last iterations
+            if i < n_events:
+                NPV_hazards_i = (
+                    wealth + income + amenity_value - expected_damages_total[i]
+                )
+                NPV_hazards_i = (NPV_hazards_i).astype(np.float32)
+
+            # if in the last two iterations do not substract damages (probs of no event)
+            elif i >= n_events:
+                NPV_hazards_i = wealth + income + amenity_value
+                NPV_hazards_i = NPV_hazards_i.astype(np.float32)
+
+            # Calculate time discounted NPVs
+            t_arr = np.arange(1, max_T, dtype=np.float32)
+            discounts = 1 / (1 + r) ** t_arr
+            NPV_tx = np.sum(discounts) * NPV_hazards_i
+
+            # Add NPV at t0 (which is not discounted)
+            NPV_tx += NPV_t0
+
+            # Store results
+            NPV_summed[index] = NPV_tx
+
+        # Store NPV at p=0 for bounds in itegration
+        NPV_summed[0] = NPV_summed[1]
+        return NPV_summed
+
     def IterateThroughEvents(
         self,
         n_events: int,
@@ -255,8 +331,24 @@ class DecisionModule:
                 amenity_value=amenity_value,
                 expected_damages=expected_damages,
             )
+
+        # elif mode == "multi_hazard":
+        #     NPV_summed = self.IterateThroughMultiHazard(
+        #         NPV_summed=NPV_summed,
+        #         n_floods=n_events,
+        #         n_windstorms=n_events,
+        #         r=discount_rate,
+        #         max_T=max_T,
+        #         wealth=wealth,
+        #         income=income,
+        #         amenity_value=amenity_value,
+        #         expected_damages_flood=expected_damages_flood,
+        #         expected_damages_wind=expected_damages_wind,
+        #     )
         else:
-            raise ValueError("Mode must be either 'flood' or 'drought'")
+            raise ValueError(
+                "Mode must be either 'flood' 'drought' 'windstorm' or 'multi_hazard'"
+            )
 
         return NPV_summed
 
@@ -1098,7 +1190,8 @@ class DecisionModule:
         sigma: float,
         deductible: float = 0.1,
         loading_factor: float = 0.3,
-        adapted: np.ndarray = None,
+        adapted_floodproofing: np.ndarray = None,
+        adapted_windshutters: np.ndarray = None,
         **kwargs,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
@@ -1119,33 +1212,57 @@ class DecisionModule:
         Returns:
             EU_insure_array
         """
-        # compute insurer payouts
+        # # compute insurer payouts
+        # expected_damages_flood_insured = expected_damages_flood * deductible
+        # expected_damages_wind_insured = expected_damages_wind * deductible
+
+        # if adapted_floodproofing is not None:
+        #     idx_flood = np.where(adapted_floodproofing == 1)[0]
+        #     expected_damages_flood_insured[:, idx_flood] *= 0.8
+
+        # if adapted_windshutters is not None:
+        #     idx_wind = np.where(adapted_windshutters == 1)[0]
+        #     expected_damages_wind_insured[:, idx_wind] *= 0.25
+
+        if adapted_floodproofing is not None:
+            idx_flood = np.where(adapted_floodproofing == 1)[0]
+            expected_damages_flood[:, idx_flood] *= 0.8
+
         expected_damages_flood_insured = expected_damages_flood * deductible
+
+        if adapted_windshutters is not None:
+            idx_wind = np.where(adapted_windshutters == 1)[0]
+            expected_damages_wind[:, idx_wind] *= 0.25
+
         expected_damages_wind_insured = expected_damages_wind * deductible
+
+        # Sort out flood damages and probabilities
+        flood_order = np.argsort(p_flood)
+        p_flood_sorted = np.sort(p_flood)
+        expected_damages_flood_insured = expected_damages_flood_insured[flood_order, :]
+
+        # Sort out wind damages and probabilities
+        wind_order = np.argsort(p_wind)
+        p_wind_sorted = np.sort(p_wind)
+        expected_damages_wind_insured = expected_damages_wind_insured[wind_order, :]
 
         premium = self.Insurance_premium(
             expected_damages_flood=expected_damages_flood_insured,
-            p_flood=p_flood,
+            p_flood=p_flood_sorted,
             expected_damages_wind=expected_damages_wind_insured,
-            p_wind=p_wind,
+            p_wind=p_wind_sorted,
             loading_factor=loading_factor,
         )
 
-        # weigh amenities
-        amenity_value = amenity_value * amenity_weight
+        # Combine hazard probabilities
+        p_all = np.concatenate([p_flood_sorted, p_wind_sorted])
+        p_all = np.argsort(p_all)
+        p_all_events = np.full((p_all.size + 3, n_agents), -1, dtype=np.float32)
 
-        # Ensure p floods is in increasing order
-        indices = np.argsort(p_flood)
-        expected_damages_flood_insured = expected_damages_flood_insured[indices]
-        p_flood = np.sort(p_flood)
-
-        # Preallocate arrays
-        n_events, n_agents = expected_damages_flood_insured.shape
-        p_all_events = np.full((p_flood.size + 3, n_agents), -1, dtype=np.float32)
-
-        # calculate perceived risk
-        perc_risk = p_flood.repeat(n_agents).reshape(p_flood.size, n_agents)
-        perc_risk *= risk_perception
+        perc_risk = (
+            p_all.astype(np.float32).repeat(n_agents).reshape(p_all.size, n_agents)
+        )
+        perc_risk *= risk_perception.astype(np.float32)
         p_all_events[1:-2, :] = perc_risk
         p_all_events[p_all_events > 0.998] = 0.998
 
@@ -1153,18 +1270,28 @@ class DecisionModule:
         p_all_events[-1, :] = 1
         p_all_events[0, :] = 0
 
+        # Compute NPV for combined multi-hazard exposure
+        amenity_value = amenity_value * amenity_weight
         max_T = np.int32(np.max(T))
         n_agents = np.int32(n_agents)
-        NPV_summed = self.IterateThroughEvents(
-            n_events=n_events,
-            n_agents=n_agents,
-            discount_rate=r,
+
+        n_events_flood = expected_damages_flood_insured.shape[0]
+        n_events_wind = expected_damages_wind_insured.shape[0]
+        n_events_total = n_events_flood + n_events_wind
+
+        # Allocate array
+        NPV_summed = np.full((n_events_total + 3, n_agents), -1, dtype=np.float32)
+        NPV_summed = self.IterateThroughMultiHazard(
+            NPV_summed=NPV_summed,
+            n_floods=n_events_flood,
+            n_windstorms=n_events_wind,
             wealth=wealth,
             income=income,
             amenity_value=amenity_value,
             max_T=max_T,
-            expected_damages=expected_damages_flood_insured,
-            mode="flood",
+            expected_damages_flood=expected_damages_flood_insured,
+            expected_damages_wind=expected_damages_wind_insured,
+            r=r,
         )
 
         discounts = 1.0 / (1.0 + r) ** np.arange(1, max_T + 1)
@@ -1176,22 +1303,25 @@ class DecisionModule:
         loan_left = (loan_duration - time_adapted).astype(np.int32)
         loan_left = np.maximum(loan_left, 0)
         loan_left = np.minimum(loan_left, T)
-        # T = T.astype(np.int32)
-        time_discounted_premium_cost = np.take(cost_array, T)
+        T = np.int32(T)
 
+        time_discounted_premium_cost = np.take(cost_array, T)
         NPV_summed -= time_discounted_premium_cost
 
+        # Calculate expected utility
         NPV_summed = np.maximum(1, NPV_summed)
         if (NPV_summed == 1).any():
             n_negative = np.sum(NPV_summed == 1)
             print(
-                f"[calcEU_insure] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)} %)"
+                f"[calcEU_insure_multirisk] Warning, {n_negative} negative NPVs in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
             )
+
         if sigma == 1:
             EU_store = np.log(NPV_summed)
         else:
             EU_store = NPV_summed ** (1 - sigma) / (1 - sigma)
 
+        # Integrate EU across all hazard probabilities
         y = EU_store
         x = p_all_events
         EU_insure_array = np.trapezoid(y=y, x=x, axis=0)
@@ -1199,11 +1329,87 @@ class DecisionModule:
         constrained = np.where(income * expenditure_cap <= premium)
         EU_insure_array[constrained] = -np.inf
 
-        # if adapted is not None:
-        #     adapted_mask = np.asarray(adapted).astype(bool)
-        #     EU_insure_array[adapted_mask] = -np.inf
-
         return EU_insure_array
+        # NPV_summed -= time_discounted_premium_cost
+
+        # # weigh amenities
+        # amenity_value = amenity_value * amenity_weight
+
+        # # Ensure p floods is in increasing order
+        # indices = np.argsort(p_flood)
+        # expected_damages_flood_insured = expected_damages_flood_insured[indices]
+        # p_flood = np.sort(p_flood)
+
+        # # Preallocate arrays
+        # n_events, n_agents = expected_damages_flood_insured.shape
+
+        # p_all = np.concatenate([p_flood, p_wind])
+        # p_all = np.sort(p_all)
+
+        # p_all_events = np.full((p_all.size + 3, n_agents), -1, dtype=np.float32)
+
+        # # calculate perceived risk
+        # perc_risk = p_all.repeat(n_agents).reshape(p_all.size, n_agents)
+        # perc_risk *= risk_perception
+        # p_all_events[1:-2, :] = perc_risk
+        # p_all_events[p_all_events > 0.998] = 0.998
+
+        # p_all_events[-2, :] = p_all_events[-3, :] + 0.001
+        # p_all_events[-1, :] = 1
+        # p_all_events[0, :] = 0
+
+        # max_T = np.int32(np.max(T))
+        # n_agents = np.int32(n_agents)
+        # NPV_summed = self.IterateThroughMultiHazard(
+        #     NPV_summed=NPV_summed,
+        #     n_floods=expected_damages_flood.shape[0],
+        #     n_windstorms=expected_damages_wind.shape[0],
+        #     wealth=wealth,
+        #     income=income,
+        #     amenity_value=amenity_value,
+        #     max_T=max_T,
+        #     expected_damages_flood=expected_damages_flood_insured,
+        #     expected_damages_wind=expected_damages_wind_insured,
+        #     r=r,
+        # )
+
+        # discounts = 1.0 / (1.0 + r) ** np.arange(1, max_T + 1)
+        # years = np.arange(max_T + 1)
+        # cost_array = np.full(years.size, -1, np.float32)
+        # for i, year in enumerate(years):
+        #     cost_array[i] = np.sum(discounts[:year] * premium.mean())
+
+        # loan_left = (loan_duration - time_adapted).astype(np.int32)
+        # loan_left = np.maximum(loan_left, 0)
+        # loan_left = np.minimum(loan_left, T)
+        # # T = T.astype(np.int32)
+        # time_discounted_premium_cost = np.take(cost_array, T)
+
+        # NPV_summed -= time_discounted_premium_cost
+
+        # NPV_summed = np.maximum(1, NPV_summed)
+        # if (NPV_summed == 1).any():
+        #     n_negative = np.sum(NPV_summed == 1)
+        #     print(
+        #         f"[calcEU_insure] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)} %)"
+        #     )
+        # if sigma == 1:
+        #     EU_store = np.log(NPV_summed)
+        # else:
+        #     EU_store = NPV_summed ** (1 - sigma) / (1 - sigma)
+
+        # y = EU_store
+        # x = p_all_events
+        # EU_insure_array = np.trapezoid(y=y, x=x, axis=0)
+
+        # constrained = np.where(income * expenditure_cap <= premium)
+        # EU_insure_array[constrained] = -np.inf
+
+        # # if adapted is not None:
+        # #     adapted_mask = np.asarray(adapted).astype(bool)
+        # #     EU_insure_array[adapted_mask] = -np.inf
+
+        # return EU_insure_array
 
     def Insurance_premium(
         self,

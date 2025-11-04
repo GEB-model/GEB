@@ -887,7 +887,8 @@ class Households(AgentBaseClass):
             sigma=1,
             deductible=0.1,
             loading_factor=0.3,  # needs to be discussed for insurance
-            adapted=self.var.adapted_insurance.data == 1,
+            adapted_floodproofing=self.var.adapted.data == 1,
+            adapted_windshutters=self.var.adapted_shutters.data == 1,
         )
 
         # execute strategy (flood adaptation)
@@ -914,6 +915,10 @@ class Households(AgentBaseClass):
         self.update_building_adaptation_status(household_adapting_shutters, "shutters")
         self.update_building_adaptation_status(
             household_adopting_insurance, "insurance"
+        )
+
+        self.buildings.to_file(
+            "C:/Users/nxu279/GitHub/Data/buildings_adapted.gpkg", driver="GPKG"
         )
 
         # ds = xr.open_zarr(
@@ -1362,7 +1367,7 @@ class Households(AgentBaseClass):
             )
             total_damage_wind = wind_damage_shutters.sum()
             print(
-                f"Wind damages to building unprotected structure rp{return_period} are {round(total_damage_wind / 1e6, 2)} M€"
+                f"Wind damages to windproof structure rp{return_period} are {round(total_damage_wind / 1e6, 2)} M€"
             )
 
             buildings_with_damages_shutters = buildings[["osm_id", "osm_way_id"]].copy()
