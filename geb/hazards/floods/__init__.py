@@ -117,7 +117,14 @@ class Floods(Module):
             utm_crs: str = f"EPSG:327{utm_zone}"  # Southern hemisphere
         return utm_crs
 
-    def build(self, name: str) -> SFINCSRootModel:
+    def build(
+        self,
+        name: str,
+        region: gpd.GeoDataFrame | None = None,
+        coastal: bool = False,
+        include_mask: gpd.GeoDataFrame | None = None,
+        bnd_exclude_mask: gpd.GeoDataFrame | None = None,
+    ) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
 
         Before using this model, forcing must be set.
@@ -126,6 +133,10 @@ class Floods(Module):
 
         Args:
             name: Name of the SFINCS model (used for the model root directory).
+            region: The region to build the SFINCS model for. If None, the entire model region is used.
+            coastal: Whether to only include coastal areas in the model.
+            include_mask: GeoDataFrame defining the area to include in the coastal model.
+            bnd_exclude_mask: GeoDataFrame defining the areas to exclude from the coastal model boundaries.
 
         Returns:
             The built or read SFINCSRootModel instance.
@@ -139,8 +150,10 @@ class Floods(Module):
                         self.model.files["other"][entry["path"]]
                     ).to_dataset(name="elevtn")
 
+            if region is None:
+                region = load_geom(self.model.files["geom"]["routing/subbasins"])
             sfincs_model.build(
-                region=load_geom(self.model.files["geom"]["routing/subbasins"]),
+                region=region,
                 DEMs=DEM_config,
                 rivers=self.rivers,
                 discharge=self.discharge_spinup_ds,
@@ -167,6 +180,10 @@ class Floods(Module):
                 in self.model.config["hydrology"]["routing"]["river_depth"]
                 else {},
                 mask_flood_plains=False,  # setting this to True sometimes leads to errors
+                coastal=coastal,
+                include_mask=include_mask,
+                bnd_exclude_mask=bnd_exclude_mask,
+                setup_outflow=False,
             )
         else:
             sfincs_model.read()
@@ -374,40 +391,6 @@ class Floods(Module):
 
         return gdf
 
-    def build_coastal_boundary_mask(self) -> gpd.GeoDataFrame:
-        """Builds a mask to define the coastal boundaries for the SFINCS model.
-
-        Returns:
-            GeoDataFrame: A GeoDataFrame containing the coastal boundary mask.
-        """
-        lecz = xr.load_dataset(
-            self.model.files["other"]["landsurface/low_elevation_coastal_zone"]
-        )
-
-        # Make sure it has a CRS
-        if lecz.rio.crs is None:
-            lecz = lecz.rio.write_crs(
-                "EPSG:4326", inplace=False
-            )  # check CRS for later applications
-
-        # Extract binary mask values
-        lecz_data = lecz["low_elevation_coastal_zone"].values.astype(np.uint8)
-
-        # Get transform from raster metadata
-        transform = lecz.rio.transform()
-
-        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
-        shapes = rasterio.features.shapes(lecz_data, mask=None, transform=transform)
-
-        # Build GeoDataFrame from the shapes generator
-        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
-
-        gdf = gpd.GeoDataFrame.from_records(records)
-        gdf.set_geometry("geometry", inplace=True)
-        gdf = gdf.set_crs(lecz.rio.crs, inplace=True)
-        gdf = gdf[gdf["value"] == 1]  # Keep only mask == 1
-        return gdf
-
     def get_coastal_return_period_maps(self) -> dict[int, xr.DataArray]:
         """This function models coastal flooding for the return periods specified in the model config.
 
@@ -456,20 +439,14 @@ class Floods(Module):
             include_mask = gpd.GeoDataFrame(
                 [include_mask], geometry="geometry", crs=lecz_regions.crs
             )
-            try:
-                sfincs_root_model: SFINCSRootModel = self.build(
-                    f"coastal_region_{idx}",
-                    region=model_domain_gdf,
-                    coastal=True,
-                    bnd_exclude_mask=bnd_exclude_mask,
-                    include_mask=include_mask,
-                    gtsm_stations=locations,
-                )
-                coastal_models.append(sfincs_root_model)
-            except ValueError as e:
-                print(f"Skipping region {idx} due to error: {e}")
-                continue
-
+            sfincs_root_model: SFINCSRootModel = self.build(
+                name=f"coastal_region_{idx}",
+                region=model_domain_gdf,
+                coastal=True,
+                bnd_exclude_mask=bnd_exclude_mask,
+                include_mask=include_mask,
+            )
+            coastal_models.append(sfincs_root_model)
         # run each model for the different return periods
         # and save the flood maps
         rp_maps_coastal = {}
