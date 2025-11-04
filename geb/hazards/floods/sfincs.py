@@ -204,6 +204,10 @@ class SFINCSRootModel:
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
+        coastal: bool = False,
+        include_mask: gpd.GeoDataFrame | None = None,
+        bnd_exclude_mask: gpd.GeoDataFrame | None = None,
+        gtsm_stations: gpd.GeoDataFrame | None = None,
         setup_outflow: bool = True,
     ) -> "SFINCSRootModel":
         """Build a SFINCS model.
@@ -302,7 +306,7 @@ class SFINCSRootModel:
                 exclude_mask=bnd_exclude_mask,
                 all_touched=True,
             )
-            sf.setup_waterlevel_forcing(locations=gtsm_stations)
+            # sf.setup_waterlevel_forcing(locations=gtsm_stations)
 
         else:
             sf.setup_mask_active(
@@ -343,43 +347,44 @@ class SFINCSRootModel:
             river_len=0,
         )
         # give error if outflow greater than 1
-        if len(outflow_points) > 1:
+        if len(outflow_points) > 1 and not coastal:
             raise ValueError(
                 "More than one outflow point found, outflow boundary condition will fail to setup"
             )
-        elif len(outflow_points) == 0:
+        elif len(outflow_points) == 0 and not coastal:
             raise ValueError(
                 "No outflow point found, outflow boundary condition will fail to setup"
             )
-        # print crs of outflow_points
-        assert outflow_points.crs == sf.crs, (
-            "CRS of outflow_points is not the same as the model crs"
-        )
-        # set crs before saving
-        outflow_points = outflow_points.set_crs(sf.crs)
-        # save to model root as a gpkg file
-        outflow_points.to_file(self.path / "gis/outflow_points.gpkg", driver="GPKG")
-        # Get the single outflow point coordinates
-        x_coord = outflow_points.geometry.x.iloc[0]
-        y_coord = outflow_points.geometry.y.iloc[0]
-        assert sf.grid.dep.rio.crs == outflow_points.crs, (
-            "CRS of sf.grid.dep is not the same as the outflow_points crs"
-        )
-        # Sample from sf.grid.dep (which is the DEM DataArray)
-        elevation_value = sf.grid.dep.sel(
-            x=x_coord, y=y_coord, method="nearest"
-        ).values.item()
-
-        # Optional: sanity check
-        if elevation_value is None or elevation_value <= 0:
-            raise ValueError(
-                f"Invalid outflow elevation ({elevation_value}), must be > 0"
+        if len(outflow_points) == 1:
+            # print crs of outflow_points
+            assert outflow_points.crs == sf.crs, (
+                "CRS of outflow_points is not the same as the model crs"
             )
+            # set crs before saving
+            outflow_points = outflow_points.set_crs(sf.crs)
+            # save to model root as a gpkg file
+            outflow_points.to_file(self.path / "gis/outflow_points.gpkg", driver="GPKG")
+            # Get the single outflow point coordinates
+            x_coord = outflow_points.geometry.x.iloc[0]
+            y_coord = outflow_points.geometry.y.iloc[0]
+            assert sf.grid.dep.rio.crs == outflow_points.crs, (
+                "CRS of sf.grid.dep is not the same as the outflow_points crs"
+            )
+            # Sample from sf.grid.dep (which is the DEM DataArray)
+            elevation_value = sf.grid.dep.sel(
+                x=x_coord, y=y_coord, method="nearest"
+            ).values.item()
 
-        # Save elevation value to a file in model_root/gis
-        outflow_elev_path = self.path / "gis" / "outflow_elevation.json"
-        with open(outflow_elev_path, "w") as f:
-            json.dump({"outflow_elevation": elevation_value}, f)
+            # Optional: sanity check
+            if elevation_value is None or elevation_value <= 0:
+                raise ValueError(
+                    f"Invalid outflow elevation ({elevation_value}), must be > 0"
+                )
+
+            # Save elevation value to a file in model_root/gis
+            outflow_elev_path = self.path / "gis" / "outflow_elevation.json"
+            with open(outflow_elev_path, "w") as f:
+                json.dump({"outflow_elevation": elevation_value}, f)
 
         river_representative_points = []
         for ID in rivers.index:
@@ -621,11 +626,29 @@ class SFINCSRootModel:
             ),
             index_col=0,
         )
+
+        locations = (
+            gpd.GeoDataFrame(
+                gpd.read_parquet(self.model.files["geom"]["gtsm/stations_coast_rp"])
+            )
+            .rename(columns={"station_id": "stations"})
+            .set_index("stations")
+        )
+
+        # convert index to int
+        locations.index = locations.index.astype(int)
+
         timeseries.index = pd.to_datetime(timeseries.index, format="%Y-%m-%d %H:%M:%S")
         # convert columns to int
         timeseries.columns = timeseries.columns.astype(int)
 
         # Align timeseries columns with locations index
+        timeseries = timeseries.loc[:, locations.index]
+
+        # now convert to incrementing integers starting from 0
+        timeseries.columns = range(len(timeseries.columns))
+        locations.index = range(len(locations.index))
+
         timeseries = timeseries.iloc[250:-250]  # trim the first and last 250 rows
 
         simulation: SFINCSSimulation = self.create_simulation(
@@ -635,7 +658,9 @@ class SFINCSRootModel:
         )
 
         # set forcing and configure model
-        simulation.set_coastal_waterlevel_forcing(timeseries=timeseries)
+        simulation.set_coastal_waterlevel_forcing(
+            timeseries=timeseries, locations=locations
+        )
         return simulation
 
     def create_simulation_for_return_period(
@@ -784,7 +809,7 @@ class SFINCSSimulation:
         end_time: datetime,
         spinup_seconds: int = 86400,
         write_gis_files: bool = True,
-        write_figures: bool = False,
+        write_figures: bool = True,
     ) -> None:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
 
@@ -826,6 +851,32 @@ class SFINCSSimulation:
         sfincs_model.write_config()
 
         self.sfincs_model = sfincs_model
+
+    def set_coastal_waterlevel_forcing(
+        self, locations: gpd.GeoDataFrame, timeseries: pd.DataFrame
+    ) -> None:
+        """Sets up coastal water level forcing for the SFINCS model from a timeseries.
+
+        Args:
+            locations: A GeoDataFrame containing the locations of the water level forcing points.
+            timeseries: A DataFrame containing the water level timeseries for each node.
+                The columns should match the index of the locations GeoDataFrame.
+        """
+        # assert np.array_equal(locations.index, np.arange(1, len(locations) + 1))
+
+        # select only locations that are in the model
+        self.sfincs_model.read_forcing()
+        # station_ids_in_model = self.sfincs_model.forcing["bzs"].index.values
+        # timeseries = timeseries.loc[:, timeseries.columns.isin(station_ids_in_model)]
+        self.sfincs_model.setup_waterlevel_forcing(
+            locations=locations, timeseries=timeseries
+        )
+        self.sfincs_model.write_forcing()
+        self.sfincs_model.write_config()
+
+        if self.write_figures:
+            self.sfincs_model.plot_forcing(fn_out="forcing.png")
+            self.sfincs_model.plot_basemap(fn_out="basemap.png")
 
     def set_headwater_forcing_from_grid(
         self,
