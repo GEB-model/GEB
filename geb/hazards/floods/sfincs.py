@@ -853,7 +853,7 @@ class SFINCSSimulation:
         Args:
             runoff_m: xarray DataArray containing runoff values in m per time step.
         """
-        assert runoff_m.raster.crs is not None, "precipitation_grid should have a crs"
+        assert runoff_m.rio.crs is not None, "precipitation_grid should have a crs"
         assert (
             pd.to_datetime(runoff_m.time[0].item()).to_pydatetime() <= self.start_time
         )

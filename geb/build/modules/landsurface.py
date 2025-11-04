@@ -2,7 +2,6 @@
 
 import geopandas as gpd
 import numpy as np
-import pandas as pd
 import xarray as xr
 
 from geb.build.methods import build_method
@@ -13,6 +12,7 @@ from geb.workflows.raster import (
     convert_nodata,
     pad_xy,
     rasterize_like,
+    reclassify,
     repeat_grid,
     resample_chunked,
     resample_like,
@@ -50,7 +50,9 @@ class LandSurface:
             mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
 
-        cell_area.data = calculate_cell_area(mask.rio.transform(), mask.shape)
+        cell_area.data = calculate_cell_area(
+            mask.rio.transform(recalc=True), mask.shape
+        )
         cell_area = cell_area.where(~mask, cell_area.attrs["_FillValue"])
         self.set_grid(cell_area, name="cell_area")
 
@@ -124,10 +126,12 @@ class LandSurface:
                 bounds,
                 buffer=100,
             ),
-        ).raster.mask_nodata()
+        )
+        fabdem.attrs["_FillValue"] = -9999.0
+        fabdem: xr.DataArray = convert_nodata(fabdem, np.nan)
 
         target: xr.DataArray = self.subgrid["mask"]
-        target.raster.set_crs(4326)
+        assert target.rio.crs is not None, "target grid must have a crs"
 
         self.set_subgrid(
             resample_like(fabdem, target, method="bilinear"),
@@ -260,8 +264,12 @@ class LandSurface:
 
         resolution_x, resolution_y = self.subgrid["mask"].rio.resolution()
 
-        regions_bounds = self.geom["regions"].total_bounds
-        mask_bounds = self.grid["mask"].raster.bounds
+        regions_bounds: tuple[float, float, float, float] = self.geom[
+            "regions"
+        ].total_bounds
+        mask_bounds: tuple[float, float, float, float] = self.grid["mask"].rio.bounds(
+            recalc=True
+        )
 
         # The bounds should be set to a bit larger than the regions to avoid edge effects
         # and also larger than the mask, to ensure that the entire grid is covered.
@@ -304,44 +312,38 @@ class LandSurface:
             name="landsurface/original_land_use",
         )
 
-        region_ids = reprojected_land_use.raster.rasterize(
-            self.geom["regions"],
-            col_name="region_id",
-            all_touched=True,
-        )
-        region_ids.attrs["_FillValue"] = -1
-
-        region_ids_: xr.DataArray = rasterize_like(
+        region_ids: xr.DataArray = rasterize_like(
             gpd=self.geom["regions"],
             column="region_id",
             raster=region_mask,
             dtype=np.int32,
-            nodata=0,
+            nodata=-1,
+            all_touched=True,
         ).compute()
         region_ids: xr.DataArray = self.set_region_subgrid(
             region_ids, name="region_ids"
         )
 
-        full_region_land_use_classes = reprojected_land_use.raster.reclassify(
-            pd.DataFrame.from_dict(
-                {
-                    reprojected_land_use.raster.nodata: 5,  # no data, set to permanent water bodies because ocean
-                    10: 0,  # tree cover
-                    20: 1,  # shrubland
-                    30: 1,  # grassland
-                    40: 1,  # cropland, setting to non-irrigated. Initiated as irrigated based on agents
-                    50: 4,  # built-up
-                    60: 1,  # bare / sparse vegetation
-                    70: 1,  # snow and ice
-                    80: 5,  # permanent water bodies
-                    90: 1,  # herbaceous wetland
-                    95: 5,  # mangroves
-                    100: 1,  # moss and lichen
-                },
-                orient="index",
-                columns=["GEB_land_use_class"],
-            ),
-        )["GEB_land_use_class"].astype(np.int32)
+        full_region_land_use_classes = reclassify(
+            reprojected_land_use,
+            {
+                reprojected_land_use.attrs[
+                    "_FillValue"
+                ]: 5,  # no data, set to permanent water bodies because ocean
+                10: 0,  # tree cover
+                20: 1,  # shrubland
+                30: 1,  # grassland
+                40: 1,  # cropland, setting to non-irrigated. Initiated as irrigated based on agents
+                50: 4,  # built-up
+                60: 1,  # bare / sparse vegetation
+                70: 1,  # snow and ice
+                80: 5,  # permanent water bodies
+                90: 1,  # herbaceous wetland
+                95: 5,  # mangroves
+                100: 1,  # moss and lichen
+            },
+        ).astype(np.int32)
+        full_region_land_use_classes.attrs["_FillValue"] = -1
 
         full_region_land_use_classes = self.set_region_subgrid(
             full_region_land_use_classes,
@@ -428,16 +430,16 @@ class LandSurface:
             .rename({"lat": "y", "lon": "x"})
             .rio.write_crs(4326)
         )
-        forest_kc = forest_kc.isel(
+        forest_kc.attrs["_FillValue"] = np.nan
+        forest_kc: xr.DataArray = forest_kc.isel(
             **get_window(
                 forest_kc.x,
                 forest_kc.y,
                 self.bounds,
                 buffer=3,
             ),
-        ).raster.mask_nodata()
-
-        forest_kc = resample_like(forest_kc, target, method="nearest")
+        )
+        forest_kc: xr.DataArray = resample_like(forest_kc, target, method="nearest")
 
         forest_kc.attrs = {
             key: attr
@@ -462,16 +464,16 @@ class LandSurface:
                 .rename({"lat": "y", "lon": "x"})
                 .rio.write_crs(4326)
             )
-            interception_capacity = interception_capacity.isel(
+            interception_capacity.attrs["_FillValue"] = np.nan
+            interception_capacity: xr.DataArray = interception_capacity.isel(
                 **get_window(
                     interception_capacity.x,
                     interception_capacity.y,
                     self.bounds,
                     buffer=3,
                 ),
-            ).raster.mask_nodata()
-
-            interception_capacity = resample_like(
+            )
+            interception_capacity: xr.DataArray = resample_like(
                 interception_capacity, target, method="nearest"
             )
 
@@ -534,9 +536,8 @@ class LandSurface:
         crop_group.attrs["_FillValue"] = crop_group.attrs["__FillValue"]
         del crop_group.attrs["__FillValue"]
 
-        crop_group = crop_group.raster.mask_nodata()
-
-        crop_group = crop_group.astype(np.float32)
+        crop_group: xr.DataArray = crop_group.astype(np.float32)
+        crop_group: xr.DataArray = convert_nodata(crop_group, np.nan)
 
         crop_group = resample_like(
             crop_group,

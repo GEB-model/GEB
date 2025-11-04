@@ -197,7 +197,7 @@ class Households(AgentBaseClass):
         # convert flood map to polygons
         flood_map_polygons = from_landuse_raster_to_polygon(
             flood_map.values,
-            flood_map.rio.transform(),
+            flood_map.rio.transform(recalc=True),
             flood_map.rio.crs,
         )
 

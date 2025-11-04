@@ -457,7 +457,7 @@ def get_farm_locations(
     """
     if method != "centroid":
         raise NotImplementedError
-    gt = farms.raster.transform.to_gdal()
+    gt = farms.rio.transform().to_gdal()
 
     farms = farms.values
     n_farmers = np.unique(farms[farms != -1]).size

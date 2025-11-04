@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from geb.workflows.raster import convert_nodata
+
 from .base import Adapter
 
 
@@ -458,9 +460,7 @@ class ECMWFForecasts(Adapter):
             x=((ds.x + 180) % 360 - 180)
         )  # Convert longitude coordinates to -180 to 180 format
         ds.attrs["_FillValue"] = np.nan  # Set fill value attribute for missing data
-        ds: xr.Dataset = (
-            ds.raster.mask_nodata()
-        )  # Mask no-data values using raster accessor
+        ds: xr.DataArray = convert_nodata(ds, np.nan)
 
         # assert that time is monotonically increasing with a constant step size
         assert (
