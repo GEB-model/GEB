@@ -17,7 +17,7 @@ from honeybees.library.raster import coord_to_pixel
 
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.typing import ArrayInt64
+from geb.typing import ArrayInt64, TwoDArrayInt32
 from geb.workflows.methods import multi_level_merge
 
 if TYPE_CHECKING:
@@ -545,12 +545,34 @@ class Reporter:
                 or if the variable type is not recognized.
             IndexError: If the coordinate is in sample_lon_lat is outside the model domain.
         """
-        if config["type"] in ("grid", "HRU"):
+        type_: str | None = config.get("type", None)
+        if type_ is None:
+            raise ValueError(f"Type not specified for {config}.")
+        if type_ in ("grid", "HRU"):
+            if not isinstance(value, np.ndarray):
+                raise ValueError(
+                    f"Value for {module_name}.{name} must be a numpy ndarray, but is {type(value)}."
+                )
+
+            grid_size = self.hydrology.grid.compressed_size
+            HRU_size = self.hydrology.HRU.compressed_size
+            if type_ == "grid" and value.shape[-1] != grid_size:
+                error = f"Value for {module_name}.{name} has size {value.shape[-1]}, but grid size is {grid_size}."
+                if value.shape[-1] == HRU_size:
+                    error += f" HRU is size {HRU_size}. Did you mean to set type to 'HRU' instead of 'grid'?"
+                raise ValueError(error)
+
+            if type_ == "HRU" and value.shape[-1] != HRU_size:
+                error = f"Value for {module_name}.{name} has size {value.shape[-1]}, but HRU size is {HRU_size}."
+                if value.shape[-1] == grid_size:
+                    error += f" grid id size {grid_size}. Did you mean to set type to 'grid' instead of 'HRU'?"
+                raise ValueError(error)
+
             if config["function"] is None:
-                if config["type"] == "HRU":
-                    value = self.hydrology.HRU.decompress(value)
+                if type_ == "HRU":
+                    value: np.ndarray = self.hydrology.HRU.decompress(value)
                 else:
-                    value = self.hydrology.grid.decompress(value)
+                    value: np.ndarray = self.hydrology.grid.decompress(value)
 
                 zarr_group: zarr.Group = zarr.open_group(
                     self.variables[module_name][name]
@@ -592,39 +614,64 @@ class Reporter:
                     value = np.sum(value)
                 elif function == "nansum":
                     value = np.nansum(value)
-                elif function == "sample_xy":
-                    if config["type"] == "grid":
-                        decompressed_array = self.hydrology.grid.decompress(value)
-                    elif config["type"] == "HRU":
-                        decompressed_array = self.hydrology.HRU.decompress(value)
+                elif function in ("sample_xy", "sample_lonlat"):
+                    # for sample_xy, args are pixel coordinates, which we
+                    # first need to convert to their pixel index in x and y
+                    if function == "sample_lonlat":
+                        if type_ == "grid":
+                            gt: tuple[float, float, float, float, float, float] = (
+                                self.model.hydrology.grid.gt
+                            )
+                        elif type_ == "HRU":
+                            gt: tuple[float, float, float, float, float, float] = (
+                                self.hydrology.HRU.gt
+                            )
+                        else:
+                            raise ValueError(
+                                f"Unknown varname type {config['varname']}"
+                            )
+                        px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
                     else:
-                        raise ValueError(f"Unknown varname type {config['varname']}")
-                    value = decompressed_array[..., int(args[1]), int(args[0])]
-                elif function == "sample_lonlat":
-                    if config["type"] == "grid":
-                        gt = self.model.hydrology.grid.gt
-                        decompressed_array = self.hydrology.grid.decompress(value)
-                    elif config["type"] == "HRU":
-                        gt = self.hydrology.HRU.gt
-                        decompressed_array = self.hydrology.HRU.decompress(value)
-                    else:
-                        raise ValueError(f"Unknown varname type {config['varname']}")
+                        # for sample_xy, args are pixel indices
+                        px: int = int(args[0])
+                        py: int = int(args[1])
 
-                    px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
+                    # both for the grid and HRU, the data is stored efficiently, so that
+                    # all data is in a 1D array, and we need to map the pixel coordinates
+                    # to the index in that 1D array
+                    # therefore, we first get the linear mapping and use that to get the index
+                    # then we extract the value at that index
+                    if type_ == "grid":
+                        linear_mapping: TwoDArrayInt32 = (
+                            self.hydrology.grid.linear_mapping
+                        )
+                    elif type_ == "HRU":
+                        linear_mapping: TwoDArrayInt32 = (
+                            self.hydrology.HRU.linear_mapping
+                        )
+                    else:
+                        raise ValueError(f"Unknown varname type {config['varname']}")
 
                     try:
-                        value = decompressed_array[py, px]
+                        idx: int = linear_mapping[py, px]
                     except IndexError:
                         raise IndexError(
-                            f"The coordinate ({args[0]},{args[1]}) is outside the model domain."
+                            f"Coordinate ({px}, {py}) is outside the model domain, which has shape {linear_mapping.shape}."
                         )
+                    if idx == -1:
+                        raise IndexError(
+                            f"Coordinate ({px}, {py}) is not a valid cell."
+                        )
+
+                    # extract the value at that index
+                    value = value[..., idx]
                 elif function in (
                     "weightedmean",
                     "weightednanmean",
                     "weightedsum",
                     "weightednansum",
                 ):
-                    if config["type"] == "HRU":
+                    if type_ == "HRU":
                         cell_area = self.hydrology.HRU.var.cell_area
                     else:
                         cell_area = self.hydrology.grid.var.cell_area
@@ -640,7 +687,7 @@ class Reporter:
                 else:
                     raise ValueError(f"Function {function} not recognized")
 
-        elif config["type"] == "agents":
+        elif type_ == "agents":
             if config["function"] is None:
                 ds = config["_file"]
                 if name not in ds:

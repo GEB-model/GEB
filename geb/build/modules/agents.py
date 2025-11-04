@@ -1183,16 +1183,25 @@ class Agents:
             cultivated_land_region_total_cells = (
                 ((region_ids == UID) & (cultivated_land)).sum().compute()
             )
-            total_cultivated_land_area_lu = (
-                (((region_ids == UID) & (cultivated_land)) * cell_area).sum().compute()
+
+            # in the later corrections, it is important that the total cultivated land is
+            # quite precise, so we first convert to float64 before summing
+            total_cultivated_land_area_lu: np.float64 = (
+                (((region_ids == UID) & (cultivated_land)) * cell_area)
+                .astype(np.float64)
+                .sum()
+                .compute()
             )
             if (
                 total_cultivated_land_area_lu == 0
             ):  # when no agricultural area, just continue as there will be no farmers. Also avoiding some division by 0 errors.
                 continue
 
-            average_subgrid_area_region = (
+            # in later corrections, it is important that the average subgrid area is quite precise,
+            # so we first convert to float64 before calculating the mean
+            average_subgrid_area_region: np.float64 = (
                 cell_area.where(((region_ids == UID) & (cultivated_land)))
+                .astype(np.float64)
                 .mean()
                 .compute()
             )
