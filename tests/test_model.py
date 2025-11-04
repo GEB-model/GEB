@@ -148,20 +148,21 @@ def test_forcing() -> None:
             close_after_run=False,
             **DEFAULT_RUN_ARGS,
         )
+        model.run(initialize_only=True)
 
-        for name in model.forcing.validators:
+        for name, loader in model.forcing._loaders.items():
             t_0: datetime = datetime(2010, 1, 1, 0, 0, 0)
-            forcing_0 = model.forcing.load(name, t_0)
+            forcing_0 = loader.load(t_0)
 
             t_1: datetime = datetime(2020, 1, 1, 0, 0, 0)
-            forcing_1 = model.forcing.load(name, t_1)
+            forcing_1 = loader.load(t_1)
 
             if isinstance(forcing_0, (xr.DataArray, np.ndarray)):
                 assert forcing_0.shape == forcing_1.shape, (
                     f"Shape of forcing data for {name} does not match for times {t_0} and {t_1}."
                 )
                 # non-precipitation forcing basically could never be equal, so we check for inequality
-                if name not in ("pr", "pr_hourly"):
+                if name != "pr_kg_per_m2_per_s":
                     assert not np.array_equal(forcing_0, forcing_1)
             else:
                 assert forcing_0 != forcing_1
