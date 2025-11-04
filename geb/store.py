@@ -1209,10 +1209,17 @@ class Store:
 
             split_name = bucket_folder.name.split(".")
 
+            # Skip loading hydrology-related buckets if hydrology simulation is disabled
             if (
                 not self.model.simulate_hydrology
                 and (split_name[0] == "hydrology")
                 and not split_name[1] == "grid"
+            ):
+                continue
+
+            # Skip loading flood-related buckets if flood simulation is disabled
+            if self.model.config["hazards"]["floods"]["simulate"] is False and (
+                split_name[0] == "floods"
             ):
                 continue
 
