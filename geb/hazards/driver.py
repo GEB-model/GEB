@@ -85,7 +85,7 @@ class HazardDriver:
                     timestep_end_time >= event["end_time"]
                     and event["end_time"] + self.timestep_length > timestep_end_time
                 ) or (
-                    event["end_time"] > self.end_time
+                    event["end_time"] > self.simulation_end
                     and event["start_time"] < timestep_end_time
                     and self.current_timestep == self.n_timesteps - 1
                 ):
@@ -93,13 +93,13 @@ class HazardDriver:
 
                     if (
                         event["end_time"]
-                        > self.model.end_time + self.model.timestep_length
+                        > self.model.simulation_end + self.model.timestep_length
                     ):
                         print(
-                            f"Warning: Flood event {event} ends after the model end time {self.end_time}. Simulating only part of flood event."
+                            f"Warning: Flood event {event} ends after the model end time {self.simulation_end}. Simulating only part of flood event."
                         )
                         event["end_time"] = (
-                            self.model.end_time + self.model.timestep_length
+                            self.model.simulation_end + self.model.timestep_length
                         )
                         assert event["end_time"] > event["start_time"]
 

@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
-from honeybees.agents import AgentBaseClass as HoneybeesAgentBaseClass
 from numba import njit
 
 from geb.module import Module
@@ -119,7 +118,7 @@ def downscale_volume(
     return downscaled_array
 
 
-class AgentBaseClass(Module, HoneybeesAgentBaseClass):
+class AgentBaseClass(Module):
     """Base class for all agent classes."""
 
     def __init__(self, model: GEBModel) -> None:
@@ -130,7 +129,6 @@ class AgentBaseClass(Module, HoneybeesAgentBaseClass):
         """
         if not hasattr(self, "redundancy"):
             self.redundancy = None  # default redundancy is None
-        HoneybeesAgentBaseClass.__init__(self)
         Module.__init__(self, model)
 
     @property

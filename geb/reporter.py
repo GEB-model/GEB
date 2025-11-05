@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import zarr.codecs
 import zarr.storage
+from dateutil.relativedelta import relativedelta
 from honeybees.library.raster import coord_to_pixel
 
 from geb.module import Module
@@ -105,7 +106,7 @@ WATER_CIRCLE_REPORT_CONFIG = {
 def create_time_array(
     start: datetime.datetime,
     end: datetime.datetime,
-    timestep: datetime.timedelta,
+    timestep: datetime.timedelta | relativedelta,
     conf: dict,
 ) -> list:
     """Create a time array based on the start and end time, the timestep, and the frequency.
@@ -293,8 +294,8 @@ class Reporter:
                 zarr_group = zarr.open_group(zarr_store, mode="w")
 
                 time = create_time_array(
-                    start=self.model.current_time,
-                    end=self.model.end_time,
+                    start=self.model.simulation_start,
+                    end=self.model.simulation_end,
                     timestep=self.model.timestep_length,
                     conf=config,
                 )
@@ -398,8 +399,8 @@ class Reporter:
                 zarr_group = zarr.open_group(store, mode="w")
 
                 time = create_time_array(
-                    start=self.model.current_time,
-                    end=self.model.end_time,
+                    start=self.model.simulation_start,
+                    end=self.model.simulation_end,
                     timestep=self.model.timestep_length,
                     conf=config,
                 )

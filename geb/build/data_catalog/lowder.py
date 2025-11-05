@@ -79,6 +79,11 @@ class Lowder(Adapter):
 
         df["ISO3"] = df["Country"].map(COUNTRY_NAME_TO_ISO3)
 
+        # Clean up agricultural area strings
+        df["Holdings/ agricultural area"] = (
+            df["Holdings/ agricultural area"].str.strip().str.replace("  ", " ")
+        )
+
         assert not df["ISO3"].isna().any(), (
             f"Found {df['ISO3'].isna().sum()} countries without ISO3 code"
         )
