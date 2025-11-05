@@ -1076,7 +1076,7 @@ def update_fn(
             }
 
         else:
-            raise ValueError
+            raise ValueError("build_config must be a str or dict.")
 
         model = get_builder(
             config,

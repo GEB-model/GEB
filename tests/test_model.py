@@ -144,7 +144,7 @@ def test_update_with_file() -> None:
     """
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
-        args["build_config"] = "update.yml"
+        args["build_config"] = Path("update.yml")
         update_fn(**args)
 
 
