@@ -775,7 +775,7 @@ class Forcing:
             era5_store.read,
             start_date=self.start_date - relativedelta(years=1),
             end_date=self.end_date,
-            bounds=self.grid["mask"].raster.bounds,
+            bounds=self.grid["mask"].rio.bounds(recalc=True),
         )
 
         pr_hourly: xr.DataArray = era5_loader(variable="tp")

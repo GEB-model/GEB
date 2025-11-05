@@ -26,6 +26,7 @@ from rasterio.crs import CRS
 from tqdm import tqdm
 
 from geb.workflows.io import open_zarr, to_zarr
+from geb.workflows.raster import rasterize_like
 
 
 class Hydrology:
@@ -1354,7 +1355,7 @@ class Hydrology:
             # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)
             obs = rxr.open_rasterio(observation)
-            sim = flood_map.raster.reproject_like(obs)
+            sim = flood_map.rio.reproject_match(obs)
             rivers = gpd.read_parquet(
                 Path("simulation_root")
                 / run_name
@@ -1378,15 +1379,19 @@ class Hydrology:
             gdf_mercator = rivers.to_crs(crs_mercator)
             gdf_mercator["geometry"] = gdf_mercator.buffer(gdf_mercator["width"] / 2)
             gdf_buffered = gdf_mercator.to_crs(sim.rio.crs)
-            rivers_mask_sim = sim.raster.geometry_mask(
-                gdf=gdf_buffered, all_touched=True
+            gdf_buffered["mask"] = True
+            rivers_mask_sim = rasterize_like(
+                gdf_buffered, "mask", sim, dtype=bool, nodata=False, all_touched=True
             )
+            rivers_mask_sim.attrs.pop("_FillValue", None)
             sim_no_rivers = sim.where(~rivers_mask_sim).fillna(0)
 
-            gdf_buffered = gdf_buffered.to_crs(obs.rio.crs)
-            rivers_mask_obs = obs.raster.geometry_mask(
-                gdf=gdf_buffered, all_touched=True
+            gdf_buffered = gdf_mercator.to_crs(obs.rio.crs)
+            gdf_buffered["mask"] = True
+            rivers_mask_obs = rasterize_like(
+                gdf_buffered, "mask", obs, dtype=bool, nodata=False, all_touched=True
             )
+            rivers_mask_obs.attrs.pop("_FillValue", None)
             obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
 
             # Step 3: Clip out region from observations

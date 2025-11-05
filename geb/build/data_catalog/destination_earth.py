@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import xarray as xr
 
-from geb.workflows.raster import interpolate_na_along_time_dim
+from geb.workflows.raster import convert_nodata, interpolate_na_along_time_dim
 
 from .base import Adapter
 
@@ -120,7 +120,7 @@ class DestinationEarth(Adapter):
         da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
 
         da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
-        da: xr.DataArray = da.raster.mask_nodata()
+        da: xr.DataArray = convert_nodata(da, np.nan)
         return da
 
     def read(
