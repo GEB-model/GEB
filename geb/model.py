@@ -621,16 +621,15 @@ class GEBModel(Module, HazardDriver, ABM_Model):
             clean_report_folder=False,
         )
 
-        HazardDriver.initialize(self, longest_flood_event_in_days=30)
         # ugly switch to determine whether model has coastal basins
         subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
         if subbasins["is_coastal_basin"].any():
             generate_storm_surge_hydrographs(self)
-            rp_maps_coastal = self.sfincs.get_coastal_return_period_maps()
+            rp_maps_coastal = self.floods.get_coastal_return_period_maps()
         else:
             rp_maps_coastal = None
-        rp_maps_riverine = self.sfincs.get_riverine_return_period_maps()
-        self.sfincs.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
+        rp_maps_riverine = self.floods.get_riverine_return_period_maps()
+        self.floods.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
 
     def evaluate(self, *args: Any, **kwargs: Any) -> None:
         """Call the evaluator to evaluate the model results."""
