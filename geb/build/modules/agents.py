@@ -1228,7 +1228,7 @@ class Agents:
                 agricultural_area_db_ha = (
                     region_farm_sizes.loc[
                         region_farm_sizes["Holdings/ agricultural area"]
-                        == "Agricultural area (Ha) "
+                        == "Agricultural area (Ha)"
                     ]
                     .iloc[0]
                     .drop(["Holdings/ agricultural area", "ISO3"])
