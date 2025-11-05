@@ -194,20 +194,6 @@ preview = true
     "D102",
     "D103",
 ]
-"geb/evaluate/hydrology.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D102",
-    "D103",
-]
-"geb/build/modules/observations.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D103",
-    "D102",
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]
