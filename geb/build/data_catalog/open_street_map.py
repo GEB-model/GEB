@@ -28,7 +28,7 @@ class OpenStreetMap(Adapter):
         """Sets the URL for the OSM data source.
 
         Args:
-            url: The URL template for the SoilGrids dataset, with placeholders for variable and depth.
+            url: The URL template for the OSM dataset.
 
         Returns:
             The OpenStreetMap adapter instance.
