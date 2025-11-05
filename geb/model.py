@@ -390,8 +390,6 @@ class GEBModel(Module, HazardDriver):
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
-        self.timestep_length = timestep_length
-
         self.hydrology: Hydrology = Hydrology(self)
 
         HazardDriver.__init__(self)
