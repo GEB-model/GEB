@@ -928,7 +928,18 @@ class GEBModel(Module, HazardDriver):
 
         Returns:
             Current model time
+
+        Raises:
+            AttributeError: If `timestep_length` or `simulation_start` are not initialized.
         """
+        # Defensive check: ensure required attributes are initialized
+        if not hasattr(self, "timestep_length") or not hasattr(
+            self, "simulation_start"
+        ):
+            raise AttributeError(
+                "Cannot compute current_time: 'timestep_length' and/or 'simulation_start' are not initialized. "
+                "Ensure the model is fully initialized before accessing current_time."
+            )
         return self.simulation_start + self.current_timestep * self.timestep_length
 
     @property
@@ -969,10 +980,14 @@ class GEBModel(Module, HazardDriver):
         else:
             logfile = "GEB.log"
 
+        formatter = logging.Formatter("%(asctime)s : %(levelname)s : %(message)s")
+
         file_handler = logging.FileHandler(logfile, mode="w")
+        file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
-        formatter = logging.Formatter("%(asctime)s : %(levelname)s : %(message)s")
-        file_handler.setFormatter(formatter)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
 
         return logger
