@@ -57,6 +57,9 @@ class HazardDriver:
                 self.floods.save_discharge()
                 self.floods.save_runoff_m()
 
+            if self.config["hazards"]["floods"]["events"] is None:
+                return
+
             for event in self.config["hazards"]["floods"]["events"]:
                 assert isinstance(event["start_time"], datetime), (
                     f"Start time {event['start_time']} must be a datetime object."
