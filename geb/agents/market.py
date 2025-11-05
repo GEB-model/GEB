@@ -287,7 +287,7 @@ class Market(AgentBaseClass):
             # and on 5-year anniversaries
             (
                 not self.model.in_spinup
-                and (self.model.run_start.year - self.model.current_time.year) % 5 == 0
+                and (self.model.current_time.year - self.model.run_start.year) % 5 == 0
                 and (
                     self.model.current_time.month == 1
                     and self.model.current_time.day == 1
