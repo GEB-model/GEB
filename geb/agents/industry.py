@@ -105,12 +105,11 @@ class Industry(AgentBaseClass):
                     shape=self.grid.shape,
                     transform=self.grid.transform,
                 )
-                / (water_demand.rio.transform(recalc=True).a / self.grid.transform.a)
-                ** 2
+                / (water_demand.rio.transform().a / self.grid.transform.a) ** 2
             )  # correct for change in cell size
             water_demand = (
                 downscale_volume(
-                    water_demand.rio.transform(recalc=True).to_gdal(),
+                    water_demand.rio.transform().to_gdal(),
                     self.grid.gt,
                     water_demand.values,
                     self.grid.mask,
@@ -139,15 +138,11 @@ class Industry(AgentBaseClass):
                     shape=self.grid.shape,
                     transform=self.grid.transform,
                 )
-                / (
-                    water_consumption.rio.transform(recalc=True).a
-                    / self.grid.transform.a
-                )
-                ** 2
+                / (water_consumption.rio.transform().a / self.grid.transform.a) ** 2
             )
             water_consumption = (
                 downscale_volume(
-                    water_consumption.rio.transform(recalc=True).to_gdal(),
+                    water_consumption.rio.transform().to_gdal(),
                     self.grid.gt,
                     water_consumption.values,
                     self.grid.mask,

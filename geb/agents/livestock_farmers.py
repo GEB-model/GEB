@@ -103,14 +103,14 @@ class LiveStockFarmers(AgentBaseClass):
                 transform=self.model.hydrology.grid.transform,
             )
             / (
-                water_consumption.rio.transform(recalc=True).a
+                water_consumption.rio.transform().a
                 / self.model.hydrology.grid.transform.a
             )
             ** 2
         )
         water_consumption: npt.NDArray[np.float32] = (
             downscale_volume(
-                water_consumption.rio.transform(recalc=True).to_gdal(),
+                water_consumption.rio.transform().to_gdal(),
                 self.model.hydrology.grid.gt,
                 water_consumption.values,
                 self.model.hydrology.grid.mask,

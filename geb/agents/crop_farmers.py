@@ -801,7 +801,7 @@ class CropFarmers(AgentBaseClass):
             self.var.GEV_parameters[:, i] = sample_from_map(
                 GEV_grid.values,
                 self.var.locations.data,
-                GEV_grid.rio.transform(recalc=True).to_gdal(),
+                GEV_grid.rio.transform().to_gdal(),
             )
 
         assert not np.all(np.isnan(self.var.GEV_parameters))
