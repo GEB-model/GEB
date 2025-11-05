@@ -1075,6 +1075,8 @@ def fetch_and_save(
     session: requests.Session | None = None,
     params: None | dict[str, Any] = None,
     timeout: float | int = 30,
+    show_progress: bool = True,
+    verbose: bool = True,
 ) -> bool:
     """Fetches data from a URL and saves it to a file, with a retry mechanism.
 
@@ -1092,6 +1094,8 @@ def fetch_and_save(
         session: An optional requests.Session object to use for HTTP requests.
         params: Optional dictionary of query parameters for HTTP requests.
         timeout: The timeout in seconds for HTTP requests.
+        show_progress: Whether to show a progress bar during download.
+        verbose: Whether to print download status messages. Default is True.
 
     Returns:
         True if the file was successfully downloaded, False otherwise.
@@ -1113,7 +1117,8 @@ def fetch_and_save(
 
         while attempts < max_retries:
             try:
-                print(f"Downloading {url} to {file_path}")
+                if verbose:
+                    print(f"Downloading {url} to {file_path}")
                 # Create a temporary file
                 temp_file = tempfile.NamedTemporaryFile(delete=False)
                 temp_file.close()
@@ -1127,9 +1132,10 @@ def fetch_and_save(
 
             except Exception as e:
                 # Log the error
-                print(
-                    f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
-                )
+                if verbose:
+                    print(
+                        f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
+                    )
 
                 # Remove the temporary file if it exists
                 if temp_file is not None and os.path.exists(temp_file.name):
@@ -1151,7 +1157,8 @@ def fetch_and_save(
 
         while attempts < max_retries:
             try:
-                print(f"Downloading {url} to {file_path}")
+                if verbose:
+                    print(f"Downloading {url} to {file_path}")
                 # Attempt to make the request
                 response = session.get(url, stream=True, params=params, timeout=timeout)
                 response.raise_for_status()  # Raises HTTPError for bad status codes
@@ -1160,12 +1167,16 @@ def fetch_and_save(
                 temp_file = tempfile.NamedTemporaryFile(delete=False)
 
                 # Write to the temporary file
-                total_size = int(response.headers.get("content-length", 0))
-                progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-                for data in response.iter_content(chunk_size=chunk_size):
-                    temp_file.write(data)
-                    progress_bar.update(len(data))
-                progress_bar.close()
+                if show_progress:
+                    total_size = int(response.headers.get("content-length", 0))
+                    progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
+                    for data in response.iter_content(chunk_size=chunk_size):
+                        temp_file.write(data)
+                        progress_bar.update(len(data))
+                    progress_bar.close()
+                else:
+                    for data in response.iter_content(chunk_size=chunk_size):
+                        temp_file.write(data)
 
                 # Close the temporary file
                 temp_file.close()
@@ -1177,7 +1188,10 @@ def fetch_and_save(
 
             except requests.RequestException as e:
                 # Log the error
-                print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+                if verbose:
+                    print(
+                        f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}"
+                    )
 
                 # Remove the temporary file if it exists
                 if temp_file is not None and os.path.exists(temp_file.name):
