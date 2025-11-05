@@ -424,6 +424,8 @@ def test_pad_xy(pad_bounds: tuple[int, int, int, int]) -> None:
     # Check that the original data is preserved
     original_data_in_padded = padded_da.isel(returned_slice)
     assert np.allclose(original_data_in_padded.values, original_da.values)
+    assert (original_data_in_padded.x.values == original_da.x.values).all()
+    assert (original_data_in_padded.y.values == original_da.y.values).all()
 
     # Check that padded areas have the constant value
     # Create a mask of the original data area and invert it to get the padded area

@@ -362,7 +362,12 @@ def pad_xy(
     | None = None,
     return_slice: bool = False,
 ) -> xr.DataArray | tuple[xr.DataArray, dict[str, slice]]:
-    """Pad the array to x,y bounds.
+    """Pad the array to x,y bounds, while preserving old coordinates exactly.
+
+    Rather than re-calculating the x and y coordinates, this function
+    uses the original coordinates and extends them as needed. This ensures
+    that the original coordinates are preserved without introducing floating point
+    imprecision.
 
     Args:
         array_rio: rio assecor of xarray DataArray
