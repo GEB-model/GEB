@@ -393,7 +393,7 @@ def pad_xy(
 
     # Create new coordinates by extending existing ones
     if top - resolution_y < maxy:
-        new_top_coords = np.arange(y_coord[0] - resolution_y, maxy, -resolution_y)[::-1]
+        new_top_coords = np.arange(top - resolution_y, maxy, -resolution_y)[::-1]
         new_y_coord = np.concatenate([new_top_coords, y_coord])
         y_before = len(new_y_coord) - len(y_coord)
         y_coord = new_y_coord
@@ -407,7 +407,7 @@ def pad_xy(
 
     if left - resolution_x > minx:
         new_left_coords: np.ndarray = np.arange(
-            x_coord[0] - resolution_x, minx, -resolution_x
+            left - resolution_x, minx, -resolution_x
         )[::-1]
         new_x_coord = np.concatenate([new_left_coords, x_coord])
         x_before = len(new_x_coord) - len(x_coord)
