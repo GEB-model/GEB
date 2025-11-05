@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
-from honeybees.library.raster import pixels_to_coords, sample_from_map
 from tqdm import tqdm
 
 from geb.agents.crop_farmers import (
@@ -22,7 +21,12 @@ from geb.agents.crop_farmers import (
 from geb.build.methods import build_method
 from geb.typing import ArrayBool, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
-from geb.workflows.raster import clip_with_grid, interpolate_na_2d
+from geb.workflows.raster import (
+    clip_with_grid,
+    interpolate_na_2d,
+    pixels_to_coords,
+    sample_from_map,
+)
 
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,

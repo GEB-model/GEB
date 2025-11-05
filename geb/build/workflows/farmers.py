@@ -4,10 +4,10 @@ import logging
 
 import numpy as np
 import pandas as pd
-from honeybees.library.raster import pixels_to_coords
 from numba import njit
 
 from geb.typing import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.workflows.raster import pixels_to_coords
 
 
 @njit(cache=True, parallel=False)

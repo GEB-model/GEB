@@ -29,7 +29,6 @@ dependencies = [
     "flopy>=3.8.0",
     "folium>=0.19.6",
     "geopandas>=1.0.1",
-    "honeybees>=1.2.0",
     "hydromt==0.10.1",
     "hydromt-sfincs>=1.2.0",
     "networkx",

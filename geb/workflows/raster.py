@@ -1,5 +1,7 @@
 """Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 from typing import Any, Literal, overload
 
@@ -12,6 +14,7 @@ import xarray
 import xarray as xr
 import xarray_regrid
 from affine import Affine
+from numba import njit, prange
 from pyresample.geometry import AreaDefinition
 from pyresample.gradient import (
     block_bilinear_interpolator,
@@ -27,6 +30,130 @@ from geb.typing import (
     TwoDArrayFloat32,
     TwoDArrayFloat64,
 )
+
+
+@njit(cache=True, parallel=True)
+def pixels_to_coords(
+    pixels: np.ndarray, gt: tuple[float, float, float, float, float, float]
+) -> np.ndarray:
+    """Converts pixels (x, y) to coordinates (lon, lat) for given geotransformation.
+
+    Uses the upper left corner of the pixels. To use the centers, add 0.5 to input pixels.
+
+    Args:
+        pixels: The pixels (x, y) that need to be transformed to coordinates (shape: 2, n).
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        The coordinates (lon, lat) with shape (2, n).
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
+    """
+    assert pixels.shape[1] == 2
+    if gt[2] + gt[4] == 0:
+        coords = np.empty(pixels.shape, dtype=np.float64)
+        for i in prange(coords.shape[0]):
+            coords[i, 0] = pixels[i, 0] * gt[1] + gt[0]
+            coords[i, 1] = pixels[i, 1] * gt[5] + gt[3]
+        return coords
+    else:
+        raise ValueError("Cannot convert rotated maps")
+
+
+@njit(parallel=False)
+def sample_from_map(
+    array: np.ndarray,
+    coords: np.ndarray,
+    gt: tuple[float, float, float, float, float, float],
+) -> np.ndarray:
+    """Sample coordinates from a map. Can handle multiple dimensions.
+
+    Args:
+        array: The map to sample from (2+n dimensions).
+        coords: The coordinates used to sample (shape: 2, m).
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        The values at each coordinate.
+    """
+    assert gt[2] + gt[4] == 0
+    size = coords.shape[0]
+    x_offset = gt[0]
+    y_offset = gt[3]
+    x_step = gt[1]
+    y_step = gt[5]
+    values = np.empty((size,) + array.shape[:-2], dtype=array.dtype)
+    for i in prange(size):
+        values[i] = array[
+            ...,
+            int((coords[i, 1] - y_offset) / y_step),
+            int((coords[i, 0] - x_offset) / x_step),
+        ]
+    return values
+
+
+@njit(
+    parallel=False,
+    cache=True,
+)  # Writing to an array cannot be parallelized as race conditions would occur.
+def write_to_array(
+    array: np.ndarray,
+    values: np.ndarray,
+    coords: np.ndarray,
+    gt: tuple[float, float, float, float, float, float],
+) -> np.ndarray:
+    """Write values using coordinates to a map.
+
+    If multiple coordinates map to a single cell,
+    the values are added. The operation is inplace.
+
+    Args:
+        array: The 2-dimensional array to write to.
+        values: The values to write (shape: n).
+        coords: The coordinates of the values (shape: 2, n).
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        The array with the values added (operation is inplace).
+    """
+    assert values.size == coords.shape[0]
+    assert gt[2] + gt[4] == 0
+    size = values.size
+    x_offset = gt[0]
+    y_offset = gt[3]
+    x_step = gt[1]
+    y_step = gt[5]
+    for i in range(size):
+        array[
+            int((coords[i, 1] - y_offset) / y_step),
+            int((coords[i, 0] - x_offset) / x_step),
+        ] += values[i]
+    return array
+
+
+@njit(cache=True)
+def coord_to_pixel(
+    coord: np.ndarray, gt: tuple[float, float, float, float, float, float]
+) -> tuple[int, int]:
+    """Converts coordinate to pixel (x, y) for given geotransformation.
+
+    Args:
+        coord: The coordinate (lon, lat) that need to be transformed to pixel.
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        A tuple of pixel coordinates (x, y).
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
+    """
+    if gt[2] + gt[4] == 0:
+        px = (coord[0] - gt[0]) / gt[1]
+        py = (coord[1] - gt[3]) / gt[5]
+        return int(px), int(py)
+    else:
+        raise ValueError("Cannot convert rotated maps")
 
 
 def compress(array: npt.NDArray[Any], mask: npt.NDArray[np.bool_]) -> npt.NDArray[Any]:
