@@ -1,5 +1,7 @@
 """The Lowder adapter for downloading and processing farm size distribution data."""
 
+from __future__ import annotations
+
 from typing import Any
 
 import pandas as pd
@@ -19,7 +21,7 @@ class Lowder(Adapter):
         """Initialize the Lowder adapter."""
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> "Lowder":
+    def fetch(self, url: str) -> Lowder:
         """Fetch the Lowder farm size distribution data from the given URL.
 
         Args:

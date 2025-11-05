@@ -1,5 +1,7 @@
 """WhyMap adapter."""
 
+from __future__ import annotations
+
 import shutil
 import zipfile
 from pathlib import Path
@@ -28,7 +30,7 @@ class WhyMap(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str, *args: Any, **kwargs: Any) -> "WhyMap":
+    def fetch(self, url: str, *args: Any, **kwargs: Any) -> WhyMap:
         """Fetch the WhyMap dataset.
 
         Args:
