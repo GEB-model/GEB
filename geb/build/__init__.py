@@ -1805,7 +1805,7 @@ class GEBModel(
             ldd, name="drainage/original_d8_flow_directions"
         )
 
-        self.derive_mask(ldd, ldd.rio.transform(), resolution_arcsec)
+        self.derive_mask(ldd, ldd.rio.transform(recalc=True), resolution_arcsec)
 
         self.create_subgrid(subgrid_factor)
 

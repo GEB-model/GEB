@@ -24,7 +24,7 @@ from geb.agents.crop_farmers import (
 from geb.build.methods import build_method
 from geb.typing import ArrayBool, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import fetch_and_save, get_window
-from geb.workflows.raster import clip_with_grid
+from geb.workflows.raster import clip_with_grid, interpolate_na_2d
 
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
@@ -1043,8 +1043,9 @@ class Agents:
         cut_farm_indices: ArrayInt32 = cut_farms[cut_farms != -1]
 
         assert farms.min() >= -1  # -1 is nodata value, all farms should be positive
-        subgrid_farms: xr.DataArray = farms.raster.clip_bbox(
-            self.subgrid["mask"].raster.bounds
+        subgrid_farms: xr.DataArray = farms.sel(
+            x=slice(self.subgrid["mask"].x[0], self.subgrid["mask"].x[-1]),
+            y=slice(self.subgrid["mask"].y[0], self.subgrid["mask"].y[-1]),
         )
 
         subgrid_farms_in_study_area: xr.DataArray = xr.where(
@@ -2464,6 +2465,7 @@ class Agents:
         fraction_sw_irrigation_data = self.new_data_catalog.fetch(
             "global_irrigation_area_surface_water"
         ).read()
+        fraction_sw_irrigation_data.attrs["_FillValue"] = np.nan
 
         fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
             **get_window(
@@ -2472,11 +2474,15 @@ class Agents:
                 self.bounds,
                 buffer=5,
             ),
-        ).raster.interpolate_na()
+        )
+        fraction_sw_irrigation_data: xr.DataArray = interpolate_na_2d(
+            fraction_sw_irrigation_data
+        )
 
         fraction_gw_irrigation_data = self.new_data_catalog.fetch(
             "global_irrigation_area_groundwater"
         ).read()
+        fraction_gw_irrigation_data.attrs["_FillValue"] = np.nan
 
         fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
             **get_window(
@@ -2485,7 +2491,10 @@ class Agents:
                 self.bounds,
                 buffer=5,
             ),
-        ).raster.interpolate_na()
+        )
+        fraction_gw_irrigation_data: xr.DataArray = interpolate_na_2d(
+            fraction_gw_irrigation_data
+        )
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"

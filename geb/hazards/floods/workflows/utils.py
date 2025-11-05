@@ -325,8 +325,7 @@ def check_docker_running() -> bool | None:
         subprocess.run(
             ["docker", "info"],
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):

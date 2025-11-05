@@ -26,7 +26,7 @@ class Module(ABC):
             var_validator: Optional validator function for the variable bucket.
                 Must return True if the variable is valid, False otherwise.
         """
-        self.model = model
+        self.model: GEBModel = model
         if create_var:
             self.var = self.model.store.create_bucket(
                 f"{self.name}.var", validator=var_validator

@@ -60,7 +60,7 @@ if TYPE_CHECKING:
 
 
 def set_river_outflow_boundary_condition(
-    sf: "SfincsModel",
+    sf: SfincsModel,
     model_root: Path,
     simulation_root: Path,
     write_figures: bool = True,
@@ -173,7 +173,7 @@ class SFINCSRootModel:
         """
         return Path(self.path / "sfincs.inp").is_file()
 
-    def read(self) -> "SFINCSRootModel":
+    def read(self) -> SFINCSRootModel:
         """Reads an existing SFINCS model from the model root directory.
 
         Returns:
@@ -208,7 +208,7 @@ class SFINCSRootModel:
         include_mask: gpd.GeoDataFrame | None = None,
         bnd_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_outflow: bool = True,
-    ) -> "SFINCSRootModel":
+    ) -> SFINCSRootModel:
         """Build a SFINCS model.
 
         Notes:
@@ -584,7 +584,7 @@ class SFINCSRootModel:
         self,
         *args: Any,
         **kwargs: Any,
-    ) -> "SFINCSSimulation":
+    ) -> SFINCSSimulation:
         """Sets forcing for a SFINCS model based on the provided parameters.
 
         Creates a new simulation directory and creteas a new sfincs model
@@ -664,7 +664,7 @@ class SFINCSRootModel:
 
     def create_simulation_for_return_period(
         self, return_period: int | float
-    ) -> "MultipleSFINCSSimulations":
+    ) -> MultipleSFINCSSimulations:
         """Creates multiple SFINCS simulations for a specified return period.
 
         The method groups rivers by their calculation group and creates a separate
@@ -751,7 +751,7 @@ class SFINCSRootModel:
 class MultipleSFINCSSimulations:
     """Manages multiple SFINCS simulations as a single entity."""
 
-    def __init__(self, simulations: list["SFINCSSimulation"]) -> None:
+    def __init__(self, simulations: list[SFINCSSimulation]) -> None:
         """Simulates running multiple SFINCS simulations as one.
 
         Args:
@@ -964,7 +964,7 @@ class SFINCSSimulation:
         Args:
             runoff_m: xarray DataArray containing runoff values in m per time step.
         """
-        assert runoff_m.raster.crs is not None, "precipitation_grid should have a crs"
+        assert runoff_m.rio.crs is not None, "precipitation_grid should have a crs"
         assert (
             pd.to_datetime(runoff_m.time[0].item()).to_pydatetime() <= self.start_time
         )

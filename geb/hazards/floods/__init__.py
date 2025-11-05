@@ -373,7 +373,7 @@ class Floods(Module):
         mask_data = mask_var.values.astype(np.uint8)
 
         # Get transform from raster metadata
-        transform = mask_var.rio.transform()
+        transform = mask_var.rio.transform(recalc=True)
 
         # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
         shapes = rasterio.features.shapes(mask_data, mask=None, transform=transform)
