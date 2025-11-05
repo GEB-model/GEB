@@ -381,7 +381,6 @@ class GEBModel(Module, HazardDriver):
         self.in_spinup = in_spinup
         self.simulate_hydrology = simulate_hydrology
 
-        self.simulation_start = current_time
         self.timestep_length = timestep_length
         self.n_timesteps = n_timesteps
         self.current_timestep = 0
@@ -892,15 +891,6 @@ class GEBModel(Module, HazardDriver):
             return self.spinup_start
         else:
             return self.run_start
-
-    @simulation_start.setter
-    def simulation_start(self, value: datetime.datetime) -> None:
-        """Set the start of the current simulation.
-
-        Args:
-            value: Datetime object representing the start of the current simulation.
-        """
-        self._simulation_start = value
 
     @property
     def simulation_end(self) -> datetime.datetime:
