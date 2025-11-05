@@ -207,7 +207,6 @@ class SFINCSRootModel:
         coastal: bool = False,
         include_mask: gpd.GeoDataFrame | None = None,
         bnd_exclude_mask: gpd.GeoDataFrame | None = None,
-        gtsm_stations: gpd.GeoDataFrame | None = None,
         setup_outflow: bool = True,
     ) -> "SFINCSRootModel":
         """Build a SFINCS model.
@@ -347,11 +346,11 @@ class SFINCSRootModel:
             river_len=0,
         )
         # give error if outflow greater than 1
-        if len(outflow_points) > 1 and not coastal:
+        if len(outflow_points) > 1 and setup_outflow:
             raise ValueError(
                 "More than one outflow point found, outflow boundary condition will fail to setup"
             )
-        elif len(outflow_points) == 0 and not coastal:
+        elif len(outflow_points) == 0 and setup_outflow:
             raise ValueError(
                 "No outflow point found, outflow boundary condition will fail to setup"
             )
@@ -728,12 +727,12 @@ class SFINCSRootModel:
             )
 
             # Set up river outflow boundary condition for this simulation
-            set_river_outflow_boundary_condition(
-                sf=simulation.sfincs_model,
-                model_root=self.path,
-                simulation_root=simulation.path,
-                write_figures=simulation.write_figures,
-            )
+            # set_river_outflow_boundary_condition(
+            #     sf=simulation.sfincs_model,
+            #     model_root=self.path,
+            #     simulation_root=simulation.path,
+            #     write_figures=simulation.write_figures,
+            # )
 
             simulations.append(simulation)
 
