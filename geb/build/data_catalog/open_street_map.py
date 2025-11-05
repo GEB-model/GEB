@@ -31,7 +31,7 @@ class OpenStreetMap(Adapter):
             url: The URL template for the SoilGrids dataset, with placeholders for variable and depth.
 
         Returns:
-            The SoilGrids adapter instance.
+            The OpenStreetMap adapter instance.
         """
         self.url = url
         return self
