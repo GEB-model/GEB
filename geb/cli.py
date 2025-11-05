@@ -18,7 +18,9 @@ from pstats import Stats
 from typing import Any, Callable
 
 import click
+import geopandas as gpd
 import yaml
+from shapely.geometry import box
 
 from geb import __version__
 from geb.build import GEBModel as GEBModelBuild
@@ -1442,6 +1444,292 @@ def workflow(
         # Execute snakemake in the working directory
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
+
+
+def init_multiple_fn(
+    config: str | Path,
+    build_config: str | Path,
+    update_config: str | Path,
+    working_directory: str | Path,
+    from_example: str,
+    geometry_bounds: str,
+    target_area_km2: float,
+    area_tolerance: float,
+    cluster_prefix: str,
+    overwrite: bool,
+    save_geoparquet: str | Path | None,
+    save_map: str | Path | None,
+) -> None:
+    """Create multiple models from a geometry by clustering downstream subbasins.
+
+    Args:
+        config: Path to the base model configuration file.
+        build_config: Path to the base model build configuration file.
+        update_config: Path to the base model update configuration file.
+        working_directory: Working directory for the models.
+        from_example: Name of the example to use as a base for the models.
+        geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
+        target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
+        area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
+        cluster_prefix: Prefix for cluster directory names.
+        overwrite: If True, overwrite existing directories and files.
+        save_geoparquet: Path to save clusters as geoparquet file. If None, no file is saved.
+        save_map: Path to save visualization map as PNG file. If None, no map is created.
+
+    Raises:
+        FileExistsError: If directories already exist and overwrite is False.
+        FileNotFoundError: If the example folder does not exist.
+        ValueError: If geometry_bounds format is invalid.
+    """
+    from geb.build import (
+        cluster_subbasins_by_area_and_proximity,
+        create_cluster_visualization_map,
+        create_multi_basin_configs,
+        get_all_downstream_subbasins_in_geom,
+        get_river_graph,
+        save_clusters_as_merged_geometries,
+        save_clusters_to_geoparquet,
+    )
+    from geb.build.data_catalog import NewDataCatalog
+
+    config: Path = Path(config)
+    build_config: Path = Path(build_config)
+    update_config: Path = Path(update_config)
+    working_directory: Path = Path(working_directory)
+
+    # Create the models/large_scale directory structure
+    models_dir = Path.cwd().parent / "models"
+    large_scale_dir = models_dir / "large_scale"
+    if not large_scale_dir.exists():
+        large_scale_dir.mkdir(parents=True, exist_ok=True)
+
+    # Always create geoparquet and map files in large_scale directory if not specified
+    if save_geoparquet is None:
+        save_geoparquet = large_scale_dir / f"{cluster_prefix}_clusters.geoparquet"
+    if save_map is None:
+        save_map = large_scale_dir / f"{cluster_prefix}_clusters_map.png"
+
+    # Parse geometry bounds
+    try:
+        bounds = [float(x.strip()) for x in geometry_bounds.split(",")]
+        if len(bounds) != 4:
+            raise ValueError
+        xmin, ymin, xmax, ymax = bounds
+    except ValueError:
+        raise ValueError(
+            "geometry_bounds must be in format 'xmin,ymin,xmax,ymax' with numeric values"
+        )
+
+    bbox_geom = gpd.GeoDataFrame(
+        geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
+    )
+
+    # Initialize data catalog and logger
+    data_catalog_instance = NewDataCatalog()
+    logger = create_logger(working_directory / "init_multiple.log")
+
+    logger.info("Starting multiple model initialization")
+    logger.info(f"Using geometry bounds: {geometry_bounds}")
+    logger.info(f"Target area: {target_area_km2:,.0f} km²")
+    logger.info(f"Area tolerance: {area_tolerance:.1%}")
+
+    logger.info("Loading river network...")
+    river_graph = get_river_graph(data_catalog_instance)
+
+    logger.info("Finding downstream subbasins in geometry...")
+    downstream_subbasins = get_all_downstream_subbasins_in_geom(
+        data_catalog_instance, bbox_geom, logger
+    )
+
+    if not downstream_subbasins:
+        raise ValueError("No downstream subbasins found in the specified geometry")
+
+    logger.info(f"Found {len(downstream_subbasins)} downstream subbasins")
+
+    logger.info("Clustering subbasins by area and proximity...")
+    clusters = cluster_subbasins_by_area_and_proximity(
+        data_catalog_instance,
+        downstream_subbasins,
+        target_area_km2=target_area_km2,
+        area_tolerance=area_tolerance,
+        logger=logger,
+    )
+
+    logger.info(f"Created {len(clusters)} clusters")
+
+    # Check for existing directories if not overwriting
+    if not overwrite:
+        for i in range(len(clusters)):
+            cluster_dir = large_scale_dir / f"{cluster_prefix}_{i:03d}"
+            if cluster_dir.exists():
+                raise FileExistsError(
+                    f"Cluster directory {cluster_dir} already exists. Remove --no-overwrite flag to overwrite."
+                )
+
+    # Verify example folder exists
+    example_folder: Path = (
+        Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / "examples" / from_example
+    )
+    if not example_folder.exists():
+        raise FileNotFoundError(
+            f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
+        )
+
+    logger.info(f"Creating cluster configurations using example: {from_example}")
+    # Create cluster configurations
+    cluster_directories = create_multi_basin_configs(
+        clusters=clusters,
+        working_directory=large_scale_dir,
+        cluster_prefix=cluster_prefix,
+    )
+
+    logger.info(f"Saving clusters to geoparquet: {save_geoparquet}")
+    # Save clusters to geoparquet (always create)
+    save_clusters_to_geoparquet(
+        clusters=clusters,
+        data_catalog=data_catalog_instance,
+        output_path=save_geoparquet,
+        cluster_prefix=cluster_prefix,
+    )
+
+    # Save clusters as merged geometries (complete basins as single polygons)
+    merged_basins_path = (
+        save_geoparquet.parent / f"complete_basins_{save_geoparquet.stem}.geoparquet"
+    )
+    logger.info(f"Saving complete basins as merged geometries: {merged_basins_path}")
+    save_clusters_as_merged_geometries(
+        clusters=clusters,
+        data_catalog=data_catalog_instance,
+        river_graph=river_graph,
+        output_path=merged_basins_path,
+        cluster_prefix=cluster_prefix,
+        include_upstream=True,  # Include all upstream subbasins in merged geometry
+    )
+
+    logger.info(f"Creating visualization map: {save_map}")
+    # Create visualization map (always create)
+    create_cluster_visualization_map(
+        clusters=clusters,
+        data_catalog=data_catalog_instance,
+        output_path=save_map,
+        cluster_prefix=cluster_prefix,
+    )
+
+    logger.info(
+        f"Successfully created {len(cluster_directories)} model configurations:"
+    )
+    for cluster_dir in cluster_directories:
+        logger.info(f"  {cluster_dir.relative_to(large_scale_dir)}")
+
+    logger.info("To build all models, run:")
+    logger.info(f"  cd {large_scale_dir}")
+    logger.info(f"  for dir in {cluster_prefix}_*/; do")
+    logger.info(f"    echo 'Building model in $dir'")
+    logger.info(f"    cd $dir && geb build && cd ..")
+    logger.info(f"  done")
+
+    logger.info("Multiple model initialization completed successfully")
+
+
+@cli.command()
+@click_config
+@click.option(
+    "--build-config",
+    "-b",
+    default=BUILD_DEFAULT,
+    help=f"Path of the model build configuration file. Defaults to '{BUILD_DEFAULT}'.",
+)
+@click.option(
+    "--update-config",
+    "-u",
+    default=UPDATE_DEFAULT,
+    help="Path of the model update configuration file.",
+)
+@click.option(
+    "--from-example",
+    default="geul",
+    help="Name of the example to use as a base for the models. Defaults to 'geul'.",
+)
+@click.option(
+    "--geometry-bounds",
+    default="-10.0,35.0,40.0,70.0",  # World: "-180.0,-90.0,180.0,90.0" Western Europe: "-10.0,35.0,20.0,70.0" Europe: "-10.0,35.0,40.0,70.0"
+    required=True,
+    type=str,
+    help="Bounding box as 'xmin,ymin,xmax,ymax' to select subbasins (e.g., '5.0,50.0,15.0,55.0' for parts of Europe). Defaults to Europe coverage.",
+)
+@click.option(
+    "--target-area-km2",
+    default=34000.0,
+    type=float,
+    help="Target cumulative upstream area per cluster in km². Defaults to 34,000 km².",
+)
+@click.option(
+    "--area-tolerance",
+    default=0.3,
+    type=float,
+    help="Tolerance for target area as fraction (0.3 = 30% tolerance).",
+)
+@click.option(
+    "--cluster-prefix",
+    default="cluster",
+    help="Prefix for cluster directory names. Defaults to 'cluster'.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=True,
+    help="If set, overwrite existing cluster directories and files.",
+)
+@click.option(
+    "--save-geoparquet",
+    type=click.Path(),
+    help="Save clusters to geoparquet file at this path. If not specified, saves to 'models/clusters.geoparquet'.",
+)
+@click.option(
+    "--save-map",
+    type=click.Path(),
+    help="Save visualization map to PNG file at this path. If not specified, saves to 'models/clusters_map.png'.",
+)
+@working_directory_option
+def init_multiple(
+    config: str,
+    build_config: str,
+    update_config: str,
+    working_directory: Path,
+    from_example: str,
+    geometry_bounds: str,
+    target_area_km2: float,
+    area_tolerance: float,
+    cluster_prefix: str,
+    overwrite: bool,
+    save_geoparquet: str | None,
+    save_map: str | None,
+) -> None:
+    """Initialize multiple models by clustering downstream subbasins in a geometry.
+
+    This command identifies all downstream subbasins (outlets) within a specified
+    bounding box, clusters them by proximity and cumulative upstream area, and
+    creates separate model configurations for each cluster.
+
+    Example for parts of Europe:
+        geb init_multiple --geometry-bounds="5.0,50.0,15.0,55.0"
+
+    By default, a region covering Europe is used. Use --geometry-bounds to specify a different region.
+    """
+    init_multiple_fn(
+        config=config,
+        build_config=build_config,
+        update_config=update_config,
+        working_directory=working_directory,
+        from_example=from_example,
+        geometry_bounds=geometry_bounds,
+        target_area_km2=target_area_km2,
+        area_tolerance=area_tolerance,
+        cluster_prefix=cluster_prefix,
+        overwrite=overwrite,
+        save_geoparquet=save_geoparquet,
+        save_map=save_map,
+    )
 
 
 if __name__ == "__main__":
