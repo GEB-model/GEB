@@ -19,7 +19,7 @@ authors = [
     {name = "Rafaella Oliveira", email = "r.gouveialoureirooliveira@vu.nl"},
 ]
 dependencies = [
-    "cartopy==0.24.1",  # pin until https://github.com/SciTools/cartopy/issues/2577 is fixed
+    "cartopy==0.24.1", # pin until https://github.com/SciTools/cartopy/issues/2577 is fixed
     "cfgrib>=0.9.14",
     "click>=8.1.8",
     "contextily>=1.6.2",
@@ -70,6 +70,7 @@ dependencies = [
     "ecmwf-api-client>=1.6.5",
     "ruff>=0.14.0",
     "snakemake>=9.13.4",
+    "imageio>=2.37.2",
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"

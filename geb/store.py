@@ -1198,7 +1198,7 @@ class Store:
         """
         if path is None:
             path = self.path
-            
+
         for bucket_folder in path.iterdir():
             # Mac OS X creates a .DS_Store file in directories, which we ignore
             if bucket_folder.name == ".DS_Store":
