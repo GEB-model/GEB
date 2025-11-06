@@ -1043,6 +1043,8 @@ class LandSurface(Module):
             + irrigation_loss_to_evaporation_m
         )
 
+        runoff_m_daily = runoff_m.sum(axis=0)
+
         growing_crop_mask = self.HRU.var.crop_map != -1
 
         self.HRU.var.transpiration_crop_life[growing_crop_mask] += transpiration_m[
