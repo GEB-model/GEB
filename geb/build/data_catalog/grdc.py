@@ -1,5 +1,7 @@
 """Adapter for Global Runoff Data Centre."""
 
+from __future__ import annotations
+
 import tempfile
 import zipfile
 from typing import Any
@@ -21,7 +23,7 @@ class GRDC(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> "GRDC":
+    def fetch(self, url: str) -> GRDC:
         """Fetch and process the Global Data Lab shapefiles.
 
         Because login is required to download the data, the user must manually

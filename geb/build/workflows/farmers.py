@@ -1,17 +1,16 @@
 """Workflows for constructing farmer distributions and farm maps."""
 
 import logging
-from random import random
 
 import numpy as np
 import pandas as pd
 from honeybees.library.raster import pixels_to_coords
 from numba import njit
 
-from geb.typing import ArrayInt32, TwoDArrayInt32
+from geb.typing import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 
 
-@njit(cache=True)
+@njit(cache=True, parallel=False)
 def create_farms_numba(
     cultivated_land: TwoDArrayInt32, ids: ArrayInt32, farm_sizes: ArrayInt32
 ) -> TwoDArrayInt32:
@@ -25,84 +24,100 @@ def create_farms_numba(
     Returns:
         farms: map of farms. Each unique ID is land owned by a single farmer. Non-cultivated land is represented by -1.
     """
-    current_farm_counter = 0
-    cur_farm_size = 0
-    farm_done = False
+    assert ids.size == farm_sizes.size
 
-    farm_id = ids[current_farm_counter]
-    farm_size = farm_sizes[current_farm_counter]
-    farms = np.where(cultivated_land, -1, -2).astype(np.int32)
-    ysize, xsize = farms.shape
-    for y in range(farms.shape[0]):
-        for x in range(farms.shape[1]):
-            f = farms[y, x]
-            if f == -1:
-                assert farm_size > 0
+    farms: TwoDArrayInt32 = np.where(cultivated_land, -1, -2).astype(np.int32)
+    if ids.size > 0:
+        current_farm_counter: int = 0
+        cur_farm_size: int = 0
+        farm_done: bool = False
+        farm_id: np.int32 = np.int32(ids[current_farm_counter])
+        farm_size: np.int32 = np.int32(farm_sizes[current_farm_counter])
+        ysize, xsize = farms.shape
+        for y in range(ysize):
+            for x in range(xsize):
+                f: np.int32 = farms[y, x]
+                if f == -1:
+                    xmin, xmax, ymin, ymax = 1e6, -1e6, 1e6, -1e6
+                    xlow, xhigh, ylow, yhigh = x, x + 1, y, y + 1
 
-                xmin, xmax, ymin, ymax = 1e6, -1e6, 1e6, -1e6
-                xlow, xhigh, ylow, yhigh = x, x + 1, y, y + 1
+                    xsearch, ysearch = 0, 0
 
-                xsearch, ysearch = 0, 0
+                    while True:
+                        # Clamp slice bounds to grid to avoid negative-wrap/out-of-bounds
+                        ys: int = max(0, ylow)
+                        ye: int = min(ysize, yhigh + 1 + ysearch)
+                        xs: int = max(0, xlow)
+                        xe: int = min(xsize, xhigh + 1 + xsearch)
+                        if (
+                            ys >= ye
+                            or xs >= xe
+                            or not np.count_nonzero(farms[ys:ye, xs:xe] == -1)
+                        ):
+                            break
 
-                while True:
-                    if not np.count_nonzero(
-                        farms[ylow : yhigh + 1 + ysearch, xlow : xhigh + 1 + xsearch]
-                        == -1
-                    ):
-                        break
+                        for yf in range(ylow, yhigh + 1):
+                            for xf in range(xlow, xhigh + 1):
+                                if (
+                                    0 <= xf < xsize
+                                    and 0 <= yf < ysize
+                                    and farms[yf, xf] == -1
+                                ):
+                                    if xf > xmax:
+                                        xmax = xf
+                                    if xf < xmin:
+                                        xmin = xf
+                                    if yf > ymax:
+                                        ymax = yf
+                                    if yf < ymin:
+                                        ymin = yf
+                                    farms[yf, xf] = farm_id
+                                    cur_farm_size += 1
+                                    if cur_farm_size == farm_size:
+                                        cur_farm_size = 0
+                                        farm_done: bool = True
+                                        break
 
-                    for yf in range(ylow, yhigh + 1):
-                        for xf in range(xlow, xhigh + 1):
-                            if xf < xsize and yf < ysize and farms[yf, xf] == -1:
-                                if xf > xmax:
-                                    xmax = xf
-                                if xf < xmin:
-                                    xmin = xf
-                                if yf > ymax:
-                                    ymax = yf
-                                if yf < ymin:
-                                    ymin = yf
-                                farms[yf, xf] = farm_id
-                                cur_farm_size += 1
-                                if cur_farm_size == farm_size:
-                                    cur_farm_size = 0
-                                    farm_done = True
-                                    break
+                            if farm_done is True:
+                                break
 
                         if farm_done is True:
                             break
 
-                    if farm_done is True:
-                        break
+                        if np.random.random() < 0.5:
+                            ylow -= 1
+                            ysearch: int = 1
+                        else:
+                            yhigh += 1
+                            ysearch: int = 0
 
-                    if random() < 0.5:
-                        ylow -= 1
-                        ysearch = 1
-                    else:
-                        yhigh += 1
-                        ysearch = 0
+                        if np.random.random() < 0.5:
+                            xlow -= 1
+                            xsearch: int = 1
+                        else:
+                            xhigh += 1
+                            xsearch: int = 0
 
-                    if random() < 0.5:
-                        xlow -= 1
-                        xsearch = 1
-                    else:
-                        xhigh += 1
-                        xsearch = 0
+                    if farm_done:
+                        farm_done: bool = False
+                        current_farm_counter += 1
 
-                if farm_done:
-                    farm_done = False
-                    current_farm_counter += 1
-                    farm_id = ids[current_farm_counter]
-                    farm_size = farm_sizes[current_farm_counter]
+                        # If no next farm, do not read next id and farm size (also because they don't exist).
+                        # We expect no '-1' cells left at this point (sum of farm sizes equals cultivated area).
+                        if current_farm_counter >= ids.size:
+                            continue
+
+                        farm_id: np.int32 = np.int32(ids[current_farm_counter])
+                        farm_size: np.int32 = np.int32(farm_sizes[current_farm_counter])
 
     assert np.count_nonzero(farms == -1) == 0
-    farms = np.where(farms != -2, farms, -1)
+    farms: TwoDArrayInt32 = np.where(farms != -2, farms, -1)
     return farms
 
 
 def create_farms(
     agents: pd.DataFrame,
-    cultivated_land_tehsil: np.ndarray,
+    cultivated_land_tehsil: TwoDArrayBool,
     farm_size_key: str = "farm_size_n_cells",
 ) -> TwoDArrayInt32:
     """Create a farm ownership map based on agent sizes and cultivated land.
@@ -120,16 +135,22 @@ def create_farms(
         A 2D array of farm IDs where each cultivated cell is assigned to exactly one agent
         and non-cultivated cells are -1.
     """
-    assert cultivated_land_tehsil.sum().compute().item() == agents[farm_size_key].sum()
+    assert cultivated_land_tehsil.sum() == agents[farm_size_key].sum()
 
-    agents = agents.sample(frac=1)
-    farms = create_farms_numba(
-        cultivated_land_tehsil.squeeze().values,  # using first (and should be only) layer
+    agents: pd.DataFrame = agents.sample(
+        frac=1
+    )  # shuffle agents to randomize farm placement order
+    assert cultivated_land_tehsil.ndim == 2
+
+    farms: TwoDArrayInt32 = create_farms_numba(
+        cultivated_land_tehsil,
         ids=agents.index.to_numpy(),
         farm_sizes=agents[farm_size_key].to_numpy(),
-    ).astype(np.int32)
-    unique_farms = np.unique(farms)
-    unique_farms = unique_farms[unique_farms != -1]
+    )
+
+    # some tests to ensure correctness
+    unique_farms: ArrayInt32 = np.unique(farms)
+    unique_farms: ArrayInt32 = unique_farms[unique_farms != -1]
     assert np.array_equal(np.sort(agents.index.to_numpy()), unique_farms)
     assert unique_farms.size == len(agents)
     assert agents[farm_size_key].sum() == np.count_nonzero(farms != -1)
@@ -436,7 +457,7 @@ def get_farm_locations(
     """
     if method != "centroid":
         raise NotImplementedError
-    gt = farms.raster.transform.to_gdal()
+    gt = farms.rio.transform().to_gdal()
 
     farms = farms.values
     n_farmers = np.unique(farms[farms != -1]).size

@@ -848,7 +848,6 @@ class ModFlowSimulation:
             if self.verbose:
                 print("MODFLOW model initialized")
 
-        self.end_time: float = self.mf6.get_end_time()
         area_tag: str = self.mf6.get_var_address("AREA", self.name, "DIS")
         area: npt.NDArray[np.float64] = self.mf6.get_value_ptr(area_tag).reshape(
             self.nlay, self.n_active_cells

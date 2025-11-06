@@ -1,5 +1,7 @@
 """ECMWF data adapter module."""
 
+from __future__ import annotations
+
 import os
 from datetime import date, datetime
 from pathlib import Path
@@ -9,6 +11,8 @@ import ecmwfapi
 import numpy as np
 import pandas as pd
 import xarray as xr
+
+from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
@@ -100,7 +104,7 @@ class ECMWFForecasts(Adapter):
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
-    ) -> "ECMWFForecasts":
+    ) -> ECMWFForecasts:
         """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
         This function downloads ECMWF forecast data for a specified variable and time period
@@ -541,9 +545,7 @@ class ECMWFForecasts(Adapter):
             x=((ds.x + 180) % 360 - 180)
         )  # Convert longitude coordinates to -180 to 180 format
         ds.attrs["_FillValue"] = np.nan  # Set fill value attribute for missing data
-        ds: xr.Dataset = (
-            ds.raster.mask_nodata()
-        )  # Mask no-data values using raster accessor
+        ds: xr.DataArray = convert_nodata(ds, np.nan)
 
         # assert that time is monotonically increasing with a constant step size
         assert (

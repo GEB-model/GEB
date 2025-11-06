@@ -1,7 +1,7 @@
 """Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
 
 from collections.abc import Mapping
-from typing import Any, Literal, Union, overload
+from typing import Any, Literal, overload
 
 import dask
 import geopandas as gpd
@@ -225,7 +225,7 @@ def rasterize_like(
         shapes,
         out_shape=raster.rio.shape,
         fill=nodata,
-        transform=raster.rio.transform(),
+        transform=raster.rio.transform(recalc=True),
         out=da.values,
         all_touched=all_touched,
         **kwargs,
@@ -356,12 +356,18 @@ def pad_xy(
     miny: float,
     maxx: float,
     maxy: float,
-    constant_values: Union[
-        float, tuple[int, int], Mapping[Any, tuple[int, int]], None
-    ] = None,
+    constant_values: float
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
     return_slice: bool = False,
-) -> xr.DataArray:
-    """Pad the array to x,y bounds.
+) -> xr.DataArray | tuple[xr.DataArray, dict[str, slice]]:
+    """Pad the array to x,y bounds, while preserving old coordinates exactly.
+
+    Rather than re-calculating the x and y coordinates, this function
+    uses the original coordinates and extends them as needed. This ensures
+    that the original coordinates are preserved without introducing floating point
+    imprecision.
 
     Args:
         array_rio: rio assecor of xarray DataArray
@@ -384,29 +390,37 @@ def pad_xy(
     """
     left, bottom, right, top = array_rio._internal_bounds()
     resolution_x, resolution_y = array_rio.resolution()
+    y_coord: xarray.DataArray | np.ndarray = array_rio._obj[array_rio.y_dim].values
+    x_coord: xarray.DataArray | np.ndarray = array_rio._obj[array_rio.x_dim].values
+
     y_before = y_after = 0
     x_before = x_after = 0
-    y_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.y_dim]
-    x_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.x_dim]
 
+    # Create new coordinates by extending existing ones
     if top - resolution_y < maxy:
-        new_y_coord: np.ndarray = np.arange(bottom, maxy, -resolution_y)[::-1]
+        new_top_coords = np.arange(top - resolution_y, maxy, -resolution_y)[::-1]
+        new_y_coord = np.concatenate([new_top_coords, y_coord])
         y_before = len(new_y_coord) - len(y_coord)
         y_coord = new_y_coord
         top = y_coord[0]
     if bottom + resolution_y > miny:
-        new_y_coord = np.arange(top, miny, resolution_y)
+        new_bottom_coords = np.arange(bottom + resolution_y, miny, resolution_y)
+        new_y_coord = np.concatenate([y_coord, new_bottom_coords])
         y_after = len(new_y_coord) - len(y_coord)
         y_coord = new_y_coord
         bottom = y_coord[-1]
 
     if left - resolution_x > minx:
-        new_x_coord: np.ndarray = np.arange(right, minx, -resolution_x)[::-1]
+        new_left_coords: np.ndarray = np.arange(
+            left - resolution_x, minx, -resolution_x
+        )[::-1]
+        new_x_coord = np.concatenate([new_left_coords, x_coord])
         x_before = len(new_x_coord) - len(x_coord)
         x_coord = new_x_coord
         left = x_coord[0]
     if right + resolution_x < maxx:
-        new_x_coord = np.arange(left, maxx, resolution_x)
+        new_right_coords = np.arange(x_coord[-1] + resolution_x, maxx, resolution_x)
+        new_x_coord = np.concatenate([x_coord, new_right_coords])
         x_after = len(new_x_coord) - len(x_coord)
         x_coord = new_x_coord
         right = x_coord[-1]
@@ -443,21 +457,29 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
 
     Returns:
         A new DataArray with NaN values interpolated along the time dimension.
+
+    Raises:
+        ValueError: If '_FillValue' attribute is missing.
     """
+    if "_FillValue" not in da.attrs:
+        raise ValueError("DataArray must have '_FillValue' attribute")
+
+    nodata = da.attrs["_FillValue"]
 
     def fillna_nearest_2d(
-        arr: TwoDArrayFloat32 | TwoDArrayFloat64, dims: tuple[str, ...]
+        arr: TwoDArrayFloat32 | TwoDArrayFloat64, dims: tuple[str, ...], nodata: float
     ) -> TwoDArrayFloat32 | TwoDArrayFloat64:
         """Fill NaN values in a 2D array using nearest neighbor interpolation.
 
         Args:
             arr: The input 2D array with NaN values.
             dims: The dimensions of the array.
+            nodata: The nodata value to treat as missing.
 
         Returns:
             The array with NaN values filled.
         """
-        mask = np.isnan(arr)
+        mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
         if not mask.any():
             return arr
 
@@ -484,11 +506,49 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
         dask="parallelized",  # Enable parallelized computation
         input_core_dims=[["y", "x"]],
         output_core_dims=[["y", "x"]],
-        kwargs={"dims": da.dims},  # Additional arguments for the function
+        kwargs={
+            "dims": da.dims,
+            "nodata": nodata,
+        },  # Additional arguments for the function
         output_dtypes=[da.dtype],
         keep_attrs=True,
     )
     return da
+
+
+def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
+    """Interpolate NaN values in a 2D DataArray using nearest neighbor interpolation.
+
+    Args:
+        da: The input DataArray with dimensions ('y', 'x').
+
+    Returns:
+        A new DataArray with NaN values interpolated.
+
+    Raises:
+        ValueError: If '_FillValue' attribute is missing.
+    """
+    if "_FillValue" not in da.attrs:
+        raise ValueError("DataArray must have '_FillValue' attribute")
+
+    nodata = da.attrs["_FillValue"]
+
+    mask = np.isnan(da.values) if np.isnan(nodata) else da.values == nodata
+
+    if not mask.any():
+        return da
+
+    y, x = np.indices(da.values.shape)
+    known_x, known_y = x[~mask], y[~mask]
+    known_v = da.values[~mask]
+    missing_x, missing_y = x[mask], y[mask]
+
+    filled_values = griddata(
+        (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+    )
+    da_filled = da.copy()
+    da_filled.values[mask] = filled_values
+    return da_filled
 
 
 def resample_like(

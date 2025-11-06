@@ -1,5 +1,7 @@
 """The Lowder adapter for downloading and processing farm size distribution data."""
 
+from __future__ import annotations
+
 from typing import Any
 
 import pandas as pd
@@ -19,7 +21,7 @@ class Lowder(Adapter):
         """Initialize the Lowder adapter."""
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> "Lowder":
+    def fetch(self, url: str) -> Lowder:
         """Fetch the Lowder farm size distribution data from the given URL.
 
         Args:
@@ -78,6 +80,11 @@ class Lowder(Adapter):
         df["Census Year"] = df["Country"].ffill()
 
         df["ISO3"] = df["Country"].map(COUNTRY_NAME_TO_ISO3)
+
+        # Clean up agricultural area strings
+        df["Holdings/ agricultural area"] = (
+            df["Holdings/ agricultural area"].str.strip().str.replace("  ", " ")
+        )
 
         assert not df["ISO3"].isna().any(), (
             f"Found {df['ISO3'].isna().sum()} countries without ISO3 code"

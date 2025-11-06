@@ -924,7 +924,7 @@ class Routing(Module):
         # Channel Manning's n
         self.grid.var.river_mannings = (
             self.grid.load(self.model.files["grid"]["routing/mannings"])
-            * self.model.config["parameters"]["manningsN"]
+            * self.model.config["parameters"]["mannings_n_multiplier"]
         )
         assert (self.grid.var.river_mannings > 0).all()
 
@@ -1101,10 +1101,11 @@ class Routing(Module):
                 self.hydrology.lakes_reservoirs.n, dtype=np.float32
             )
             outflow_at_pits_m3 = np.float32(0)
-            over_abstraction_m3: ArrayFloat32 = self.grid.full_compressed(
-                0, dtype=np.float32
-            )
             command_area_release_m3 = np.float32(0)
+
+        over_abstraction_m3: ArrayFloat32 = self.grid.full_compressed(
+            0, dtype=np.float32
+        )
 
         for hour in range(24):
             total_runoff_m3: np.ndarray = (
@@ -1313,6 +1314,10 @@ class Routing(Module):
             )
 
             assert routing_loss >= 0, "Routing loss cannot be negative"
+
+        # outside debug, we return NaN for routing loss
+        else:
+            routing_loss: np.float64 = np.float64(np.nan)
 
         self.report(locals())
 

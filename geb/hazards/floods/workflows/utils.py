@@ -325,8 +325,7 @@ def check_docker_running() -> bool | None:
         subprocess.run(
             ["docker", "info"],
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -363,7 +362,25 @@ def run_sfincs_simulation(
             result: subprocess.CompletedProcess[bytes] = subprocess.run(
                 args=["nvidia-smi"], capture_output=True
             )
-            gpu: bool = result.returncode == 0
+            maybe_gpu: bool = result.returncode == 0
+
+            # if no GPU is found, there is no need to check further, set gpu to False
+            if not maybe_gpu:
+                gpu: bool = False
+            else:
+                # otherwise, check if we are in a SLURM job. We may be on a cluster
+                # where a GPU is physically present, but not allocated to the job
+                # and therefore not available for use.
+                in_SLURM_job: bool = "SLURM_JOB_ID" in os.environ
+                if in_SLURM_job:
+                    # in a SLURM job, if the job has access to the GPU
+                    gpu_ids: str | None = os.getenv(key="CUDA_VISIBLE_DEVICES")
+                    if gpu_ids is not None and len(gpu_ids) > 0:
+                        gpu: bool = True
+                    else:
+                        gpu: bool = False
+                else:
+                    gpu: bool = True
         else:
             gpu: bool = False
 

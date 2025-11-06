@@ -1,5 +1,7 @@
 """Base class for data adapters in the GEB data catalog."""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 from typing import Any
@@ -113,7 +115,7 @@ class Adapter:
             )
         return is_ready
 
-    def fetch(self) -> "Adapter":
+    def fetch(self) -> Adapter:
         """Process the data after downloading.
 
         Returns:

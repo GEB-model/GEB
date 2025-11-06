@@ -26,6 +26,7 @@ from rasterio.crs import CRS
 from tqdm import tqdm
 
 from geb.workflows.io import open_zarr, to_zarr
+from geb.workflows.raster import rasterize_like
 
 
 class Hydrology:
@@ -105,7 +106,7 @@ class Hydrology:
         run_name: str = "default",
         include_spinup: bool = False,
         include_yearly_plots: bool = False,
-        correct_Q_obs=False,
+        correct_Q_obs: bool = False,
     ) -> None:
         """Evaluate the discharge grid from GEB against observations from the Q_obs database.
 
@@ -214,18 +215,6 @@ class Hydrology:
                 f"Run folder '{run_name}' does not exist in the report directory. Did you run the model?"
             )
 
-        if include_spinup:
-            # load the discharge spinup simulation
-            GEB_discharge_spinup = open_zarr(
-                self.model.output_folder
-                / "report"
-                / spinup_name
-                / "hydrology.routing"
-                / "discharge_daily.zarr"
-            )
-            print(f"Loaded discharge spinup simulation from {spinup_name} run.")
-            GEB_discharge = xr.concat([GEB_discharge_spinup, GEB_discharge], dim="time")
-
         evaluation_per_station: list = []
 
         print("Starting discharge evaluation...")
@@ -262,42 +251,98 @@ class Hydrology:
 
                 Returns:
                     DataFrame with the Q_obs discharge observations and the GEB discharge simulation for the selected station.
-                """
-                # select data closest to meerssen point
-                GEB_discharge_station = GEB_discharge.isel(
-                    x=snapped_xy_coords[0], y=snapped_xy_coords[1]
-                )  # select the pixel in the grid that corresponds to the selected hydrography_xy value
 
-                if np.isnan(GEB_discharge_station.values).all():
+                Raises:
+                    FileNotFoundError: If the hydrology routing directory does not exist.
+                """
+                # Check if the hydrology.routing directory exists
+                routing_dir = (
+                    self.model.output_folder / "report" / run_name / "hydrology.routing"
+                )
+                if not routing_dir.exists():
+                    raise FileNotFoundError(
+                        f"Hydrology routing directory does not exist: {routing_dir}"
+                    )
+
+                # Construct the path to the individual station discharge file
+                station_file_name = f"discharge_hourly_m3_per_s_{ID}.csv"
+                station_file_path = routing_dir / station_file_name
+
+                # Check if the station file exists
+                if not station_file_path.exists():
                     print(
-                        f"WARNING: Station {ID} has only NaN values in the GEB discharge simulation. Skipping."
+                        f"WARNING: Station file {station_file_path} does not exist. Skipping station {ID}."
                     )
                     return pd.DataFrame()
 
-                # rename xarray dataarray to Q
-                GEB_discharge_station.name = "Q"
-                discharge_sim_station_df = GEB_discharge_station.to_dataframe()
-                discharge_sim_station_df = discharge_sim_station_df["Q"]
-                discharge_sim_station_df.index.name = "time"  # rename index to time
+                try:
+                    # Load the individual station discharge timeseries
+                    GEB_discharge_station = pd.read_csv(
+                        station_file_path, index_col=0, parse_dates=True
+                    )
+                    GEB_discharge_station = (
+                        GEB_discharge_station.squeeze()
+                    )  # Convert to Series if only one column
 
-                # merge to one df but keep only the rows where both have data
-                validation_df = pd.merge(
-                    discharge_Q_obs_df,
-                    discharge_sim_station_df,
-                    left_index=True,
-                    right_index=True,
-                    how="inner",
-                    suffixes=("_obs", "_sim"),
-                )  # merge the two dataframes on the index (time)
+                    if np.isnan(GEB_discharge_station.values).all():
+                        print(
+                            f"WARNING: Station {ID} has only NaN values in the GEB discharge simulation. Skipping."
+                        )
+                        return pd.DataFrame()
 
-                validation_df.dropna(how="any", inplace=True)  # drop rows with nans
+                    # Handle spinup data if needed
+                    if include_spinup:
+                        spinup_station_file_path = (
+                            self.model.output_folder
+                            / "report"
+                            / spinup_name
+                            / "hydrology.routing"
+                            / station_file_name
+                        )
+                        if spinup_station_file_path.exists():
+                            GEB_discharge_station_spinup = pd.read_csv(
+                                spinup_station_file_path, index_col=0, parse_dates=True
+                            )
+                            GEB_discharge_station_spinup = (
+                                GEB_discharge_station_spinup.squeeze()
+                            )
+                            # Concatenate the spinup and main run data
+                            GEB_discharge_station = pd.concat(
+                                [GEB_discharge_station_spinup, GEB_discharge_station]
+                            )
+                            print(f"Loaded spinup data for station {ID}")
+                        else:
+                            print(
+                                f"WARNING: Spinup file for station {ID} not found, using only main run data"
+                            )
 
-                if correct_Q_obs:
-                    """ correct the Q_obs values for the difference in upstream area between subgrid and grid """
-                    validation_df["Q_obs"] = (
-                        validation_df["Q_obs"] * Q_obs_to_GEB_upstream_area_ratio
-                    )  # correct the Q_obs values for the difference in upstream area between subgrid and grid
-                return validation_df
+                    # rename series to Q
+                    GEB_discharge_station.name = "Q"
+                    discharge_sim_station_df = GEB_discharge_station
+
+                    # merge to one df but keep only the rows where both have data
+                    validation_df = pd.merge(
+                        discharge_Q_obs_df,
+                        discharge_sim_station_df,
+                        left_index=True,
+                        right_index=True,
+                        how="inner",
+                        suffixes=("_obs", "_sim"),
+                    )  # merge the two dataframes on the index (time)
+
+                    validation_df.dropna(how="any", inplace=True)  # drop rows with nans
+
+                    if correct_Q_obs:
+                        """ correct the Q_obs values for the difference in upstream area between subgrid and grid """
+                        validation_df["Q_obs"] = (
+                            validation_df["Q_obs"] * Q_obs_to_GEB_upstream_area_ratio
+                        )  # correct the Q_obs values for the difference in upstream area between subgrid and grid
+
+                    return validation_df
+
+                except Exception as e:
+                    print(f"ERROR loading station file {station_file_path}: {e}")
+                    return pd.DataFrame()
 
             validation_df = create_validation_df()
 
@@ -329,7 +374,7 @@ class Hydrology:
 
             KGE, NSE, R = calculate_validation_metrics()
 
-            def plot_validation_graphs(ID) -> None:
+            def plot_validation_graphs(ID: Any) -> None:
                 """Plot the validation results for the current station."""
                 # scatter plot
                 fig, ax = plt.subplots()
@@ -663,7 +708,7 @@ class Hydrology:
 
         plot_validation_map()
 
-        def create_folium_map(evaluation_gdf) -> folium.Map:
+        def create_folium_map(evaluation_gdf: gpd.GeoDataFrame) -> folium.Map:
             """Create a Folium map with evaluation results and station markers.
 
             Returns:
@@ -881,12 +926,7 @@ class Hydrology:
 
     def skill_score_graphs(
         self,
-        run_name: str = "default",
-        include_spinup: bool = False,
-        spinup_name: str = "spinup",
         export: bool = True,
-        include_yearly_plots: bool = False,
-        correct_Q_obs: bool = False,
     ) -> None:
         """Create skill score boxplot graphs for hydrological model evaluation metrics.
 
@@ -900,15 +940,7 @@ class Hydrology:
             graph creation and return early.
 
         Args:
-            run_name: Name of the simulation run to evaluate (used in file paths).
-            include_spinup: Whether the spinup run was included in the evaluation
-                (currently not used in this method).
-            spinup_name: Name of the spinup run (currently not used in this method).
             export: Whether to save the skill score graphs to PNG files.
-            include_yearly_plots: Whether yearly plots were created in the evaluation
-                (parameter accepted for compatibility but not used in this method).
-            correct_Q_obs: Whether observed discharge values were corrected in the evaluation
-                (parameter accepted for compatibility but not used in this method).
         """
         eval_result_folder = (
             Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
@@ -1339,19 +1371,25 @@ class Hydrology:
 
             return forecast_init, member, event_start, event_end, event_name
 
-        def calculate_hit_rate(model, observations) -> float:
+        def calculate_hit_rate(
+            model: xr.DataArray, observations: xr.DataArray
+        ) -> float:
             miss = np.sum(((model == 0) & (observations == 1)).values)
             hit = np.sum(((model == 1) & (observations == 1)).values)
             hit_rate = hit / (hit + miss)
             return float(hit_rate)
 
-        def calculate_false_alarm_ratio(model, observations) -> float:
+        def calculate_false_alarm_ratio(
+            model: xr.DataArray, observations: xr.DataArray
+        ) -> float:
             false_alarm = np.sum(((model == 1) & (observations == 0)).values)
             hit = np.sum(((model == 1) & (observations == 1)).values)
             false_alarm_ratio = false_alarm / (false_alarm + hit)
             return float(false_alarm_ratio)
 
-        def calculate_critical_success_index(model, observations) -> float:
+        def calculate_critical_success_index(
+            model: xr.DataArray, observations: xr.DataArray
+        ) -> float:
             hit = np.sum(((model == 1) & (observations == 1)).values)
             false_alarm = np.sum(((model == 1) & (observations == 0)).values)
             miss = np.sum(((model == 0) & (observations == 1)).values)
@@ -1360,15 +1398,9 @@ class Hydrology:
 
         # Main function for the peformance metrics
         def calculate_performance_metrics(
-            observation,
-            flood_map_path,
-            visualization_type="Hillshade",
-            output_folder=None,
+            observation: Path | str, flood_map_path: Path | str, visualization_type: str = "Hillshade",
+            output_folder: Path | str = None,
         ) -> None:
-            if output_folder is None:
-                save_folder = event_folder
-            else:
-                save_folder = output_folder
             # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)
             obs = open_zarr(observation)
@@ -1396,15 +1428,19 @@ class Hydrology:
             gdf_mercator = rivers.to_crs(crs_mercator)
             gdf_mercator["geometry"] = gdf_mercator.buffer(gdf_mercator["width"] / 2)
             gdf_buffered = gdf_mercator.to_crs(sim.rio.crs)
-            rivers_mask_sim = sim.raster.geometry_mask(
-                gdf=gdf_buffered, all_touched=True
+            gdf_buffered["mask"] = True
+            rivers_mask_sim = rasterize_like(
+                gdf_buffered, "mask", sim, dtype=bool, nodata=False, all_touched=True
             )
+            rivers_mask_sim.attrs.pop("_FillValue", None)
             sim_no_rivers = sim.where(~rivers_mask_sim).fillna(0)
 
-            gdf_buffered = gdf_buffered.to_crs(obs.rio.crs)
-            rivers_mask_obs = obs.raster.geometry_mask(
-                gdf=gdf_buffered, all_touched=True
+            gdf_buffered = gdf_mercator.to_crs(obs.rio.crs)
+            gdf_buffered["mask"] = True
+            rivers_mask_obs = rasterize_like(
+                gdf_buffered, "mask", obs, dtype=bool, nodata=False, all_touched=True
             )
+            rivers_mask_obs.attrs.pop("_FillValue", None)
             obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
 
             # Step 3: Clip out region from observations

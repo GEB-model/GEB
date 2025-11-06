@@ -1,7 +1,5 @@
 """Contains several functions for crop farmer module."""
 
-from typing import Union
-
 import numpy as np
 import numpy.typing as npt
 from numba import njit, prange
@@ -408,7 +406,6 @@ def get_potential_irrigation_consumption_m(
     wilting_point,
     w,
     ws,
-    arno_beta: np.float32,
     saturated_hydraulic_conductivity_m_per_day: np.float32,
     fraction_irrigated_field: np.float32,
     max_paddy_water_level_farmer,
@@ -492,7 +489,6 @@ def get_gross_irrigation_demand_m3(
     wilting_point: npt.NDArray[np.float64],
     w: npt.NDArray[np.float64],
     ws: npt.NDArray[np.float64],
-    arno_beta: npt.NDArray[np.float32],
     saturated_hydraulic_conductivity_m_per_day: npt.NDArray[np.float32],
     remaining_irrigation_limit_m3: npt.NDArray[np.float32],
     irrigation_limit_reset_day_index: npt.NDArray[np.int32],
@@ -542,7 +538,6 @@ def get_gross_irrigation_demand_m3(
                 wilting_point=wilting_point[:, field],
                 w=w[:, field],
                 ws=ws[:, field],
-                arno_beta=arno_beta[field],
                 saturated_hydraulic_conductivity_m_per_day=saturated_hydraulic_conductivity_m_per_day[
                     :, field
                 ],
@@ -778,7 +773,7 @@ def plant(
     current_crop_calendar_rotation_year_index: np.ndarray,
     crop_map: np.ndarray,
     crop_harvest_age_days: np.ndarray,
-    cultivation_cost: Union[np.ndarray, int, float],
+    cultivation_cost: np.ndarray | int | float,
     region_ids_per_farmer: np.ndarray,
     field_indices_by_farmer: np.ndarray,
     field_indices: np.ndarray,

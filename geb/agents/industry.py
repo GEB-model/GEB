@@ -122,7 +122,7 @@ class Industry(AgentBaseClass):
 
             water_demand = (
                 water_demand
-                * self.model.config["parameters"]["water_demand_multiplier"]
+                * self.model.config["parameters"]["water_demand_multiplier_industry"]
             )
 
             water_consumption = (

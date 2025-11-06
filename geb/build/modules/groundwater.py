@@ -6,7 +6,12 @@ import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
-from geb.workflows.raster import convert_nodata, rasterize_like, resample_like
+from geb.workflows.raster import (
+    convert_nodata,
+    interpolate_na_2d,
+    rasterize_like,
+    resample_like,
+)
 
 
 class GroundWater:
@@ -197,7 +202,8 @@ class GroundWater:
             dtype=np.int16,
             nodata=-1,
             all_touched=False,
-        ).raster.interpolate_na()
+        )
+        why_map_grid: xr.DataArray = interpolate_na_2d(why_map_grid)
 
         self.set_grid(why_map_grid, name="groundwater/why_map")
 
