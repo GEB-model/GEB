@@ -184,14 +184,19 @@ class ECMWFForecasts(Adapter):
         elif forecast_model in ["control_forecast", "probabilistic_forecast"]:
             model_types_to_download = [forecast_model]
         else:
-            raise ValueError(f"Unsupported forecast_model: '{forecast_model}'. "
+            raise ValueError(
+                f"Unsupported forecast_model: '{forecast_model}'. "
                 "Must be 'control_forecast', 'probabilistic_forecast', or 'both_control_and_probabilistic'."
             )
-        
+
         for model_type in model_types_to_download:
             print(f"Processing {model_type} downloads...")
-            for forecast_date in forecast_date_list:  # Loop through each forecast date to download
-                print(f"Downloading {model_type} for {forecast_date}")  # Print the current forecast date being processed
+            for (
+                forecast_date
+            ) in forecast_date_list:  # Loop through each forecast date to download
+                print(
+                    f"Downloading {model_type} for {forecast_date}"
+                )  # Print the current forecast date being processed
 
                 # Process MARS request parameters
                 mars_class: str = "od"  # operational data class
@@ -201,7 +206,9 @@ class ECMWFForecasts(Adapter):
                     str(var) for var in forecast_variables
                 )  # Join parameter codes with "/" separator
 
-                if forecast_timestep_hours == 1:  # Check if hourly timestep is requested
+                if (
+                    forecast_timestep_hours == 1
+                ):  # Check if hourly timestep is requested
                     mars_step: str = generate_forecast_steps(
                         forecast_date
                     )  # Generate forecast steps based on date using helper function
@@ -320,20 +327,18 @@ class ECMWFForecasts(Adapter):
             da: processed ECMWF forecast data as an xarray Dataset.
 
         Raises:
-            FileNotFoundError: If required forecast files are not found.
             ValueError: If forecast initialization dates or time dimensions don't match between control and ensemble.
         """
 
         def _load_forecast_file(model_type: str) -> xr.Dataset:
-            """
-            Load a single forecast dataset for the specified model type
+            """Load a single forecast dataset for the specified model type.
 
             Args:
             model_type: Either 'control_forecast' or 'probabilistic_forecast'.
-            
+
             Returns:
                 Loaded and renamed forecast dataset.
-            
+
             Raises:
                 FileNotFoundError: If the forecast file doesn't exist.
             """
@@ -359,16 +364,16 @@ class ECMWFForecasts(Adapter):
             ).rename(
                 {"latitude": "y", "longitude": "x", "number": "member"}
             )  # Rename dimensions to standard names
+
         def _validate_forecast_compatibility(
-            control_ds: xr.Dataset, 
-            ensemble_ds: xr.Dataset
+            control_ds: xr.Dataset, ensemble_ds: xr.Dataset
         ) -> None:
             """Validate that control and ensemble forecasts are compatible for merging.
-            
+
             Args:
                 control_ds: Control forecast dataset.
                 ensemble_ds: Ensemble forecast dataset.
-                
+
             Raises:
                 ValueError: If forecasts have incompatible dimensions or initialization times.
             """
@@ -378,19 +383,23 @@ class ECMWFForecasts(Adapter):
                     "Control and ensemble forecasts have different initialization times. "
                     f"Control: {control_ds.time.values[0]}, Ensemble: {ensemble_ds.time.values[0]}"
                 )
-            
-            # Check forecast steps match  
+
+            # Check forecast steps match
             if not np.array_equal(control_ds.step.values, ensemble_ds.step.values):
                 raise ValueError(
                     "Control and ensemble forecasts have different forecast steps. "
                     f"Control steps: {len(control_ds.step)}, Ensemble steps: {len(ensemble_ds.step)}"
                 )
-            
+
             # Check spatial dimensions match
-            if not (np.allclose(control_ds.x.values, ensemble_ds.x.values) and 
-                    np.allclose(control_ds.y.values, ensemble_ds.y.values)):
-                raise ValueError("Control and ensemble forecasts have different spatial coordinates")
-            
+            if not (
+                np.allclose(control_ds.x.values, ensemble_ds.x.values)
+                and np.allclose(control_ds.y.values, ensemble_ds.y.values)
+            ):
+                raise ValueError(
+                    "Control and ensemble forecasts have different spatial coordinates"
+                )
+
             # Check variables match
             control_vars = set(control_ds.data_vars)
             ensemble_vars = set(ensemble_ds.data_vars)
@@ -399,37 +408,38 @@ class ECMWFForecasts(Adapter):
                     f"Control and ensemble forecasts have different variables. "
                     f"Control: {control_vars}, Ensemble: {ensemble_vars}"
                 )
+
         # Load forecast datasets based on YAML forecast_model parameter
         if forecast_model == "both_control_and_probabilistic":
             # Load both_control_and_probabilistic control and ensemble forecasts for combination
             control_ds = _load_forecast_file("control_forecast")
             ensemble_ds = _load_forecast_file("probabilistic_forecast")
-             # Validate compatibility before merging
+            # Validate compatibility before merging
             _validate_forecast_compatibility(control_ds, ensemble_ds)
-            
+
             # Assign member number 0 to control forecast (ECMWF convention)
             control_ds = control_ds.expand_dims(dim={"member": [0]})
             # Ensure ensemble members start from 1 (adjust if they start from 0)
             if ensemble_ds.member.min().item() == 0:
-                ensemble_ds = ensemble_ds.assign_coords(
-                    member=ensemble_ds.member + 1
-                )
+                ensemble_ds = ensemble_ds.assign_coords(member=ensemble_ds.member + 1)
             # Combine control and ensemble forecasts
             ds = xr.concat([control_ds, ensemble_ds], dim="member")
-            print(f"Combined control and ensemble forecasts: {len(ds.member)} total members")
+            print(
+                f"Combined control and ensemble forecasts: {len(ds.member)} total members"
+            )
         elif forecast_model in ["control_forecast", "probabilistic_forecast"]:
             # Load single forecast type without combining
             ds = _load_forecast_file(forecast_model)
-            
+
             # Add member dimension to control forecast if not present for consistency
             if forecast_model == "control_forecast" and "member" not in ds.dims:
                 ds = ds.expand_dims(dim={"member": [0]})
-            
+
         else:
             raise ValueError(
                 f"Unsupported forecast_model: '{forecast_model}'. "
                 "Must be 'control_forecast', 'probabilistic_forecast', or 'both_control_and_probabilistic'."
-        )
+            )
 
         # ensure all the timesteps are hourly
         if not (

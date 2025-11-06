@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tempfile
 from datetime import date, datetime, timedelta
 from functools import partial
@@ -17,7 +18,6 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import re
 import xarray as xr
 import xclim.indices as xci
 from dateutil.relativedelta import relativedelta
@@ -273,14 +273,13 @@ def plot_gif(
     ensemble_dim = None
     time_dim = None
     # Pattern to match YYYYMMDDT000000 format
-    date_pattern = r'(\d{4})(\d{2})(\d{2})T\d{6}'
+    date_pattern = r"(\d{4})(\d{2})(\d{2})T\d{6}"
     match = re.search(date_pattern, name)
     if match:
         year, month, day = match.groups()
         forecast_date = f"{year}-{month}-{day}"
     else:
         forecast_date = ""
-        
 
     for dim in da.dims:
         if (
@@ -455,7 +454,9 @@ def plot_gif(
         else:
             time_str = str(t)
 
-        fig.suptitle(f"Forecast initialization {forecast_date}- {time_str}", fontsize=16, y=1)
+        fig.suptitle(
+            f"Forecast initialization {forecast_date}- {time_str}", fontsize=16, y=1
+        )
 
         buf = BytesIO()
         plt.savefig(buf, format="png", dpi=150)
@@ -1405,7 +1406,7 @@ class Forcing:
             "sp": 134.128,  # surface pressure
             "u10": 165.128,  # 10 metre u-component of wind
             "v10": 166.128,  # 10 metre v-component of wind
-        }      
+        }
 
         forecast_issue_dates = pd.date_range(  # Create pandas date range
             start=forecast_start,  # Start from forecast start date
@@ -1427,14 +1428,14 @@ class Forcing:
             forecast_timestep_hours=forecast_timestep_hours,  # Temporal resolution in hours
         )
 
-        for (forecast_issue_date) in forecast_issue_dates:  # # Process each forecast issue date separately
+        for (
+            forecast_issue_date
+        ) in forecast_issue_dates:  # # Process each forecast issue date separately
             forecast_issue_date_str = forecast_issue_date.strftime(
                 "%Y%m%dT%H%M%S"
             )  # Format date for filenames
 
-            self.logger.info(
-                f"Processing forecast issued at {forecast_issue_date}..."
-            )
+            self.logger.info(f"Processing forecast issued at {forecast_issue_date}...")
 
             ECMWF_forecast = ECMWF_forecasts_store.read(
                 bounds=self.bounds,
@@ -1446,11 +1447,15 @@ class Forcing:
                 reproject_like=self.other["climate/pr_kg_per_m2_per_s"],
             )  # Reproject to grid of other climate data
 
-             # Create name based on forecast_model for consistent file structure
+            # Create name based on forecast_model for consistent file structure
             if forecast_model == "both_control_and_probabilistic":
-                base_name = f"forecasts/ECMWF/merged_control_ensemble/{forecast_issue_date_str}"
+                base_name = (
+                    f"forecasts/ECMWF/merged_control_ensemble/{forecast_issue_date_str}"
+                )
             else:
-                base_name = f"forecasts/ECMWF/{forecast_model}/{forecast_issue_date_str}"
+                base_name = (
+                    f"forecasts/ECMWF/{forecast_model}/{forecast_issue_date_str}"
+                )
 
             # Extract and process hourly precipitation data
             pr = ECMWF_forecast["tp"].rename(
