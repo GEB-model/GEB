@@ -33,16 +33,21 @@ from geb.typing import (
 
 
 @njit(cache=True)
-def pixel_to_coord(px: int, py: int, gt: tuple) -> Tuple[float, float]:
+def pixel_to_coord(px: int, py: int, gt: tuple) -> tuple[float, float]:
     """Converts pixel (x, y) to coordinate (lon, lat) for given geotransformation.
+
     Uses the upper left corner of the pixel. To use the center, add 0.5 to input pixel.
 
-        Parameters:
-            pixel: the pixel (x, y) that need to be transformed to coordinate
-            gt: the geotransformation. Must be unrotated
+    Args:
+        px: The pixel x coordinate.
+        py: The pixel y coordinate.
+        gt: The geotransformation. Must be unrotated.
 
-        Returns:
-            array: the coordinate (lon, lat)
+    Returns:
+        array: the coordinate (lon, lat)
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
     """
     if gt[2] + gt[4] == 0:
         lon = px * gt[1] + gt[0]
@@ -61,11 +66,11 @@ def pixels_to_coords(
     Uses the upper left corner of the pixels. To use the centers, add 0.5 to input pixels.
 
     Args:
-        pixels: The pixels (x, y) that need to be transformed to coordinates (shape: 2, n).
+        pixels: The pixels (x, y) that need to be transformed to coordinates (shape: n, 2).
         gt: The geotransformation. Must be unrotated.
 
     Returns:
-        The coordinates (lon, lat) with shape (2, n).
+        The coordinates (lon, lat) with shape (n, 2).
 
     Raises:
         ValueError: If the geotransformation indicates a rotated map.
@@ -91,7 +96,7 @@ def sample_from_map(
 
     Args:
         array: The map to sample from (2+n dimensions).
-        coords: The coordinates used to sample (shape: 2, m).
+        coords: The coordinates used to sample (shape: m, 2).
         gt: The geotransformation. Must be unrotated.
 
     Returns:
@@ -131,7 +136,7 @@ def write_to_array(
     Args:
         array: The 2-dimensional array to write to.
         values: The values to write (shape: n).
-        coords: The coordinates of the values (shape: 2, n).
+        coords: The coordinates of the values (shape: n, 2).
         gt: The geotransformation. Must be unrotated.
 
     Returns:
@@ -178,16 +183,21 @@ def coord_to_pixel(
 
 @njit(parallel=True)
 def coords_to_pixels(
-    coords, gt: tuple, dtype=np.uint32
+    coords: np.ndarray,
+    gt: tuple[float, float, float, float, float, float],
+    dtype: type[np.uint32] = np.uint32,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Converts array of coordinates to array of pixels for given geotransformation.
 
-    Parameters:
+    Args::
         coords: the coordinates (lon, lat) that need to be transformed to pixels (shape: 2, n)
         gt: the geotransformation. Must be unrotated
 
     Returns:
         array: 2d-array of pixels per coordinate (shape: 2, n)
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
     """
     if gt[2] + gt[4] == 0:
         size = coords.shape[0]

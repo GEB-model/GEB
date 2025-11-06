@@ -488,7 +488,7 @@ if __name__ == "__main__":
     search_ids = np.random.choice(np.arange(0, n_locations), 50, replace=False)
 
     counts = np.zeros(n_locations, dtype=np.int32)
-    for i in range(1000):
+    for _ in range(1000):
         neighors = find_neighbors(
             locations, radius, n_neighbor, bits, search_ids=search_ids
         )

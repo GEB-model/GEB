@@ -404,7 +404,7 @@ def plot_geohash_shifts(
 
     Args:
         lon: Longitude of circle centre.
-        lat: Latitude of cirle centre.
+        lat: Latitude of circle centre.
         radius: Radius of circle.
         bits: Number of geohash bits used.
         show: Whether to show the resulting plot.
