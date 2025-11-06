@@ -427,9 +427,9 @@ class SFINCSRootModel:
         # Because hydromt-sfincs does a lot of filling default values when data
         # is missing, we need to be extra sure that the required columns are
         # present and contain valid data.
-        # assert rivers["width"].notnull().all(), "River width cannot be null"
-        # assert rivers["depth"].notnull().all(), "River depth cannot be null"
-        # assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
+        assert rivers["width"].notnull().all(), "River width cannot be null"
+        assert rivers["depth"].notnull().all(), "River depth cannot be null"
+        assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
 
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
