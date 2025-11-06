@@ -27,12 +27,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
-from honeybees.library.raster import write_to_array
 
 from geb.module import Module
 from geb.typing import ArrayFloat32
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import load_grid
+from geb.workflows.raster import write_to_array
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
