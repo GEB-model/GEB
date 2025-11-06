@@ -15,17 +15,18 @@ general:
   simulate_forest: false
   forecasts:
     use: false
+    provider: ECMWF
 
 hazards:
   floods:
     simulate: false
-    forcing_method: headwater_points  # headwater_points or precipitation
+    forcing_method: accumulated_runoff  # headwater_points, runoff, accumulated_runoff
     minimum_flood_depth: 0.05
     resolution: 150
     nr_subgrid_pixels: 4
     crs: auto
     force_overwrite: true
-    write_figures: false  # whether to generate and save diagnostic figures
+    write_figures: true  # whether to generate and save diagnostic figures
     return_periods:
       - 2
       - 5
@@ -80,7 +81,7 @@ agent_settings:
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
-    return_fraction: 0.5172748734767878
+    return_fraction: 0.5
     social_network:
       radius: 5000 # m
       size: 10 # nr of neighbors
@@ -136,12 +137,9 @@ agent_settings:
           min: 0.5
   fix_activation_order: true
   reservoir_operators:
-    MinOutflowQ: 0.0
-    NonDamagingOutflowQ: 4.0
-    NormalOutflowQ: 0.1
-    max_reservoir_release_factor: 0.03380636312896216
     ruleset: no-adaptation
     equal_abstraction: false
+    reservoir_M_factor: 0.1
   sensitivity_analysis:
     risk_aversion_factor: 1
     discount_rate_factor: 1
@@ -171,15 +169,12 @@ report:
       single_file: true
 
 parameters:
-  SnowMeltCoef: 0.004
-  arno_beta_add: 0.0
-  lakeAFactor: 1
-  manningsN: 1
-  preferentialFlowConstant: 3.14300925049279
-  ksat_multiplier: 1.0
+  mannings_n_multiplier: 1.0
   crop_factor_multiplier: 1.0
-  water_demand_multiplier: 1.0
+  saturated_hydraulic_conductivity_multiplier: 1.0
   reservoir_release_factor: 0.1
+  water_demand_multiplier_industry: 1.0
+  lake_outflow_multiplier: 1.0
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini

@@ -1,11 +1,23 @@
+"""Reservoir operator agents."""
+
+from __future__ import annotations
+
 import calendar
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
+
+from geb.store import DynamicArray
+from geb.typing import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 
 from ..hydrology.lakes_reservoirs import RESERVOIR
-from ..store import DynamicArray
 from .general import AgentBaseClass
+
+if TYPE_CHECKING:
+    from geb.agents import Agents
+    from geb.model import GEBModel
 
 IRRIGATION_RESERVOIR: int = 1
 FLOOD_RESERVOIR: int = 2
@@ -20,9 +32,15 @@ class ReservoirOperators(AgentBaseClass):
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
 
-    def __init__(self, model, agents) -> None:
+    def __init__(self, model: GEBModel, agents: Agents) -> None:
+        """Initialize the ReservoirOperators agent.
+
+        Args:
+            model: The GEB model instance.
+            agents: The Agents instance containing all agent types.
+        """
         super().__init__(model)
-        self.agents = agents
+        self.agents: Agents = agents
         self.config = (
             self.model.config["agent_settings"]["reservoir_operators"]
             if "reservoir_operators" in self.model.config["agent_settings"]
@@ -40,25 +58,32 @@ class ReservoirOperators(AgentBaseClass):
 
     @property
     def name(self) -> str:
+        """Get the name of the module."""
         return "agents.reservoir_operators"
 
     def spinup(self) -> None:
-        self.reservoirs = self.model.hydrology.lakes_reservoirs.var.water_body_data[
-            self.model.hydrology.lakes_reservoirs.var.water_body_data["waterbody_type"]
-            == 2
-        ].copy()
+        """Initialize the reservoir operators during spinup."""
+        water_body_data: pd.DataFrame = (
+            self.model.hydrology.lakes_reservoirs.var.water_body_data[
+                self.model.hydrology.lakes_reservoirs.var.water_body_data[
+                    "waterbody_type"
+                ]
+                == 2
+            ].copy()
+        )
 
-        assert (self.reservoirs["volume_total"] > 0).all()
-        self.var.active_reservoirs = self.reservoirs[
-            self.reservoirs["waterbody_type"] == RESERVOIR
+        assert (water_body_data["volume_total"] > 0).all()
+        self.var.active_reservoirs = water_body_data[
+            water_body_data["waterbody_type"] == RESERVOIR
         ]
 
-        self.var.reservoir_release_factors = DynamicArray(
-            np.full(
-                len(self.var.active_reservoirs),
-                self.model.config["agent_settings"]["reservoir_operators"][
-                    "max_reservoir_release_factor"
-                ],
+        # Based on Shin et al. (2019)
+        # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
+        self.var.reservoir_M_factor: DynamicArray = DynamicArray(
+            np.full_like(
+                self.storage,
+                self.config["reservoir_M_factor"],
+                dtype=np.float64,
             )
         )
 
@@ -71,7 +96,7 @@ class ReservoirOperators(AgentBaseClass):
             self.var.storage_year_start, 0.85, dtype=np.float32
         )
 
-        total_monthly_inflow = (
+        total_monthly_inflow: ArrayFloat64 = (
             self.var.active_reservoirs["average_discharge"].values * 30 * 24 * 3600
         )
 
@@ -91,19 +116,36 @@ class ReservoirOperators(AgentBaseClass):
             :, np.newaxis
         ]
 
-        self.var.multi_year_monthly_total_irrigation_demand_m3 = (
-            self.var.multi_year_monthly_total_inflow
-        ) * 0.25
-
-        self.var.multi_year_monthly_usable_command_area_release_m3 = (
+        self.var.multi_year_monthly_total_irrigation_demand_m3: ArrayFloat32 = (
             self.var.multi_year_monthly_total_inflow * 0.25
         )
 
-        self.var.hydrological_year_counter = (
+        self.var.multi_year_monthly_usable_command_area_release_m3: ArrayFloat32 = (
+            self.var.multi_year_monthly_total_inflow * 0.25
+        )
+
+        self.var.hydrological_year_counter: int = (
             0  # Number of hydrological years for each reservoir
         )
 
-    def get_command_area_release(self, gross_irrigation_demand_m3):
+    def get_command_area_release(
+        self, gross_irrigation_demand_m3: ArrayFloat32
+    ) -> ArrayFloat64:
+        """Get the command area release for the reservoirs.
+
+        This function balances the irrigation demand, the expected future demand,
+        the exected future water available, and the current the available water
+        in the reservoirs.
+
+        Uses an adapted version of the Hanasaki et al. (2006) protocol. Various
+        improvements have been made based on more recent literature (cited in the functions).
+
+        Args:
+            gross_irrigation_demand_m3: The gross irrigation demand in m3.
+
+        Returns:
+            The usable command area release in m3.
+        """
         assert gross_irrigation_demand_m3.size == self.storage.size
 
         # add the irrigation demand to the multi_year_monthly_total_irrigation_demand_m3, use the current month
@@ -111,8 +153,12 @@ class ReservoirOperators(AgentBaseClass):
             :, self.current_month_index, 0
         ] += gross_irrigation_demand_m3
 
-        self.remaining_command_area_release = np.zeros_like(gross_irrigation_demand_m3)
-        self.command_area_release_m3 = np.zeros_like(gross_irrigation_demand_m3)
+        self.remaining_command_area_release: ArrayFloat64 = np.zeros_like(
+            gross_irrigation_demand_m3
+        )
+        self.command_area_release_m3: ArrayFloat64 = np.zeros_like(
+            gross_irrigation_demand_m3
+        )
 
         # environmental release is not used for irrigation
         usable_release_m3, environmental_release_m3 = self._get_release(
@@ -125,11 +171,11 @@ class ReservoirOperators(AgentBaseClass):
         self.command_area_release_m3 = np.minimum(
             usable_release_m3, gross_irrigation_demand_m3
         )
-        self.usable_command_area_release_m3 = (
+        self.usable_command_area_release_m3: ArrayFloat64 = (
             self.command_area_release_m3 * self.water_conveyance_efficiency
         )
         self.remaining_command_area_release = self.command_area_release_m3.copy()
-        self.gross_irrigation_demand_m3 = gross_irrigation_demand_m3
+        self.gross_irrigation_demand_m3: ArrayFloat64 = gross_irrigation_demand_m3
 
         self.var.multi_year_monthly_usable_command_area_release_m3[
             :, self.current_month_index, 0
@@ -163,20 +209,24 @@ class ReservoirOperators(AgentBaseClass):
             The maximum abstraction from reservoirs for each farmer in m3.
         """
         if self.config["equal_abstraction"] is True:
-            command_area_mask = farmer_command_areas != -1
-            demand_per_command_area = np.bincount(
+            command_area_mask: ArrayBool = farmer_command_areas != -1
+            demand_per_command_area: ArrayFloat64 = np.bincount(
                 farmer_command_areas[command_area_mask],
                 weights=gross_irrigation_demand_m3_per_farmer[command_area_mask],
                 minlength=self.model.hydrology.lakes_reservoirs.n,
             )
-            command_area_release_m3 = np.full(
-                self.model.hydrology.lakes_reservoirs.n, np.nan, dtype=np.float32
+            command_area_release_m3: ArrayFloat64 = np.full(
+                self.model.hydrology.lakes_reservoirs.n, np.nan, dtype=np.float64
             )
             command_area_release_m3[
                 self.model.hydrology.lakes_reservoirs.is_reservoir
             ] = self.command_area_release_m3
-            correction_factor = command_area_release_m3 / demand_per_command_area
-            correction_factor_per_farmer = correction_factor[farmer_command_areas]
+            correction_factor: ArrayFloat64 = (
+                command_area_release_m3 / demand_per_command_area
+            )
+            correction_factor_per_farmer: ArrayFloat64 = correction_factor[
+                farmer_command_areas
+            ]
             correction_factor_per_farmer[~command_area_mask] = np.nan
             return gross_irrigation_demand_m3_per_farmer * correction_factor_per_farmer
         else:
@@ -189,7 +239,7 @@ class ReservoirOperators(AgentBaseClass):
             inflow_m3: The inflow to the reservoirs in m3.
         """
         if inflow_m3.size == 0:
-            return np.zeros_like(inflow_m3), np.zeros_like(inflow_m3)
+            return
         # add the inflow to the multi_year_monthly_total_inflow, use the current month
         self.var.multi_year_monthly_total_inflow[:, self.current_month_index, 0] += (
             inflow_m3
@@ -197,8 +247,23 @@ class ReservoirOperators(AgentBaseClass):
 
     def release(
         self, daily_substeps: int, current_substep: int
-    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-        command_area_release_substep: npt.NDArray[np.float64] = (
+    ) -> tuple[ArrayFloat64, ArrayFloat64]:
+        """Calculate and apply the release of water from reservoirs for a given substep.
+
+        This method determines the release for the main channel and the command area
+        based on the total monthly command area release. It ensures that the total
+        release matches the calculated usable and environmental flows.
+
+        Args:
+            daily_substeps: The number of substeps within a day.
+            current_substep: The current substep index (0-based).
+
+        Returns:
+            A tuple containing:
+                - main_channel_release: The water released into the main channel (m3).
+                - command_area_release_substep: The water released for the command area (m3).
+        """
+        command_area_release_substep: ArrayFloat64 = (
             self.command_area_release_m3 / daily_substeps
         )
 
@@ -235,11 +300,30 @@ class ReservoirOperators(AgentBaseClass):
         return main_channel_release, command_area_release_substep
 
     def _get_release(
-        self, irrigation_demand_m3, daily_substeps, enforce_minimum_usable_release_m3
+        self,
+        irrigation_demand_m3: ArrayFloat32,
+        daily_substeps: int,
+        enforce_minimum_usable_release_m3: bool,
     ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+        """Calculate the provisional and environmental release from reservoirs.
+
+        This internal method computes the total usable and environmental water release
+        based on long-term hydrological data, current demand, and reservoir characteristics.
+
+        Args:
+            irrigation_demand_m3: The current irrigation demand for this timestep (m3).
+            daily_substeps: The number of substeps within a day.
+            enforce_minimum_usable_release_m3: Whether to enforce a minimum usable release,
+                typically to meet command area demand.
+
+        Returns:
+            A tuple containing:
+                - usable_release_m3: The calculated usable water release (m3).
+                - environmental_release_m3: The calculated environmental flow release (m3).
+        """
         if irrigation_demand_m3.size == 0:
-            return np.zeros_like(irrigation_demand_m3), np.zeros_like(
-                irrigation_demand_m3
+            return np.zeros_like(irrigation_demand_m3, dtype=np.float64), np.zeros_like(
+                irrigation_demand_m3, dtype=np.float64
             )
         days_in_month: int = calendar.monthrange(
             self.model.current_time.year, self.model.current_time.month
@@ -266,14 +350,14 @@ class ReservoirOperators(AgentBaseClass):
 
         # get the long term inflow for this month. Do not consider the current month as
         # it is not yet complete.
-        long_term_monthly_inflow_this_month_m3 = np.average(
+        long_term_monthly_inflow_this_month_m3: ArrayFloat32 = np.average(
             self.var.multi_year_monthly_total_inflow[
                 :, self.current_month_index, 1 : self.var.history_fill_index
             ],
             axis=1,
         )
 
-        long_term_monthly_irrigation_demand_m3 = np.average(
+        long_term_monthly_irrigation_demand_m3: ArrayFloat32 = np.average(
             self.var.multi_year_monthly_total_irrigation_demand_m3[
                 ..., 1 : self.var.history_fill_index
             ],
@@ -281,7 +365,7 @@ class ReservoirOperators(AgentBaseClass):
             weights=month_weights,
         )
 
-        provisional_reservoir_release_m3 = np.full_like(
+        provisional_reservoir_release_m3: ArrayFloat32 = np.full_like(
             self.storage, np.nan, dtype=np.float32
         )
         # Calculate reservoir release for each reservoir type in m3/s. Only execute if there are reservoirs of that type.
@@ -303,7 +387,7 @@ class ReservoirOperators(AgentBaseClass):
         if np.any(self.var.reservoir_purpose == FLOOD_RESERVOIR):
             raise NotImplementedError
 
-        environmental_flow_requirement_m3 = (
+        environmental_flow_requirement_m3: ArrayFloat32 = (
             long_term_monthly_inflow_m3
             * self.environmental_flow_requirement
             / n_monthly_substeps
@@ -319,36 +403,34 @@ class ReservoirOperators(AgentBaseClass):
             else None,
             environmental_flow_requirement_m3=environmental_flow_requirement_m3,
             alpha=self.var.alpha,
-            daily_substeps=daily_substeps,
         )
         assert (usable_release_m3 >= 0).all()
         assert (environmental_release_m3 >= 0).all()
-        assert (
-            usable_release_m3 >= self.command_area_release_m3 / daily_substeps
-        ).all()
+        if enforce_minimum_usable_release_m3:
+            assert (
+                usable_release_m3 >= self.command_area_release_m3 / daily_substeps
+            ).all()
 
         return usable_release_m3, environmental_release_m3
 
     def _release_corrections(
         self,
-        provisional_reservoir_release_m3,
-        storage_m3,
-        capacity_m3,
-        minimum_usable_release_m3,
-        environmental_flow_requirement_m3,
-        alpha,
-        daily_substeps,
-    ):
+        provisional_reservoir_release_m3: ArrayFloat32,
+        storage_m3: ArrayFloat64,
+        capacity_m3: ArrayFloat64,
+        minimum_usable_release_m3: ArrayFloat64 | None,
+        environmental_flow_requirement_m3: ArrayFloat32,
+        alpha: ArrayFloat32,
+    ) -> tuple[ArrayFloat64, ArrayFloat64]:
         """Adjusts the provisional reservoir release to ensure it meets environmental flow requirements, does not exceed the reservoir capacity, and maintains a minimum usable release.
 
         Args:
             provisional_reservoir_release_m3: The initial calculated release from the reservoir [m3].
             storage_m3: The current storage in the reservoir [m3].
             capacity_m3: The total capacity of the reservoir [m3].
-            minimum_usable_release_m3: The minimum usable release required [m3].
+            minimum_usable_release_m3: The minimum usable release required [m3], or None.
             environmental_flow_requirement_m3: The environmental flow requirement [m3].
             alpha: The reservoir capacity reduction factor [-].
-            daily_substeps: The number of substeps in the current day [-].
 
         Returns:
             A tuple containing:
@@ -397,22 +479,20 @@ class ReservoirOperators(AgentBaseClass):
             # make sure the usable release is at least the command area release
             # divided by the number of daily substeps
             usable_release_m3 = np.maximum(usable_release_m3, minimum_usable_release_m3)
-        assert (
-            usable_release_m3 >= self.command_area_release_m3 / daily_substeps
-        ).all()
+            assert (usable_release_m3 >= minimum_usable_release_m3).all()
         return usable_release_m3, environmental_flow_release_m3
 
     def get_irrigation_reservoir_release(
         self,
-        capacity,
-        storage_year_start,
-        long_term_monthly_inflow_m3,
-        long_term_monthly_inflow_this_month_m3,
-        current_irrigation_demand_m3,
-        long_term_monthly_irrigation_demand_m3,
-        alpha,
-        n_monthly_substeps,
-    ):
+        capacity: ArrayFloat64,
+        storage_year_start: ArrayFloat64,
+        long_term_monthly_inflow_m3: ArrayFloat32,
+        long_term_monthly_inflow_this_month_m3: ArrayFloat32,
+        current_irrigation_demand_m3: ArrayFloat32,
+        long_term_monthly_irrigation_demand_m3: ArrayFloat32,
+        alpha: ArrayFloat32,
+        n_monthly_substeps: int,
+    ) -> ArrayFloat64:
         """Computes release from irrigation reservoirs.
 
         Based on:
@@ -436,21 +516,21 @@ class ReservoirOperators(AgentBaseClass):
         Returns:
             The reservoir release for irrigation [m3].
         """
-        # Based on Shin et al. (2019)
-        # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
-        M = self.reservoir_release_factor
-
-        ratio_long_term_demand_to_inflow = (
+        ratio_long_term_demand_to_inflow: ArrayFloat32 = (
             long_term_monthly_irrigation_demand_m3 / long_term_monthly_inflow_m3
         )  # here the units don't matter as long as they are the same
-        irrigation_dominant_reservoirs = ratio_long_term_demand_to_inflow > 1.0 - M
+        irrigation_dominant_reservoirs: ArrayBool = (
+            ratio_long_term_demand_to_inflow > 1.0 - self.var.reservoir_M_factor
+        )
 
-        provisional_release = np.full_like(capacity, np.nan, dtype=np.float32)
+        provisional_release: ArrayFloat32 = np.full_like(
+            capacity, np.nan, dtype=np.float32
+        )
 
         # equation 2a in Shin et al. (2019)
         # if the irrigation demand is not dominant, this assumes there is sufficient
         # water in the reservoir to meet the demand
-        long_term_inflow_irrigation_delta_m3 = (
+        long_term_inflow_irrigation_delta_m3: ArrayFloat32 = (
             long_term_monthly_inflow_m3[~irrigation_dominant_reservoirs]
             - long_term_monthly_irrigation_demand_m3[~irrigation_dominant_reservoirs]
         )
@@ -463,8 +543,8 @@ class ReservoirOperators(AgentBaseClass):
             long_term_monthly_inflow_m3[irrigation_dominant_reservoirs]
             / n_monthly_substeps
             * (
-                M
-                + (1 - M)
+                self.var.reservoir_M_factor[irrigation_dominant_reservoirs]
+                + (1 - self.var.reservoir_M_factor[irrigation_dominant_reservoirs])
                 * current_irrigation_demand_m3[irrigation_dominant_reservoirs]
                 / (
                     long_term_monthly_irrigation_demand_m3[
@@ -476,19 +556,21 @@ class ReservoirOperators(AgentBaseClass):
         )  # equation 2b in Shin et al. (2019)
 
         # Targeted monthly release (Shin et al., 2019)
-        ratio_capacity_to_total_inflow = capacity / (long_term_monthly_inflow_m3 * 12)
+        ratio_capacity_to_total_inflow: ArrayFloat64 = capacity / (
+            long_term_monthly_inflow_m3 * 12
+        )
         # R in Shin et al. (2019). "As R varies from 0 to 1, the reservoir release changes
         # from run-of-the-river flow to demand-controlled release.""
-        demand_controlled_release_ratio = np.minimum(
+        demand_controlled_release_ratio: ArrayFloat64 = np.minimum(
             alpha * ratio_capacity_to_total_inflow, 1.0
         )
 
         # kᵣₗₛ [−], "the ratio between the initial storage at the
         # beginning of the operational year (S0 [L3])
         # and the long-term target storage (αC [L3])" (Shin et al., 2019)
-        release_coefficient = storage_year_start / (alpha * capacity)
+        release_coefficient: ArrayFloat64 = storage_year_start / (alpha * capacity)
 
-        final_release = (
+        final_release: ArrayFloat64 = (
             demand_controlled_release_ratio * release_coefficient * provisional_release
             + (1 - demand_controlled_release_ratio)
             * long_term_monthly_inflow_this_month_m3
@@ -546,6 +628,17 @@ class ReservoirOperators(AgentBaseClass):
     #     return Rflood_final
 
     def step(self) -> None:
+        """Perform the monthly and yearly updates for the reservoir operators.
+
+        This method handles the hydrological year-end logic, which includes:
+        - Shifting the multi-year historical data for inflow and demand. This removes
+        the oldest year and makes space for the new year. See comments below for details.
+        - Resetting counters for the new hydrological year.
+        - Setting the storage for the new hydrological year.
+
+        The hydrological year is assumed to start in October. TODO: This should
+        be configurable or auto-detected based on the local climate.
+        """
         # operational year should start after the end of the rainy season
         # this could also maybe be determined based on the start of the irrigation season
         # thus crop calendars
@@ -589,11 +682,16 @@ class ReservoirOperators(AgentBaseClass):
         self.report(locals())
 
     @property
-    def storage(self):
+    def storage(self) -> ArrayFloat64:
+        """Get the storage of the reservoirs in m3.
+
+        Returns:
+            An array with the storage of each reservoir (m3).
+        """
         return self.model.hydrology.lakes_reservoirs.reservoir_storage
 
     @storage.setter
-    def storage(self, value) -> None:
+    def storage(self, value: ArrayFloat64) -> None:
         self.model.hydrology.lakes_reservoirs.reservoir_storage = value
 
     # @property
@@ -601,23 +699,50 @@ class ReservoirOperators(AgentBaseClass):
     #     return self.model.hydrology.lakes_reservoirs.potential_evaporation_per_water_body_m3_reservoir
 
     @property
-    def capacity(self):
+    def capacity(self) -> ArrayFloat64:
+        """Get the capacity of the reservoirs in m3.
+
+        Returns:
+            An array with the capacity of each reservoir (m3).
+        """
         return self.model.hydrology.lakes_reservoirs.reservoir_capacity
 
     @capacity.setter
-    def capacity(self, value) -> None:
+    def capacity(self, value: ArrayFloat64) -> None:
+        """Set the capacity of the reservoirs in m3.
+
+        Args:
+            value: An array with the capacity of each reservoir (m3).
+        """
         self.model.hydrology.lakes_reservoirs.reservoir_capacity = value
 
     @property
-    def fill_ratio(self):
+    def fill_ratio(self) -> ArrayFloat64:
+        """Get the fill ratio of the reservoirs (0-1).
+
+        Returns:
+            An array with the fill ratio of each reservoir.
+        """
         return self.storage / self.capacity
 
     @property
-    def current_month_index(self):
+    def current_month_index(self) -> int:
+        """Get the index of the current month.
+
+        0-indexed.
+
+        Returns:
+            The index of the current month.
+        """
         return self.model.current_time.month - 1
 
     @property
-    def waterbody_ids(self):
+    def waterbody_ids(self) -> ArrayInt32:
+        """Get the waterbody IDs of the reservoirs.
+
+        Returns:
+            An array with the waterbody IDs of the reservoirs.
+        """
         return self.model.hydrology.lakes_reservoirs.var.waterbody_ids_original[
             self.model.hydrology.lakes_reservoirs.is_reservoir
         ]

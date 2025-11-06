@@ -1,11 +1,27 @@
+"""This module contains the DecisionModule class for handling decision-making processes in the GEB model."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 from numba import njit, prange
+
+if TYPE_CHECKING:
+    from geb.agents import Agents
+    from geb.model import GEBModel
 
 
 class DecisionModule:
     """This class implements the decision module for drought adaptation."""
 
-    def __init__(self, agents, model) -> None:
+    def __init__(self, model: GEBModel, agents: Agents) -> None:
+        """Initialize the DecisionModule.
+
+        Args:
+            model: The GEB model.
+            agents: The class that includes all agent types (allowing easier communication between agents).
+        """
         self.agents = agents
         self.model = model
 

@@ -49,6 +49,12 @@ The figure below shows a schematic overview of some parts of the model, showing 
   Government <agents/government>
 
 .. toctree::
+  :maxdepth: 1
+  :caption: Forecasts
+
+  Forecasts <forecasts>
+
+.. toctree::
   :maxdepth: 2
   :caption: Reference
 

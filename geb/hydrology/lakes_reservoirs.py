@@ -1,3 +1,5 @@
+"""Lakes and Reservoirs Module."""
+
 # --------------------------------------------------------------------------------
 # This file contains code that has been adapted from an original source available
 # in a public repository under the GNU General Public License. The original code
@@ -19,53 +21,90 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 
-from geb.hydrology.HRUs import load_grid
 from geb.module import Module
 from geb.workflows import balance_check
+from geb.workflows.io import load_grid
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
 OFF: int = 0
 LAKE: int = 1
 RESERVOIR: int = 2
 LAKE_CONTROL: int = 3  # currently modelled as normal lake
 
 
-def laketotal(values, areaclass, nan_class):
-    mask = areaclass != nan_class
-    class_totals = np.bincount(areaclass[mask], weights=values[mask])
-    return class_totals.astype(values.dtype)
-
-
-GRAVITY: float = 9.81
+GRAVITY: np.float32 = np.float32(9.81)
 SHAPE: str = "parabola"
 # http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
 
 if SHAPE == "rectangular":
-    overflow_coefficient_mu: float = 0.577
+    overflow_coefficient_mu: np.float32 = np.float32(0.577)
 
-    def estimate_lake_outflow(lake_factor, height_above_outflow):
+    def estimate_lake_outflow(
+        lake_factor: npt.NDArray[np.float32],
+        height_above_outflow: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
+        """Estimates the outflow from a lake given its height above the outflow for a rectangular shape.
+
+        References:
+            http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
+
+        Args:
+            lake_factor: A lake-specific constant factor used in the lake outflow equations.
+            height_above_outflow: Height of the lake above elevation of the outflow [m]
+
+        Returns:
+            Outflow in m3/s
+        """
         return lake_factor * height_above_outflow**1.5
 
-    def outflow_to_height_above_outflow(lake_factor, outflow):
-        """Inverse function of estimate_lake_outflow.
+    def outflow_to_height_above_outflow(
+        lake_factor: npt.NDArray[np.float32], outflow: npt.NDArray[np.float32]
+    ) -> npt.NDArray[np.float32]:
+        """Inverse function of estimate_lake_outflow for a rectangular shape.
+
+        Args:
+            lake_factor: A lake-specific constant factor used in the lake outflow equations.
+            outflow: Outflow in m3/s
 
         Returns:
             Height of the lake above elevation of the outflow [m]
         """
-        return (outflow / lake_factor) ** (2 / 3)
+        return (outflow / lake_factor) ** np.float32((2 / 3))
 
 elif SHAPE == "parabola":
-    overflow_coefficient_mu: float = 0.612
+    overflow_coefficient_mu: np.float32 = np.float32(0.612)
 
-    def estimate_lake_outflow(lake_factor, height_above_outflow):
+    def estimate_lake_outflow(
+        lake_factor: npt.NDArray[np.float32],
+        height_above_outflow: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
+        """Estimates the outflow from a lake given its height above the outflow for a parabolic shape.
+
+        References:
+            http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
+
+        Args:
+            lake_factor: A lake-specific constant factor used in the lake outflow equations.
+            height_above_outflow: Height of the lake above the outflow [m]
+
+        Returns:
+            Outflow in m3/s
+        """
         return lake_factor * height_above_outflow**2
 
-    def outflow_to_height_above_outflow(lake_factor, outflow):
-        """Inverse function of estimate_lake_outflow.
+    def outflow_to_height_above_outflow(
+        lake_factor: npt.NDArray[np.float32], outflow: npt.NDArray[np.float32]
+    ) -> npt.NDArray[np.float32]:
+        """Inverse function of estimate_lake_outflow for a parabolic shape.
 
         References:
             http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
@@ -83,7 +122,20 @@ else:
     raise ValueError("Invalid shape")
 
 
-def get_lake_height_from_bottom(lake_storage, lake_area):
+def get_lake_height_from_bottom(
+    lake_storage: npt.NDArray[np.float32], lake_area: npt.NDArray[np.float32]
+) -> npt.NDArray[np.float32]:
+    """Calculate the height of a lake above the bottom given its storage and area.
+
+    Assumes a box-shaped lake. Could be extended in the future to account for different lake shapes.
+
+    Args:
+        lake_storage: Storage of the lake in m3
+        lake_area: Area of the lake in m2
+
+    Returns:
+        Height of the lake above the bottom in m
+    """
     height_from_bottom = lake_storage / lake_area
     return height_from_bottom
 
@@ -103,7 +155,24 @@ def get_lake_storage_from_height_above_bottom(
     return lake_height * lake_area
 
 
-def get_lake_height_above_outflow(lake_storage, lake_area, outflow_height):
+def get_lake_height_above_outflow(
+    lake_storage: npt.NDArray[np.float32],
+    lake_area: npt.NDArray[np.float32],
+    outflow_height: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Calculate the height of a lake above the outflow given its storage, area, and outflow height.
+
+    Assumes a box-shaped lake. Could be extended in the future to account for different lake shapes.
+    First calculates the height above the bottom, then subtracts the outflow height.
+
+    Args:
+        lake_storage: Storage of the lake in m3
+        lake_area: Area of the lake in m2
+        outflow_height: Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
+
+    Returns:
+        Height of the lake above the outflow in m
+    """
     height_above_outflow = (
         get_lake_height_from_bottom(lake_storage, lake_area) - outflow_height
     )
@@ -111,11 +180,27 @@ def get_lake_height_above_outflow(lake_storage, lake_area, outflow_height):
     return height_above_outflow
 
 
-def get_river_width(average_discharge):
-    return 7.1 * np.power(average_discharge, 0.539)
+def get_river_width(
+    average_discharge: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Estimate river width at lake outflow from average discharge using an empirical relationship.
+
+    TODO: Check if this can be improved using river width data from the hydrological model.
+
+    Args:
+        average_discharge: Average discharge in m3/s
+
+    Returns:
+        Estimated river width in m
+    """
+    return np.float32(7.1) * np.power(average_discharge, np.float32(0.539))
 
 
-def get_lake_factor(river_width, overflow_coefficient_mu, lake_a_factor):
+def get_lake_factor(
+    river_width: npt.NDArray[np.float32],
+    overflow_coefficient_mu: np.float32,
+    lake_a_factor: np.float32,
+) -> npt.NDArray[np.float32]:
     """A lake-constant factor that is used in the equations for lake outflow.
 
     Pre-calculated to save computation time.
@@ -140,7 +225,24 @@ def get_lake_factor(river_width, overflow_coefficient_mu, lake_a_factor):
     )
 
 
-def estimate_outflow_height(lake_capacity, lake_factor, lake_area, avg_outflow):
+def estimate_outflow_height(
+    lake_capacity: npt.NDArray[np.float32],
+    lake_factor: npt.NDArray[np.float32],
+    lake_area: npt.NDArray[np.float32],
+    avg_outflow: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Estimate the outflow height of a lake given its capacity, lake factor, area, and average outflow.
+
+    Args:
+        lake_capacity: Capacity of the lake in m3
+        lake_factor: Factor for the Modified Puls approach to calculate retention of the lake
+        lake_area: Area of the lake in m2
+        avg_outflow: Average outflow in m3/s
+
+    Returns:
+        outflow_height: Height of the outflow in m above the bottom of the lake in m (assuming a rectangular lake)
+
+    """
     height_above_outflow = outflow_to_height_above_outflow(lake_factor, avg_outflow)
     lake_height_when_full = get_lake_height_from_bottom(lake_capacity, lake_area)
     outflow_height = lake_height_when_full - height_above_outflow
@@ -154,7 +256,7 @@ def get_lake_outflow(
     lake_factor: npt.NDArray[np.float32],
     lake_area: npt.NDArray[np.float32],
     outflow_height: npt.NDArray[np.float32],
-):
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
     """Calculate outflow and storage for a lake using the Modified Puls method.
 
     Args:
@@ -193,7 +295,13 @@ class LakesReservoirs(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology) -> None:
+    def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
+        """Initializes the Lakes and Reservoirs module.
+
+        Args:
+            model: The GEB model instance.
+            hydrology: The hydrology submodel instance.
+        """
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -205,9 +313,29 @@ class LakesReservoirs(Module):
 
     @property
     def name(self) -> str:
+        """Name of the module.
+
+        Returns:
+            The name of the module.
+        """
         return "hydrology.lakes_reservoirs"
 
     def spinup(self) -> None:
+        """Spinup part to initialize lakes and reservoirs.
+
+        This function is called during the spinup phase of the model to set up lakes and reservoirs.
+
+        Steps:
+        1. Load the water bodies map and create a mapping of water body IDs.
+        2. Set discharge to NaN for all cells that are not part of a water body.
+        3. Identify outflow points for each water body.
+        4. Load water body data from a Parquet file and filter it based on the water bodies present in the grid.
+        5. Extract relevant attributes such as water body type, area, capacity, and average discharge.
+        6. Calculate river width and lake factor for each water body.
+        7. Initialize storage for lakes and reservoirs, setting initial values based on capacity.
+        8. Estimate outflow height for each water body.
+
+        """
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped: np.ndarray = self.grid.load(
             self.model.files["grid"]["waterbodies/water_body_id"]
@@ -266,7 +394,7 @@ class LakesReservoirs(Module):
         self.var.lake_factor = get_lake_factor(
             river_width,
             overflow_coefficient_mu,
-            self.model.config["parameters"]["lakeAFactor"],
+            self.model.config["parameters"]["lake_outflow_multiplier"],
         )
 
         self.var.storage = np.full_like(self.var.capacity, np.nan, dtype=np.float64)
@@ -291,10 +419,24 @@ class LakesReservoirs(Module):
                 self.var.lake_area[self.is_lake],
                 self.var.outflow_height[self.is_lake],
             )
-            < 1e-10
+            < 1e-5
         ).all()
 
-    def map_water_bodies_IDs(self, waterBodyID_unmapped):
+    def map_water_bodies_IDs(
+        self, waterBodyID_unmapped: npt.NDArray[np.int32]
+    ) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]:
+        """Maps the water body IDs to a continuous range of IDs starting from 0.
+
+        If there are no water bodies, it returns an array of -1.
+
+        Args:
+            waterBodyID_unmapped: The original water body IDs from the grid.
+
+        Returns:
+            A tuple containing:
+                - waterBodyID_mapped: The mapped water body IDs.
+                - water_body_mapping: The mapping from original IDs to mapped IDs.
+        """
         unique_water_bodies = np.unique(waterBodyID_unmapped)
         unique_water_bodies = unique_water_bodies[unique_water_bodies != -1]
         if unique_water_bodies.size == 0:
@@ -310,7 +452,22 @@ class LakesReservoirs(Module):
             )
             return water_body_mapping[waterBodyID_unmapped], water_body_mapping
 
-    def load_water_body_data(self, waterbody_mapping, waterbody_original_ids):
+    def load_water_body_data(
+        self,
+        waterbody_mapping: npt.NDArray[np.int32],
+        waterbody_original_ids: npt.NDArray[np.int32],
+    ) -> gpd.GeoDataFrame:
+        """Loads water body data from a Parquet file and sets the index to the mapped water body IDs.
+
+        All water bodies that are not in the original IDs (and thus not in the study area) are dropped.
+
+        Args:
+            waterbody_mapping: The mapping from original water body IDs to mapped IDs.
+            waterbody_original_ids: The original water body IDs from the grid.
+
+        Returns:
+            A GeoDataFrame containing the water body data with the index set to the mapped water body IDs.
+        """
         water_body_data = gpd.read_parquet(
             self.model.files["geom"]["waterbodies/waterbody_data"],
         )
@@ -331,7 +488,18 @@ class LakesReservoirs(Module):
         water_body_data = water_body_data.set_index("waterbody_id")
         return water_body_data
 
-    def get_outflows(self, waterBodyID):
+    def get_outflows(self, waterBodyID: npt.NDArray[np.int32]) -> npt.NDArray[np.int32]:
+        """Identifies the outflow points for each water body.
+
+        Finds the cell with the highest upstream area in each water body as the outflow point.
+        If there are multiple cells with the same upstream area, the one with the lowest elevation is chosen.
+
+        Args:
+            waterBodyID: The mapped water body IDs from the grid.
+
+        Returns:
+            An array containing the outflow point for each water body.
+        """
         # calculate biggest outlet = biggest accumulation of ldd network
         upstream_area_n_cells = self.hydrology.routing.river_network.upstream_area(
             unit="cell"
@@ -416,7 +584,9 @@ class LakesReservoirs(Module):
 
         return waterbody_outflow_points
 
-    def routing_lakes(self, routing_step_length_seconds: int | float):
+    def routing_lakes(
+        self, routing_step_length_seconds: int | float
+    ) -> npt.NDArray[np.float32]:
         """Lake routine to calculate lake outflow.
 
         Args:
@@ -471,10 +641,35 @@ class LakesReservoirs(Module):
 
     def substep(
         self,
-        current_substep,
-        n_routing_substeps,
-        routing_step_length_seconds,
-    ):
+        current_substep: int,
+        n_routing_substeps: int,
+        routing_step_length_seconds: int,
+    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+        """Routes lakes and reservoirs for a single routing substep.
+
+        Importantly, the outflow is not removed from the storage here. This is
+        done in the hydrology routing module.
+
+        For lakes, it calculates the outflow based on the current storage and lake parameters.
+        This is returned as outflow to the drainage network.
+
+        For reservoirs, it gets the outflow and the command area release from the reservoir operators.
+        The outflow is returned as outflow to the drainage network, while the command area release
+        is returned separately.
+
+        The command area release is not routed through the drainage network, but is instead
+        added directly to the irrigation demand in the irrigation module.
+
+        Args:
+            current_substep: Current substep in the routing process
+            n_routing_substeps: Number of routing substeps per time step
+            routing_step_length_seconds: length of the routing step in seconds.
+
+        Returns:
+            tuple containing:
+                - outflow_to_drainage_network_m3: Outflow to the drainage network in m3 per routing step.
+                - command_area_release_m3: Outflow from the command area in m3 per routing step.
+        """
         if __debug__:
             prestorage = self.var.storage.copy()
 
@@ -499,60 +694,120 @@ class LakesReservoirs(Module):
                 outfluxes=[],
                 prestorages=[prestorage[self.is_reservoir]],
                 poststorages=[self.var.storage[self.is_reservoir]],
-                tollerance=1,  # 1 m3
+                tolerance=1,  # 1 m3
             )
 
         return outflow_to_drainage_network_m3, command_area_release_m3
 
     @property
-    def is_reservoir(self):
+    def is_reservoir(self) -> npt.NDArray[np.bool_]:
+        """Returns a boolean array indicating which water bodies are reservoirs.
+
+        Returns:
+            A boolean array where True indicates that the corresponding water body is a reservoir.
+        """
         return self.var.water_body_type == RESERVOIR
 
     @property
-    def is_lake(self):
+    def is_lake(self) -> npt.NDArray[np.bool_]:
+        """Returns a boolean array indicating which water bodies are lakes.
+
+        Returns:
+            A boolean array where True indicates that the corresponding water body is a lake.
+        """
         return self.var.water_body_type == LAKE
 
     @property
-    def reservoir_storage(self):
+    def reservoir_storage(self) -> npt.NDArray[np.float32]:
+        """Gets the storage of each reservoir in the model.
+
+        Returns:
+            The storage of each reservoir in the model. [m3]
+        """
         return self.var.storage[self.is_reservoir]
 
     @reservoir_storage.setter
-    def reservoir_storage(self, value) -> None:
+    def reservoir_storage(self, value: npt.NDArray[np.float32]) -> None:
+        """Sets the storage of each reservoir in the model."""
         self.var.storage[self.is_reservoir] = value
 
     @property
-    def reservoir_capacity(self):
+    def reservoir_capacity(self) -> npt.NDArray[np.float32]:
+        """Gets the capacity of each reservoir in the model.
+
+        Returns:
+            The capacity of each reservoir in the model. [m3]
+        """
         return self.var.capacity[self.is_reservoir]
 
     @reservoir_capacity.setter
-    def reservoir_capacity(self, value) -> None:
+    def reservoir_capacity(self, value: npt.NDArray[np.float32]) -> None:
+        """Sets the capacity of each reservoir in the model.
+
+        Args:
+            value: The capacity of each reservoir in the model. [m3]
+        """
         self.var.capacity[self.is_reservoir] = value
 
     @property
-    def lake_storage(self):
+    def lake_storage(self) -> npt.NDArray[np.float32]:
+        """Gets the storage of each lake in the model.
+
+        Returns:
+            The storage of each lake in the model. [m3]
+        """
         return self.var.storage[self.is_lake]
 
     @lake_storage.setter
-    def lake_storage(self, value) -> None:
+    def lake_storage(self, value: npt.NDArray[np.float32]) -> None:
+        """Sets the storage of each lake in the model."""
         self.var.storage[self.is_lake] = value
 
     @property
-    def lake_capacity(self):
+    def lake_capacity(self) -> npt.NDArray[np.float32]:
+        """Gets the capacity of each lake in the model.
+
+        Returns:
+            The capacity of each lake in the model. [m3]
+        """
         return self.var.capacity[self.is_lake]
 
     @lake_capacity.setter
-    def lake_capacity(self, value) -> None:
+    def lake_capacity(self, value: npt.NDArray[np.float32]) -> None:
+        """Sets the capacity of each lake in the model."""
         self.var.capacity[self.is_lake] = value
 
     @property
-    def reservoir_fill_percentage(self):
+    def reservoir_fill_percentage(self) -> npt.NDArray[np.float32]:
+        """Returns the fill percentage of each reservoir in the model.
+
+        Returns:
+            The fill percentage of each reservoir in the model.
+        """
         return self.reservoir_storage / self.reservoir_capacity * 100
 
     @property
-    def n(self):
+    def n(self) -> int:
+        """Returns the number of lakes and reservoirs in the model.
+
+        Returns:
+            The number of lakes and reservoirs in the model.
+        """
         return self.var.capacity.size
 
-    def decompress(self, array):
+    def decompress(self, array: npt.NDArray[Any]) -> npt.NDArray[Any]:
+        """Placeholder decompression function.
+
+        Other modules expect a decompress function to be present. However, since
+        the lakes and reservoirs module doesn't need to decompress any data,
+        this function simply returns the input array unchanged.
+
+        Args:
+            array: The input array to be "decompressed".
+
+        Returns:
+            The same array that was input, unchanged.
+        """
         return array
 
     def step(self) -> None:

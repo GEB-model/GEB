@@ -7,14 +7,15 @@ import itertools
 import os
 import warnings
 from datetime import datetime, timedelta
-from typing import Any, Tuple
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.signal as ss
 
-from ....hydrology.HRUs import load_geom
+from geb.workflows.io import load_geom
+
 from ....workflows.io import load_table
 
 warnings.filterwarnings("ignore")
@@ -101,7 +102,7 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
 
 def generate_tide_signals(
     station: int, tidepd: pd.Series, make_plot: bool = True
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Generate tidal signals for a given station.
 
     Args:
@@ -274,7 +275,7 @@ def generate_tide_signals(
 
 def generate_surge_hydrograph(
     station: int, surgepd: pd.Series, percentile: float, make_plot: bool
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray]:
     """Generate storm surge hydrographs for a given GEB model.
 
     Args:
@@ -465,7 +466,7 @@ def generate_storm_tide_hydrograph(
     rp: int,
     offset: int,
     make_plot: bool,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """This function generates storm tide hydrographs for a given station.
 
     Args:
