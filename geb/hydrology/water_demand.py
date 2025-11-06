@@ -136,7 +136,8 @@ class WaterDemand(Module):
 
         available_channel_storage_m3: np.ndarray = (
             self.hydrology.routing.router.get_available_storage(
-                Q=self.grid.var.discharge_m3_s_substep, maximum_abstraction_ratio=0.1
+                Q=self.grid.var.discharge_m3_in_rivers_s_substep,
+                maximum_abstraction_ratio=0.1,
             )
         )
 

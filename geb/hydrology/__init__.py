@@ -94,7 +94,7 @@ class Hydrology(Data, Module):
             ).sum()
             + (self.HRU.var.topwater.astype(np.float64) * self.HRU.var.cell_area).sum()
             + self.routing.router.get_total_storage(
-                self.grid.var.discharge_m3_s_substep
+                self.grid.var.discharge_m3_in_rivers_s_substep
             )
             .astype(np.float64)
             .sum()

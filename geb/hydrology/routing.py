@@ -13,10 +13,12 @@ from geb.module import Module
 from geb.typing import (
     ArrayBool,
     ArrayFloat32,
+    ArrayFloat64,
     ArrayInt32,
     ArrayInt64,
     ArrayUint8,
     TwoDArrayBool,
+    TwoDArrayFloat32,
     TwoDArrayInt32,
     TwoDArrayUint8,
 )
@@ -584,6 +586,22 @@ class KinematicWave(Router):
         )
 
 
+def fill_discharge_gaps(
+    discharge_m3_s: ArrayFloat32,
+) -> ArrayFloat32:
+    """Fill gaps in discharge data by propagating upstream values downstream.
+
+    Args:
+        discharge_m3_s: 1D array of discharge values with possible NaNs.
+
+    Returns:
+        1D array of discharge values with NaNs filled.
+    """
+    filled_discharge_m3_s: ArrayFloat32 = discharge_m3_s.copy()
+    filled_discharge_m3_s[np.isnan(discharge_m3_s)] = 0.0
+    return filled_discharge_m3_s
+
+
 class Accuflux(Router):
     """Accuflux routing algorithm.
 
@@ -970,19 +988,22 @@ class Routing(Module):
         ) ** self.var.river_beta
 
         # Initialize discharge with zero
-        self.grid.var.discharge_m3_s_substep = self.grid.full_compressed(
+        self.grid.var.discharge_m3_in_rivers_s_substep: ArrayFloat32 = (
+            self.grid.full_compressed(1e-30, dtype=np.float32)
+        )
+        self.grid.var.discharge_m3_s_substep: ArrayFloat32 = self.grid.full_compressed(
             1e-30, dtype=np.float32
         )
-        self.grid.var.discharge_m3_s_per_substep = np.full(
+        self.grid.var.discharge_m3_s_per_substep: TwoDArrayFloat32 = np.full(
             (24, self.grid.var.discharge_m3_s_substep.size),
             0,
             dtype=self.grid.var.discharge_m3_s_substep.dtype,
         )
 
-        self.var.sum_of_all_discharge_steps = self.grid.full_compressed(
+        self.var.sum_of_all_discharge_steps: ArrayFloat64 = self.grid.full_compressed(
             0, dtype=np.float64
         )
-        self.var.discharge_step_count = 0
+        self.var.discharge_step_count: int = 0
 
     def get_river_width_alpha_and_beta(
         self,
@@ -1066,7 +1087,7 @@ class Routing(Module):
         if __debug__:
             pre_storage: np.ndarray = self.hydrology.lakes_reservoirs.var.storage.copy()
             pre_river_storage_m3: ArrayFloat32 = self.router.get_total_storage(
-                self.grid.var.discharge_m3_s_substep
+                self.grid.var.discharge_m3_in_rivers_s_substep
             )
 
         channel_abstraction_m3_per_hour: np.ndarray = channel_abstraction_m3 / 24
@@ -1086,10 +1107,9 @@ class Routing(Module):
         )
         return_flow_m3_per_hour[self.grid.var.waterBodyID != -1] = 0.0
 
-        self.grid.var.discharge_m3_s_per_substep = np.full(
-            (24, self.grid.var.discharge_m3_s_substep.size),
-            np.nan,
-            dtype=self.grid.var.discharge_m3_s_substep.dtype,
+        self.grid.var.discharge_m3_s_per_substep: TwoDArrayFloat32 = np.full_like(
+            self.grid.var.discharge_m3_s_per_substep,
+            fill_value=np.nan,
         )
 
         if __debug__:
@@ -1186,14 +1206,16 @@ class Routing(Module):
                 )
 
             assert (
-                self.grid.var.discharge_m3_s_substep[self.grid.var.waterBodyID == -1]
+                self.grid.var.discharge_m3_in_rivers_s_substep[
+                    self.grid.var.waterBodyID == -1
+                ]
                 >= 0.0
             ).all()
 
             river_width: ArrayFloat32 = get_river_width(
                 self.model.var.river_width_alpha,
                 self.model.var.river_width_beta,
-                self.grid.var.discharge_m3_s_substep,
+                self.grid.var.discharge_m3_in_rivers_s_substep,
             )
             # the ratio of each grid cell that is currently covered by a river
             channel_ratio: ArrayFloat32 = get_channel_ratio(
@@ -1210,14 +1232,14 @@ class Routing(Module):
             )
 
             (
-                self.grid.var.discharge_m3_s_substep,
+                self.grid.var.discharge_m3_in_rivers_s_substep,
                 actual_evaporation_in_rivers_m3_per_hour,
                 over_abstraction_m3_routing_step,
                 self.hydrology.lakes_reservoirs.var.storage,
                 waterbody_inflow_m3,
                 outflow_at_pits_m3_routing_step,
             ) = self.router.step(
-                Q_prev_m3_s=self.grid.var.discharge_m3_s_substep,
+                Q_prev_m3_s=self.grid.var.discharge_m3_in_rivers_s_substep,
                 sideflow_m3=side_flow_channel_m3_per_hour.astype(np.float32),
                 evaporation_m3=potential_evaporation_in_rivers_m3_per_hour,
                 waterbody_storage_m3=self.hydrology.lakes_reservoirs.var.storage,
@@ -1233,18 +1255,30 @@ class Routing(Module):
 
             # ensure that discharge is nan for water bodies
             assert np.isnan(
-                self.grid.var.discharge_m3_s_substep[self.grid.var.waterBodyID != -1]
+                self.grid.var.discharge_m3_in_rivers_s_substep[
+                    self.grid.var.waterBodyID != -1
+                ]
             ).all()
 
-            self.var.sum_of_all_discharge_steps += self.grid.var.discharge_m3_s_substep
-            self.var.discharge_step_count += 1
-
-            self.grid.var.discharge_m3_s_per_substep[hour, :] = (
-                self.grid.var.discharge_m3_s_substep.copy()
+            discharge_m3_s_substep: ArrayFloat32 = (
+                self.grid.var.discharge_m3_in_rivers_s_substep.copy()
             )
 
+            discharge_m3_s_substep_filled: ArrayFloat32 = fill_discharge_gaps(
+                self.grid.var.discharge_m3_in_rivers_s_substep
+            )
+
+            self.grid.var.discharge_m3_s_per_substep[hour, :] = (
+                discharge_m3_s_substep_filled
+            )
+
+            self.var.sum_of_all_discharge_steps += discharge_m3_s_substep_filled
+            self.var.discharge_step_count += 1
+
             assert (
-                self.router.get_available_storage(self.grid.var.discharge_m3_s_substep)
+                self.router.get_available_storage(
+                    self.grid.var.discharge_m3_in_rivers_s_substep
+                )
                 >= 0.0
             ).all()
 
@@ -1258,14 +1292,14 @@ class Routing(Module):
                 over_abstraction_m3 += over_abstraction_m3_routing_step
                 command_area_release_m3 += command_area_release_m3_routing_step
 
-        self.grid.var.discharge_m3_s = self.grid.var.discharge_m3_s_per_substep.mean(
-            axis=0
+        self.grid.var.discharge_m3_s: ArrayFloat32 = (
+            self.grid.var.discharge_m3_s_per_substep.mean(axis=0)
         )
 
         if __debug__:
             # TODO: make dependent on routing step length
             river_storage_m3: ArrayFloat32 = self.router.get_total_storage(
-                self.grid.var.discharge_m3_s_substep
+                self.grid.var.discharge_m3_in_rivers_s_substep
             )
             balance_check(
                 how="sum",
@@ -1320,6 +1354,12 @@ class Routing(Module):
             routing_loss: np.float64 = np.float64(np.nan)
 
         self.report(locals())
+
+        nan_values: int = np.isnan(self.grid.var.discharge_m3_s).sum()
+        if nan_values:
+            print(
+                f"Warning: {nan_values} NaN values found in discharge after routing step."
+            )
 
         total_over_abstraction_m3: np.float64 = over_abstraction_m3.astype(
             np.float64
