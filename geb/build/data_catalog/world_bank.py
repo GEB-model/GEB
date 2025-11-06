@@ -1,5 +1,7 @@
 """Simple file adapter for downloading and saving files."""
 
+from __future__ import annotations
+
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -14,7 +16,7 @@ from .base import Adapter
 class WorldBankData(Adapter):
     """Adapter for generic file download and save."""
 
-    def fetch(self, url: str) -> "File":
+    def fetch(self, url: str) -> WorldBankData:
         """Fetch file from URL and save to local path.
 
         Args:

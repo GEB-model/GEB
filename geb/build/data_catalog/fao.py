@@ -1,5 +1,7 @@
 """File adapter for FAO datasets."""
 
+from __future__ import annotations
+
 import zipfile
 from typing import Any
 
@@ -17,7 +19,7 @@ class GMIA(Adapter):
         """Initialize the Global Map of Irrigation Areas adapter."""
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> "GMIA":
+    def fetch(self, url: str) -> GMIA:
         """Fetch the dataset from the given URL if not already present.
 
         Args:

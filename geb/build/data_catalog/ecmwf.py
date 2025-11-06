@@ -1,5 +1,7 @@
 """ECMWF data adapter module."""
 
+from __future__ import annotations
+
 import os
 from datetime import date, datetime
 from pathlib import Path
@@ -102,7 +104,7 @@ class ECMWFForecasts(Adapter):
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
-    ) -> "ECMWFForecasts":
+    ) -> ECMWFForecasts:
         """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
         This function downloads ECMWF forecast data for a specified variable and time period

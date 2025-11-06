@@ -18,6 +18,7 @@ from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
+from .open_street_map import OpenStreetMap
 from .soilgrids import SoilGrids
 from .sword import Sword
 from .why_map import WhyMap
@@ -512,6 +513,16 @@ data_catalog: dict[str, dict[str, Any]] = {
             "version": "v16",
             "license": "CC BY 4.0",
             "url": "doi.org/10.5281/zenodo.14727521",
+        },
+    },
+    "open_street_map": {
+        "adapter": OpenStreetMap(),
+        "url": "https://osm.download.movisda.io",
+        "source": {
+            "name": "OpenStreetMap",
+            "author": "OpenStreetMap contributors",
+            "license": "ODbL 1.0",
+            "url": "https://www.openstreetmap.org/copyright",
         },
     },
 }

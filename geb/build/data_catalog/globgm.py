@@ -1,5 +1,7 @@
 """Adapters for GlobGM datasets."""
 
+from __future__ import annotations
+
 from typing import Any
 
 import numpy as np
@@ -17,7 +19,7 @@ class GlobGM(Adapter):
         """Initialize the GlobGM adapter."""
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> "GlobGM":
+    def fetch(self, url: str) -> GlobGM:
         """Fetch the dataset from the given URL if not already present.
 
         Args:
@@ -66,7 +68,7 @@ class GlobGMDEM(GlobGM):
         """Initialize the GlobGMDEM adapter."""
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> "GlobGMDEM":
+    def fetch(self, url: str) -> GlobGMDEM:
         """Fetch the DEM dataset from the given URL if not already present.
 
         Extracts the 'dem_average' variable from the downloaded dataset and
