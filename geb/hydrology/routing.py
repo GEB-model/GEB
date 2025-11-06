@@ -599,7 +599,7 @@ def fill_discharge_gaps(
         rivers: GeoDataFrame containing river network geometries.
 
     Returns:
-        1D array of discharge values with NaNs filled.
+        1D array of discharge values with NaNs in rivers filled.
     """
     filled_discharge_m3_s: ArrayFloat32 = discharge_m3_s.copy()
     for COMID, river in rivers.iterrows():
@@ -1041,7 +1041,7 @@ class Routing(Module):
         self,
         beta: float,
         default_alpha: float,
-    ) -> tuple[ArrayFloat32, float]:
+    ) -> tuple[ArrayFloat32, ArrayFloat32]:
         """Calculate the river alpha parameter for the kinematic wave routing.
 
         For river widths where we have an observed average river width, we use the default
@@ -1064,7 +1064,7 @@ class Routing(Module):
         Returns:
             The alpha parameter for river width
         """
-        beta_array = np.full_like(
+        beta_array: ArrayFloat32 = np.full_like(
             self.grid.var.average_river_width, beta, dtype=np.float32
         )
         # for the first year of simulation, we use the default alpha value for all rivers
@@ -1085,8 +1085,6 @@ class Routing(Module):
                 default_alpha,
             )
 
-        # Set alpha to NaN for water bodies, as they do not have a river width
-        alpha[self.grid.var.waterBodyID != -1] = np.nan
         return alpha, beta_array
 
     def step(
@@ -1387,14 +1385,6 @@ class Routing(Module):
             routing_loss: np.float64 = np.float64(np.nan)
 
         self.report(locals())
-
-        nan_values: int = np.isnan(
-            self.grid.var.discharge_m3_s[self.river_ids != -1]
-        ).sum()
-        if nan_values:
-            print(
-                f"Warning: {nan_values} NaN values found in rivers after routing step."
-            )
 
         total_over_abstraction_m3: np.float64 = over_abstraction_m3.astype(
             np.float64
