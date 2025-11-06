@@ -1669,13 +1669,13 @@ class Hydrology:
                         os.path.basename(flood_map_path)
                     )[0]
                     fig.savefig(
-                        save_folder
+                        output_folder
                         / f"{simulation_filename}_validation_floodextent_plot.png",
                         dpi=600,
                         bbox_inches="tight",
                     )
                     print(
-                        f"Figure with {visualization_type} saved as: {save_folder / f'{simulation_filename}_validation_floodextent_plot.png'}"
+                        f"Figure with {visualization_type} saved as: {output_folder / f'{simulation_filename}_validation_floodextent_plot.png'}"
                     )
 
                 elif visualization_type == "Hillshade":
@@ -1742,11 +1742,11 @@ class Hydrology:
                         os.path.basename(flood_map_path)
                     )[0]
                     plt.savefig(
-                        save_folder
+                        output_folder
                         / f"{simulation_filename}_validation_floodextent_plot.png"
                     )
                     print(
-                        f"Figure with {visualization_type} saved as: {save_folder / f'{simulation_filename}_validation_floodextent_plot.png'}"
+                        f"Figure with {visualization_type} saved as: {output_folder / f'{simulation_filename}_validation_floodextent_plot.png'}"
                     )
 
                 else:
@@ -1755,7 +1755,7 @@ class Hydrology:
                     )
 
                 performance_numbers = (
-                    save_folder / f"{simulation_filename}_performance_metrics.txt"
+                    output_folder / f"{simulation_filename}_performance_metrics.txt"
                 )
 
                 with open(performance_numbers, "w") as f:
@@ -1774,7 +1774,7 @@ class Hydrology:
                 }
 
         def create_forecast_performance_plots(
-            performance_df: pd.DataFrame, event_name: str, save_folder: Path
+            performance_df: pd.DataFrame, event_name: str, output_folder: Path
         ) -> None:
             """Create performance metric plots showing spread and mean across forecast initializations.
 
@@ -1792,7 +1792,7 @@ class Hydrology:
                     initialization times and ensemble members. Must include columns:
                     'forecast_init', 'hit_rate', 'false_alarm_rate', 'csi', 'flooded_area_km2'.
                 event_name: Name of the flood event being analyzed.
-                save_folder: Directory to save the performance plots (meters).
+                output_folder: Directory to save the performance plots (meters).
 
             Raises:
                 ValueError: If required columns are missing from performance_df.
@@ -1974,9 +1974,9 @@ class Hydrology:
             plot_filename = (
                 f"{event_name.replace(':', '_')}_forecast_performance_spread.png"
             )
-            fig.savefig(save_folder / plot_filename, dpi=300, bbox_inches="tight")
+            fig.savefig(output_folder / plot_filename, dpi=300, bbox_inches="tight")
             print(
-                f"Forecast performance spread plot saved as: {save_folder / plot_filename}"
+                f"Forecast performance spread plot saved as: {output_folder / plot_filename}"
             )
 
         self.config = self.model.config["hazards"]
