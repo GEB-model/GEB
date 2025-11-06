@@ -579,7 +579,14 @@ class Floods(Module):
 
     @property
     def discharge_spinup_ds(self) -> xr.DataArray:
-        """Open the discharge datasets from the model output folder."""
+        """Open the discharge datasets from the model output folder.
+
+        Returns:
+            The discharge data array after spinup period.
+
+        Raises:
+            ValueError: If there is not enough data available for reliable spinup.
+        """
         da: xr.DataArray = open_zarr(
             self.model.output_folder
             / "report"
@@ -588,15 +595,15 @@ class Floods(Module):
             / "discharge_daily.zarr"
         )
 
-        # start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
-        # ds = ds.sel(time=slice(start_time, ds.time[-1]))
+        start_time = pd.to_datetime(da.time[0].item()) + pd.DateOffset(years=10)
+        da: xr.DataArray = da.sel(time=slice(start_time, da.time[-1]))
 
-        # # make sure there is at least 20 years of data
-        # if not len(ds.time.groupby(ds.time.dt.year).groups) >= 20:
-        #     raise ValueError(
-        #         """Not enough data available for reliable spinup, should be at least 20 years of data left.
-        #         Please run the model for at least 30 years (10 years of data is discarded)."""
-        #     )
+        # make sure there is at least 20 years of data
+        if not len(da.time.groupby(da.time.dt.year).groups) >= 20:
+            raise ValueError(
+                """Not enough data available for reliable spinup, should be at least 20 years of data left.
+                Please run the model for at least 30 years (10 years of data is discarded)."""
+            )
 
         return da
 
