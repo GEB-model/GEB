@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import geopandas as gpd
 import numpy as np
 import pyflwdir
 import pyflwdir.core
@@ -23,6 +24,7 @@ from geb.typing import (
     TwoDArrayUint8,
 )
 from geb.workflows import balance_check
+from geb.workflows.io import load_geom
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -588,17 +590,22 @@ class KinematicWave(Router):
 
 def fill_discharge_gaps(
     discharge_m3_s: ArrayFloat32,
+    rivers: gpd.GeoDataFrame,
 ) -> ArrayFloat32:
     """Fill gaps in discharge data by propagating upstream values downstream.
 
     Args:
         discharge_m3_s: 1D array of discharge values with possible NaNs.
+        rivers: GeoDataFrame containing river network geometries.
 
     Returns:
         1D array of discharge values with NaNs filled.
     """
     filled_discharge_m3_s: ArrayFloat32 = discharge_m3_s.copy()
-    filled_discharge_m3_s[np.isnan(discharge_m3_s)] = 0.0
+    for COMID, river in rivers.iterrows():
+        for idx in river["hydrography_linear"]:
+            if np.isnan(filled_discharge_m3_s[idx]):
+                filled_discharge_m3_s[idx] = 0.0
     return filled_discharge_m3_s
 
 
@@ -881,6 +888,31 @@ class Routing(Module):
         self.river_network: pyflwdir.FlwdirRaster = create_river_network(
             ldd_uncompressed=ldd_uncompressed, mask=mask
         )
+
+        self.rivers: gpd.GeoDataFrame = self.load_rivers(
+            grid_linear_mapping=self.grid.linear_mapping
+        )
+
+        self.river_ids = self.grid.load(
+            self.model.files["grid"]["routing/river_ids"],
+        )
+
+    def load_rivers(self, grid_linear_mapping: TwoDArrayInt32) -> gpd.GeoDataFrame:
+        """Load the river network geometries.
+
+        Args:
+            grid_linear_mapping: A 2D array mapping grid cells to linear indices.
+
+        Returns:
+            A GeoDataFrame containing the river network geometries.
+        """
+        rivers: gpd.GeoDataFrame = load_geom(self.model.files["geom"]["routing/rivers"])
+        rivers["hydrography_linear"] = rivers["hydrography_xy"].apply(
+            lambda xys: np.array(
+                [grid_linear_mapping[xy[1], xy[0]] for xy in xys], dtype=np.int32
+            )
+        )
+        return rivers
 
     def set_router(self) -> None:
         """Initialize the routing algorithm based on the configuration.
@@ -1265,7 +1297,8 @@ class Routing(Module):
             )
 
             discharge_m3_s_substep_filled: ArrayFloat32 = fill_discharge_gaps(
-                self.grid.var.discharge_m3_in_rivers_s_substep
+                self.grid.var.discharge_m3_in_rivers_s_substep,
+                rivers=self.rivers,
             )
 
             self.grid.var.discharge_m3_s_per_substep[hour, :] = (
@@ -1355,10 +1388,12 @@ class Routing(Module):
 
         self.report(locals())
 
-        nan_values: int = np.isnan(self.grid.var.discharge_m3_s).sum()
+        nan_values: int = np.isnan(
+            self.grid.var.discharge_m3_s[self.river_ids != -1]
+        ).sum()
         if nan_values:
             print(
-                f"Warning: {nan_values} NaN values found in discharge after routing step."
+                f"Warning: {nan_values} NaN values found in rivers after routing step."
             )
 
         total_over_abstraction_m3: np.float64 = over_abstraction_m3.astype(
