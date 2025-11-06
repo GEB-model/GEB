@@ -599,7 +599,7 @@ class Floods(Module):
         da: xr.DataArray = da.sel(time=slice(start_time, da.time[-1]))
 
         # make sure there is at least 20 years of data
-        if not len(da.time.groupby(da.time.dt.year).groups) >= 20:
+        if len(da.time) == 0 or len(da.time.groupby(da.time.dt.year).groups) < 20:
             raise ValueError(
                 """Not enough data available for reliable spinup, should be at least 20 years of data left.
                 Please run the model for at least 30 years (10 years of data is discarded)."""
