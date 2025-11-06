@@ -1214,6 +1214,8 @@ dependencies = [
     { name = "pystac" },
     { name = "pystac-client" },
     { name = "pytest" },
+    { name = "pytest-benchmark" },
+    { name = "pytest-plt" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "rasterio" },
@@ -1301,6 +1303,8 @@ requires-dist = [
     { name = "pystac", specifier = ">=1.14.1" },
     { name = "pystac-client", specifier = ">=0.9.0" },
     { name = "pytest" },
+    { name = "pytest-benchmark", specifier = ">=5.2.1" },
+    { name = "pytest-plt", specifier = ">=1.1.1" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "rasterio", specifier = ">=1.3.10" },
@@ -3291,6 +3295,15 @@ wheels = [
 ]
 
 [[package]]
+name = "py-cpuinfo"
+version = "9.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/37/a8/d832f7293ebb21690860d2e01d8115e5ff6f2ae8bbdc953f0eb0fa4bd2c7/py-cpuinfo-9.0.0.tar.gz", hash = "sha256:3cdbbf3fac90dc6f118bfd64384f309edeadd902d7c8fb17f02ffa1fc3f49690", size = 104716, upload-time = "2022-10-25T20:38:06.303Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/a9/023730ba63db1e494a271cb018dcd361bd2c917ba7004c3e49d5daf795a2/py_cpuinfo-9.0.0-py3-none-any.whl", hash = "sha256:859625bc251f64e21f077d099d4162689c762b5d6a4c3c97553d56241c9674d5", size = 22335, upload-time = "2022-10-25T20:38:27.636Z" },
+]
+
+[[package]]
 name = "pyarrow"
 version = "22.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3628,6 +3641,32 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a3/5c/00a0e072241553e1a7496d638deababa67c5058571567b92a7eaa258397c/pytest-8.4.2.tar.gz", hash = "sha256:86c0d0b93306b961d58d62a4db4879f27fe25513d4b969df351abdddb3c30e01", size = 1519618, upload-time = "2025-09-04T14:34:22.711Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a8/a4/20da314d277121d6534b3a980b29035dcd51e6744bd79075a6ce8fa4eb8d/pytest-8.4.2-py3-none-any.whl", hash = "sha256:872f880de3fc3a5bdc88a11b39c9710c3497a547cfa9320bc3c5e62fbf272e79", size = 365750, upload-time = "2025-09-04T14:34:20.226Z" },
+]
+
+[[package]]
+name = "pytest-benchmark"
+version = "5.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "py-cpuinfo" },
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b8/fd/237def5e4b775a6a1a98c5f6a5b01f6c75d1f3af740b3665b7f538aea14b/pytest_benchmark-5.2.1.tar.gz", hash = "sha256:56dc1455bda7ccb540aa671c496dafc8187d2769f278e5f137689476805b6f9d", size = 339278, upload-time = "2025-11-04T14:51:33.543Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/75/02cb44852083794606c6b1b3f21df517c8bcf4ad1e88c6e0c5b8adb98da3/pytest_benchmark-5.2.1-py3-none-any.whl", hash = "sha256:a6e18fe0df2155e9d993db6ba03bdf85324794035ad986553787024ca59e8db9", size = 44727, upload-time = "2025-11-04T14:51:31.532Z" },
+]
+
+[[package]]
+name = "pytest-plt"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0f/bc/2cbd5862edaddf9c06cbb90452e200dbae3106f58ac6b75737cc6e7c14f2/pytest-plt-1.1.1.tar.gz", hash = "sha256:4cebb2547db028aaeecbb481356df3eb6cb3a66053ea5e9170a8683b55d41611", size = 20437, upload-time = "2024-01-17T20:29:21.831Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/cd/e479c8ec8487cc2d9cb918a4c6a5391a1de0fc40a9828e1dc85c45cb933e/pytest_plt-1.1.1-py3-none-any.whl", hash = "sha256:f7b700f2a9add47666fc40e03ebd487f29ed20b558249cff48ff4aac62bd6be6", size = 12133, upload-time = "2024-01-17T20:29:20.774Z" },
 ]
 
 [[package]]

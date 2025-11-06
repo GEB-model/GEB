@@ -32,6 +32,26 @@ from geb.typing import (
 )
 
 
+@njit(cache=True)
+def pixel_to_coord(px: int, py: int, gt: tuple) -> Tuple[float, float]:
+    """Converts pixel (x, y) to coordinate (lon, lat) for given geotransformation.
+    Uses the upper left corner of the pixel. To use the center, add 0.5 to input pixel.
+
+        Parameters:
+            pixel: the pixel (x, y) that need to be transformed to coordinate
+            gt: the geotransformation. Must be unrotated
+
+        Returns:
+            array: the coordinate (lon, lat)
+    """
+    if gt[2] + gt[4] == 0:
+        lon = px * gt[1] + gt[0]
+        lat = py * gt[5] + gt[3]
+        return lon, lat
+    else:
+        raise ValueError("Cannot convert rotated maps")
+
+
 @njit(cache=True, parallel=True)
 def pixels_to_coords(
     pixels: np.ndarray, gt: tuple[float, float, float, float, float, float]
@@ -152,6 +172,35 @@ def coord_to_pixel(
         px = (coord[0] - gt[0]) / gt[1]
         py = (coord[1] - gt[3]) / gt[5]
         return int(px), int(py)
+    else:
+        raise ValueError("Cannot convert rotated maps")
+
+
+@njit(parallel=True)
+def coords_to_pixels(
+    coords, gt: tuple, dtype=np.uint32
+) -> tuple[np.ndarray, np.ndarray]:
+    """Converts array of coordinates to array of pixels for given geotransformation.
+
+    Parameters:
+        coords: the coordinates (lon, lat) that need to be transformed to pixels (shape: 2, n)
+        gt: the geotransformation. Must be unrotated
+
+    Returns:
+        array: 2d-array of pixels per coordinate (shape: 2, n)
+    """
+    if gt[2] + gt[4] == 0:
+        size = coords.shape[0]
+        x_offset = gt[0]
+        y_offset = gt[3]
+        x_step = gt[1]
+        y_step = gt[5]
+        pxs = np.empty(size, dtype=dtype)
+        pys = np.empty(size, dtype=dtype)
+        for i in prange(size):
+            pxs[i] = int((coords[i, 0] - x_offset) / x_step)
+            pys[i] = int((coords[i, 1] - y_offset) / y_step)
+        return pxs, pys
     else:
         raise ValueError("Cannot convert rotated maps")
 
