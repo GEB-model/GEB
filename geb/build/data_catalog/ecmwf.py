@@ -108,8 +108,8 @@ class ECMWFForecasts(Adapter):
         """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
         This function downloads ECMWF forecast data for a specified variable and time period
-        from the MARS archive using the ECMWF API. It handles the download and processing of both_control_and_probabilistic
-        deterministic (cf) and ensemble (pf) forecasts returning them as an xarray DataArray.
+        from the MARS archive using the ECMWF API. It handles the download and processing of deterministic (control forecast, cf)
+        and ensemble (probabilistic forecast, pf) forecasts, returning them as an xarray DataArray.
 
         This function requires the ECMWF_API_KEY, ECMWF_API_URL and ECMWF_API_EMAIL to be set in the environment variables.
         You can do this by adding it to your .env file. For detailed instructions, see GEB documentation.
@@ -334,7 +334,7 @@ class ECMWFForecasts(Adapter):
             """Load a single forecast dataset for the specified model type.
 
             Args:
-            model_type: Either 'control_forecast' or 'probabilistic_forecast'.
+                model_type: Either 'control_forecast' or 'probabilistic_forecast'.
 
             Returns:
                 Loaded and renamed forecast dataset.

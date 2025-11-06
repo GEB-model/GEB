@@ -1112,7 +1112,7 @@ def update(*args: Any, **kwargs: Any) -> None:
 @click_run_options()
 @click.option(
     "--methods",
-    default="evaluate_forecasts",  # plot_discharge,evaluate_discharge, evaluate_hydrodynamics, evaluate_forecasts
+    default="plot_discharge,evaluate_discharge,evaluate_hydrodynamics,evaluate_forecasts",
     help="Comma-seperated list of methods to evaluate. Currently supported methods: 'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.",
 )
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")

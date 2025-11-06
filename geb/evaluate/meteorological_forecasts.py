@@ -8,6 +8,7 @@ Supports both intensity and cumulative precipitation plotting.
 from pathlib import Path
 from typing import Any
 
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -90,7 +91,7 @@ class MeteorologicalForecasts:
                 """Import ERA5, control and ensemble data for one forecast initialisation.
 
                 Processes precipitation data either as maximum intensity per time step or
-                cumulative precipitation over time, depending on the is_cumulative parameter.
+                cumulative precipitation over time, depending on the plot_type parameter.
 
                 Args:
                     init_folder: Path to forecast initialisation folder containing zarr files.
@@ -166,8 +167,7 @@ class MeteorologicalForecasts:
                 x_end: pd.Timestamp,
                 x_ticks: list[pd.Timestamp],
             ) -> None:
-                import matplotlib.dates as mdates
-
+                """Format the time axis for the plots."""
                 ax.set_xlim(x_start, x_end)
                 ax.set_xticks(x_ticks)
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m %H:%M"))
@@ -193,17 +193,13 @@ class MeteorologicalForecasts:
                     era5_data: ERA5 precipitation data (mm/h for intensity, mm for cumulative).
                     control_data: Control forecast precipitation data (mm/h for intensity, mm for cumulative).
                     ensemble_data: Ensemble forecast precipitation data (mm/h for intensity, mm for cumulative).
-                    control_time: Time array for length of the data).
+                    control_time: Time array for the forecast data (e.g. timesteps corresponding to the data).
                     init_time_str: Initialization time identifier string (e.g., '20240429T000000').
                     plot_type: If "cumulative", format for cumulative data. If "intensity", format for intensity.
                     show_legend: Whether to show the legend on this subplot.
                     x_start: Start time for x-axis.
                     x_end: End time for x-axis.
                 """
-                x_ticks: list[pd.Timestamp] = pd.date_range(
-                    start=x_start, end=x_end, freq="12h"
-                )
-
                 # Parse initialization time string to readable format
                 init_datetime: pd.Timestamp = pd.to_datetime(
                     init_time_str, format="%Y%m%dT%H%M%S"
@@ -265,6 +261,9 @@ class MeteorologicalForecasts:
                 else:
                     ax.set_yticks(range(0, 47, 5))  # For intensity mm/h values
 
+                x_ticks: list[pd.Timestamp] = pd.date_range(
+                    start=x_start, end=x_end, freq="12h"
+                )
                 format_time_axis(ax, x_start, x_end, x_ticks)
 
                 if show_legend:

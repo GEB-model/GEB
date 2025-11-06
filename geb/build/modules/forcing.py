@@ -265,13 +265,12 @@ def plot_gif(
         geb_build_model: The GEBModel instance.
         da: The xarray DataArray containing the data to animate. Must have dimensions 'time', 'y', and 'x'.
         name: The name of the variable being animated, used for titles and filenames.
-        interpolation: The interpolation method to use for displaying the data. Default is 'none'.
-        accumulated: Whether to plot accumulated precipitation (True) or instantaneous (False). Default is False
+        interpolation: The interpolation method to use for displaying the data. Default is 'none'. Interpolation can be set to 'bicubic', etc. for smoother interpolation.
+        accumulated: Whether to plot accumulated precipitation (True) or instantaneous (False). Default is False.
     """
     percentiles = [25, 50, 75, 90, 95]
     # Use xarray's quantile function to calculate percentiles across the ensemble dimension
     ensemble_dim = None
-    time_dim = None
     # Pattern to match YYYYMMDDT000000 format
     date_pattern = r"(\d{4})(\d{2})(\d{2})T\d{6}"
     match = re.search(date_pattern, name)
@@ -315,14 +314,13 @@ def plot_gif(
         }
     )
     # === Define variable to plot  ===
-    mask = geb_build_model.grid["mask"]  # get the GEB grid
     da_plot = (
         ensemble_percentiles_xr.copy()
     )  # make a copy to avoid modifying the original data
     # Convert data to mm/hour if it's precipitation
     if "pr" in name.lower() and "kg m-2 s-1" in da_plot.attrs.get("units", ""):
         da_plot = da_plot * 3600  # convert to mm/hour
-        if accumulated == True:
+        if accumulated:
             da_plot = da_plot.cumsum(dim="time")  # convert to accumulated precipitation
             ylabel = "mm"  # set y-axis label
             name += "_accumulated"
@@ -375,8 +373,6 @@ def plot_gif(
     else:  # Y is decreasing
         origin = "upper"
         print("Using origin='upper' - Y coordinates decrease")
-
-    interpolation = interpolation  # or 'none', 'bicubic' for smoother interpolation
 
     # === Generating Animation ===
     frames = []
@@ -612,9 +608,7 @@ class Forcing:
 
             if not gif_fp_accumulated.exists():
                 plot_gif(self, da, name, accumulated=True)
-                self.logger.info(
-                    f"Creating an GIF animation: {gif_fp_accumulated.name}"
-                )
+                self.logger.info(f"Creating a GIF animation: {gif_fp_accumulated.name}")
             else:
                 self.logger.info(
                     f"GIF file {gif_fp_accumulated.name} already exists, skipping accumulated animation creation"

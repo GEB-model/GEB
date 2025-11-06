@@ -148,7 +148,7 @@ To use ECMWF forecasts, you need:
 2. **Environment Variable**: Set variables in your environment or ``.env`` file located in the GEB repository.
     Request access to the ECMWF MARS database <https://confluence.ecmwf.int/display/WEBAPI/Access+to+MARS+data>, and extend the ".env"-file in the GEB repository with the following content:
 
-.. code-block:: text
+  .. code-block:: text
     ECMWF_API_KEY=<your_API_KEY>
     ECMWF_API_URL="https://api.ecmwf.int/v1"
     ECMWF_API_EMAIL=<your_email>
