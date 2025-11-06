@@ -192,6 +192,7 @@ def coords_to_pixels(
     Args:
         coords: The coordinates (lon, lat) that need to be transformed to pixels (shape: n, 2).
         gt: The geotransformation. Must be unrotated.
+        dtype: The data type of the output pixel arrays.
 
     Returns:
         A tuple of two arrays: pixel x coordinates and pixel y coordinates, each of shape (n,).
