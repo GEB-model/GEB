@@ -1,17 +1,14 @@
 import calendar
 import copy
 import math
-import os
 from datetime import datetime
 from typing import Tuple
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 from honeybees.library.neighbors import find_neighbors
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from numba import njit
-from scipy.optimize import curve_fit
 from scipy.stats import genextreme
 
 from geb.workflows import TimingModule
@@ -68,7 +65,7 @@ def _r2(y, yhat):
     return 1 - ss_res / ss_tot if ss_tot != 0 else np.nan
 
 
-def cumulative_mean(mean, counter, update, mask=None):
+def cumulative_mean(mean, counter, update, mask=None) -> None:
     """Calculates the cumulative mean of a series of numbers. This function operates in place.
 
     Args:
@@ -86,7 +83,7 @@ def cumulative_mean(mean, counter, update, mask=None):
         counter += 1
 
 
-def shift_and_update(array, update):
+def shift_and_update(array, update) -> None:
     """Shifts the array and updates the first element with the update value.
 
     Args:
@@ -106,7 +103,7 @@ def shift_and_reset_matrix(matrix: np.ndarray) -> None:
 def advance_crop_rotation_year(
     current_crop_calendar_rotation_year_index: np.ndarray,
     crop_calendar_rotation_years: np.ndarray,
-):
+) -> None:
     """Update the crop rotation year for each farmer. This function is used to update the crop rotation year for each farmer at the end of the year.
 
     Args:
@@ -140,7 +137,7 @@ class CropFarmers(AgentBaseClass):
             self.grid = model.hydrology.grid
 
         self.redundancy = reduncancy
-        self.decision_module = DecisionModule(self)
+        self.decision_module = DecisionModule(self, model=None)
 
         self.inflation_rate = load_economic_data(
             self.model.files["dict"]["socioeconomics/inflation_rates"]
@@ -209,10 +206,10 @@ class CropFarmers(AgentBaseClass):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "agents.crop_farmers"
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.var.crop_data_type, self.var.crop_data = load_crop_data(self.model.files)
         self.var.crop_ids = self.var.crop_data["name"].to_dict()
         # reverse dictionary
@@ -316,7 +313,7 @@ class CropFarmers(AgentBaseClass):
 
         # Get number of farmers and maximum number of farmers that could be in the entire model run based on the redundancy.
         self.var.n = np.unique(farms[farms != -1]).size
-        self.var.max_n = self.get_max_n(self.var.n)
+        self.var.max_n = math.ceil(self.var.n * (1 + self.redundancy))
 
         # The code below obtains the coordinates of the farmers' locations.
         # First the horizontal and vertical indices of the pixels that are not -1 are obtained. Then, for each farmer the
@@ -951,9 +948,11 @@ class CropFarmers(AgentBaseClass):
     def update_field_indices(self) -> None:
         """Creates `field_indices_by_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer."""
         (
-            self.var.field_indices_by_farmer,
+            field_indices_by_farmer,
             self.var.field_indices,
         ) = self.update_field_indices_numba(self.HRU.var.land_owners)
+
+        self.var.field_indices_by_farmer[:] = field_indices_by_farmer
 
     def set_social_network(self) -> None:
         """Determines for each farmer a group of neighbors which constitutes their social network."""
@@ -986,7 +985,7 @@ class CropFarmers(AgentBaseClass):
             maxy=bounds[3],
         )
 
-    def adjust_cultivation_costs(self):
+    def adjust_cultivation_costs(self) -> None:
         # Set the cultivation costs
         self.cultivation_costs = load_regional_crop_data_from_dict(
             self.model, "crops/cultivation_costs"
@@ -1064,7 +1063,7 @@ class CropFarmers(AgentBaseClass):
     def is_in_command_area(self):
         return self.command_area != -1
 
-    def save_pr(self):
+    def save_pr(self) -> None:
         pr = self.HRU.pr * (24 * 3600)  # mm / day
 
         pr_day_mm_per_farmer = np.bincount(
@@ -1079,7 +1078,7 @@ class CropFarmers(AgentBaseClass):
         if day_index == 364 and not calendar.isleap(self.model.current_time.year):
             self.var.cumulative_pr_mm[:, 365] = self.var.cumulative_pr_mm[:, 364]
 
-    def save_water_deficit(self, discount_factor=0.2):
+    def save_water_deficit(self, discount_factor=0.2) -> None:
         water_deficit_day_m3 = (
             (self.HRU.var.reference_evapotranspiration_grass - self.HRU.pr)  # kg/m^2/s
             * self.HRU.var.cell_area  # m^2
@@ -1325,11 +1324,11 @@ class CropFarmers(AgentBaseClass):
             groundwater_abstraction_m3,
         ) = abstract_water(
             activation_order=self.activation_order_by_elevation.data,
-            field_indices_by_farmer=self.var.field_indices_by_farmer,
+            field_indices_by_farmer=self.var.field_indices_by_farmer.data,
             field_indices=self.var.field_indices,
             irrigation_efficiency=self.var.irrigation_efficiency.data,
-            surface_irrigated=self.surface_irrigated,
-            well_irrigated=self.well_irrigated,
+            surface_irrigated=self.surface_irrigated.data,
+            well_irrigated=self.well_irrigated.data,
             cell_area=self.model.hydrology.HRU.var.cell_area,
             HRU_to_grid=self.HRU.var.HRU_to_grid,
             nearest_river_grid_cell=self.HRU.var.nearest_river_grid_cell,
@@ -1611,6 +1610,9 @@ class CropFarmers(AgentBaseClass):
 
         Returns:
             yield_ratio: Map of yield ratio.
+
+        Raises:
+            ValueError: If crop data type is not GAEZ or MIRCA2000.
         """
         if self.var.crop_data_type == "GAEZ":
             yield_ratio: npt.NDArray[np.float32] = self.get_yield_ratio_numba_GAEZ(
@@ -1720,7 +1722,7 @@ class CropFarmers(AgentBaseClass):
                     assert crop_map[field] == -1
         return harvest
 
-    def harvest(self):
+    def harvest(self) -> None:
         """Determine which crops need to be harvested based on their current age and their harvest age.
 
         Once harvested, compute various metrics related to the harvest including potential profit,
@@ -2407,7 +2409,7 @@ class CropFarmers(AgentBaseClass):
             np.mean(full_size_SPEI_per_farmer[harvesting_farmers]),
         )
 
-    def save_harvest_precipitation(self, harvesting_farmers, crop_age):
+    def save_harvest_precipitation(self, harvesting_farmers, crop_age) -> None:
         avg_age = np.mean(crop_age, dtype=np.int32)
         end_day = self.model.current_day_of_year - 1
         start_day = end_day - avg_age
@@ -2423,7 +2425,7 @@ class CropFarmers(AgentBaseClass):
             season_pr_per_farmer
         )
 
-    def save_yearly_spei(self):
+    def save_yearly_spei(self) -> None:
         assert self.model.current_time.month == 1
 
         # calculate the SPEI probability using GEV parameters
@@ -2447,7 +2449,7 @@ class CropFarmers(AgentBaseClass):
         self.var.cumulative_SPEI_during_growing_season.fill(0)
         self.var.cumulative_SPEI_count_during_growing_season.fill(0)
 
-    def save_yearly_pr(self):
+    def save_yearly_pr(self) -> None:
         assert self.model.current_time.month == 1
 
         shift_and_update(
@@ -2670,7 +2672,7 @@ class CropFarmers(AgentBaseClass):
         ) = self.profits_SEUT_crops(
             unique_crop_calendars, farmer_yield_probability_relation
         )
-        timer_crops.new_split("profit_difference")
+        timer_crops.finish_split("profit_difference")
         total_annual_costs_m2 = (
             self.var.all_loans_annual_cost[:, -1, 0] / self.field_size_per_farmer
         )
@@ -2700,7 +2702,9 @@ class CropFarmers(AgentBaseClass):
         }
 
         # Determine the SEUT of the current crop
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
+            **decision_params
+        )
 
         # Determine the SEUT of the other crop options
         SEUT_crop_options = np.full(
@@ -2733,12 +2737,12 @@ class CropFarmers(AgentBaseClass):
                     "adaptation_costs": cost_difference_adaptation,
                 }
             )
-            SEUT_crop_options[:, idx] = self.decision_module.calcEU_adapt(
+            SEUT_crop_options[:, idx] = self.decision_module.calcEU_adapt_drought(
                 **decision_params_option
             )
 
         assert np.any(SEUT_do_nothing != -1) or np.any(SEUT_crop_options != -1)
-        timer_crops.new_split("SEUT")
+        timer_crops.finish_split("SEUT")
         # Determine the best adaptation option
         best_option_SEUT = np.max(SEUT_crop_options, axis=1)
         chosen_option = np.argmax(SEUT_crop_options, axis=1)
@@ -2799,7 +2803,7 @@ class CropFarmers(AgentBaseClass):
         self.var.yearly_SPEI_probability[SEUT_adaptation_decision, :] = (
             self.var.yearly_SPEI_probability[new_id_final, :]
         )
-        timer_crops.new_split("final steps")
+        timer_crops.finish_split("final steps")
         print(timer_crops)
 
     def adapt_irrigation_well(
@@ -2912,8 +2916,10 @@ class CropFarmers(AgentBaseClass):
         }
 
         # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
-        SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
+            **decision_params
+        )
+        SEUT_adapt = self.decision_module.calcEU_adapt_drought(**decision_params)
 
         assert (SEUT_do_nothing != -1).any() or (SEUT_adapt != -1).any()
 
@@ -3064,8 +3070,10 @@ class CropFarmers(AgentBaseClass):
         }
 
         # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
-        SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
+            **decision_params
+        )
+        SEUT_adapt = self.decision_module.calcEU_adapt_drought(**decision_params)
 
         assert (SEUT_do_nothing != -1).any() or (SEUT_adapt != -1).any()
 
@@ -3186,8 +3194,10 @@ class CropFarmers(AgentBaseClass):
         }
 
         # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
-        SEUT_adapt = self.decision_module.calcEU_adapt(**decision_params)
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
+            **decision_params
+        )
+        SEUT_adapt = self.decision_module.calcEU_adapt_drought(**decision_params)
 
         assert (SEUT_do_nothing != -1).any or (SEUT_adapt != -1).any()
 
@@ -3220,7 +3230,7 @@ class CropFarmers(AgentBaseClass):
         farmer_yield_probability_relation_base,
         farmer_yield_probability_relations_insured,
         premiums,
-    ):
+    ) -> None:
         """Handle the adaptation of farmers to irrigation wells.
 
         This function checks which farmers will adopt irrigation wells based on their expected utility
@@ -3337,12 +3347,14 @@ class CropFarmers(AgentBaseClass):
                 "extra_constraint": extra_constraint,
             }
 
-            SEUT_insurance_options[:, idx] = self.decision_module.calcEU_adapt(
+            SEUT_insurance_options[:, idx] = self.decision_module.calcEU_adapt_drought(
                 **decision_params
             )
 
         # Calculate the EU of not adapting and adapting respectively
-        SEUT_do_nothing = self.decision_module.calcEU_do_nothing(**decision_params)
+        SEUT_do_nothing = self.decision_module.calcEU_do_nothing_drought(
+            **decision_params
+        )
 
         assert (SEUT_do_nothing != -1).any() or (SEUT_insurance_options != -1).any()
 
@@ -3960,7 +3972,7 @@ class CropFarmers(AgentBaseClass):
 
         return y
 
-    def create_unique_groups(self, *additional_diffentiators):
+    def create_unique_groups(self, *additional_diffentiators: npt.NDArray):
         """Create unique groups based on elevation data and merge with crop calendar.
 
         Returns:
@@ -4039,7 +4051,7 @@ class CropFarmers(AgentBaseClass):
         adapted,
         groundwater_depth,
         additional_diffentiator,
-    ):
+    ) -> None:
         expired_adaptations = (
             self.var.time_adapted[:, WELL_ADAPTATION] == self.var.lifespan_well
         ) | (groundwater_depth > self.var.well_depth)
@@ -4231,7 +4243,7 @@ class CropFarmers(AgentBaseClass):
         # Subtract 1 off each loan duration, except if that loan is at 0
         self.var.loan_tracker -= self.var.loan_tracker != 0
         # If the loan tracker is at 0, cancel the loan amount and subtract it of the total
-        expired_loan_mask = self.var.loan_tracker == 0
+        expired_loan_mask: npt.NDArray[np.bool_] = self.var.loan_tracker.data == 0
 
         # Add a column to make it the same shape as the loan amount array
         new_column = np.full((self.var.n, 1, 5), False)
@@ -4363,7 +4375,7 @@ class CropFarmers(AgentBaseClass):
         assert not np.isnan(groundwater_depth).any(), "groundwater depth is nan"
         return groundwater_depth
 
-    def create_farmer_classes(self, *characteristics):
+    def create_farmer_classes(self, *characteristics: np.ndarray) -> np.ndarray:
         agent_classes = np.unique(
             np.stack(characteristics), axis=1, return_inverse=True
         )[1]
@@ -4389,6 +4401,9 @@ class CropFarmers(AgentBaseClass):
         """This function is called at the beginning of each timestep.
 
         Then, farmers harvest and plant crops.
+
+        Raises:
+            ValueError: When farmers don't have a yield probability relation yet.
         """
         if not self.model.simulate_hydrology:
             return
@@ -4396,11 +4411,12 @@ class CropFarmers(AgentBaseClass):
         timer = TimingModule("crop_farmers")
 
         self.harvest()
-        timer.new_split("harvest")
+        timer.finish_split("harvest")
         self.plant()
-        timer.new_split("planting")
+        timer.finish_split("planting")
+
         self.water_abstraction_sum()
-        timer.new_split("water abstraction calculation")
+        timer.finish_split("water abstraction calculation")
 
         self.save_pr()
 
@@ -4464,7 +4480,7 @@ class CropFarmers(AgentBaseClass):
                 self.calculate_water_costs()
             )
 
-            timer.new_split("water & energy costs")
+            timer.finish_split("water & energy costs")
 
             if (
                 not self.model.in_spinup
@@ -4489,7 +4505,7 @@ class CropFarmers(AgentBaseClass):
                     :, 0
                 ].copy()
 
-                timer.new_split("yield-spei relation")
+                timer.finish_split("yield-spei relation")
 
                 if (
                     self.personal_insurance_adaptation_active
@@ -4535,7 +4551,7 @@ class CropFarmers(AgentBaseClass):
                     ] = farmer_yield_probability_relation_insured_personal[
                         personal_insured_farmers_mask, :
                     ]
-                    timer.new_split("personal insurance")
+                    timer.finish_split("personal insurance")
                 if self.index_insurance_adaptation_active:
                     gev_params = self.var.GEV_parameters.data
                     strike_vals = np.round(np.arange(0.0, -2.6, -0.2), 2)
@@ -4574,7 +4590,7 @@ class CropFarmers(AgentBaseClass):
                     ] = farmer_yield_probability_relation_insured_index[
                         index_insured_farmers_mask, :
                     ]
-                    timer.new_split("index insurance")
+                    timer.finish_split("index insurance")
                 if self.pr_insurance_adaptation_active:
                     gev_params = self.var.GEV_pr_parameters.data
                     strike_vals = np.round(np.arange(1500, 300, -100), 2)
@@ -4617,7 +4633,7 @@ class CropFarmers(AgentBaseClass):
                     ] = farmer_yield_probability_relation_insured_pr[
                         pr_insured_farmers_mask, :
                     ]
-                    timer.new_split("precipitation insurance")
+                    timer.finish_split("precipitation insurance")
                 # These adaptations can only be done if there is a yield-probability relation
                 if not np.all(farmer_yield_probability_relation == 0):
                     if self.wells_adaptation_active:
@@ -4627,16 +4643,16 @@ class CropFarmers(AgentBaseClass):
                             energy_cost,
                             water_cost,
                         )
-                        timer.new_split("irr well")
+                        timer.finish_split("irr well")
                     if self.sprinkler_adaptation_active:
                         self.adapt_irrigation_efficiency(
                             farmer_yield_probability_relation, energy_cost, water_cost
                         )
 
-                        timer.new_split("irr efficiency")
+                        timer.finish_split("irr efficiency")
                     if self.crop_switching_adaptation_active:
                         self.adapt_crops(farmer_yield_probability_relation)
-                        timer.new_split("adapt crops")
+                        timer.finish_split("adapt crops")
 
                     if (
                         self.personal_insurance_adaptation_active
@@ -4673,7 +4689,7 @@ class CropFarmers(AgentBaseClass):
                             [farmer_yield_probability_relation_insured_personal],
                             [self.var.personal_premium],
                         )
-                        timer.new_split("adapt pers. insurance")
+                        timer.finish_split("adapt pers. insurance")
                     elif self.index_insurance_adaptation_active:
                         self.adapt_insurance(
                             [INDEX_INSURANCE_ADAPTATION],
@@ -4682,7 +4698,7 @@ class CropFarmers(AgentBaseClass):
                             [farmer_yield_probability_relation_insured_index],
                             [self.var.index_premium],
                         )
-                        timer.new_split("adapt index insurance")
+                        timer.finish_split("adapt index insurance")
                     elif self.pr_insurance_adaptation_active:
                         self.adapt_insurance(
                             [PR_INSURANCE_ADAPTATION],
@@ -4691,9 +4707,9 @@ class CropFarmers(AgentBaseClass):
                             [farmer_yield_probability_relation_insured_pr],
                             [self.var.pr_premium],
                         )
-                        timer.new_split("adapt prec. insurance")
+                        timer.finish_split("adapt prec. insurance")
                 else:
-                    raise AssertionError(
+                    raise ValueError(
                         "Cannot adapt without yield - probability relation"
                     )
 
@@ -4726,7 +4742,7 @@ class CropFarmers(AgentBaseClass):
         if self.model.timing:
             print(timer)
 
-        self.report(self, locals())
+        self.report(locals())
 
     def remove_agents(
         self, farmer_indices: list[int], new_land_use_type: int
@@ -4868,7 +4884,7 @@ class CropFarmers(AgentBaseClass):
             "risk_decr": 1,
             "decision_horizon": 1,
         },
-    ):
+    ) -> None:
         """This function can be used to add new farmers."""
         HRU = self.model.data.split(indices)
         assert self.HRU.var.land_owners[HRU] == -1, "There is already a farmer here."
@@ -4903,7 +4919,7 @@ class CropFarmers(AgentBaseClass):
         return self.var._n
 
     @n.setter
-    def n(self, value):
+    def n(self, value) -> None:
         self.var._n = value
 
     def get_farmer_elevation(self):

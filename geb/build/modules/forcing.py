@@ -19,8 +19,8 @@ import xarray as xr
 import xclim.indices as xci
 from dateutil.relativedelta import relativedelta
 from isimip_client.client import ISIMIPClient
-from numcodecs.zarr3 import FixedScaleOffset
 from tqdm import tqdm
+from zarr.codecs.numcodecs import FixedScaleOffset
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
@@ -287,7 +287,9 @@ def get_chunk_size(da, target: float | int = 1e8) -> int:
 
 
 class Forcing:
-    def __init__(self):
+    """Contains methods to download and process climate forcing data for GEB."""
+
+    def __init__(self) -> None:
         pass
 
     def download_isimip(
@@ -325,6 +327,12 @@ class Forcing:
 
         Returns:
             The downloaded climate data as an xarray dataset.
+
+        Raises:
+            ValueError: If no files are found for the specified variable in the ISIMIP dataset.
+            ValueError: If the parse_files does not all end with either .nc or .txt.
+            ValueError: If an unknown file type is encountered in the ISIMIP dataset.
+            RuntimeError: If the ISIMIP server returns an unknown status during file download.
         """
         # if start_date is specified, end_date must be specified as well
         assert (start_date is None) == (end_date is None)
@@ -465,7 +473,7 @@ class Forcing:
                                 "ISIMIP internal server error, waiting 60 seconds before retrying"
                             )
                         else:
-                            raise ValueError(
+                            raise RuntimeError(
                                 f"Could not download files: {response['status']}"
                             )
                     time.sleep(60)
@@ -641,7 +649,7 @@ class Forcing:
                 f"{parse_files}"
             )
 
-    def plot_forcing(self, da, name):
+    def plot_forcing(self, da, name) -> None:
         fig, axes = plt.subplots(4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5})
 
         mask = self.grid["mask"]
@@ -687,7 +695,9 @@ class Forcing:
         da.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
         da.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
 
-    def set_pr_hourly(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_pr_hourly(
+        self, da: xr.DataArray, *args: Any, **kwargs: Any
+    ) -> xr.DataArray:
         name: str = "climate/pr_hourly"
         da.attrs = {
             "standard_name": "precipitation_flux",
@@ -705,15 +715,15 @@ class Forcing:
         max_value = 500 / 3600  # convert to kg/m2/s
         precision = 0.01 / 3600  # 0.01 mm in kg/m2/s
 
-        scaling_factor, out_dtype = calculate_scaling(
-            0, max_value, offset=offset, precision=precision
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, max_value, offset=offset, precision=precision
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -728,7 +738,7 @@ class Forcing:
         )
         return da
 
-    def set_pr(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_pr(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/pr"
         da.attrs = {
             "standard_name": "precipitation_flux",
@@ -746,14 +756,14 @@ class Forcing:
         precision: float = 0.01 / 3600  # 0.01 mm in kg/m2/s
 
         offset: int = 0
-        scaling_factor, out_dtype = calculate_scaling(
-            0, max_value, offset=offset, precision=precision
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, max_value, offset=offset, precision=precision
         )
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -770,7 +780,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_rsds(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_rsds(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/rsds"
         da.attrs = {
             "standard_name": "surface_downwelling_shortwave_flux_in_air",
@@ -781,14 +791,14 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = 0
-        scaling_factor, out_dtype = calculate_scaling(
-            0, 1361, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, 1361, offset=offset, precision=0.1
         )
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -805,7 +815,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_rlds(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_rlds(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/rlds"
         da.attrs = {
             "standard_name": "surface_downwelling_longwave_flux_in_air",
@@ -816,14 +826,14 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = 0
-        scaling_factor, out_dtype = calculate_scaling(
-            0, 1361, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, 1361, offset=offset, precision=0.1
         )
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -840,7 +850,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tas(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_tas(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/tas"
         da.attrs = {
             "standard_name": "air_temperature",
@@ -852,15 +862,15 @@ class Forcing:
 
         K_to_C = 273.15
         offset = -15 - K_to_C  # average temperature on earth
-        scaling_factor, out_dtype = calculate_scaling(
-            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -879,7 +889,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tasmax(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_tasmax(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/tasmax"
         da.attrs = {
             "standard_name": "air_temperature",
@@ -891,15 +901,15 @@ class Forcing:
 
         K_to_C = 273.15
         offset = -15 - K_to_C  # average temperature on earth
-        scaling_factor, out_dtype = calculate_scaling(
-            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -917,7 +927,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_tasmin(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_tasmin(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/tasmin"
         da.attrs = {
             "standard_name": "air_temperature",
@@ -929,15 +939,15 @@ class Forcing:
 
         K_to_C = 273.15
         offset = -15 - K_to_C  # average temperature on earth
-        scaling_factor, out_dtype = calculate_scaling(
-            -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, -100 + K_to_C, 60 + K_to_C, offset=offset, precision=0.1
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -955,7 +965,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_hurs(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_hurs(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/hurs"
         da.attrs = {
             "standard_name": "relative_humidity",
@@ -966,15 +976,15 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = -50
-        scaling_factor, out_dtype = calculate_scaling(
-            0, 100, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, 100, offset=offset, precision=0.1
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1008,7 +1018,7 @@ class Forcing:
         da: xr.DataArray = da_.transpose(*da.dims)
         return da
 
-    def set_ps(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_ps(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/ps"
         da.attrs = {
             "standard_name": "surface_air_pressure",
@@ -1019,15 +1029,15 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = -100_000
-        scaling_factor, out_dtype = calculate_scaling(
-            30_000, 120_000, offset=offset, precision=10
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 30_000, 120_000, offset=offset, precision=10
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1045,7 +1055,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_sfcwind(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_sfcwind(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/sfcwind"
         da.attrs = {
             "standard_name": "wind_speed",
@@ -1056,14 +1066,14 @@ class Forcing:
         self.set_xy_attrs(da)
 
         offset = 0
-        scaling_factor, out_dtype = calculate_scaling(
-            0, 120, offset=offset, precision=0.1
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, 0, 120, offset=offset, precision=0.1
         )
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1081,7 +1091,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def set_SPEI(self, da: xr.DataArray, *args, **kwargs) -> xr.DataArray:
+    def set_SPEI(self, da: xr.DataArray, *args: Any, **kwargs: Any) -> xr.DataArray:
         name: str = "climate/SPEI"
         da.attrs = {
             "units": "-",
@@ -1098,15 +1108,15 @@ class Forcing:
         da = da.clip(min=min_SPEI, max=max_SPEI)
 
         offset = 0
-        scaling_factor, out_dtype = calculate_scaling(
-            min_SPEI, max_SPEI, offset=offset, precision=0.001
+        scaling_factor, in_dtype, out_dtype = calculate_scaling(
+            da, min_SPEI, max_SPEI, offset=offset, precision=0.001
         )
 
         filters: list = [
             FixedScaleOffset(
                 offset=offset,
                 scale=scaling_factor,
-                dtype=da.dtype,
+                dtype=in_dtype,
                 astype=out_dtype,
             ),
         ]
@@ -1124,7 +1134,7 @@ class Forcing:
         self.plot_forcing(da, name)
         return da
 
-    def setup_forcing_ERA5(self):
+    def setup_forcing_ERA5(self) -> None:
         target = self.grid["mask"]
         target.raster.set_crs(4326)
 
@@ -1264,6 +1274,9 @@ class Forcing:
             resolution_arcsec: The resolution of the data in arcseconds. Supported values are 30 and 1800.
             model: The forcing data to use. Supported values are 'chelsa-w5e5' for 30 arcsec resolution
                 and ipsl-cm6a-lr, gfdl-esm4, mpi-esm1-2-hr, mri-esm2-0, and mri-esm2-0 for 1800 arcsec resolution.
+
+        Raises:
+            ValueError: If an unsupported resolution or model is specified.
         """
         if resolution_arcsec == 30:
             assert model == "chelsa-w5e5", (
@@ -1314,7 +1327,7 @@ class Forcing:
         forcing: str = "ERA5",
         resolution_arcsec: int | None = None,
         model: str | None = None,
-    ):
+    ) -> None:
         """Sets up the forcing data for GEB.
 
         Args:
@@ -1336,6 +1349,9 @@ class Forcing:
             from the ISIMIP dataset using the `setup_wind_isimip_30arcsec` method. All these data are first downscaled to the model grid.
 
             The resulting forcing data is set as forcing data in the model with names of the form 'forcing/{variable_name}'.
+
+        Raises:
+            ValueError: If an unknown data source is specified.
         """
         if forcing == "ISIMIP":
             assert resolution_arcsec is not None, (
@@ -1463,7 +1479,7 @@ class Forcing:
         self,
         forcing: str,
         variables: List[str],
-    ):
+    ) -> None:
         """Sets up the high-resolution climate variables for GEB.
 
         Args:
@@ -1486,7 +1502,7 @@ class Forcing:
             )
             getattr(self, f"set_{variable}")(da)
 
-    def setup_30arcsec_variables_isimip(self, variables: List[str]):
+    def setup_30arcsec_variables_isimip(self, variables: List[str]) -> None:
         """Sets up the high-resolution climate variables for GEB.
 
         Args:
@@ -1503,7 +1519,7 @@ class Forcing:
             The resulting climate variables are set as forcing data in the model with names of the form 'climate/{variable_name}'.
         """
 
-        def download_variable(variable):
+        def download_variable(variable) -> None:
             self.logger.info(f"Setting up {variable}...")
             ds: xr.DataArray = self.download_isimip(
                 product="InputData",
@@ -1527,7 +1543,7 @@ class Forcing:
         for variable in variables:
             download_variable(variable)
 
-    def setup_hurs_isimip_30arcsec(self):
+    def setup_hurs_isimip_30arcsec(self) -> None:
         """Sets up the relative humidity data for GEB.
 
         Notes:
@@ -1646,7 +1662,7 @@ class Forcing:
 
         self.set_hurs(hurs_output)
 
-    def setup_longwave_isimip_30arcsec(self):
+    def setup_longwave_isimip_30arcsec(self) -> None:
         """Sets up the longwave radiation data for GEB.
 
         Notes:
@@ -1750,7 +1766,7 @@ class Forcing:
         )
         self.set_rlds(lw_fine)
 
-    def setup_pressure_isimip_30arcsec(self):
+    def setup_pressure_isimip_30arcsec(self) -> None:
         """Sets up the surface pressure data for GEB.
 
         This method sets up the surface pressure data for GEB. It then downloads
@@ -1799,7 +1815,7 @@ class Forcing:
 
         self.set_ps(pressure_30_min_regridded_corr)
 
-    def setup_wind_isimip_30arcsec(self):
+    def setup_wind_isimip_30arcsec(self) -> None:
         """This method sets up the wind data for GEB.
 
         It first downloads the global wind atlas data and
@@ -1901,6 +1917,9 @@ class Forcing:
             calibration_period_start: The start time of the reSPEI data in ISO 8601 format (YYYY-MM-DD).
             calibration_period_end: The end time of the SPEI data in ISO 8601 format (YYYY-MM-DD). Endtime is exclusive.
             window_months: The window size in months for the SPEI calculation. Default is 12 months.
+
+        Raises:
+            ValueError: If the input data do not have the same coordinates.
         """
         assert window_months <= 12, (
             "window_months must be less than or equal to 12 (otherwise we run out of climate data)"
@@ -1929,7 +1948,7 @@ class Forcing:
         ].time.max().dt.date >= calibration_period_end - timedelta(days=1):
             forcing_start_date = self.other["climate/pr"].time.min().dt.date.item()
             forcing_end_date = self.other["climate/pr"].time.max().dt.date.item()
-            raise AssertionError(
+            raise ValueError(
                 f"water data does not cover the entire calibration period, forcing data covers from {forcing_start_date} to {forcing_end_date}, "
                 f"while requested calibration period is from {calibration_period_start} to {calibration_period_end}"
             )

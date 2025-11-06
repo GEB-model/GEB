@@ -51,7 +51,11 @@ if SHAPE == "rectangular":
         return lake_factor * height_above_outflow**1.5
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """Inverse function of estimate_lake_outflow."""
+        """Inverse function of estimate_lake_outflow.
+
+        Returns:
+            Height of the lake above elevation of the outflow [m]
+        """
         return (outflow / lake_factor) ** (2 / 3)
 
 elif SHAPE == "parabola":
@@ -61,7 +65,18 @@ elif SHAPE == "parabola":
         return lake_factor * height_above_outflow**2
 
     def outflow_to_height_above_outflow(lake_factor, outflow):
-        """Inverse function of estimate_lake_outflow."""
+        """Inverse function of estimate_lake_outflow.
+
+        References:
+            http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
+
+        Args:
+            lake_factor: A lake-specific constant factor used in the lake outflow equations.
+            outflow: Outflow in m3/s
+
+        Returns:
+            Height of the lake above the outflow [m]
+        """
         return np.sqrt(outflow / lake_factor)
 
 else:
@@ -101,6 +116,21 @@ def get_river_width(average_discharge):
 
 
 def get_lake_factor(river_width, overflow_coefficient_mu, lake_a_factor):
+    """A lake-constant factor that is used in the equations for lake outflow.
+
+    Pre-calculated to save computation time.
+
+    References:
+        http://rcswww.urz.tu-dresden.de/~daigner/pdf/ueberf.pdf
+
+    Args:
+        river_width: Width of the river in m
+        overflow_coefficient_mu: Overflow coefficient, depends on the shape of the lake outflow
+        lake_a_factor: Calibration factor for the lake outflow
+
+    Returns:
+        A lake-specific constant factor used in the lake outflow equations.
+    """
     return (
         lake_a_factor
         * overflow_coefficient_mu
@@ -163,7 +193,7 @@ class LakesReservoirs(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -174,10 +204,10 @@ class LakesReservoirs(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "hydrology.lakes_reservoirs"
 
-    def spinup(self):
+    def spinup(self) -> None:
         # load lakes/reservoirs map with a single ID for each lake/reservoir
         waterBodyID_unmapped: np.ndarray = self.grid.load(
             self.model.files["grid"]["waterbodies/water_body_id"]
@@ -487,7 +517,7 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_reservoir]
 
     @reservoir_storage.setter
-    def reservoir_storage(self, value):
+    def reservoir_storage(self, value) -> None:
         self.var.storage[self.is_reservoir] = value
 
     @property
@@ -495,7 +525,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_reservoir]
 
     @reservoir_capacity.setter
-    def reservoir_capacity(self, value):
+    def reservoir_capacity(self, value) -> None:
         self.var.capacity[self.is_reservoir] = value
 
     @property
@@ -503,7 +533,7 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_lake]
 
     @lake_storage.setter
-    def lake_storage(self, value):
+    def lake_storage(self, value) -> None:
         self.var.storage[self.is_lake] = value
 
     @property
@@ -511,7 +541,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_lake]
 
     @lake_capacity.setter
-    def lake_capacity(self, value):
+    def lake_capacity(self, value) -> None:
         self.var.capacity[self.is_lake] = value
 
     @property
@@ -525,7 +555,7 @@ class LakesReservoirs(Module):
     def decompress(self, array):
         return array
 
-    def step(self):
+    def step(self) -> None:
         """Dynamic part set lakes and reservoirs for each year."""
         # if first timestep, or beginning of new year
         if self.model.current_timestep == 1 or (
@@ -535,4 +565,4 @@ class LakesReservoirs(Module):
                 raise NotImplementedError("dynamic_water_bodies not implemented yet")
 
         # print(self.reservoir_fill_percentage.astype(int))
-        self.report(self, locals())
+        self.report(locals())

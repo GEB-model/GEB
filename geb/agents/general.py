@@ -1,4 +1,5 @@
-import math
+"""Module containing general agent functions and the base class for all agents."""
+
 from typing import Tuple
 
 import numpy as np
@@ -20,6 +21,20 @@ def downscale_volume(
     downscale_mask: npt.NDArray[np.bool_],
     HRU_land_size: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
+    """Downscale a gridded volume to HRU level using area-weighted averaging.
+
+    Args:
+        data_gt: Geotransform of the data to be downscaled.
+        model_gt: Geotransform of the model (target) decompressed HRU grid.
+        data: 2D array of data to be downscaled.
+        mask: 2D boolean array where True indicates no data (e.g., water bodies).
+        grid_to_HRU_uncompressed: 1D array mapping each grid cell to an HRU index.
+        downscale_mask: 1D boolean array where True indicates HRUs to be excluded from downscaling.
+        HRU_land_size: 1D array of land area for each HRU.
+
+    Returns:
+        1D array of downscaled data at HRU level.
+    """
     xoffset = (model_gt[0] - data_gt[0]) / model_gt[1]
     assert 0.0001 > xoffset - round(xoffset) > -0.0001
     xoffset = round(xoffset)
@@ -100,24 +115,26 @@ def downscale_volume(
 
 
 class AgentBaseClass(Module, HoneybeesAgentBaseClass):
-    def __init__(self, model):
+    """Base class for all agent classes."""
+
+    def __init__(self, model: "GEBModel") -> None:
+        """Initialize the agent base class.
+
+        Args:
+            model: The GEB model instance.
+        """
         if not hasattr(self, "redundancy"):
             self.redundancy = None  # default redundancy is None
         HoneybeesAgentBaseClass.__init__(self)
         Module.__init__(self, model)
 
-    def get_max_n(self, n):
-        if self.redundancy is None:
-            return n
-        else:
-            max_n = math.ceil(n * (1 + self.redundancy))
-            assert (
-                max_n < 4294967295
-            )  # max value of uint32, consider replacing with uint64
-            return max_n
-
     @property
-    def agent_arrays(self):
+    def agent_arrays(self) -> dict[str, DynamicArray]:
+        """Return a dictionary of all DynamicArray attributes of the agent.
+
+        Raises:
+            AssertionError: If there are duplicate DynamicArray attributes.
+        """
         agent_arrays = {
             name: value
             for name, value in vars(self.var).items()

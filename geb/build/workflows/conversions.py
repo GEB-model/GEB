@@ -1,10 +1,22 @@
+"""All functions related to region and country handling in GEB.
+
+Contains functions to set up donor countries for countries with missing data,
+finding similar countries with data.
+
+Contains several dictionaries to convert between different country coding systems.
+
+"""
+
+
 def setup_donor_countries(
-    self, countries_with_data: list[str], alternative_countries: list[str] | None = None
+    geb_build_model: "GEBModel",
+    countries_with_data: list[str],
+    alternative_countries: list[str] | None = None,
 ) -> dict[str, str]:
     """Sets up the donor countries for GEB.
 
     Args:
-        self: The GEB build instance.
+        geb_build_model: The GEB build instance.
         countries_with_data: list
             Countries (ISO3 codes) that have data available.
         alternative_countries: list, optional
@@ -14,7 +26,7 @@ def setup_donor_countries(
         A dictionary with the keys representing the country with missing data, and the values the country that is selected as donor.
     """
     # load HDI index
-    dev_index = self.data_catalog.get_dataframe(
+    dev_index = geb_build_model.data_catalog.get_dataframe(
         "UN_dev_index"
     )  # Human Development Index
     dev_index.rename(columns={"Human Development Index": "HDI"}, inplace=True)
@@ -23,36 +35,9 @@ def setup_donor_countries(
     )  # calculate mean HDI for each country
 
     # find potential donors
-    global_countries = None
-    if hasattr(self, "geom") and isinstance(self.geom, dict):
-        global_countries = self.geom.get("global_countries")
-
-    # If missing or empty, build it
-    if global_countries is None or getattr(global_countries, "empty", False):
-        global_countries = self.data_catalog.get_geodataframe("GADM_level0").rename(
-            columns={"GID_0": "ISO3"}
-        )
-
-        # Use centroids of the country geometries
-        # (Note: for geographic CRS this is planar; reproject if you need geodesic accuracy.)
-        global_countries = global_countries.set_geometry(
-            global_countries.geometry.centroid
-        )
-
-        # Fix Kosovo code: XKO -> XKX, then index by ISO3
-        global_countries["ISO3"] = global_countries["ISO3"].replace({"XKO": "XKX"})
-        global_countries = global_countries.set_index("ISO3")
-
-        # (Optional) If you also want to ensure the index label is correct:
-        # global_countries.index.name = "ISO3"
-
-        self.logger.info(
-            "Built 'global_countries' (centroids) and normalized ISO3 codes (XKO->XKX)."
-        )
-        # self.set_geom(global_countries, name="global_countries")
-    else:
-        self.logger.debug("'global_countries' already present; using cached geometry.")
-
+    global_countries = geb_build_model.geom[
+        "global_countries"
+    ]  # we need this to get the centroids of the countries geoms
     potential_donors = global_countries.loc[
         global_countries.index.isin(countries_with_data)
     ]
@@ -67,7 +52,7 @@ def setup_donor_countries(
         # if GLOBIOM regions are provided, use the globiom regions
         region_countries = alternative_countries.copy()
     else:
-        region_countries = self.geom["regions"]["ISO3"].unique().tolist()
+        region_countries = geb_build_model.geom["regions"]["ISO3"].unique().tolist()
 
     # find countries in model domain that do not have data
     countries_without_data = list(set(region_countries) - set(countries_with_data))
@@ -88,7 +73,7 @@ def setup_donor_countries(
             ]  # remove zero distances (self-distance)
             closest_country = region_countries_geometries.loc[distances.idxmin()].name
 
-            self.logger.warning(
+            geb_build_model.logger.warning(
                 f"Country {country} does not have HDI data available, as it is not an official UN country. Taking HDI from the closest country with HDI data: {closest_country}."
             )
             hdi = dev_index.loc[closest_country, "HDI"]

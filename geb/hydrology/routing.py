@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 import numpy.typing as npt
 import pyflwdir
@@ -285,7 +287,7 @@ class KinematicWave(Router):
         river_beta: float,
         waterbody_id: npt.NDArray[np.int32],
         is_waterbody_outflow: npt.NDArray[np.bool_],
-    ):
+    ) -> None:
         super().__init__(
             dt, river_network, Q_initial, waterbody_id, is_waterbody_outflow
         )
@@ -329,12 +331,17 @@ class KinematicWave(Router):
                 This is the ratio of the available storage that can be used for abstraction.
 
         Returns:
-            The available storage of the river network.
+            The available storage of the river network [m3].
         """
         return self.get_total_storage() * maximum_abstraction_ratio
 
     def get_total_storage(self) -> npt.NDArray[np.float32]:
-        """Get the total storage of the river network, which is the sum of the available storage in each cell."""
+        """Get the total storage of the river network, which is the sum of the available storage in each cell.
+
+        Returns:
+            The total storage of the river network [m3].
+
+        """
         total_storage = self.calculate_river_storage_from_discharge(
             discharge=self.Q_prev,
             river_alpha=self.river_alpha,
@@ -528,8 +535,12 @@ class Accuflux(Router):
     """
 
     def __init__(
-        self, dt: float | int, river_network: pyflwdir.FlwdirRaster, *args, **kwargs
-    ):
+        self,
+        dt: float | int,
+        river_network: pyflwdir.FlwdirRaster,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(dt, river_network, *args, **kwargs)
 
     def get_available_storage(
@@ -564,7 +575,12 @@ class Accuflux(Router):
         idxs_up_to_downstream,
         is_waterbody_outflow,
         waterbody_id,
-    ):
+    ) -> tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
         """Accuflux routing.
 
         Args:
@@ -695,7 +711,12 @@ class Accuflux(Router):
         )
 
     def get_total_storage(self) -> npt.NDArray[np.float32]:
-        """Get the total storage of the river network, which is the sum of the available storage in each cell."""
+        """Get the total storage of the river network, which is the sum of the available storage in each cell.
+
+        Returns:
+            The total storage of the river network [m3].
+
+        """
         return self.get_available_storage(maximum_abstraction_ratio=1.0)
 
 
@@ -707,7 +728,7 @@ class Routing(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology):
+    def __init__(self, model, hydrology) -> None:
         super().__init__(model)
 
         self.config = model.config["hydrology"]["routing"]
@@ -739,7 +760,7 @@ class Routing(Module):
             ldd_uncompressed=ldd_uncompressed, mask=mask
         )
 
-    def set_router(self):
+    def set_router(self) -> None:
         routing_algorithm: str = self.config["algorithm"]
         is_waterbody_outflow: npt.NDArray[np.bool] = (
             self.grid.var.waterbody_outflow_points != -1
@@ -775,7 +796,7 @@ class Routing(Module):
                 "Available algorithms are 'kinematic_wave' and 'accuflux'."
             )
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.grid.var.upstream_area = self.grid.load(
             self.model.files["grid"]["routing/upstream_area"]
         )
@@ -1151,7 +1172,7 @@ class Routing(Module):
 
             assert routing_loss >= 0, "Routing loss cannot be negative"
 
-        self.report(self, locals())
+        self.report(locals())
 
         total_over_abstraction_m3: np.float64 = over_abstraction_m3.astype(
             np.float64

@@ -1,3 +1,10 @@
+"""Module for computing damages using the VectorScanner from the damagescanner package.
+
+Since the DamageScanner has a slightly complicated interface, we wrap it in a function that checks for common issues
+and provides a simpler interface.
+
+"""
+
 import geopandas as gpd
 import pandas as pd
 import xarray as xr

@@ -21,7 +21,7 @@ class Market(AgentBaseClass):
         Currently assume single market for all crops.
     """
 
-    def __init__(self, model, agents):
+    def __init__(self, model, agents) -> None:
         super().__init__(model)
         self.agents = agents
         self.config = (
@@ -56,7 +56,7 @@ class Market(AgentBaseClass):
             )
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "agents.market"
 
     def spinup(self) -> None:
@@ -229,7 +229,7 @@ class Market(AgentBaseClass):
         ):
             self.estimate_price_model()
 
-        self.report(self, locals())
+        self.report(locals())
 
     @property
     def crop_prices(self) -> np.ndarray:

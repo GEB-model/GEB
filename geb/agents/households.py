@@ -5,6 +5,7 @@ from typing import Tuple
 
 import geopandas as gpd
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import rasterio
 import xarray as xr
@@ -19,7 +20,7 @@ from ..hydrology.landcover import (
 from ..store import DynamicArray
 from ..workflows.damage_scanner import VectorScanner
 from ..workflows.io import load_array, load_table, open_zarr
-from .decision_module_flood import DecisionModule
+from .decision_module import DecisionModule
 from .general import AgentBaseClass
 
 
@@ -46,6 +47,8 @@ def from_landuse_raster_to_polygon(mask, transform, crs) -> gpd.GeoDataFrame:
 
 
 class Households(AgentBaseClass):
+    """This class implements the household agents."""
+
     def __init__(self, model, agents, reduncancy: float) -> None:
         super().__init__(model)
 
@@ -74,7 +77,7 @@ class Households(AgentBaseClass):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
         return "agents.households"
 
     def load_flood_maps(self) -> None:
@@ -463,7 +466,7 @@ class Households(AgentBaseClass):
 
         return probability_maps
 
-    def create_damage_probability_maps(self):
+    def create_damage_probability_maps(self) -> None:
         """Creates an object-based (buildings) probability map based on the ensemble of damage maps."""
         crs = self.model.config["hazards"]["floods"]["crs"]
         days = self.model.config["general"]["forecasts"]["days"]
@@ -532,7 +535,7 @@ class Households(AgentBaseClass):
 
             damage_probability_map.to_file(output_path)
 
-    def warning_strategy_1(self, prob_threshold=0.6):
+    def warning_strategy_1(self, prob_threshold=0.6) -> None:
         # I probably should use the probability_maps as argument for this function instead of getting it inside the function
         # ideally add an option to choose the warning strategy
 
@@ -601,7 +604,7 @@ class Households(AgentBaseClass):
         path = os.path.join(self.model.output_folder, "warnings_log.csv")
         pd.DataFrame(warnings_log).to_csv(path, index=False)
 
-    def infrastructure_warning_strategy(self, prob_threshold=0.6):
+    def infrastructure_warning_strategy(self, prob_threshold=0.6) -> None:
         # Load postal codes and substations
         PC4 = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
         substations = gpd.read_parquet(
@@ -682,11 +685,17 @@ class Households(AgentBaseClass):
             path = os.path.join(self.model.output_folder, "warning_log_energy.csv")
             pd.DataFrame(warning_log).to_csv(path, index=False)
 
-    def warning_communication(self, target_households):
+    def warning_communication(self, target_households: gpd.GeoDataFrame) -> int:
         """Communicates the warning to households based on the communication efficiency.
 
         changes risk perception --> to be moved to the update risk perception function;
-        and return the number of households that were warned
+        and return the number of households that were warned.
+
+        Args:
+            target_households: The households that are targeted to receive the warning.
+
+        Returns:
+            The number of households that received the warning.
         """
         print("Communicating the warning...")
         # Define the % of households reached by the warning
@@ -729,7 +738,7 @@ class Households(AgentBaseClass):
         damages_do_not_adapt, damages_adapt = self.calculate_building_flood_damages()
 
         # calculate expected utilities
-        EU_adapt = self.decision_module.calcEU_adapt(
+        EU_adapt = self.decision_module.calcEU_adapt_flood(
             geom_id="NoID",
             n_agents=self.n,
             wealth=self.var.wealth.data,
@@ -748,7 +757,7 @@ class Households(AgentBaseClass):
             sigma=1,
         )
 
-        EU_do_not_adapt = self.decision_module.calcEU_do_nothing(
+        EU_do_not_adapt = self.decision_module.calcEU_do_nothing_flood(
             geom_id="NoID",
             n_agents=self.n,
             wealth=self.var.wealth.data,
@@ -776,7 +785,7 @@ class Households(AgentBaseClass):
         # print percentage of households that adapted
         print(f"N households that adapted: {len(household_adapting)}")
 
-    def load_objects(self):
+    def load_objects(self) -> None:
         # Load buildings
         self.buildings = gpd.read_parquet(self.model.files["geom"]["assets/buildings"])
         self.buildings["object_type"] = (
@@ -796,7 +805,7 @@ class Households(AgentBaseClass):
         self.rail = gpd.read_parquet(self.model.files["geom"]["assets/rails"])
         self.rail["object_type"] = "rail"
 
-    def load_max_damage_values(self):
+    def load_max_damage_values(self) -> None:
         # Load maximum damages
         with open(
             self.model.files["dict"][
@@ -881,7 +890,7 @@ class Households(AgentBaseClass):
         ) as f:
             self.var.max_dam_agriculture_m2 = float(json.load(f)["maximum_damage"])
 
-    def load_damage_curves(self):
+    def load_damage_curves(self) -> None:
         # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
         road_curves = []
         road_types = [
@@ -981,7 +990,7 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "rail"}
         )
 
-    def create_damage_interpolators(self):
+    def create_damage_interpolators(self) -> None:
         # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
         self.buildings_content_curve_interpolator = interpolate.interp1d(
             x=self.buildings_content_curve.index,
@@ -994,7 +1003,7 @@ class Households(AgentBaseClass):
             # fill_value="extrapolate",
         )
 
-    def spinup(self):
+    def spinup(self) -> None:
         self.construct_income_distribution()
         self.assign_household_attributes()
 
@@ -1087,23 +1096,30 @@ class Households(AgentBaseClass):
 
         return damages_do_not_adapt, damages_adapt
 
-    def flood(self, flood_map: xr.DataArray) -> float:
+    def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
 
         Args:
-            flood_map: The flood map containing water levels for the flood event.
+            flood_depth: The flood map containing water levels for the flood event [m].
+
+        Returns:
+            The total flood damages for the event for all assets and land use types.
 
         """
-        flood_map: xr.DataArray = flood_map.compute()
+        flood_depth: xr.DataArray = flood_depth.compute()
         # flood_map = flood_map.chunk({"x": 100, "y": 1000})
 
-        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_map.rio.crs)
+        buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_depth.rio.crs)
         household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
-            flood_map.rio.crs
+            flood_depth.rio.crs
         )
 
+        assert len(household_points) == self.var.risk_perception.size
+
         household_points["protect_building"] = False
-        household_points.loc[self.var.risk_perception >= 0.1, "protect_building"] = True
+        household_points.loc[
+            self.var.risk_perception.data >= 0.1, "protect_building"
+        ] = True
 
         buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
             buildings, household_points, how="left", exclusive=True
@@ -1122,7 +1138,7 @@ class Households(AgentBaseClass):
         category_name: str = "buildings_content"
         filename: str = f"damage_map_{category_name}.gpkg"
 
-        buildings_centroid = household_points.to_crs(flood_map.rio.crs)
+        buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
         buildings_centroid["object_type"] = buildings_centroid[
             "protect_building"
         ].apply(lambda x: "building_protected" if x else "building_unprotected")
@@ -1130,7 +1146,7 @@ class Households(AgentBaseClass):
 
         damages_buildings_content = VectorScanner(
             features=buildings_centroid,
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.buildings_content_curve,
         )
 
@@ -1143,7 +1159,7 @@ class Households(AgentBaseClass):
 
         damages_buildings_structure: pd.Series = VectorScanner(
             features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.buildings_structure_curve,
         )
 
@@ -1162,11 +1178,11 @@ class Households(AgentBaseClass):
         agriculture["object_type"] = "agriculture"
         agriculture["maximum_damage"] = self.var.max_dam_agriculture_m2
 
-        agriculture = agriculture.to_crs(flood_map.rio.crs)
+        agriculture = agriculture.to_crs(flood_depth.rio.crs)
 
         damages_agriculture = VectorScanner(
             features=agriculture,
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.var.agriculture_curve,
         )
         total_damages_agriculture = damages_agriculture.sum()
@@ -1181,29 +1197,29 @@ class Households(AgentBaseClass):
         forest["object_type"] = "forest"
         forest["maximum_damage"] = self.var.max_dam_forest_m2
 
-        forest = forest.to_crs(flood_map.rio.crs)
+        forest = forest.to_crs(flood_depth.rio.crs)
 
         damages_forest = VectorScanner(
             features=forest,
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.var.forest_curve,
         )
         total_damages_forest = damages_forest.sum()
         print(f"damages to forest are: {total_damages_forest}")
 
-        roads = self.roads.to_crs(flood_map.rio.crs)
+        roads = self.roads.to_crs(flood_depth.rio.crs)
         damages_roads = VectorScanner(
             features=roads.rename(columns={"maximum_damage_m": "maximum_damage"}),
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.var.road_curves,
         )
         total_damages_roads = damages_roads.sum()
         print(f"damages to roads are: {total_damages_roads} ")
 
-        rail = self.rail.to_crs(flood_map.rio.crs)
+        rail = self.rail.to_crs(flood_depth.rio.crs)
         damages_rail = VectorScanner(
             features=rail.rename(columns={"maximum_damage_m": "maximum_damage"}),
-            hazard=flood_map,
+            hazard=flood_depth,
             vulnerability_curves=self.var.rail_curve,
         )
         total_damages_rail = damages_rail.sum()
@@ -1221,12 +1237,36 @@ class Households(AgentBaseClass):
 
         return total_flood_damages
 
-    def water_demand(self):
+    def water_demand(
+        self,
+    ) -> Tuple[
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+        npt.NDArray[np.float32],
+    ]:
         """Calculate the water demand per household in m3 per day.
 
-        This function uses a multiplier to calculate the water demand for
-        for each region with respect to the base year.
+        In the default option (see configuration), the water demand is calculated
+        based on the municipal water demand per capita in the baseline year,
+        the size of the household, and a water demand multiplier that varies
+        by region and year.
+
+        In the 'custom_value' option, all households are assigned the same
+        water demand value specified in the configuration.
+
+        Returns:
+            Tuple containing:
+                - water_demand_per_household_m3: Water demand per household in m3 per day.
+                - water_efficiency_per_household: Water efficiency per household (0-1).
+                    A factor of 1 means no water is wasted, while 0 means all water is wasted.
+                - locations: Locations of the households (x, y coordinates).
+
+        Raises:
+            ValueError: If the water demand method in the configuration is invalid.
         """
+        assert (self.var.water_efficiency_per_household == 1).all(), (
+            "if not 1, code must be updated to account for water efficiency in water demand"
+        )
         if self.config["water_demand"]["method"] == "default":
             # the water demand multiplier is a function of the year and region
             water_demand_multiplier_per_region = self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier.loc[
@@ -1256,7 +1296,7 @@ class Households(AgentBaseClass):
             )
         else:
             raise ValueError(
-                "Invalid water demand method. Choose 'default' or 'customized_demand'."
+                "Invalid water demand method. Configuration must be 'default' or 'custom_value'."
             )
 
         return (
@@ -1276,7 +1316,7 @@ class Households(AgentBaseClass):
 
             print("Thinking about adapting...")
             self.decide_household_strategy()
-        self.report(self, locals())
+        self.report(locals())
 
     @property
     def n(self):

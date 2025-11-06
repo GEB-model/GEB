@@ -1,18 +1,18 @@
+"""Implements build methods for the land surface submodel, responsible for land surface characteristics and processes."""
+
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
+from geb.workflows.raster import rasterize_like, repeat_grid
 
-from ..workflows.conversions import (
-    COUNTRY_NAME_TO_ISO3,
-)
 from ..workflows.general import (
     bounds_are_within,
     calculate_cell_area,
     pad_xy,
-    repeat_grid,
     resample_chunked,
     resample_like,
 )
@@ -20,15 +20,15 @@ from ..workflows.soilgrids import load_soilgrids
 
 
 class LandSurface:
-    def __init__(self):
+    """Implements land surface submodel, responsible for land surface characteristics and processes."""
+
+    def __init__(self) -> None:
+        """Initialize the LandSurface class."""
         pass
 
     @build_method(depends_on=["setup_regions_and_land_use"])
     def setup_cell_area(self) -> None:
         """Sets up the cell area map for the model.
-
-        Raises:
-            ValueError: If the grid mask is not available.
 
         Notes:
             This method prepares the cell area map for the model by calculating the area of each cell in the grid. It first
@@ -84,18 +84,23 @@ class LandSurface:
     @build_method(depends_on=["setup_hydrography"])
     def setup_elevation(
         self,
-        DEMs=[
+        DEMs: list[dict[str, str | float]] = [
             {
                 "name": "fabdem",
                 "zmin": 0.001,
             },
             {"name": "gebco"},
         ],
-    ):
+    ) -> None:
         """Sets up the elevation data for the model.
 
         For configuration of DEMs parameters, see
         https://deltares.github.io/hydromt_sfincs/latest/_generated/hydromt_sfincs.SfincsModel.setup_dep.html.
+
+        Args:
+            DEMs: A list of dictionaries containing the names and parameters of the DEMs to use. Each dictionary should have a 'name' key
+                with the name of the DEM, and optionally other keys such as 'zmin' for minimum elevation.
+
         """
         if not DEMs:
             DEMs = []
@@ -195,27 +200,25 @@ class LandSurface:
             land use data is reclassified into five classes and set as a grid in the model. Finally, the cultivated land is
             identified and set as a grid in the model.
         """
-        regions = self.data_catalog.get_geodataframe(
-            region_database,
-            geom=self.region,
-            predicate="intersects",
-        ).rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
-
-        # save global countries and their centroids (used for calculating euclidian distances)
-        global_countries = self.data_catalog.get_geodataframe("GADM_level0").rename(
-            columns={"GID_0": "ISO3"}
+        regions: gpd.GeoDataFrame = (
+            self.new_data_catalog.get(region_database)
+            .read(geom=self.region.union_all())
+            .rename(columns={unique_region_id: "region_id", ISO3_column: "ISO3"})
         )
+
+        global_countries: gpd.GeoDataFrame = (
+            self.new_data_catalog.get("GADM_level0")
+            .read()
+            .rename(columns={"GID_0": "ISO3"})
+        )
+
         global_countries["geometry"] = global_countries.centroid
+        # Renaming XKO to XKX
+        self.logger.info("Renaming XKO to XKX in global countries")
         global_countries["ISO3"] = global_countries["ISO3"].replace(
             {"XKO": "XKX"}
         )  # XKO is a deprecated code for Kosovo, XKX is the new code
         global_countries = global_countries.set_index("ISO3")
-
-        # Renaming XKO to XKX
-        global_countries = global_countries.rename(columns={"XKO": "XKX"})
-        self.logger.info(
-            f"Renamed XKO to XKX in global countries: {global_countries.columns}"
-        )
 
         self.set_geom(global_countries, name="global_countries")
 
@@ -243,7 +246,7 @@ class LandSurface:
             {"ISO3": {"XKO": "XKX"}}, inplace=True
         )  # XKO is a deprecated code for Kosovo, XKX is the new code
 
-        self.logger.info(f"Renamed XKO to XKX in regions: {regions.columns}")
+        self.logger.info(f"Renamed XKO to XKX in regions")
 
         self.set_geom(regions, name="regions")
 
@@ -283,11 +286,11 @@ class LandSurface:
             .isel(band=0)
         )
 
-        reprojected_land_use = resample_chunked(
+        reprojected_land_use: xr.DataArray = resample_chunked(
             land_use, region_mask.chunk({"x": 1000, "y": 1000}), method="nearest"
         )
 
-        reprojected_land_use = self.set_region_subgrid(
+        reprojected_land_use: xr.DataArray = self.set_region_subgrid(
             reprojected_land_use,
             name="landsurface/original_land_use",
         )
@@ -298,7 +301,17 @@ class LandSurface:
             all_touched=True,
         )
         region_ids.attrs["_FillValue"] = -1
-        region_ids = self.set_region_subgrid(region_ids, name="region_ids")
+
+        region_ids_: xr.DataArray = rasterize_like(
+            gpd=self.geom["regions"],
+            column="region_id",
+            raster=region_mask,
+            dtype=np.int32,
+            nodata=0,
+        ).compute()
+        region_ids: xr.DataArray = self.set_region_subgrid(
+            region_ids, name="region_ids"
+        )
 
         full_region_land_use_classes = reprojected_land_use.raster.reclassify(
             pd.DataFrame.from_dict(
@@ -347,7 +360,7 @@ class LandSurface:
     @build_method(depends_on=[])
     def setup_land_use_parameters(
         self,
-        land_cover="esa_worldcover_2021_v200",
+        land_cover: str = "esa_worldcover_2021_v200",
     ) -> None:
         """Sets up the land use parameters for the model.
 

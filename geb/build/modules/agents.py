@@ -1,6 +1,5 @@
 import json
 import math
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -37,7 +36,9 @@ from ..workflows.population import load_GLOPOP_S
 
 
 class Agents:
-    def __init__(self):
+    """Contains all build methods for the agents for GEB."""
+
+    def __init__(self) -> None:
         pass
 
     @build_method(
@@ -48,7 +49,7 @@ class Agents:
             "setup_household_characteristics",
         ]
     )
-    def setup_water_demand(self):
+    def setup_water_demand(self) -> None:
         """Sets up the water demand data for GEB.
 
         Notes:
@@ -63,6 +64,10 @@ class Agents:
             monthly time step, but is assumed to be constant over the year.
 
             The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
+
+        Raises:
+            ValueError: If required data is missing in the data sources.
+
         """
         start_model_time = self.start_date.year
         end_model_time = self.end_date.year
@@ -271,7 +276,7 @@ class Agents:
 
         self.logger.info("Setting up other water demands")
 
-        def set_demand(file, variable, name, ssp):
+        def set_demand(file, variable, name, ssp) -> None:
             ds_historic = xr.open_dataset(
                 self.data_catalog.get_source(f"cwatm_{file}_historical_year").path,
                 decode_times=False,
@@ -349,14 +354,24 @@ class Agents:
         cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
         oecd_idd = oecd_idd[cols_to_keep]
         # only done to check countries in region, could probably be done more efficiently
-        countries = self.data_catalog.get_geodataframe(
-            "GADM_level0",
-            geom=self.region,
+        countries = self.new_data_catalog.get("GADM_level0").read(
+            geom=self.region.union_all(),
         )
+        # setup donor countries for country missing in oecd data
+        donor_countries = setup_donor_countries(self, oecd_idd["REF_AREA"])
+
         for country in countries["GID_0"]:
             income_distribution_parameters[country] = {}
             income_distributions[country] = {}
-            oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
+            if country not in oecd_idd["REF_AREA"].values:
+                donor = donor_countries[country]
+                self.logger.info(
+                    f"Missing income distribution data for {country}, using donor country {donor}"
+                )
+                oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == donor]
+            else:
+                oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
+
             # take the most recent year
             most_recent_year = oecd_widd_country[
                 oecd_widd_country["TIME_PERIOD"]
@@ -391,7 +406,7 @@ class Agents:
         self.set_table(income_distributions_pd, "income/national_distribution")
 
     @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
-    def setup_economic_data(self):
+    def setup_economic_data(self) -> None:
         """Sets up the economic data for GEB.
 
         Notes:
@@ -613,7 +628,7 @@ class Agents:
         self.set_dict(lcu_dict, name="socioeconomics/LCU_per_USD")
 
     @build_method
-    def setup_irrigation_sources(self, irrigation_sources):
+    def setup_irrigation_sources(self, irrigation_sources) -> None:
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
 
     @build_method(depends_on=["set_time_range", "setup_economic_data"])
@@ -626,7 +641,7 @@ class Agents:
         capital_cost_sprinkler: float,
         capital_cost_drip: float,
         reference_year: int,
-    ):
+    ) -> None:
         """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
 
         Args:
@@ -704,7 +719,7 @@ class Agents:
         WHY_20: float,
         WHY_30: float,
         reference_year: int,
-    ):
+    ) -> None:
         """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
 
         Args:
@@ -835,7 +850,7 @@ class Agents:
         reference_year: int,
         start_year: int,
         end_year: int,
-    ):
+    ) -> None:
         """Sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year.
 
         Args:
@@ -888,7 +903,7 @@ class Agents:
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
-    def set_farmers_and_create_farms(self, farmers: pd.DataFrame):
+    def set_farmers_and_create_farms(self, farmers: pd.DataFrame) -> None:
         """Sets up the farmers data for GEB.
 
         Args:
@@ -1017,6 +1032,11 @@ class Agents:
             data_source: The source of the farm size data. Default is 'lowder', which uses the Lowder et al. (2016) dataset.
             size_class_boundaries: The boundaries for the size classes of farms. For the Lowder et al. (2016) dataset, this must be None
                 because the boundaries are defined in the dataset itself.
+
+        Raises:
+            ValueError: If the data_source is 'lowder' and size_class_boundaries is not None.
+            ValueError: If the data_source is not 'lowder' and size_class_boundaries is None.
+            ValueError: If required data is missing in the data sources.
         """
         if data_source == "lowder":
             assert size_class_boundaries is None, (
@@ -1509,7 +1529,7 @@ class Agents:
     @build_method(depends_on="setup_assets")
     def setup_household_characteristics(
         self, maximum_age: int = 85, skip_countries_ISO3: list = []
-    ):
+    ) -> None:
         # setup buildings in region for household allocation
         all_buildings_model_region = self.setup_buildings()
 
@@ -1867,7 +1887,7 @@ class Agents:
             )
 
     @build_method(depends_on=["setup_create_farms"])
-    def setup_farmer_household_characteristics(self, maximum_age=85):
+    def setup_farmer_household_characteristics(self, maximum_age=85) -> None:
         n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
@@ -2155,7 +2175,7 @@ class Agents:
     def setup_farmer_characteristics(
         self,
         interest_rate=0.05,
-    ):
+    ) -> None:
         n_farmers = self.array["agents/farmers/id"].size
 
         preferences_global = self.create_preferences()
@@ -2342,7 +2362,7 @@ class Agents:
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
-    def setup_farmer_irrigation_source(self, irrigating_farmers, year):
+    def setup_farmer_irrigation_source(self, irrigating_farmers, year) -> None:
         fraction_sw_irrigation = "aeisw"
 
         fraction_sw_irrigation_data = xr.open_dataarray(
@@ -2509,6 +2529,10 @@ class Agents:
             feature_types: The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
             source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
             use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
+
+        Raises:
+            ValueError: If an unknown source is provided.
+            ValueError: When an unknown feature type is provided.
         """
         if isinstance(feature_types, str):
             feature_types = [feature_types]
