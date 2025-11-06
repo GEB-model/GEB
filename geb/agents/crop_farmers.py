@@ -6,7 +6,7 @@ import calendar
 import copy
 import math
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 import numpy as np
 import numpy.typing as npt
@@ -1105,7 +1105,7 @@ class CropFarmers(AgentBaseClass):
         self.cultivation_costs = (date_index, cultivation_costs_array)
 
     @property
-    def activation_order_by_elevation(self) -> "DynamicArray":
+    def activation_order_by_elevation(self) -> DynamicArray:
         """Determine activation order by elevation, highest first.
 
         Agents with identical elevation are randomly shuffled among themselves. If
@@ -1154,14 +1154,17 @@ class CropFarmers(AgentBaseClass):
         """Whether a farmer is in anu command area."""
         return self.command_area != -1
 
-    def save_pr(self, pr_kg_per_m2_per_s) -> None:
+    def save_pr(self, pr_kg_per_m2_per_s: npt.NDArray[np.floating]) -> None:
         """Aggregate and store daily precipitation per farmer.
 
-        Converts HRU precipitation from m/s to mm/day, aggregates to each farmer
-        using land ownership, and writes the result into
+        Converts HRU precipitation (kg·m⁻²·s⁻¹) to mm/day, aggregates by
+        land ownership, and writes the per-farmer values into
         ``self.var.cumulative_pr_mm[:, day_index]`` for the current day of year.
-        On non-leap years, the value for day 365 is copied from day 364. Done
-        per time-step
+        On non-leap years, the value for day 365 is copied from day 364.
+
+        Args:
+            pr_kg_per_m2_per_s (npt.NDArray[np.floating]): Precipitation time-step
+                series per HRU in kg·m⁻²·s⁻¹ (1 kg·m⁻² = 1 mm).
 
         """
         # take mean pr for day and convert to mm/day
@@ -1181,9 +1184,9 @@ class CropFarmers(AgentBaseClass):
 
     def save_water_deficit(
         self,
-        reference_evapotranspiration_grass_m_per_day,
-        pr_kg_per_m2_per_s,
-        discount_factor=0.2,
+        reference_evapotranspiration_grass_m_per_day: npt.NDArray[np.floating],
+        pr_kg_per_m2_per_s: npt.NDArray[np.floating],
+        discount_factor: float = 0.2,
     ) -> None:
         """Accumulate daily water deficit per farmer with exponential smoothing.
 
@@ -1194,6 +1197,8 @@ class CropFarmers(AgentBaseClass):
         non-leap years, day 366 mirrors day 365.
 
         Args:
+            reference_evapotranspiration_grass_m_per_day (npt.NDArray[np.floating]): Reference ET (m/day) per HRU.
+            pr_kg_per_m2_per_s (npt.NDArray[np.floating]): Precipitation (kg·m⁻²·s⁻¹) per HRU per time-step.
             discount_factor (float, optional): Smoothing factor in [0, 1] applied to
                 the new day's deficit (higher values weight the current day more).
                 Defaults to 0.2.
@@ -4834,7 +4839,7 @@ class CropFarmers(AgentBaseClass):
         self,
         data: tuple[dict[datetime, int], npt.NDArray[np.floating]],
         time: datetime,
-        subset: Optional[npt.NDArray[np.bool_]] = None,
+        subset: npt.NDArray[np.bool_] | None = None,
     ) -> npt.NDArray[np.float32]:
         """Map region-level values to farmers for a given time.
 
