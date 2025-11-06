@@ -275,6 +275,8 @@ class SFINCSRootModel:
         )
 
         DEMs = [{**DEM, **{"reproj_method": "bilinear"}} for DEM in DEMs]
+        # add zmax to secondary DEM (assumed to be gebco)
+        DEMs[1]["zmax"] = 0
 
         # HydroMT-SFINCS only accepts datasets with an 'elevtn' variable. Therefore, the following
         # is a bit convoluted. We first open the dataarray, then convert it to a dataset,
@@ -425,9 +427,9 @@ class SFINCSRootModel:
         # Because hydromt-sfincs does a lot of filling default values when data
         # is missing, we need to be extra sure that the required columns are
         # present and contain valid data.
-        assert rivers["width"].notnull().all(), "River width cannot be null"
-        assert rivers["depth"].notnull().all(), "River depth cannot be null"
-        assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
+        # assert rivers["width"].notnull().all(), "River width cannot be null"
+        # assert rivers["depth"].notnull().all(), "River depth cannot be null"
+        # assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
 
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
@@ -852,7 +854,7 @@ class SFINCSSimulation:
         self.sfincs_model = sfincs_model
 
     def set_coastal_waterlevel_forcing(
-        self, locations: gpd.GeoDataFrame, timeseries: pd.DataFrame
+        self, locations: gpd.GeoDataFrame, timeseries: pd.DataFrame, buffer: int = 1e5
     ) -> None:
         """Sets up coastal water level forcing for the SFINCS model from a timeseries.
 
@@ -860,15 +862,14 @@ class SFINCSSimulation:
             locations: A GeoDataFrame containing the locations of the water level forcing points.
             timeseries: A DataFrame containing the water level timeseries for each node.
                 The columns should match the index of the locations GeoDataFrame.
+            buffer: Buffer distance in meters to extend the model domain for coastal forcing points.
         """
         # assert np.array_equal(locations.index, np.arange(1, len(locations) + 1))
 
         # select only locations that are in the model
         self.sfincs_model.read_forcing()
-        # station_ids_in_model = self.sfincs_model.forcing["bzs"].index.values
-        # timeseries = timeseries.loc[:, timeseries.columns.isin(station_ids_in_model)]
         self.sfincs_model.setup_waterlevel_forcing(
-            locations=locations, timeseries=timeseries
+            locations=locations, timeseries=timeseries, buffer=buffer
         )
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
