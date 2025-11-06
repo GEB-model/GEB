@@ -1,11 +1,21 @@
 {
 	"folders": [
 		{
-			"path": "../../../../../../../../scistor/ivm/mka483/GEB_p3/GEB"
+			"path": "../../../../../net/sys/pscst201/BETA-IVM-HPC@ada-nodes/mka483/GEB_p3/GEB"
 		},
 		{
-			"path": "../../../../../../../../scistor/ivm/mka483/GEB_p3/GEB_models"
+			"path": "../../../../../net/sys/pscst201/BETA-IVM-HPC@ada-nodes/mka483/GEB_p3/GEB_models/logs"
+		},
+		{
+			"path": "../../../../../net/sys/pscst201/BETA-IVM-HPC@ada-nodes/mka483/GEB_p3/GEB_models/sh"
+		},
+		{
+			"path": "../../../../../net/sys/pscst201/BETA-IVM-HPC@ada-nodes/mka483/GEB_p3/GEB_models/plot"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"git.autorefresh": false,
+		"git.autoRepositoryDetection": "openEditors",
+		"ruff.importStrategy": "fromEnvironment"
+	}
 }

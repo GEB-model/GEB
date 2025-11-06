@@ -839,7 +839,8 @@ class CropFarmers(AgentBaseClass):
                     GEV_pr_grid, self.var.locations.data, self.grid.gt
                 )
 
-        assert not np.all(np.isnan(self.var.GEV_pr_parameters))
+            assert not np.all(np.isnan(self.var.GEV_pr_parameters))
+
         self.var.risk_perc_min = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -1214,6 +1215,12 @@ class CropFarmers(AgentBaseClass):
     @property
     def surface_irrigated(self):
         return self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0
+
+    @property
+    def reservoir_channel_irrigated(self):
+        return (self.command_area >= 0).astype(np.int8) | np.int8(
+            self.var.yearly_abstraction_m3_by_farmer[:, CHANNEL_IRRIGATION, 0] > 0
+        )
 
     @property
     def well_irrigated(self):
@@ -2869,9 +2876,7 @@ class CropFarmers(AgentBaseClass):
             farmer_yield_probability_relation,
         )
 
-        within_budget = self.budget_check(
-            self.farmer_yield_probability_relation_exp_cap, total_annual_costs_m2
-        )
+        within_budget = self.budget_check(total_annual_costs_m2)
 
         total_profits_adaptation = (
             total_profits_adaptation + energy_diff_m2 + water_diff_m2
@@ -3889,7 +3894,7 @@ class CropFarmers(AgentBaseClass):
             )
         return total_profits
 
-    def budget_check(self, yield_probability_relation_exp_cap, total_annual_costs_m2):
+    def budget_check(self, total_annual_costs_m2):
         # Determine the additional spending room insurance brings
         # Is done separately as index insurance does affect income,
         # but does not affect adaptation decisions
@@ -4472,6 +4477,9 @@ class CropFarmers(AgentBaseClass):
                         self.var.yearly_yield_ratio, self.var.yearly_SPEI_probability
                     )
                 )
+                self.farmer_yield_probability_relation_exp_cap = (
+                    farmer_yield_probability_relation.copy()
+                )
                 self.calculate_yield_spei_relation_group_lin(
                     self.var.yearly_yield_ratio, self.var.yearly_SPEI_probability
                 )
@@ -4490,9 +4498,6 @@ class CropFarmers(AgentBaseClass):
                 ):
                     # save the base relations for determining the difference with and without insurance
                     farmer_yield_probability_relation_base = (
-                        farmer_yield_probability_relation.copy()
-                    )
-                    self.farmer_yield_probability_relation_exp_cap = (
                         farmer_yield_probability_relation.copy()
                     )
                     potential_insured_loss = self.potential_insured_loss()

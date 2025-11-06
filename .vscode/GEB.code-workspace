@@ -10,6 +10,6 @@
 	"settings": {
 		"git.autorefresh": false,
 		"git.autoRepositoryDetection": "openEditors",
-		"ruff.importStrategy": "fromEnvironment",
+		"ruff.importStrategy": "fromEnvironment"
 	}
 }

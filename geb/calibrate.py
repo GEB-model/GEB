@@ -13,7 +13,6 @@ Modified by Peter Burek and Jens de Bruijn
 import array
 import collections
 import datetime
-from datetime import date
 import json
 import multiprocessing
 import os
@@ -24,11 +23,11 @@ import sys
 import time
 import traceback
 from copy import deepcopy
+from datetime import date
 from functools import partial, wraps
 from io import StringIO
 from pathlib import Path
 from subprocess import Popen
-from .workflows.io import open_zarr
 
 import geopandas as gpd
 import joblib
@@ -39,6 +38,8 @@ import yaml
 from deap import algorithms, base, creator, tools
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import KFold
+
+from .workflows.io import open_zarr
 
 
 def KGE_calculation(s, o):
@@ -760,7 +761,7 @@ def score_insurance(
         / "report"
         / config["general"]["name"]
         / "agents.crop_farmers"
-        / "precipitation_insurance_adaptation.zarr"
+        / "personal_insurance_adaptation.zarr"
     )
 
     da = open_zarr(scenario_dir)
