@@ -666,6 +666,7 @@ def assign_return_periods(
 
     Raises:
         ValueError: If discharge values are unrealistically high.
+        ZeroDivisionError: If the extreme value model cannot be fitted.
     """
     assert isinstance(return_periods, list)
     for i, idx in tqdm(enumerate(rivers.index), total=len(rivers)):
@@ -680,7 +681,12 @@ def assign_return_periods(
             # Fit the model and calculate return periods
             model = EVA(discharge)
             model.get_extremes(method="BM", block_size="365.2425D")
-            model.fit_model()
+            try:
+                model.fit_model()
+            except ZeroDivisionError:
+                raise ZeroDivisionError(
+                    f"Could not fit extreme value model for river {idx} with discharge {discharge.values}"
+                )
             discharge_per_return_period = model.get_return_value(
                 return_period=return_periods
             )[0]  # [1] and [2] are the uncertainty bounds
