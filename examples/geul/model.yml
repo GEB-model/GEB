@@ -14,7 +14,7 @@ general:
   # start of the spinup time (YYYY-MM-DD).
   # spinup_time: 1999-01-01
   # spinup_time: 1980-01-01
-  spinup_time: 2011-01-01
+  spinup_time: 1990-01-01
   # spinup_time: 2020-01-01
   ###
   # base folder where to report output data to
