@@ -442,39 +442,36 @@ def run_sfincs_simulation(
 
 def _get_xy(
     river: pd.Series,
-    waterbody_ids: npt.NDArray[np.int32],
     up_to_downstream: bool = True,
 ) -> tuple[int, int] | None:
     """Get the first valid xy coordinate from a river's hydrography_xy list.
 
-    Ignore coordinates that fall within a waterbody (waterbody_ids != -1).
     Starts upstream or downstream based on the up_to_downstream flag.
 
     Args:
         river: Series containing river information, including 'hydrography_xy'.
             This is a list of (x, y) tuples, representing the location of the river
             in the low-resolution hydrological grid.
-        waterbody_ids: 2D array of waterbody IDs, where -1 indicates no waterbody.
-            Also in the low-resolution hydrological grid.
         up_to_downstream: Whether to search from upstream to downstream.
             Defaults to True (starting upstream).
 
     Returns:
         A tuple (x, y) of the first valid coordinate, or an empty list if none found.
+
+    Raises:
+        ValueError: If no valid xy coordinate is found in the river's hydrography_xy list.
     """
     xys = river["hydrography_xy"]
     if not up_to_downstream:
         xys = reversed(xys)  # Reverse the order if not going downstream
     for xy in xys:
-        is_waterbody = waterbody_ids[xy[1], xy[0]] != -1
-        if not is_waterbody:
-            return (xy[0], xy[1])
+        return (xy[0], xy[1])
     else:
-        return None  # If no valid xy found, return None
+        raise ValueError("No valid xy found in river hydrography_xy list.")
 
 
 def get_representative_river_points(
-    river_ID: set, rivers: pd.DataFrame, waterbody_ids: npt.NDArray[np.int32]
+    river_ID: set, rivers: pd.DataFrame
 ) -> list[tuple[float, float]]:
     """Get representative river points for a given river ID.
 
@@ -482,14 +479,9 @@ def get_representative_river_points(
     representative point is used. If not, the function traverses upstream to find
     rivers that are represented in the grid and uses their representative points.
 
-    Moreover, if a point in the river falls within a waterbody (waterbody_ids != -1),
-    it is ignored and the next point in the river's hydrography_xy list is checked until
-    a valid point is found or the list is exhausted in which case an empty list is returned.
-
     Args:
         river_ID: The ID of the river for which to find representative points.
         rivers: DataFrame containing river information, including 'represented_in_grid' and 'hydrography_xy'.
-        waterbody_ids: 2D array of waterbody IDs, where -1 indicates no waterbody.
 
     Returns:
         A list of tuples (x, y) representing the coordinates of the representative points.
@@ -497,7 +489,7 @@ def get_representative_river_points(
     """
     river = rivers.loc[river_ID]
     if river["represented_in_grid"]:
-        xy = _get_xy(river, waterbody_ids, up_to_downstream=True)
+        xy = _get_xy(river, up_to_downstream=True)
         if xy is not None:
             return [xy]
         else:
@@ -521,7 +513,7 @@ def get_representative_river_points(
         representitative_rivers = rivers[rivers.index.isin(representitative_rivers)]
         xys = []
         for river_ID, river in representitative_rivers.iterrows():
-            xy = _get_xy(river, waterbody_ids, up_to_downstream=False)
+            xy = _get_xy(river, up_to_downstream=False)
             if xy is not None:
                 xys.append(xy)
             else:

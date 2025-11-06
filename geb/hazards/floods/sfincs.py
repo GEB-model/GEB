@@ -194,7 +194,6 @@ class SFINCSRootModel:
         region: gpd.GeoDataFrame,
         rivers: gpd.GeoDataFrame,
         discharge: xr.DataArray,
-        waterbody_ids: npt.NDArray[np.int32],
         river_width_alpha: npt.NDArray[np.float32],
         river_width_beta: npt.NDArray[np.float32],
         mannings: xr.DataArray,
@@ -217,7 +216,6 @@ class SFINCSRootModel:
             region: A GeoDataFrame defining the region of interest.
             rivers: A GeoDataFrame containing river segments.
             discharge: An xarray DataArray containing discharge values for the rivers in m^3/s.
-            waterbody_ids: An numpy array of waterbody IDs specifying lakes and reservoirs. Should have same x and y dimensions as the discharge.
             river_width_alpha: An numpy array of river width alpha parameters. Used for calculating river width.
             river_width_beta: An numpy array of river width beta parameters. Used for calculating river width
             mannings: A xarray DataArray of Manning's n values for the rivers.
@@ -290,6 +288,14 @@ class SFINCSRootModel:
         # in one plot plot the region boundary as well as the rivers and save to file
         fig, ax = plt.subplots(figsize=(10, 10))
         region.boundary.plot(ax=ax, color="black")
+
+        # Remove rivers that are not represented in the grid and have no upstream rivers
+        # TODO: Make an upstream flag in preprocessing for upstream rivers that is more
+        # general than the MERIT-hydro specific 'maxup' attribute
+        rivers: gpd.GeoDataFrame = rivers[
+            (rivers["maxup"] > 0) | (rivers["represented_in_grid"])
+        ]
+
         rivers.plot(ax=ax, color="blue")
         plt.savefig(self.path / "gis" / "rivers.png")
 
@@ -346,21 +352,15 @@ class SFINCSRootModel:
             x=x_coord, y=y_coord, method="nearest"
         ).values.item()
 
-        # Optional: sanity check
-        if elevation_value is None or elevation_value <= 0:
-            raise ValueError(
-                f"Invalid outflow elevation ({elevation_value}), must be > 0"
-            )
-
         # Save elevation value to a file in model_root/gis
-        outflow_elev_path = self.path / "gis" / "outflow_elevation.json"
+        outflow_elev_path: Path = self.path / "gis" / "outflow_elevation.json"
         with open(outflow_elev_path, "w") as f:
             json.dump({"outflow_elevation": elevation_value}, f)
 
         river_representative_points = []
         for ID in rivers.index:
             river_representative_points.append(
-                get_representative_river_points(ID, rivers, waterbody_ids)
+                get_representative_river_points(ID, rivers)
             )
 
         discharge_by_river, river_parameters = (
@@ -493,7 +493,6 @@ class SFINCSRootModel:
     def estimate_discharge_for_return_periods(
         self,
         discharge: xr.DataArray,
-        waterbody_ids: npt.NDArray[np.int32],
         rivers: gpd.GeoDataFrame,
         rising_limb_hours: int | float = 72,
         return_periods: list[int | float] = [2, 5, 10, 20, 50, 100, 250, 500, 1000],
@@ -503,7 +502,6 @@ class SFINCSRootModel:
         Args:
             model_root: path to the SFINC model root directory
             discharge: xr.DataArray containing the discharge data
-            waterbody_ids: array of waterbody IDs, of identical x and y dimensions as discharge
             rivers: GeoDataFrame containing river segments
             rising_limb_hours: number of hours for the rising limb of the hydrograph.
             return_periods: list of return periods for which to estimate discharge.
@@ -516,9 +514,7 @@ class SFINCSRootModel:
         river_representative_points = []
         for ID in rivers_with_forcing_point.index:
             river_representative_points.append(
-                get_representative_river_points(
-                    ID, rivers_with_forcing_point, waterbody_ids
-                )
+                get_representative_river_points(ID, rivers_with_forcing_point)
             )
 
         discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
@@ -769,15 +765,12 @@ class SFINCSSimulation:
     def set_headwater_forcing_from_grid(
         self,
         discharge_grid: str | xr.DataArray,
-        waterbody_ids: npt.NDArray[np.int32],
     ) -> None:
         """Sets up discharge forcing for the SFINCS model from a gridded dataset.
 
         Args:
             discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
                 Usually this is from a hydrological model.
-            waterbody_ids: An numpy array of waterbody IDs specifying lakes and reservoirs.
-                Should have same x and y dimensions as the discharge.
         """
         rivers: gpd.GeoDataFrame = import_rivers(self.root_path)
         rivers_with_forcing_point: gpd.GeoDataFrame = rivers[
@@ -795,7 +788,10 @@ class SFINCSSimulation:
         river_representative_points = []
         for ID in headwater_rivers.index:
             river_representative_points.append(
-                get_representative_river_points(ID, headwater_rivers, waterbody_ids)
+                get_representative_river_points(
+                    ID,
+                    headwater_rivers,
+                )
             )
 
         discharge_by_river, _ = get_discharge_and_river_parameters_by_river(

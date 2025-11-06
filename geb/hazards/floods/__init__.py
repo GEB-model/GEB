@@ -142,11 +142,8 @@ class Floods(Module):
             sfincs_model.build(
                 region=load_geom(self.model.files["geom"]["routing/subbasins"]),
                 DEMs=DEM_config,
-                rivers=self.rivers,
+                rivers=self.model.hydrology.routing.rivers,
                 discharge=self.discharge_spinup_ds,
-                waterbody_ids=self.model.hydrology.grid.decompress(
-                    self.model.hydrology.grid.var.waterBodyID
-                ),
                 river_width_alpha=self.model.hydrology.grid.decompress(
                     self.model.var.river_width_alpha
                 ),
@@ -253,9 +250,6 @@ class Floods(Module):
         if self.config["forcing_method"] == "headwater_points":
             simulation.set_headwater_forcing_from_grid(
                 discharge_grid=forcing_grid,
-                waterbody_ids=self.model.hydrology.grid.decompress(
-                    self.model.hydrology.grid.var.waterBodyID
-                ),
             )
         elif self.config["forcing_method"] == "runoff":
             simulation.set_runoff_forcing(
@@ -277,7 +271,7 @@ class Floods(Module):
                 cell_area=self.model.hydrology.grid.decompress(
                     self.model.hydrology.grid.var.cell_area
                 ),
-                river_geometry=self.rivers,
+                river_geometry=self.model.hydrology.routing.rivers,
             )
         else:
             raise ValueError(
@@ -448,10 +442,7 @@ class Floods(Module):
 
         sfincs_root_model.estimate_discharge_for_return_periods(
             discharge=self.discharge_spinup_ds,
-            waterbody_ids=self.model.hydrology.grid.decompress(
-                self.model.hydrology.grid.var.waterBodyID
-            ),
-            rivers=self.rivers,
+            rivers=self.model.hydrology.routing.rivers,
             return_periods=self.config["return_periods"],
         )
 
@@ -608,15 +599,6 @@ class Floods(Module):
         #     )
 
         return da
-
-    @property
-    def rivers(self) -> gpd.GeoDataFrame:
-        """Load the river geometry from the model files.
-
-        Returns:
-            A GeoDataFrame containing the river geometry.
-        """
-        return load_geom(self.model.files["geom"]["routing/rivers"])
 
     @property
     def mannings(self) -> xr.DataArray:
