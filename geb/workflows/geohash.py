@@ -323,7 +323,7 @@ def get_shifts(
     Args:
         x: x-coordinate of circle center.
         y: y-coordinate of circle center.
-        radius: Circle radius.
+        radius: Circle radius. Specified in meters for grid="longlat", specified in map units for grid="orthogonal".
         n_bits: Precision for geohash.
         minx: Minimum x-value of the entire relevant space.
         maxx: Maximum x-value of the entire relevant space.
@@ -404,7 +404,7 @@ def plot_geohash_shifts(
 
     Args:
         lon: Longitude of circle centre.
-        lat: Latitude of cirle centre.
+        lat: Latitude of circle centre.
         radius: Radius of circle.
         bits: Number of geohash bits used.
         show: Whether to show the resulting plot.
