@@ -189,12 +189,12 @@ def coords_to_pixels(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Converts array of coordinates to array of pixels for given geotransformation.
 
-    Args::
-        coords: the coordinates (lon, lat) that need to be transformed to pixels (shape: 2, n)
-        gt: the geotransformation. Must be unrotated
+    Args:
+        coords: The coordinates (lon, lat) that need to be transformed to pixels (shape: n, 2).
+        gt: The geotransformation. Must be unrotated.
 
     Returns:
-        array: 2d-array of pixels per coordinate (shape: 2, n)
+        A tuple of two arrays: pixel x coordinates and pixel y coordinates, each of shape (n,).
 
     Raises:
         ValueError: If the geotransformation indicates a rotated map.
