@@ -9,7 +9,6 @@ and read simulation results.
 from __future__ import annotations
 
 import json
-import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -143,6 +142,7 @@ class SFINCSRootModel:
                 Also used to create the path to write the file to disk.
         """
         self.model = model
+        self.logger = self.model.logger
         self._name: str = name
 
     @property
@@ -249,9 +249,7 @@ class SFINCSRootModel:
             "power_law",
         ], "Method should be 'manning' or 'power_law'"
 
-        logger = logging.getLogger(__name__)
-        logger.info("Starting SFINCS model build...")
-        logger.setLevel(logging.DEBUG)
+        self.logger.info("Starting SFINCS model build...")
 
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+")
@@ -394,7 +392,7 @@ class SFINCSRootModel:
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
         # including mannings roughness.
         if nr_subgrid_pixels is not None:
-            logger.info(
+            self.logger.info(
                 f"Setting up SFINCS subgrid with {nr_subgrid_pixels} subgrid pixels..."
             )
             # only burn rivers that are wider than half the subgrid pixel size
@@ -424,7 +422,7 @@ class SFINCSRootModel:
 
             sf.write_subgrid()
         else:
-            logger.info(
+            self.logger.info(
                 "Setting up SFINCS without subgrid - burning rivers into main grid..."
             )
             # only burn rivers that are wider than half the grid size
