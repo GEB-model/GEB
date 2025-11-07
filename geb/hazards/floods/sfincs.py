@@ -250,17 +250,8 @@ class SFINCSRootModel:
         ], "Method should be 'manning' or 'power_law'"
 
         logger = logging.getLogger(__name__)
-
-        # Configure HydroMT logging to capture internal logs
-        for logger_name in ["hydromt", "hydromt_sfincs", "hydromt_sfincs.workflows"]:
-            hydromt_logger = logging.getLogger(logger_name)
-            hydromt_logger.setLevel(logging.INFO)
-            hydromt_logger.propagate = True
-
-        # Get the main HydroMT-SFINCS logger for level adjustments
-        hydromt_logger = logging.getLogger("hydromt_sfincs")
-
         logger.info("Starting SFINCS model build...")
+        logger.setLevel(logging.DEBUG)
 
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+")
@@ -284,7 +275,6 @@ class SFINCSRootModel:
             )  # TODO: Improve mask setup
 
         # Temporarily set HydroMT logging to DEBUG to capture detailed internal logs
-        hydromt_logger.setLevel(logging.DEBUG)
         # in one plot plot the region boundary as well as the rivers and save to file
         fig, ax = plt.subplots(figsize=(10, 10))
         region.boundary.plot(ax=ax, color="black")
@@ -408,6 +398,10 @@ class SFINCSRootModel:
             logger.info(
                 f"Setting up SFINCS subgrid with {nr_subgrid_pixels} subgrid pixels..."
             )
+            # only burn rivers that are wider than half the subgrid pixel size
+            rivers_to_burn: gpd.GeoDataFrame = rivers[
+                rivers["width"] > resolution / nr_subgrid_pixels / 2
+            ].copy()
             sf.setup_subgrid(
                 datasets_dep=DEMs,
                 datasets_rgh=[
@@ -417,7 +411,7 @@ class SFINCSRootModel:
                 ],
                 datasets_riv=[
                     {
-                        "centerlines": rivers.rename(
+                        "centerlines": rivers_to_burn.rename(
                             columns={"width": "rivwth", "depth": "rivdph"}
                         )
                     }
@@ -434,6 +428,10 @@ class SFINCSRootModel:
             logger.info(
                 "Setting up SFINCS without subgrid - burning rivers into main grid..."
             )
+            # only burn rivers that are wider than half the grid size
+            rivers_to_burn: gpd.GeoDataFrame = rivers[
+                rivers["width"] > resolution / 2
+            ].copy()
             # first set up the mannings roughness with the default method
             # (we already have the DEM set up)
             sf.setup_manning_roughness(
@@ -447,7 +445,7 @@ class SFINCSRootModel:
             # burn the rivers into these grids
             elevation, mannings = burn_river_rect(
                 da_elv=sf.grid.dep,
-                gdf_riv=rivers,
+                gdf_riv=rivers_to_burn,
                 da_man=sf.grid.manning,
                 rivwth_name="width",
                 rivdph_name="depth",
@@ -494,7 +492,7 @@ class SFINCSRootModel:
         self,
         discharge: xr.DataArray,
         rivers: gpd.GeoDataFrame,
-        rising_limb_hours: int | float = 72,
+        rising_limb_hours: int = 72,
         return_periods: list[int | float] = [2, 5, 10, 20, 50, 100, 250, 500, 1000],
     ) -> None:
         """Estimate discharge for specified return periods and create hydrographs.
@@ -506,12 +504,14 @@ class SFINCSRootModel:
             rising_limb_hours: number of hours for the rising limb of the hydrograph.
             return_periods: list of return periods for which to estimate discharge.
         """
-        recession_limb_hours: int | float = rising_limb_hours
+        recession_limb_hours: int = rising_limb_hours
 
         # here we only select the rivers that have an upstream forcing point
-        rivers_with_forcing_point = rivers[~rivers["is_downstream_outflow_subbasin"]]
+        rivers_with_forcing_point: gpd.GeoDataFrame = rivers[
+            ~rivers["is_downstream_outflow_subbasin"]
+        ]
 
-        river_representative_points = []
+        river_representative_points: list[list[tuple[int, int]]] = []
         for ID in rivers_with_forcing_point.index:
             river_representative_points.append(
                 get_representative_river_points(ID, rivers_with_forcing_point)
@@ -522,7 +522,7 @@ class SFINCSRootModel:
             river_representative_points,
             discharge=discharge,
         )
-        rivers_with_forcing_point = assign_return_periods(
+        rivers_with_forcing_point: gpd.GeoDataFrame = assign_return_periods(
             rivers_with_forcing_point, discharge_by_river, return_periods=return_periods
         )
 
@@ -534,12 +534,12 @@ class SFINCSRootModel:
                 discharge_for_return_period = rivers_with_forcing_point.at[
                     river_idx, f"Q_{return_period}"
                 ]
-                hydrograph = create_hourly_hydrograph(
+                hydrograph: pd.DataFrame = create_hourly_hydrograph(
                     discharge_for_return_period,
                     rising_limb_hours,
                     recession_limb_hours,
                 )
-                hydrograph = {
+                hydrograph: dict[str, Any] = {
                     time.isoformat(): Q.item() for time, Q in hydrograph.iterrows()
                 }
                 rivers_with_forcing_point.at[
@@ -740,7 +740,7 @@ class SFINCSSimulation:
         self.sfincs_root_model = sfincs_root_model
 
         sfincs_model = sfincs_root_model.sfincs_model
-        sfincs_model.set_root(self.path, mode="w+")
+        sfincs_model.set_root(str(self.path), mode="w+")
 
         # update mode time based on event tstart and tend from event dict
         sfincs_model.setup_config(
@@ -764,7 +764,7 @@ class SFINCSSimulation:
 
     def set_headwater_forcing_from_grid(
         self,
-        discharge_grid: str | xr.DataArray,
+        discharge_grid: xr.DataArray,
     ) -> None:
         """Sets up discharge forcing for the SFINCS model from a gridded dataset.
 
@@ -1127,4 +1127,6 @@ class SFINCSSimulation:
             An xarray DataArray containing the cumulative precipitation.
         """
         self.sfincs_model.read_results()
-        return self.sfincs_model.results["cumprcp"].isel(timemax=-1)
+        cumulative_precipitation = self.sfincs_model.results["cumprcp"].isel(timemax=-1)
+        assert isinstance(cumulative_precipitation, xr.DataArray)
+        return cumulative_precipitation
