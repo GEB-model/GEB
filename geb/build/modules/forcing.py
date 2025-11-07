@@ -255,7 +255,6 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
 def plot_gif(
     report_dir: Path,
     geom_mask_boundary: Any,  # The boundary geometry for plotting catchment outline
-    geb_build_model: GEBModel,
     da: xr.DataArray,
     name: str,
     interpolation: str = "none",
@@ -604,7 +603,9 @@ class Forcing:
                 self.report_dir / f"{name.replace('/', '_')}_animation_accumulated.gif"
             )
             if not gif_fp_regular.exists():
-                plot_gif(self.report_dir, self.geom["mask"], da, name, accumulated=False)
+                plot_gif(
+                    self.report_dir, self.geom["mask"], da, name, accumulated=False
+                )
                 self.logger.info(f"Creating a GIF animation: {gif_fp_regular.name}")
             else:
                 self.logger.info(

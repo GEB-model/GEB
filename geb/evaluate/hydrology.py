@@ -16,12 +16,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import rioxarray as rio
 import xarray as xr
 from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
-
-# from matplotlib_scalebar.scalebar import ScaleBar
 from permetrics.regression import RegressionMetric
 from rasterio.crs import CRS
 from tqdm import tqdm
@@ -29,28 +26,32 @@ from tqdm import tqdm
 from geb.workflows.io import open_zarr, to_zarr
 from geb.workflows.raster import rasterize_like
 
-def calculate_hit_rate(
-            model: xr.DataArray, observations: xr.DataArray
-        ) -> float:
-            """Calculate the hit rate metric.
-            Args:
-                model: Model flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
-                observations: Observed flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
-            Returns:
-                Hit rate as a float.
-            """
-            miss = np.sum(((model == 0) & (observations == 1)).values)
-            hit = np.sum(((model == 1) & (observations == 1)).values)
-            hit_rate = hit / (hit + miss)
-            return float(hit_rate)
+
+def calculate_hit_rate(model: xr.DataArray, observations: xr.DataArray) -> float:
+    """Calculate the hit rate metric.
+
+    Args:
+        model: Model flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
+        observations: Observed flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
+
+    Returns:
+        Hit rate as a float.
+    """
+    miss = np.sum(((model == 0) & (observations == 1)).values)
+    hit = np.sum(((model == 1) & (observations == 1)).values)
+    hit_rate = hit / (hit + miss)
+    return float(hit_rate)
+
 
 def calculate_false_alarm_ratio(
     model: xr.DataArray, observations: xr.DataArray
 ) -> float:
     """Calculate the false alarm ratio metric.
+
     Args:
         model: Model flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
         observations: Observed flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
+
     Returns:
         False alarm ratio as a float.
     """
@@ -59,13 +60,16 @@ def calculate_false_alarm_ratio(
     false_alarm_ratio = false_alarm / (false_alarm + hit)
     return float(false_alarm_ratio)
 
+
 def calculate_critical_success_index(
     model: xr.DataArray, observations: xr.DataArray
 ) -> float:
     """Calculate the critical success index (CSI) metric.
+
     Args:
         model: Model flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
         observations: Observed flood extent as a binary xarray DataArray (1 for flood, 0 for no flood).
+
     Returns:
         Critical success index as a float.
     """
@@ -1383,6 +1387,9 @@ class Hydrology:
 
             Returns:
                 Tuple containing (forecast_init, member, event_start, event_end, event_name)
+
+            Raises:
+                ValueError: If the filename does not match the expected format.
             """
             # Remove .zarr extension
             name_without_ext = filename.replace(".zarr", "")
@@ -1426,11 +1433,15 @@ class Hydrology:
             output_folder: Path | str = None,
         ) -> None:
             """Calculate performance metrics for flood maps against observations.
+
             Args:
                 observation: Path to the observed flood extent data (.zarr format).
                 flood_map_path: Path to the model-generated flood map data (.zarr format).
                 visualization_type: Type of visualization for plotting (default is "Hillshade").
                 output_folder: Path to the folder where results will be saved.
+
+            Raises:
+                ValueError: If the observation file is not in .zarr format.
             """
             # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)
