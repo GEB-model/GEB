@@ -253,6 +253,8 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
 
 
 def plot_gif(
+    report_dir: Path,
+    geom_mask_boundary: Any,  # The boundary geometry for plotting catchment outline
     geb_build_model: GEBModel,
     da: xr.DataArray,
     name: str,
@@ -262,13 +264,13 @@ def plot_gif(
     """Create a GIF animation of the data over time.
 
     Args:
-        geb_build_model: The GEBModel instance.
+        report_dir: Directory path where output files should be saved.
+        geom_mask_boundary: Geometry boundary for the catchment area overlay.
         da: The xarray DataArray containing the data to animate. Must have dimensions 'time', 'y', and 'x'.
         name: The name of the variable being animated, used for titles and filenames.
         interpolation: The interpolation method to use for displaying the data. Default is 'none'. Interpolation can be set to 'bicubic', etc. for smoother interpolation.
         accumulated: Whether to plot accumulated precipitation (True) or instantaneous (False). Default is False.
     """
-    percentiles = [25, 50, 75, 90, 95]
     # Use xarray's quantile function to calculate percentiles across the ensemble dimension
     ensemble_dim = None
     # Pattern to match YYYYMMDDT000000 format
@@ -288,15 +290,18 @@ def plot_gif(
         ):
             ensemble_dim = dim
 
+    percentiles = [25, 50, 75, 90, 95]  # Define desired percentiles
+    # Convert chosen percentiles to decimals to use xr.quantile
     percentiles_decimal = [
         p / 100 for p in percentiles
     ]  # Convert to 0-1 range for xarray
 
-    # Calculate all percentiles at once
+    # Calculate all percentiles at once with the quantile function over the ensemble dimension
     ensemble_percentiles_xr = da.quantile(
         percentiles_decimal, dim=ensemble_dim, keep_attrs=True
     )
 
+    # Rename the 'quantile' dimension to 'percentile' and assign percentile values
     ensemble_percentiles_xr = ensemble_percentiles_xr.rename({"quantile": "percentile"})
     ensemble_percentiles_xr = ensemble_percentiles_xr.assign_coords(
         percentile=percentiles
@@ -313,13 +318,14 @@ def plot_gif(
             "computation_method": "xarray.quantile across ensemble dimension",
         }
     )
-    # === Define variable to plot  ===
     da_plot = (
         ensemble_percentiles_xr.copy()
     )  # make a copy to avoid modifying the original data
+
     # Convert data to mm/hour if it's precipitation
     if "pr" in name.lower() and "kg m-2 s-1" in da_plot.attrs.get("units", ""):
         da_plot = da_plot * 3600  # convert to mm/hour
+        # Handle accumulated precipitation if specified (e.g. colormap, ylabel)
         if accumulated:
             da_plot = da_plot.cumsum(dim="time")  # convert to accumulated precipitation
             ylabel = "mm"  # set y-axis label
@@ -347,7 +353,7 @@ def plot_gif(
             viridis = cm.get_cmap("viridis")
             viridis_colors = viridis(
                 np.linspace(0, 1, 20)
-            )  # how more colors, how smoother
+            )  # The more colors, the smoother the gradient but more movement in cbar during animation
             light_blue = np.array([0.7, 0.9, 1.0, 1.0])  # RGBA
             custom_colors = np.vstack([light_blue.reshape(1, -1), viridis_colors])
             custom_cmap = ListedColormap(custom_colors)
@@ -355,7 +361,7 @@ def plot_gif(
         da_plot = da_plot.copy()  # no conversion
         ylabel = da_plot.attrs.get("units", "")
 
-    # === Settings for the imshow plot ===
+    # Settings for the imshow plot
     vmin = float(da_plot.min())
     vmax = float(da_plot.max())
 
@@ -374,7 +380,7 @@ def plot_gif(
         origin = "upper"
         print("Using origin='upper' - Y coordinates decrease")
 
-    # === Generating Animation ===
+    # Generating Animation frames
     frames = []
     times = da_plot["time"].values
 
@@ -399,17 +405,16 @@ def plot_gif(
                 origin=origin,
                 aspect="auto",
                 zorder=2,
-                interpolation=interpolation,  # or bilinear for smoother
+                interpolation=interpolation,
             )
 
-            geb_build_model.geom["mask"].boundary.plot(
+            geom_mask_boundary.boundary.plot(
                 ax=ax,
                 color="black",
                 linewidth=1.5,
                 alpha=0.8,
                 zorder=1,
                 label="Catchment Boundary",
-                # transform=ccrs.PlateCarree(),
             )
 
             try:
@@ -461,8 +466,8 @@ def plot_gif(
         frames.append(imageio.imread(buf))
         buf.close()
 
-    # === Saving GIF ===
-    gif_fp = geb_build_model.report_dir / f"{name}_animation.gif"  # File path for GIF
+    # Saving GIF
+    gif_fp = report_dir / f"{name}_animation.gif"  # File path for GIF
     imageio.mimsave(gif_fp, frames, fps=5, p=0)
 
 
@@ -599,7 +604,7 @@ class Forcing:
                 self.report_dir / f"{name.replace('/', '_')}_animation_accumulated.gif"
             )
             if not gif_fp_regular.exists():
-                plot_gif(self, da, name, accumulated=False)
+                plot_gif(self.report_dir, self.geom["mask"], da, name, accumulated=False)
                 self.logger.info(f"Creating a GIF animation: {gif_fp_regular.name}")
             else:
                 self.logger.info(
@@ -607,7 +612,7 @@ class Forcing:
                 )
 
             if not gif_fp_accumulated.exists():
-                plot_gif(self, da, name, accumulated=True)
+                plot_gif(self.report_dir, self.geom["mask"], da, name, accumulated=True)
                 self.logger.info(f"Creating a GIF animation: {gif_fp_accumulated.name}")
             else:
                 self.logger.info(

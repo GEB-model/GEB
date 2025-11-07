@@ -322,20 +322,9 @@ class Floods(Module):
             self.config["minimum_flood_depth"]
         )  # read the flood depth results
 
-        if self.config["general"]["forecasts"]["use"]:
-            filename = (
-                self.model.output_folder
-                / "flood_maps"
-                / "forecasts"
-                / self.model.forecast_issue_date
-                / (sfincs_simulation.name + ".zarr")
-            )
-        else:
-            filename = (
-                self.model.output_folder
-                / "flood_maps"
-                / (sfincs_simulation.name + ".zarr")
-            )
+        filename = (
+            self.model.output_folder / "flood_maps" / (sfincs_simulation.name + ".zarr")
+        )
 
         flood_depth: xr.DataArray = to_zarr(
             da=flood_depth,
