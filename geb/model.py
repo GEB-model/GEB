@@ -279,7 +279,6 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                 loader.unset_forecast()  # unset forecast mode
 
         self.multiverse_name: None = None  # reset the multiverse name
-
         if return_mean_discharge:
             return mean_discharge  # return the mean discharge for each member
         else:
@@ -344,11 +343,23 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                         return_mean_discharge=True,
                     )  # run the multiverse for the current timestep
 
+                    # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
-                        self.agents.households.water_level_warning_strategy()
-                        # self.get_critical_infrastructure()
-                        # self.critical_infrastructure_warning_strategy()
-                        self.agents.households.household_decision_making()
+                        print(
+                            f"Running flood early warning system for date time {self.current_time.strftime('%d-%m-%Y T%H:%M:%S')}..."
+                        )
+                        self.agents.households.water_level_warning_strategy(
+                            date_time=self.current_time
+                        )
+                        self.agents.households.critical_infrastructure_warning_strategy(
+                            date_time=self.current_time
+                        )
+                        self.agents.households.household_decision_making(
+                            date_time=self.current_time
+                        )
+                        self.agents.households.update_households_gdf(
+                            date_time=self.current_time
+                        )
 
         t0 = time()
         self.agents.step()

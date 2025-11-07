@@ -1295,6 +1295,7 @@ dependencies = [
     { name = "numpy" },
     { name = "odc-stac" },
     { name = "openpyxl" },
+    { name = "osmnx" },
     { name = "pandas" },
     { name = "permetrics" },
     { name = "plotly" },
@@ -1380,6 +1381,7 @@ requires-dist = [
     { name = "odc-stac", specifier = ">=0.4.0" },
     { name = "openpyxl", specifier = ">=3.1.2" },
     { name = "opt-einsum", marker = "extra == 'fairstream'", specifier = ">=3.3.0" },
+    { name = "osmnx", specifier = ">=2.0.6" },
     { name = "pandas", specifier = ">=2.3.0" },
     { name = "permetrics", specifier = ">=2.0.0" },
     { name = "pgmpy", marker = "extra == 'fairstream'", specifier = "==0.1.26" },
@@ -3089,6 +3091,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/60/d4/bae8e4f26afb2c23bea69d2f6d566132584d1c3a5fe89ee8c17b718cab67/orjson-3.11.3-cp313-cp313-win32.whl", hash = "sha256:2039b7847ba3eec1f5886e75e6763a16e18c68a63efc4b029ddf994821e2e66b", size = 136216, upload-time = "2025-08-26T17:45:57.182Z" },
     { url = "https://files.pythonhosted.org/packages/88/76/224985d9f127e121c8cad882cea55f0ebe39f97925de040b75ccd4b33999/orjson-3.11.3-cp313-cp313-win_amd64.whl", hash = "sha256:29be5ac4164aa8bdcba5fa0700a3c9c316b411d8ed9d39ef8a882541bd452fae", size = 131362, upload-time = "2025-08-26T17:45:58.56Z" },
     { url = "https://files.pythonhosted.org/packages/e2/cf/0dce7a0be94bd36d1346be5067ed65ded6adb795fdbe3abd234c8d576d01/orjson-3.11.3-cp313-cp313-win_arm64.whl", hash = "sha256:18bd1435cb1f2857ceb59cfb7de6f92593ef7b831ccd1b9bfb28ca530e539dce", size = 125989, upload-time = "2025-08-26T17:45:59.95Z" },
+]
+
+[[package]]
+name = "osmnx"
+version = "2.0.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "geopandas" },
+    { name = "networkx" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "requests" },
+    { name = "shapely" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/11/9c/24b31365332ef3a5a051dc9b39fe21204bf4bbae1509dc6035aaf7137c68/osmnx-2.0.6.tar.gz", hash = "sha256:0a00844d3f3f69af42b2dcae835261da77ac7b8e20b1c13cc89a62ab3ab9bc2e", size = 87798, upload-time = "2025-08-11T18:15:24.589Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/5f/2fc0135c5aa3fc36c7cb1ac63852349681908778eb15ab3e1aacbddc1b54/osmnx-2.0.6-py3-none-any.whl", hash = "sha256:46a719b711b52233701aa238d6a4beb8277c21124906f5b857997e1df9e22b80", size = 101462, upload-time = "2025-08-11T18:15:22.9Z" },
 ]
 
 [[package]]
