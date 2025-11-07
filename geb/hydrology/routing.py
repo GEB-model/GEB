@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pyflwdir
 import pyflwdir.core
 from numba import njit
@@ -590,9 +591,12 @@ class KinematicWave(Router):
 
 def fill_discharge_gaps(
     discharge_m3_s: ArrayFloat32,
-    rivers: gpd.GeoDataFrame,
+    rivers: gpd.GeoDataFrame | pd.DataFrame,
 ) -> ArrayFloat32:
-    """Fill gaps in discharge data by propagating upstream values downstream.
+    """Fill gaps in discharge data with NaN values.
+
+    Propagation of discharge values is done from upstream to downstream,
+    then from downstream to upstream.
 
     Args:
         discharge_m3_s: 1D array of discharge values with possible NaNs.
@@ -602,10 +606,29 @@ def fill_discharge_gaps(
         1D array of discharge values with NaNs in rivers filled.
     """
     filled_discharge_m3_s: ArrayFloat32 = discharge_m3_s.copy()
-    for COMID, river in rivers.iterrows():
+    for river_id, river in rivers.iterrows():
+        # iterate from upstream to downstream
+        valid_discharge: np.float32 = np.float32(np.nan)
         for idx in river["hydrography_linear"]:
-            if np.isnan(filled_discharge_m3_s[idx]):
-                filled_discharge_m3_s[idx] = 0.0
+            if not np.isnan(discharge_m3_s[idx]):
+                valid_discharge = discharge_m3_s[idx]
+            elif np.isnan(filled_discharge_m3_s[idx]):
+                filled_discharge_m3_s[idx] = valid_discharge
+
+        if np.isnan(valid_discharge):
+            print("WARNING: No valid discharge found for river:", river_id)
+            continue  # skip if no valid discharge found
+
+        down_stream_discharge: np.float32 = filled_discharge_m3_s[
+            river["hydrography_linear"][-1]
+        ]
+        for idx in reversed(river["hydrography_linear"][:-1]):
+            current_discharge: np.float32 = filled_discharge_m3_s[idx]
+            if np.isnan(current_discharge):
+                filled_discharge_m3_s[idx] = down_stream_discharge
+            else:
+                down_stream_discharge = current_discharge
+
     return filled_discharge_m3_s
 
 

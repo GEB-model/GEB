@@ -9,6 +9,7 @@ import math
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import pyflwdir
 import pytest
 
@@ -16,9 +17,60 @@ from geb.hydrology.routing import (
     Accuflux,
     KinematicWave,
     create_river_network,
+    fill_discharge_gaps,
     get_channel_ratio,
     update_node_kinematic,
 )
+from geb.typing import ArrayFloat32
+
+
+def test_fill_discharge_gaps() -> None:
+    """Test the fill_discharge_gaps function to ensure it fills NaN values correctly."""
+    Q: ArrayFloat32 = np.array(
+        [
+            [np.nan, 1, np.nan, 4],
+            [7, np.nan, 0, np.nan],
+            [5, 2, 0, 0],
+            [np.nan, np.nan, 3, np.nan],
+            [6, 6, 6, 6],
+            [np.nan, 4, 4, 5],
+            [np.nan, np.nan, np.nan, np.nan],
+        ],
+        dtype=np.float32,
+    ).ravel()
+
+    # rivers are defined up to downstream
+    rivers: pd.DataFrame = pd.DataFrame(
+        data={
+            "river_id": [0, 1, 2, 3, 4, 5, 6],
+            "hydrography_linear": [
+                [0, 1, 5, 9, 14, 15],  # river with nans at start, middle and end
+                [2, 3, 7],  # river with nans at start and end
+                [8, 12, 13],  # river with nan at end
+                [19, 18, 17, 16],  # river with no nans
+                [20, 21, 22, 23],  # river with nan at start
+                [24, 25, 26, 27],  # river with all nans
+                [4],  # single cell river with no nans
+            ],
+        },
+    )
+    Q_filled: ArrayFloat32 = fill_discharge_gaps(Q, rivers)
+
+    np.testing.assert_array_equal(
+        Q_filled.reshape((7, 4)),
+        np.array(
+            [
+                [1, 1, 4, 4],
+                [7, 1, 0, 4],
+                [5, 2, 0, 0],
+                [5, 5, 3, 3],
+                [6, 6, 6, 6],
+                [4, 4, 4, 5],
+                [np.nan, np.nan, np.nan, np.nan],
+            ],
+            dtype=np.float32,
+        ),
+    )
 
 
 def test_update_node_kinematic_1() -> None:
