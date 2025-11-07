@@ -16,9 +16,12 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel, utils
+from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from pyextremes import EVA
 from shapely.geometry import LineString, Point
 from tqdm import tqdm
+
+from geb.typing import ArrayFloat32, ArrayInt64
 
 
 def export_rivers(
@@ -92,12 +95,12 @@ def read_flood_depth(
     ):
         if method == "max":
             # get maximum water surface elevation (with respect to sea level)
-            water_surface_elevation: xr.DataArray = model.results["zsmax"].max(
-                dim="timemax"
-            )
+            water_surface_elevation = model.results["zsmax"].max(dim="timemax")
+            assert isinstance(water_surface_elevation, xr.DataArray)
         elif method == "final":
             # get water surface elevation at the final time step (with respect to sea level)
-            water_surface_elevation: xr.DataArray = model.results["zs"].isel(timemax=-1)
+            water_surface_elevation = model.results["zs"].isel(timemax=-1)
+            assert isinstance(water_surface_elevation, xr.DataArray)
         else:
             raise ValueError(f"Unknown method: {method}")
         # read subgrid elevation
@@ -117,12 +120,14 @@ def read_flood_depth(
         surface_elevation = model.grid.get("dep")
         if method == "max":
             flood_depth_m = model.results["hmax"].max(dim="timemax")
+            assert isinstance(flood_depth_m, xr.DataArray)
         elif method == "final":
             flood_depth_m_zs = model.results["zs"].isel(time=-1) - surface_elevation
             flood_depth_m_zs = flood_depth_m_zs.compute()
 
             flood_depth_m = model.results["h"].isel(time=-1)
-            flood_depth_m = flood_depth_m.compute()
+            assert isinstance(flood_depth_m, xr.DataArray)
+            flood_depth_m: xr.DataArray = flood_depth_m.compute()
 
         else:
             raise ValueError(f"Unknown method: {method}")
@@ -133,11 +138,11 @@ def read_flood_depth(
     )
     # Create basemap plot
     fig, ax = model.plot_basemap(
-        fn_out=None,
+        fn_out=None,  # ty: ignore[invalid-argument-type]
         variable="",  # No variable to plot, only basemap
         plot_geoms=False,
         zoomlevel=12,
-        figsize=(11, 7),
+        figsize=(11, 7),  # ty: ignore[invalid-argument-type]
     )
 
     # Plot flood depth with colorbar
@@ -148,7 +153,7 @@ def read_flood_depth(
         ax=ax,
         vmin=0,
         vmax=float(flood_depth_m.max().values),
-        cmap=plt.cm.viridis,
+        cmap=viridis,
         cbar_kwargs=cbar_kwargs,
     )
 
@@ -279,8 +284,8 @@ def get_end_point(geom: LineString) -> Point:
 
 def create_hourly_hydrograph(
     peak_discharge: float,
-    rising_limb_hours: float | int,
-    recession_limb_hours: float | int,
+    rising_limb_hours: int,
+    recession_limb_hours: int,
 ) -> pd.DataFrame:
     """Create a triangular hydrograph time series.
 
@@ -292,11 +297,11 @@ def create_hourly_hydrograph(
     Returns:
         A pandas DataFrame with the time series of the hydrograph.
     """
-    total_duration_hours = rising_limb_hours + recession_limb_hours
+    total_duration_hours: int | float = rising_limb_hours + recession_limb_hours
     # Create a time array with hourly intervals
-    time_hours = np.arange(0, total_duration_hours + 1)
+    time_hours: ArrayInt64 = np.arange(0, total_duration_hours + 1)
     # Create discharge array for triangular shape
-    discharge = np.zeros_like(time_hours, dtype=float)
+    discharge: ArrayFloat32 = np.zeros_like(time_hours, dtype=np.float32)
     # Rising limb: linear increase to peak
     discharge[: rising_limb_hours + 1] = np.linspace(
         0, peak_discharge, rising_limb_hours + 1
@@ -306,11 +311,13 @@ def create_hourly_hydrograph(
         peak_discharge, 0, recession_limb_hours + 1
     )
     # Create a pandas DataFrame for the time series
-    time_index = pd.date_range(
+    time_index: pd.DatetimeIndex = pd.date_range(
         start="2024-01-01 00:00", periods=len(time_hours), freq="h"
     )
-    hydrograph_df = pd.DataFrame({"time": time_index, "discharge": discharge})
-    hydrograph_df.set_index("time", inplace=True)
+    hydrograph_df: pd.DataFrame = pd.DataFrame(
+        {"time": time_index, "discharge": discharge}
+    )
+    hydrograph_df = hydrograph_df.set_index("time")
     return hydrograph_df
 
 
@@ -472,7 +479,7 @@ def _get_xy(
 
 def get_representative_river_points(
     river_ID: set, rivers: pd.DataFrame
-) -> list[tuple[float, float]]:
+) -> list[tuple[int, int]]:
     """Get representative river points for a given river ID.
 
     If the river is represented in the low-resolution hydrological grid, its
@@ -647,11 +654,11 @@ def get_discharge_and_river_parameters_by_river(
 
 
 def assign_return_periods(
-    rivers: pd.DataFrame,
+    rivers: gpd.GeoDataFrame,
     discharge_dataframe: pd.DataFrame,
-    return_periods: list[int],
+    return_periods: list[int | float],
     prefix: str = "Q",
-) -> pd.DataFrame:
+) -> gpd.GeoDataFrame:
     """Assign return periods to rivers based on discharge data.
 
     Args:

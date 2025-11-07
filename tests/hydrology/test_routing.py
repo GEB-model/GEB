@@ -146,7 +146,7 @@ def test_get_channel_ratio() -> None:
     """
     river_width = np.array([1, 2, 3, 4, 5])
     river_length = np.array([1000, 2000, 3000, 4000, 5000])
-    cell_area = 10000
+    cell_area = np.full_like(river_width, 10000)
 
     channel_ratio = get_channel_ratio(
         river_width=river_width, river_length=river_length, cell_area=cell_area

@@ -460,7 +460,7 @@ class KinematicWave(Router):
         )
 
         for i in range(upstream_matrix_from_up_to_downstream.shape[0]):
-            node: np.int32 = idxs_up_to_downstream[i]
+            node = idxs_up_to_downstream[i]
             upstream_nodes: ArrayInt32 = upstream_matrix_from_up_to_downstream[i]
 
             Qin: np.float32 = np.float32(0.0)
@@ -499,7 +499,7 @@ class KinematicWave(Router):
                     assert not np.isnan(Qnew[upstream_node])
                     Qin += Qnew[upstream_node]
 
-            node_waterbody_id: np.int32 = waterbody_id[node]
+            node_waterbody_id = waterbody_id[node]
             if node_waterbody_id != -1:
                 waterbody_inflow_m3_node = Qin * dt + sideflow_node_m3
                 waterbody_storage_m3[node_waterbody_id] += waterbody_inflow_m3_node
