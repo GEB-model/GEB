@@ -467,7 +467,7 @@ def plot_gif(
 
     # Saving GIF
     gif_fp = report_dir / f"{name}_animation.gif"  # File path for GIF
-    imageio.mimsave(gif_fp, frames, fps=5, p=0)
+    imageio.mimsave(gif_fp, frames, fps=5)
 
 
 def _plot_data(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> None:

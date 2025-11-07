@@ -46,7 +46,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "ecmwf_forecasts": {
         "adapter": ECMWFForecasts(
-            folder="ecmwf_forecasts/{forecast_model}",
+            folder="ecmwf_forecasts",
             filename="ecmwf_{forecast_date}_{forecast_model}_{forecast_resolution}_{forecast_horizon}h_{forecast_timestep_hours}h.grb",
             local_version=1,
             cache="local",

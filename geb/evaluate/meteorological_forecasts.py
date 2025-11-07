@@ -17,8 +17,6 @@ import xarray
 # from matplotlib_scalebar.scalebar import ScaleBar
 from geb.workflows.io import open_zarr
 
-# from matplotlib_scalebar.scalebar import ScaleBar
-
 
 class MeteorologicalForecasts:
     """Implements several functions to evaluate the meteorological forecasts inside GEB."""
