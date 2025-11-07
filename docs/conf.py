@@ -1,16 +1,18 @@
-# -*- coding: utf-8 -*-
-# Configuration file for the Sphinx documentation builder.
-#
-# This file only contains a selection of the most common options. For a full
-# list see the documentation:
-# https://www.sphinx-doc.org/en/master/usage/configuration.html
+"""
+Configuration file for the Sphinx documentation builder for the GEB project.
 
-# -- Path setup --------------------------------------------------------------
+This module sets up the Sphinx environment for generating documentation,
+including project information, extensions, and output configurations.
+It also handles the conversion of an ODD protocol Markdown file to PDF using pypandoc.
 
-# If extensions (or modules to document with autodoc) are in another directory,
-# add these directories to sys.path here. If the directory is relative to the
-# documentation root, use os.path.abspath to make it absolute, like shown here.
-#
+Key features:
+- Adds necessary paths to sys.path for extensions and modules.
+- Reads project copyright and author information from external files.
+- Converts 'ODD_protocol.md' to PDF with specific formatting and bibliography.
+- Configures Sphinx extensions for autodoc, themes, and bibliography support.
+- Defines HTML output settings, including theme and static paths.
+"""
+
 import os
 import sys
 from pathlib import Path

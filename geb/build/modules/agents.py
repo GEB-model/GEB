@@ -1,14 +1,13 @@
-import json
+"""Module containing build methods for the agents for GEB."""
+
 import math
 from datetime import datetime
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import requests
 import xarray as xr
 from dateutil.relativedelta import relativedelta
-from honeybees.library.raster import pixels_to_coords, sample_from_map
 from tqdm import tqdm
 
 from geb.agents.crop_farmers import (
@@ -19,46 +18,64 @@ from geb.agents.crop_farmers import (
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
+from geb.build.methods import build_method
+from geb.typing import ArrayBool, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
+from geb.workflows.raster import (
+    clip_with_grid,
+    interpolate_na_2d,
+    pixels_to_coords,
+    sample_from_map,
+)
 
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
     COUNTRY_NAME_TO_ISO3,
     GLOBIOM_NAME_TO_ISO3,
     SUPERWELL_NAME_TO_ISO3,
+    setup_donor_countries,
 )
 from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
-from ..workflows.general import (
-    clip_with_grid,
-    fetch_and_save,
-)
 from ..workflows.population import load_GLOPOP_S
 
 
 class Agents:
-    def __init__(self):
+    """Contains all build methods for the agents for GEB."""
+
+    def __init__(self) -> None:
+        """Initialize the Agents build methods."""
         pass
 
-    def setup_water_demand(self, ssp):
+    @build_method(
+        depends_on=[
+            "set_ssp",
+            "set_time_range",
+            "setup_regions_and_land_use",
+            "setup_household_characteristics",
+        ]
+    )
+    def setup_water_demand(self) -> None:
+        """Sets up the water demand data for GEB.
+
+        Notes:
+            This method sets up the water demand data for GEB. It retrieves the domestic, industry, and
+            livestock water demand data from the specified data catalog and sets it as forcing data in the model. The domestic
+            water demand and consumption data are retrieved from the 'cwatm_domestic_water_demand' dataset, while the industry
+            water demand and consumption data are retrieved from the 'cwatm_industry_water_demand' dataset. The livestock water
+            consumption data is retrieved from the 'cwatm_livestock_water_demand' dataset.
+
+            The domestic water demand and consumption data are provided at a monthly time step, while the industry water demand
+            and consumption data are provided at an annual time step. The livestock water consumption data is provided at a
+            monthly time step, but is assumed to be constant over the year.
+
+            The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
+
+        Raises:
+            ValueError: If required data is missing in the data sources.
+
         """
-        Sets up the water demand data for GEB.
-
-        Notes
-        -----
-        This method sets up the water demand data for GEB. It retrieves the domestic, industry, and
-        livestock water demand data from the specified data catalog and sets it as forcing data in the model. The domestic
-        water demand and consumption data are retrieved from the 'cwatm_domestic_water_demand' dataset, while the industry
-        water demand and consumption data are retrieved from the 'cwatm_industry_water_demand' dataset. The livestock water
-        consumption data is retrieved from the 'cwatm_livestock_water_demand' dataset.
-
-        The domestic water demand and consumption data are provided at a monthly time step, while the industry water demand
-        and consumption data are provided at an annual time step. The livestock water consumption data is provided at a
-        monthly time step, but is assumed to be constant over the year.
-
-        The resulting water demand data is set as forcing data in the model with names of the form 'water_demand/{demand_type}'.
-        """
-
-        self.logger.info("Setting up municipal water demands")
+        start_model_time = self.start_date.year
+        end_model_time = self.end_date.year
 
         municipal_water_demand = self.data_catalog.get_dataframe(
             "AQUASTAT_municipal_withdrawal"
@@ -68,6 +85,12 @@ class Agents:
         )
         municipal_water_demand = municipal_water_demand.set_index("ISO3")
 
+        # Filter the data for the model time
+        municipal_water_demand = municipal_water_demand[
+            (municipal_water_demand["Year"] >= start_model_time)
+            & (municipal_water_demand["Year"] <= end_model_time)
+        ]
+
         municipal_water_demand_per_capita = np.full_like(
             self.array["agents/households/region_id"],
             np.nan,
@@ -75,36 +98,74 @@ class Agents:
         )
 
         municipal_water_withdrawal_m3_per_capita_per_day_multiplier = pd.DataFrame()
-        for _, region in self.geoms["regions"].iterrows():
+        for _, region in self.geom["regions"].iterrows():
             ISO3 = region["ISO3"]
-
-            if (
-                ISO3 == "AND"
-            ):  # for Andorra (not available in World Bank data), use Spain's data
-                self.logger.warning(
-                    "Andorra's economic data not available, using Spain's data"
-                )
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":  # for Liechtenstein, use Switzerland's data
-                self.logger.warning(
-                    "Liechtenstein's economic data not available, using Switzerland's data"
-                )
-                ISO3 = "CHE"
-
             region_id = region["region_id"]
 
-            # select domestic water demand for the region
-            municipal_water_demand_region = municipal_water_demand.loc[ISO3]
-            population = municipal_water_demand_region[
-                municipal_water_demand_region["Variable"] == "Total population"
-            ]
-            population = population.set_index("Year")
-            population = population["Value"] * 1000
+            def load_water_demand_and_pop_data(
+                ISO3: str,
+            ) -> tuple[pd.DataFrame, pd.DataFrame]:
+                """Load municipal water demand and population data for a given ISO3 code.
 
-            municipal_water_withdrawal = municipal_water_demand_region[
-                municipal_water_demand_region["Variable"]
-                == "Municipal water withdrawal"
-            ]
+                Args:
+                    ISO3: The ISO3 code of the region.
+
+                Returns:
+                    A tuple containing two DataFrames: municipal water withdrawal and population.
+                """
+                # Load the municipal water demand data for the given ISO3 code
+                if ISO3 not in municipal_water_demand.index:
+                    countries_with_data = municipal_water_demand.index.unique().tolist()
+                    donor_countries = setup_donor_countries(self, countries_with_data)
+                    ISO3 = donor_countries.get(ISO3, None)
+
+                    self.logger.warning(
+                        f"Country {region['ISO3']} not present in municipal water demand data, using donor country {ISO3}"
+                    )
+
+                municipal_water_demand_region = municipal_water_demand.loc[ISO3]
+                population = municipal_water_demand_region[
+                    municipal_water_demand_region["Variable"] == "Total population"
+                ]
+                population = population.set_index("Year")
+                population = population["Value"] * 1000
+
+                municipal_water_withdrawal = municipal_water_demand_region[
+                    municipal_water_demand_region["Variable"]
+                    == "Municipal water withdrawal"
+                ]
+                return municipal_water_withdrawal, population
+
+            municipal_water_withdrawal, population = load_water_demand_and_pop_data(
+                ISO3
+            )
+
+            if population.isna().any() or len(population) == 0:
+                raise ValueError(
+                    f"Missing population data for {ISO3}. Please check the population dataset."
+                )
+            if len(municipal_water_withdrawal) == 0:
+                countries_with_water_withdrawal_data = (
+                    municipal_water_demand[
+                        municipal_water_demand["Variable"]
+                        == "Municipal water withdrawal"
+                    ]
+                    .dropna(axis=0, how="any")
+                    .index.unique()
+                    .tolist()
+                )
+
+                donor_countries = setup_donor_countries(
+                    self, countries_with_water_withdrawal_data
+                )
+                donor_country = donor_countries.get(ISO3, None)
+                self.logger.info(
+                    f"Missing municipal water withdrawal data for {ISO3}, filling with donor country {donor_country}"
+                )
+                municipal_water_withdrawal, population = load_water_demand_and_pop_data(
+                    donor_country
+                )
+
             assert len(municipal_water_withdrawal) > 0, (
                 f"Missing municipal water withdrawal data for {ISO3}"
             )
@@ -115,11 +176,59 @@ class Agents:
             municipal_water_withdrawal_m3_per_capita_per_day = (
                 municipal_water_withdrawal / population / 365.2425
             )
+
+            if municipal_water_withdrawal_m3_per_capita_per_day.isna().any():
+                missing_years = municipal_water_withdrawal_m3_per_capita_per_day[
+                    municipal_water_withdrawal_m3_per_capita_per_day.isna()
+                ].index.tolist()
+                # filter out years that are not in the model time
+                missing_years = [year for year in missing_years]
+                # get all the countries with data for these years
+                municipal_water_withdrawal_insert = municipal_water_demand[
+                    municipal_water_demand["Variable"] == "Municipal water withdrawal"
+                ]
+                # countries wirth data for ALL the missing years
+                countries_with_data = (
+                    municipal_water_withdrawal_insert.loc[
+                        municipal_water_withdrawal_insert["Year"].isin(missing_years)
+                    ]
+                    .dropna(axis=0, how="any")
+                    .index.unique()
+                    .tolist()
+                )
+
+                # fill the municipal water withdrawal data for missing years from donor countries
+                donor_countries = setup_donor_countries(self, countries_with_data)
+                donor_country = donor_countries.get(ISO3, None)
+                self.logger.info(
+                    f"Missing municipal water withdrawal data for {ISO3}, using donor country {donor_country}"
+                )
+                municipal_water_withdrawal_donor, population_donor = (
+                    load_water_demand_and_pop_data(donor_country)
+                )
+
+                municipal_water_withdrawal_donor = (
+                    municipal_water_withdrawal_donor.set_index("Year")
+                )
+                municipal_water_withdrawal_donor = (
+                    municipal_water_withdrawal_donor["Value"] * 10e9
+                )
+
+                municipal_water_withdrawal_m3_per_capita_per_day_donor = (
+                    municipal_water_withdrawal_donor / population_donor / 365.2425
+                )
+
+                # use the donor country data to fill the missing values
+                for year in missing_years:
+                    municipal_water_withdrawal_m3_per_capita_per_day.loc[year] = (
+                        municipal_water_withdrawal_m3_per_capita_per_day_donor.loc[year]
+                    )
+
             municipal_water_withdrawal_m3_per_capita_per_day = (
                 municipal_water_withdrawal_m3_per_capita_per_day
             ).dropna()
 
-            municipal_water_withdrawal_m3_per_capita_per_day = (
+            municipal_water_withdrawal_m3_per_capita_per_day: pd.DataFrame = (
                 municipal_water_withdrawal_m3_per_capita_per_day.reindex(
                     list(
                         range(
@@ -127,26 +236,41 @@ class Agents:
                             self.end_date.year + 1,
                         )
                     )
-                ).interpolate(method="linear")
-            )  # interpolate also extrapolates with constant values
+                )
+                .interpolate(method="linear")
+                .bfill()
+            )  # interpolate also extrapolates forward with constant values
 
             assert municipal_water_withdrawal_m3_per_capita_per_day.max() < 10, (
                 f"Too large water withdrawal data for {ISO3}"
             )
 
-            municipal_water_demand_2000_m3_per_capita_per_day = (
+            # set baseline year for municipal water demand
+            if 2000 not in municipal_water_withdrawal_m3_per_capita_per_day.index:
+                # get first year with data
+                first_year = municipal_water_withdrawal_m3_per_capita_per_day.index[0]
+                self.logger.warning(
+                    f"Missing 2000 data for {ISO3}, using first year {first_year} as baseline"
+                )
+                municipal_water_demand_baseline_m3_per_capita_per_day = (
+                    municipal_water_withdrawal_m3_per_capita_per_day.loc[
+                        first_year
+                    ].item()
+                )
+            # use the 2000 as baseline (default)
+            municipal_water_demand_baseline_m3_per_capita_per_day: pd.DataFrame = (
                 municipal_water_withdrawal_m3_per_capita_per_day.loc[2000].item()
             )
 
             municipal_water_demand_per_capita[
                 self.array["agents/households/region_id"] == region_id
-            ] = municipal_water_demand_2000_m3_per_capita_per_day
+            ] = municipal_water_demand_baseline_m3_per_capita_per_day
 
             # scale municipal water demand table to use baseline as 1.00 and scale other values
             # relatively
             municipal_water_withdrawal_m3_per_capita_per_day_multiplier[region_id] = (
                 municipal_water_withdrawal_m3_per_capita_per_day
-                / municipal_water_demand_2000_m3_per_capita_per_day
+                / municipal_water_demand_baseline_m3_per_capita_per_day
             )
 
         # we don't want to calculate the water demand for every year,
@@ -167,7 +291,15 @@ class Agents:
 
         self.logger.info("Setting up other water demands")
 
-        def set_demand(file, variable, name, ssp):
+        def set_demand(file: str, variable: str, name: str, ssp: str) -> None:
+            """Sets up the water demand data for a given demand type.
+
+            Args:
+                file: The file name of the dataset.
+                variable: The variable name in the dataset.
+                name: The name to set the forcing data as.
+                ssp: The SSP scenario to use.
+            """
             ds_historic = xr.open_dataset(
                 self.data_catalog.get_source(f"cwatm_{file}_historical_year").path,
                 decode_times=False,
@@ -197,7 +329,7 @@ class Agents:
                 start=datetime(1901, 1, 1)
                 + relativedelta(years=int(ds.time[0].data.item())),
                 periods=len(ds.time),
-                freq="AS",
+                freq="YS",
             )
 
             assert (ds.time.dt.year.diff("time") == 1).all(), "not all years are there"
@@ -209,46 +341,126 @@ class Agents:
             "industry_water_demand",
             "indWW",
             "industry_water_demand",
-            ssp,
+            self.ssp,
         )
         set_demand(
             "industry_water_demand",
             "indCon",
             "industry_water_consumption",
-            ssp,
+            self.ssp,
         )
         set_demand(
             "livestock_water_demand",
             "livestockConsumption",
             "livestock_water_consumption",
-            ssp,
+            "ssp2",
         )
 
-    def setup_economic_data(self):
+    @build_method
+    def setup_income_distribution_parameters(self) -> None:
+        """Sets up the income distributions for GEB.
+
+        Notes:
+            This function used WID data on income distributions to generate income distribution profiles for each region.
+            It retrieves the OECD income distribution data, processes it to extract mean and median income values for each country,
+            and generates synthetic income distributions based on these parameters assuming a log-normal distribution. The resulting
+            distributions are set as tables (be mindful for models outside of the EU that we do not yet account for currencies).
         """
-        Sets up the economic data for GEB.
+        income_distribution_parameters = {}
+        income_distributions = {}
+        path = self.data_catalog.get_source(
+            "oecd_idd"
+        ).path  # in future maybe replace this with an API request
+        oecd_idd = pd.read_csv(path)
 
-        Notes
-        -----
-        This method sets up the lending rates and inflation rates data for GEB. It first retrieves the
-        lending rates and inflation rates data from the World Bank dataset using the `get_geodataframe` method of the
-        `data_catalog` object. It then creates dictionaries to store the data for each region, with the years as the time
-        dimension and the lending rates or inflation rates as the data dimension.
+        # clean data
+        cols_to_keep = ["REF_AREA", "STATISTICAL_OPERATION", "TIME_PERIOD", "OBS_VALUE"]
+        oecd_idd = oecd_idd[cols_to_keep]
+        # only done to check countries in region, could probably be done more efficiently
+        countries = self.new_data_catalog.fetch("GADM_level0").read(
+            geom=self.region.union_all(),
+        )
+        # setup donor countries for country missing in oecd data
+        donor_countries = setup_donor_countries(self, oecd_idd["REF_AREA"])
 
-        The lending rates and inflation rates data are converted from percentage to rate by dividing by 100 and adding 1.
-        The data is then stored in the dictionaries with the region ID as the key.
+        for country in countries["GID_0"]:
+            income_distribution_parameters[country] = {}
+            income_distributions[country] = {}
+            if country not in oecd_idd["REF_AREA"].values:
+                donor = donor_countries[country]
+                self.logger.info(
+                    f"Missing income distribution data for {country}, using donor country {donor}"
+                )
+                oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == donor]
+            else:
+                oecd_widd_country = oecd_idd[oecd_idd["REF_AREA"] == country]
 
-        The resulting lending rates and inflation rates data are set as forcing data in the model with names of the form
-        'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
+            # take the most recent year
+            most_recent_year = oecd_widd_country[
+                oecd_widd_country["TIME_PERIOD"]
+                == np.max(oecd_widd_country["TIME_PERIOD"])
+            ]
+            income_distribution_parameters[country]["MEAN"] = most_recent_year[
+                most_recent_year["STATISTICAL_OPERATION"] == "MEAN"
+            ]["OBS_VALUE"].iloc[0]
+            income_distribution_parameters[country]["MEDIAN"] = most_recent_year[
+                most_recent_year["STATISTICAL_OPERATION"] == "MEDIAN"
+            ]["OBS_VALUE"].iloc[0]
+
+            # now also create national income distribution
+            mu = np.log(income_distribution_parameters[country]["MEDIAN"])
+            sd = np.sqrt(
+                2
+                * np.log(
+                    income_distribution_parameters[country]["MEAN"]
+                    / income_distribution_parameters[country]["MEDIAN"]
+                )
+            )
+            income_distribution = np.sort(
+                np.random.lognormal(mu, sd, 15_000).astype(np.int32)
+            )
+            income_distributions[country] = income_distribution
+        # store to model table
+        income_distribution_parameters_pd = pd.DataFrame(income_distribution_parameters)
+        income_distributions_pd = pd.DataFrame(income_distributions)
+        self.set_table(
+            income_distribution_parameters_pd, "income/distribution_parameters"
+        )
+        self.set_table(income_distributions_pd, "income/national_distribution")
+
+    @build_method(depends_on=["setup_regions_and_land_use", "set_time_range"])
+    def setup_economic_data(self) -> None:
+        """Sets up the economic data for GEB.
+
+        Notes:
+            This method sets up the lending rates and inflation rates data for GEB. It first retrieves the
+            lending rates and inflation rates data from the World Bank dataset using the `get_geodataframe` method of the
+            `data_catalog` object. It then creates dictionaries to store the data for each region, with the years as the time
+            dimension and the lending rates or inflation rates as the data dimension.
+
+            The lending rates and inflation rates data are converted from percentage to rate by dividing by 100 and adding 1.
+            The data is then stored in the dictionaries with the region ID as the key.
+
+            The resulting lending rates and inflation rates data are set as forcing data in the model with names of the form
+            'socioeconomics/lending_rates' and 'socioeconomics/inflation_rates', respectively.
         """
-        self.logger.info("Setting up economic data")
+        inflation_rates = self.new_data_catalog.fetch("wb_inflation_rate").read()
+        inflation_rates_country_index = inflation_rates.set_index("Country Code")
+        price_ratio = self.new_data_catalog.fetch("world_bank_price_ratio").read()
+        LCU_per_USD = self.new_data_catalog.fetch("world_bank_LCU_per_USD").read()
 
-        # lending_rates = self.data_catalog.get_dataframe("wb_lending_rate")
-        inflation_rates = self.data_catalog.get_dataframe("wb_inflation_rate")
-        price_ratio = self.data_catalog.get_dataframe("world_bank_price_ratio")
-        LCU_per_USD = self.data_catalog.get_dataframe("wb_LCU_per_USD")
+        def select_years_from_df(
+            df: pd.DataFrame, additional_cols: list[str]
+        ) -> pd.DataFrame:
+            """Selects columns corresponding to years and additional specified columns from a DataFrame.
 
-        def filter_and_rename(df, additional_cols):
+            Args:
+                df: The input DataFrame.
+                additional_cols: A list of additional column names to retain.
+
+            Returns:
+                A DataFrame containing only the specified columns.
+            """
             # Select columns: 'Country Name', 'Country Code', and columns containing "YR"
             columns_to_keep = additional_cols + [
                 col
@@ -258,7 +470,15 @@ class Agents:
             filtered_df = df[columns_to_keep]
             return filtered_df
 
-        def extract_years(df):
+        def extract_years(df: pd.DataFrame) -> list[int]:
+            """Extracts year columns from a DataFrame.
+
+            Args:
+                df: The input DataFrame.
+
+            Returns:
+                A list of year columns.
+            """
             # Extract years that are numerically valid between 1900 and 3000
             return [
                 col
@@ -267,13 +487,16 @@ class Agents:
             ]
 
         # Assuming dataframes for PPP and LCU per USD have been initialized
-        price_ratio_filtered = filter_and_rename(
+        price_ratio_filtered = select_years_from_df(
             price_ratio, ["Country Name", "Country Code"]
         )
         years_price_ratio = extract_years(price_ratio_filtered)
         price_ratio_dict = {"time": years_price_ratio, "data": {}}  # price ratio
 
-        lcu_filtered = filter_and_rename(LCU_per_USD, ["Country Name", "Country Code"])
+        lcu_filtered = select_years_from_df(
+            LCU_per_USD, ["Country Name", "Country Code"]
+        )
+
         years_lcu = extract_years(lcu_filtered)
         lcu_dict = {"time": years_lcu, "data": {}}  # LCU per USD
 
@@ -285,52 +508,79 @@ class Agents:
         inflation_rates_dict = {"time": years_inflation_rates, "data": {}}
 
         # Create a helper to process rates and assert single row data
-        def process_rates(df, rate_cols, ISO3, convert_percent_to_ratio=False):
-            filtered_data = df.loc[df["Country Code"] == ISO3, rate_cols]
-            assert len(filtered_data) == 1, (
-                f"Expected one row for {ISO3}, got {len(filtered_data)}"
-            )
+        def retrieve_inflation_rates(
+            df: pd.DataFrame,
+            inflation_rate_columns: list[str],
+            ISO3: str,
+            convert_percent_to_ratio: bool = False,
+        ) -> list[float]:
+            """Processes rates for a given country code from a DataFrame.
+
+            Args:
+                df: The input DataFrame containing rate data.
+                inflation_rate_columns: A list of columns corresponding to years.
+                ISO3: The ISO3 country code to filter the data.
+                convert_percent_to_ratio: Whether to convert percentage rates to ratios.
+
+            Returns:
+                A list of processed rates for the specified country code.
+            """
+            filtered_data = df.loc[df["Country Code"] == ISO3, inflation_rate_columns]
+            if len(filtered_data) == 0:
+                return list(
+                    np.full(len(inflation_rate_columns), np.nan, dtype=np.float32)
+                )
             if convert_percent_to_ratio:
                 return (filtered_data.iloc[0] / 100 + 1).tolist()
             return filtered_data.iloc[0].tolist()
 
-        USA_inflation_rates = process_rates(
+        USA_inflation_rates = retrieve_inflation_rates(
             inflation_rates,
             years_inflation_rates,
             "USA",
             convert_percent_to_ratio=True,
         )
 
-        for _, region in self.geoms["regions"].iterrows():
+        for _, region in self.geom["regions"].iterrows():
             region_id = str(region["region_id"])
-
-            # Store data in dictionaries
-            # lending_rates_dict["data"][region_id] = process_rates(
-            #     lending_rates,
-            #     years_lending_rates,
-            #     region["ISO3"],
-            #     convert_percent_to_ratio=True,
-            # )
             ISO3 = region["ISO3"]
-            if (
-                ISO3 == "AND"
-            ):  # for Andorra (not available in World Bank data), use Spain's data
-                self.logger.warning(
-                    "Andorra's economic data not available, using Spain's data"
-                )
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":  # for Liechtenstein, use Switzerland's data
-                self.logger.warning(
-                    "Liechtenstein's economic data not available, using Switzerland's data"
-                )
-                ISO3 = "CHE"
 
-            local_inflation_rates = process_rates(
+            local_inflation_rates = retrieve_inflation_rates(
                 inflation_rates,
                 years_inflation_rates,
                 ISO3,
                 convert_percent_to_ratio=True,
             )
+
+            if np.isnan(local_inflation_rates).any():
+                # get index of nans in local_inflation_rates
+                nan_indices = np.where(np.isnan(local_inflation_rates))[0]
+                nan_years = [years_inflation_rates[i] for i in nan_indices]
+
+                countries_with_data = (
+                    inflation_rates_country_index[nan_years]
+                    .dropna(axis=0, how="any")
+                    .index.tolist()
+                )
+
+                ## get all the donor countries for countries in the dataset
+                donor_countries = setup_donor_countries(self, countries_with_data)
+                donor_country = donor_countries.get(ISO3, None)
+
+                self.logger.info(
+                    f"Missing inflation rates for {ISO3}, using donor country {donor_country}"
+                )
+                donor_country_inflation_rates = retrieve_inflation_rates(
+                    inflation_rates,
+                    years_inflation_rates,
+                    donor_country,
+                    convert_percent_to_ratio=True,
+                )
+
+                # Replace NaN values in local_inflation_rates with values from similar_country_average_inflation
+                for idx, value in zip(nan_indices, donor_country_inflation_rates):
+                    local_inflation_rates[idx] = value
+
             assert not np.isnan(local_inflation_rates).any(), (
                 f"Missing inflation rates for {region['ISO3']}"
             )
@@ -338,45 +588,87 @@ class Agents:
                 np.array(local_inflation_rates) / np.array(USA_inflation_rates)
             ).tolist()
 
-            price_ratio_dict["data"][region_id] = process_rates(
+            price_ratio_dict["data"][region_id] = retrieve_inflation_rates(
                 price_ratio_filtered, years_price_ratio, region["ISO3"]
             )
 
-            lcu_dict["data"][region_id] = process_rates(
+            if np.all(np.isnan(price_ratio_dict["data"][region_id])):
+                # check which countries are NOT fully nan
+                price_ratio_filter_index = price_ratio_filtered.set_index(
+                    "Country Code"
+                )
+                countries_with_price_ratio_data = (
+                    price_ratio_filter_index[years_price_ratio]
+                    .dropna(axis=0, how="all")
+                    .index.unique()
+                    .tolist()
+                )
+                donor_countries = setup_donor_countries(
+                    self, countries_with_price_ratio_data
+                )
+                donor_country = donor_countries.get(ISO3, None)
+                price_ratio_dict["data"][region_id] = retrieve_inflation_rates(
+                    price_ratio_filtered,
+                    years_price_ratio,
+                    donor_country,
+                )
+
+                self.logger.info(
+                    f"Missing price ratio data for {ISO3}, using donor country {donor_country}"
+                )
+
+            lcu_dict["data"][region_id] = retrieve_inflation_rates(
                 lcu_filtered, years_lcu, region["ISO3"]
             )
 
-        # convert to pandas dataframe
-        inflation_rates = pd.DataFrame(
-            inflation_rates_dict["data"], index=inflation_rates_dict["time"]
-        ).dropna()
-        # lending_rates = pd.DataFrame(
-        #     lending_rates_dict["data"], index=lending_rates_dict["time"]
-        # ).dropna()
+            if np.all(np.isnan(lcu_dict["data"][region_id])):
+                # check which countries are NOT fully nan
+                lcu_dict_filter_index = lcu_filtered.set_index("Country Code")
+                countries_with_lcu_data = (
+                    lcu_dict_filter_index[years_lcu]
+                    .dropna(axis=0, how="all")
+                    .index.unique()
+                    .tolist()
+                )
+                donor_countries = setup_donor_countries(self, countries_with_lcu_data)
+                donor_country = donor_countries.get(ISO3, None)
+                lcu_dict["data"][region_id] = retrieve_inflation_rates(
+                    lcu_filtered,
+                    years_lcu,
+                    donor_country,
+                )
 
-        inflation_rates.index = inflation_rates.index.astype(int)
+                self.logger.info(
+                    f"Missing LCU (currency conversion) data for {ISO3}, using donor country {donor_country}"
+                )
 
-        # re-index the inflation rates to ensure that at least all years from
-        # model start to end are present. In addition, we add 10 years
-        # to the beginning, since this is used in some of the model spinup.
-        inflation_rates = inflation_rates.reindex(
-            list(
-                range(
-                    min(self.start_date.year - 10, inflation_rates.index[0]),
-                    max(self.end_date.year, inflation_rates.index[-1]) + 1,
+        for d in (
+            inflation_rates_dict,
+            price_ratio_dict,
+            lcu_dict,
+        ):
+            # convert to pandas dataframe
+            df = pd.DataFrame(d["data"], index=d["time"])
+            df.index = df.index.astype(int)
+
+            # re-index the inflation rates to ensure that at least all years from
+            # model start to end are present. In addition, we add 10 years
+            # to the beginning, since this is used in some of the model spinup.
+            df = df.reindex(
+                list(
+                    range(
+                        min(self.start_date.year - 10, df.index[0]),
+                        max(self.end_date.year, df.index[-1]) + 1,
+                    )
                 )
             )
-        )
+            # interpolate missing values in inflation rates. For extrapolation
+            # linear interpolation uses the first and last value
+            for column in df.columns:
+                df[column] = df[column].interpolate(method="linear").bfill()
 
-        # interpolate missing values in inflation rates. For extrapolation
-        # linear interpolation uses the first and last value
-        for column in inflation_rates.columns:
-            inflation_rates[column] = inflation_rates[column].interpolate(
-                method="linear"
-            )
-
-        inflation_rates_dict["time"] = inflation_rates.index.astype(str).tolist()
-        inflation_rates_dict["data"] = inflation_rates.to_dict(orient="list")
+            d["time"] = df.index.astype(str).tolist()
+            d["data"] = df.to_dict(orient="list")
 
         # lending_rates.index = lending_rates.index.astype(int)
         # extend lending rates to future
@@ -396,9 +688,16 @@ class Agents:
         self.set_dict(price_ratio_dict, name="socioeconomics/price_ratio")
         self.set_dict(lcu_dict, name="socioeconomics/LCU_per_USD")
 
-    def setup_irrigation_sources(self, irrigation_sources):
+    @build_method
+    def setup_irrigation_sources(self, irrigation_sources: dict[str, int]) -> None:
+        """Sets up the irrigation sources for GEB.
+
+        Args:
+            irrigation_sources: A dictionary mapping irrigation source names to their corresponding IDs.
+        """
         self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
 
+    @build_method(depends_on=["set_time_range", "setup_economic_data"])
     def setup_irrigation_prices_by_reference_year(
         self,
         operation_surface: float,
@@ -408,40 +707,30 @@ class Agents:
         capital_cost_sprinkler: float,
         capital_cost_drip: float,
         reference_year: int,
-        start_year: int,
-        end_year: int,
-    ):
+    ) -> None:
+        """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
+
+        Args:
+            operation_surface: The operation cost for surface irrigation in the reference year.
+            operation_sprinkler: The operation cost for sprinkler irrigation in the reference year.
+            operation_drip: The operation cost for drip irrigation in the reference year.
+            capital_cost_surface: The capital cost for surface irrigation in the reference year.
+            capital_cost_sprinkler: The capital cost for sprinkler irrigation in the reference year.
+            capital_cost_drip: The capital cost for drip irrigation in the reference year.
+            reference_year: The reference year for the well prices and upkeep prices.
+
+        Notes:
+            This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
+            retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
+            store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
+            data dimension.
+
+            The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
+            resulting prices are stored in the dictionaries with the region ID as the key.
+
+            The resulting well prices and upkeep prices data are set as dictionary with names of the form
+            'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
-        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
-
-        Parameters
-        ----------
-        well_price : float
-            The price of a well in the reference year.
-        upkeep_price_per_m2 : float
-            The upkeep price per square meter of a well in the reference year.
-        reference_year : int
-            The reference year for the well prices and upkeep prices.
-        start_year : int
-            The start year for the well prices and upkeep prices.
-        end_year : int
-            The end year for the well prices and upkeep prices.
-
-        Notes
-        -----
-        This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
-        store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
-        data dimension.
-
-        The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
-        resulting prices are stored in the dictionaries with the region ID as the key.
-
-        The resulting well prices and upkeep prices data are set as dictionary with names of the form
-        'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
-        """
-        self.logger.info("Setting up well prices by reference year")
-
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())
@@ -455,6 +744,9 @@ class Agents:
             "capital_cost_sprinkler": capital_cost_sprinkler,
             "capital_cost_drip": capital_cost_drip,
         }
+
+        start_year = self.start_date.year
+        end_year = self.end_date.year
 
         # Iterate over each price type and calculate the prices across years for each region
         for price_type, initial_price in price_types.items():
@@ -486,40 +778,34 @@ class Agents:
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
+    @build_method(depends_on=["setup_economic_data"])
     def setup_well_prices_by_reference_year_global(
         self,
         WHY_10: float,
         WHY_20: float,
         WHY_30: float,
         reference_year: int,
-    ):
+    ) -> None:
+        """Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
+
+        Args:
+            WHY_10: the price for a well in WHY_10 in the reference year.
+            WHY_20: the price for a well in WHY_20 in the reference year.
+            WHY_30: the price for a well in WHY_30 in the reference year.
+            reference_year: The reference year for the well prices and upkeep prices.
+
+        Notes:
+            This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
+            retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
+            store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
+            data dimension.
+
+            The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
+            resulting prices are stored in the dictionaries with the region ID as the key.
+
+            The resulting well prices and upkeep prices data are set as dictionary with names of the form
+            'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
-        Sets up the well prices and upkeep prices for the hydrological model based on a reference year.
-
-        Parameters
-        ----------
-        well_price : float
-            The price of a well in the reference year.
-        upkeep_price_per_m2 : float
-            The upkeep price per square meter of a well in the reference year.
-        reference_year : int
-            The reference year for the well prices and upkeep prices.
-
-        Notes
-        -----
-        This method sets up the well prices and upkeep prices for the hydrological model based on a reference year. It first
-        retrieves the inflation rates data from the `socioeconomics/inflation_rates` dictionary. It then creates dictionaries to
-        store the well prices and upkeep prices for each region, with the years as the time dimension and the prices as the
-        data dimension.
-
-        The well prices and upkeep prices are calculated by applying the inflation rates to the reference year prices. The
-        resulting prices are stored in the dictionaries with the region ID as the key.
-
-        The resulting well prices and upkeep prices data are set as dictionary with names of the form
-        'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
-        """
-        self.logger.info("Setting up well prices by reference year")
-
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
         price_ratio = self.dict["socioeconomics/price_ratio"]
@@ -538,7 +824,7 @@ class Agents:
         for price_type, initial_price in price_types.items():
             prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
 
-            for _, region in self.geoms["regions"].iterrows():
+            for _, region in self.geom["regions"].iterrows():
                 region_id = str(region["region_id"])
 
                 prices = pd.Series(index=range(start_year, end_year + 1))
@@ -582,11 +868,24 @@ class Agents:
             "data": {},
         }
 
-        for _, region in self.geoms["regions"].iterrows():
+        for _, region in self.geom["regions"].iterrows():
             region_id = str(region["region_id"])
-
             prices = pd.Series(index=range(start_year, end_year + 1))
-            prices.loc[reference_year] = electricity_rates[region["ISO3"]]
+            country = region["ISO3"]
+
+            # implement donors
+            if country not in electricity_rates:
+                countries_with_data = list(electricity_rates.keys())
+                donor_countries = setup_donor_countries(self, countries_with_data)
+                donor_country = donor_countries.get(country, None)
+                self.logger.info(
+                    f"Missing electricity rates for {region['ISO3']}, using donor country {donor_country}"
+                )
+                country = donor_country
+
+            prices.loc[reference_year] = electricity_rates[
+                country
+            ]  # use country or donor country
 
             # Forward calculation from the reference year
             for year in range(reference_year + 1, end_year + 1):
@@ -617,31 +916,20 @@ class Agents:
         reference_year: int,
         start_year: int,
         end_year: int,
-    ):
+    ) -> None:
+        """Sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year.
+
+        Args:
+            drip_irrigation_price: The price of a drip_irrigation in the reference year.
+
+            reference_year: The reference year for the drip_irrigation prices and upkeep prices.
+            start_year: The start year for the drip_irrigation prices and upkeep prices.
+            end_year: The end year for the drip_irrigation prices and upkeep prices.
+
+        Notes:
+            The drip_irrigation prices are calculated by applying the inflation rates to the reference year prices. The
+            resulting prices are stored in the dictionaries with the region ID as the key.
         """
-        Sets up the drip_irrigation prices and upkeep prices for the hydrological model based on a reference year.
-
-        Parameters
-        ----------
-        drip_irrigation_price : float
-            The price of a drip_irrigation in the reference year.
-
-        reference_year : int
-            The reference year for the drip_irrigation prices and upkeep prices.
-        start_year : int
-            The start year for the drip_irrigation prices and upkeep prices.
-        end_year : int
-            The end year for the drip_irrigation prices and upkeep prices.
-
-        Notes
-        -----
-
-        The drip_irrigation prices are calculated by applying the inflation rates to the reference year prices. The
-        resulting prices are stored in the dictionaries with the region ID as the key.
-
-        """
-        self.logger.info("Setting up well prices by reference year")
-
         # Retrieve the inflation rates data
         inflation_rates = self.dict["socioeconomics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())
@@ -681,64 +969,60 @@ class Agents:
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
 
-    def setup_farmers(self, farmers):
+    def set_farmers_and_create_farms(self, farmers: pd.DataFrame) -> None:
+        """Sets up the farmers data for GEB.
+
+        Args:
+            farmers: A DataFrame containing the farmer data.
+
+        Notes:
+            This method sets up the farmers data for GEB. It first retrieves the region data from the
+            `regions` and `subgrid` grids. It then creates a `farms` grid with the same shape as the
+            `region_subgrid` grid, with a value of -1 for each cell.
+
+            For each region, the method clips the `cultivated_land` grid to the region and creates farms for the region using
+            the `create_farms` function, using these farmlands as well as the dataframe of farmer agents. The resulting farms
+            whose IDs correspondd to the IDs in the farmer dataframe are added to the `farms` grid for the region.
+
+            The method then removes any farms that are outside the study area by using the `region_mask` grid. It then remaps
+            the farmer IDs to a contiguous range of integers starting from 0.
+
+            The resulting farms data is set as agents data in the model with names of the form 'agents/farmers/farms'. The
+            crop names are mapped to IDs using the `crop_name_to_id` dictionary that was previously created. The resulting
+            crop IDs are stored in the `season_#_crop` columns of the `farmers` DataFrame.
+
+            If `irrigation_sources` is provided, the method sets the `irrigation_source` column of the `farmers` DataFrame to
+            the corresponding IDs.
+
+            Finally, the method sets the array data for each column of the `farmers` DataFrame as agents data in the model
+            with names of the form 'agents/farmers/{column}'.
         """
-        Sets up the farmers data for GEB.
-
-        Parameters
-        ----------
-        farmers : pandas.DataFrame
-            A DataFrame containing the farmer data.
-        irrigation_sources : dict, optional
-            A dictionary mapping irrigation source names to IDs.
-        n_seasons : int, optional
-            The number of seasons to simulate.
-
-        Notes
-        -----
-        This method sets up the farmers data for GEB. It first retrieves the region data from the
-        `regions` and `subgrid` grids. It then creates a `farms` grid with the same shape as the
-        `region_subgrid` grid, with a value of -1 for each cell.
-
-        For each region, the method clips the `cultivated_land` grid to the region and creates farms for the region using
-        the `create_farms` function, using these farmlands as well as the dataframe of farmer agents. The resulting farms
-        whose IDs correspondd to the IDs in the farmer dataframe are added to the `farms` grid for the region.
-
-        The method then removes any farms that are outside the study area by using the `region_mask` grid. It then remaps
-        the farmer IDs to a contiguous range of integers starting from 0.
-
-        The resulting farms data is set as agents data in the model with names of the form 'agents/farmers/farms'. The
-        crop names are mapped to IDs using the `crop_name_to_id` dictionary that was previously created. The resulting
-        crop IDs are stored in the `season_#_crop` columns of the `farmers` DataFrame.
-
-        If `irrigation_sources` is provided, the method sets the `irrigation_source` column of the `farmers` DataFrame to
-        the corresponding IDs.
-
-        Finally, the method sets the array data for each column of the `farmers` DataFrame as agents data in the model
-        with names of the form 'agents/farmers/{column}'.
-        """
-        regions = self.geoms["regions"]
-        region_ids = self.region_subgrid["region_ids"]
-        full_region_cultivated_land = self.region_subgrid[
+        regions: gpd.GeoDataFrame = self.geom["regions"]
+        region_ids: TwoDArrayInt32 = self.region_subgrid["region_ids"]
+        full_region_cultivated_land: xr.DataArray = self.region_subgrid[
             "landsurface/full_region_cultivated_land"
         ]
 
-        farms = self.full_like(region_ids, fill_value=-1, nodata=-1)
-        for region_id in regions["region_id"]:
-            self.logger.info(f"Creating farms for region {region_id}")
-            region = region_ids == region_id
+        farms: TwoDArrayInt32 = self.full_like(
+            region_ids, fill_value=-1, nodata=-1, dtype=np.int32
+        )
+        for region_id in tqdm(regions["region_id"]):
+            region: xr.DataArray = region_ids == region_id
             region_clip, bounds = clip_with_grid(region, region)
 
-            cultivated_land_region = full_region_cultivated_land.isel(bounds)
-            cultivated_land_region = xr.where(
-                region_clip, cultivated_land_region, 0, keep_attrs=True
+            cultivated_land_region: xr.DataArray = full_region_cultivated_land.isel(
+                bounds
             )
-            # TODO: Why does nodata value disappear?
-            # self.dict['areamaps/region_id_mapping'][farmers['region_id']]
-            farmer_region_ids = farmers["region_id"]
-            farmers_region = farmers[farmer_region_ids == region_id]
-            farms_region = create_farms(
-                farmers_region, cultivated_land_region, farm_size_key="area_n_cells"
+            cultivated_land_region: xr.DataArray = xr.where(
+                region_clip, x=cultivated_land_region, y=False, keep_attrs=True
+            )
+            cultivated_land_region_values: TwoDArrayBool = cultivated_land_region.values
+
+            farmers_region: pd.DataFrame = farmers[farmers["region_id"] == region_id]
+            farms_region: TwoDArrayInt32 = create_farms(
+                farmers_region,
+                cultivated_land_region_values,
+                farm_size_key="area_n_cells",
             )
             assert (
                 farms_region.min() >= -1
@@ -746,11 +1030,11 @@ class Agents:
             farms[bounds] = xr.where(
                 region_clip, farms_region, farms.isel(bounds), keep_attrs=True
             )
-            # farms = farms.compute()  # perhaps this helps with memory issues?
+            farms: xr.DataArray = farms.compute()
 
-        farmers = farmers.drop("area_n_cells", axis=1)
+        farmers: pd.DataFrame = farmers.drop("area_n_cells", axis=1)
 
-        cut_farms = np.unique(
+        cut_farms: ArrayInt32 = np.unique(
             xr.where(
                 self.region_subgrid["mask"],
                 farms.copy().values,
@@ -758,17 +1042,20 @@ class Agents:
                 keep_attrs=True,
             )
         )
-        cut_farm_indices = cut_farms[cut_farms != -1]
+        cut_farm_indices: ArrayInt32 = cut_farms[cut_farms != -1]
 
         assert farms.min() >= -1  # -1 is nodata value, all farms should be positive
-        subgrid_farms = farms.raster.clip_bbox(self.subgrid["mask"].raster.bounds)
+        subgrid_farms: xr.DataArray = farms.sel(
+            x=slice(self.subgrid["mask"].x[0], self.subgrid["mask"].x[-1]),
+            y=slice(self.subgrid["mask"].y[0], self.subgrid["mask"].y[-1]),
+        )
 
-        subgrid_farms_in_study_area = xr.where(
+        subgrid_farms_in_study_area: xr.DataArray = xr.where(
             np.isin(subgrid_farms, cut_farm_indices), -1, subgrid_farms, keep_attrs=True
         )
-        farmers = farmers[~farmers.index.isin(cut_farm_indices)]
+        farmers: pd.DataFrame = farmers[~farmers.index.isin(cut_farm_indices)]
 
-        remap_farmer_ids = np.full(
+        remap_farmer_ids: ArrayInt32 = np.full(
             farmers.index.max() + 2, -1, dtype=np.int32
         )  # +1 because 0 is also a farm, +1 because no farm is -1, set to -1 in next step
         remap_farmer_ids[farmers.index] = np.arange(len(farmers))
@@ -776,14 +1063,14 @@ class Agents:
             subgrid_farms_in_study_area.values
         ]
 
-        farmers = farmers.reset_index(drop=True)
+        farmers: pd.DataFrame = farmers.reset_index(drop=True)
 
         assert np.setdiff1d(np.unique(subgrid_farms_in_study_area), -1).size == len(
             farmers
         )
         assert farmers.iloc[-1].name == subgrid_farms_in_study_area.max()
 
-        subgrid_farms_in_study_area_ = self.full_like(
+        subgrid_farms_in_study_area_: TwoDArrayInt32 = self.full_like(
             self.subgrid["mask"],
             fill_value=-1,
             nodata=-1,
@@ -795,59 +1082,39 @@ class Agents:
         self.set_array(farmers.index.values, name="agents/farmers/id")
         self.set_array(farmers["region_id"].values, name="agents/farmers/region_id")
 
-    def setup_farmers_from_csv(self, path=None):
-        """
-        Sets up the farmers data for GEB from a CSV file.
-
-        Parameters
-        ----------
-        path : str
-            The path to the CSV file containing the farmer data.
-
-        Notes
-        -----
-        This method sets up the farmers data for GEB from a CSV file. It first reads the farmer data from
-        the CSV file using the `pandas.read_csv` method.
-
-        See the `setup_farmers` method for more information on how the farmer data is set up in the model.
-        """
-        if path is None:
-            path = self.preprocessing_dir / "agents" / "farmers" / "farmers.csv"
-        farmers = pd.read_csv(path, index_col=0)
-        self.setup_farmers(farmers)
-
+    @build_method(depends_on=["setup_regions_and_land_use", "setup_cell_area"])
     def setup_create_farms(
         self,
-        region_id_column="region_id",
-        country_iso3_column="ISO3",
-        farm_size_donor_countries=None,
-        data_source="lowder",
-        size_class_boundaries=None,
-    ):
-        """
-        Sets up the farmers for GEB.
+        region_id_column: str = "region_id",
+        country_iso3_column: str = "ISO3",
+        data_source: str = "lowder",
+        size_class_boundaries: dict[str, tuple[int | float, int | float]] | None = None,
+    ) -> None:
+        """Sets up the farmers for GEB.
 
-        Parameters
-        ----------
-        region_id_column : str, optional
-            The name of the column in the region database that contains the region IDs. Default is 'UID'.
-        country_iso3_column : str, optional
-            The name of the column in the region database that contains the country ISO3 codes. Default is 'ISO3'.
-        farm_size_donor_countries : dict, optional
-            Dictionary with key, value pairs of ISO3 codes. The value-country is used as donor for the key-country.
-            Default is None.
-
-
-        Notes
-        -----
         This method sets up the farmers for GEB. This is a simplified method that generates an example set of agent data.
         It first calculates the number of farmers and their farm sizes for each region based on the agricultural data for
-        that region based on theamount of farm land and data from a global database on farm sizes per country. It then
+        that region based on the amount of farm land and data from a global database on farm sizes per country. It then
         randomly assigns crops, irrigation sources, household sizes, and daily incomes and consumption levels to each farmer.
 
         A paper that reports risk aversion values for 75 countries is this one: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2646134
+
+        Args:
+            region_id_column: The name of the column in the region database that contains the region IDs. Default is 'UID'.
+            country_iso3_column: The name of the column in the region database that contains the country ISO3 codes. Default is 'ISO3'.
+            data_source: The source of the farm size data. Default is 'lowder', which uses the Lowder et al. (2016) dataset.
+            size_class_boundaries: The boundaries for the size classes of farms. For the Lowder et al. (2016) dataset, this must be None
+                because the boundaries are defined in the dataset itself.
+
+        Raises:
+            ValueError: If the data_source is 'lowder' and size_class_boundaries is not None.
+            ValueError: If the data_source is not 'lowder' and size_class_boundaries is None.
+            ValueError: If required data is missing in the data sources.
         """
         if data_source == "lowder":
+            assert size_class_boundaries is None, (
+                "size_class_boundaries must be None when using Lowder et al. (2016) dataset"
+            )
             size_class_boundaries = {
                 "< 1 Ha": (0, 10000),
                 "1 - 2 Ha": (10000, 20000),
@@ -863,41 +1130,24 @@ class Agents:
             }
         else:
             assert size_class_boundaries is not None
-            assert farm_size_donor_countries is None, (
-                "farm_size_donor_countries is only used for lowder data"
-            )
 
         cultivated_land = self.region_subgrid["landsurface/full_region_cultivated_land"]
         assert cultivated_land.dtype == bool, "Cultivated land must be boolean"
         region_ids = self.region_subgrid["region_ids"]
         cell_area = self.region_subgrid["cell_area"]
 
-        regions_shapes = self.geoms["regions"]
+        regions_shapes = self.geom["regions"]
         if data_source == "lowder":
             assert country_iso3_column in regions_shapes.columns, (
                 f"Region database must contain {country_iso3_column} column ({self.data_catalog['GADM_level1'].path})"
             )
 
-            farm_sizes_per_region = (
-                self.data_catalog.get_dataframe("lowder_farm_sizes")
-                .dropna(subset=["Total"], axis=0)
-                .drop(["empty", "income class"], axis=1)
-            )
-            farm_sizes_per_region["Country"] = farm_sizes_per_region["Country"].ffill()
-            # Remove preceding and trailing white space from country names
-            farm_sizes_per_region["Country"] = farm_sizes_per_region[
-                "Country"
-            ].str.strip()
-            farm_sizes_per_region["Census Year"] = farm_sizes_per_region[
-                "Country"
-            ].ffill()
+            farm_sizes_per_region = self.new_data_catalog.fetch(
+                "lowder_farm_size_distribution"
+            ).read()
 
-            farm_sizes_per_region["ISO3"] = farm_sizes_per_region["Country"].map(
-                COUNTRY_NAME_TO_ISO3
-            )
-            assert not farm_sizes_per_region["ISO3"].isna().any(), (
-                f"Found {farm_sizes_per_region['ISO3'].isna().sum()} countries without ISO3 code"
-            )
+            farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
+            farm_size_donor_country = setup_donor_countries(self, farm_countries_list)
         else:
             # load data source
             farm_sizes_per_region = pd.read_excel(
@@ -909,17 +1159,22 @@ class Agents:
             )
 
         all_agents = []
+
         self.logger.info(f"Starting processing of {len(regions_shapes)} regions")
+
         for i, (_, region) in enumerate(regions_shapes.iterrows()):
             UID = region[region_id_column]
             if data_source == "lowder":
                 ISO3 = region[country_iso3_column]
-                if farm_size_donor_countries:
-                    assert isinstance(farm_size_donor_countries, dict)
-                    ISO3 = farm_size_donor_countries.get(ISO3, ISO3)
                 self.logger.info(
                     f"Processing region ({i + 1}/{len(regions_shapes)}) with ISO3 {ISO3}"
                 )
+
+                if ISO3 in farm_size_donor_country.keys():
+                    ISO3 = farm_size_donor_country.get(ISO3)
+                    self.logger.info(
+                        f"Missing farm sizes for {region[country_iso3_column]}, using donor country {ISO3}"
+                    )
             else:
                 state, district, tehsil = (
                     region["state_name"],
@@ -931,16 +1186,25 @@ class Agents:
             cultivated_land_region_total_cells = (
                 ((region_ids == UID) & (cultivated_land)).sum().compute()
             )
-            total_cultivated_land_area_lu = (
-                (((region_ids == UID) & (cultivated_land)) * cell_area).sum().compute()
+
+            # in the later corrections, it is important that the total cultivated land is
+            # quite precise, so we first convert to float64 before summing
+            total_cultivated_land_area_lu: np.float64 = (
+                (((region_ids == UID) & (cultivated_land)) * cell_area)
+                .astype(np.float64)
+                .sum()
+                .compute()
             )
             if (
                 total_cultivated_land_area_lu == 0
             ):  # when no agricultural area, just continue as there will be no farmers. Also avoiding some division by 0 errors.
                 continue
 
-            average_subgrid_area_region = (
+            # in later corrections, it is important that the average subgrid area is quite precise,
+            # so we first convert to float64 before calculating the mean
+            average_subgrid_area_region: np.float64 = (
                 cell_area.where(((region_ids == UID) & (cultivated_land)))
+                .astype(np.float64)
                 .mean()
                 .compute()
             )
@@ -966,7 +1230,7 @@ class Agents:
                 agricultural_area_db_ha = (
                     region_farm_sizes.loc[
                         region_farm_sizes["Holdings/ agricultural area"]
-                        == "Agricultural area (Ha) "
+                        == "Agricultural area (Ha)"
                     ]
                     .iloc[0]
                     .drop(["Holdings/ agricultural area", "ISO3"])
@@ -1034,18 +1298,108 @@ class Agents:
                             "Cannot calculate region_n_holdings: both datasets are zero or missing."
                         )
                 else:
-                    # Replace zeros and NaNs in both datasets to avoid division by zero
-                    region_n_holdings = region_n_holdings.fillna(1).replace(0, 1)
-                    agricultural_area_db_ha = agricultural_area_db_ha.fillna(1).replace(
-                        0, 1
+                    # if one of the datasets has amount of holdings but agricultural area is missing: calculate agricultural area by # holdings * average size
+                    agricultural_area_db_ha = agricultural_area_db_ha.fillna(
+                        average_sizes_series * region_n_holdings
                     )
+                    # if you have agri area but no holdings: calculate holdings by agri area / average size
+                    region_n_holdings = region_n_holdings.fillna(
+                        agricultural_area_db_ha / average_sizes_series
+                    )
+
+                # delete classes with no holdings
+                agricultural_area_db_ha = agricultural_area_db_ha[region_n_holdings > 0]
+                region_n_holdings = region_n_holdings[region_n_holdings > 0]
+
+                def correct_farm_size_data(
+                    agricultural_area_db_ha: pd.Series,
+                    region_n_holdings: pd.Series,
+                    size_class_boundaries: dict,
+                    ISO3: str,
+                    tolerance: float = 0.3,
+                ) -> pd.Series:
+                    """Checks if agricultural area is consistent with farm size class boundaries. If not, it corrects the data.
+
+                    Args:
+                        agricultural_area_db_ha: Agricultural area in hectares per size class.
+                        region_n_holdings: Number of holdings per size class.
+                        size_class_boundaries: Dictionary mapping size class names to (min, max) boundaries in m².
+                        ISO3: ISO3 country code for the region.
+                        tolerance: Tolerance for validation (default: 0.3 = 30%).
+
+                    Returns:
+                        Corrected agricultural area data as a pandas Series.
+                    """
+                    for size_class in agricultural_area_db_ha.index:
+                        actual_area = agricultural_area_db_ha.loc[size_class]
+
+                        # Get the size class boundaries for validation
+                        min_size_ha, max_size_ha = size_class_boundaries[size_class]
+                        # Convert from m² to ha
+                        min_size_ha = min_size_ha / 10000
+                        max_size_ha = (
+                            max_size_ha / 10000 if max_size_ha != np.inf else np.inf
+                        )
+
+                        # Calculate expected area range based on class boundaries
+                        min_expected_area = (
+                            region_n_holdings.loc[size_class] * min_size_ha
+                        )
+                        max_expected_area = (
+                            region_n_holdings.loc[size_class] * max_size_ha
+                        )
+
+                        # Check if actual area falls within reasonable bounds
+                        if not (
+                            min_expected_area * (1 - tolerance)
+                            <= actual_area
+                            <= max_expected_area * (1 + tolerance)
+                        ):
+                            # Correct farmsize data by adjusting to the nearest valid boundary
+                            self.logger.info(
+                                f"farm sizes correction for: {ISO3} - Size class '{size_class}' area ({actual_area:.2f} ha) "
+                                f"outside expected range [{min_expected_area * (1 - tolerance):.2f}, "
+                                f"{max_expected_area * (1 + tolerance):.2f}] ha. Correcting..."
+                            )
+
+                            corrected_area = (
+                                actual_area.copy()
+                            )  # Initialize with current value
+
+                            if max_expected_area != np.inf:
+                                # corrected area is average of min and max expected area
+                                corrected_area = (
+                                    min_expected_area + max_expected_area
+                                ) / 2
+                            else:
+                                # If max is infinite, just set to min expected area
+                                corrected_area = min_expected_area.copy()
+
+                            self.logger.info(
+                                f"corrected agri area from {actual_area:.2f} ha to {corrected_area:.2f} ha for size class '{size_class}' in {ISO3}"
+                            )
+
+                            # Apply the correction if it changed
+                            if corrected_area != actual_area:
+                                agricultural_area_db_ha[size_class] = corrected_area
+
+                    return agricultural_area_db_ha
+
+                # Validate that holdings * average farm size approximately equals agricultural area
+
+                correct_farm_size_data(
+                    agricultural_area_db_ha,
+                    region_n_holdings,
+                    size_class_boundaries,
+                    ISO3,
+                )
 
                 # Calculate total agricultural area in square meters
                 agricultural_area_db = (
                     agricultural_area_db_ha * 10000
                 )  # Convert Ha to m^2
 
-                # Calculate region farm sizes
+                # Calculate region farm sizes (in m2)
                 region_farm_sizes = agricultural_area_db / region_n_holdings
 
             else:
@@ -1141,7 +1495,7 @@ class Agents:
                 offset = (
                     whole_cells_per_size_class[size_class]
                     - number_of_agents_size_class * mean_cells_per_agent
-                )
+                )  # high offset means that there are relatively too many agents for the available agricultural area derived from the land use map (total_cultivated_land_area_lu)
 
                 if (
                     number_of_agents_size_class * mean_cells_per_agent + offset
@@ -1166,6 +1520,7 @@ class Agents:
                     offset,
                     self.logger,
                 )
+
                 assert n_farms_size_class.sum() == number_of_agents_size_class
                 assert (farm_sizes_size_class >= 1).all()
                 assert (
@@ -1186,18 +1541,80 @@ class Agents:
             all_agents.append(region_agents)
 
         farmers = pd.concat(all_agents, ignore_index=True)
-        self.setup_farmers(farmers)
+        self.set_farmers_and_create_farms(farmers)
 
-    def setup_household_characteristics(self, maximum_age=85, skip_countries_ISO3=[]):
-        # load GDL region within model domain
-        GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4",
-            geom=self.region,
-            variables=["GDLcode", "iso_code"],
+    def get_buildings_per_GDL_region(self) -> None:
+        """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid.
+
+        Returns:
+            A dictionary with GDLcode as keys and GeoDataFrames of buildings with grid indices as values.
+        """
+        output = {}
+        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "geometry"]
         )
-        GDL_regions = GDL_regions[
-            GDL_regions["GDLcode"] != "NA"
-        ]  # remove regions without GDL code
+
+        fp_buildings = self.files["geom"]["assets/buildings"]
+        buildings = gpd.read_parquet(f"{self.root}/{fp_buildings}")[
+            ["osm_id", "osm_way_id", "geometry"]
+        ]
+        # replace None with -1
+        buildings["osm_id"] = buildings["osm_id"].replace({None: -1}).astype(np.int64)
+        buildings["osm_way_id"] = (
+            buildings["osm_way_id"].replace({None: -1}).astype(np.int64)
+        )
+        # Vectorized centroid extraction
+        centroids = buildings.geometry.centroid
+        buildings["lon"] = centroids.x
+        buildings["lat"] = centroids.y
+
+        for _, GDL_region in GDL_regions.iterrows():
+            _, GLOPOP_GRID_region = load_GLOPOP_S(
+                self.data_catalog, GDL_region["GDLcode"]
+            )
+            GLOPOP_GRID_region = GLOPOP_GRID_region.rio.clip_box(*self.bounds)
+
+            # subset buildings to those within the GLOPOP_GRID_region
+            buildings_gdl = buildings.cx[
+                GLOPOP_GRID_region.x.min() : GLOPOP_GRID_region.x.max(),
+                GLOPOP_GRID_region.y.min() : GLOPOP_GRID_region.y.max(),
+            ]
+
+            # Vectorized assignment of grid cells
+            cells = GLOPOP_GRID_region.sel(
+                x=xr.DataArray(buildings_gdl["lon"].values, dims="points"),
+                y=xr.DataArray(buildings_gdl["lat"].values, dims="points"),
+                method="nearest",
+            )
+
+            buildings_gdl["grid_idx"] = cells.values[0]
+            # drop buildings without grid_idx
+            buildings_gdl = buildings_gdl[buildings_gdl["grid_idx"] != 0]
+
+            gdl_name = GDL_region["GDLcode"]
+            output[gdl_name] = buildings_gdl
+        return output
+
+    @build_method(depends_on="setup_assets")
+    def setup_household_characteristics(
+        self, maximum_age: int = 85, skip_countries_ISO3: list[str] = []
+    ) -> None:
+        """Sets up household characteristics for agents using GLOPOP-S data.
+
+        Args:
+            maximum_age: The maximum age for the head of household. Default is 85.
+            skip_countries_ISO3: A list of ISO3 country codes to skip when setting up household characteristics.
+
+        Raises:
+            ValueError: If any household could not be allocated to a building.
+        """
+        # setup buildings in region for household allocation
+        all_buildings_model_region = self.get_buildings_per_GDL_region()
+
+        # load GDL region within model domain
+        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
+        )
 
         # create list of attibutes to include (and include name to store to)
         rename = {
@@ -1208,6 +1625,15 @@ class Agents:
             "RURAL": "rural",
         }
         region_results = {}
+
+        # create income percentile based on wealth index mapping
+        wealth_index_to_income_percentile = {
+            1: (1, 19),
+            2: (20, 39),
+            3: (40, 59),
+            4: (60, 79),
+            5: (80, 100),
+        }
 
         # get age class to age (head of household) mapping
         age_class_to_age = {
@@ -1221,6 +1647,8 @@ class Agents:
             8: (66, maximum_age + 1),
         }
 
+        allocated_agents = pd.DataFrame()
+        households_not_allocated = 0
         # iterate over regions and sample agents from GLOPOP-S
         for i, (_, GDL_region) in enumerate(GDL_regions.iterrows()):
             GDL_code = GDL_region["GDLcode"]
@@ -1233,6 +1661,14 @@ class Agents:
                     f"Skipping setting up household characteristics for {GDL_region['GDLcode']}"
                 )
                 continue
+
+            # load table with income distribution data
+            national_income_distribution = self.table["income/national_distribution"]
+
+            # construct national income distribution
+
+            # load building database with grid idx
+            buildings = all_buildings_model_region[GDL_code]
 
             GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
                 self.data_catalog, GDL_code
@@ -1268,6 +1704,33 @@ class Agents:
                 GLOPOP_S_region["WEALTH"] + GLOPOP_S_region["INCOME"] + 1
             )
 
+            # sample income percentile
+            GLOPOP_S_region["income_percentile"] = np.uint16(np.iinfo(np.uint16).max)
+            for wealth_index in wealth_index_to_income_percentile:
+                percentile_range = wealth_index_to_income_percentile[wealth_index]
+
+                GLOPOP_S_region.loc[
+                    GLOPOP_S_region["wealth_index"] == wealth_index,
+                    "income_percentile",
+                ] = np.random.randint(
+                    percentile_range[0],
+                    percentile_range[1],
+                    size=len(
+                        GLOPOP_S_region.loc[
+                            GLOPOP_S_region["wealth_index"] == wealth_index
+                        ]
+                    ),
+                ).astype(np.uint16)
+            assert not (
+                GLOPOP_S_region["income_percentile"] == np.iinfo(np.uint16).max
+            ).any()
+
+            # sample income from national distribution
+            GLOPOP_S_region["disp_income"] = np.percentile(
+                np.array(national_income_distribution[GDL_code[:3]]),
+                np.array(GLOPOP_S_region["income_percentile"]),
+            )
+
             # calculate age:
             GLOPOP_S_region["age_household_head"] = np.uint16(np.iinfo(np.uint16).max)
             for age_class in age_class_to_age:
@@ -1287,8 +1750,136 @@ class Agents:
             # create all households
             GLOPOP_households_region = np.unique(GLOPOP_S_region["HID"])
             n_households = GLOPOP_households_region.size
+            grid_cells_GLOPOP_region = np.array(GLOPOP_S_region["GRID_CELL"])
+            n_agents_allocated = 0
+            # for grid_cell in unique_grid_cells:
+            for grid_cell in unique_grid_cells:
+                if grid_cell in grid_cells_GLOPOP_region:
+                    agents_in_grid_cell = GLOPOP_S_region[
+                        GLOPOP_S_region["GRID_CELL"] == grid_cell
+                    ]
+                    buildings_grid_cell = buildings[buildings["grid_idx"] == grid_cell]
+                    n_agents_in_cell = len(agents_in_grid_cell)
+                    n_buildings_in_cell = len(buildings_grid_cell)
 
+                    # if there are less households in the grid than buildings,
+                    # we assure that each building gets at least one household. To do this, sample households
+                    # without replacement from the grid cell and allocate them to buildings.
+                    if n_agents_in_cell < n_buildings_in_cell:
+                        upsampled_agents_in_cell = agents_in_grid_cell.sample(
+                            n_buildings_in_cell,
+                            replace=True,
+                        )
+                        agents_in_grid_cell = upsampled_agents_in_cell
+
+                        building_id = np.random.choice(
+                            np.arange(n_buildings_in_cell),
+                            n_buildings_in_cell,
+                            replace=False,
+                        )
+                        agents_allocated_to_building = agents_in_grid_cell
+                        lat_agents = np.array(buildings_grid_cell["lat"])[building_id]
+                        lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
+                        agents_allocated_to_building["coord_Y"] = lat_agents
+                        agents_allocated_to_building["coord_X"] = lon_agents
+                        agents_allocated_to_building["osm_id"] = np.array(
+                            buildings_grid_cell["osm_id"]
+                        )[building_id]
+                        agents_allocated_to_building["osm_way_id"] = np.array(
+                            buildings_grid_cell["osm_way_id"]
+                        )[building_id]
+
+                        allocated_agents = pd.concat(
+                            [allocated_agents, agents_allocated_to_building]
+                        )
+                        n_agents_allocated += len(agents_allocated_to_building)
+                    # if there are more households than buildings, allocate households to buildings
+                    elif (
+                        n_agents_in_cell >= n_buildings_in_cell
+                        and n_buildings_in_cell > 0
+                    ):
+                        # first put a household in each building
+                        households_to_put_in_building = np.random.choice(
+                            np.arange(n_buildings_in_cell),
+                            n_buildings_in_cell,
+                            replace=False,
+                        )
+                        building_id = np.random.choice(
+                            np.arange(n_buildings_in_cell),
+                            n_buildings_in_cell,
+                            replace=False,
+                        )
+                        agents_allocated_to_building = agents_in_grid_cell.iloc[
+                            households_to_put_in_building
+                        ]
+                        lat_agents = np.array(buildings_grid_cell["lat"])[building_id]
+                        lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
+                        agents_allocated_to_building["coord_Y"] = lat_agents
+                        agents_allocated_to_building["coord_X"] = lon_agents
+                        agents_allocated_to_building["osm_id"] = np.array(
+                            buildings_grid_cell["osm_id"]
+                        )[building_id]
+                        agents_allocated_to_building["osm_way_id"] = np.array(
+                            buildings_grid_cell["osm_way_id"]
+                        )[building_id]
+
+                        allocated_agents = pd.concat(
+                            [allocated_agents, agents_allocated_to_building]
+                        )
+                        assert len(agents_allocated_to_building) == n_buildings_in_cell
+                        n_agents_allocated += len(agents_allocated_to_building)
+
+                        # now allocate the rest of the households to buildings
+                        indices_to_allocate = np.setdiff1d(
+                            np.arange(n_agents_in_cell),
+                            households_to_put_in_building,
+                        )
+                        if len(indices_to_allocate) > 0:
+                            building_id = np.random.choice(
+                                np.arange(n_buildings_in_cell),
+                                len(indices_to_allocate),
+                                replace=True,
+                            )
+                            agents_allocated_to_building = agents_in_grid_cell.iloc[
+                                indices_to_allocate
+                            ]
+                            lat_agents = np.array(buildings_grid_cell["lat"])[
+                                building_id
+                            ]
+                            lon_agents = np.array(buildings_grid_cell["lon"])[
+                                building_id
+                            ]
+                            agents_allocated_to_building["coord_Y"] = lat_agents
+                            agents_allocated_to_building["coord_X"] = lon_agents
+                            agents_allocated_to_building["osm_id"] = np.array(
+                                buildings_grid_cell["osm_id"]
+                            )[building_id]
+                            agents_allocated_to_building["osm_way_id"] = np.array(
+                                buildings_grid_cell["osm_way_id"]
+                            )[building_id]
+
+                            allocated_agents = pd.concat(
+                                [allocated_agents, agents_allocated_to_building]
+                            )
+                            n_agents_allocated += len(agents_allocated_to_building)
+                        else:
+                            agents_allocated_to_building = pd.DataFrame()
+                            n_agents_allocated += len(agents_allocated_to_building)
+                            households_not_allocated += n_agents_in_cell
+
+                    elif n_buildings_in_cell == 0:
+                        agents_allocated_to_building = pd.DataFrame()
+                        n_agents_allocated += len(agents_allocated_to_building)
+                        households_not_allocated += n_agents_in_cell
+                    else:
+                        raise ValueError("Weird")
+                    # assert n_agents_allocated < len(GLOPOP_households_region)
             # iterate over unique housholds and extract the variables we want
+            if len(allocated_agents) == 0:
+                self.logger.warning(
+                    f"No households allocated for {GDL_code}, skipping region."
+                )
+                continue
             household_characteristics = {}
             household_characteristics["size"] = np.full(
                 n_households, -1, dtype=np.int32
@@ -1304,23 +1895,22 @@ class Agents:
                 "education_level",
                 "wealth_index",
                 "rural",
+                "osm_id",
+                "osm_way_id",
+                "disp_income",
+                "income_percentile",
+                # "building_id"
             ):
-                household_characteristics[column] = np.array(GLOPOP_S_region[column])
+                household_characteristics[column] = np.array(allocated_agents[column])
 
-            household_characteristics["size"] = np.array(GLOPOP_S_region["HHSIZE"])
+            household_characteristics["size"] = np.array(allocated_agents["HHSIZE"])
+
             # now find location of household
             # get x and y from df
-
-            res_x, res_y = GLOPOP_GRID_region.rio.resolution()
-            n = len(GLOPOP_S_region)
             x_y = np.stack(
                 [
-                    GLOPOP_S_region["coord_X"].astype(np.float32)
-                    + (np.random.random(n).astype(np.float32) * abs(res_x))
-                    - 0.5 * res_x,
-                    GLOPOP_S_region["coord_Y"].astype(np.float32)
-                    + (np.random.random(n).astype(np.float32) * abs(res_y))
-                    - 0.5 * res_y,
+                    allocated_agents["coord_X"].astype(np.float32),
+                    allocated_agents["coord_Y"].astype(np.float32),
                 ],
                 axis=1,
             )
@@ -1338,6 +1928,14 @@ class Agents:
             for column, data in household_characteristics.items():
                 # only keep households with region
                 household_characteristics[column] = data[households_with_region]
+                # assert that there in no None in arrays
+                if np.sum(household_characteristics[column] == None) > 0:
+                    self.logger.warning(
+                        f"Found {np.sum(household_characteristics[column] == None)} None values in {column} for {GDL_code}"
+                    )
+                    household_characteristics[column][
+                        household_characteristics[column] == None
+                    ] = -1
 
             # ensure that all households have a region assigned
             assert not (household_characteristics["region_id"] == -1).any()
@@ -1359,7 +1957,13 @@ class Agents:
                 name=f"agents/households/{household_attribute}",
             )
 
-    def setup_farmer_household_characteristics(self, maximum_age=85):
+    @build_method(depends_on=["setup_create_farms"])
+    def setup_farmer_household_characteristics(self, maximum_age: int = 85) -> None:
+        """Sets up farmer household characteristics for farmers using GLOPOP-S data.
+
+        Args:
+            maximum_age: The maximum age for the head of household. Default is 85.
+        """
         n_farmers = self.array["agents/farmers/id"].size
         farms = self.subgrid["agents/farmers/farms"]
 
@@ -1392,14 +1996,24 @@ class Agents:
         )  # convert locations to geodataframe
 
         # GLOPOP-S uses the GDL regions. So we need to get the GDL region for each farmer using their location
-        GDL_regions = self.data_catalog.get_geodataframe(
-            "GDL_regions_v4", geom=self.region, variables=["GDLcode"]
+        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
+            geom=self.region.union_all(), columns=["GDLcode", "geometry"]
         )
-        if (GDL_regions["GDLcode"] == "NA").any():
-            self.logger.warning("GDL region has a 'NA', these rows will be deleted.")
-            GDL_regions = GDL_regions[GDL_regions["GDLcode"] != "NA"]
 
-        GDL_region_per_farmer = gpd.sjoin_nearest(locations, GDL_regions, how="left")
+        # assign GDL region to each farmer based on their location. This is a heavy operation, so we include a progress bar to monitor progress.
+        self.logger.info("Assigning GDL region to each farmer based on their location.")
+        chunk_size = 5000
+        n_farmers = len(locations)
+        chunks = []
+
+        self.logger.info(f"Processing {n_farmers} farmers in chunks of {chunk_size}")
+
+        for i in tqdm(range(0, n_farmers, chunk_size), desc="Processing farmer chunks"):
+            chunk_locations = locations.iloc[i : i + chunk_size]
+            chunk_result = gpd.sjoin_nearest(chunk_locations, GDL_regions, how="left")
+            chunks.append(chunk_result)
+
+        GDL_region_per_farmer = pd.concat(chunks, ignore_index=True)
 
         # ensure that each farmer has a region
         assert GDL_region_per_farmer["GDLcode"].notna().all()
@@ -1418,11 +2032,6 @@ class Agents:
             self.logger.info(
                 f"Setting up farmer household characteristics for {GDL_region} ({GDL_idx + 1}/{len(GDL_regions)})"
             )
-            if GDL_region == "ANDt":
-                GDL_region = "ESPr112"
-            if GDL_region == "LIEt":
-                GDL_region = "CHEr105"
-
             GLOPOP_S_region, _ = load_GLOPOP_S(self.data_catalog, GDL_region)
 
             # select farmers only
@@ -1544,19 +2153,34 @@ class Agents:
             name="agents/farmers/education_level",
         )
 
-    def create_preferences(self):
+    def create_behavioural_parameters(self) -> pd.DataFrame:
+        """Creates behavioural parameters for agents based on country-level and individual-level preferences.
+
+        Returns:
+            A DataFrame containing behavioural parameters for each country, including risk aversion and discount factors.
+        """
         # Risk aversion
-        preferences_country_level = self.data_catalog.get_dataframe(
+        preferences_country_level: pd.DataFrame = self.data_catalog.get_dataframe(
             "preferences_country",
             variables=["country", "isocode", "patience", "risktaking"],
         ).dropna()
 
-        preferences_individual_level = self.data_catalog.get_dataframe(
+        preferences_individual_level: pd.DataFrame = self.data_catalog.get_dataframe(
             "preferences_individual",
             variables=["country", "isocode", "patience", "risktaking"],
         ).dropna()
 
-        def scale_to_range(x, new_min, new_max):
+        def scale_to_range(x: pd.Series, new_min: float, new_max: float) -> pd.Series:
+            """Scales a pandas Series to a new range [new_min, new_max].
+
+            Args:
+                x: The pandas Series to be scaled.
+                new_min: The minimum value of the new range.
+                new_max: The maximum value of the new range.
+
+            Returns:
+                A pandas Series scaled to the new range.
+            """
             x_min = x.min()
             x_max = x.max()
             # Avoid division by zero
@@ -1608,7 +2232,7 @@ class Agents:
         )
 
         # List of variables for which to calculate the standard deviation
-        variables = ["discount", "risktaking_gains", "risktaking_losses"]
+        variables: list[str] = ["discount", "risktaking_gains", "risktaking_losses"]
 
         # Convert the variables to numeric, coercing errors to NaN to handle non-numeric entries
         for var in variables:
@@ -1633,13 +2257,21 @@ class Agents:
 
         return preferences_country_level
 
+    @build_method(
+        depends_on=["setup_create_farms", "setup_farmer_household_characteristics"]
+    )
     def setup_farmer_characteristics(
         self,
-        interest_rate=0.05,
-    ):
+        interest_rate: float = 0.05,
+    ) -> None:
+        """Sets up farmer characteristics including behavioural parameters.
+
+        Args:
+            interest_rate: The interest rate. Value between 0 and 1. Default is 0.05.
+        """
         n_farmers = self.array["agents/farmers/id"].size
 
-        preferences_global = self.create_preferences()
+        preferences_global = self.create_behavioural_parameters()
         preferences_global.rename(
             columns={
                 "country": "Country",
@@ -1662,23 +2294,49 @@ class Agents:
         )
         assert not np.any(GLOBIOM_regions["ISO3"].isna()), "Missing ISO3 codes"
 
-        ISO3_codes_region = self.geoms["regions"]["ISO3"].unique()
+        ISO3_codes_region = self.geom["regions"]["ISO3"].unique()
         GLOBIOM_regions_region = GLOBIOM_regions[
             GLOBIOM_regions["ISO3"].isin(ISO3_codes_region)
         ]["Region37"].unique()
+
         ISO3_codes_GLOBIOM_region = GLOBIOM_regions[
             GLOBIOM_regions["Region37"].isin(GLOBIOM_regions_region)
         ]["ISO3"]
 
-        donor_data = {}
+        self.logger.info(
+            f" missing ISO3 codes in GLOBIOM regions: {set(ISO3_codes_region) - set(ISO3_codes_GLOBIOM_region)}"
+        )
+
+        donor_data = {}  # determine the donors: donors are all the countries in the GLOBIOM regions that are within our model domain(self.geoms["regions"]). Therefore, this can be a region OUTSIDE of the model domain, but within a GLOBIOM region in the model domain.
         for ISO3 in ISO3_codes_GLOBIOM_region:
-            if ISO3 == "AND":
-                ISO3 = "ESP"
-            elif ISO3 == "LIE":
-                ISO3 = "CHE"
             region_risk_aversion_data = preferences_global[
                 preferences_global["ISO3"] == ISO3
             ]
+            if region_risk_aversion_data.empty:  # country NOT in preferences dataset
+                countries_with_preferences_data = (
+                    preferences_global["ISO3"].unique().tolist()
+                )
+                donor_countries = setup_donor_countries(
+                    self,
+                    countries_with_preferences_data,
+                    ISO3_codes_GLOBIOM_region.to_list(),
+                )
+
+                donor_country = donor_countries.get(ISO3, None)
+                assert donor_country is not None, f"No donor country found for {ISO3}"
+
+                region_risk_aversion_data = preferences_global[
+                    preferences_global["ISO3"] == donor_country
+                ]
+
+                self.logger.info(
+                    f"Missing risk aversion data for {ISO3}, filling with {donor_country} instead."
+                )
+                # ensure that the country and ISO3 represent the original country, not the donor country
+                region_risk_aversion_data["Country"] = [
+                    key for key, val in COUNTRY_NAME_TO_ISO3.items() if val == ISO3
+                ]
+                region_risk_aversion_data["ISO3"] = ISO3
 
             region_risk_aversion_data = region_risk_aversion_data[
                 [
@@ -1702,7 +2360,7 @@ class Agents:
         # Drop crops with no data at all for these regions
         donor_data = donor_data.dropna(axis=1, how="all")
 
-        unique_regions = self.geoms["regions"]
+        unique_regions = self.geom["regions"]
 
         data = self.donate_and_receive_crop_prices(
             donor_data, unique_regions, GLOBIOM_regions
@@ -1724,7 +2382,7 @@ class Agents:
         education_levels = self.array["agents/farmers/education_level"]
         age = self.array["agents/farmers/age_household_head"]
 
-        def normalize(array):
+        def normalize(array: np.ndarray) -> np.ndarray:
             return (array - np.min(array)) / (np.max(array) - np.min(array))
 
         combined_deviation_risk_aversion = ((2 / 6) * normalize(education_levels)) + (
@@ -1797,39 +2455,48 @@ class Agents:
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
 
-    def setup_farmer_irrigation_source(self, irrigating_farmers, year):
-        fraction_sw_irrigation = "aeisw"
+    def setup_farmer_irrigation_source(
+        self, irrigating_farmers: ArrayBool, year: int
+    ) -> None:
+        """Sets up the irrigation source for farmers based on global irrigation area data.
 
-        fraction_sw_irrigation_data = xr.open_dataarray(
-            self.data_catalog.get_source(
-                f"global_irrigation_area_{fraction_sw_irrigation}",
-            ).path
-        )
+        Args:
+            irrigating_farmers: A boolean array indicating which farmers are irrigating.
+            year: The year for which to set up the irrigation source.
+        """
+        fraction_sw_irrigation_data = self.new_data_catalog.fetch(
+            "global_irrigation_area_surface_water"
+        ).read()
+        fraction_sw_irrigation_data.attrs["_FillValue"] = np.nan
+
         fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
-            band=0,
             **get_window(
                 fraction_sw_irrigation_data.x,
                 fraction_sw_irrigation_data.y,
                 self.bounds,
                 buffer=5,
             ),
-        ).raster.interpolate_na()
-
-        fraction_gw_irrigation = "aeigw"
-        fraction_gw_irrigation_data = xr.open_dataarray(
-            self.data_catalog.get_source(
-                f"global_irrigation_area_{fraction_gw_irrigation}",
-            ).path
         )
+        fraction_sw_irrigation_data: xr.DataArray = interpolate_na_2d(
+            fraction_sw_irrigation_data
+        )
+
+        fraction_gw_irrigation_data = self.new_data_catalog.fetch(
+            "global_irrigation_area_groundwater"
+        ).read()
+        fraction_gw_irrigation_data.attrs["_FillValue"] = np.nan
+
         fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
-            band=0,
             **get_window(
                 fraction_gw_irrigation_data.x,
                 fraction_gw_irrigation_data.y,
                 self.bounds,
                 buffer=5,
             ),
-        ).raster.interpolate_na()
+        )
+        fraction_gw_irrigation_data: xr.DataArray = interpolate_na_2d(
+            fraction_gw_irrigation_data
+        )
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"
@@ -1951,134 +2618,29 @@ class Agents:
 
         self.set_array(adaptations, name="agents/farmers/adaptations")
 
-    def setup_assets(self, feature_types, source="geofabrik", overwrite=False):
-        """
-        Get assets from OpenStreetMap (OSM) data.
+    @build_method(depends_on=[])
+    def setup_assets(
+        self,
+        feature_types: str | list[str],
+        source: str = "geofabrik",
+        use_cache: bool = True,
+    ) -> None:
+        """Get assets from OpenStreetMap (OSM) data.
 
-        Parameters
-        ----------
-        feature_types : str or list of str
-            The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
-        source : str, optional
-            The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
-        overwrite : bool, optional
-            Whether to overwrite existing files. Default is False.
+        Args:
+            feature_types: The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
+            source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
+            use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
         """
         if isinstance(feature_types, str):
-            feature_types = [feature_types]
+            feature_types: list[str] = [feature_types]
 
-        OSM_data_dir = self.preprocessing_dir / "osm"
-        OSM_data_dir.mkdir(exist_ok=True, parents=True)
+        all_features: dict[str, gpd.GeoDataFrame] = self.new_data_catalog.fetch(
+            "open_street_map"
+        ).read(
+            self.region.geometry[0],
+            feature_types=feature_types,
+        )
 
-        if source == "geofabrik":
-            index_file = OSM_data_dir / "geofabrik_region_index.geojson"
-            fetch_and_save(
-                "https://download.geofabrik.de/index-v1.json",
-                index_file,
-                overwrite=overwrite,
-            )
-
-            index = gpd.read_file(index_file)
-            # remove Dach region as all individual regions within dach countries are also in the index
-            index = index[index["id"] != "dach"]
-
-            # find all regions that intersect with the bbox
-            intersecting_regions = index[index.intersects(self.region.geometry[0])]
-
-            def filter_regions(ID, parents):
-                return ID not in parents
-
-            intersecting_regions = intersecting_regions[
-                intersecting_regions["id"].apply(
-                    lambda x: filter_regions(x, intersecting_regions["parent"].tolist())
-                )
-            ]
-
-            urls = (
-                intersecting_regions["urls"]
-                .apply(lambda x: json.loads(x)["pbf"])
-                .tolist()
-            )
-
-        elif source == "movisda":
-            minx, miny, maxx, maxy = self.bounds
-
-            urls = []
-            for x in range(int(minx), int(maxx) + 1):
-                # Movisda seems to switch the W and E for the x coordinate
-                EW_code = f"E{-x:03d}" if x < 0 else f"W{x:03d}"
-                for y in range(int(miny), int(maxy) + 1):
-                    NS_code = f"N{y:02d}" if y >= 0 else f"S{-y:02d}"
-                    url = f"https://osm.download.movisda.io/grid/{NS_code}{EW_code}-latest.osm.pbf"
-
-                    # some tiles do not exists because they are in the ocean. Therefore we check if they exist
-                    # before adding the url
-                    response = requests.head(url, allow_redirects=True)
-                    if response.status_code != 404:
-                        urls.append(url)
-
-        else:
-            raise ValueError(f"Unknown source {source}")
-
-        # download all regions
-        all_features = {}
-        for url in tqdm(urls):
-            filepath = OSM_data_dir / url.split("/")[-1]
-            fetch_and_save(url, filepath, overwrite=overwrite)
-            for feature_type in feature_types:
-                if feature_type not in all_features:
-                    all_features[feature_type] = []
-
-                if feature_type == "buildings":
-                    features = gpd.read_file(
-                        filepath,
-                        mask=self.region,
-                        layer="multipolygons",
-                        use_arrow=True,
-                    )
-                    features = features[features["building"].notna()]
-                elif feature_type == "rails":
-                    features = gpd.read_file(
-                        filepath,
-                        mask=self.region,
-                        layer="lines",
-                        use_arrow=True,
-                    )
-                    features = features[
-                        features["railway"].isin(
-                            ["rail", "tram", "subway", "light_rail", "narrow_gauge"]
-                        )
-                    ]
-                elif feature_type == "roads":
-                    features = gpd.read_file(
-                        filepath,
-                        mask=self.region,
-                        layer="lines",
-                        use_arrow=True,
-                    )
-                    features = features[
-                        features["highway"].isin(
-                            [
-                                "motorway",
-                                "trunk",
-                                "primary",
-                                "secondary",
-                                "tertiary",
-                                "unclassified",
-                                "residential",
-                                "motorway_link",
-                                "trunk_link",
-                                "primary_link",
-                                "secondary_link",
-                                "tertiary_link",
-                            ]
-                        )
-                    ]
-                else:
-                    raise ValueError(f"Unknown feature type {feature_type}")
-
-                all_features[feature_type].append(features)
-
-        for feature_type in feature_types:
-            features = pd.concat(all_features[feature_type], ignore_index=True)
-            self.set_geoms(features, name=f"assets/{feature_type}")
+        for feature_type, features in all_features.items():
+            self.set_geom(features, name=f"assets/{feature_type}")

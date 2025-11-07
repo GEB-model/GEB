@@ -19,17 +19,44 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+"""
+Groundwater submodule for hydrology in GEB.
+
+Provides groundwater simulation and ModFlow integration utilities.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
+import numpy.typing as npt
 
 from geb.module import Module
+from geb.typing import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
 from geb.workflows import balance_check
 
 from ..routing import get_channel_ratio
 from .model import ModFlowSimulation
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
+
 
 class GroundWater(Module):
-    def __init__(self, model, hydrology):
+    """Implements groundwater hydrology submodel, responsible for flow, abstraction, outflow, and percolation.
+
+    This model communicates with the ModFlow simulation to manage groundwater flow and storage.
+    """
+
+    def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
+        """Initialize the groundwater model.
+
+        Args:
+            model: The GEB model instance.
+            hydrology: The hydrology submodel instance.
+
+        """
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -40,10 +67,12 @@ class GroundWater(Module):
             self.spinup()
 
     @property
-    def name(self):
+    def name(self) -> str:
+        """Name of the module."""
         return "hydrology.groundwater"
 
-    def spinup(self):
+    def spinup(self) -> None:
+        """Initialize groundwater model parameters and state variables."""
         # load hydraulic conductivity (md-1)
         self.grid.var.hydraulic_conductivity = self.hydrology.grid.load(
             self.model.files["grid"]["groundwater/hydraulic_conductivity"],
@@ -78,7 +107,7 @@ class GroundWater(Module):
 
         self.initial_water_table_depth = 2
 
-        def get_initial_head():
+        def get_initial_head() -> npt.NDArray[np.float64]:
             heads = self.hydrology.grid.load(
                 self.model.files["grid"]["groundwater/heads"], layer=None
             ).astype(np.float64)  # modflow is an exception, it needs double precision
@@ -98,10 +127,18 @@ class GroundWater(Module):
 
         self.grid.var.capillar = self.grid.full_compressed(0, dtype=np.float32)
 
-    def heads_update_callback(self, heads):
+    def heads_update_callback(self, heads: TwoDArrayFloat64) -> None:
+        """Callback function to update groundwater heads after ModFlow simulation step.
+
+        This is done to ensure the value is always in sync with ModFlow.
+
+        Args:
+            heads: Updated groundwater heads from ModFlow (m).
+        """
         self.hydrology.grid.var.heads = heads
 
-    def initalize_modflow_model(self):
+    def initalize_modflow_model(self) -> None:
+        """Initialize the ModFlow groundwater simulation model."""
         self.modflow = ModFlowSimulation(
             self.model,
             topography=self.grid.var.elevation,
@@ -116,32 +153,59 @@ class GroundWater(Module):
             heads_update_callback=self.heads_update_callback,
         )
 
-    def step(self, groundwater_recharge, groundwater_abstraction_m3):
+    def step(
+        self,
+        groundwater_recharge_m: ArrayFloat32,
+        groundwater_abstraction_m3: ArrayFloat64,
+    ) -> ArrayFloat64:
+        """Perform a groundwater model step.
+
+        Args:
+            groundwater_recharge_m: Recharge to the groundwater (m/step).
+            groundwater_abstraction_m3: Groundwater abstraction (m3/step).
+
+        Returns:
+            Baseflow to rivers (m/step).
+        """
         assert (groundwater_abstraction_m3 + 1e-7 >= 0).all()
         groundwater_abstraction_m3[groundwater_abstraction_m3 < 0] = 0
-        assert (groundwater_recharge >= 0).all()
+        assert (groundwater_recharge_m >= 0).all()
 
         if __debug__:
             groundwater_storage_pre = self.modflow.groundwater_content_m3
 
-        self.modflow.set_recharge_m(groundwater_recharge)
+        self.modflow.set_recharge_m3(groundwater_recharge_m * self.grid.var.cell_area)
         self.modflow.set_groundwater_abstraction_m3(groundwater_abstraction_m3)
         self.modflow.step()
 
         if __debug__:
-            self.balance_check(
-                groundwater_storage_pre,
-                groundwater_recharge,
-                groundwater_abstraction_m3,
+            balance_check(
+                name="groundwater",
+                how="sum",
+                influxes=[
+                    groundwater_recharge_m.astype(np.float64) * self.grid.var.cell_area
+                ],
+                outfluxes=[
+                    groundwater_abstraction_m3.astype(np.float64),
+                    self.modflow.drainage_m3.astype(np.float64),
+                ],
+                prestorages=[groundwater_storage_pre.astype(np.float64)],
+                poststorages=[self.modflow.groundwater_content_m3.astype(np.float64)],
+                tolerance=500,  # 500 m3
             )
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
 
-        channel_ratio = get_channel_ratio(
+        channel_ratio: npt.NDArray[np.float32] = get_channel_ratio(
             river_length=self.grid.var.river_length,
-            river_width=self.grid.var.river_width,
+            river_width=np.where(
+                ~np.isnan(self.grid.var.average_river_width),
+                self.grid.var.average_river_width,
+                0,
+            ),
             cell_area=self.grid.var.cell_area,
         )
+        channel_ratio.fill(1)
 
         # this is the capillary rise for the NEXT timestep
         self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
@@ -149,40 +213,38 @@ class GroundWater(Module):
 
         # capriseindex is 1 where capilary rise occurs
         self.hydrology.HRU.capriseindex = self.hydrology.to_HRU(
-            data=np.float32(groundwater_drainage > 0)
+            data=np.float32(self.grid.var.capillar > 0)
         )
 
-        self.report(self, locals())
+        self.report(locals())
 
         return baseflow
 
     @property
-    def groundwater_content_m3(self):
+    def groundwater_content_m3(self) -> npt.NDArray[np.float32]:
+        """Groundwater content in cubic meters.
+
+        Returns:
+            Groundwater content in cubic meters in active grid cells.
+        """
         return self.modflow.groundwater_content_m3.astype(np.float32)
 
     @property
-    def groundwater_depth(self):
+    def groundwater_depth(self) -> npt.NDArray[np.float32]:
+        """Groundwater depth in meters.
+
+        Returns:
+            Groundwater depth in active grid cells.
+        """
         return self.modflow.groundwater_depth.astype(np.float32)
 
-    def decompress(self, data):
+    def decompress(self, data: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+        """Decompress data from compressed grid format to full grid format.
+
+        Args:
+            data: Data in compressed grid format.
+
+        Returns:
+            Data in full grid format.
+        """
         return self.hydrology.grid.decompress(data)
-
-    def balance_check(
-        self, groundwater_storage_pre, groundwater_recharge, groundwater_abstraction_m3
-    ):
-        drainage_m3 = self.modflow.drainage_m3
-        recharge_m3 = groundwater_recharge * self.modflow.area
-        groundwater_storage_post = self.modflow.groundwater_content_m3
-
-        balance_check(
-            name="groundwater",
-            how="sum",
-            influxes=[recharge_m3],
-            outfluxes=[
-                groundwater_abstraction_m3,
-                drainage_m3,
-            ],
-            prestorages=[groundwater_storage_pre],
-            poststorages=[groundwater_storage_post],
-            tollerance=100,  # 100 m3
-        )

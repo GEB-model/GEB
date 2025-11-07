@@ -5,7 +5,18 @@ set_time_range:
   start_date: 2000-01-01
   end_date: 2024-12-31
 
+set_ssp:
+  ssp: ssp3
+
 setup_hydrography:
+
+setup_assets:
+  feature_types:
+  - buildings
+  - roads
+  - rails
+
+setup_gtsm_station_data:
 
 setup_elevation:
 
@@ -43,10 +54,11 @@ setup_irrigation_sources:
 
 setup_create_farms:
 
+setup_income_distribution_parameters:
+
 setup_household_characteristics:
 
 setup_water_demand:
-  ssp: ssp2
 
 setup_farmer_household_characteristics:
 
@@ -164,11 +176,6 @@ setup_crop_prices:
     sunflower: 
       - sunflower seed
 
-setup_assets:
-  feature_types:
-  - buildings
-  - roads
-  - rails
 
 setup_damage_parameters:
   parameters:
@@ -345,12 +352,27 @@ setup_damage_parameters:
             - [6.00, 0.05]
           maximum_damage: 25
 
-setup_forcing_era5:
+setup_forcing:
+  forcing: ERA5
+
+# setup_forecasts:
+#   forecast_start: 2021-07-11 00:00:00 # Start date for forecast data downloads. Format: ``YYYY-MM-DD``
+#   forecast_end: 2021-07-12 00:00:00 # End date for forecast data downloads. Format: ``YYYY-MM-DD``
+#   forecast_provider: ECMWF # The forecast data provider. Currently only ``"ECMWF"`` is supported.
+#   forecast_model: probabilistic_forecast # The forecast model to use. Options are "probabilistic_forecast" or "control_forecast".
+#   forecast_resolution: 0.1/0.1 # The spatial resolution of the forecast data in degrees.
+#   forecast_horizon: 240 # The forecast horizon in hours.
+#   forecast_timestep_hours: 1 # The time step of the forecast output in hours.
 
 setup_SPEI:
   window_months: 12
   calibration_period_start: 2011-01-01
   calibration_period_end: 2021-12-31
 
+setup_pr_GEV:
+
 setup_discharge_observations:
   custom_river_stations: null
+
+setup_CO2_concentration:
+

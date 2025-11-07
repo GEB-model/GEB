@@ -1,3 +1,5 @@
+"""Tests for lake and reservoir functions in GEB."""
+
 import math
 
 import matplotlib.pyplot as plt
@@ -17,7 +19,12 @@ from geb.hydrology.lakes_reservoirs import (
 from ..testconfig import output_folder
 
 
-def test_get_lake_height_from_bottom():
+def test_get_lake_height_from_bottom() -> None:
+    """Test calculation of lake height from storage and area.
+
+    Verifies that lake height is correctly calculated as storage divided by area,
+    and that the inverse function produces consistent results.
+    """
     lake_area = np.array([100])
     lake_storage = np.linspace(0, 1000, 100)
 
@@ -38,7 +45,12 @@ def test_get_lake_height_from_bottom():
     )
 
 
-def test_get_lake_storage_from_height_above_bottom():
+def test_get_lake_storage_from_height_above_bottom() -> None:
+    """Test calculation of lake storage from height and area.
+
+    Verifies that lake storage is correctly calculated as height times area,
+    and that the inverse function produces consistent results.
+    """
     lake_area = np.array([100])
     lake_height = np.linspace(0, 10, 100)
 
@@ -57,7 +69,17 @@ def test_get_lake_storage_from_height_above_bottom():
     )
 
 
-def test_estimate_initial_lake_storage_and_outflow_height():
+def test_estimate_initial_lake_storage_and_outflow_height() -> None:
+    """Test estimation of lake outflow height and storage dynamics.
+
+    Tests the complete lake outflow estimation workflow including:
+    - Calculation of river width from average discharge
+    - Lake factor computation using overflow coefficients
+    - Outflow height estimation from capacity and average outflow
+    - Verification of outflow-to-height inverse relationships
+    - Storage dynamics simulation with inflow, outflow, and evaporation
+    - Generation of diagnostic plots for lake behavior analysis
+    """
     lake_area = np.array([3_480_000.0])
     lake_capacity = np.array([7_630_000.0])
     avg_outflow = np.array([2.494])

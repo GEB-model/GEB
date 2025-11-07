@@ -9,20 +9,24 @@ general:
   preprocessing_folder: preprocessing/
   output_folder: output/
   spinup_name: spinup
+  simulation_root: simulation_root
   name: default
   export_inital_on_spinup: true
   simulate_forest: false
   forecasts:
     use: false
+    provider: ECMWF
 
 hazards:
   floods:
     simulate: false
+    forcing_method: accumulated_runoff  # headwater_points, runoff, accumulated_runoff
+    minimum_flood_depth: 0.05
     resolution: 150
-    nr_subgrid_pixels: 5
+    nr_subgrid_pixels: 4
     crs: auto
-    gpu: false
     force_overwrite: true
+    write_figures: true  # whether to generate and save diagnostic figures
     return_periods:
       - 2
       - 5
@@ -33,6 +37,8 @@ hazards:
       - 250
       - 500
       - 1000
+    SFINCS:
+      gpu: auto  # True, False, "auto". If "auto", it will check if a GPU is available using nvidia-smi.
   damage:
     simulate: false
   erosion:
@@ -41,17 +47,23 @@ hazards:
 hydrology:
   routing:
     algorithm: kinematic_wave  # accuflux or kinematic_wave
+    river_width:
+      parameters:
+        default_alpha: 7.2
+        beta: 0.5
+    river_depth:
+      method: manning # or power law. If power law, alpha and beta must be set additionally in the parameters
 
 agent_settings:
   market:
     dynamic_market: false
     price_frequency: yearly
-  # government:
-  #   irrigation_limit:
-  #     limit: 10000  # previous tried 1700
-  #     per: capita
   households:
     adapt: false
+    warning_response: false
+    water_demand:
+      method: default
+    adjust_demand_factor: 1
     expected_utility:
       flood_risk_calculations:
         risk_perception:
@@ -60,7 +72,7 @@ agent_settings:
           max: 10
           min: 0.01
   farmers:
-    ruleset: base
+    ruleset:  
     base_management_yield_ratio: 1
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
@@ -69,17 +81,19 @@ agent_settings:
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
-    return_fraction: 0.5172748734767878
+    return_fraction: 0.5
     social_network:
       radius: 5000 # m
       size: 10 # nr of neighbors
     expected_utility:
       insurance:
-        duration: 2
+        duration: 1
         personal_insurance: 
-          ruleset: base
+          ruleset: no-adaptation
         index_insurance: 
-          ruleset: base
+          ruleset: no-adaptation
+        pr_insurance:
+          ruleset: no-adaptation
       crop_switching: 
         ruleset: no-adaptation
       adaptation_sprinkler:
@@ -123,11 +137,9 @@ agent_settings:
           min: 0.5
   fix_activation_order: true
   reservoir_operators:
-    MinOutflowQ: 0.0
-    NonDamagingOutflowQ: 4.0
-    NormalOutflowQ: 0.1
-    max_reservoir_release_factor: 0.03380636312896216
     ruleset: no-adaptation
+    equal_abstraction: false
+    reservoir_M_factor: 0.1
   sensitivity_analysis:
     risk_aversion_factor: 1
     discount_rate_factor: 1
@@ -146,6 +158,8 @@ draw:
       draw_every_nth: 1
 
 report:
+  _water_circle: false
+  _discharge_stations: false
   hydrology.routing:
     discharge_daily:
       varname: grid.var.discharge_m3_s
@@ -155,12 +169,12 @@ report:
       single_file: true
 
 parameters:
-  SnowMeltCoef: 0.004
-  arnoBeta_add: 0.6653797014119323
-  lakeAFactor: 1
-  lakeEvaFactor: 2.6777823102359894
-  manningsN: 0.8269807271111366
-  preferentialFlowConstant: 3.14300925049279
+  mannings_n_multiplier: 1.0
+  crop_factor_multiplier: 1.0
+  saturated_hydraulic_conductivity_multiplier: 1.0
+  reservoir_release_factor: 0.1
+  water_demand_multiplier_industry: 1.0
+  lake_outflow_multiplier: 1.0
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini
@@ -169,3 +183,19 @@ plantFATE:
   new_forest: false
   new_forest_filename: null
   n_cells: 'all'
+
+calibration:
+  spinup_time: 1975-01-01
+  start_time: 1978-01-01
+  end_time: 1985-01-01
+  path: calibration
+  gpus: 0
+  scenario: no-adaptation
+  calibration_targets:
+    KGE_discharge: 1
+  DEAP:
+    use_multiprocessing: true
+    ngen: 10
+    mu: 30
+    lambda_: 12
+    select_best: 10

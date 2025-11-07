@@ -33,9 +33,8 @@ The figure below shows a schematic overview of some parts of the model, showing 
 
   Overview and installation <overview_and_installation>
   Configuration <configuration>
-  Preprocessing <preprocessing>
+  Creating a model <creating_a_model>
   Running the model <running>
-  Visualisation <visualisation>
   Calibration <calibration>
   ODD protocol <ODD/ODD.rst>
 
@@ -48,6 +47,12 @@ The figure below shows a schematic overview of some parts of the model, showing 
   Crop farmers <agents/crop_farmers>
   Reservoir operators <agents/reservoir_operators>
   Government <agents/government>
+
+.. toctree::
+  :maxdepth: 1
+  :caption: Forecasts
+
+  Forecasts <forecasts>
 
 .. toctree::
   :maxdepth: 2

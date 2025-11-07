@@ -19,43 +19,20 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-
-      # Install Pandoc and xelatex engine
       - name: Install Pandoc and xelatex
         run: |
           sudo apt-get update
           sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra texlive-latex-extra librsvg2-bin
-
       - name: Set up uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
       - name: Install the project
         run: |
           uv sync --dev
-
-      # Debugging information
-      - name: Debugging information
-        run: |
-          echo "github.ref: ${{ github.ref }}"
-          echo "github.event_name: ${{ github.event_name }}"
-          echo "github.head_ref: ${{ github.head_ref }}"
-          echo "github.base_ref: ${{ github.base_ref }}"
-          set -x
-          git rev-parse --abbrev-ref HEAD
-          git branch
-          git branch -a
-          git remote -v
-          python -V
-          pip list
-
-      # Build Sphinx documentation
       - name: Build Sphinx docs
         run: |
           cd docs
           mkdir -p _build
           uv run make html
-
-      # Upload the build logs as an artifact if the build fails
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
