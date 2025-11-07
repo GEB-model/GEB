@@ -592,15 +592,25 @@ class KinematicWave(Router):
 def fill_discharge_gaps(
     discharge_m3_s: ArrayFloat32,
     rivers: gpd.GeoDataFrame | pd.DataFrame,
+    waterbody_ids: ArrayInt32,
+    outflow_per_waterbody_m3_s: ArrayFloat32,
 ) -> ArrayFloat32:
     """Fill gaps in discharge data with NaN values.
 
-    Propagation of discharge values is done from upstream to downstream,
-    then from downstream to upstream.
+    First, discharge values are filled:
+
+    1) with discharges from waterbodies if available
+    2) by propagating discharge values from up to downstream
+    3) by propagating discharge values from downstream to upstream
 
     Args:
         discharge_m3_s: 1D array of discharge values with possible NaNs.
         rivers: GeoDataFrame containing river network geometries.
+        waterbody_ids: 1D array with waterbody IDs for each cell. This must be the same
+            size as discharge_m3_s. -1 indicates no waterbody, and non-negative values indicate
+            waterbody cells.
+        outflow_per_waterbody_m3_s: 1D array with outflow values for each waterbody. This
+            must be the same size as the number of unique waterbody IDs.
 
     Returns:
         1D array of discharge values with NaNs in rivers filled.
@@ -612,7 +622,12 @@ def fill_discharge_gaps(
         for idx in river["hydrography_linear"]:
             if not np.isnan(discharge_m3_s[idx]):
                 valid_discharge = discharge_m3_s[idx]
+
             elif np.isnan(filled_discharge_m3_s[idx]):
+                if waterbody_ids[idx] != -1:
+                    waterbody_id = waterbody_ids[idx]
+                    valid_discharge = outflow_per_waterbody_m3_s[waterbody_id]
+
                 filled_discharge_m3_s[idx] = valid_discharge
 
         if np.isnan(valid_discharge):
@@ -1320,6 +1335,8 @@ class Routing(Module):
             discharge_m3_s_substep_filled: ArrayFloat32 = fill_discharge_gaps(
                 self.grid.var.discharge_m3_in_rivers_s_substep,
                 rivers=self.rivers,
+                waterbody_ids=self.grid.var.waterBodyID,
+                outflow_per_waterbody_m3_s=outflow_per_waterbody_m3 / 3600,
             )
 
             self.grid.var.discharge_m3_s_per_substep[hour, :] = (
