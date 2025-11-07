@@ -1105,7 +1105,9 @@ class Routing(Module):
                 default is 7.2.
 
         Returns:
-            The alpha parameter for river width
+            A tuple containing:
+            - alpha: The alpha parameter for the kinematic wave routing, which is a 1D array with the same shape as the grid.
+            - beta_array: The beta parameter for the kinematic wave routing, which is a 1D array with the same shape as the grid.
         """
         beta_array: ArrayFloat32 = np.full_like(
             self.grid.var.average_river_width, beta, dtype=np.float32
