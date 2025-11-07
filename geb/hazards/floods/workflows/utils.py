@@ -450,7 +450,7 @@ def run_sfincs_simulation(
 def _get_xy(
     river: pd.Series,
     up_to_downstream: bool = True,
-) -> tuple[int, int] | None:
+) -> tuple[int, int]:
     """Get the first valid xy coordinate from a river's hydrography_xy list.
 
     Starts upstream or downstream based on the up_to_downstream flag.
@@ -463,18 +463,14 @@ def _get_xy(
             Defaults to True (starting upstream).
 
     Returns:
-        A tuple (x, y) of the first valid coordinate, or an empty list if none found.
-
-    Raises:
-        ValueError: If no valid xy coordinate is found in the river's hydrography_xy list.
+        A tuple (x, y) of the first valid coordinate.
     """
     xys = river["hydrography_xy"]
-    if not up_to_downstream:
-        xys = reversed(xys)  # Reverse the order if not going downstream
-    for xy in xys:
-        return (xy[0], xy[1])
+    if up_to_downstream:
+        idx: int = 0
     else:
-        raise ValueError("No valid xy found in river hydrography_xy list.")
+        idx: int = -1
+    return (xys[idx][0], xys[idx][1])
 
 
 def get_representative_river_points(

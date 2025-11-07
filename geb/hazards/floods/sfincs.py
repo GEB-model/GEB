@@ -274,7 +274,6 @@ class SFINCSRootModel:
                 region, zmin=-21, reset_mask=True
             )  # TODO: Improve mask setup
 
-        # Temporarily set HydroMT logging to DEBUG to capture detailed internal logs
         # in one plot plot the region boundary as well as the rivers and save to file
         fig, ax = plt.subplots(figsize=(10, 10))
         region.boundary.plot(ax=ax, color="black")
