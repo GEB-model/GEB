@@ -1,15 +1,3 @@
-fabdem:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  meta:
-    category: topography
-    paper_doi: CC BY-NC-SA 4.0
-    paper_ref: Hawker et al. (2022)
-    source_license: CC BY-NC-SA 4.0
-    source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
-    source_version: 1-2
-  path: ../../data_catalogue/topography/fabdem.vrt
 geul_dem:
   data_type: RasterDataset
   driver: raster

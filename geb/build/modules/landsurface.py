@@ -113,22 +113,18 @@ class LandSurface:
         assert isinstance(DEMs, list)
         # here we use the bounds of all subbasins, which may include downstream
         # subbasins that are not part of the study area
-        bounds = tuple(self.geom["routing/subbasins"].total_bounds)
+        bounds: tuple[float, float, float, float] = tuple(
+            self.geom["routing/subbasins"].total_bounds
+        )
 
-        fabdem: xr.DataArray = xr.open_dataarray(
-            self.data_catalog.get_source("fabdem").path
-        )
-        fabdem: xr.DataArray = fabdem.isel(
-            band=0,
-            **get_window(
-                fabdem.x,
-                fabdem.y,
-                bounds,
-                buffer=100,
-            ),
-        )
-        fabdem.attrs["_FillValue"] = -9999.0
-        fabdem: xr.DataArray = convert_nodata(fabdem, np.nan)
+        buffer: float = 0.5
+        xmin: float = bounds[0] - buffer
+        ymin: float = bounds[1] - buffer
+        xmax: float = bounds[2] + buffer
+        ymax: float = bounds[3] + buffer
+        fabdem: xr.DataArray = self.new_data_catalog.fetch(
+            "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, prefix="hydrodynamics"
+        ).read(prefix="hydrodynamics")
 
         target: xr.DataArray = self.subgrid["mask"]
         assert target.rio.crs is not None, "target grid must have a crs"
