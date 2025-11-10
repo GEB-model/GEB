@@ -21,7 +21,7 @@ from shapely.geometry import shape
 from ..hydrology.landcovers import FOREST
 from ..store import DynamicArray
 from ..workflows.damage_scanner import VectorScanner
-from ..workflows.io import load_array, load_table, open_zarr
+from ..workflows.io import load_array, load_table, open_zarr, to_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 
@@ -605,12 +605,10 @@ class Households(AgentBaseClass):
         Returns:
             pd.DataFrame: A dataframe containing the aggregated damage maps for all ensemble members.
         """
-        start_time = (
-            "2021-07-13"  # CHECK LATER IF YOU WANT THE START TIME OR THE FORECAST DAYS
-        )
+        start_time = "2021-07-13"  # NEED TO CHECK LATER IF YOU WANT THE START TIME OR THE FORECAST DAYS
 
         damage_maps = []
-        # Load the damage maps for each ensemble member -- CHANGE IT LATER TO THE ACTUAL NUMBER OF MEMBERS
+        # Load the damage maps for each ensemble member -- NEED CHANGE IT LATER TO THE ACTUAL NUMBER OF MEMBERS
         for member in range(1, 4):
             file_path = (
                 self.model.output_folder
@@ -686,22 +684,17 @@ class Households(AgentBaseClass):
             # Save probability map as a zarr file
             file_name = f"prob_map_range{range_id}_strategy{strategy}.zarr"
             file_path = prob_folder / file_name
+            file_path.mkdir(parents=True, exist_ok=True)
 
-            # probability = probability.astype(np.float32)
-            # probability = probability.rio.write_nodata(np.nan)
-            # probability = to_zarr(
-            #     da=probability, path=file_path, crs=crs
-            # )  # need to save it as zarr
-
-            # SOMETHING IS WRONG WHEN WRITING THE TIFF FILE, THE Y AXIS IS FLIPPED, IDWK WHY, so doing this to fix it for now
+            # The y axis is flipped when writing to zarr, so fixing it here for now
             if probability.y.values[0] < probability.y.values[-1]:
                 print("flipping y axis")
                 probability = probability.sortby("y", ascending=False)
 
-            probability = probability.rio.write_crs(crs)
-            probability = probability.fillna(-9999)
-            probability = probability.rio.write_nodata(-9999, inplace=True)
-            probability.rio.to_raster(file_path, driver="GTiff")
+            probability = probability.astype(np.float32)
+            probability = probability.rio.write_nodata(np.nan)
+            probability = probability.isel(time=0)  # select the first time step
+            probability = to_zarr(da=probability, path=file_path, crs=crs)
 
             probability_maps[(date_time, range_id)] = probability
 
@@ -803,17 +796,39 @@ class Households(AgentBaseClass):
         # Maybe load this as a global var (?) instead of loading it each time
 
         for range_id in range_ids:
-            # Build path to probability map (is there a way of doing it with array instead of raster?)
+            # prob_map = Path(
+            #     self.model.output_folder
+            #     / "prob_maps"
+            #     / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
+            #     / f"prob_map_range{range_id}_strategy{strategy_id}.tif"
+            # )
+
+            # with rasterio.open(prob_map) as src:
+            #     prob_map = src.read(1)
+            #     affine = src.transform
+
+            # # Get the pixel values for each postal code
+            # stats = zonal_stats(
+            #     postal_codes,
+            #     prob_map,
+            #     affine=affine,
+            #     raster_out=True,
+            #     all_touched=True,
+            #     nodata=np.nan,
+            # )
+
+            # Build path to probability map
             prob_map = Path(
                 self.model.output_folder
                 / "prob_maps"
                 / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
-                / f"prob_map_range{range_id}_strategy{strategy_id}.tif"
+                / f"prob_map_range{range_id}_strategy{strategy_id}.zarr"
             )
 
-            with rasterio.open(prob_map) as src:
-                prob_map = src.read(1)
-                affine = src.transform
+            # Open the probability map
+            prob_map = open_zarr(prob_map)
+            affine = prob_map.rio.transform()
+            prob_map = np.asarray(prob_map.values)
 
             # Get the pixel values for each postal code
             stats = zonal_stats(
@@ -822,7 +837,7 @@ class Households(AgentBaseClass):
                 affine=affine,
                 raster_out=True,
                 all_touched=True,
-                nodata=-9999,
+                nodata=np.nan,
             )
 
             # Iterate through each postal code and check how many pixels exceed the threshold
