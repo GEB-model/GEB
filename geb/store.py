@@ -1,18 +1,25 @@
 """Storage classes for model data."""
 
+from __future__ import annotations
+
 import json
+import pickle
 import shutil
+from collections import deque
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from .hydrology.HRUs import load_geom
+from geb.workflows.io import load_geom
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 class DynamicArray:
@@ -246,7 +253,11 @@ class DynamicArray:
         return self._data.__array_interface__()
 
     def __array_ufunc__(
-        self, ufunc: Callable, method: str, *inputs: tuple[Any], **kwargs: dict[Any]
+        self,
+        ufunc: Callable,
+        method: str,
+        *inputs: tuple[Any],
+        **kwargs: dict[str, Any],
     ) -> Any:
         """
         Handle NumPy ufuncs applied to DynamicArray instances.
@@ -276,7 +287,11 @@ class DynamicArray:
             return self.__class__(result, max_n=self._data.shape[0])
 
     def __array_function__(
-        self, func: Callable, types: tuple[Any], args: tuple[Any], kwargs: dict[Any]
+        self,
+        func: Callable,
+        types: tuple[Any],
+        args: tuple[Any],
+        kwargs: dict[str, Any],
     ) -> Any:
         """
         Delegate NumPy __array_function__ calls to the underlying NumPy array.
@@ -302,7 +317,7 @@ class DynamicArray:
             func, modified_types, modified_args, kwargs
         )
 
-    def __setitem__(self, key: str, value: Any) -> None:
+    def __setitem__(self, key: int | slice, value: Any) -> None:
         """
         Set item(s) in the active portion of the array.
 
@@ -312,7 +327,7 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
-    def __getitem__(self, key: str) -> "DynamicArray | np.ndarray":
+    def __getitem__(self, key: int | slice) -> DynamicArray | np.ndarray:
         """
         Retrieve item(s) or a sliced DynamicArray.
 
@@ -359,7 +374,7 @@ class DynamicArray:
         else:
             return self.data.__getitem__(key)
 
-    def copy(self) -> "DynamicArray":
+    def copy(self) -> DynamicArray:
         """
         Create a deep copy of this DynamicArray.
 
@@ -467,7 +482,7 @@ class DynamicArray:
         other: Any,
         operation: str,
         inplace: bool = False,
-    ) -> "DynamicArray":
+    ) -> DynamicArray:
         """
         Helper to perform binary/unary array operations delegating to NumPy.
 
@@ -497,7 +512,7 @@ class DynamicArray:
         else:
             return self.__class__(result, max_n=self._data.shape[0])
 
-    def __add__(self, other: Any) -> "DynamicArray":
+    def __add__(self, other: Any) -> DynamicArray:
         """Addition operator.
 
         Args:
@@ -508,7 +523,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__add__")
 
-    def __radd__(self, other: Any) -> "DynamicArray":
+    def __radd__(self, other: Any) -> DynamicArray:
         """Right-hand addition operator.
 
         Args:
@@ -519,7 +534,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__radd__")
 
-    def __iadd__(self, other: Any) -> "DynamicArray":
+    def __iadd__(self, other: Any) -> DynamicArray:
         """In-place addition operator.
 
         Args:
@@ -530,7 +545,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__add__", inplace=True)
 
-    def __sub__(self, other: Any) -> "DynamicArray":
+    def __sub__(self, other: Any) -> DynamicArray:
         """Subtraction operator.
 
         Args:
@@ -541,7 +556,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__sub__")
 
-    def __rsub__(self, other: Any) -> "DynamicArray":
+    def __rsub__(self, other: Any) -> DynamicArray:
         """Right-hand subtraction operator.
 
         Args:
@@ -553,7 +568,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rsub__")
 
-    def __isub__(self, other: Any) -> "DynamicArray":
+    def __isub__(self, other: Any) -> DynamicArray:
         """In-place subtraction operator.
 
         Args:
@@ -565,7 +580,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__sub__", inplace=True)
 
-    def __mul__(self, other: Any) -> "DynamicArray":
+    def __mul__(self, other: Any) -> DynamicArray:
         """Multiplication operator.
 
         Args:
@@ -577,7 +592,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mul__")
 
-    def __rmul__(self, other: Any) -> "DynamicArray":
+    def __rmul__(self, other: Any) -> DynamicArray:
         """Right-hand multiplication operator.
 
         Args:
@@ -589,7 +604,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rmul__")
 
-    def __imul__(self, other: Any) -> "DynamicArray":
+    def __imul__(self, other: Any) -> DynamicArray:
         """In-place multiplication operator.
 
         Args:
@@ -601,7 +616,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mul__", inplace=True)
 
-    def __truediv__(self, other: Any) -> "DynamicArray":
+    def __truediv__(self, other: Any) -> DynamicArray:
         """True division operator.
 
         Args:
@@ -613,7 +628,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__truediv__")
 
-    def __rtruediv__(self, other: Any) -> "DynamicArray":
+    def __rtruediv__(self, other: Any) -> DynamicArray:
         """Right-hand true division operator.
 
         Args:
@@ -625,7 +640,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rtruediv__")
 
-    def __itruediv__(self, other: Any) -> "DynamicArray":
+    def __itruediv__(self, other: Any) -> DynamicArray:
         """In-place true division operator.
 
         Args:
@@ -637,7 +652,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__truediv__", inplace=True)
 
-    def __floordiv__(self, other: Any) -> "DynamicArray":
+    def __floordiv__(self, other: Any) -> DynamicArray:
         """Floor division operator.
 
         Args:
@@ -649,7 +664,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__floordiv__")
 
-    def __rfloordiv__(self, other: Any) -> "DynamicArray":
+    def __rfloordiv__(self, other: Any) -> DynamicArray:
         """Right-hand floor division operator.
 
         Args:
@@ -661,7 +676,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rfloordiv__")
 
-    def __ifloordiv__(self, other: Any) -> "DynamicArray":
+    def __ifloordiv__(self, other: Any) -> DynamicArray:
         """In-place floor division operator.
 
         Args:
@@ -673,7 +688,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__floordiv__", inplace=True)
 
-    def __mod__(self, other: Any) -> "DynamicArray":
+    def __mod__(self, other: Any) -> DynamicArray:
         """Modulo operator.
 
         Args:
@@ -685,7 +700,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mod__")
 
-    def __rmod__(self, other: Any) -> "DynamicArray":
+    def __rmod__(self, other: Any) -> DynamicArray:
         """Right-hand modulo operator.
 
         Args:
@@ -697,7 +712,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rmod__")
 
-    def __imod__(self, other: Any) -> "DynamicArray":
+    def __imod__(self, other: Any) -> DynamicArray:
         """In-place modulo operator.
 
         Args:
@@ -708,7 +723,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__mod__", inplace=True)
 
-    def __pow__(self, other: Any) -> "DynamicArray":
+    def __pow__(self, other: Any) -> DynamicArray:
         """Power operator.
 
         Args:
@@ -719,7 +734,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__")
 
-    def __rpow__(self, other: Any) -> "DynamicArray":
+    def __rpow__(self, other: Any) -> DynamicArray:
         """Right-hand power operator.
 
         Args:
@@ -730,7 +745,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__rpow__")
 
-    def __ipow__(self, other: Any) -> "DynamicArray":
+    def __ipow__(self, other: Any) -> DynamicArray:
         """In-place power operator.
 
         Returns:
@@ -738,7 +753,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__", inplace=True)
 
-    def _compare(self, value: Any, operation: str) -> "DynamicArray":
+    def _compare(self, value: Any, operation: str) -> DynamicArray:
         """
         Helper for comparison operations.
 
@@ -755,7 +770,7 @@ class DynamicArray:
             )
         return self.__class__(getattr(self.data, operation)(value))
 
-    def __eq__(self, value: Any) -> "DynamicArray":
+    def __eq__(self, value: Any) -> DynamicArray:
         """Equality comparison.
 
         Args:
@@ -766,7 +781,7 @@ class DynamicArray:
         """
         return self._compare(value, "__eq__")
 
-    def __ne__(self, value: Any) -> "DynamicArray":
+    def __ne__(self, value: Any) -> DynamicArray:
         """Inequality comparison.
 
         Args:
@@ -777,7 +792,7 @@ class DynamicArray:
         """
         return self._compare(value, "__ne__")
 
-    def __gt__(self, value: Any) -> "DynamicArray":
+    def __gt__(self, value: Any) -> DynamicArray:
         """Greater-than comparison.
 
         Args:
@@ -788,7 +803,7 @@ class DynamicArray:
         """
         return self._compare(value, "__gt__")
 
-    def __ge__(self, value: Any) -> "DynamicArray":
+    def __ge__(self, value: Any) -> DynamicArray:
         """Greater-than-or-equal comparison.
 
         Args:
@@ -799,7 +814,7 @@ class DynamicArray:
         """
         return self._compare(value, "__ge__")
 
-    def __lt__(self, value: Any) -> "DynamicArray":
+    def __lt__(self, value: Any) -> DynamicArray:
         """Less-than comparison.
 
         Args:
@@ -810,7 +825,7 @@ class DynamicArray:
         """
         return self._compare(value, "__lt__")
 
-    def __le__(self, value: Any) -> "DynamicArray":
+    def __le__(self, value: Any) -> DynamicArray:
         """Less-than-or-equal comparison.
 
         Args:
@@ -821,7 +836,7 @@ class DynamicArray:
         """
         return self._compare(value, "__le__")
 
-    def __and__(self, other: npt.NDArray[Any]) -> "DynamicArray":
+    def __and__(self, other: npt.NDArray[Any]) -> DynamicArray:
         """Bitwise and / logical and operator.
 
         Returns:
@@ -829,7 +844,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__and__")
 
-    def __or__(self, other: npt.NDArray[Any]) -> "DynamicArray":
+    def __or__(self, other: npt.NDArray[Any]) -> DynamicArray:
         """Bitwise or / logical or operator.
 
         Returns:
@@ -838,7 +853,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__or__")
 
-    def __neg__(self) -> "DynamicArray":
+    def __neg__(self) -> DynamicArray:
         """Unary negation.
 
         Returns:
@@ -847,7 +862,7 @@ class DynamicArray:
         """
         return self._perform_operation(None, "__neg__")
 
-    def __pos__(self) -> "DynamicArray":
+    def __pos__(self) -> DynamicArray:
         """Unary plus (no-op).
 
         Returns:
@@ -856,7 +871,7 @@ class DynamicArray:
         """
         return self._perform_operation(None, "__pos__")
 
-    def __invert__(self) -> "DynamicArray":
+    def __invert__(self) -> DynamicArray:
         """Bitwise invert / logical not.
 
         Returns:
@@ -877,7 +892,7 @@ class DynamicArray:
         )
 
     @classmethod
-    def load(cls, path: Path) -> "DynamicArray":
+    def load(cls, path: Path) -> DynamicArray:
         """
         Load a DynamicArray previously saved with `save`.
 
@@ -917,7 +932,7 @@ class Bucket:
         """
         self._validator = validator
 
-    def __iter__(self) -> tuple[str, Any]:
+    def __iter__(self) -> Iterator[tuple[str, Any]]:
         """Iterate over the items in the bucket.
 
         Yields:
@@ -979,6 +994,8 @@ class Bucket:
                 str,
                 dict,
                 datetime,
+                np.generic,
+                deque,
             ),
         )
         super().__setattr__(name, value)
@@ -990,6 +1007,9 @@ class Bucket:
 
         Args:
             path: The location where the data should be saved. Must be a directory.
+
+        Raises:
+            ValueError: If a value type is not supported for saving.
         """
         path.mkdir(parents=True, exist_ok=True)
         for name, value in self.__dict__.items():
@@ -1016,7 +1036,7 @@ class Bucket:
                     compression="gzip",
                     compression_level=9,
                 )
-            elif isinstance(value, (list, dict)):
+            elif isinstance(value, (list, dict, float, int)):
                 with open((path / name).with_suffix(".json"), "w") as f:
                     json.dump(value, f)
             elif isinstance(value, str):
@@ -1025,10 +1045,23 @@ class Bucket:
             elif isinstance(value, datetime):
                 with open((path / name).with_suffix(".datetime"), "w") as f:
                     f.write(value.isoformat())
-            else:
+            elif isinstance(value, np.ndarray):
+                if value.ndim == 0:
+                    raise ValueError(
+                        "0-dim arrays should be saved as scalars. Otherwise we get undefined and unexpected behavior when loading the array back. Here, 0-dim array are converted to scalars."
+                    )
                 np.save((path / name).with_suffix(".npy"), value)
+            elif isinstance(value, np.generic):
+                np.save((path / name).with_suffix(".npy"), value)
+            elif isinstance(value, deque):
+                # TODO: Remove this option when we use the BMI of SFINCS and deques
+                # are no longer needed.
+                with open((path / name).with_suffix(".pkl"), "wb") as f:
+                    pickle.dump(value, f)
+            else:
+                raise ValueError(f"Cannot save value of type {type(value)} for {name}")
 
-    def load(self, path: Path) -> "Bucket":
+    def load(self, path: Path) -> Bucket:
         """Load the bucket data from disk to the Bucket instance.
 
         Args:
@@ -1036,6 +1069,9 @@ class Bucket:
 
         Returns:
             The Bucket instance itself with the loaded data.
+
+        Raises:
+            ValueError: If a value type is not supported for loading.
         """
         for filename in path.iterdir():
             if filename.suffixes == [".storearray", ".npz"]:
@@ -1044,11 +1080,17 @@ class Bucket:
                     filename.name.removesuffix("".join(filename.suffixes)),
                     DynamicArray.load(filename),
                 )
-            elif filename.suffixes == [".array", ".npz"]:
+            elif filename.suffixes == [".array", ".npz"] or filename.suffix == ".npy":
+                value = np.load(filename)
+                # unpack the value if it was saved as a .array.npz
+                if filename.suffixes == [".array", ".npz"]:
+                    value = value["value"]
+                if value.ndim == 0:
+                    value = value[()]  # convert to scalar but keep dtype
                 setattr(
                     self,
                     filename.name.removesuffix("".join(filename.suffixes)),
-                    np.load(filename)["value"],
+                    value,
                 )
             elif filename.suffix == ".geoparquet":
                 setattr(
@@ -1075,8 +1117,17 @@ class Bucket:
             elif filename.suffix == ".json":
                 with open(filename, "r") as f:
                     setattr(self, filename.stem, json.load(f))
+            elif filename.suffix == ".pkl":
+                # TODO: Remove this option when we use the BMI of SFINCS and deques
+                # are no longer needed.
+                with open(filename, "rb") as f:
+                    setattr(
+                        self,
+                        filename.stem,
+                        pickle.load(f),
+                    )
             else:
-                setattr(self, filename.stem, np.load(filename).item())
+                raise ValueError(f"Cannot load value {filename}")
 
         return self
 
@@ -1087,7 +1138,7 @@ class Store:
     This class is use to store and restore the model's state in a structured way.
     """
 
-    def __init__(self, model: "GEBModel") -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize the Store with a reference to the model.
 
         Args:
@@ -1158,10 +1209,17 @@ class Store:
 
             split_name = bucket_folder.name.split(".")
 
+            # Skip loading hydrology-related buckets if hydrology simulation is disabled
             if (
                 not self.model.simulate_hydrology
                 and (split_name[0] == "hydrology")
                 and not split_name[1] == "grid"
+            ):
+                continue
+
+            # Skip loading flood-related buckets if flood simulation is disabled
+            if self.model.config["hazards"]["floods"]["simulate"] is False and (
+                split_name[0] == "floods"
             ):
                 continue
 

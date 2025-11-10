@@ -6,22 +6,34 @@ and read simulation results.
 
 """
 
+from __future__ import annotations
+
 import json
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.workflows import burn_river_rect, river_source_points
+from pyflwdir import FlwdirRaster
+from scipy.ndimage import value_indices
 from tqdm import tqdm
 
 from geb.hydrology.routing import get_river_width
+from geb.typing import (
+    ArrayInt32,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
+    TwoDArrayFloat64,
+    TwoDArrayInt32,
+)
 
 from .workflows import do_mask_flood_plains, get_river_depth, get_river_manning
 from .workflows.return_periods import (
@@ -42,11 +54,83 @@ from .workflows.utils import (
     to_sfincs_datetime,
 )
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel
+
+
+def set_river_outflow_boundary_condition(
+    sf: SfincsModel,
+    model_root: Path,
+    simulation_root: Path,
+    write_figures: bool = True,
+) -> None:
+    """Set up river outflow boundary condition with constant elevation.
+
+    This function reads the outflow point and elevation from the model setup,
+    creates a constant water level time series, and applies it as a boundary condition.
+
+    Args:
+        sf: The SFINCS model instance.
+        model_root: Path to the model root directory.
+        simulation_root: Path to the simulation directory.
+        write_figures: Whether to generate and save forcing plots. Defaults to True.
+    """
+    outflow: gpd.GeoDataFrame = gpd.read_file(model_root / "gis/outflow_points.gpkg")
+    # only one point location is expected
+    assert len(outflow) == 1, "Only one outflow point is expected"
+
+    # before changing root read dem value from gis folder from .json file
+    dem_json_path = model_root / "gis" / "outflow_elevation.json"
+    with open(dem_json_path, "r") as f:
+        dem_values = json.load(f)
+    elevation = dem_values.get("outflow_elevation", None)
+
+    if elevation is None or elevation == 0:
+        assert False, (
+            "Elevation should have positive value to set up outflow waterlevel boundary"
+        )
+
+    # Get the model's start and stop time using the get_model_time function
+    tstart, tstop = sf.get_model_time()
+
+    # Define the time range (e.g., 1 month of hourly data)
+    time_range: pd.DatetimeIndex = pd.date_range(start=tstart, end=tstop, freq="h")
+
+    # Create DataFrame with constant elevation value
+    elevation_time_series_constant: pd.DataFrame = pd.DataFrame(
+        data={"water_level": elevation},  # Use extracted elevation value
+        index=time_range,
+    )
+
+    # Extract a unique index from the outflow point. Here, we use 1 as an example.
+    outflow_index: int = (
+        1  # This should be the index or a suitable ID of the outflow point
+    )
+    elevation_time_series_constant.columns: list[int] = [
+        outflow_index
+    ]  # Use an integer as column name
+
+    # Ensure outflow has the correct index as well
+    outflow["index"] = outflow_index  # Set the matching index to outflow location
+
+    # Now set the water level forcing
+    sf.setup_waterlevel_forcing(
+        timeseries=elevation_time_series_constant,  # Constant time series
+        locations=outflow,  # Outflow point
+    )
+    sf.set_root(str(simulation_root), mode="w+")
+
+    sf.write_forcing()
+
+    if write_figures:
+        sf.plot_forcing(fn_out="waterlevel_forcing.png")
+        sf.plot_basemap(fn_out="basemap.png")
+
 
 class SFINCSRootModel:
     """Builds and updates SFINCS model files for flood hazard modeling."""
 
-    def __init__(self, model: "GEBModel", name: str) -> None:
+    def __init__(self, model: GEBModel, name: str) -> None:
         """Initializes the SFINCSRootModel with a GEBModel and event name.
 
         Sets up the constant parts of the model (grid, mask, rivers, etc.),
@@ -58,7 +142,8 @@ class SFINCSRootModel:
                 Also used to create the path to write the file to disk.
         """
         self.model = model
-        self._name = name
+        self.logger = self.model.logger
+        self._name: str = name
 
     @property
     def name(self) -> str:
@@ -88,7 +173,7 @@ class SFINCSRootModel:
         """
         return Path(self.path / "sfincs.inp").is_file()
 
-    def read(self) -> "SFINCSRootModel":
+    def read(self) -> SFINCSRootModel:
         """Reads an existing SFINCS model from the model root directory.
 
         Returns:
@@ -109,7 +194,6 @@ class SFINCSRootModel:
         region: gpd.GeoDataFrame,
         rivers: gpd.GeoDataFrame,
         discharge: xr.DataArray,
-        waterbody_ids: npt.NDArray[np.int32],
         river_width_alpha: npt.NDArray[np.float32],
         river_width_beta: npt.NDArray[np.float32],
         mannings: xr.DataArray,
@@ -119,7 +203,8 @@ class SFINCSRootModel:
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
-    ) -> "SFINCSRootModel":
+        setup_outflow: bool = True,
+    ) -> SFINCSRootModel:
         """Build a SFINCS model.
 
         Notes:
@@ -131,7 +216,6 @@ class SFINCSRootModel:
             region: A GeoDataFrame defining the region of interest.
             rivers: A GeoDataFrame containing river segments.
             discharge: An xarray DataArray containing discharge values for the rivers in m^3/s.
-            waterbody_ids: An numpy array of waterbody IDs specifying lakes and reservoirs. Should have same x and y dimensions as the discharge.
             river_width_alpha: An numpy array of river width alpha parameters. Used for calculating river width.
             river_width_beta: An numpy array of river width beta parameters. Used for calculating river width
             mannings: A xarray DataArray of Manning's n values for the rivers.
@@ -142,6 +226,7 @@ class SFINCSRootModel:
             depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
+            setup_outflow: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
 
         Returns:
             The SFINCSRootModel instance with the built model.
@@ -164,6 +249,8 @@ class SFINCSRootModel:
             "power_law",
         ], "Method should be 'manning' or 'power_law'"
 
+        self.logger.info("Starting SFINCS model build...")
+
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+")
 
@@ -185,13 +272,35 @@ class SFINCSRootModel:
                 region, zmin=-21, reset_mask=True
             )  # TODO: Improve mask setup
 
-        # Setup river inflow points
+        # in one plot plot the region boundary as well as the rivers and save to file
+        fig, ax = plt.subplots(figsize=(10, 10))
+        region.boundary.plot(ax=ax, color="black")
+
+        # Remove rivers that are not represented in the grid and have no upstream rivers
+        # TODO: Make an upstream flag in preprocessing for upstream rivers that is more
+        # general than the MERIT-hydro specific 'maxup' attribute
+        rivers: gpd.GeoDataFrame = rivers[
+            (rivers["maxup"] > 0) | (rivers["represented_in_grid"])
+        ]
+
+        rivers.plot(ax=ax, color="blue")
+        plt.savefig(self.path / "gis" / "rivers.png")
+
         sf.setup_river_inflow(
-            rivers=rivers,
+            rivers=rivers.to_crs(sf.crs),
             keep_rivers_geom=True,
             river_upa=0,
             river_len=0,
         )
+
+        if setup_outflow:
+            sf.setup_river_outflow(
+                rivers=rivers.to_crs(sf.crs),
+                keep_rivers_geom=True,
+                river_upa=0,
+                river_len=0,
+                btype="waterlevel",
+            )
 
         # find outflow points and save for later use
         outflow_points = river_source_points(
@@ -230,21 +339,15 @@ class SFINCSRootModel:
             x=x_coord, y=y_coord, method="nearest"
         ).values.item()
 
-        # Optional: sanity check
-        if elevation_value is None or elevation_value <= 0:
-            raise ValueError(
-                f"Invalid outflow elevation ({elevation_value}), must be > 0"
-            )
-
         # Save elevation value to a file in model_root/gis
-        outflow_elev_path = self.path / "gis" / "outflow_elevation.json"
+        outflow_elev_path: Path = self.path / "gis" / "outflow_elevation.json"
         with open(outflow_elev_path, "w") as f:
             json.dump({"outflow_elevation": elevation_value}, f)
 
         river_representative_points = []
         for ID in rivers.index:
             river_representative_points.append(
-                get_representative_river_points(ID, rivers, waterbody_ids)
+                get_representative_river_points(ID, rivers)
             )
 
         discharge_by_river, river_parameters = (
@@ -289,7 +392,13 @@ class SFINCSRootModel:
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
         # including mannings roughness.
         if nr_subgrid_pixels is not None:
-            print("Setting up SFINCS subgrid...")
+            self.logger.info(
+                f"Setting up SFINCS subgrid with {nr_subgrid_pixels} subgrid pixels..."
+            )
+            # only burn rivers that are wider than the subgrid pixel size
+            rivers_to_burn: gpd.GeoDataFrame = rivers[
+                rivers["width"] > resolution / nr_subgrid_pixels
+            ].copy()
             sf.setup_subgrid(
                 datasets_dep=DEMs,
                 datasets_rgh=[
@@ -299,7 +408,7 @@ class SFINCSRootModel:
                 ],
                 datasets_riv=[
                     {
-                        "centerlines": rivers.rename(
+                        "centerlines": rivers_to_burn.rename(
                             columns={"width": "rivwth", "depth": "rivdph"}
                         )
                     }
@@ -313,7 +422,13 @@ class SFINCSRootModel:
 
             sf.write_subgrid()
         else:
-            print("Setting up SFINCS without subgrid")
+            self.logger.info(
+                "Setting up SFINCS without subgrid - burning rivers into main grid..."
+            )
+            # only burn rivers that are wider than the grid size
+            rivers_to_burn: gpd.GeoDataFrame = rivers[
+                rivers["width"] > resolution
+            ].copy()
             # first set up the mannings roughness with the default method
             # (we already have the DEM set up)
             sf.setup_manning_roughness(
@@ -327,7 +442,7 @@ class SFINCSRootModel:
             # burn the rivers into these grids
             elevation, mannings = burn_river_rect(
                 da_elv=sf.grid.dep,
-                gdf_riv=rivers,
+                gdf_riv=rivers_to_burn,
                 da_man=sf.grid.manning,
                 rivwth_name="width",
                 rivdph_name="depth",
@@ -373,9 +488,8 @@ class SFINCSRootModel:
     def estimate_discharge_for_return_periods(
         self,
         discharge: xr.DataArray,
-        waterbody_ids: npt.NDArray[np.int32],
         rivers: gpd.GeoDataFrame,
-        rising_limb_hours: int | float = 72,
+        rising_limb_hours: int = 72,
         return_periods: list[int | float] = [2, 5, 10, 20, 50, 100, 250, 500, 1000],
     ) -> None:
         """Estimate discharge for specified return periods and create hydrographs.
@@ -383,22 +497,21 @@ class SFINCSRootModel:
         Args:
             model_root: path to the SFINC model root directory
             discharge: xr.DataArray containing the discharge data
-            waterbody_ids: array of waterbody IDs, of identical x and y dimensions as discharge
             rivers: GeoDataFrame containing river segments
             rising_limb_hours: number of hours for the rising limb of the hydrograph.
             return_periods: list of return periods for which to estimate discharge.
         """
-        recession_limb_hours: int | float = rising_limb_hours
+        recession_limb_hours: int = rising_limb_hours
 
         # here we only select the rivers that have an upstream forcing point
-        rivers_with_forcing_point = rivers[~rivers["is_downstream_outflow_subbasin"]]
+        rivers_with_forcing_point: gpd.GeoDataFrame = rivers[
+            ~rivers["is_downstream_outflow_subbasin"]
+        ]
 
-        river_representative_points = []
+        river_representative_points: list[list[tuple[int, int]]] = []
         for ID in rivers_with_forcing_point.index:
             river_representative_points.append(
-                get_representative_river_points(
-                    ID, rivers_with_forcing_point, waterbody_ids
-                )
+                get_representative_river_points(ID, rivers_with_forcing_point)
             )
 
         discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
@@ -406,7 +519,7 @@ class SFINCSRootModel:
             river_representative_points,
             discharge=discharge,
         )
-        rivers_with_forcing_point = assign_return_periods(
+        rivers_with_forcing_point: gpd.GeoDataFrame = assign_return_periods(
             rivers_with_forcing_point, discharge_by_river, return_periods=return_periods
         )
 
@@ -418,12 +531,12 @@ class SFINCSRootModel:
                 discharge_for_return_period = rivers_with_forcing_point.at[
                     river_idx, f"Q_{return_period}"
                 ]
-                hydrograph = create_hourly_hydrograph(
+                hydrograph: pd.DataFrame = create_hourly_hydrograph(
                     discharge_for_return_period,
                     rising_limb_hours,
                     recession_limb_hours,
                 )
-                hydrograph = {
+                hydrograph: dict[str, Any] = {
                     time.isoformat(): Q.item() for time, Q in hydrograph.iterrows()
                 }
                 rivers_with_forcing_point.at[
@@ -436,7 +549,7 @@ class SFINCSRootModel:
         self,
         *args: Any,
         **kwargs: Any,
-    ) -> "SFINCSSimulation":
+    ) -> SFINCSSimulation:
         """Sets forcing for a SFINCS model based on the provided parameters.
 
         Creates a new simulation directory and creteas a new sfincs model
@@ -459,7 +572,7 @@ class SFINCSRootModel:
 
     def create_simulation_for_return_period(
         self, return_period: int | float
-    ) -> "MultipleSFINCSSimulations":
+    ) -> MultipleSFINCSSimulations:
         """Creates multiple SFINCS simulations for a specified return period.
 
         The method groups rivers by their calculation group and creates a separate
@@ -520,15 +633,33 @@ class SFINCSRootModel:
                 nodes=inflow_nodes.to_crs(self.sfincs_model.crs),
                 timeseries=Q,
             )
+
+            # Set up river outflow boundary condition for this simulation
+            set_river_outflow_boundary_condition(
+                sf=simulation.sfincs_model,
+                model_root=self.path,
+                simulation_root=simulation.path,
+                write_figures=simulation.write_figures,
+            )
+
             simulations.append(simulation)
 
         return MultipleSFINCSSimulations(simulations=simulations)
+
+    @property
+    def active_cells(self) -> xr.DataArray:
+        """Returns a boolean mask of the active cells in the SFINCS model.
+
+        Returns:
+            A boolean mask of the active cells in the SFINCS model.
+        """
+        return self.sfincs_model.grid["msk"] == 1
 
 
 class MultipleSFINCSSimulations:
     """Manages multiple SFINCS simulations as a single entity."""
 
-    def __init__(self, simulations: list["SFINCSSimulation"]) -> None:
+    def __init__(self, simulations: list[SFINCSSimulation]) -> None:
         """Simulates running multiple SFINCS simulations as one.
 
         Args:
@@ -606,7 +737,7 @@ class SFINCSSimulation:
         self.sfincs_root_model = sfincs_root_model
 
         sfincs_model = sfincs_root_model.sfincs_model
-        sfincs_model.set_root(self.path, mode="w+")
+        sfincs_model.set_root(str(self.path), mode="w+")
 
         # update mode time based on event tstart and tend from event dict
         sfincs_model.setup_config(
@@ -630,16 +761,13 @@ class SFINCSSimulation:
 
     def set_headwater_forcing_from_grid(
         self,
-        discharge_grid: str | xr.DataArray,
-        waterbody_ids: npt.NDArray[np.int32],
+        discharge_grid: xr.DataArray,
     ) -> None:
         """Sets up discharge forcing for the SFINCS model from a gridded dataset.
 
         Args:
             discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
                 Usually this is from a hydrological model.
-            waterbody_ids: An numpy array of waterbody IDs specifying lakes and reservoirs.
-                Should have same x and y dimensions as the discharge.
         """
         rivers: gpd.GeoDataFrame = import_rivers(self.root_path)
         rivers_with_forcing_point: gpd.GeoDataFrame = rivers[
@@ -657,7 +785,10 @@ class SFINCSSimulation:
         river_representative_points = []
         for ID in headwater_rivers.index:
             river_representative_points.append(
-                get_representative_river_points(ID, headwater_rivers, waterbody_ids)
+                get_representative_river_points(
+                    ID,
+                    headwater_rivers,
+                )
             )
 
         discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
@@ -703,55 +834,160 @@ class SFINCSSimulation:
         self.sfincs_model.write_config()
 
         if self.write_figures:
+            self.sfincs_model.plot_basemap(fn_out="src_points_check.png")
             self.sfincs_model.plot_forcing(fn_out="forcing.png")
-            self.sfincs_model.plot_basemap(fn_out="basemap.png")
 
-    def set_precipitation_forcing_grid(
+    def set_runoff_forcing(
         self,
-        current_water_storage_grid: xr.DataArray,
-        max_water_storage_grid: xr.DataArray,
-        saturated_hydraulic_conductivity_grid: xr.DataArray,
-        precipitation_grid: xr.DataArray,
+        runoff_m: xr.DataArray,
     ) -> None:
         """Sets up precipitation forcing for the SFINCS model from a gridded dataset.
 
         Args:
-            current_water_storage_grid: xarray DataArray containing current soil water capacity [m].
-            max_water_storage_grid: xarray DataArray containing maximum water storage [m].
-            saturated_hydraulic_conductivity_grid: xarray DataArray containing saturated hydraulic conductivity [m/s].
-            precipitation_grid: xarray DataArray containing precipitation values in kg/m²/s (equivalent to mm/s).
+            runoff_m: xarray DataArray containing runoff values in m per time step.
         """
-        assert precipitation_grid.raster.crs is not None, (
-            "precipitation_grid should have a crs"
-        )
+        assert runoff_m.rio.crs is not None, "precipitation_grid should have a crs"
         assert (
-            pd.to_datetime(precipitation_grid.time[0].item()).to_pydatetime()
-            <= self.start_time
+            pd.to_datetime(runoff_m.time[0].item()).to_pydatetime() <= self.start_time
         )
-        assert (
-            pd.to_datetime(precipitation_grid.time[-1].item()).to_pydatetime()
-            >= self.end_time
-        )
+        assert pd.to_datetime(runoff_m.time[-1].item()).to_pydatetime() >= self.end_time
 
-        precipitation_grid: xr.DataArray = precipitation_grid.sel(
+        runoff_m: xr.DataArray = runoff_m.sel(
             time=slice(self.start_time, self.end_time)
         )
 
         self.sfincs_model.setup_precip_forcing_from_grid(
-            precip=(precipitation_grid * 3600).to_dataset(name="precip")
-        )  # convert from kg/m2/s to mm/h
+            precip=(runoff_m * 1000).to_dataset(name="precip")
+        )  # convert from m/h to mm/h for SFINCS
 
-        self._setup_infiltration_capacity(
-            max_water_storage=max_water_storage_grid,
-            current_water_storage=current_water_storage_grid,
-            saturated_hydraulic_conductivity=saturated_hydraulic_conductivity_grid,
-        )
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
 
-        if self.write_figures:
-            self.sfincs_model.plot_basemap(fn_out="basemap.png")
-            self.sfincs_model.plot_forcing(fn_out="forcing.png")
+    def set_accumulated_runoff_forcing(
+        self,
+        runoff_m: xr.DataArray,
+        river_network: FlwdirRaster,
+        mask: TwoDArrayBool,
+        river_ids: TwoDArrayInt32,
+        upstream_area: TwoDArrayFloat32,
+        cell_area: TwoDArrayFloat32,
+        river_geometry: gpd.GeoDataFrame,
+    ) -> np.float64:
+        """Sets up accumulated runoff forcing for the SFINCS model.
+
+        This function accumulates the runoff from the provided runoff grid to the starting
+        points of each river segment in the river network.
+
+        Args:
+            runoff_m: xarray DataArray containing runoff values in m per time step.
+            river_network: FlwdirRaster representing the river network flow directions.
+            mask: Boolean mask indicating the cells within the river basin.
+            river_ids: 2D numpy array of river segment IDs for each cell in the grid.
+            upstream_area: 2D numpy array of upstream area values for each cell in the grid.
+            cell_area: 2D numpy array of cell area values for each cell in the grid.
+            river_geometry: GeoDataFrame containing the geometry of the river segments.
+
+        Returns:
+            The mean discarded generated discharge in m³/s due to cells not belonging to any subbasin.
+        """
+        # select only the time range needed
+        runoff_m: xr.DataArray = runoff_m.sel(
+            time=slice(self.start_time, self.end_time)
+        )
+
+        # we want to get all the discharge upstream from the starting point of each river segment
+        # therefore, we first remove all river cells except for the starting point of each river segment
+        # TODO: this can be changed so that runoff is added along the river segment, rather than
+        # just the most upstream point
+        xy_per_river_segment = value_indices(river_ids, ignore_value=-1)
+        for COMID, (ys, xs) in xy_per_river_segment.items():
+            river_upstream_area = upstream_area[ys, xs]
+            up_to_downstream_ids = np.argsort(river_upstream_area)
+
+            ys_up_to_down: npt.NDArray[np.int64] = ys[up_to_downstream_ids]
+            xs_up_to_down: npt.NDArray[np.int64] = xs[up_to_downstream_ids]
+
+            for i in range(1, len(ys_up_to_down)):
+                river_ids[ys_up_to_down[i], xs_up_to_down[i]] = -1
+
+        # confirm that each river segment is represented by exactly one cell
+        assert (np.unique(river_ids, return_counts=True)[1][1:] == 1).all()
+
+        river_cells: TwoDArrayBool = river_ids != -1
+        river_ids_mapping: ArrayInt32 = river_ids[river_cells]
+
+        # starting from each river cell, create an upstream basin map for which
+        # the discharge will be accumulated
+        subbasins: ArrayInt32 = river_network.basins(
+            np.where(river_cells.ravel())[0],
+            ids=np.arange(1, river_cells.sum() + 1, step=1, dtype=np.int32),
+        )[mask]
+
+        timestep_size: xr.DataArray = runoff_m.time.diff(dim="time").astype(
+            "timedelta64[s]"
+        )
+        # confirm that timestep size is constant
+        assert (timestep_size == timestep_size[0]).all()
+        timestep_size_seconds: int = timestep_size[0].item().seconds
+
+        # get the generated discharge in m3/s for each cell
+        generated_discharge_m3_per_s: xr.DataArray = (
+            runoff_m * cell_area / timestep_size_seconds
+        )
+
+        # accumulate generated discharge to the river starting points
+        accumulated_generated_discharge_m3_per_s: TwoDArrayFloat64 = (
+            np.apply_along_axis(
+                func1d=lambda x: np.bincount(subbasins, weights=x),
+                axis=1,
+                arr=generated_discharge_m3_per_s.values[:, mask],
+            )
+        )
+
+        # a subbasin value of 0 means that the cell does not belong to any subbasin
+        # this is possible for cells that flow into the river segment closest
+        # to the outlet of the river network
+        # therefore, we discard the generated discharge from these cells
+        if (subbasins == 0).any():
+            # for testing, we return the mean discarded generated discharge
+            discarded_generated_discharge_m3_per_s: np.float64 = (
+                accumulated_generated_discharge_m3_per_s[:, 0].mean()
+            )
+            accumulated_generated_discharge_m3_per_s: TwoDArrayFloat64 = (
+                accumulated_generated_discharge_m3_per_s[:, 1:]
+            )
+        else:
+            discarded_generated_discharge_m3_per_s: np.float64 = np.float64(0.0)
+
+        assert accumulated_generated_discharge_m3_per_s.shape[1] == river_cells.sum()
+
+        # create the forcing timeseries for each river segment starting point
+        nodes: gpd.GeoDataFrame = river_geometry.copy()
+        nodes["geometry"] = nodes["geometry"].apply(get_start_point)
+        nodes: gpd.GeoDataFrame = nodes.reset_index()
+        nodes.index = list(np.arange(1, len(nodes) + 1))
+        timeseries: pd.DataFrame = pd.DataFrame(
+            {
+                "time": generated_discharge_m3_per_s.time,
+            }
+        ).set_index("time")
+
+        for i, node in nodes.iterrows():
+            if node["represented_in_grid"]:
+                idx = np.where(node["COMID"] == river_ids_mapping)[0]
+                assert len(idx) == 1
+                idx = idx[0]
+                timeseries[i] = accumulated_generated_discharge_m3_per_s[:, idx]
+            else:
+                timeseries[i] = 0.0
+
+        self.set_discharge_forcing_from_nodes(
+            nodes=nodes,
+            timeseries=timeseries,
+        )
+
+        # return the mean discarded generated discharge for testing purposes
+        return discarded_generated_discharge_m3_per_s
 
     # def setup_outflow_boundary(self) -> None:
     #     # detect whether water level forcing should be set (use this under forcing == coastal) PLot basemap and forcing to check
@@ -786,85 +1022,6 @@ class SFINCSSimulation:
     #         )
 
     #     self.sfincs_model.write_forcing()
-
-    def _setup_infiltration_capacity(
-        self,
-        max_water_storage: xr.DataArray,
-        current_water_storage: xr.DataArray,
-        saturated_hydraulic_conductivity: xr.DataArray,
-        initial_substractiion: float = 0.0,
-    ) -> None:
-        """Set up infiltration parameters in the SFINCS model.
-
-        Uses the curve number method with recovery.
-
-        Args:
-            sfincs_model: SfincsModel object to update.
-            max_water_storage: xarray DataArray containing maximum water storage [m].
-            current_water_storage: xarray DataArray containing soil water capacity [m].
-            saturated_hydraulic_conductivity: xarray DataArray containing saturated hydraulic conductivity [m/s].
-            initial_substractiion: Initial abstraction ratio [-].
-                Is removed from rainfall before infiltration. Defaults to 0.0.
-        """
-        remaining_water_storage = max_water_storage - current_water_storage
-        remaining_water_storage = remaining_water_storage.compute()
-
-        # maximum water storage (smax in SFINCS)
-        max_water_storage = max_water_storage.raster.reproject_like(
-            self.sfincs_model.grid, method="average"
-        )
-        assert not np.isnan(max_water_storage.values[self.active_cells]).any(), (
-            "max_water_storage contains NaN values in active cells"
-        )
-        max_water_storage = max_water_storage.to_dataset(name="smax")
-        self.sfincs_model.set_grid(max_water_storage, name="smax")
-        self.sfincs_model.set_config("smaxfile", "sfincs.smax")
-
-        # remaining water storage (seff in SFINCS)
-        remaining_water_storage = remaining_water_storage.raster.reproject_like(
-            self.sfincs_model.grid, method="nearest"
-        )
-        assert not np.isnan(remaining_water_storage.values[self.active_cells]).any(), (
-            "current_water_storage contains NaN values in active cells"
-        )
-        remaining_water_storage = remaining_water_storage.to_dataset(name="seff")
-        self.sfincs_model.set_grid(remaining_water_storage, name="seff")
-        self.sfincs_model.set_config("sefffile", "sfincs.seff")
-
-        # saturated hydraulic conductivity (ks in SFINCS)
-        saturated_hydraulic_conductivity = (
-            (
-                saturated_hydraulic_conductivity.raster.reproject_like(
-                    self.sfincs_model.grid, method="average"
-                )
-            )
-            * 3600
-            * 1000
-        )  # convert from m/s to mm/h for SFINCS
-        assert not np.isnan(
-            saturated_hydraulic_conductivity.values[self.active_cells]
-        ).any(), "saturated_hydraulic_conductivity contains NaN values in active cells"
-
-        saturated_hydraulic_conductivity: xr.Dataset = (
-            saturated_hydraulic_conductivity.to_dataset(name="ks")
-        )
-        self.sfincs_model.set_grid(
-            saturated_hydraulic_conductivity, name="ks"
-        )  # convert from m/s to mm/h
-        self.sfincs_model.set_config("ksfile", "sfincs.ks")
-
-        # initial abstraction ratio
-        assert initial_substractiion >= 0.0, "initial_substraction must be non-negative"
-        assert initial_substractiion < 1.0, "initial_substraction must be < 1.0"
-
-        self.sfincs_model.set_config("sfacinf", initial_substractiion)
-
-        # remove constant infiltration rate if present
-        self.sfincs_model.config.pop("qinf", None)
-
-        # write grids and config
-        self.sfincs_model.write_grid(data_vars=["smax", "seff", "ks"])
-        self.sfincs_model.write_config()
 
     def run(self, gpu: bool | str) -> None:
         """Runs the SFINCS simulation.
@@ -958,16 +1115,7 @@ class SFINCSSimulation:
         Returns:
             True if the SFINCS model has an outflow boundary condition, False otherwise.
         """
-        return (self.sfincs_model.grid["msk"] == 2).any()
-
-    @property
-    def active_cells(self) -> xr.DataArray:
-        """Returns a boolean mask of the active cells in the SFINCS model.
-
-        Returns:
-            A boolean mask of the active cells in the SFINCS model.
-        """
-        return self.sfincs_model.grid["msk"] == 1
+        return (self.sfincs_model.grid["msk"] == 2).any().item()
 
     def get_cumulative_precipitation(self) -> xr.DataArray:
         """Reads the cumulative precipitation from the SFINCS model results.
@@ -976,13 +1124,6 @@ class SFINCSSimulation:
             An xarray DataArray containing the cumulative precipitation.
         """
         self.sfincs_model.read_results()
-        return self.sfincs_model.results["cumprcp"].isel(timemax=-1)
-
-    def get_cumulative_infiltration(self) -> xr.DataArray:
-        """Reads the cumulative infiltration from the SFINCS model results.
-
-        Returns:
-            An xarray DataArray containing the cumulative infiltration.
-        """
-        self.sfincs_model.read_results()
-        return self.sfincs_model.results["cuminf"].isel(timemax=-1)
+        cumulative_precipitation = self.sfincs_model.results["cumprcp"].isel(timemax=-1)
+        assert isinstance(cumulative_precipitation, xr.DataArray)
+        return cumulative_precipitation

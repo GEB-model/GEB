@@ -2,7 +2,7 @@
 
 import shutil
 import warnings
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from time import sleep, time
 
@@ -11,7 +11,6 @@ import numpy.typing as npt
 import pandas as pd
 import pytest
 import xarray as xr
-import zarr
 import zarr.storage
 from zarr.codecs.numcodecs import FixedScaleOffset
 
@@ -97,6 +96,13 @@ def encode_decode(
 
 
 def test_calculate_scaling() -> None:
+    """Test the calculate_scaling function with various precision and range scenarios.
+
+    Tests encoding/decoding with different precisions, offsets, and data ranges.
+    Verifies that the scaling calculations work correctly for signed and unsigned
+    integer types, and that edge cases like zero values and extreme ranges are handled.
+    Also tests that ValueError is raised for impossible precision/range combinations.
+    """
     for precision in [0.1, 0.01, 0.001, 0.0001]:
         data = ((np.random.rand(100) - 0.5) * 20).astype(np.float32)
         encode_decode(data, -10, 100, offset=0, precision=precision)
@@ -156,6 +162,13 @@ def test_calculate_scaling() -> None:
 
 
 def test_io() -> None:
+    """Test the to_zarr function with different data array configurations.
+
+    Tests saving xarray DataArrays to Zarr format with different coordinate
+    systems and dimensions. Verifies that arrays with spatial coordinates,
+    time dimensions, and other dimensions can be properly saved with CRS
+    information and fill values.
+    """
     x = np.linspace(-5, 5, 10)
     y = np.linspace(10, 0, 10)
 
@@ -188,6 +201,13 @@ def test_io() -> None:
 
 
 def test_get_window() -> None:
+    """Test the get_window function with various bounding box and buffer scenarios.
+
+    Tests window selection from coordinate arrays with different bounds,
+    buffer values, and edge cases. Verifies that proper slices are returned
+    for full windows, partial windows, and windows with buffers. Also tests
+    error handling for invalid buffer values and out-of-bounds coordinates.
+    """
     x = np.linspace(-5, 5, 11, dtype=np.int32)
     y = np.linspace(10, 0, 11, dtype=np.int32)
     values = np.arange(x.size * y.size).reshape(y.size, x.size).astype(np.int32)
@@ -232,7 +252,12 @@ def test_get_window() -> None:
     assert (da_slice.y.values == y[0:4]).all()
 
     with pytest.raises(ValueError, match="buffer must be an integer"):
-        window = get_window(da.x, da.y, bounds, buffer=0.1)
+        window = get_window(
+            da.x,
+            da.y,
+            bounds,
+            buffer=0.1,  # ty: ignore[invalid-argument-type]
+        )
     with pytest.raises(ValueError, match="buffer must be greater than or equal to 0"):
         window = get_window(da.x, da.y, bounds, buffer=-1)
 
@@ -330,8 +355,8 @@ def zarr_file(varname: str) -> Path:
 
     periods: int = 100
 
-    times = pd.date_range("2000-01-01", periods=periods, freq="D")
-    data = np.empty((periods, size, size), dtype=np.int32)
+    times: pd.DatetimeIndex = pd.date_range("2000-01-01", periods=periods, freq="D")
+    data: npt.NDArray[np.float32] = np.empty((periods, size, size), dtype=np.float32)
     for i in range(periods):
         data[i][:] = i
     ds: xr.Dataset = xr.Dataset(
@@ -348,6 +373,7 @@ def zarr_file(varname: str) -> Path:
         encoding={
             varname: {
                 "chunks": (1, size, size),
+                "fill_value": np.nan,
             }
         },
         consolidated=False,
@@ -355,8 +381,8 @@ def zarr_file(varname: str) -> Path:
     return file_path
 
 
-def test_read_timestep() -> None:
-    """Test the AsyncGriddedForcingReader class.
+def test_read_timestep_async() -> None:
+    """Test the AsyncGriddedForcingReader class with asynchronous reading.
 
     This test creates three temporary zarr files with a single variable each.
     It then creates three AsyncGriddedForcingReader instances to read the data from these
@@ -375,69 +401,72 @@ def test_read_timestep() -> None:
     precipitation_file: Path = zarr_file("precipitation")
     pressure_file: Path = zarr_file("pressure")
     reader1: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        temperature_file, variable_name="temperature"
+        temperature_file, variable_name="temperature", asynchronous=True
     )
     reader2: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        precipitation_file, variable_name="precipitation"
+        precipitation_file, variable_name="precipitation", asynchronous=True
     )
     reader3: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-        pressure_file, variable_name="pressure"
+        pressure_file, variable_name="pressure", asynchronous=True
     )
 
-    data0 = reader1.read_timestep(date(2000, 1, 1))
+    data0 = reader1.read_timestep(datetime(2000, 1, 1))
 
     sleep(3)  # Simulate some processing time
 
     t0 = time()
-    data1 = reader1.read_timestep(date(2000, 1, 2))
+    data1 = reader1.read_timestep(datetime(2000, 1, 2))
     t1 = time()
-    print("Load next timestep (quick): {:.3f}s".format(t1 - t0))
+    print("Async - Load next timestep (quick): {:.3f}s".format(t1 - t0))
 
     # wait half the time it took to load the previous timestep to simulate a short
     # processing time
     sleep((t1 - t0) / 2)
 
     t0 = time()
-    data2 = reader1.read_timestep(date(2000, 1, 3))
+    data2 = reader1.read_timestep(datetime(2000, 1, 3))
     t1 = time()
-    print("Load next timestep short waiting (semi-quick): {:.3f}s".format(t1 - t0))
+    print(
+        "Async - Load next timestep short waiting (semi-quick): {:.3f}s".format(t1 - t0)
+    )
 
     assert (data0 == 0).all()
     assert (data1 == 1).all()
     assert (data2 == 2).all()
-    assert data0.dtype == np.int32
+    assert data0.dtype == np.float32
 
     sleep(3)
 
     t0 = time()
-    data3 = reader1.read_timestep(date(2000, 1, 4))
+    data3 = reader1.read_timestep(datetime(2000, 1, 4))
     t1 = time()
-    print("Load next timestep with waiting (quick): {:.3f}s".format(t1 - t0))
+    print("Async - Load next timestep with waiting (quick): {:.3f}s".format(t1 - t0))
 
     t0 = time()
-    data3 = reader1.read_timestep(date(2000, 1, 4))
+    data3 = reader1.read_timestep(datetime(2000, 1, 4))
     t1 = time()
-    print("Load same timestep (quick): {:.3f}s".format(t1 - t0))
+    print("Async - Load same timestep (quick): {:.3f}s".format(t1 - t0))
     assert (data3 == 3).all()
 
     t0 = time()
-    data0 = reader1.read_timestep(date(2000, 1, 1))
+    data0 = reader1.read_timestep(datetime(2000, 1, 6))
     t1 = time()
-    print("Load previous timestep (slow): {:.3f}s".format(t1 - t0))
-    assert (data0 == 0).all()
+    print("Async - Load next next timestep (slow): {:.3f}s".format(t1 - t0))
+    assert (data0 == 5).all()
 
-    reader2.read_timestep(date(2000, 1, 1))
-    reader3.read_timestep(date(2000, 1, 1))
+    reader1.read_timestep(datetime(2000, 1, 1))
+    reader2.read_timestep(datetime(2000, 1, 1))
+    reader3.read_timestep(datetime(2000, 1, 1))
 
     sleep(3)  # Simulate some processing time
     print("-----------------")
 
     t0 = time()
-    data1 = reader1.read_timestep(date(2000, 1, 2))
-    reader2.read_timestep(date(2000, 1, 2))
-    reader3.read_timestep(date(2000, 1, 2))
+    data1 = reader1.read_timestep(datetime(2000, 1, 2))
+    reader2.read_timestep(datetime(2000, 1, 2))
+    reader3.read_timestep(datetime(2000, 1, 2))
     t1 = time()
-    print("Load data from three readers (quick): {:.3f}s".format(t1 - t0))
+    print("Async - Load data from three readers (quick): {:.3f}s".format(t1 - t0))
 
     reader1.close()
     reader2.close()
@@ -446,3 +475,132 @@ def test_read_timestep() -> None:
     shutil.rmtree(temperature_file)
     shutil.rmtree(precipitation_file)
     shutil.rmtree(pressure_file)
+
+
+def test_read_timestep_sync() -> None:
+    """Test the AsyncGriddedForcingReader class with synchronous reading.
+
+    This test verifies that the reader works correctly when asynchronous mode is disabled.
+    It should correctly read data without any preloading mechanism.
+    """
+    temperature_file: Path = zarr_file("temperature")
+    reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
+        temperature_file, variable_name="temperature", asynchronous=False
+    )
+
+    # Test reading single timesteps
+    data0 = reader.read_timestep(datetime(2000, 1, 1))
+    data1 = reader.read_timestep(datetime(2000, 1, 2))
+    data2 = reader.read_timestep(datetime(2000, 1, 3))
+
+    assert (data0 == 0).all()
+    assert (data1 == 1).all()
+    assert (data2 == 2).all()
+    assert data0.dtype == np.float32
+    assert data0.shape == (1, 1000, 1000)
+
+    # Test reading the same timestep twice
+    data1_again = reader.read_timestep(datetime(2000, 1, 2))
+    assert (data1_again == 1).all()
+    assert np.array_equal(data1, data1_again)
+
+    # Test reading a non-sequential timestep
+    data10 = reader.read_timestep(datetime(2000, 1, 11))
+    assert (data10 == 10).all()
+
+    reader.close()
+    shutil.rmtree(temperature_file)
+
+
+def test_read_multiple_timesteps() -> None:
+    """Test reading multiple timesteps at once (n>1).
+
+    This test verifies that the reader correctly handles reading multiple consecutive
+    timesteps in a single call, and that the data is correct for both async and sync modes.
+    """
+    temperature_file: Path = zarr_file("temperature")
+
+    # Test with asynchronous reading
+    reader_async: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
+        temperature_file, variable_name="temperature", asynchronous=True
+    )
+
+    # Read 5 timesteps starting from Jan 1
+    data_multi = reader_async.read_timestep(datetime(2000, 1, 1), n=5)
+    assert data_multi.shape == (5, 1000, 1000)
+    for i in range(5):
+        assert (data_multi[i] == i).all(), f"Timestep {i} has incorrect data"
+
+    sleep(2)  # Allow preloading to happen
+
+    # Read next 5 timesteps
+    t0 = time()
+    data_multi_next = reader_async.read_timestep(datetime(2000, 1, 6), n=5)
+    t1 = time()
+    print(f"Async - Load next 5 timesteps (should be quick): {t1 - t0:.3f}s")
+    assert data_multi_next.shape == (5, 1000, 1000)
+    for i in range(5):
+        assert (data_multi_next[i] == i + 5).all(), (
+            f"Timestep {i + 5} has incorrect data"
+        )
+
+    # Read 3 timesteps from a different position
+    data_multi_jump = reader_async.read_timestep(datetime(2000, 1, 20), n=3)
+    assert data_multi_jump.shape == (3, 1000, 1000)
+    for i in range(3):
+        assert (data_multi_jump[i] == i + 19).all(), (
+            f"Timestep {i + 19} has incorrect data"
+        )
+
+    reader_async.close()
+
+    # Test with synchronous reading
+    reader_sync: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
+        temperature_file, variable_name="temperature", asynchronous=False
+    )
+
+    # Read 5 timesteps starting from Jan 1
+    data_multi_sync = reader_sync.read_timestep(datetime(2000, 1, 1), n=5)
+    assert data_multi_sync.shape == (5, 1000, 1000)
+    for i in range(5):
+        assert (data_multi_sync[i] == i).all(), f"Sync: Timestep {i} has incorrect data"
+
+    # Verify that async and sync give same results
+    assert np.array_equal(data_multi, data_multi_sync), "Async and sync results differ"
+
+    # Read next 5 timesteps
+    data_multi_next_sync = reader_sync.read_timestep(datetime(2000, 1, 6), n=5)
+    assert data_multi_next_sync.shape == (5, 1000, 1000)
+    for i in range(5):
+        assert (data_multi_next_sync[i] == i + 5).all(), (
+            f"Sync: Timestep {i + 5} has incorrect data"
+        )
+
+    # Verify that async and sync give same results
+    assert np.array_equal(data_multi_next, data_multi_next_sync), (
+        "Async and sync results differ for next batch"
+    )
+
+    # Test edge case: reading exactly 1 timestep with n=1
+    data_single = reader_sync.read_timestep(datetime(2000, 1, 15), n=1)
+    assert data_single.shape == (1, 1000, 1000)
+    assert (data_single[0] == 14).all()
+
+    reader_sync.close()
+    shutil.rmtree(temperature_file)
+
+
+def test_asyncreader_rapid_access() -> None:
+    """Test rapid access of timesteps using AsyncGriddedForcingReader.
+
+    This test verifies that the reader can handle rapid sequential access of timesteps
+    so no sleeps in between reads.
+    """
+    temperature_file: Path = zarr_file("temperature")
+    reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
+        temperature_file, variable_name="temperature", asynchronous=True
+    )
+    for day in range(1, 11):
+        data = reader.read_timestep(datetime(2000, 1, day))
+        assert (data == day - 1).all()
+    reader.close()

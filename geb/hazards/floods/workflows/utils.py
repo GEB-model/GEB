@@ -10,14 +10,18 @@ from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel, utils
+from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from pyextremes import EVA
 from shapely.geometry import LineString, Point
 from tqdm import tqdm
+
+from geb.typing import ArrayFloat32, ArrayInt64
 
 
 def export_rivers(
@@ -91,12 +95,12 @@ def read_flood_depth(
     ):
         if method == "max":
             # get maximum water surface elevation (with respect to sea level)
-            water_surface_elevation: xr.DataArray = model.results["zsmax"].max(
-                dim="timemax"
-            )
+            water_surface_elevation = model.results["zsmax"].max(dim="timemax")
+            assert isinstance(water_surface_elevation, xr.DataArray)
         elif method == "final":
             # get water surface elevation at the final time step (with respect to sea level)
-            water_surface_elevation: xr.DataArray = model.results["zs"].isel(timemax=-1)
+            water_surface_elevation = model.results["zs"].isel(timemax=-1)
+            assert isinstance(water_surface_elevation, xr.DataArray)
         else:
             raise ValueError(f"Unknown method: {method}")
         # read subgrid elevation
@@ -116,12 +120,14 @@ def read_flood_depth(
         surface_elevation = model.grid.get("dep")
         if method == "max":
             flood_depth_m = model.results["hmax"].max(dim="timemax")
+            assert isinstance(flood_depth_m, xr.DataArray)
         elif method == "final":
             flood_depth_m_zs = model.results["zs"].isel(time=-1) - surface_elevation
             flood_depth_m_zs = flood_depth_m_zs.compute()
 
             flood_depth_m = model.results["h"].isel(time=-1)
-            flood_depth_m = flood_depth_m.compute()
+            assert isinstance(flood_depth_m, xr.DataArray)
+            flood_depth_m: xr.DataArray = flood_depth_m.compute()
 
         else:
             raise ValueError(f"Unknown method: {method}")
@@ -130,7 +136,31 @@ def read_flood_depth(
         f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "
         f"Mean flood depth: {float(flood_depth_m.mean().values):.2f} m"
     )
+    # Create basemap plot
+    fig, ax = model.plot_basemap(
+        fn_out=None,  # ty: ignore[invalid-argument-type]
+        variable="",  # No variable to plot, only basemap
+        plot_geoms=False,
+        zoomlevel=12,
+        figsize=(11, 7),  # ty: ignore[invalid-argument-type]
+    )
 
+    # Plot flood depth with colorbar
+    cbar_kwargs = {"shrink": 0.6, "anchor": (0, 0)}
+    flood_depth_m.plot(
+        x="x",
+        y="y",
+        ax=ax,
+        vmin=0,
+        vmax=float(flood_depth_m.max().values),
+        cmap=viridis,
+        cbar_kwargs=cbar_kwargs,
+    )
+
+    ax.set_title("Maximum Water Depth over all time steps")
+
+    output_path: Path = model_root / "flood_depth_all_time_steps.png"
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
     return flood_depth_m
 
 
@@ -254,8 +284,8 @@ def get_end_point(geom: LineString) -> Point:
 
 def create_hourly_hydrograph(
     peak_discharge: float,
-    rising_limb_hours: float | int,
-    recession_limb_hours: float | int,
+    rising_limb_hours: int,
+    recession_limb_hours: int,
 ) -> pd.DataFrame:
     """Create a triangular hydrograph time series.
 
@@ -267,11 +297,11 @@ def create_hourly_hydrograph(
     Returns:
         A pandas DataFrame with the time series of the hydrograph.
     """
-    total_duration_hours = rising_limb_hours + recession_limb_hours
+    total_duration_hours: int | float = rising_limb_hours + recession_limb_hours
     # Create a time array with hourly intervals
-    time_hours = np.arange(0, total_duration_hours + 1)
+    time_hours: ArrayInt64 = np.arange(0, total_duration_hours + 1)
     # Create discharge array for triangular shape
-    discharge = np.zeros_like(time_hours, dtype=float)
+    discharge: ArrayFloat32 = np.zeros_like(time_hours, dtype=np.float32)
     # Rising limb: linear increase to peak
     discharge[: rising_limb_hours + 1] = np.linspace(
         0, peak_discharge, rising_limb_hours + 1
@@ -281,11 +311,13 @@ def create_hourly_hydrograph(
         peak_discharge, 0, recession_limb_hours + 1
     )
     # Create a pandas DataFrame for the time series
-    time_index = pd.date_range(
+    time_index: pd.DatetimeIndex = pd.date_range(
         start="2024-01-01 00:00", periods=len(time_hours), freq="h"
     )
-    hydrograph_df = pd.DataFrame({"time": time_index, "discharge": discharge})
-    hydrograph_df.set_index("time", inplace=True)
+    hydrograph_df: pd.DataFrame = pd.DataFrame(
+        {"time": time_index, "discharge": discharge}
+    )
+    hydrograph_df = hydrograph_df.set_index("time")
     return hydrograph_df
 
 
@@ -300,8 +332,7 @@ def check_docker_running() -> bool | None:
         subprocess.run(
             ["docker", "info"],
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -338,7 +369,25 @@ def run_sfincs_simulation(
             result: subprocess.CompletedProcess[bytes] = subprocess.run(
                 args=["nvidia-smi"], capture_output=True
             )
-            gpu: bool = result.returncode == 0
+            maybe_gpu: bool = result.returncode == 0
+
+            # if no GPU is found, there is no need to check further, set gpu to False
+            if not maybe_gpu:
+                gpu: bool = False
+            else:
+                # otherwise, check if we are in a SLURM job. We may be on a cluster
+                # where a GPU is physically present, but not allocated to the job
+                # and therefore not available for use.
+                in_SLURM_job: bool = "SLURM_JOB_ID" in os.environ
+                if in_SLURM_job:
+                    # in a SLURM job, if the job has access to the GPU
+                    gpu_ids: str | None = os.getenv(key="CUDA_VISIBLE_DEVICES")
+                    if gpu_ids is not None and len(gpu_ids) > 0:
+                        gpu: bool = True
+                    else:
+                        gpu: bool = False
+                else:
+                    gpu: bool = True
         else:
             gpu: bool = False
 
@@ -348,14 +397,13 @@ def run_sfincs_simulation(
             print("No GPU detected, running SFINCS without GPU support.")
 
     if gpu:
-        version: str = os.getenv(
-            key="SFINCS_SIF_GPU", default="mvanormondt/sfincs-gpu:coldeze_combo_ccall"
+        version: str | None = os.getenv(key="SFINCS_CONTAINER_GPU")
+        assert version is not None, (
+            "SFINCS_CONTAINER_GPU environment variable is not set"
         )
     else:
-        version: str = os.getenv(
-            key="SFINCS_SIF",
-            default="deltares/sfincs-cpu:sfincs-v2.2.0-col-dEze-Release",
-        )
+        version: str | None = os.getenv(key="SFINCS_CONTAINER")
+        assert version is not None, "SFINCS_CONTAINER environment variable is not set"
 
     if platform.system() == "Linux":
         # If not a apptainer image, add docker:// prefix
@@ -401,54 +449,42 @@ def run_sfincs_simulation(
 
 def _get_xy(
     river: pd.Series,
-    waterbody_ids: npt.NDArray[np.int32],
     up_to_downstream: bool = True,
-) -> tuple[int, int] | None:
+) -> tuple[int, int]:
     """Get the first valid xy coordinate from a river's hydrography_xy list.
 
-    Ignore coordinates that fall within a waterbody (waterbody_ids != -1).
     Starts upstream or downstream based on the up_to_downstream flag.
 
     Args:
         river: Series containing river information, including 'hydrography_xy'.
             This is a list of (x, y) tuples, representing the location of the river
             in the low-resolution hydrological grid.
-        waterbody_ids: 2D array of waterbody IDs, where -1 indicates no waterbody.
-            Also in the low-resolution hydrological grid.
         up_to_downstream: Whether to search from upstream to downstream.
             Defaults to True (starting upstream).
 
     Returns:
-        A tuple (x, y) of the first valid coordinate, or an empty list if none found.
+        A tuple (x, y) of the first valid coordinate.
     """
     xys = river["hydrography_xy"]
-    if not up_to_downstream:
-        xys = reversed(xys)  # Reverse the order if not going downstream
-    for xy in xys:
-        is_waterbody = waterbody_ids[xy[1], xy[0]] != -1
-        if not is_waterbody:
-            return (xy[0], xy[1])
+    if up_to_downstream:
+        idx: int = 0
     else:
-        return None  # If no valid xy found, return None
+        idx: int = -1
+    return (xys[idx][0], xys[idx][1])
 
 
 def get_representative_river_points(
-    river_ID: set, rivers: pd.DataFrame, waterbody_ids: npt.NDArray[np.int32]
-) -> list[tuple[float, float]]:
+    river_ID: set, rivers: pd.DataFrame
+) -> list[tuple[int, int]]:
     """Get representative river points for a given river ID.
 
     If the river is represented in the low-resolution hydrological grid, its
     representative point is used. If not, the function traverses upstream to find
     rivers that are represented in the grid and uses their representative points.
 
-    Moreover, if a point in the river falls within a waterbody (waterbody_ids != -1),
-    it is ignored and the next point in the river's hydrography_xy list is checked until
-    a valid point is found or the list is exhausted in which case an empty list is returned.
-
     Args:
         river_ID: The ID of the river for which to find representative points.
         rivers: DataFrame containing river information, including 'represented_in_grid' and 'hydrography_xy'.
-        waterbody_ids: 2D array of waterbody IDs, where -1 indicates no waterbody.
 
     Returns:
         A list of tuples (x, y) representing the coordinates of the representative points.
@@ -456,7 +492,7 @@ def get_representative_river_points(
     """
     river = rivers.loc[river_ID]
     if river["represented_in_grid"]:
-        xy = _get_xy(river, waterbody_ids, up_to_downstream=True)
+        xy = _get_xy(river, up_to_downstream=True)
         if xy is not None:
             return [xy]
         else:
@@ -480,7 +516,7 @@ def get_representative_river_points(
         representitative_rivers = rivers[rivers.index.isin(representitative_rivers)]
         xys = []
         for river_ID, river in representitative_rivers.iterrows():
-            xy = _get_xy(river, waterbody_ids, up_to_downstream=False)
+            xy = _get_xy(river, up_to_downstream=False)
             if xy is not None:
                 xys.append(xy)
             else:
@@ -614,11 +650,11 @@ def get_discharge_and_river_parameters_by_river(
 
 
 def assign_return_periods(
-    rivers: pd.DataFrame,
+    rivers: gpd.GeoDataFrame,
     discharge_dataframe: pd.DataFrame,
-    return_periods: list[int],
+    return_periods: list[int | float],
     prefix: str = "Q",
-) -> pd.DataFrame:
+) -> gpd.GeoDataFrame:
     """Assign return periods to rivers based on discharge data.
 
     Args:
@@ -633,6 +669,7 @@ def assign_return_periods(
 
     Raises:
         ValueError: If discharge values are unrealistically high.
+        ZeroDivisionError: If the extreme value model cannot be fitted.
     """
     assert isinstance(return_periods, list)
     for i, idx in tqdm(enumerate(rivers.index), total=len(rivers)):
@@ -647,7 +684,12 @@ def assign_return_periods(
             # Fit the model and calculate return periods
             model = EVA(discharge)
             model.get_extremes(method="BM", block_size="365.2425D")
-            model.fit_model()
+            try:
+                model.fit_model()
+            except ZeroDivisionError:
+                raise ZeroDivisionError(
+                    f"Could not fit extreme value model for river {idx} with discharge {discharge.values}"
+                )
             discharge_per_return_period = model.get_return_value(
                 return_period=return_periods
             )[0]  # [1] and [2] are the uncertainty bounds
