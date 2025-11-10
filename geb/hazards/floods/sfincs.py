@@ -395,9 +395,9 @@ class SFINCSRootModel:
             self.logger.info(
                 f"Setting up SFINCS subgrid with {nr_subgrid_pixels} subgrid pixels..."
             )
-            # only burn rivers that are wider than half the subgrid pixel size
+            # only burn rivers that are wider than the subgrid pixel size
             rivers_to_burn: gpd.GeoDataFrame = rivers[
-                rivers["width"] > resolution / nr_subgrid_pixels / 2
+                rivers["width"] > resolution / nr_subgrid_pixels
             ].copy()
             sf.setup_subgrid(
                 datasets_dep=DEMs,
@@ -425,9 +425,9 @@ class SFINCSRootModel:
             self.logger.info(
                 "Setting up SFINCS without subgrid - burning rivers into main grid..."
             )
-            # only burn rivers that are wider than half the grid size
+            # only burn rivers that are wider than the grid size
             rivers_to_burn: gpd.GeoDataFrame = rivers[
-                rivers["width"] > resolution / 2
+                rivers["width"] > resolution
             ].copy()
             # first set up the mannings roughness with the default method
             # (we already have the DEM set up)
