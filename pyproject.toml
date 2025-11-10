@@ -211,3 +211,6 @@ addopts = "--ignore=.venv"
 [tool.ty.environment]
 python-version = "3.13"
 extra-paths = ["./typings"]
+
+[tool.ty.rules]
+possibly-missing-attribute = "ignore"
