@@ -179,6 +179,38 @@ def load_dict(filepath: Path) -> dict[str, Any]:
         )
 
 
+def _convert_paths_to_strings(obj: Any) -> Any:
+    """Recursively convert Path objects to strings in nested data structures.
+
+    Args:
+        obj: The object to convert.
+
+    Returns:
+        The object with Path objects converted to strings.
+    """
+    if isinstance(obj, Path):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {key: _convert_paths_to_strings(value) for key, value in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return type(obj)(_convert_paths_to_strings(item) for item in obj)
+    else:
+        return obj
+
+
+def to_dict(d: dict, filepath: Path) -> None:
+    """Save a dictionary YAML file.
+
+    Args:
+        d: The dictionary to save.
+        filepath: Path to the output YAML file.
+    """
+    # Convert Path objects to strings before saving
+    d_converted = _convert_paths_to_strings(d)
+    with open(filepath, "w") as f:
+        yaml.dump(d_converted, f, default_flow_style=False, sort_keys=False)
+
+
 def calculate_scaling(
     da: xr.DataArray,
     min_value: float,

@@ -31,7 +31,7 @@ from shapely.geometry import Point
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.workflows.io import load_dict
+from geb.workflows.io import load_dict, to_dict
 from geb.workflows.raster import full_like, repeat_grid
 
 from ..workflows.io import open_zarr, to_zarr
@@ -1054,7 +1054,7 @@ def create_multi_basin_configs(
     with open(geul_build_path, "r") as src, open(build_config_path, "w") as dst:
         dst.write(src.read())
 
-    print(f"  Created build.yml in {working_directory}")
+    print(f"Created build.yml in {working_directory}")
 
     # Create model.yml in large_scale directory that inherits from reasonable default
     print("Creating model.yml in large_scale directory...")
@@ -1067,7 +1067,7 @@ def create_multi_basin_configs(
     with open(model_config_path, "w") as f:
         f.write(model_config_content)
 
-    print(f"  Created model.yml in {working_directory}")
+    print(f"Created model.yml in {working_directory}")
 
     cluster_directories = []
 
@@ -2325,8 +2325,7 @@ class GEBModel(
 
             self.files["dict"][name] = fp
 
-            with open(fp_with_root, "w") as f:
-                yaml.dump(data, f)
+            to_dict(data, fp_with_root)
 
         self.dict[name] = fp_with_root
 
@@ -2377,8 +2376,7 @@ class GEBModel(
             else:
                 file_library[type_name].update(type_files)
 
-        with open(self.files_path, "w") as f:
-            yaml.dump(file_library, f)
+        to_dict(file_library, self.files_path)
 
     def read_or_create_file_library(self) -> dict:
         """Reads the file library from disk.
@@ -2402,8 +2400,7 @@ class GEBModel(
                 "other": {},
             }
         else:
-            with open(Path(self.files_path), "r") as f:
-                files: dict[str, dict[str, str]] = json.load(f)
+            files = load_dict(self.files_path)
 
             # geoms was renamed to geom in the file library. To upgrade old models,
             # we check if "geoms" is in the files and rename it to "geom"
