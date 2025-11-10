@@ -853,11 +853,11 @@ class GEBModel(Module, HazardDriver):
         model_build_time_range: dict[str, str] = load_dict(
             self.files["dict"]["model_time_range"]
         )
-        model_build_start_date: datetime.datetime = datetime.datetime.strptime(
-            model_build_time_range["start_date"], "%Y-%m-%d"
+        model_build_start_date: datetime.datetime = datetime.datetime.fromisoformat(
+            model_build_time_range["start_date"]
         )
-        model_build_end_date: datetime.datetime = datetime.datetime.strptime(
-            model_build_time_range["end_date"], "%Y-%m-%d"
+        model_build_end_date: datetime.datetime = datetime.datetime.fromisoformat(
+            model_build_time_range["end_date"]
         )
 
         if self.spinup_start < model_build_start_date:
