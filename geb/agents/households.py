@@ -93,8 +93,9 @@ class Households(AgentBaseClass):
         self.load_objects()
         self.load_max_damage_values()
         self.load_damage_curves()
-        self.load_wlranges_and_measures()
-        self.load_critical_infrastructure()
+        if self.model.config["agent_settings"]["households"]["warning_response"]:
+            self.load_critical_infrastructure()
+            self.load_wlranges_and_measures()
 
         if self.model.in_spinup:
             self.spinup()
