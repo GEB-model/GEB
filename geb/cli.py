@@ -3,7 +3,6 @@
 import cProfile
 import functools
 import importlib
-import json
 import logging
 import os
 import platform
@@ -27,7 +26,7 @@ from geb.build import GEBModel as GEBModelBuild
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory
+from geb.workflows.io import WorkingDirectory, load_dict
 from geb.workflows.methods import multi_level_merge
 
 PROFILING_DEFAULT: bool = False
@@ -340,8 +339,17 @@ def run_model_with_method(
     with WorkingDirectory(working_directory):
         config: dict[str, Any] = parse_config(config)
 
+        # TODO: This ca be removed in 2026
+        if not Path("input/files.yml").exists() and Path("input/files.json").exists():
+            # convert input/files.json to input/files.yml
+            json_files: dict[str, Any] = load_dict(
+                Path("input/files.json"),
+            )
+            with open("input/files.yml", "w") as f:
+                yaml.dump(json_files, f, default_flow_style=False)
+
         files: dict[str, Any] = parse_config(
-            "input/files.json"
+            load_dict(Path("input/files.yml"))
             if "files" not in config["general"]
             else config["general"]["files"]
         )
@@ -931,19 +939,30 @@ def alter_fn(
 
         original_input_path: Path = from_model / input_folder
 
-        with open(original_input_path / "files.json", "r") as f:
-            original_files = json.load(f)
+        # TODO: This ca be removed in 2026
+        if (
+            not (original_input_path / "files.yml").exists()
+            and (original_input_path / "files.json").exists()
+        ):
+            # convert input/files.json to input/files.yml
+            json_files: dict[str, Any] = load_dict(
+                (original_input_path / "files.json"),
+            )
+            with open((original_input_path / "files.yml"), "w") as f:
+                yaml.dump(json_files, f, default_flow_style=False)
 
-            for file_class, files in original_files.items():
-                for file_name, file_path in files.items():
-                    if not file_path.startswith("/"):
-                        original_files[file_class][file_name] = str(
-                            Path("..") / original_input_path / file_path
-                        )
+        original_files = load_dict(original_input_path / "files.yml")
+
+        for file_class, files in original_files.items():
+            for file_name, file_path in files.items():
+                if not file_path.startswith("/"):
+                    original_files[file_class][file_name] = str(
+                        Path("..") / original_input_path / file_path
+                    )
 
         input_folder.mkdir(parents=True, exist_ok=True)
-        with open(input_folder / "files.json", "w") as f:
-            json.dump(original_files, f, indent=4)
+        with open(input_folder / "files.yml", "w") as f:
+            yaml.dump(original_files, f, default_flow_style=False)
 
         build_config = parse_config(build_config)
         model = get_builder(

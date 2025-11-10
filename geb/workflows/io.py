@@ -24,6 +24,7 @@ import rasterio
 import requests
 import s3fs
 import xarray as xr
+import yaml
 import zarr
 import zarr.storage
 from dask.diagnostics import ProgressBar
@@ -156,15 +157,26 @@ def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
 
 
 def load_dict(filepath: Path) -> dict[str, Any]:
-    """Load a dictionary for the GEB model from disk.
+    """Load a dictionary from a JSON or YAML file.
 
     Args:
-        filepath: Path to the dictionary file.
+        filepath: Path to the JSON or YAML file.
 
     Returns:
         A dictionary containing the data.
+
+    Raises:
+        ValueError: If the file extension is not supported.
     """
-    return json.loads(filepath.read_text())
+    suffix: str = filepath.suffix
+    if suffix == ".json":
+        return json.loads(filepath.read_text())
+    elif suffix in (".yml", ".yaml"):
+        return yaml.safe_load(filepath.read_text())
+    else:
+        raise ValueError(
+            f"Unsupported file format: {suffix}. Supported formats are .json, .yml, .yaml"
+        )
 
 
 def calculate_scaling(

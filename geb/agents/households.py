@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,6 +16,8 @@ from rasterio.features import shapes
 from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
+
+from geb.workflows.io import load_dict
 
 from ..hydrology.landcovers import (
     FOREST,
@@ -830,34 +831,28 @@ class Households(AgentBaseClass):
 
     def load_max_damage_values(self) -> None:
         # Load maximum damages
-        with open(
-            self.model.files["dict"][
-                "damage_parameters/flood/buildings/structure/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
+        self.var.max_dam_buildings_structure = float(
+            load_dict(
+                self.model.files["dict"][
+                    "damage_parameters/flood/buildings/structure/maximum_damage"
+                ]
+            )["maximum_damage"]
+        )
         self.buildings["maximum_damage_m2"] = self.var.max_dam_buildings_structure
 
-        with open(
+        max_dam_buildings_content = load_dict(
             self.model.files["dict"][
                 "damage_parameters/flood/buildings/content/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            max_dam_buildings_content = json.load(f)
+            ]
+        )
         self.var.max_dam_buildings_content = float(
             max_dam_buildings_content["maximum_damage"]
         )
         self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
-        with open(
-            self.model.files["dict"][
-                "damage_parameters/flood/rail/main/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.var.max_dam_rail = float(json.load(f)["maximum_damage"])
+        self.var.max_dam_rail = load_dict(
+            self.model.files["dict"]["damage_parameters/flood/rail/main/maximum_damage"]
+        )["maximum_damage"]
         self.rail["maximum_damage_m"] = self.var.max_dam_rail
 
         max_dam_road_m: dict[str, float] = {}
@@ -891,27 +886,27 @@ class Households(AgentBaseClass):
         ]
 
         for road_type, path in road_types:
-            with open(self.model.files["dict"][path], "r") as f:
-                max_damage = json.load(f)
-            max_dam_road_m[road_type] = max_damage["maximum_damage"]
+            max_dam_road_m[road_type] = load_dict(self.model.files["dict"][path])[
+                "maximum_damage"
+            ]
 
         self.roads["maximum_damage_m"] = self.roads["object_type"].map(max_dam_road_m)
 
-        with open(
-            self.model.files["dict"][
-                "damage_parameters/flood/land_use/forest/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.var.max_dam_forest_m2 = float(json.load(f)["maximum_damage"])
+        self.var.max_dam_forest_m2 = float(
+            load_dict(
+                self.model.files["dict"][
+                    "damage_parameters/flood/land_use/forest/maximum_damage"
+                ]
+            )["maximum_damage"]
+        )
 
-        with open(
-            self.model.files["dict"][
-                "damage_parameters/flood/land_use/agriculture/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.var.max_dam_agriculture_m2 = float(json.load(f)["maximum_damage"])
+        self.var.max_dam_agriculture_m2 = float(
+            load_dict(
+                self.model.files["dict"][
+                    "damage_parameters/flood/land_use/agriculture/maximum_damage"
+                ]
+            )["maximum_damage"]
+        )
 
     def load_damage_curves(self) -> None:
         # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]

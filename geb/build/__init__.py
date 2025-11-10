@@ -31,6 +31,7 @@ from shapely.geometry import Point
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
+from geb.workflows.io import load_dict
 from geb.workflows.raster import full_like, repeat_grid
 
 from ..workflows.io import open_zarr, to_zarr
@@ -1633,9 +1634,7 @@ class GEBModel(
         self.geom: DelayedReader = DelayedReader(reader=gpd.read_parquet)
         self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
         self.array: DelayedReader = DelayedReader(zarr.load)
-        self.dict: DelayedReader = DelayedReader(
-            reader=lambda x: json.load(open(x, "r"))
-        )
+        self.dict: DelayedReader = DelayedReader(reader=load_dict)
         self.other: DelayedReader = DelayedReader(reader=open_zarr)
 
     @build_method
@@ -2318,7 +2317,7 @@ class GEBModel(
             write: Whether to write the dictionary to disk. If False, the dictionary
                 is only added to the file library, but not written to disk.
         """
-        fp: Path = Path("dict") / (name + ".json")
+        fp: Path = Path("dict") / (name + ".yml")
         fp_with_root: Path = Path(self.root) / fp
         fp_with_root.parent.mkdir(parents=True, exist_ok=True)
         if write:
@@ -2327,7 +2326,7 @@ class GEBModel(
             self.files["dict"][name] = fp
 
             with open(fp_with_root, "w") as f:
-                json.dump(data, f, default=lambda o: o.isoformat(), indent=4)
+                yaml.dump(data, f)
 
         self.dict[name] = fp_with_root
 
@@ -2360,7 +2359,7 @@ class GEBModel(
     @property
     def files_path(self) -> Path:
         """Path to the files.json file that contains the file library."""
-        return Path(self.root, "files.json")
+        return Path(self.root, "files.yml")
 
     def write_file_library(self) -> None:
         """Writes the file library to disk.
@@ -2379,7 +2378,7 @@ class GEBModel(
                 file_library[type_name].update(type_files)
 
         with open(self.files_path, "w") as f:
-            json.dump(file_library, f, indent=4, cls=PathEncoder)
+            yaml.dump(file_library, f)
 
     def read_or_create_file_library(self) -> dict:
         """Reads the file library from disk.
