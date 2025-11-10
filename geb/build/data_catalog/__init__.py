@@ -6,6 +6,7 @@ from .base import Adapter
 from .destination_earth import DestinationEarth
 from .ecmwf import ECMWFForecasts
 from .esa_worldcover import ESAWorldCover
+from .fabdem import Fabdem as Fabdem
 from .fao import GMIA
 from .gadm import GADM
 from .gebco import GEBCO
@@ -453,6 +454,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "Yamazaki et al.",
             "version": "2019",
             "license": "CC BY 4.0 or ODbL 1.0",
+        },
+    },
+    "fabdem": {
+        "adapter": Fabdem(
+            folder="fabdem",
+            local_version=1,
+            filename="fabdem.zarr",
+            cache="local",
+        ),
+        "url": "https://data.bris.ac.uk/datasets/s5hqmjcdj8yo2ibzi9b4ew3sn",
+        "source": {
+            "name": "FABDEM",
+            "author": "Hawker et al. (2022)",
+            "version": "1-2",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7",
+            "paper_doi": "10.1088/1748-9326/ac4d4f",
         },
     },
     "merit_basins_catchments": {
