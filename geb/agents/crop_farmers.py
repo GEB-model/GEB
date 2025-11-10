@@ -12,14 +12,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from honeybees.library.neighbors import find_neighbors
-from honeybees.library.raster import pixels_to_coords, sample_from_map
 from numba import njit
 from scipy.optimize import curve_fit
 from scipy.stats import genextreme
 
 from geb.workflows import TimingModule
 from geb.workflows.io import load_grid
+from geb.workflows.neighbors import find_neighbors
+from geb.workflows.raster import pixels_to_coords, sample_from_map
 
 from ..data import (
     load_crop_data,

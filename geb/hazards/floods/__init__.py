@@ -155,11 +155,8 @@ class Floods(Module):
             sfincs_model.build(
                 region=region,
                 DEMs=DEM_config,
-                rivers=self.rivers,
+                rivers=self.model.hydrology.routing.rivers,
                 discharge=self.discharge_spinup_ds,
-                waterbody_ids=self.model.hydrology.grid.decompress(
-                    self.model.hydrology.grid.var.waterBodyID
-                ),
                 river_width_alpha=self.model.hydrology.grid.decompress(
                     self.model.var.river_width_alpha
                 ),
@@ -270,9 +267,6 @@ class Floods(Module):
         if self.config["forcing_method"] == "headwater_points":
             simulation.set_headwater_forcing_from_grid(
                 discharge_grid=forcing_grid,
-                waterbody_ids=self.model.hydrology.grid.decompress(
-                    self.model.hydrology.grid.var.waterBodyID
-                ),
             )
         elif self.config["forcing_method"] == "runoff":
             simulation.set_runoff_forcing(
@@ -294,7 +288,7 @@ class Floods(Module):
                 cell_area=self.model.hydrology.grid.decompress(
                     self.model.hydrology.grid.var.cell_area
                 ),
-                river_geometry=self.rivers,
+                river_geometry=self.model.hydrology.routing.rivers,
             )
         else:
             raise ValueError(
@@ -500,10 +494,7 @@ class Floods(Module):
 
         sfincs_root_model.estimate_discharge_for_return_periods(
             discharge=self.discharge_spinup_ds,
-            waterbody_ids=self.model.hydrology.grid.decompress(
-                self.model.hydrology.grid.var.waterBodyID
-            ),
-            rivers=self.rivers,
+            rivers=self.model.hydrology.routing.rivers,
             return_periods=self.config["return_periods"],
         )
 
@@ -640,7 +631,14 @@ class Floods(Module):
 
     @property
     def discharge_spinup_ds(self) -> xr.DataArray:
-        """Open the discharge datasets from the model output folder."""
+        """Open the discharge datasets from the model output folder.
+
+        Returns:
+            The discharge data array after spinup period.
+
+        Raises:
+            ValueError: If there is not enough data available for reliable spinup.
+        """
         da: xr.DataArray = open_zarr(
             self.model.output_folder
             / "report"
@@ -649,26 +647,17 @@ class Floods(Module):
             / "discharge_daily.zarr"
         )
 
-        # start_time = pd.to_datetime(ds.time[0].item()) + pd.DateOffset(years=10)
-        # ds = ds.sel(time=slice(start_time, ds.time[-1]))
+        start_time = pd.to_datetime(da.time[0].item()) + pd.DateOffset(years=10)
+        da: xr.DataArray = da.sel(time=slice(start_time, da.time[-1]))
 
-        # # make sure there is at least 20 years of data
-        # if not len(ds.time.groupby(ds.time.dt.year).groups) >= 20:
-        #     raise ValueError(
-        #         """Not enough data available for reliable spinup, should be at least 20 years of data left.
-        #         Please run the model for at least 30 years (10 years of data is discarded)."""
-        #     )
+        # make sure there is at least 20 years of data
+        if len(da.time) == 0 or len(da.time.groupby(da.time.dt.year).groups) < 20:
+            raise ValueError(
+                """Not enough data available for reliable spinup, should be at least 20 years of data left.
+                Please run the model for at least 30 years (10 years of data is discarded)."""
+            )
 
         return da
-
-    @property
-    def rivers(self) -> gpd.GeoDataFrame:
-        """Load the river geometry from the model files.
-
-        Returns:
-            A GeoDataFrame containing the river geometry.
-        """
-        return load_geom(self.model.files["geom"]["routing/rivers"])
 
     @property
     def mannings(self) -> xr.DataArray:

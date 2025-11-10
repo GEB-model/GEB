@@ -27,12 +27,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
-from honeybees.library.raster import write_to_array
 
 from geb.module import Module
 from geb.typing import ArrayFloat32
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import load_grid
+from geb.workflows.raster import write_to_array
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -136,7 +136,8 @@ class WaterDemand(Module):
 
         available_channel_storage_m3: np.ndarray = (
             self.hydrology.routing.router.get_available_storage(
-                Q=self.grid.var.discharge_m3_s_substep, maximum_abstraction_ratio=0.1
+                Q=self.grid.var.discharge_in_rivers_m3_s_substep,
+                maximum_abstraction_ratio=0.1,
             )
         )
 

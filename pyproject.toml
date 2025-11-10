@@ -19,7 +19,7 @@ authors = [
     {name = "Rafaella Oliveira", email = "r.gouveialoureirooliveira@vu.nl"},
 ]
 dependencies = [
-    "cartopy==0.24.1",  # pin until https://github.com/SciTools/cartopy/issues/2577 is fixed
+    "cartopy==0.24.1", # pin until https://github.com/SciTools/cartopy/issues/2577 is fixed
     "cfgrib>=0.9.14",
     "click>=8.1.8",
     "contextily>=1.6.2",
@@ -29,7 +29,6 @@ dependencies = [
     "flopy>=3.8.0",
     "folium>=0.19.6",
     "geopandas>=1.0.1",
-    "honeybees>=1.2.0",
     "hydromt==0.10.1",
     "hydromt-sfincs>=1.2.0",
     "networkx",
@@ -70,6 +69,8 @@ dependencies = [
     "ecmwf-api-client>=1.6.5",
     "ruff>=0.14.0",
     "snakemake>=9.13.4",
+    "pytest-plt>=1.1.1",
+    "pytest-benchmark>=5.2.1",
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"
@@ -210,3 +211,6 @@ addopts = "--ignore=.venv"
 [tool.ty.environment]
 python-version = "3.13"
 extra-paths = ["./typings"]
+
+[tool.ty.rules]
+possibly-missing-attribute = "ignore"

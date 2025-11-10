@@ -9,7 +9,6 @@ from typing import Any
 
 import geopandas as gpd
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
 import pytest
 import xarray as xr
@@ -64,7 +63,7 @@ def create_discharge_timeseries(
     Returns:
         A tuple with the nodes and the timeseries.
     """
-    nodes: gpd.GeoDataFrame = geb_model.floods.rivers
+    nodes: gpd.GeoDataFrame = geb_model.hydrology.routing.rivers
     nodes["geometry"] = nodes["geometry"].apply(get_start_point)
     nodes.index = list(np.arange(1, len(nodes) + 1))
     timeseries: pd.DataFrame = pd.DataFrame(
@@ -97,11 +96,8 @@ def build_sfincs(geb_model: GEBModel, nr_subgrid_pixels: int | None) -> SFINCSRo
     sfincs_model.build(
         region=load_geom(geb_model.model.files["geom"]["routing/subbasins"]),
         DEMs=DEM_config,
-        rivers=geb_model.floods.rivers,
+        rivers=geb_model.hydrology.routing.rivers,
         discharge=geb_model.floods.discharge_spinup_ds,
-        waterbody_ids=geb_model.model.hydrology.grid.decompress(
-            geb_model.model.hydrology.grid.var.waterBodyID
-        ),
         river_width_alpha=geb_model.model.hydrology.grid.decompress(
             geb_model.model.var.river_width_alpha
         ),
@@ -388,14 +384,8 @@ def test_SFINCS_discharge_grid_forcing(geb_model: GEBModel) -> None:
             time=pd.date_range(start=start_time, end=end_time, freq="h")
         )
 
-        waterbody_ids: npt.NDArray[np.int32] = (
-            geb_model.model.hydrology.grid.decompress(
-                geb_model.model.hydrology.grid.var.waterBodyID
-            )
-        )
-
         simulation.set_headwater_forcing_from_grid(
-            discharge_grid=discharge_grid, waterbody_ids=waterbody_ids
+            discharge_grid=discharge_grid,
         )
 
         assert (simulation.path / "sfincs.dis").exists()

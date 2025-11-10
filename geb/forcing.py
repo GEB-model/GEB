@@ -710,6 +710,26 @@ class CO2:
         """
         return False
 
+    def set_forecast(self, forecast_issue_datetime: datetime, da: xr.DataArray) -> None:
+        """Set forecast mode.
+
+        CO2 loader does not support forecast mode.
+
+        Raises:
+            NotImplementedError: As CO2 loader does not support forecast mode.
+        """
+        raise NotImplementedError("CO2 loader does not support forecast mode.")
+
+    def unset_forecast(self) -> None:
+        """Unset forecast mode.
+
+        CO2 loader does not support forecast mode.
+
+        Raises:
+            NotImplementedError: As CO2 loader does not support forecast mode.
+        """
+        raise NotImplementedError("CO2 loader does not support forecast mode.")
+
 
 class Forcing(Module):
     """Module to handle climate forcing data.
