@@ -518,6 +518,8 @@ class Households(AgentBaseClass):
 
         This information is used in the decision module.
         For now also only dummy data is created.
+
+        Returns:
         """
         # preallocate array for damages
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
