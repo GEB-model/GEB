@@ -314,24 +314,10 @@ class Floods(Module):
             crs=flood_depth.rio.crs,
         )  # save the flood depth to a zarr file
 
-        # Check if multiverse has finished and if the household warning response is active,
-        # If so, update the household actions and compute damages only after multiverse is done using ERA5
-        if (
-            self.model.config["agent_settings"]["households"]["warning_response"]
-            and self.model.multiverse_name is None
-        ):
+        # This check is done to compute damages (using ERA5) only after multiverse is finished
+        if self.model.multiverse_name is None:
             print("Multiverse no longer active, now compute flood damages...")
             self.model.agents.households.flood(flood_depth=flood_depth)
-        elif (
-            self.model.config["agent_settings"]["households"]["warning_response"]
-            is False
-        ):
-            print("Household warning response is disabled, computing flood damages...")
-            self.model.agents.households.flood(flood_depth=flood_depth)
-        else:
-            print(
-                "Now making the flood maps, but multiverse is still active, so do not compute the damages yet..."
-            )
 
     def build_mask_for_coastal_sfincs(self) -> gpd.GeoDataFrame:
         """Builds a mask to define the active cells and boundaries for the coastal SFINCS model.
