@@ -1960,7 +1960,11 @@ class Households(AgentBaseClass):
         return damages_do_not_adapt, damages_adapt
 
     def update_households_gdf(self, date_time) -> None:
-        """This function merges the global variables related to warnings to the households geodataframe for visualization purposes."""
+        """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
+
+        Args:
+            date_time: The forecast date time for which to update the households geodataframe.
+        """
         household_points: gpd.GeoDataFrame = self.var.household_points.copy()
         global_vars = [
             "warning_reached",
