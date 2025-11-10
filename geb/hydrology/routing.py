@@ -636,7 +636,9 @@ def fill_discharge_gaps(
                 filled_discharge_m3_s[idx] = valid_discharge
 
         if np.isnan(valid_discharge):
-            warnings.warn(f"WARNING: No valid discharge found for river: {river_id}")
+            warnings.warn(
+                f"WARNING: No valid discharge found for river: {river_id}, please let Jens know."
+            )
             continue  # skip if no valid discharge found
 
         down_stream_discharge: np.float32 = filled_discharge_m3_s[
