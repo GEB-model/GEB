@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import json
 import os
 import shutil
 import tempfile
@@ -152,6 +153,18 @@ def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
 
     """
     return gpd.read_parquet(filepath)
+
+
+def load_dict(filepath: Path) -> dict[str, Any]:
+    """Load a dictionary for the GEB model from disk.
+
+    Args:
+        filepath: Path to the dictionary file.
+
+    Returns:
+        A dictionary containing the data.
+    """
+    return json.loads(filepath.read_text())
 
 
 def calculate_scaling(
