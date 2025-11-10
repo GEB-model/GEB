@@ -7,10 +7,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import xarray as xr
-from honeybees.library.raster import sample_from_map
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
+from geb.workflows.raster import sample_from_map
 
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,

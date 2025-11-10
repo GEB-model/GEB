@@ -29,7 +29,6 @@ dependencies = [
     "flopy>=3.8.0",
     "folium>=0.19.6",
     "geopandas>=1.0.1",
-    "honeybees>=1.2.0",
     "hydromt==0.10.1",
     "hydromt-sfincs>=1.2.0",
     "networkx",
@@ -70,6 +69,8 @@ dependencies = [
     "ecmwf-api-client>=1.6.5",
     "ruff>=0.14.0",
     "snakemake>=9.13.4",
+    "pytest-plt>=1.1.1",
+    "pytest-benchmark>=5.2.1",
     "imageio>=2.37.2",
 ]
 requires-python = ">=3.13, <3.14"
@@ -211,3 +212,6 @@ addopts = "--ignore=.venv"
 [tool.ty.environment]
 python-version = "3.13"
 extra-paths = ["./typings"]
+
+[tool.ty.rules]
+possibly-missing-attribute = "ignore"
