@@ -14,7 +14,7 @@ examples/*/*
 !examples/*/build.yml
 !examples/*/model.yml
 !examples/*/update.yml
-*.code-workspace
+**.code-workspace
 
 #ignore folder
 model
