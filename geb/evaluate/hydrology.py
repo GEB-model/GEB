@@ -21,6 +21,7 @@ from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
 from permetrics.regression import RegressionMetric
 from rasterio.crs import CRS
+from rasterio.features import geometry_mask
 from tqdm import tqdm
 
 from geb.workflows.io import open_zarr, to_zarr
@@ -1446,6 +1447,7 @@ class Hydrology:
             # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)
             obs = open_zarr(observation)
+            print('obs CRS',obs.rio.crs)
             sim = flood_map.rio.reproject_match(obs)
             rivers = gpd.read_parquet(
                 Path("simulation_root")
@@ -1469,20 +1471,27 @@ class Hydrology:
             rivers.set_crs(crs_wgs84, inplace=True)
             gdf_mercator = rivers.to_crs(crs_mercator)
             gdf_mercator["geometry"] = gdf_mercator.buffer(gdf_mercator["width"] / 2)
-            gdf_buffered = gdf_mercator.to_crs(sim.rio.crs)
-            gdf_buffered["mask"] = True
-            rivers_mask_sim = rasterize_like(
-                gdf_buffered, "mask", sim, dtype=bool, nodata=False, all_touched=True
+
+            # Create river mask for simulation data
+            gdf_buffered_sim = gdf_mercator.to_crs(sim.rio.crs)
+            rivers_mask_sim = ~geometry_mask(
+                gdf_buffered_sim.geometry,
+                out_shape=sim.rio.shape,
+                transform=sim.rio.transform(),
+                all_touched=True,
+                invert=False
             )
-            rivers_mask_sim.attrs.pop("_FillValue", None)
             sim_no_rivers = sim.where(~rivers_mask_sim).fillna(0)
 
-            gdf_buffered = gdf_mercator.to_crs(obs.rio.crs)
-            gdf_buffered["mask"] = True
-            rivers_mask_obs = rasterize_like(
-                gdf_buffered, "mask", obs, dtype=bool, nodata=False, all_touched=True
+            # Create river mask for observation data
+            gdf_buffered_obs = gdf_mercator.to_crs(obs.rio.crs)
+            rivers_mask_obs = ~geometry_mask(
+                gdf_buffered_obs.geometry, 
+                out_shape=obs.rio.shape, 
+                transform=obs.rio.transform(),
+                all_touched=True,
+                invert=False
             )
-            rivers_mask_obs.attrs.pop("_FillValue", None)
             obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
 
             # Step 3: Clip out region from observations
@@ -2090,6 +2099,7 @@ class Hydrology:
                     observation=self.config["floods"]["event_observation_file"],
                     flood_map_path=flood_map_path,
                     visualization_type="OSM",
+                    output_folder=event_folder
                 )
                 print(f"Successfully evaluated: {flood_map_path.name}")
 

@@ -294,7 +294,6 @@ class GEBModel(Module, HazardDriver):
                     / "other"
                     / "forecasts"
                     / self.config["general"]["forecasts"]["provider"]
-                    / self.forecast_issue_date
                 ).glob("*.zarr")
             )  # get all forecast files in the input folder
             forecast_issue_dates: list[
