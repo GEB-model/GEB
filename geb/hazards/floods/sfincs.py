@@ -725,7 +725,7 @@ class SFINCSRootModel:
             end_time=timeseries.index[-1],
         )
 
-        # set forcing and configure model
+        # set coastal forcing model
         simulation.set_coastal_waterlevel_forcing(
             timeseries=timeseries, locations=locations
         )
