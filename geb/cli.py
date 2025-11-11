@@ -26,7 +26,7 @@ from geb.build import GEBModel as GEBModelBuild
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory, load_dict
+from geb.workflows.io import WorkingDirectory, load_dict, to_dict
 from geb.workflows.methods import multi_level_merge
 
 PROFILING_DEFAULT: bool = False
@@ -345,8 +345,7 @@ def run_model_with_method(
             json_files: dict[str, Any] = load_dict(
                 Path("input/files.json"),
             )
-            with open("input/files.yml", "w") as f:
-                yaml.dump(json_files, f, default_flow_style=False)
+            to_dict(json_files, Path("input/files.yml"))
 
         files: dict[str, Any] = parse_config(
             load_dict(Path("input/files.yml"))
@@ -602,6 +601,7 @@ def init_fn(
     working_directory: str | Path,
     from_example: str,
     basin_id: str | None = None,
+    iso3: str | None = None,
     overwrite: bool = False,
 ) -> None:
     """Create a new model.
@@ -612,15 +612,20 @@ def init_fn(
         update_config: Path to the model update configuration file to create.
         working_directory: Working directory for the model.
         from_example: Name of the example to use as a base for the model.
-        basin_id:Basin ID(s) to use for the model. Can be a comma-separated list of integers.
+        basin_id: Basin ID(s) to use for the model. Can be a comma-separated list of integers.
             If not set, the basin ID is taken from the config file.
+        iso3: ISO3 country code to use for the model. Cannot be used together with --basin-id.
         overwrite: If True, overwrite existing config and build config files. Defaults to False.
 
     Raises:
         FileExistsError: If the config or build config file already exists and overwrite is False.
         FileNotFoundError: If the example folder does not exist.
+        ValueError: If both basin_id and ISO3 are set.
 
     """
+    if basin_id is not None and iso3 is not None:
+        raise ValueError("Cannot use --basin-id and --ISO3 together.")
+
     config: Path = Path(config)
     build_config: Path = Path(build_config)
     update_config: Path = Path(update_config)
@@ -668,6 +673,15 @@ def init_fn(
                 basin_ids: int = int(basin_id)
 
             config_dict["general"]["region"]["subbasin"] = basin_ids
+        elif iso3 is not None:
+            del config_dict["general"]["region"]["subbasin"]
+            config_dict["general"]["region"] = {
+                "geom": {
+                    "source": "GADM_level1",
+                    "key": iso3,
+                    "column": "GID_0",
+                }
+            }
 
         with open(config, "w") as f:
             # do not sort keys, to keep the order of the config file
@@ -702,7 +716,13 @@ def init_fn(
     "--basin-id",
     default=None,
     type=str,
-    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file.",
+    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file. Cannot be used together with --ISO3.",
+)
+@click.option(
+    "--ISO3",
+    default=None,
+    type=str,
+    help="ISO3 country code to use for the model. Cannot be used together with --basin-id.",
 )
 @click.option(
     "--overwrite",
