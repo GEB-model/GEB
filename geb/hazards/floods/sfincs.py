@@ -204,7 +204,6 @@ class SFINCSRootModel:
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
         coastal: bool = False,
-        include_mask: gpd.GeoDataFrame | None = None,
         bnd_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_outflow: bool = True,
         zsini: float = 0.0,
@@ -276,14 +275,14 @@ class SFINCSRootModel:
             do_mask_flood_plains(sf)
         elif coastal:
             sf.setup_mask_active(
-                mask=include_mask,
+                mask=region,
                 zmin=-21,  # minimum elevation for valid cells
-                # zmax=25,  # Now set quite high to include dunes. Otherwise weird bounding mask shapes can occur.
+                zmax=25,  # Now set quite high to include dunes. Otherwise weird bounding mask shapes can occur.
                 drop_area=1,  # drops areas that are smaller than 1km2,
                 reset_mask=True,
             )
 
-            # set zsini based on the minimum elevation within the include_mask
+            # set zsini based on the minimum elevation
             sf.config["zsini"] = zsini
 
             # setup the coastal boundary conditions

@@ -122,7 +122,6 @@ class Floods(Module):
         name: str,
         region: gpd.GeoDataFrame | None = None,
         coastal: bool = False,
-        include_mask: gpd.GeoDataFrame | None = None,
         bnd_exclude_mask: gpd.GeoDataFrame | None = None,
         zsini: float = 0.0,
     ) -> SFINCSRootModel:
@@ -136,7 +135,6 @@ class Floods(Module):
             name: Name of the SFINCS model (used for the model root directory).
             region: The region to build the SFINCS model for. If None, the entire model region is used.
             coastal: Whether to only include coastal areas in the model.
-            include_mask: GeoDataFrame defining the area to include in the coastal model.
             bnd_exclude_mask: GeoDataFrame defining the areas to exclude from the coastal model boundaries.
             zsini: The initial water level to initiate the model.
 
@@ -180,7 +178,6 @@ class Floods(Module):
                 else {},
                 mask_flood_plains=False,  # setting this to True sometimes leads to errors
                 coastal=coastal,
-                include_mask=include_mask,
                 bnd_exclude_mask=bnd_exclude_mask,
                 setup_outflow=False,
                 zsini=zsini,
@@ -388,7 +385,6 @@ class Floods(Module):
             region=model_domain,
             coastal=coastal,
             bnd_exclude_mask=bnd_exclude_mask,
-            include_mask=model_domain,
             zsini=zsini,
         )
 
