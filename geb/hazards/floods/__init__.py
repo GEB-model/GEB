@@ -345,45 +345,37 @@ class Floods(Module):
 
         self.model.agents.households.flood(flood_depth=flood_depth)
 
-    def build_mask_for_coastal_sfincs(self) -> gpd.GeoDataFrame:
-        """Builds a mask to define the active cells and boundaries for the coastal SFINCS model.
+    def get_return_period_maps(self) -> dict[int, xr.DataArray]:
+        # close the zarr store
+        if hasattr(self.model, "reporter"):
+            self.model.reporter.variables["discharge_daily"].close()
 
-        Returns:
-            GeoDataFrame: A GeoDataFrame containing the coastal mask.
-        """
-        # Load the dataset (assumes NetCDF with CF conventions and georeferencing info)
-        mask = xr.load_dataset(self.model.files["other"]["drainage/mask"])
+        # Load mask of lecz to activate cells for the different sfincs model regions
+        lecz_regions = load_geom(self.model.files["geom"]["coastal/lecz_regions"])
 
-        # Extract the mask variable
-        mask_var = mask["mask"]
+        # buffer lecz regions to ensure proper inclusion of coastline
+        lecz_regions["geometry"] = lecz_regions.buffer(0.00833333)
 
-        # Make sure it has a CRS
-        if mask_var.rio.crs is None:
-            mask_var = mask_var.rio.write_crs(
-                "EPSG:4326", inplace=False
-            )  # or your known CRS
+        # load osm land polygons to exclude from coastal boundary cells
+        bnd_exclude_mask = load_geom(
+            self.model.files["geom"]["coastal/land_polygons"],
+        )
 
-        # Extract binary mask values
-        mask_data = mask_var.values.astype(np.uint8)
+        # add buffer of ~500m to ensure proper exclusion. Buffer should be smaller than that of lecz regions
+        bnd_exclude_mask["geometry"] = bnd_exclude_mask.buffer(0.004165)
 
-        # Get transform from raster metadata
-        transform = mask_var.rio.transform(recalc=True)
+        # load the subbasin geometry for the model domain
+        region = load_geom(self.model.files["geom"]["mask"])
 
-        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
-        shapes = rasterio.features.shapes(mask_data, mask=None, transform=transform)
-
-        # Build GeoDataFrame from the shapes generator
-        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
-
-        gdf = gpd.GeoDataFrame.from_records(records)
-        gdf.set_geometry("geometry", inplace=True)
-        gdf.crs = mask_var.rio.crs
-        # include a 1km buffer to the mask to include the coastal areas
-        # Keep only mask == 1
-        gdf = gdf[gdf["value"] == 1]
-        # gdf.geometry = gdf.geometry.buffer(0.00833)
-
-        return gdf
+        # merge region and lecz regions in a single shapefile
+        model_domain = region.union(lecz_regions.union_all())
+        model_domain.to_file("domain_test.gpkg", driver="GPKG")
+        sfincs_root_model: SFINCSRootModel = self.build(
+            name="coastal_region",
+            region=model_domain,
+            coastal=True,
+            bnd_exclude_mask=bnd_exclude_mask,
+        )
 
     def get_coastal_return_period_maps(self) -> dict[int, xr.DataArray]:
         """This function models coastal flooding for the return periods specified in the model config.
