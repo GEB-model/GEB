@@ -604,7 +604,7 @@ class SFINCSRootModel:
 
     def create_coastal_simulation_for_return_period(
         self, return_period: int | float
-    ) -> "SFINCSSimulation":
+    ) -> SFINCSSimulation:
         """Creates a SFINCS simulation for coastal regions for a specified return period.
 
         This method sets up a simulation that includes coastal
