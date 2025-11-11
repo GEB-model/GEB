@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
+import networkx as nx
 import numpy as np
 import pandas as pd
 import rasterio
@@ -22,7 +22,7 @@ from geb.typing import ArrayFloat32, TwoDArrayInt32
 from geb.workflows.io import load_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
-from ...workflows.io import open_zarr, to_zarr
+from ...workflows.io import load_dict, open_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .sfincs import (
     MultipleSFINCSSimulations,
@@ -32,7 +32,85 @@ from .sfincs import (
 )
 
 if TYPE_CHECKING:
-    from geb.model import GEBModel, Hydrology as Hydrology
+    from geb.model import GEBModel, Hydrology
+
+
+def group_subbasins(
+    river_graph: nx.DiGraph, max_area_m2: float | int
+) -> dict[int, list[int]]:
+    """Groups subbasins in the river graph aiming while keeping the area of each group below max_area_m2.
+
+    Args:
+        river_graph: The river network as a directed graph (networkx DiGraph).
+        max_area_m2: The maximum upstream area (in m²) allowed for each group.
+
+    Returns:
+        A dictionary mapping group IDs to lists of subbasin node IDs.
+    """
+    river_graph = river_graph.copy()
+    # add attribute for merged nodes
+    nx.set_node_attributes(
+        river_graph, {node: [node] for node in river_graph.nodes}, "merged_nodes"
+    )
+
+    # for each node, derive the area of the node by excluding the area of the upstream nodes
+    for node in river_graph.nodes:
+        upstream_nodes = list(river_graph.predecessors(node))
+        upstream_area = sum(
+            river_graph.nodes[up_node]["uparea_m2"] for up_node in upstream_nodes
+        )
+        assert upstream_area >= 0
+        river_graph.nodes[node]["area_m2"] = (
+            river_graph.nodes[node]["uparea_m2"] - upstream_area
+        )
+
+    groups: dict[int, list[int]] = {}
+    group_id: int = 0
+
+    while len(river_graph.nodes) > 1:
+        # get all nodes without predecessors (i.e., headwater nodes)
+        headwater_nodes_to_merge = [
+            (n, river_graph.nodes[n]["area_m2"])
+            for n, d in river_graph.in_degree()
+            if d == 0
+        ]
+        if not headwater_nodes_to_merge:
+            break
+
+        # sort headwater nodes by area descending
+        headwater_nodes_to_merge.sort(key=lambda x: x[1], reverse=True)
+
+        for potential_node_to_merge, _ in headwater_nodes_to_merge:
+            downstream_node = list(river_graph.successors(potential_node_to_merge))
+            assert len(downstream_node) == 1
+            downstream_node = downstream_node[0]
+
+            new_area_after_merge = (
+                river_graph.nodes[downstream_node]["area_m2"]
+                + river_graph.nodes[potential_node_to_merge]["area_m2"]
+            )
+
+            if new_area_after_merge > max_area_m2:
+                groups[group_id] = river_graph.nodes[potential_node_to_merge][
+                    "merged_nodes"
+                ]
+                river_graph.remove_node(potential_node_to_merge)
+                group_id += 1
+                continue
+
+            river_graph.nodes[downstream_node]["merged_nodes"].extend(
+                river_graph.nodes[potential_node_to_merge]["merged_nodes"]
+            )
+            river_graph.nodes[downstream_node]["area_m2"] = new_area_after_merge
+            # remove node
+            river_graph.remove_node(potential_node_to_merge)
+            break
+
+    # add remaining nodes as groups
+    for node in river_graph.nodes:
+        groups[group_id] = river_graph.nodes[node]["merged_nodes"]
+
+    return groups
 
 
 class Floods(Module):
@@ -132,12 +210,11 @@ class Floods(Module):
         """
         sfincs_model = SFINCSRootModel(self.model, name)
         if self.config["force_overwrite"] or not sfincs_model.exists():
-            with open(self.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
-                DEM_config = json.load(f)
-                for entry in DEM_config:
-                    entry["elevtn"] = open_zarr(
-                        self.model.files["other"][entry["path"]]
-                    ).to_dataset(name="elevtn")
+            DEM_config = load_dict(self.model.files["dict"]["hydrodynamics/DEM_config"])
+            for entry in DEM_config:
+                entry["elevtn"] = open_zarr(
+                    self.model.files["other"][entry["path"]]
+                ).to_dataset(name="elevtn")
 
             sfincs_model.build(
                 region=load_geom(self.model.files["geom"]["routing/subbasins"]),

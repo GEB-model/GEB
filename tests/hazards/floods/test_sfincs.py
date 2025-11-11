@@ -176,27 +176,14 @@ def test_SFINCS_runoff(geb_model: GEBModel) -> None:
         # get total flood volume
         flood_volume: float = simulation.get_flood_volume(flood_depth)
 
-        runoff_volume: float = (
-            runoff_rate_m_per_hr
-            * sfincs_model.area
-            * ((end_time - start_time).total_seconds() / 3600.0)
-        )
+        # Use tracked runoff volume from simulation (m3)
+        runoff_volume: float = simulation.total_runoff_volume_m3
 
         cumulative_runoff = simulation.get_cumulative_precipitation().compute()
         cumulative_runoff = cumulative_runoff.mean().item() * sfincs_model.area
 
-        assert math.isclose(
-            flood_volume,
-            runoff_volume,
-            abs_tol=0,
-            rel_tol=0.01,
-        )
-        assert math.isclose(
-            cumulative_runoff,
-            runoff_volume,
-            abs_tol=0,
-            rel_tol=0.01,
-        )
+        assert math.isclose(flood_volume, runoff_volume, abs_tol=0, rel_tol=0.01)
+        assert math.isclose(cumulative_runoff, runoff_volume, abs_tol=0, rel_tol=0.01)
         simulation.cleanup()
 
 
@@ -277,14 +264,10 @@ def test_SFINCS_accumulated_runoff(geb_model: GEBModel) -> None:
         flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.00)
         total_flood_volume = simulation.get_flood_volume(flood_depth)
 
-        runoff_volume: float = (
-            runoff_rate_m_per_hr
-            * geb_model.hydrology.grid.var.cell_area.sum()
-            * ((end_time - start_time).total_seconds() / 3600.0)
-        )
-        discarded_discharge = (
-            discarded_generated_discharge_m3_per_s
-            * (end_time - start_time).total_seconds()
+        # Use tracked volumes from the simulation
+        runoff_volume: float = simulation.total_accumulated_runoff_volume_m3
+        discarded_discharge: float = (
+            simulation.discarded_accumulated_generated_discharge_m3
         )
 
         # compare to total discharge volume
@@ -343,7 +326,7 @@ def test_SFINCS_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None
         # compare to total discharge volume
         assert math.isclose(
             total_flood_volume,
-            (timeseries.values.sum() * 3600).item(),
+            simulation.total_discharge_volume_m3,
             abs_tol=0,
             rel_tol=0.01,
         )
@@ -399,16 +382,10 @@ def test_SFINCS_discharge_grid_forcing(geb_model: GEBModel) -> None:
         )
         total_flood_volume: float = simulation.get_flood_volume(flood_depth)
 
-        number_of_rivers: int = sfincs_model.sfincs_model.forcing["dis"].index.size
-
-        # compare to total discharge volume
+        # compare to total discharge volume tracked by simulation
         assert math.isclose(
             total_flood_volume,
-            (
-                number_of_rivers
-                * (end_time - start_time).total_seconds()
-                * discharge_rate
-            ),
+            simulation.total_discharge_volume_m3,
             abs_tol=0,
             rel_tol=0.01,
         )
