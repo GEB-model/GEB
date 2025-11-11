@@ -13,7 +13,6 @@ import numpy.typing as npt
 from numba import njit
 from scipy.stats import genextreme
 
-from geb.model import GEBModel
 from geb.workflows import TimingModule
 from geb.workflows.io import load_grid
 from geb.workflows.neighbors import find_neighbors
