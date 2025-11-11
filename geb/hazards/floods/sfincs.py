@@ -286,9 +286,6 @@ class SFINCSRootModel:
             # set zsini based on the minimum elevation within the include_mask
             sf.config["zsini"] = zsini
 
-            # set the spinup period to 24 hours (also set in class init, move this to better place)
-            sf.config["tspinup"] = 24 * 3600
-
             # setup the coastal boundary conditions
             sf.setup_mask_bounds(
                 btype="waterlevel",

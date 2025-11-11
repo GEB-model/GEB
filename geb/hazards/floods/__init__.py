@@ -392,6 +392,21 @@ class Floods(Module):
             zsini=zsini,
         )
 
+        for return_period in self.config["return_periods"]:
+            simulation: SFINCSSimulation = (
+                sfincs_root_model.create_coastal_simulation_for_return_period(
+                    return_period
+                )
+            )
+            simulation.run(
+                gpu=self.config["SFINCS"]["gpu"],
+            )
+            flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
+                self.config["minimum_flood_depth"]
+            )
+
+        return flood_depth_return_period
+
     def get_coastal_return_period_maps(self) -> dict[int, xr.DataArray]:
         """This function models coastal flooding for the return periods specified in the model config.
 
