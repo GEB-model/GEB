@@ -1,6 +1,5 @@
 """Tests for the SFINCS flood model and its integration in GEB."""
 
-import json
 import math
 import os
 from datetime import datetime
@@ -21,7 +20,7 @@ from geb.typing import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
-from geb.workflows.io import WorkingDirectory, load_geom, open_zarr
+from geb.workflows.io import WorkingDirectory, load_dict, load_geom, open_zarr
 
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
@@ -86,12 +85,11 @@ def build_sfincs(geb_model: GEBModel, nr_subgrid_pixels: int | None) -> SFINCSRo
         A SFINCS model instance with static grids and configuration written.
     """
     sfincs_model: SFINCSRootModel = SFINCSRootModel(geb_model, TEST_MODEL_NAME)
-    with open(geb_model.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
-        DEM_config = json.load(f)
-        for entry in DEM_config:
-            entry["elevtn"] = open_zarr(
-                geb_model.model.files["other"][entry["path"]]
-            ).to_dataset(name="elevtn")
+    DEM_config = load_dict(geb_model.model.files["dict"]["hydrodynamics/DEM_config"])
+    for entry in DEM_config:
+        entry["elevtn"] = open_zarr(
+            geb_model.model.files["other"][entry["path"]]
+        ).to_dataset(name="elevtn")
 
     sfincs_model.build(
         region=load_geom(geb_model.model.files["geom"]["routing/subbasins"]),
@@ -152,15 +150,22 @@ def test_SFINCS_runoff(geb_model: GEBModel) -> None:
         simulation.sfincs_model.set_config("storecumprcp", 1)
 
         runoff_rate_mm_per_hr: float = 1.0  # mm/hr
-        runoff_rate_m_per_hr = runoff_rate_mm_per_hr / 1000.0
+        runoff_rate_m_per_hr: float = runoff_rate_mm_per_hr / 1000.0
 
-        precipitation: xr.DataArray = open_zarr(
-            geb_model.files["other"]["climate/pr_kg_per_m2_per_s"]
-        ).sel(time=slice(start_time, end_time))
-        runoff_m: xr.DataArray = xr.full_like(
-            precipitation, runoff_rate_m_per_hr, dtype=np.float64
+        runoff_m: xr.DataArray = xr.DataArray(
+            sfincs_model.active_cells * runoff_rate_m_per_hr,
+            dims=["y", "x"],
+            coords={
+                "y": sfincs_model.active_cells.y,
+                "x": sfincs_model.active_cells.x,
+            },
         )
-        mask: xr.DataArray = sfincs_model.sfincs_model.grid["msk"]
+        runoff_m = runoff_m.rio.write_crs(sfincs_model.sfincs_model.crs)
+
+        # repeat for all timesteps
+        runoff_m: xr.DataArray = runoff_m.expand_dims(
+            time=pd.date_range(start=start_time, end=end_time, freq="h")
+        )
 
         simulation.set_runoff_forcing(
             runoff_m=runoff_m,
@@ -181,6 +186,8 @@ def test_SFINCS_runoff(geb_model: GEBModel) -> None:
 
         cumulative_runoff = simulation.get_cumulative_precipitation().compute()
         cumulative_runoff = cumulative_runoff.mean().item() * sfincs_model.area
+
+        print(flood_volume, runoff_volume, cumulative_runoff)
 
         assert math.isclose(flood_volume, runoff_volume, abs_tol=0, rel_tol=0.01)
         assert math.isclose(cumulative_runoff, runoff_volume, abs_tol=0, rel_tol=0.01)
@@ -233,6 +240,7 @@ def test_SFINCS_accumulated_runoff(geb_model: GEBModel) -> None:
         runoff_m: xr.DataArray = runoff_m.expand_dims(
             time=pd.date_range(start=start_time, end=end_time, freq="h")
         )
+        runoff_m = runoff_m.rio.write_crs(4326)
 
         river_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load(
             geb_model.files["grid"]["routing/river_ids"], compress=False
@@ -251,7 +259,7 @@ def test_SFINCS_accumulated_runoff(geb_model: GEBModel) -> None:
                 cell_area=geb_model.hydrology.grid.decompress(
                     geb_model.hydrology.grid.var.cell_area
                 ),
-                river_geometry=geb_model.floods.rivers,
+                river_geometry=geb_model.hydrology.routing.rivers,
             )
         )
 
@@ -264,8 +272,14 @@ def test_SFINCS_accumulated_runoff(geb_model: GEBModel) -> None:
         flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.00)
         total_flood_volume = simulation.get_flood_volume(flood_depth)
 
+        total_runoff_volume: float = (
+            runoff_rate_m_per_hr
+            * geb_model.hydrology.grid.var.cell_area.sum()
+            * ((end_time - start_time).total_seconds() / 3600.0)
+        )
+
         # Use tracked volumes from the simulation
-        runoff_volume: float = simulation.total_accumulated_runoff_volume_m3
+        non_discharded_runoff_volume: float = simulation.total_discharge_volume_m3
         discarded_discharge: float = (
             simulation.discarded_accumulated_generated_discharge_m3
         )
@@ -273,7 +287,13 @@ def test_SFINCS_accumulated_runoff(geb_model: GEBModel) -> None:
         # compare to total discharge volume
         assert math.isclose(
             total_flood_volume,
-            runoff_volume - discarded_discharge,
+            non_discharded_runoff_volume,
+            abs_tol=0,
+            rel_tol=0.01,
+        )
+        assert math.isclose(
+            total_flood_volume,
+            total_runoff_volume - discarded_discharge,
             abs_tol=0,
             rel_tol=0.01,
         )

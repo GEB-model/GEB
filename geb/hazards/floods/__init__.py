@@ -195,7 +195,7 @@ class Floods(Module):
             utm_crs: str = f"EPSG:327{utm_zone}"  # Southern hemisphere
         return utm_crs
 
-    def build(self, name: str) -> SFINCSRootModel:
+    def build(self, name: str, subbasins: gpd.GeoDataFrame) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
 
         Before using this model, forcing must be set.
@@ -204,6 +204,7 @@ class Floods(Module):
 
         Args:
             name: Name of the SFINCS model (used for the model root directory).
+            subbasins: GeoDataFrame containing the subbasins to include in the model.
 
         Returns:
             The built or read SFINCSRootModel instance.
@@ -217,7 +218,7 @@ class Floods(Module):
                 ).to_dataset(name="elevtn")
 
             sfincs_model.build(
-                region=load_geom(self.model.files["geom"]["routing/subbasins"]),
+                region=subbasins,
                 DEMs=DEM_config,
                 rivers=self.model.hydrology.routing.rivers,
                 discharge=self.discharge_spinup_ds,
@@ -378,17 +379,47 @@ class Floods(Module):
             start_time: The start time of the flood event.
             end_time: The end time of the flood event.
         """
-        sfincs_root_model = self.build("entire_region")  # build or read the model
-        sfincs_simulation = self.set_forcing(  # set the forcing
-            sfincs_root_model, start_time, end_time
-        )
-        self.model.logger.info(
-            f"Running SFINCS for {self.model.current_time}..."
-        )  # log the start of the simulation
+        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        rivers = self.model.hydrology.routing.rivers
 
-        sfincs_simulation.run(
-            gpu=self.config["SFINCS"]["gpu"],
-        )  # run the simulation
+        rivers_without_outflow_basin = rivers[~rivers["is_downstream_outflow_subbasin"]]
+
+        river_graph: nx.DiGraph = nx.DiGraph()
+        rivers_in_network = set(rivers_without_outflow_basin.index)
+        for river_id, row in rivers_without_outflow_basin.iterrows():
+            river_graph.add_node(river_id, uparea_m2=row["uparea_m2"])
+            downstream_id = row["downstream_ID"]
+
+            # only add edge if downstream river is in the network and not -1 (ocean)
+            if downstream_id != -1 and downstream_id in rivers_in_network:
+                river_graph.add_edge(river_id, downstream_id)
+
+        grouped_subbasins = group_subbasins(
+            river_graph=river_graph,
+            max_area_m2=1e20,  # very large to force single group only
+        )
+
+        assert len(grouped_subbasins) == 1, "currently only single group supported"
+        for group_id, group in grouped_subbasins.items():
+            group = set(group) | set(
+                rivers.loc[rivers.index.isin(group)]["downstream_ID"]
+            )
+            subbasins_group = subbasins[subbasins.index.isin(group)]
+
+            sfincs_root_model = self.build(
+                f"group_{group_id}", subbasins_group
+            )  # build or read the model
+            sfincs_simulation = self.set_forcing(  # set the forcing
+                sfincs_root_model, start_time, end_time
+            )
+            self.model.logger.info(
+                f"Running SFINCS for {self.model.current_time}..."
+            )  # log the start of the simulation
+
+            sfincs_simulation.run(
+                gpu=self.config["SFINCS"]["gpu"],
+            )  # run the simulation
+
         flood_depth: xr.DataArray = sfincs_simulation.read_max_flood_depth(
             self.config["minimum_flood_depth"]
         )  # read the flood depth results
