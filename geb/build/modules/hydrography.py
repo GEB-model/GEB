@@ -130,6 +130,7 @@ def get_rivers(
         )
     )
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
+    rivers["is_headwater_catchment"] = rivers["maxup"] == 0
     rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"

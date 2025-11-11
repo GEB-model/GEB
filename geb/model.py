@@ -23,7 +23,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
-from geb.workflows.io import load_geom, open_zarr
+from geb.workflows.io import load_dict, load_geom, open_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
@@ -85,6 +85,8 @@ class GEBModel(Module, HazardDriver):
         for data in self.files.values():
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
+
+        self.check_time_range()
 
         self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
 
@@ -840,6 +842,33 @@ class GEBModel(Module, HazardDriver):
             Datetime object with time set to midnight.
         """
         return datetime.datetime.combine(date, datetime.time(0))
+
+    def check_time_range(self) -> None:
+        """Check that the model's spinup and run time ranges are within the model build time range.
+
+        Raises:
+            ValueError: If the spinup start date is before the model build start date.
+            ValueError: If the run end date is after the model build end date.
+        """
+        model_build_time_range: dict[str, str] = load_dict(
+            self.files["dict"]["model_time_range"]
+        )
+        model_build_start_date: datetime.datetime = datetime.datetime.strptime(
+            model_build_time_range["start_date"], "%Y-%m-%d"
+        )
+        model_build_end_date: datetime.datetime = datetime.datetime.strptime(
+            model_build_time_range["end_date"], "%Y-%m-%d"
+        )
+
+        if self.spinup_start < model_build_start_date:
+            raise ValueError(
+                "Spinup start date cannot be before model build start date. Adjust the time range in your build configuration and rebuild the model or adjust the spinup time of the model."
+            )
+
+        if self.run_end > model_build_end_date:
+            raise ValueError(
+                "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
+            )
 
     @property
     def spinup_start(self) -> datetime.datetime:
