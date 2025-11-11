@@ -10,7 +10,7 @@ import logging
 import math
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -2084,7 +2084,7 @@ class GEBModel(
         self.set_subgrid(submask, name="mask")
 
     @build_method
-    def set_time_range(self, start_date: datetime, end_date: datetime) -> None:
+    def set_time_range(self, start_date: date, end_date: date) -> None:
         """Sets the time range for the build model.
 
         This time range is used to ensure that all datasets with a time dimension
@@ -2097,7 +2097,7 @@ class GEBModel(
         """
         assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
-            {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+            {"start_date": start_date, "end_date": end_date},
             name="model_time_range",
         )
 
