@@ -207,6 +207,7 @@ class SFINCSRootModel:
         include_mask: gpd.GeoDataFrame | None = None,
         bnd_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_outflow: bool = True,
+        zsini: float = 0.0,
     ) -> SFINCSRootModel:
         """Build a SFINCS model.
 
@@ -230,6 +231,7 @@ class SFINCSRootModel:
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
             setup_outflow: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
+            zsini: The initial water level to initiate the model.
 
         Returns:
             The SFINCSRootModel instance with the built model.
@@ -276,13 +278,13 @@ class SFINCSRootModel:
             sf.setup_mask_active(
                 mask=include_mask,
                 zmin=-21,  # minimum elevation for valid cells
-                zmax=25,  # Now set quite high to include dunes. Otherwise weird bounding mask shapes can occur.
+                # zmax=25,  # Now set quite high to include dunes. Otherwise weird bounding mask shapes can occur.
                 drop_area=1,  # drops areas that are smaller than 1km2,
                 reset_mask=True,
             )
 
             # set zsini based on the minimum elevation within the include_mask
-            sf.config["zsini"] = include_mask["zsini"].values[0]
+            sf.config["zsini"] = zsini
 
             # set the spinup period to 24 hours (also set in class init, move this to better place)
             sf.config["tspinup"] = 24 * 3600
@@ -294,7 +296,6 @@ class SFINCSRootModel:
                 exclude_mask=bnd_exclude_mask,
                 all_touched=True,
             )
-            # sf.setup_waterlevel_forcing(locations=gtsm_stations)
 
         else:
             sf.setup_mask_active(

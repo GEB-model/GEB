@@ -612,8 +612,8 @@ class GEBModel(Module, HazardDriver):
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
             load_data_from_store=True,
-            omit="agents",
-            simulate_hydrology=False,
+            # omit="agents",
+            simulate_hydrology=True,
             clean_report_folder=False,
         )
 
@@ -623,7 +623,7 @@ class GEBModel(Module, HazardDriver):
             generate_storm_surge_hydrographs(self)
 
         rp_maps = self.floods.get_return_period_maps()
-        # rp_maps_coastal = self.floods.get_coastal_return_period_maps()
+        rp_maps_coastal = self.floods.get_coastal_return_period_maps()
         # else:
         #     rp_maps_coastal = None
         # rp_maps_riverine = self.floods.get_riverine_return_period_maps()

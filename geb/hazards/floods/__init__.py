@@ -124,6 +124,7 @@ class Floods(Module):
         coastal: bool = False,
         include_mask: gpd.GeoDataFrame | None = None,
         bnd_exclude_mask: gpd.GeoDataFrame | None = None,
+        zsini: float = 0.0,
     ) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
 
@@ -137,6 +138,7 @@ class Floods(Module):
             coastal: Whether to only include coastal areas in the model.
             include_mask: GeoDataFrame defining the area to include in the coastal model.
             bnd_exclude_mask: GeoDataFrame defining the areas to exclude from the coastal model boundaries.
+            zsini: The initial water level to initiate the model.
 
         Returns:
             The built or read SFINCSRootModel instance.
@@ -181,6 +183,7 @@ class Floods(Module):
                 include_mask=include_mask,
                 bnd_exclude_mask=bnd_exclude_mask,
                 setup_outflow=False,
+                zsini=zsini,
             )
         else:
             sfincs_model.read()
@@ -345,13 +348,16 @@ class Floods(Module):
 
         self.model.agents.households.flood(flood_depth=flood_depth)
 
-    def get_return_period_maps(self) -> dict[int, xr.DataArray]:
+    def get_return_period_maps(self, coastal_only=False) -> dict[int, xr.DataArray]:
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
 
         # Load mask of lecz to activate cells for the different sfincs model regions
         lecz_regions = load_geom(self.model.files["geom"]["coastal/lecz_regions"])
+
+        # get zsini for model domain
+        zsini = lecz_regions["zsini"].min()
 
         # buffer lecz regions to ensure proper inclusion of coastline
         lecz_regions["geometry"] = lecz_regions.buffer(0.00833333)
@@ -365,16 +371,25 @@ class Floods(Module):
         bnd_exclude_mask["geometry"] = bnd_exclude_mask.buffer(0.004165)
 
         # load the subbasin geometry for the model domain
-        region = load_geom(self.model.files["geom"]["mask"])
+        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        coastal = subbasins["is_coastal_basin"].any()
+
+        # filter on coastal subbasins only
+        if coastal_only:
+            subbasins = subbasins[subbasins["is_coastal_basin"]]
 
         # merge region and lecz regions in a single shapefile
-        model_domain = region.union(lecz_regions.union_all())
-        model_domain.to_file("domain_test.gpkg", driver="GPKG")
+        model_domain = subbasins.union_all().union(lecz_regions.union_all())
+
+        # domain to gpd.GeoDataFrame
+        model_domain = gpd.GeoDataFrame(geometry=[model_domain], crs=lecz_regions.crs)
         sfincs_root_model: SFINCSRootModel = self.build(
             name="coastal_region",
             region=model_domain,
-            coastal=True,
+            coastal=coastal,
             bnd_exclude_mask=bnd_exclude_mask,
+            include_mask=model_domain,
+            zsini=zsini,
         )
 
     def get_coastal_return_period_maps(self) -> dict[int, xr.DataArray]:
