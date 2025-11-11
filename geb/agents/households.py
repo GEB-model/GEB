@@ -850,9 +850,11 @@ class Households(AgentBaseClass):
         )
         self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
-        self.var.max_dam_rail = load_dict(
-            self.model.files["dict"]["damage_parameters/flood/rail/main/maximum_damage"]
-        )["maximum_damage"]
+        self.var.max_dam_rail = float(
+            load_dict(
+                self.model.files["dict"]["damage_parameters/flood/rail/main/maximum_damage"]
+            )["maximum_damage"]
+        )
         self.rail["maximum_damage_m"] = self.var.max_dam_rail
 
         max_dam_road_m: dict[str, float] = {}
