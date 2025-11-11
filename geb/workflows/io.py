@@ -199,7 +199,7 @@ def _convert_paths_to_strings(obj: Any) -> Any:
 
 
 def to_dict(d: dict, filepath: Path) -> None:
-    """Save a dictionary YAML file.
+    """Save a dictionary to a YAML file.
 
     Args:
         d: The dictionary to save.

@@ -168,10 +168,6 @@ class Fabdem(Adapter):
             lon_min = lon_val
             lon_max = lon_val + 1
 
-        print(
-            f"TIF {tif_filename} bounds: ({lon_min}, {lat_min}) to ({lon_max}, {lat_max})"
-        )
-
         # Check for intersection
         return not (
             lon_max <= xmin or lon_min >= xmax or lat_max <= ymin or lat_min >= ymax

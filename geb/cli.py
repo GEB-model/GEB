@@ -339,7 +339,7 @@ def run_model_with_method(
     with WorkingDirectory(working_directory):
         config: dict[str, Any] = parse_config(config)
 
-        # TODO: This ca be removed in 2026
+        # TODO: This can be removed in 2026
         if not Path("input/files.yml").exists() and Path("input/files.json").exists():
             # convert input/files.json to input/files.yml
             json_files: dict[str, Any] = load_dict(
@@ -959,7 +959,7 @@ def alter_fn(
 
         original_input_path: Path = from_model / input_folder
 
-        # TODO: This ca be removed in 2026
+        # TODO: This can be removed in 2026
         if (
             not (original_input_path / "files.yml").exists()
             and (original_input_path / "files.json").exists()
@@ -968,8 +968,9 @@ def alter_fn(
             json_files: dict[str, Any] = load_dict(
                 (original_input_path / "files.json"),
             )
-            with open((original_input_path / "files.yml"), "w") as f:
-                yaml.dump(json_files, f, default_flow_style=False)
+            to_dict(json_files, original_input_path / "files.yml")
+            # remove the original json file
+            (original_input_path / "files.json").unlink()
 
         original_files = load_dict(original_input_path / "files.yml")
 
