@@ -20,7 +20,7 @@ from zarr.codecs.numcodecs import FixedScaleOffset
 
 from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
-from geb.workflows.raster import convert_nodata, resample_like
+from geb.workflows.raster import resample_like
 
 from ...workflows.io import calculate_scaling, to_zarr
 
@@ -1070,8 +1070,10 @@ class Forcing:
         elevation: xr.DataArray = self.new_data_catalog.fetch(
             "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, prefix="forcing"
         ).read(prefix="forcing")
+
         # FABDEM has nodata values in the ocean, for which we can assume an elevation of 0 m
-        elevation: xr.DataArray = convert_nodata(elevation, 0)
+        elevation = xr.where(~np.isnan(elevation), elevation, 0, keep_attrs=True)
+
         target: xr.DataArray = forcing_grid.isel(time=0).drop_vars("time")
 
         elevation_forcing: xr.DataArray = resample_like(
