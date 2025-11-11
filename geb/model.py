@@ -623,7 +623,6 @@ class GEBModel(Module, HazardDriver):
             generate_storm_surge_hydrographs(self)
 
         rp_maps = self.floods.get_return_period_maps()
-        rp_maps_coastal = self.floods.get_coastal_return_period_maps()
         # else:
         #     rp_maps_coastal = None
         # rp_maps_riverine = self.floods.get_riverine_return_period_maps()

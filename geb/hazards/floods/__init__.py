@@ -388,10 +388,21 @@ class Floods(Module):
             zsini=zsini,
         )
 
+        sfincs_root_model.estimate_discharge_for_return_periods(
+            discharge=self.discharge_spinup_ds,
+            rivers=self.model.hydrology.routing.rivers,
+            return_periods=self.config["return_periods"],
+        )
+
+        rm_maps = {}
         for return_period in self.config["return_periods"]:
-            simulation: SFINCSSimulation = (
-                sfincs_root_model.create_coastal_simulation_for_return_period(
-                    return_period
+            print(
+                f"Estimated discharge for return period {return_period} years for all rivers."
+            )
+
+            simulation: MultipleSFINCSSimulations = (
+                sfincs_root_model.create_simulation_for_return_period(
+                    return_period,
                 )
             )
             simulation.run(
@@ -400,8 +411,13 @@ class Floods(Module):
             flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
                 self.config["minimum_flood_depth"]
             )
+            rm_maps[return_period] = flood_depth_return_period
 
-        return flood_depth_return_period
+            to_zarr(
+                flood_depth_return_period,
+                self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
+                crs=flood_depth_return_period.rio.crs,
+            )
 
     def get_coastal_return_period_maps(self) -> dict[int, xr.DataArray]:
         """This function models coastal flooding for the return periods specified in the model config.

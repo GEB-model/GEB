@@ -277,7 +277,6 @@ class SFINCSRootModel:
             sf.setup_mask_active(
                 mask=region,
                 zmin=-21,  # minimum elevation for valid cells
-                zmax=25,  # Now set quite high to include dunes. Otherwise weird bounding mask shapes can occur.
                 drop_area=1,  # drops areas that are smaller than 1km2,
                 reset_mask=True,
             )
@@ -683,11 +682,55 @@ class SFINCSRootModel:
         rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
 
         working_dir: Path = self.path / "working_dir"
+        working_dir_return_period: Path = working_dir / f"rp_{return_period}"
 
         print(f"Running SFINCS for return period {return_period} years")
         simulations: list[SFINCSSimulation] = []
 
-        working_dir_return_period: Path = working_dir / f"rp_{return_period}"
+        # prepare coastal timeseries and locations
+        timeseries = pd.read_csv(
+            Path(
+                f"output/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
+            ),
+            index_col=0,
+        )
+
+        locations = (
+            gpd.GeoDataFrame(
+                gpd.read_parquet(self.model.files["geom"]["gtsm/stations_coast_rp"])
+            )
+            .rename(columns={"station_id": "stations"})
+            .set_index("stations")
+        )
+
+        # convert index to int
+        locations.index = locations.index.astype(int)
+
+        timeseries.index = pd.to_datetime(timeseries.index, format="%Y-%m-%d %H:%M:%S")
+        # convert columns to int
+        timeseries.columns = timeseries.columns.astype(int)
+
+        # Align timeseries columns with locations index
+        timeseries = timeseries.loc[:, locations.index]
+
+        # now convert to incrementing integers starting from 0
+        timeseries.columns = range(len(timeseries.columns))
+        locations.index = range(len(locations.index))
+
+        timeseries = timeseries.iloc[250:-250]  # trim the first and last 250 rows
+
+        simulation: SFINCSSimulation = self.create_simulation(
+            simulation_name=f"rp_{return_period}_coastal",
+            start_time=timeseries.index[0],
+            end_time=timeseries.index[-1],
+        )
+
+        # set forcing and configure model
+        simulation.set_coastal_waterlevel_forcing(
+            timeseries=timeseries, locations=locations
+        )
+
+        simulations.append(simulation)
         for group, group_rivers in tqdm(rivers.groupby("calculation_group")):
             simulation_root = working_dir_return_period / str(group)
 
