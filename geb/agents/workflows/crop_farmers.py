@@ -12,17 +12,19 @@ from geb.hydrology.soil import (
 
 @njit(cache=True, inline="always")
 def get_farmer_HRUs(
-    field_indices: np.ndarray, field_indices_by_farmer: np.ndarray, farmer_index: int
-) -> np.ndarray:
-    """Gets indices of field for given farmer.
+    field_indices: npt.NDArray[np.int32],
+    field_indices_by_farmer: npt.NDArray[np.int32],
+    farmer_index: int,
+) -> npt.NDArray[np.int32]:
+    """Get HRU indices for a given farmer.
 
     Args:
-        field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
-        field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
-        farmer_index: Index of the farmer for which to get the field indices.
+        field_indices: Flat array of HRU indices for all fields (ordered by farmer).
+        field_indices_by_farmer: Start/stop indices into ``field_indices`` per farmer.
+        farmer_index: Farmer index to select.
 
     Returns:
-        field_indices_for_farmer: the indices of the fields for the given farmer.
+        HRU indices that belong to ``farmer_index``.
     """
     return field_indices[
         field_indices_by_farmer[farmer_index, 0] : field_indices_by_farmer[
@@ -33,8 +35,22 @@ def get_farmer_HRUs(
 
 @njit(cache=True)
 def farmer_command_area(
-    n, field_indices, field_indices_by_farmer, reservoir_command_areas
-):
+    n: int,
+    field_indices: npt.NDArray[np.int32],
+    field_indices_by_farmer: npt.NDArray[np.int32],
+    reservoir_command_areas: npt.NDArray[np.int32],
+) -> npt.NDArray[np.int32]:
+    """Map each farmer to the first available reservoir command area.
+
+    Args:
+        n: Number of farmers.
+        field_indices: Flat array of HRU indices for all fields (ordered by farmer).
+        field_indices_by_farmer: Start/stop indices into ``field_indices`` per farmer.
+        reservoir_command_areas: Command-area id per HRU (``-1`` if none).
+
+    Returns:
+        Array of length ``n`` with command-area id per farmer (``-1`` if none).
+    """
     output = np.full(n, -1, dtype=np.int32)
     for farmer_i in range(n):
         farmer_fields = get_farmer_HRUs(
@@ -50,8 +66,26 @@ def farmer_command_area(
 
 @njit(cache=True)
 def get_farmer_groundwater_depth(
-    n, groundwater_depth, HRU_to_grid, field_indices, field_indices_by_farmer, cell_area
-):
+    n: int,
+    groundwater_depth: npt.NDArray[np.float32],
+    HRU_to_grid: npt.NDArray[np.int32],
+    field_indices: npt.NDArray[np.int32],
+    field_indices_by_farmer: npt.NDArray[np.int32],
+    cell_area: npt.NDArray[np.float32],
+) -> npt.NDArray[np.float32]:
+    """Compute area-weighted mean groundwater depth per farmer.
+
+    Args:
+        n: Number of farmers.
+        groundwater_depth: Groundwater depth per grid cell.
+        HRU_to_grid: Map from HRU index to grid-cell index.
+        field_indices: Flat array of HRU indices for all fields (ordered by farmer).
+        field_indices_by_farmer: Start/stop indices into ``field_indices`` per farmer.
+        cell_area: HRU area.
+
+    Returns:
+        Area-weighted groundwater depth per farmer.
+    """
     groundwater_depth_by_farmer = np.full(n, np.nan, dtype=np.float32)
     for farmer_i in range(n):
         farmer_fields = get_farmer_HRUs(
@@ -59,8 +93,8 @@ def get_farmer_groundwater_depth(
             field_indices_by_farmer=field_indices_by_farmer,
             farmer_index=farmer_i,
         )
-        total_cell_area = 0
-        total_groundwater_depth_times_area = 0
+        total_cell_area = 0.0
+        total_groundwater_depth_times_area = 0.0
         for field in farmer_fields:
             grid_cell = HRU_to_grid[field]
             total_cell_area += cell_area[field]
@@ -118,12 +152,12 @@ def get_deficit_between_dates(
 def get_future_deficit(
     farmer: int,
     day_index: int,
-    cumulative_water_deficit_m3: np.ndarray,
-    crop_calendar: np.ndarray,
-    crop_rotation_year_index: np.ndarray,
+    cumulative_water_deficit_m3: npt.NDArray[np.float32],
+    crop_calendar: npt.NDArray[np.int32],
+    crop_rotation_year_index: npt.NDArray[np.int32],
     potential_irrigation_consumption_farmer_m3: float,
     reset_day_index: int,
-):
+) -> float:
     """Get the future water deficit for a farmer.
 
     Args:
@@ -254,18 +288,38 @@ def adjust_irrigation_to_limit(
 
 @njit(cache=True)
 def withdraw_channel(
-    available_channel_storage_m3: np.ndarray,
+    available_channel_storage_m3: npt.NDArray[np.float32],
     grid_cell: int,
-    cell_area: np.ndarray,
+    cell_area: npt.NDArray[np.float32],
     field: int,
     farmer: int,
     irrigation_water_demand_field_m: float,
-    water_withdrawal_m: np.ndarray,
-    remaining_irrigation_limit_m3: np.ndarray,
-    channel_abstraction_m3_by_farmer: np.ndarray,
+    water_withdrawal_m: npt.NDArray[np.float32],
+    remaining_irrigation_limit_m3: npt.NDArray[np.float32],
+    channel_abstraction_m3_by_farmer: npt.NDArray[np.float32],
     maximum_abstraction_channel_m3_field: np.float32,
-    minimum_channel_storage_m3: float = 100,
-):
+    minimum_channel_storage_m3: float = 100.0,
+) -> float:
+    """Withdraw irrigation water from channel for a field.
+
+    Args:
+        available_channel_storage_m3: Available channel storage by grid cell (m³).
+        grid_cell: Grid-cell index of the field.
+        cell_area: HRU area (m²).
+        field: HRU index.
+        farmer: Farmer index.
+        irrigation_water_demand_field_m: Remaining demand at field (m).
+        water_withdrawal_m: Per-field withdrawal accumulator (m).
+        remaining_irrigation_limit_m3: Remaining seasonal limit per farmer (m³),
+            or ``NaN`` when unlimited.
+        channel_abstraction_m3_by_farmer: Per-farmer channel abstraction accumulator (m³).
+        maximum_abstraction_channel_m3_field: Max channel abstraction allowed for this
+            field in current step (m³).
+        minimum_channel_storage_m3: Minimum storage to keep in channel (buffer).
+
+    Returns:
+        Updated remaining field demand (m).
+    """
     water_demand_cell_m3 = irrigation_water_demand_field_m * cell_area[field]
     assert water_demand_cell_m3 >= 0
 
@@ -302,16 +356,35 @@ def withdraw_reservoir(
     command_area: int,
     field: int,
     farmer: int,
-    reservoir_abstraction_m3: np.ndarray,
-    available_reservoir_storage_m3: np.ndarray,
+    reservoir_abstraction_m3: npt.NDArray[np.float32],
+    available_reservoir_storage_m3: npt.NDArray[np.float32],
     irrigation_water_demand_field_m: np.float32,
-    # irrigation_water_demand_field_m_limit_adjusted: np.float32,
-    water_withdrawal_m: np.ndarray,
-    remaining_irrigation_limit_m3: np.ndarray,
-    reservoir_abstraction_m3_by_farmer: np.ndarray,
+    water_withdrawal_m: npt.NDArray[np.float32],
+    remaining_irrigation_limit_m3: npt.NDArray[np.float32],
+    reservoir_abstraction_m3_by_farmer: npt.NDArray[np.float32],
     maximum_abstraction_reservoir_m3_field: np.float32,
-    cell_area: np.ndarray,
-) -> tuple[np.float32, np.float32]:
+    cell_area: npt.NDArray[np.float32],
+) -> np.float32:
+    """Withdraw irrigation water from a reservoir for a field.
+
+    Args:
+        command_area: Reservoir command-area id for this farmer, or ``-1``.
+        field: HRU index.
+        farmer: Farmer index.
+        reservoir_abstraction_m3: Per-reservoir abstraction accumulator (m³).
+        available_reservoir_storage_m3: Available storage per reservoir (m³).
+        irrigation_water_demand_field_m: Remaining demand at field (m).
+        water_withdrawal_m: Per-field withdrawal accumulator (m).
+        remaining_irrigation_limit_m3: Remaining seasonal limit per farmer (m³),
+            or ``NaN`` when unlimited.
+        reservoir_abstraction_m3_by_farmer: Per-farmer reservoir abstraction accumulator (m³).
+        maximum_abstraction_reservoir_m3_field: Max reservoir abstraction allowed for
+            this field in current step (m³).
+        cell_area: HRU area (m²).
+
+    Returns:
+        Updated remaining field demand (m).
+    """
     water_demand_cell_m3 = irrigation_water_demand_field_m * cell_area[field]
     assert water_demand_cell_m3 >= 0
 
@@ -359,17 +432,38 @@ def withdraw_groundwater(
     farmer: int,
     grid_cell: int,
     field: int,
-    groundwater_abstraction_m3: np.ndarray,
-    available_groundwater_m3: np.ndarray,
-    cell_area: np.ndarray,
-    groundwater_depth: np.ndarray,
-    well_depth: np.ndarray,
+    groundwater_abstraction_m3: npt.NDArray[np.float32],
+    available_groundwater_m3: npt.NDArray[np.float32],
+    cell_area: npt.NDArray[np.float32],
+    groundwater_depth: npt.NDArray[np.float32],
+    well_depth: npt.NDArray[np.float32],
     irrigation_water_demand_field_m: float,
-    water_withdrawal_m: np.ndarray,
-    remaining_irrigation_limit_m3: np.ndarray,
-    groundwater_abstraction_m3_by_farmer: np.ndarray,
+    water_withdrawal_m: npt.NDArray[np.float32],
+    remaining_irrigation_limit_m3: npt.NDArray[np.float32],
+    groundwater_abstraction_m3_by_farmer: npt.NDArray[np.float32],
     maximum_abstraction_groundwater_m3_field: np.float32,
-):
+) -> float:
+    """Withdraw irrigation water from groundwater for a field.
+
+    Args:
+        farmer: Farmer index.
+        grid_cell: Grid-cell index corresponding to field.
+        field: HRU index.
+        groundwater_abstraction_m3: Per-grid-cell groundwater abstraction accumulator (m³).
+        available_groundwater_m3: Available groundwater per grid cell (m³).
+        cell_area: HRU area (m²).
+        groundwater_depth: Groundwater depth per grid cell (m).
+        well_depth: Per-farmer well depth (m).
+        irrigation_water_demand_field_m: Remaining demand at field (m).
+        water_withdrawal_m: Per-field withdrawal accumulator (m).
+        remaining_irrigation_limit_m3: Remaining seasonal limit per farmer (m³),
+            or ``NaN`` when unlimited.
+        groundwater_abstraction_m3_by_farmer: Per-farmer groundwater abstraction accumulator (m³).
+        maximum_abstraction_groundwater_m3_field: Max allowed GW abstraction (m³) for this field.
+
+    Returns:
+        Updated remaining field demand (m).
+    """
     # groundwater irrigation
     if groundwater_depth[grid_cell] < well_depth[farmer]:
         water_demand_cell_m3 = irrigation_water_demand_field_m * cell_area[field]
@@ -407,21 +501,47 @@ def withdraw_groundwater(
 
 @njit(cache=True, inline="always")
 def get_potential_irrigation_consumption_m(
-    topwater: np.float32,
-    root_depth_m: np.float32,
-    soil_layer_height: np.float32,
-    field_capacity,
-    wilting_point,
-    w,
-    ws,
-    saturated_hydraulic_conductivity_m_per_day: np.float32,
-    fraction_irrigated_field: np.float32,
-    max_paddy_water_level_farmer,
-    crop_group: np.float32,
+    topwater: npt.NDArray[np.float32],
+    root_depth_m: npt.NDArray[np.float32],
+    soil_layer_height: npt.NDArray[np.float32],
+    field_capacity: npt.NDArray[np.float32],
+    wilting_point: npt.NDArray[np.float32],
+    w: npt.NDArray[np.float32],
+    ws: npt.NDArray[np.float32],
+    saturated_hydraulic_conductivity_m_per_day: npt.NDArray[np.float32],
+    fraction_irrigated_field: npt.NDArray[np.float32],
+    max_paddy_water_level_farmer: npt.NDArray[np.float32],
+    crop_group: npt.NDArray[np.float32],  # kept for future dynamic-p logic
     is_paddy: np.bool_,
     minimum_effective_root_depth_m: np.float32,
     depletion_factor: np.float32 = np.float32(0.5),
 ) -> np.float32:
+    """Compute potential irrigation (m) for a field on the current day.
+
+    For paddy: irrigate up to a target ponding level above the current topwater.
+    For non-paddy: apply when soil depletion exceeds a fraction of readily
+    available water in the root zone, capped by infiltration capacity.
+
+    Args:
+        topwater: Current surface water level at the field (m).
+        root_depth_m: Current crop root depth (m).
+        soil_layer_height: Soil layer heights (m), shape (n_layers,).
+        field_capacity: Volumetric water at field capacity per layer, (n_layers,).
+        wilting_point: Volumetric water at wilting point per layer, (n_layers,).
+        w: Current soil water per layer (same units as FC/WP), (n_layers,).
+        ws: Saturation per layer (unused here but kept for signature stability).
+        saturated_hydraulic_conductivity_m_per_day: Layer/soil infiltration control (m/day).
+        fraction_irrigated_field: Fraction of HRU actually irrigated [0,1].
+        max_paddy_water_level_farmer: Target ponding level for paddy (m).
+        crop_group: Crop stress group (placeholder for future dynamic p).
+        is_paddy: Whether this field is paddy.
+        minimum_effective_root_depth_m: Lower bound for effective root depth (m).
+        depletion_factor: Multiplier on RAW threshold (default 0.5).
+
+    Returns:
+        Potential irrigation depth (m) to apply today (already scaled by
+        ``fraction_irrigated_field``).
+    """
     assert np.float32(0) <= fraction_irrigated_field <= np.float32(1)
 
     # Calculate the potential irrigation consumption for the farmer
@@ -513,11 +633,25 @@ def get_gross_irrigation_demand_m3(
     npt.NDArray[np.float32],
     npt.NDArray[np.float32],
 ]:
-    """This function is used to regulate the irrigation behavior of farmers. The farmers are "activated" by the given `activation_order` and each farmer can irrigate from the various water sources, given water is available and the farmers has the means to abstract water. The abstraction order is channel irrigation, reservoir irrigation, groundwater irrigation.
+    """Compute gross irrigation demand per field (m³) and limit-adjusted variants.
+
+    Iterates per farmer and field to compute gross potential irrigation demand
+    (m³) from soil/crop state, then applies irrigation-limit corrections for
+    each source (in the order reservoir, channel, groundwater) when a limit is present.
+    Used to regulate the irrigation behavior of farmers. The farmers are "activated"
+    by the given `activation_order`
 
     Returns:
-        gross_potential_irrigation_m3: The gross potential irrigation demand in m3 for each field.
-        gross_potential_irrigation_m3_limit_adjusted: The gross potential irrigation demand in m3 for each field, adjusted to the remaining irrigation limit.
+        tuple[
+            np.ndarray,
+            np.ndarray,
+            np.ndarray,
+            np.ndarray,
+        ]: A 4-tuple of arrays (all shape = n_fields, dtype float32):
+            - gross_potential_irrigation_m3: Unconstrained gross demand (m³) per field.
+            - gross_potential_irrigation_m3_limit_adjusted_reservoir: Demand limited by the reservoir cap.
+            - gross_potential_irrigation_m3_limit_adjusted_channel: Demand limited by the channel cap.
+            - gross_potential_irrigation_m3_limit_adjusted_groundwater: Demand limited by the groundwater cap.
     """
     n_hydrological_response_units: int = cell_area.size
     gross_potential_irrigation_m3: npt.NDArray[np.float32] = np.zeros(
@@ -664,32 +798,76 @@ def get_gross_irrigation_demand_m3(
 
 @njit(cache=True)
 def abstract_water(
-    activation_order: np.ndarray,
-    field_indices_by_farmer: np.ndarray,
-    field_indices: np.ndarray,
-    irrigation_efficiency: np.ndarray,
-    surface_irrigated: np.ndarray,
-    well_irrigated: np.ndarray,
-    cell_area: np.ndarray,
-    HRU_to_grid: np.ndarray,
-    nearest_river_grid_cell: np.ndarray,
-    crop_map: np.ndarray,
-    available_channel_storage_m3: np.ndarray,
-    available_groundwater_m3: np.ndarray,
-    groundwater_depth: np.ndarray,
-    available_reservoir_storage_m3: np.ndarray,
-    command_area_by_farmer: np.ndarray,
+    activation_order: npt.NDArray[np.int32],
+    field_indices_by_farmer: npt.NDArray[np.int32],
+    field_indices: npt.NDArray[np.int32],
+    irrigation_efficiency: npt.NDArray[np.float32],
+    surface_irrigated: npt.NDArray[np.bool_],
+    well_irrigated: npt.NDArray[np.bool_],
+    cell_area: npt.NDArray[np.float32],
+    HRU_to_grid: npt.NDArray[np.int32],
+    nearest_river_grid_cell: npt.NDArray[np.int32],
+    crop_map: npt.NDArray[np.int32],
+    available_channel_storage_m3: npt.NDArray[np.float32],
+    available_groundwater_m3: npt.NDArray[np.float32],
+    groundwater_depth: npt.NDArray[np.float32],
+    available_reservoir_storage_m3: npt.NDArray[np.float32],
+    command_area_by_farmer: npt.NDArray[np.int32],
     return_fraction: float,
-    well_depth: float,
-    remaining_irrigation_limit_m3_reservoir: np.ndarray,
-    remaining_irrigation_limit_m3_channel: np.ndarray,
-    remaining_irrigation_limit_m3_groundwater: np.ndarray,
+    well_depth: npt.NDArray[np.float32],
+    remaining_irrigation_limit_m3_reservoir: npt.NDArray[np.float32],
+    remaining_irrigation_limit_m3_channel: npt.NDArray[np.float32],
+    remaining_irrigation_limit_m3_groundwater: npt.NDArray[np.float32],
     maximum_abstraction_reservoir_m3_by_farmer: npt.NDArray[np.float32],
     maximum_abstraction_channel_m3_by_farmer: npt.NDArray[np.float32],
     maximum_abstraction_groundwater_m3_by_farmer: npt.NDArray[np.float32],
-    gross_irrigation_demand_m3_per_field: np.ndarray,
-    # gross_irrigation_demand_m3_per_field_limit_adjusted: npt.NDArray[np.float32],
-):
+    gross_irrigation_demand_m3_per_field: npt.NDArray[np.float32],
+) -> tuple[
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+    npt.NDArray[np.float32],
+]:
+    """Perform irrigation withdrawals from channel, reservoir, and groundwater.
+
+    Args:
+        activation_order: Farmer activation order (e.g., by elevation).
+        field_indices_by_farmer: Start/stop indices into ``field_indices`` per farmer.
+        field_indices: Flat array of HRU indices for all fields (ordered by farmer).
+        irrigation_efficiency: Per-farmer irrigation efficiency.
+        surface_irrigated: Whether farmer can access surface-water sources.
+        well_irrigated: Whether farmer has a functioning well.
+        cell_area: HRU areas.
+        HRU_to_grid: Map from HRU to grid cell.
+        nearest_river_grid_cell: Nearest river cell per HRU.
+        crop_map: Crop id per HRU (``-1`` for none).
+        available_channel_storage_m3: Available channel storage per river cell (m³).
+        available_groundwater_m3: Available groundwater per grid cell (m³).
+        groundwater_depth: Groundwater depth per grid cell (m).
+        available_reservoir_storage_m3: Available reservoir storage (m³).
+        command_area_by_farmer: Reservoir command area per farmer (``-1`` if none).
+        return_fraction: Fraction of applied losses that return as return-flow.
+        well_depth: Per-farmer well depth (m).
+        remaining_irrigation_limit_m3_reservoir: Remaining seasonal limit (m³).
+        remaining_irrigation_limit_m3_channel: Remaining seasonal limit (m³).
+        remaining_irrigation_limit_m3_groundwater: Remaining seasonal limit (m³).
+        maximum_abstraction_reservoir_m3_by_farmer: Cap per farmer (m³) from reservoir.
+        maximum_abstraction_channel_m3_by_farmer: Cap per farmer (m³) from channel.
+        maximum_abstraction_groundwater_m3_by_farmer: Cap per farmer (m³) from GW.
+        gross_irrigation_demand_m3_per_field: Unadjusted gross demand per HRU (m³).
+
+    Returns:
+        Tuple with per-source totals and field-level fluxes:
+        (channel_by_farmer, reservoir_by_farmer, groundwater_by_farmer,
+         water_withdrawal_m, water_consumption_m,
+         irrigation_return_flow_m, irrigation_evaporation_m,
+         reservoir_abstraction_m3, groundwater_abstraction_m3).
+    """
     n_hydrological_response_units = cell_area.size
     water_withdrawal_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
     water_consumption_m = np.zeros(n_hydrological_response_units, dtype=np.float32)
@@ -991,7 +1169,16 @@ def plant(
 
 
 @njit(cache=True)
-def arrays_equal(a, b) -> bool:
+def arrays_equal(a: npt.NDArray, b: npt.NDArray) -> bool:
+    """Check element-wise equality for two same-shaped arrays.
+
+    Args:
+        a: First array.
+        b: Second array.
+
+    Returns:
+        True if every element is equal, otherwise False.
+    """
     for i in range(a.size):
         if a.flat[i] != b.flat[i]:
             return True if a.flat[i] != b.flat[i] else False
@@ -999,7 +1186,18 @@ def arrays_equal(a, b) -> bool:
 
 
 @njit(cache=True)
-def find_matching_rows(arr, target_row):
+def find_matching_rows(
+    arr: npt.NDArray[np.int32], target_row: npt.NDArray[np.int32]
+) -> npt.NDArray[np.bool_]:
+    """Find rows in ``arr`` that match ``target_row`` exactly.
+
+    Args:
+        arr: 2D array of shape (n_rows, n_cols).
+        target_row: 1D array of shape (n_cols,).
+
+    Returns:
+        Boolean mask of length ``n_rows`` where True indicates a match.
+    """
     n_rows = arr.shape[0]
     matches = np.empty(n_rows, dtype=np.bool_)
     for i in range(n_rows):
@@ -1012,7 +1210,21 @@ def find_matching_rows(arr, target_row):
 
 
 @njit(cache=True)
-def find_most_similar_index(target_series, yield_ratios, groups):
+def find_most_similar_index(
+    target_series: npt.NDArray[np.float32],
+    yield_ratios: npt.NDArray[np.float32],
+    groups: npt.NDArray[np.bool_],
+) -> int:
+    """Find index (within ``groups``) whose series is closest to ``target_series``.
+
+    Args:
+        target_series: 1D reference series.
+        yield_ratios: 2D matrix where each row is a candidate series.
+        groups: Boolean mask selecting allowable rows.
+
+    Returns:
+        Index (into ``yield_ratios``) of the closest series among ``groups``.
+    """
     n = groups.size
     indices = []
     for i in range(n):
@@ -1035,15 +1247,32 @@ def find_most_similar_index(target_series, yield_ratios, groups):
 
 @njit(cache=True, parallel=True)
 def crop_profit_difference_njit_parallel(
-    yearly_profits,
-    crop_elevation_group,
-    unique_crop_groups,
-    group_indices,
-    crop_calendar,
-    unique_crop_calendars,
-    p_droughts,
-    past_window,
-):
+    yearly_profits: npt.NDArray[np.float32],
+    crop_elevation_group: npt.NDArray[np.int32],
+    unique_crop_groups: npt.NDArray[np.int32],
+    group_indices: npt.NDArray[np.int32],
+    crop_calendar: npt.NDArray[np.int32],
+    unique_crop_calendars: npt.NDArray[np.int32],
+    p_droughts: npt.NDArray[np.float32],
+    past_window: int,
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.int32]]:
+    """Compute profit gains for alternative crop calendars (parallel over groups).
+
+    Args:
+        yearly_profits: Per-farmer yearly profits (recent years in columns).
+        crop_elevation_group: Per-farmer feature rows for grouping.
+        unique_crop_groups: Unique group keys.
+        group_indices: For each farmer, index into ``unique_crop_groups``.
+        crop_calendar: Per-farmer crop calendar.
+        unique_crop_calendars: Candidate alternative calendars (rows).
+        p_droughts: Drought probabilities (not used directly in this body).
+        past_window: Number of past years to use (with a decaying weight).
+
+    Returns:
+        Tuple of:
+            - gains_adaptation: Profit gain per farmer for each candidate calendar.
+            - new_farmer_id: Example “nearest” farmer id per candidate and farmer.
+    """
     n_groups: int = len(unique_crop_groups)
     n_calendars: int = len(unique_crop_calendars)
     n_rotation: int = unique_crop_calendars.shape[1]
@@ -1168,15 +1397,21 @@ def gev_ppf_scalar(u: float, c: float, loc: float, scale: float) -> float:
 
 @njit(cache=True, parallel=True)
 def compute_premiums_and_best_contracts_numba(
-    gev_params,
-    values_history,
-    losses,
-    strike_vals,
-    exit_vals,
-    rate_vals,
-    n_sims,
-    seed=42,
-):
+    gev_params: npt.NDArray[np.float64],
+    values_history: npt.NDArray[np.float64],
+    losses: npt.NDArray[np.float64],
+    strike_vals: npt.NDArray[np.float64],
+    exit_vals: npt.NDArray[np.float64],
+    rate_vals: npt.NDArray[np.float64],
+    n_sims: int,
+    seed: int = 42,
+) -> tuple[
+    npt.NDArray[np.int64],
+    npt.NDArray[np.int64],
+    npt.NDArray[np.int64],
+    npt.NDArray[np.float64],
+    npt.NDArray[np.float64],
+]:
     """Computes the best insurance contracts for each agent based on GEV parameters, historical SPEI data, and losses.
 
     For each agent, loop once over (strike, exit):

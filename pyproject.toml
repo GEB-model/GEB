@@ -188,13 +188,6 @@ preview = true
     "D102",
     "D103",
 ]
-"geb/agents/workflows/crop_farmers.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D102",
-    "D103",
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]
