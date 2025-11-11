@@ -1,17 +1,13 @@
 import calendar
 import copy
 import math
-import os
 from datetime import datetime
-from typing import Tuple
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 from honeybees.library.neighbors import find_neighbors
 from honeybees.library.raster import pixels_to_coords, sample_from_map
 from numba import njit
-from scipy.optimize import curve_fit
 from scipy.stats import genextreme
 
 from geb.workflows import TimingModule
@@ -3483,7 +3479,7 @@ class CropFarmers(AgentBaseClass):
         )
         return SEUT_adaptation_decision
 
-    def calculate_water_costs(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def calculate_water_costs(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Calculate the water and energy costs per agent and the average extraction speed.
 
         This method computes the energy costs for agents using groundwater, the water costs for all agents
@@ -3629,7 +3625,7 @@ class CropFarmers(AgentBaseClass):
 
     def calculate_well_costs_global(
         self, groundwater_depth: np.ndarray, average_extraction_speed: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Calculate the annual costs associated with well installation and operation globally.
 
         This function computes the annual costs for installing wells, maintaining them, and the energy costs
@@ -3730,7 +3726,7 @@ class CropFarmers(AgentBaseClass):
 
     def profits_SEUT(
         self, additional_diffentiators, adapted, farmer_yield_probability_relation
-    ) -> Tuple[
+    ) -> tuple[
         np.ndarray,
         np.ndarray,
         np.ndarray,
@@ -3780,7 +3776,7 @@ class CropFarmers(AgentBaseClass):
 
     def profits_SEUT_crops(
         self, unique_crop_calendars, farmer_yield_probability_relation
-    ) -> Tuple[
+    ) -> tuple[
         np.ndarray,
         np.ndarray,
         np.ndarray,
@@ -3910,7 +3906,7 @@ class CropFarmers(AgentBaseClass):
 
     def format_results(
         self, total_profits: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Transpose and slice the total profits matrix, and extract the 'no drought' scenario profits.
 
         Args:
@@ -4073,7 +4069,7 @@ class CropFarmers(AgentBaseClass):
 
     def adaptation_water_cost_difference(
         self, additional_diffentiators, adapted: np.ndarray, energy_cost, water_cost
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Calculate the relative yield ratio improvement for farmers adopting a certain adaptation.
 
         This function determines how much better farmers that have adopted a particular adaptation

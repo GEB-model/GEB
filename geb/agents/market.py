@@ -239,10 +239,8 @@ class Market(AgentBaseClass):
             and self.config["dynamic_market"] is True
         ):
             index = self._crop_prices[0].get(self.model.current_time)
-            observed_price = self._crop_prices[1][index]
             simulated_price = self.get_modelled_crop_prices()
-            final_price = observed_price * 0.4 + simulated_price * 0.6
-            return final_price
+            return simulated_price
         else:
             if self._crop_prices[0] is None:
                 print("WARNING: Using static crop prices")
