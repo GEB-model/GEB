@@ -332,6 +332,9 @@ class Floods(Module):
         elif self.config["forcing_method"] == "runoff":
             simulation.set_runoff_forcing(
                 runoff_m=forcing_grid,
+                area_m2=self.hydrology.grid.decompress(
+                    self.hydrology.grid.var.cell_area
+                ),
             )
 
         elif self.config["forcing_method"] == "accumulated_runoff":

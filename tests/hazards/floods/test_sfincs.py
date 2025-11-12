@@ -16,10 +16,7 @@ from geb.cli import CONFIG_DEFAULT, parse_config, run_model_with_method
 from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
-from geb.typing import (
-    TwoDArrayFloat64,
-    TwoDArrayInt32,
-)
+from geb.typing import TwoDArrayFloat32, TwoDArrayFloat64, TwoDArrayInt32
 from geb.workflows.io import WorkingDirectory, load_dict, load_geom, open_zarr
 
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -128,7 +125,7 @@ def build_sfincs(geb_model: GEBModel, nr_subgrid_pixels: int | None) -> SFINCSRo
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_SFINCS_runoff(geb_model: GEBModel) -> None:
+def test_runoff(geb_model: GEBModel) -> None:
     """Test SFINCS with runoff forcing.
 
     Args:
@@ -167,9 +164,11 @@ def test_SFINCS_runoff(geb_model: GEBModel) -> None:
             time=pd.date_range(start=start_time, end=end_time, freq="h")
         )
 
-        simulation.set_runoff_forcing(
-            runoff_m=runoff_m,
+        area_m2: TwoDArrayFloat32 = np.full_like(
+            sfincs_model.active_cells, sfincs_model.cell_area, dtype=np.float32
         )
+
+        simulation.set_runoff_forcing(runoff_m=runoff_m, area_m2=area_m2)
 
         assert (simulation.path / "precip_2d.nc").exists()
         assert (simulation.path / "sfincs.inp").exists()
@@ -195,7 +194,7 @@ def test_SFINCS_runoff(geb_model: GEBModel) -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_SFINCS_accumulated_runoff(geb_model: GEBModel) -> None:
+def test_accumulated_runoff(geb_model: GEBModel) -> None:
     """Test SFINCS with accumulated runoff forcing.
 
     Args:
@@ -306,7 +305,7 @@ def test_SFINCS_accumulated_runoff(geb_model: GEBModel) -> None:
     "use_gpu",
     [False] + ([True] if os.getenv("GEB_TEST_GPU", "no") == "yes" else []),
 )
-def test_SFINCS_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
+def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
     """Test SFINCS with discharge forcing from river nodes.
 
     Args:
@@ -355,7 +354,7 @@ def test_SFINCS_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_SFINCS_discharge_grid_forcing(geb_model: GEBModel) -> None:
+def test_discharge_grid_forcing(geb_model: GEBModel) -> None:
     """Test SFINCS with discharge forcing from a grid.
 
     Args:

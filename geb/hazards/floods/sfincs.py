@@ -863,11 +863,13 @@ class SFINCSSimulation:
     def set_runoff_forcing(
         self,
         runoff_m: xr.DataArray,
+        area_m2: TwoDArrayFloat32,
     ) -> None:
         """Sets up precipitation forcing for the SFINCS model from a gridded dataset.
 
         Args:
             runoff_m: xarray DataArray containing runoff values in m per time step.
+            area_m2: xarray DataArray containing the area of each runoff grid cell in m².
         """
         assert runoff_m.rio.crs is not None, "precipitation_grid should have a crs"
         assert (
@@ -886,11 +888,8 @@ class SFINCSSimulation:
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
 
-        resolution: tuple[float, float] = runoff_m.rio.resolution()
         self.total_runoff_volume_m3 += (
-            (runoff_m.isel(time=slice(None, -1)) * resolution[0] * resolution[1])
-            .sum()
-            .item()
+            (runoff_m.isel(time=slice(None, -1)) * area_m2).sum().item()
         )
         self.print_forcing_volume()
 
