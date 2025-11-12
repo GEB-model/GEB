@@ -476,7 +476,7 @@ def land_surface_model(
                 minimum_effective_root_depth_m=minimum_effective_root_depth_m,
             )
 
-            potential_transpiration_m[i] = potential_transpiration_m_cell_hour
+            potential_transpiration_m[i] += potential_transpiration_m_cell_hour
             transpiration_m[i] += transpiration_m_cell_hour
 
             # soil moisture is updated in place
