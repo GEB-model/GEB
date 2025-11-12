@@ -602,63 +602,6 @@ class SFINCSRootModel:
             **kwargs,
         )
 
-    def create_coastal_simulation_for_return_period(
-        self, return_period: int | float
-    ) -> SFINCSSimulation:
-        """Creates a SFINCS simulation for coastal regions for a specified return period.
-
-        This method sets up a simulation that includes coastal
-        boundary conditions, such as storm surge or tidal influences, for the specified
-        return period.
-
-        Args:
-            return_period: The return period for which to create the coastal simulation.
-        Returns:
-            An instance of SFINCSSimulation configured for coastal conditions.
-        """
-        timeseries = pd.read_csv(
-            Path(
-                f"output/hydrographs/gtsm_spring_tide_hydrograph_rp{return_period:04d}.csv"
-            ),
-            index_col=0,
-        )
-
-        locations = (
-            gpd.GeoDataFrame(
-                gpd.read_parquet(self.model.files["geom"]["gtsm/stations_coast_rp"])
-            )
-            .rename(columns={"station_id": "stations"})
-            .set_index("stations")
-        )
-
-        # convert index to int
-        locations.index = locations.index.astype(int)
-
-        timeseries.index = pd.to_datetime(timeseries.index, format="%Y-%m-%d %H:%M:%S")
-        # convert columns to int
-        timeseries.columns = timeseries.columns.astype(int)
-
-        # Align timeseries columns with locations index
-        timeseries = timeseries.loc[:, locations.index]
-
-        # now convert to incrementing integers starting from 0
-        timeseries.columns = range(len(timeseries.columns))
-        locations.index = range(len(locations.index))
-
-        timeseries = timeseries.iloc[250:-250]  # trim the first and last 250 rows
-
-        simulation: SFINCSSimulation = self.create_simulation(
-            simulation_name=f"rp_{return_period}_coastal",
-            start_time=timeseries.index[0],
-            end_time=timeseries.index[-1],
-        )
-
-        # set forcing and configure model
-        simulation.set_coastal_waterlevel_forcing(
-            timeseries=timeseries, locations=locations
-        )
-        return simulation
-
     def create_simulation_for_return_period(
         self, return_period: int | float
     ) -> MultipleSFINCSSimulations:
