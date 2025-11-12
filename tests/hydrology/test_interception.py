@@ -20,6 +20,7 @@ def test_interception_no_rainfall_evaporation_only() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 
@@ -54,6 +55,7 @@ def test_interception_rainfall_below_capacity() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 
@@ -86,6 +88,7 @@ def test_interception_rainfall_exceeds_capacity() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 
@@ -119,6 +122,7 @@ def test_interception_zero_capacity() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 
@@ -150,6 +154,7 @@ def test_interception_zero_potential_evaporation() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 
@@ -181,6 +186,7 @@ def test_interception_full_storage_no_rainfall() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 
@@ -212,6 +218,7 @@ def test_interception_evaporation_formula() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 
@@ -247,6 +254,7 @@ def test_interception_large_rainfall() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 
@@ -285,6 +293,7 @@ def test_interception_edge_case_zero_storage_zero_rainfall() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 
@@ -312,6 +321,7 @@ def test_interception_evaporation_limited_by_storage() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 
@@ -347,6 +357,7 @@ def test_interception_storage_exceeds_capacity_initially() -> None:
             storage_m=storage_m,
             capacity_m=capacity_m,
             potential_transpiration_m=potential_transpiration_m,
+            potential_evaporation_m=potential_transpiration_m,
         )
     )
 

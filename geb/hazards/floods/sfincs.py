@@ -766,7 +766,11 @@ class SFINCSSimulation:
 
     def print_forcing_volume(self) -> None:
         """Print all forcing volumes for debugging the water balance."""
-        msg = f"SFINCS Forcing volumes: runoff={int(self.total_runoff_volume_m3)} m3, discarded_accumulated={int(self.discarded_accumulated_generated_discharge_m3)} m3, discharge={int(self.total_discharge_volume_m3)} m3"
+        msg: str = (
+            f"SFINCS Forcing volumes: runoff={int(self.total_runoff_volume_m3)} m3, "
+            f"discarded discharge={int(self.discarded_accumulated_generated_discharge_m3)} m3, "
+            f"discharge={int(self.total_discharge_volume_m3)} m3"
+        )
         print(msg)
 
     def set_headwater_forcing_from_grid(

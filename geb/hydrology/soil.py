@@ -130,7 +130,7 @@ def infiltration(
 
     Args:
         ws: Saturated soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,).
-        saturated_hydraulic_conductivity: Saturated hydraulic conductivity for the cell in m/day.
+        saturated_hydraulic_conductivity: Saturated hydraulic conductivity for the cell in m in this timestep.
         land_use_type: Land use type for the cell.
         soil_is_frozen: Boolean indicating if the soil is frozen.
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.

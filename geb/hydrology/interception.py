@@ -70,6 +70,7 @@ def interception(
     rainfall_m: np.float32,
     storage_m: np.float32,
     capacity_m: np.float32,
+    potential_evaporation_m: np.float32,
     potential_transpiration_m: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
     """Calculate interception storage, throughfall, and evaporation.
@@ -81,6 +82,7 @@ def interception(
         rainfall_m: Precipitation (rain) in m.
         storage_m: Current interception storage in m.
         capacity_m: Interception capacity of vegetation in m.
+        potential_evaporation_m: Potential evaporation from a wet surface in m.
         potential_transpiration_m: Potential transpiration in m.
 
     Returns:
@@ -98,7 +100,7 @@ def interception(
     # Calculate evaporation from intercepted water
     evaporation = min(
         new_storage,
-        potential_transpiration_m * (new_storage / capacity_m) ** np.float32(2.0 / 3.0)
+        potential_evaporation_m * (new_storage / capacity_m) ** np.float32(2.0 / 3.0)
         if capacity_m > np.float32(0.0)
         else np.float32(0.0),
     )
