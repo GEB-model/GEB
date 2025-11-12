@@ -145,7 +145,7 @@ def get_root_ratios(
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water(
     crop_group_number: np.float32,
-    potential_evapotranspiration_full_day_m: np.float32,
+    reference_evapotranspiration_grass_full_day_m: np.float32,
 ) -> np.float32:
     """Calculate the fraction of easily available soil water.
 
@@ -155,13 +155,13 @@ def get_fraction_easily_available_soil_water(
     Args:
         crop_group_number: The crop group number is a indicator of adaptation to dry climate,
             Van Diepen et al., 1988: WOFOST 6.0, Theory and Algorithms p.87
-        potential_evapotranspiration_full_day_m: Potential evapotranspiration in m for a full day.
+        reference_evapotranspiration_grass_full_day_m: Potential evapotranspiration in m for a full day.
 
     Returns:
         The fraction of easily available soil water, p is closer to 0 if evapo is bigger and cropgroup is smaller
     """
     potential_evapotranspiration_cm: np.float32 = (
-        potential_evapotranspiration_full_day_m * np.float32(100)
+        reference_evapotranspiration_grass_full_day_m * np.float32(100)
     )
 
     p: np.float32 = np.float32(1) / (
@@ -272,7 +272,7 @@ def calculate_transpiration(
     crop_map: np.int32,
     natural_crop_groups: np.float32,
     potential_transpiration_m: np.float32,  # [m]
-    potential_evapotranspiration_m: np.float32,  # [m]
+    reference_evapotranspiration_grass_m_hour: np.float32,  # [m]
     crop_group_number_per_group: npt.NDArray[np.float32],
     w_m: npt.NDArray[np.float32],  # [m]
     topwater_m: np.float32,  # [m]
@@ -291,7 +291,7 @@ def calculate_transpiration(
         crop_map: Crop map indicating the crop type for the hydrological response unit. -1 indicates no crop.
         natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
         potential_transpiration_m: Potential transpiration [m].
-        potential_evapotranspiration_m: Potential evapotranspiration [m].
+        reference_evapotranspiration_grass_m_hour: Potential reference evapotranspiration [m].
         crop_group_number_per_group: Crop group numbers for each crop type.
         w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
@@ -321,12 +321,10 @@ def calculate_transpiration(
             crop_group_number: np.float32 = crop_group_number_per_group[crop_map]
 
         # vegetation-specific factor for easily available soil water
-        fraction_easily_available_soil_water: np.float32 = (
-            get_fraction_easily_available_soil_water(
-                crop_group_number=crop_group_number,
-                potential_evapotranspiration_full_day_m=potential_evapotranspiration_m
-                * np.float32(24.0),
-            )
+        fraction_easily_available_soil_water: np.float32 = get_fraction_easily_available_soil_water(
+            crop_group_number=crop_group_number,
+            reference_evapotranspiration_grass_full_day_m=reference_evapotranspiration_grass_m_hour
+            * np.float32(24.0),
         )
 
         effective_root_depth: np.float32 = np.maximum(

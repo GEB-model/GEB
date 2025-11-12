@@ -469,7 +469,7 @@ def land_surface_model(
                 crop_map=crop_map[i],
                 natural_crop_groups=natural_crop_groups[i],
                 potential_transpiration_m=potential_transpiration_m_cell_hour,
-                potential_evapotranspiration_m=potential_evapotranspiration_m,
+                reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour_cell,
                 crop_group_number_per_group=crop_group_number_per_group,
                 w_m=w[:, i],
                 topwater_m=topwater_m[i],

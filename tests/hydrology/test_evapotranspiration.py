@@ -440,14 +440,14 @@ def test_get_fraction_easily_available_soil_water() -> None:
     ):
         p5 = get_fraction_easily_available_soil_water(
             crop_group_number=5,
-            potential_evapotranspiration_full_day_m=potential_evapotranspiration,
+            reference_evapotranspiration_grass_full_day_m=potential_evapotranspiration,
         )
 
         assert math.isclose(p5, p5_test, rel_tol=1e-6)
 
         p1 = get_fraction_easily_available_soil_water(
             crop_group_number=1,
-            potential_evapotranspiration_full_day_m=potential_evapotranspiration,
+            reference_evapotranspiration_grass_full_day_m=potential_evapotranspiration,
         )
 
         assert math.isclose(p1, p1_test, rel_tol=1e-6)
@@ -540,7 +540,7 @@ def test_calculate_transpiration() -> None:
     crop_map = 0  # Some crop
     natural_crop_groups = np.float32(3.0)
     potential_transpiration = np.float32(0.002)
-    potential_evapotranspiration = np.float32(0.003)
+    reference_evapotranspiration_grass_m_hour = np.float32(0.003)
     frost_index = np.float32(0.0)
     crop_group_number_per_group = np.array([3.0, 4.0, 5.0], dtype=np.float32)
     w_cell = np.array(
@@ -560,7 +560,7 @@ def test_calculate_transpiration() -> None:
         crop_map=crop_map,
         natural_crop_groups=natural_crop_groups,
         potential_transpiration_m=potential_transpiration,
-        potential_evapotranspiration_m=potential_evapotranspiration,
+        reference_evapotranspiration_grass_m_hour=reference_evapotranspiration_grass_m_hour,
         crop_group_number_per_group=crop_group_number_per_group,
         w_m=w_cell,
         topwater_m=topwater,
@@ -615,13 +615,13 @@ def test_get_fraction_easily_available_soil_water_edge_cases() -> None:
     """Test edge cases for get_fraction_easily_available_soil_water."""
     # Very low ET should give high p values
     p_low = get_fraction_easily_available_soil_water(
-        crop_group_number=5, potential_evapotranspiration_full_day_m=0.00001
+        crop_group_number=5, reference_evapotranspiration_grass_full_day_m=0.00001
     )
     assert p_low > 0.9  # Should be close to 1
 
     # Very high ET should give low p values
     p_high = get_fraction_easily_available_soil_water(
-        crop_group_number=5, potential_evapotranspiration_full_day_m=0.1
+        crop_group_number=5, reference_evapotranspiration_grass_full_day_m=0.1
     )
     assert p_high < 0.1  # Should be close to 0
 
@@ -629,15 +629,15 @@ def test_get_fraction_easily_available_soil_water_edge_cases() -> None:
     et_test = 0.001
     p1 = get_fraction_easily_available_soil_water(
         crop_group_number=1,
-        potential_evapotranspiration_full_day_m=et_test,
+        reference_evapotranspiration_grass_full_day_m=et_test,
     )
     p2 = get_fraction_easily_available_soil_water(
         crop_group_number=2,
-        potential_evapotranspiration_full_day_m=et_test,
+        reference_evapotranspiration_grass_full_day_m=et_test,
     )
     p3 = get_fraction_easily_available_soil_water(
         crop_group_number=3,
-        potential_evapotranspiration_full_day_m=et_test,
+        reference_evapotranspiration_grass_full_day_m=et_test,
     )
 
     # Crop groups 1 and 2 should have different behavior due to correction
@@ -663,7 +663,7 @@ def test_calculate_transpiration_frozen_soil() -> None:
         crop_map=0,
         natural_crop_groups=3.0,
         potential_transpiration_m=0.002,
-        potential_evapotranspiration_m=0.003,
+        reference_evapotranspiration_grass_m_hour=0.003,
         crop_group_number_per_group=np.array([3.0, 4.0, 5.0], dtype=np.float32),
         w_m=w.copy(),
         topwater_m=0.0,
@@ -695,7 +695,7 @@ def test_calculate_transpiration_paddy_irrigation() -> None:
         crop_map=0,
         natural_crop_groups=3.0,
         potential_transpiration_m=0.002,
-        potential_evapotranspiration_m=0.003,
+        reference_evapotranspiration_grass_m_hour=0.003,
         crop_group_number_per_group=np.array([3.0, 4.0, 5.0], dtype=np.float32),
         w_m=w.copy(),
         topwater_m=0.005,  # Topwater available
