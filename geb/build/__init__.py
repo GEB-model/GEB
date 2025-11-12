@@ -2110,7 +2110,12 @@ class GEBModel(
         Returns:
             The start date of the model.
         """
-        return datetime.fromisoformat(self.dict["model_time_range"]["start_date"])
+        start_date = self.dict["model_time_range"]["start_date"]
+
+        # TODO: This can be removed in 2026
+        if isinstance(start_date, str):
+            start_date = datetime.fromisoformat(start_date)
+        return start_date
 
     @property
     def end_date(self) -> datetime:
@@ -2121,7 +2126,12 @@ class GEBModel(
         Returns:
             The end date of the model.
         """
-        return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
+        end_date = self.dict["model_time_range"]["end_date"]
+
+        # TODO: This can be removed in 2026
+        if isinstance(end_date, str):
+            end_date = datetime.fromisoformat(end_date)
+        return end_date
 
     @build_method
     def set_ssp(self, ssp: str) -> None:
