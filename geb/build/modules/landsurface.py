@@ -234,9 +234,13 @@ class LandSurface:
             f"Region database must contain unique region IDs ({self.data_catalog[region_database].path})"
         )
 
+        # allow some tolerance, especially for regions that coincide with coastlines, in which
+        # case the region boundaries may be slightly outside the model region due to differences
+        # in coastline representation. This is especially relevant for islands.
         assert bounds_are_within(
             self.region.total_bounds,
             regions.to_crs(self.region.crs).total_bounds,
+            tolerance=0.1,
         )
 
         region_id_mapping = {
@@ -254,7 +258,7 @@ class LandSurface:
             {"ISO3": {"XKO": "XKX"}}, inplace=True
         )  # XKO is a deprecated code for Kosovo, XKX is the new code
 
-        self.logger.info(f"Renamed XKO to XKX in regions")
+        self.logger.info("Renamed XKO to XKX in regions")
 
         self.set_geom(regions, name="regions")
 
