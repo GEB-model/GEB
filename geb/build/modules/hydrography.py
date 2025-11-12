@@ -21,6 +21,24 @@ from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
 from geb.workflows.raster import rasterize_like, snap_to_grid
 
 
+def remove_contained_polygons(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Remove polygons that are completely inside another larger polygon.
+
+    Args:
+        gdf: A GeoDataFrame containing the polygons to be filtered.
+    Returns:
+        A GeoDataFrame containing only the polygons that are not completely inside another polygon.
+    """
+    to_drop = set()
+    for i, geom1 in gdf.iterrows():
+        for j, geom2 in gdf.iterrows():
+            if i != j and geom1.geometry.within(
+                geom2.geometry
+            ):  # geom1 is inside geom2
+                to_drop.add(i)
+    return gdf.drop(index=list(to_drop))
+
+
 def get_all_upstream_subbasin_ids(
     river_graph: nx.DiGraph, subbasin_ids: list[int]
 ) -> set[int]:
@@ -588,14 +606,16 @@ class Hydrography:
         self.set_grid(river_width, name="routing/river_width")
 
     @build_method
-    def setup_lecz_mask(self) -> None:
+    def setup_low_elevation_coastal_zone_mask(self) -> None:
         """Sets up the low elevation coastal zone (LECZ) mask for sfincs models."""
         # load low elevation coastal zone mask
-        lecz = self.other["landsurface/low_elevation_coastal_zone"]
-        mask_data = lecz.values.astype(np.uint8)
+        low_elevation_coastal_zone = self.other[
+            "landsurface/low_elevation_coastal_zone"
+        ]
+        mask_data = low_elevation_coastal_zone.values.astype(np.uint8)
 
         # Get transform from raster metadata
-        transform = lecz.rio.transform()
+        transform = low_elevation_coastal_zone.rio.transform()
 
         # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
         shapes = rasterio.features.shapes(mask_data, mask=None, transform=transform)
@@ -605,18 +625,24 @@ class Hydrography:
 
         gdf = gpd.GeoDataFrame.from_records(records)
         gdf.set_geometry("geometry", inplace=True)
-        gdf.crs = lecz.rio.crs
+        gdf.crs = low_elevation_coastal_zone.rio.crs
         # Keep only mask == 1
         gdf = gdf[gdf["value"] == 1]
 
         # load mask to select coastal areas in model region
-        # intersect the mask with the lecz mask
-        lecz_mask = gpd.overlay(gdf, self.geom["mask"], how="intersection")
-        # merge all polygons into a single polygon
-        lecz_mask = gpd.GeoDataFrame(
-            geometry=[lecz_mask.union_all()], crs=lecz_mask.crs
+        # intersect the mask with the low elevation coastal zone mask
+        low_elevation_coastal_zone_mask = gpd.overlay(
+            gdf, self.geom["mask"], how="intersection"
         )
-        self.set_geom(lecz_mask, name="coastal/lecz_mask")
+        # merge all polygons into a single polygon
+        low_elevation_coastal_zone_mask = gpd.GeoDataFrame(
+            geometry=[low_elevation_coastal_zone_mask.union_all()],
+            crs=gdf.crs,
+        )
+        self.set_geom(
+            low_elevation_coastal_zone_mask,
+            name="coastal/low_elevation_coastal_zone_mask",
+        )
 
     @build_method
     def setup_coastlines(self) -> None:
@@ -644,24 +670,6 @@ class Hydrography:
             )  # buffer by 0.04 degree
             self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
 
-    @staticmethod
-    def remove_contained_polygons(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-        """Remove polygons that are completely inside another larger polygon.
-
-        Args:
-            gdf: A GeoDataFrame containing the polygons to be filtered.
-        Returns:
-            A GeoDataFrame containing only the polygons that are not completely inside another polygon.
-        """
-        to_drop = set()
-        for i, geom1 in gdf.iterrows():
-            for j, geom2 in gdf.iterrows():
-                if i != j and geom1.geometry.within(
-                    geom2.geometry
-                ):  # geom1 is inside geom2
-                    to_drop.add(i)
-        return gdf.drop(index=list(to_drop))
-
     @build_method
     def setup_osm_land_polygons(
         self,
@@ -680,62 +688,95 @@ class Hydrography:
         # clip and write to model files
         self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
 
-    @build_method(depends_on=["setup_lecz_mask", "setup_coastlines"])
+    @build_method(
+        depends_on=["setup_low_elevation_coastal_zone_mask", "setup_coastlines"]
+    )
     def setup_coastal_sfincs_model_regions(self) -> None:
         """Sets up the coastal sfincs model regions."""
         # load elevation data
         elevation = self.other["DEM/fabdem"]
         # load the lecz mask
-        lecz_mask = self.geom["coastal/lecz_mask"]
+        low_elevation_coastal_zone_mask = self.geom[
+            "coastal/low_elevation_coastal_zone_mask"
+        ]
         # add small buffer to ensure connection of 'islands' with coastlines
-        lecz_mask.geometry = lecz_mask.geometry.buffer(0.001)
-        # split the lezc mask into individual polygons of contiguous areas
-        lecz_polygons = lecz_mask.explode(index_parts=False).reset_index(drop=True)
+        low_elevation_coastal_zone_mask.geometry = (
+            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
+        )
+        # split the low elevation coastal zone mask into individual polygons of contiguous areas
+        low_elevation_coastal_zone_polygons = low_elevation_coastal_zone_mask.explode(
+            index_parts=False
+        ).reset_index(drop=True)
 
         # add area column
-        lecz_polygons["area"] = lecz_polygons.geometry.area
+        low_elevation_coastal_zone_polygons["area"] = (
+            low_elevation_coastal_zone_polygons.geometry.area
+        )
 
         # load the coastlines
         coastlines = self.geom["coastal/coastlines"]
         sfincs_regions = []
-        lecz_regions = []
-        zsini = []
-        for _, lecz_polygon in lecz_polygons.iterrows():
-            # check if the lecz polygon intersects with the coastline
+        low_elevation_coastal_zone_regions = []
+        initial_water_levels = []
+        for (
+            _,
+            low_elevation_coastal_zone_polygon,
+        ) in low_elevation_coastal_zone_polygons.iterrows():
+            # check if the low elevation coastal zone polygon intersects with the coastline
             if (
-                coastlines.intersects(lecz_polygon.geometry).any()
-                and lecz_polygon["area"] > 0.0006449015308288645
+                coastlines.intersects(low_elevation_coastal_zone_polygon.geometry).any()
+                and low_elevation_coastal_zone_polygon["area"]
+                > 0.0006449015308288645  # approx 1 km2 at equator
             ):
                 # if it does, create a sfincs region
-                # get the minimum elevation within the lecz polygon
-                mask = elevation.rio.clip_box(*lecz_polygon.geometry.bounds).where(
-                    elevation.rio.clip([lecz_polygon.geometry], drop=False).notnull(),
+                # get the minimum elevation within the low elevation coastal zone polygon
+                mask = elevation.rio.clip_box(
+                    *low_elevation_coastal_zone_polygon.geometry.bounds
+                ).where(
+                    elevation.rio.clip(
+                        [low_elevation_coastal_zone_polygon.geometry], drop=False
+                    ).notnull(),
                     drop=False,
                 )
-                zsini.append(float(mask.min().values))
+                initial_water_levels.append(float(mask.min().values))
 
-                # create a bounding box around the lecz polygon
-                lecz_polygon_gpd = gpd.GeoDataFrame(
-                    geometry=[lecz_polygon.geometry], crs=lecz_mask.crs
+                # create a bounding box around the low elevation coastal zone polygon
+                low_elevation_coastal_zone_polygon_gpd = gpd.GeoDataFrame(
+                    geometry=[low_elevation_coastal_zone_polygon.geometry],
+                    crs=low_elevation_coastal_zone_mask.crs,
                 )
-                bbox = lecz_polygon_gpd.minimum_rotated_rectangle().iloc[0]
+                bbox = low_elevation_coastal_zone_polygon_gpd.minimum_rotated_rectangle().iloc[
+                    0
+                ]
                 # add a small buffer to ensure connection with coastlines
                 bbox = bbox.buffer(0.04, join_style=2)
 
                 sfincs_regions.append(bbox)
-                lecz_regions.append(lecz_polygon[0])
-        bbox_gdf = gpd.GeoDataFrame(geometry=sfincs_regions, crs=lecz_mask.crs)
-        lecz_gdf = gpd.GeoDataFrame(geometry=lecz_regions, crs=lecz_mask.crs)
+                low_elevation_coastal_zone_regions.append(
+                    low_elevation_coastal_zone_polygon[0]
+                )
+        bbox_gdf = gpd.GeoDataFrame(
+            geometry=sfincs_regions, crs=low_elevation_coastal_zone_mask.crs
+        )
+        low_elevation_coastal_zone_gdf = gpd.GeoDataFrame(
+            geometry=low_elevation_coastal_zone_regions,
+            crs=low_elevation_coastal_zone_mask.crs,
+        )
         # remove polygons that are completely inside another larger polygon
         # filtered_gdf = self.remove_contained_polygons(bbox_gdf).reset_index(drop=True)
 
         # add idx
         bbox_gdf["idx"] = bbox_gdf.index
-        lecz_gdf["idx"] = lecz_gdf.index
-        lecz_gdf["area"] = lecz_gdf.geometry.area
-        lecz_gdf["zsini"] = zsini
+        low_elevation_coastal_zone_gdf["idx"] = low_elevation_coastal_zone_gdf.index
+        low_elevation_coastal_zone_gdf["area"] = (
+            low_elevation_coastal_zone_gdf.geometry.area
+        )
+        low_elevation_coastal_zone_gdf["initial_water_level"] = initial_water_levels
         self.set_geom(bbox_gdf, name="coastal/model_regions")
-        self.set_geom(lecz_gdf, name="coastal/lecz_regions")
+        self.set_geom(
+            low_elevation_coastal_zone_gdf,
+            name="coastal/lower_elevation_coastal_zone_regions",
+        )
 
     @build_method
     def setup_waterbodies(

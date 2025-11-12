@@ -204,9 +204,9 @@ class SFINCSRootModel:
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
         coastal: bool = False,
-        bnd_exclude_mask: gpd.GeoDataFrame | None = None,
+        coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_outflow: bool = True,
-        zsini: float = 0.0,
+        initial_water_level: float = 0.0,
     ) -> SFINCSRootModel:
         """Build a SFINCS model.
 
@@ -230,9 +230,9 @@ class SFINCSRootModel:
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
             coastal: Whether to set up coastal boundary conditions. Defaults to False.
-            bnd_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition.
+            coastal_boundary_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition cells.
             setup_outflow: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
-            zsini: The initial water level to initiate the model.
+            initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
 
         Returns:
             The SFINCSRootModel instance with the built model.
@@ -284,13 +284,13 @@ class SFINCSRootModel:
             )
 
             # set zsini based on the minimum elevation
-            sf.config["zsini"] = zsini
+            sf.config["zsini"] = initial_water_level
 
             # setup the coastal boundary conditions
             sf.setup_mask_bounds(
                 btype="waterlevel",
                 zmax=2,  # maximum elevation for valid boundary cells
-                exclude_mask=bnd_exclude_mask,
+                exclude_mask=coastal_boundary_exclude_mask,
                 all_touched=True,
             )
 
@@ -728,12 +728,13 @@ class SFINCSRootModel:
             )
 
             # Set up river outflow boundary condition for this simulation
-            # set_river_outflow_boundary_condition(
-            #     sf=simulation.sfincs_model,
-            #     model_root=self.path,
-            #     simulation_root=simulation.path,
-            #     write_figures=simulation.write_figures,
-            # )
+            if not coastal:
+                set_river_outflow_boundary_condition(
+                    sf=simulation.sfincs_model,
+                    model_root=self.path,
+                    simulation_root=simulation.path,
+                    write_figures=simulation.write_figures,
+                )
 
             simulations.append(simulation)
 

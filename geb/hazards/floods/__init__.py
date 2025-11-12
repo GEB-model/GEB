@@ -119,8 +119,8 @@ class Floods(Module):
         name: str,
         region: gpd.GeoDataFrame | None = None,
         coastal: bool = False,
-        bnd_exclude_mask: gpd.GeoDataFrame | None = None,
-        zsini: float = 0.0,
+        coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
+        initial_water_level: float = 0.0,
     ) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
 
@@ -132,8 +132,8 @@ class Floods(Module):
             name: Name of the SFINCS model (used for the model root directory).
             region: The region to build the SFINCS model for. If None, the entire model region is used.
             coastal: Whether to only include coastal areas in the model.
-            bnd_exclude_mask: GeoDataFrame defining the areas to exclude from the coastal model boundaries.
-            zsini: The initial water level to initiate the model.
+            coastal_boundary_exclude_mask: GeoDataFrame defining the areas to exclude from the coastal model boundary cells.
+            initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
 
         Returns:
             The built or read SFINCSRootModel instance.
@@ -175,9 +175,9 @@ class Floods(Module):
                 else {},
                 mask_flood_plains=False,  # setting this to True sometimes leads to errors
                 coastal=coastal,
-                bnd_exclude_mask=bnd_exclude_mask,
-                setup_outflow=False,
-                zsini=zsini,
+                coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
+                setup_outflow=not coastal,
+                initial_water_level=initial_water_level,
             )
         else:
             sfincs_model.read()
@@ -353,22 +353,30 @@ class Floods(Module):
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
 
-        # Load mask of lecz to activate cells for the different sfincs model regions
-        lecz_regions = load_geom(self.model.files["geom"]["coastal/lecz_regions"])
+        # Load mask of lower elevation coastal zones to activate cells for the different sfincs model regions
+        lower_elevation_coastal_zone_mask = load_geom(
+            self.model.files["geom"]["coastal/lower_elevation_coastal_zone_regions"]
+        )
 
-        # get zsini for model domain
-        zsini = lecz_regions["zsini"].min()
+        # get initial_water_level for model domain
+        initial_water_level = lower_elevation_coastal_zone_mask[
+            "initial_water_level"
+        ].min()
 
-        # buffer lecz regions to ensure proper inclusion of coastline
-        lecz_regions["geometry"] = lecz_regions.buffer(0.00833333)
+        # buffer lower elevation coastal zone mask to ensure proper inclusion of coastline
+        lower_elevation_coastal_zone_mask["geometry"] = (
+            lower_elevation_coastal_zone_mask.buffer(0.00833333)
+        )
 
         # load osm land polygons to exclude from coastal boundary cells
-        bnd_exclude_mask = load_geom(
+        coastal_boundary_exclude_mask = load_geom(
             self.model.files["geom"]["coastal/land_polygons"],
         )
 
-        # add buffer of ~500m to ensure proper exclusion. Buffer should be smaller than that of lecz regions
-        bnd_exclude_mask["geometry"] = bnd_exclude_mask.buffer(0.004165)
+        # add buffer of ~500m to ensure proper exclusion. Buffer should be smaller than that of lower elevation coastal zone mask
+        coastal_boundary_exclude_mask["geometry"] = (
+            coastal_boundary_exclude_mask.buffer(0.004165)
+        )
 
         # load the subbasin geometry for the model domain
         subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
@@ -378,17 +386,21 @@ class Floods(Module):
         if coastal_only:
             subbasins = subbasins[subbasins["is_coastal_basin"]]
 
-        # merge region and lecz regions in a single shapefile
-        model_domain = subbasins.union_all().union(lecz_regions.union_all())
+        # merge region and lower elevation coastal zone mask in a single shapefile
+        model_domain = subbasins.union_all().union(
+            lower_elevation_coastal_zone_mask.union_all()
+        )
 
         # domain to gpd.GeoDataFrame
-        model_domain = gpd.GeoDataFrame(geometry=[model_domain], crs=lecz_regions.crs)
+        model_domain = gpd.GeoDataFrame(
+            geometry=[model_domain], crs=lower_elevation_coastal_zone_mask.crs
+        )
         sfincs_root_model: SFINCSRootModel = self.build(
             name="coastal_region",
             region=model_domain,
             coastal=coastal,
-            bnd_exclude_mask=bnd_exclude_mask,
-            zsini=zsini,
+            coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
+            initial_water_level=initial_water_level,
         )
 
         sfincs_root_model.estimate_discharge_for_return_periods(
@@ -397,7 +409,6 @@ class Floods(Module):
             return_periods=self.config["return_periods"],
         )
 
-        rm_maps = {}
         for return_period in self.config["return_periods"]:
             print(
                 f"Estimated discharge for return period {return_period} years for all rivers."
@@ -414,7 +425,6 @@ class Floods(Module):
             flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
                 self.config["minimum_flood_depth"]
             )
-            rm_maps[return_period] = flood_depth_return_period
 
             to_zarr(
                 flood_depth_return_period,
