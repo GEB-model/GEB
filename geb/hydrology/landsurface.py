@@ -304,6 +304,7 @@ def land_surface_model(
                 rainfall_m=rainfall_that_resulted_in_runoff_if_interception_was_not_considered_m_per_hour,
                 storage_m=interception_storage_m[i],
                 capacity_m=interception_capacity_m[i],
+                potential_evaporation_m=reference_evapotranspiration_water_m_hour_cell,
                 potential_transpiration_m=potential_transpiration_m_cell_hour,
             )
 
@@ -473,7 +474,6 @@ def land_surface_model(
                 w_m=w[:, i],
                 topwater_m=topwater_m[i],
                 minimum_effective_root_depth_m=minimum_effective_root_depth_m,
-                time_step_hours_h=np.float32(24),
             )
 
             potential_transpiration_m[i] = potential_transpiration_m_cell_hour
