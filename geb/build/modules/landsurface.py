@@ -221,11 +221,6 @@ class LandSurface:
         )
 
         global_countries["geometry"] = global_countries.centroid
-        # Renaming XKO to XKX
-        self.logger.info("Renaming XKO to XKX in global countries")
-        global_countries["ISO3"] = global_countries["ISO3"].replace(
-            {"XKO": "XKX"}
-        )  # XKO is a deprecated code for Kosovo, XKX is the new code
         global_countries = global_countries.set_index("ISO3")
 
         self.set_geom(global_countries, name="global_countries")
@@ -253,12 +248,6 @@ class LandSurface:
         assert "ISO3" in regions.columns, (
             f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
         )
-
-        regions.replace(
-            {"ISO3": {"XKO": "XKX"}}, inplace=True
-        )  # XKO is a deprecated code for Kosovo, XKX is the new code
-
-        self.logger.info("Renamed XKO to XKX in regions")
 
         self.set_geom(regions, name="regions")
 
