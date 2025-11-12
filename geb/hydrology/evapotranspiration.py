@@ -291,7 +291,7 @@ def calculate_transpiration(
         crop_map: Crop map indicating the crop type for the hydrological response unit. -1 indicates no crop.
         natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
         potential_transpiration_m: Potential transpiration [m].
-        reference_evapotranspiration_grass_m_hour: Potential reference evapotranspiration [m].
+        reference_evapotranspiration_grass_m_hour: Reference evapotranspiration for grass [m/hour]. This is an hourly value that will be converted to a daily value for the calculation.
         crop_group_number_per_group: Crop group numbers for each crop type.
         w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
