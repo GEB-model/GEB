@@ -1195,6 +1195,7 @@ class Store:
             path: A Path object representing the directory to load the model data from. Defaults to None.
                 In this case, a default path is used. In most cases this should not be changed, but can
                 be useful for special cases such as forecasting and testing.
+            omit: An optional string. If provided, any bucket whose name contains this string will be skipped during loading.
         """
         if path is None:
             path = self.path

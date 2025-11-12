@@ -229,6 +229,8 @@ class SFINCSRootModel:
             depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
+            coastal: Whether to set up coastal boundary conditions. Defaults to False.
+            bnd_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition.
             setup_outflow: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
             zsini: The initial water level to initiate the model.
 

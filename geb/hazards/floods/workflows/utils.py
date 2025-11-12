@@ -668,7 +668,6 @@ def assign_return_periods(
         DataFrame with return period discharge values added as new columns.
 
     Raises:
-        ValueError: If discharge values are unrealistically high.
         ZeroDivisionError: If the extreme value model cannot be fitted.
     """
     assert isinstance(return_periods, list)

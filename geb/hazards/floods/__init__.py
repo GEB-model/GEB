@@ -342,7 +342,13 @@ class Floods(Module):
 
         self.model.agents.households.flood(flood_depth=flood_depth)
 
-    def get_return_period_maps(self, coastal_only=False) -> dict[int, xr.DataArray]:
+    def get_return_period_maps(self, coastal_only: bool = False) -> None:
+        """
+        Generates flood maps for specified return periods using the SFINCS model.
+
+        Args:
+            coastal_only: Whether to only consider coastal subbasins for the flood maps.
+        """
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
