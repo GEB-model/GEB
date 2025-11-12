@@ -704,6 +704,78 @@ class Households(AgentBaseClass):
         return probability_maps
         # Right now I am not using this for anything, but maybe useful later to replace the file loading
 
+    def create_flood_exceedance_probability_maps(
+        self, date_time, strategy=1
+    ) -> dict[Tuple[pd.Timestamp, int], xr.DataArray]:
+        """Creates flood exceedance probability maps based on the ensemble of flood maps for different warning strategies.
+
+        Args:
+            date_time: The forecast date time for which to create the probability maps.
+            strategy: Identifier of the warning strategy (1 for water level ranges with measures,
+                2 for energy substations, 3 for vulnerable/emergency facilities).
+
+        Returns:
+            Dict[Tuple[datetime, int], xr.DataArray]: Dictionary mapping (date_time, range_id) tuples
+                to probability maps (xarray DataArray) for that forecast day and water level range.
+        """
+        # Load the ensemble of flood maps for that specific date time
+        ensemble_flood_maps = self.load_ensemble_flood_maps(date_time=date_time)
+        crs = self.model.config["hazards"]["floods"]["crs"]
+
+        # Create output folder for probability maps
+        prob_folder = (
+            self.model.output_folder
+            / "prob_exceedance_maps"
+            / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
+        )
+        prob_folder.mkdir(exist_ok=True, parents=True)
+
+        # Define water level ranges based on the chosen strategy
+        if strategy == 1:
+            # Water level ranges associated to specific measures (based on "impact" scale)
+            ranges = []
+            for key, value in self.var.wlranges_and_measures.items():
+                ranges.append((key, value["min"], None))
+
+        elif strategy == 2:
+            # Water level range for energy substations (based on critical hit) -- need to make it nor hard coded
+            ranges = [(1, 0.3, None)]
+
+        else:
+            # Water level range for vulnerable and emergency facilities (flooded or not)
+            ranges = [(1, 0.1, None)]
+
+        probability_maps = {}
+
+        # Loop over water level ranges to calculate probability maps
+        for range_id, min, max in ranges:
+            daily_ensemble = ensemble_flood_maps
+            if max is not None:
+                condition = (daily_ensemble >= min) & (daily_ensemble <= max)
+            else:
+                condition = daily_ensemble >= min
+            probability = condition.sum(dim="member") / condition.sizes["member"]
+
+            # Save probability map as a zarr file
+            file_name = f"prob_exceedance_map_range{range_id}_strategy{strategy}.zarr"
+            file_path = prob_folder / file_name
+            file_path.mkdir(parents=True, exist_ok=True)
+
+            # The y axis is flipped when writing to zarr, so fixing it here for now
+            if probability.y.values[0] < probability.y.values[-1]:
+                print("flipping y axis")
+                probability = probability.sortby("y", ascending=False)
+
+            probability = probability.astype(np.float32)
+            probability = probability.rio.write_nodata(np.nan)
+            probability = probability.isel(time=0)  # select the first time step
+            probability = to_zarr(da=probability, path=file_path, crs=crs)
+
+            probability_maps[(date_time, range_id)] = probability
+
+        return probability_maps
+        # Right now I am not using this for anything, but maybe useful later to replace the file loading
+
     def create_damage_probability_maps(self) -> None:
         """Creates an object-based (buildings) probability map based on the ensemble of damage maps. Work in standby for now."""
         crs = self.model.config["hazards"]["floods"]["crs"]
