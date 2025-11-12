@@ -132,6 +132,8 @@ def read_flood_depth(
         else:
             raise ValueError(f"Unknown method: {method}")
 
+        flood_depth_m.attrs["_FillValue"] = np.nan
+
     print(
         f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "
         f"Mean flood depth: {float(flood_depth_m.mean().values):.2f} m"
