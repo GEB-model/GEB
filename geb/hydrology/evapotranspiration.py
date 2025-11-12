@@ -296,7 +296,6 @@ def calculate_transpiration(
         w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
         minimum_effective_root_depth_m: Minimum effective root depth [m], used to ensure that the effective root depth is not less than this value. Crops can extract water up to this depth.
-        time_step_hours_h: Time step [h] (default 24 for daily).
 
     Returns:
         A tuple containing:
