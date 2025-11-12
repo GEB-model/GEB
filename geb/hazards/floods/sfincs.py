@@ -853,6 +853,20 @@ class SFINCSSimulation:
 
         self.sfincs_model = sfincs_model
 
+        # Track total volumes added via forcings (for water balance debugging)
+        self.total_runoff_volume_m3: float = 0.0
+        self.total_discharge_volume_m3: float = 0.0
+        self.discarded_accumulated_generated_discharge_m3: float = 0.0
+
+    def print_forcing_volume(self) -> None:
+        """Print all forcing volumes for debugging the water balance."""
+        msg: str = (
+            f"SFINCS Forcing volumes: runoff={int(self.total_runoff_volume_m3)} m3, "
+            f"discarded discharge={int(self.discarded_accumulated_generated_discharge_m3)} m3, "
+            f"discharge={int(self.total_discharge_volume_m3)} m3"
+        )
+        print(msg)
+
     def set_coastal_waterlevel_forcing(
         self, locations: gpd.GeoDataFrame, timeseries: pd.DataFrame, buffer: int = 1e5
     ) -> None:
