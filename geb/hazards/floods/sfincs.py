@@ -604,34 +604,14 @@ class SFINCSRootModel:
             **kwargs,
         )
 
-    def create_simulation_for_return_period(
-        self, return_period: int | float
-    ) -> MultipleSFINCSSimulations:
-        """Creates multiple SFINCS simulations for a specified return period.
-
-        The method groups rivers by their calculation group and creates a separate
-        simulation for each group. Each simulation is configured with discharge
-        hydrographs corresponding to the specified return period.
-        Args:
-            return_period: The return period for which to create simulations.
-
-        Returns:
-            An instance of MultipleSFINCSSimulations containing the created simulations.
-                This class aims to emulate a single SFINCSSimulation instance as if
-                it was one.
+    def create_coastal_simulation(self, return_period: int) -> None:
         """
-        rivers: gpd.GeoDataFrame = import_rivers(self.path, postfix="_return_periods")
-        assert (~rivers["is_downstream_outflow_subbasin"]).all()
+        Creates a SFINCS simulation with coastal water level forcing for a specified return period.
 
-        rivers["topological_stream_order"] = get_topological_stream_order(rivers)
-        rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
-
-        working_dir: Path = self.path / "working_dir"
-        working_dir_return_period: Path = working_dir / f"rp_{return_period}"
-
-        print(f"Running SFINCS for return period {return_period} years")
-        simulations: list[SFINCSSimulation] = []
-
+        It reads the coastal hydrograph timeseries and locations from pre-defined files, and sets the coastal water level forcing for the simulation.
+        Args:
+            return_period: The return period for which to create the coastal simulation.
+        """
         # prepare coastal timeseries and locations
         timeseries = pd.read_csv(
             Path(
@@ -674,8 +654,43 @@ class SFINCSRootModel:
         simulation.set_coastal_waterlevel_forcing(
             timeseries=timeseries, locations=locations
         )
+        return simulation
 
-        simulations.append(simulation)
+    def create_simulation_for_return_period(
+        self, return_period: int | float, coastal: bool = False
+    ) -> MultipleSFINCSSimulations:
+        """Creates multiple SFINCS simulations for a specified return period.
+
+        The method groups rivers by their calculation group and creates a separate
+        simulation for each group. Each simulation is configured with discharge
+        hydrographs corresponding to the specified return period.
+        Args:
+            return_period: The return period for which to create simulations.
+            coastal: Whether to create a coastal simulation.
+
+        Returns:
+            An instance of MultipleSFINCSSimulations containing the created simulations.
+                This class aims to emulate a single SFINCSSimulation instance as if
+                it was one.
+        """
+        rivers: gpd.GeoDataFrame = import_rivers(self.path, postfix="_return_periods")
+        assert (~rivers["is_downstream_outflow_subbasin"]).all()
+
+        rivers["topological_stream_order"] = get_topological_stream_order(rivers)
+        rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
+
+        working_dir: Path = self.path / "working_dir"
+        working_dir_return_period: Path = working_dir / f"rp_{return_period}"
+
+        print(f"Running SFINCS for return period {return_period} years")
+        simulations: list[SFINCSSimulation] = []
+
+        # create coastal simulation
+        if coastal:
+            simulation: SFINCSSimulation = self.create_coastal_simulation(return_period)
+            simulations.append(simulation)
+
+        # create river inflow simulations
         for group, group_rivers in tqdm(rivers.groupby("calculation_group")):
             simulation_root = working_dir_return_period / str(group)
 

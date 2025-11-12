@@ -405,7 +405,7 @@ class Floods(Module):
 
             simulation: MultipleSFINCSSimulations = (
                 sfincs_root_model.create_simulation_for_return_period(
-                    return_period,
+                    return_period, coastal=coastal
                 )
             )
             simulation.run(
