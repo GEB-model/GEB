@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import warnings
 from typing import TYPE_CHECKING
 
@@ -11,6 +10,7 @@ import statsmodels.api as sm
 from numpy.linalg import LinAlgError
 
 from geb.typing import TwoDArrayFloat32
+from geb.workflows.io import load_dict
 
 from ..data import load_regional_crop_data_from_dict
 from ..store import DynamicArray
@@ -122,20 +122,19 @@ class Market(AgentBaseClass):
             extra_dims_names=["params"],
         )
 
-        with open(self.model.files["dict"]["socioeconomics/inflation_rates"], "r") as f:
-            inflation = json.load(f)
-            inflation["time"] = [int(time) for time in inflation["time"]]
-            start_idx = inflation["time"].index(
-                self.model.config["general"]["spinup_time"].year
-            )
-            end_idx = inflation["time"].index(
-                self.model.config["general"]["end_time"].year
-            )
-            for region in inflation["data"]:
-                region_inflation = [1] + inflation["data"][region][
-                    start_idx + 1 : end_idx + 1
-                ]
-                self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
+        inflation = load_dict(
+            self.model.files["dict"]["socioeconomics/inflation_rates"]
+        )
+        inflation["time"] = [int(time) for time in inflation["time"]]
+        start_idx = inflation["time"].index(
+            self.model.config["general"]["spinup_time"].year
+        )
+        end_idx = inflation["time"].index(self.model.config["general"]["end_time"].year)
+        for region in inflation["data"]:
+            region_inflation = [1] + inflation["data"][region][
+                start_idx + 1 : end_idx + 1
+            ]
+            self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
 
     def estimate_price_model(self) -> None:
         """Estimate the parameters of the crop price model using OLS regression.
@@ -282,17 +281,17 @@ class Market(AgentBaseClass):
         self.track_production_and_price()
         if (
             # run price model at the end of the spinup
-            (self.model.current_time == self.model.end_time and self.model.in_spinup)
+            (self.model.current_time == self.model.spinup_end and self.model.in_spinup)
             or
             # and on 5-year anniversaries
             (
                 not self.model.in_spinup
-                and (self.model.start_time.year - self.model.current_time.year) % 5 == 0
+                and (self.model.current_time.year - self.model.run_start.year) % 5 == 0
                 and (
                     self.model.current_time.month == 1
                     and self.model.current_time.day == 1
                 )
-                and (self.model.current_time.year - self.model.start_time.year) >= 5
+                and (self.model.current_time.year - self.model.run_start.year) >= 5
             )
         ):
             self.estimate_price_model()

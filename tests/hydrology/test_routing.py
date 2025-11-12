@@ -9,6 +9,7 @@ import math
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 import pyflwdir
 import pytest
 
@@ -16,9 +17,135 @@ from geb.hydrology.routing import (
     Accuflux,
     KinematicWave,
     create_river_network,
+    fill_discharge_gaps,
     get_channel_ratio,
     update_node_kinematic,
 )
+from geb.typing import ArrayFloat32, ArrayInt32
+
+
+def test_fill_discharge_gaps() -> None:
+    """Test the fill_discharge_gaps function to ensure it fills NaN values correctly."""
+    Q: ArrayFloat32 = np.array(
+        [
+            [np.nan, 1, np.nan, 4],
+            [7, np.nan, 0, np.nan],
+            [5, 2, 0, 0],
+            [np.nan, np.nan, 3, np.nan],
+            [6, 6, 6, 6],
+            [np.nan, 4, 4, 5],
+            [np.nan, np.nan, np.nan, np.nan],
+        ],
+        dtype=np.float32,
+    ).ravel()
+
+    # rivers are defined up to downstream
+    rivers: pd.DataFrame = pd.DataFrame(
+        data={
+            "river_id": [0, 1, 2, 3, 4, 5, 6],
+            "hydrography_linear": [
+                [0, 1, 5, 9, 14, 15],  # river with nans at start, middle and end
+                [2, 3, 7],  # river with nans at start and end
+                [8, 12, 13],  # river with nan at end
+                [19, 18, 17, 16],  # river with no nans
+                [20, 21, 22, 23],  # river with nan at start
+                [24, 25, 26, 27],  # river with all nans
+                [4],  # single cell river with no nans
+            ],
+        },
+    )
+    Q_filled: ArrayFloat32 = fill_discharge_gaps(
+        Q,
+        rivers,
+        waterbody_ids=np.full(Q.shape, -1, dtype=np.int32),
+        outflow_per_waterbody_m3_s=np.array([], dtype=np.float32),
+    )
+
+    np.testing.assert_array_equal(
+        Q_filled.reshape((7, 4)),
+        np.array(
+            [
+                [1, 1, 4, 4],
+                [7, 1, 0, 4],
+                [5, 2, 0, 0],
+                [5, 5, 3, 3],
+                [6, 6, 6, 6],
+                [4, 4, 4, 5],
+                [np.nan, np.nan, np.nan, np.nan],
+            ],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_fill_discharge_gaps_with_waterbodies() -> None:
+    """Test the fill_discharge_gaps function to ensure it fills NaN values correctly."""
+    Q: ArrayFloat32 = np.array(
+        [
+            [np.nan, 1, np.nan, 4],
+            [7, np.nan, 0, np.nan],
+            [5, 2, 0, 0],
+            [np.nan, np.nan, 3, np.nan],
+            [6, 6, 6, 6],
+            [np.nan, 4, 4, 5],
+            [np.nan, np.nan, np.nan, np.nan],
+        ],
+        dtype=np.float32,
+    ).ravel()
+
+    # rivers are defined up to downstream
+    rivers: pd.DataFrame = pd.DataFrame(
+        data={
+            "river_id": [0, 1, 2, 3, 4, 5, 6],
+            "hydrography_linear": [
+                [0, 1, 5, 9, 14, 15],  # river with nans at start, middle and end
+                [2, 3, 7],  # river with nans at start and end
+                [8, 12, 13],  # river with nan at end
+                [19, 18, 17, 16],  # river with no nans
+                [20, 21, 22, 23],  # river with nan at start
+                [24, 25, 26, 27],  # river with all nans
+                [4],  # single cell river with no nans
+            ],
+        },
+    )
+    waterbody_ids: ArrayInt32 = np.array(
+        [
+            [0, -1, 2, -1],
+            [-1, -1, -1, -1],
+            [-1, -1, -1, -1],
+            [-1, 4, -1, -1],
+            [-1, -1, -1, -1],
+            [3, -1, -1, -1],
+            [-1, 1, -1, -1],
+        ],
+        dtype=np.int32,
+    ).ravel()
+
+    outflow_per_waterbody_m3_s: ArrayFloat32 = np.array(
+        [8, 9, 10, 11, 12], dtype=np.float32
+    )
+    Q_filled: ArrayFloat32 = fill_discharge_gaps(
+        Q,
+        rivers,
+        waterbody_ids=waterbody_ids,
+        outflow_per_waterbody_m3_s=outflow_per_waterbody_m3_s,
+    )
+
+    np.testing.assert_array_equal(
+        Q_filled.reshape((7, 4)),
+        np.array(
+            [
+                [8, 1, 10, 4],
+                [7, 1, 0, 4],
+                [5, 2, 0, 0],
+                [5, 12, 3, 3],
+                [6, 6, 6, 6],
+                [11, 4, 4, 5],
+                [9, 9, 9, 9],
+            ],
+            dtype=np.float32,
+        ),
+    )
 
 
 def test_update_node_kinematic_1() -> None:
@@ -94,7 +221,7 @@ def test_get_channel_ratio() -> None:
     """
     river_width = np.array([1, 2, 3, 4, 5])
     river_length = np.array([1000, 2000, 3000, 4000, 5000])
-    cell_area = 10000
+    cell_area = np.full_like(river_width, 10000)
 
     channel_ratio = get_channel_ratio(
         river_width=river_width, river_length=river_length, cell_area=cell_area

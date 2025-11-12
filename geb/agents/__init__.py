@@ -12,6 +12,7 @@ from geb.module import Module
 from geb.workflows import TimingModule
 
 from .crop_farmers import CropFarmers
+from .general import AgentBaseClass
 from .government import Government
 from .households import Households
 from .industry import Industry
@@ -44,7 +45,7 @@ class Agents(Module):
         self.government = Government(model, self)
         self.market = Market(model, self)
 
-        self.agents = [
+        self.agents: list[AgentBaseClass] = [
             self.crop_farmers,
             self.households,
             self.livestock_farmers,

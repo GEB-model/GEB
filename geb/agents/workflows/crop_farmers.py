@@ -1,7 +1,5 @@
 """Contains several functions for crop farmer module."""
 
-from typing import Union
-
 import numpy as np
 import numpy.typing as npt
 from numba import njit, prange
@@ -775,7 +773,7 @@ def plant(
     current_crop_calendar_rotation_year_index: np.ndarray,
     crop_map: np.ndarray,
     crop_harvest_age_days: np.ndarray,
-    cultivation_cost: Union[np.ndarray, int, float],
+    cultivation_cost: np.ndarray | int | float,
     region_ids_per_farmer: np.ndarray,
     field_indices_by_farmer: np.ndarray,
     field_indices: np.ndarray,

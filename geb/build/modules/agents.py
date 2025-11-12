@@ -1,16 +1,13 @@
 """Module containing build methods for the agents for GEB."""
 
-import json
 import math
 from datetime import datetime
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import requests
 import xarray as xr
 from dateutil.relativedelta import relativedelta
-from honeybees.library.raster import pixels_to_coords, sample_from_map
 from tqdm import tqdm
 
 from geb.agents.crop_farmers import (
@@ -23,8 +20,13 @@ from geb.agents.crop_farmers import (
 )
 from geb.build.methods import build_method
 from geb.typing import ArrayBool, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
-from geb.workflows.io import fetch_and_save, get_window
-from geb.workflows.raster import clip_with_grid
+from geb.workflows.io import get_window
+from geb.workflows.raster import (
+    clip_with_grid,
+    interpolate_na_2d,
+    pixels_to_coords,
+    sample_from_map,
+)
 
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
@@ -1043,8 +1045,9 @@ class Agents:
         cut_farm_indices: ArrayInt32 = cut_farms[cut_farms != -1]
 
         assert farms.min() >= -1  # -1 is nodata value, all farms should be positive
-        subgrid_farms: xr.DataArray = farms.raster.clip_bbox(
-            self.subgrid["mask"].raster.bounds
+        subgrid_farms: xr.DataArray = farms.sel(
+            x=slice(self.subgrid["mask"].x[0], self.subgrid["mask"].x[-1]),
+            y=slice(self.subgrid["mask"].y[0], self.subgrid["mask"].y[-1]),
         )
 
         subgrid_farms_in_study_area: xr.DataArray = xr.where(
@@ -1227,7 +1230,7 @@ class Agents:
                 agricultural_area_db_ha = (
                     region_farm_sizes.loc[
                         region_farm_sizes["Holdings/ agricultural area"]
-                        == "Agricultural area (Ha) "
+                        == "Agricultural area (Ha)"
                     ]
                     .iloc[0]
                     .drop(["Holdings/ agricultural area", "ISO3"])
@@ -2464,6 +2467,7 @@ class Agents:
         fraction_sw_irrigation_data = self.new_data_catalog.fetch(
             "global_irrigation_area_surface_water"
         ).read()
+        fraction_sw_irrigation_data.attrs["_FillValue"] = np.nan
 
         fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
             **get_window(
@@ -2472,11 +2476,15 @@ class Agents:
                 self.bounds,
                 buffer=5,
             ),
-        ).raster.interpolate_na()
+        )
+        fraction_sw_irrigation_data: xr.DataArray = interpolate_na_2d(
+            fraction_sw_irrigation_data
+        )
 
         fraction_gw_irrigation_data = self.new_data_catalog.fetch(
             "global_irrigation_area_groundwater"
         ).read()
+        fraction_gw_irrigation_data.attrs["_FillValue"] = np.nan
 
         fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
             **get_window(
@@ -2485,7 +2493,10 @@ class Agents:
                 self.bounds,
                 buffer=5,
             ),
-        ).raster.interpolate_na()
+        )
+        fraction_gw_irrigation_data: xr.DataArray = interpolate_na_2d(
+            fraction_gw_irrigation_data
+        )
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"
@@ -2620,135 +2631,16 @@ class Agents:
             feature_types: The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
             source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
             use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
-
-        Raises:
-            ValueError: If an unknown source is provided.
-            ValueError: When an unknown feature type is provided.
         """
         if isinstance(feature_types, str):
-            feature_types = [feature_types]
+            feature_types: list[str] = [feature_types]
 
-        OSM_data_dir = self.preprocessing_dir / "osm"
-        OSM_data_dir.mkdir(exist_ok=True, parents=True)
+        all_features: dict[str, gpd.GeoDataFrame] = self.new_data_catalog.fetch(
+            "open_street_map"
+        ).read(
+            self.region.geometry[0],
+            feature_types=feature_types,
+        )
 
-        if source == "geofabrik":
-            index_file = OSM_data_dir / "geofabrik_region_index.geojson"
-            fetch_and_save(
-                "https://download.geofabrik.de/index-v1.json",
-                index_file,
-                overwrite=not use_cache,
-            )
-
-            index = gpd.read_file(index_file)
-            # remove Dach region as all individual regions within dach countries are also in the index
-            index = index[index["id"] != "dach"]
-
-            # find all regions that intersect with the bbox
-            intersecting_regions = index[index.intersects(self.region.geometry[0])]
-
-            def filter_regions(ID: str, parents: list[str]) -> bool:
-                """Filter out regions that are children of other regions in the list.
-
-                Args:
-                    ID: The ID of the region to check.
-                    parents: The list of parent region IDs.
-
-                Returns:
-                    bool: True if the region is not a child of any other region in the list, False otherwise.
-                """
-                return ID not in parents
-
-            intersecting_regions = intersecting_regions[
-                intersecting_regions["id"].apply(
-                    lambda x: filter_regions(x, intersecting_regions["parent"].tolist())
-                )
-            ]
-
-            urls = (
-                intersecting_regions["urls"]
-                .apply(lambda x: json.loads(x)["pbf"])
-                .tolist()
-            )
-
-        elif source == "movisda":
-            minx, miny, maxx, maxy = self.bounds
-
-            urls = []
-            for x in range(int(minx), int(maxx) + 1):
-                # Movisda seems to switch the W and E for the x coordinate
-                EW_code = f"E{-x:03d}" if x < 0 else f"W{x:03d}"
-                for y in range(int(miny), int(maxy) + 1):
-                    NS_code = f"N{y:02d}" if y >= 0 else f"S{-y:02d}"
-                    url = f"https://osm.download.movisda.io/grid/{NS_code}{EW_code}-latest.osm.pbf"
-
-                    # some tiles do not exists because they are in the ocean. Therefore we check if they exist
-                    # before adding the url
-                    response = requests.head(url, allow_redirects=True)
-                    if response.status_code != 404:
-                        urls.append(url)
-
-        else:
-            raise ValueError(f"Unknown source {source}")
-
-        # download all regions
-        all_features = {}
-        for url in tqdm(urls):
-            filepath = OSM_data_dir / url.split("/")[-1]
-            fetch_and_save(url, filepath, overwrite=not use_cache)
-            for feature_type in feature_types:
-                if feature_type not in all_features:
-                    all_features[feature_type] = []
-
-                if feature_type == "buildings":
-                    features = gpd.read_file(
-                        filepath,
-                        mask=self.region,
-                        layer="multipolygons",
-                        use_arrow=True,
-                    )
-                    features = features[features["building"].notna()]
-                elif feature_type == "rails":
-                    features = gpd.read_file(
-                        filepath,
-                        mask=self.region,
-                        layer="lines",
-                        use_arrow=True,
-                    )
-                    features = features[
-                        features["railway"].isin(
-                            ["rail", "tram", "subway", "light_rail", "narrow_gauge"]
-                        )
-                    ]
-                elif feature_type == "roads":
-                    features = gpd.read_file(
-                        filepath,
-                        mask=self.region,
-                        layer="lines",
-                        use_arrow=True,
-                    )
-                    features = features[
-                        features["highway"].isin(
-                            [
-                                "motorway",
-                                "trunk",
-                                "primary",
-                                "secondary",
-                                "tertiary",
-                                "unclassified",
-                                "residential",
-                                "motorway_link",
-                                "trunk_link",
-                                "primary_link",
-                                "secondary_link",
-                                "tertiary_link",
-                            ]
-                        )
-                    ]
-                else:
-                    raise ValueError(f"Unknown feature type {feature_type}")
-
-                all_features[feature_type].append(features)
-
-        for feature_type in feature_types:
-            features = pd.concat(all_features[feature_type], ignore_index=True)
+        for feature_type, features in all_features.items():
             self.set_geom(features, name=f"assets/{feature_type}")

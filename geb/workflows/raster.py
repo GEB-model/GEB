@@ -1,7 +1,9 @@
 """Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
 
+from __future__ import annotations
+
 from collections.abc import Mapping
-from typing import Any, Literal, Union, overload
+from typing import Any, Literal, overload
 
 import dask
 import geopandas as gpd
@@ -12,6 +14,7 @@ import xarray
 import xarray as xr
 import xarray_regrid
 from affine import Affine
+from numba import njit, prange
 from pyresample.geometry import AreaDefinition
 from pyresample.gradient import (
     block_bilinear_interpolator,
@@ -27,6 +30,190 @@ from geb.typing import (
     TwoDArrayFloat32,
     TwoDArrayFloat64,
 )
+
+
+@njit(cache=True)
+def pixel_to_coord(px: int, py: int, gt: tuple) -> tuple[float, float]:
+    """Converts pixel (x, y) to coordinate (lon, lat) for given geotransformation.
+
+    Uses the upper left corner of the pixel. To use the center, add 0.5 to input pixel.
+
+    Args:
+        px: The pixel x coordinate.
+        py: The pixel y coordinate.
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        array: the coordinate (lon, lat)
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
+    """
+    if gt[2] + gt[4] == 0:
+        lon = px * gt[1] + gt[0]
+        lat = py * gt[5] + gt[3]
+        return lon, lat
+    else:
+        raise ValueError("Cannot convert rotated maps")
+
+
+@njit(cache=True, parallel=True)
+def pixels_to_coords(
+    pixels: np.ndarray, gt: tuple[float, float, float, float, float, float]
+) -> np.ndarray:
+    """Converts pixels (x, y) to coordinates (lon, lat) for given geotransformation.
+
+    Uses the upper left corner of the pixels. To use the centers, add 0.5 to input pixels.
+
+    Args:
+        pixels: The pixels (x, y) that need to be transformed to coordinates (shape: n, 2).
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        The coordinates (lon, lat) with shape (n, 2).
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
+    """
+    assert pixels.shape[1] == 2
+    if gt[2] + gt[4] == 0:
+        coords = np.empty(pixels.shape, dtype=np.float64)
+        for i in prange(coords.shape[0]):
+            coords[i, 0] = pixels[i, 0] * gt[1] + gt[0]
+            coords[i, 1] = pixels[i, 1] * gt[5] + gt[3]
+        return coords
+    else:
+        raise ValueError("Cannot convert rotated maps")
+
+
+@njit(parallel=False)
+def sample_from_map(
+    array: np.ndarray,
+    coords: np.ndarray,
+    gt: tuple[float, float, float, float, float, float],
+) -> np.ndarray:
+    """Sample coordinates from a map. Can handle multiple dimensions.
+
+    Args:
+        array: The map to sample from (2+n dimensions).
+        coords: The coordinates used to sample (shape: m, 2).
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        The values at each coordinate.
+    """
+    assert gt[2] + gt[4] == 0
+    size = coords.shape[0]
+    x_offset = gt[0]
+    y_offset = gt[3]
+    x_step = gt[1]
+    y_step = gt[5]
+    values = np.empty((size,) + array.shape[:-2], dtype=array.dtype)
+    for i in prange(size):
+        values[i] = array[
+            ...,
+            int((coords[i, 1] - y_offset) / y_step),
+            int((coords[i, 0] - x_offset) / x_step),
+        ]
+    return values
+
+
+@njit(
+    parallel=False,
+    cache=True,
+)  # Writing to an array cannot be parallelized as race conditions would occur.
+def write_to_array(
+    array: np.ndarray,
+    values: np.ndarray,
+    coords: np.ndarray,
+    gt: tuple[float, float, float, float, float, float],
+) -> np.ndarray:
+    """Write values using coordinates to a map.
+
+    If multiple coordinates map to a single cell,
+    the values are added. The operation is inplace.
+
+    Args:
+        array: The 2-dimensional array to write to.
+        values: The values to write (shape: n).
+        coords: The coordinates of the values (shape: n, 2).
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        The array with the values added (operation is inplace).
+    """
+    assert values.size == coords.shape[0]
+    assert gt[2] + gt[4] == 0
+    size = values.size
+    x_offset = gt[0]
+    y_offset = gt[3]
+    x_step = gt[1]
+    y_step = gt[5]
+    for i in range(size):
+        array[
+            int((coords[i, 1] - y_offset) / y_step),
+            int((coords[i, 0] - x_offset) / x_step),
+        ] += values[i]
+    return array
+
+
+@njit(cache=True)
+def coord_to_pixel(
+    coord: np.ndarray, gt: tuple[float, float, float, float, float, float]
+) -> tuple[int, int]:
+    """Converts coordinate to pixel (x, y) for given geotransformation.
+
+    Args:
+        coord: The coordinate (lon, lat) that need to be transformed to pixel.
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        A tuple of pixel coordinates (x, y).
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
+    """
+    if gt[2] + gt[4] == 0:
+        px = (coord[0] - gt[0]) / gt[1]
+        py = (coord[1] - gt[3]) / gt[5]
+        return int(px), int(py)
+    else:
+        raise ValueError("Cannot convert rotated maps")
+
+
+@njit(parallel=True)
+def coords_to_pixels(
+    coords: np.ndarray,
+    gt: tuple[float, float, float, float, float, float],
+    dtype: type[np.uint32] = np.uint32,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Converts array of coordinates to array of pixels for given geotransformation.
+
+    Args:
+        coords: The coordinates (lon, lat) that need to be transformed to pixels (shape: n, 2).
+        gt: The geotransformation. Must be unrotated.
+        dtype: The data type of the output pixel arrays.
+
+    Returns:
+        A tuple of two arrays: pixel x coordinates and pixel y coordinates, each of shape (n,).
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
+    """
+    if gt[2] + gt[4] == 0:
+        size = coords.shape[0]
+        x_offset = gt[0]
+        y_offset = gt[3]
+        x_step = gt[1]
+        y_step = gt[5]
+        pxs = np.empty(size, dtype=dtype)
+        pys = np.empty(size, dtype=dtype)
+        for i in prange(size):
+            pxs[i] = int((coords[i, 0] - x_offset) / x_step)
+            pys[i] = int((coords[i, 1] - y_offset) / y_step)
+        return pxs, pys
+    else:
+        raise ValueError("Cannot convert rotated maps")
 
 
 def compress(array: npt.NDArray[Any], mask: npt.NDArray[np.bool_]) -> npt.NDArray[Any]:
@@ -225,7 +412,7 @@ def rasterize_like(
         shapes,
         out_shape=raster.rio.shape,
         fill=nodata,
-        transform=raster.rio.transform(),
+        transform=raster.rio.transform(recalc=True),
         out=da.values,
         all_touched=all_touched,
         **kwargs,
@@ -356,12 +543,18 @@ def pad_xy(
     miny: float,
     maxx: float,
     maxy: float,
-    constant_values: Union[
-        float, tuple[int, int], Mapping[Any, tuple[int, int]], None
-    ] = None,
+    constant_values: float
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
     return_slice: bool = False,
-) -> xr.DataArray:
-    """Pad the array to x,y bounds.
+) -> xr.DataArray | tuple[xr.DataArray, dict[str, slice]]:
+    """Pad the array to x,y bounds, while preserving old coordinates exactly.
+
+    Rather than re-calculating the x and y coordinates, this function
+    uses the original coordinates and extends them as needed. This ensures
+    that the original coordinates are preserved without introducing floating point
+    imprecision.
 
     Args:
         array_rio: rio assecor of xarray DataArray
@@ -384,29 +577,37 @@ def pad_xy(
     """
     left, bottom, right, top = array_rio._internal_bounds()
     resolution_x, resolution_y = array_rio.resolution()
+    y_coord: xarray.DataArray | np.ndarray = array_rio._obj[array_rio.y_dim].values
+    x_coord: xarray.DataArray | np.ndarray = array_rio._obj[array_rio.x_dim].values
+
     y_before = y_after = 0
     x_before = x_after = 0
-    y_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.y_dim]
-    x_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.x_dim]
 
+    # Create new coordinates by extending existing ones
     if top - resolution_y < maxy:
-        new_y_coord: np.ndarray = np.arange(bottom, maxy, -resolution_y)[::-1]
+        new_top_coords = np.arange(top - resolution_y, maxy, -resolution_y)[::-1]
+        new_y_coord = np.concatenate([new_top_coords, y_coord])
         y_before = len(new_y_coord) - len(y_coord)
         y_coord = new_y_coord
         top = y_coord[0]
     if bottom + resolution_y > miny:
-        new_y_coord = np.arange(top, miny, resolution_y)
+        new_bottom_coords = np.arange(bottom + resolution_y, miny, resolution_y)
+        new_y_coord = np.concatenate([y_coord, new_bottom_coords])
         y_after = len(new_y_coord) - len(y_coord)
         y_coord = new_y_coord
         bottom = y_coord[-1]
 
     if left - resolution_x > minx:
-        new_x_coord: np.ndarray = np.arange(right, minx, -resolution_x)[::-1]
+        new_left_coords: np.ndarray = np.arange(
+            left - resolution_x, minx, -resolution_x
+        )[::-1]
+        new_x_coord = np.concatenate([new_left_coords, x_coord])
         x_before = len(new_x_coord) - len(x_coord)
         x_coord = new_x_coord
         left = x_coord[0]
     if right + resolution_x < maxx:
-        new_x_coord = np.arange(left, maxx, resolution_x)
+        new_right_coords = np.arange(x_coord[-1] + resolution_x, maxx, resolution_x)
+        new_x_coord = np.concatenate([x_coord, new_right_coords])
         x_after = len(new_x_coord) - len(x_coord)
         x_coord = new_x_coord
         right = x_coord[-1]
@@ -443,21 +644,29 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
 
     Returns:
         A new DataArray with NaN values interpolated along the time dimension.
+
+    Raises:
+        ValueError: If '_FillValue' attribute is missing.
     """
+    if "_FillValue" not in da.attrs:
+        raise ValueError("DataArray must have '_FillValue' attribute")
+
+    nodata = da.attrs["_FillValue"]
 
     def fillna_nearest_2d(
-        arr: TwoDArrayFloat32 | TwoDArrayFloat64, dims: tuple[str, ...]
+        arr: TwoDArrayFloat32 | TwoDArrayFloat64, dims: tuple[str, ...], nodata: float
     ) -> TwoDArrayFloat32 | TwoDArrayFloat64:
         """Fill NaN values in a 2D array using nearest neighbor interpolation.
 
         Args:
             arr: The input 2D array with NaN values.
             dims: The dimensions of the array.
+            nodata: The nodata value to treat as missing.
 
         Returns:
             The array with NaN values filled.
         """
-        mask = np.isnan(arr)
+        mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
         if not mask.any():
             return arr
 
@@ -484,11 +693,49 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
         dask="parallelized",  # Enable parallelized computation
         input_core_dims=[["y", "x"]],
         output_core_dims=[["y", "x"]],
-        kwargs={"dims": da.dims},  # Additional arguments for the function
+        kwargs={
+            "dims": da.dims,
+            "nodata": nodata,
+        },  # Additional arguments for the function
         output_dtypes=[da.dtype],
         keep_attrs=True,
     )
     return da
+
+
+def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
+    """Interpolate NaN values in a 2D DataArray using nearest neighbor interpolation.
+
+    Args:
+        da: The input DataArray with dimensions ('y', 'x').
+
+    Returns:
+        A new DataArray with NaN values interpolated.
+
+    Raises:
+        ValueError: If '_FillValue' attribute is missing.
+    """
+    if "_FillValue" not in da.attrs:
+        raise ValueError("DataArray must have '_FillValue' attribute")
+
+    nodata = da.attrs["_FillValue"]
+
+    mask = np.isnan(da.values) if np.isnan(nodata) else da.values == nodata
+
+    if not mask.any():
+        return da
+
+    y, x = np.indices(da.values.shape)
+    known_x, known_y = x[~mask], y[~mask]
+    known_v = da.values[~mask]
+    missing_x, missing_y = x[mask], y[mask]
+
+    filled_values = griddata(
+        (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+    )
+    da_filled = da.copy()
+    da_filled.values[mask] = filled_values
+    return da_filled
 
 
 def resample_like(

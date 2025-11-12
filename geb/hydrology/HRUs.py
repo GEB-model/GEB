@@ -281,7 +281,7 @@ class Grid(BaseVariables):
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
         self.var.cell_area = self.compress(self.cell_area_uncompressed)
-        self.linear_mapping = self.create_linear_mapping(self.mask)
+        self.linear_mapping: TwoDArrayInt32 = self.create_linear_mapping(self.mask)
 
         BaseVariables.__init__(self)
 

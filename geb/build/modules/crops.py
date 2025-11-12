@@ -3,15 +3,14 @@
 import json
 import os
 from pathlib import Path
-from typing import Dict, Optional, Union
 
 import numpy as np
 import pandas as pd
 import xarray as xr
-from honeybees.library.raster import sample_from_map
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
+from geb.workflows.raster import sample_from_map
 
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
@@ -121,8 +120,8 @@ class Crops:
     @build_method(depends_on=[])
     def setup_crops_from_source(
         self,
-        source: Union[str, None] = "MIRCA2000",
-        crop_specifier: Union[str, None] = None,
+        source: str | None = "MIRCA2000",
+        crop_specifier: str | None = None,
     ) -> None:
         """Sets up the crops data for the model."""
         self.logger.info("Preparing crops data")
@@ -777,8 +776,8 @@ class Crops:
     @build_method(depends_on=["set_time_range"])
     def setup_cultivation_costs(
         self,
-        cultivation_costs: Optional[Union[str, int, float]] = 0,
-        translate_crop_names: Optional[Dict[str, str]] = None,
+        cultivation_costs: str | int | float | None = 0,
+        translate_crop_names: dict[str, str] | None = None,
         adjust_currency: bool = False,
     ) -> None:
         """Set cultivation costs per crop and region for the model run.
@@ -806,8 +805,8 @@ class Crops:
     )
     def setup_crop_prices(
         self,
-        crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
-        translate_crop_names: Optional[Dict[str, str]] = None,
+        crop_prices: str | int | float | None = "FAO_stat",
+        translate_crop_names: dict[str, str] | None = None,
         adjust_currency: bool = False,
     ) -> None:
         """Set crop prices per crop and region for the model run.

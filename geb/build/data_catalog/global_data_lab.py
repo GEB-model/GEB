@@ -1,5 +1,7 @@
 """Adapter for Global Data Lab shapefiles."""
 
+from __future__ import annotations
+
 import shutil
 import zipfile
 from typing import Any
@@ -21,7 +23,7 @@ class GlobalDataLabShapefile(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> "GlobalDataLabShapefile":
+    def fetch(self, url: str) -> GlobalDataLabShapefile:
         """Fetch and process the Global Data Lab shapefiles.
 
         Because login is required to download the data, the user must manually

@@ -130,6 +130,7 @@ def get_rivers(
         )
     )
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
+    rivers["is_headwater_catchment"] = rivers["maxup"] == 0
     rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
@@ -175,7 +176,7 @@ def create_river_raster_from_river_lines(
         out_shape=target.shape,
         fill=-1,
         dtype=np.int32,
-        transform=target.rio.transform(),
+        transform=target.rio.transform(recalc=True),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
     )
     return river_raster
@@ -411,7 +412,6 @@ class Hydrography:
         slope = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        slope.raster.set_nodata(np.nan)
         slope_data = pyflwdir.dem.slope(
             elevation.values,
             nodata=np.nan,
@@ -697,25 +697,26 @@ class Hydrography:
 
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
-            self.set_grid(
-                self.grid.raster.rasterize(
-                    command_areas,
-                    col_name="waterbody_id",
-                    nodata=-1,
-                    all_touched=True,
-                    dtype=np.int32,
-                ),
-                name="waterbodies/command_area",
+            command_area_raster = rasterize_like(
+                gpd=command_areas,
+                column="waterbody_id",
+                raster=self.grid["mask"],
+                nodata=-1,
+                dtype=np.int32,
+                all_touched=True,
+            )
+            self.set_grid(command_area_raster, name="waterbodies/command_area")
+
+            subcommand_area_raster = rasterize_like(
+                gpd=command_areas,
+                column="waterbody_id",
+                raster=self.subgrid["mask"],
+                nodata=-1,
+                dtype=np.int32,
+                all_touched=True,
             )
             self.set_subgrid(
-                self.subgrid.raster.rasterize(
-                    command_areas,
-                    col_name="waterbody_id",
-                    nodata=-1,
-                    all_touched=True,
-                    dtype=np.int32,
-                ),
-                name="waterbodies/subcommand_areas",
+                subcommand_area_raster, name="waterbodies/subcommand_areas"
             )
 
         else:

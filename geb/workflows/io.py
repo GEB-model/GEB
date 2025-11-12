@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import json
 import os
 import shutil
 import tempfile
@@ -23,6 +24,7 @@ import rasterio
 import requests
 import s3fs
 import xarray as xr
+import yaml
 import zarr
 import zarr.storage
 from dask.diagnostics import ProgressBar
@@ -152,6 +154,61 @@ def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
 
     """
     return gpd.read_parquet(filepath)
+
+
+def load_dict(filepath: Path) -> dict[str, Any]:
+    """Load a dictionary from a JSON or YAML file.
+
+    Args:
+        filepath: Path to the JSON or YAML file.
+
+    Returns:
+        A dictionary containing the data.
+
+    Raises:
+        ValueError: If the file extension is not supported.
+    """
+    suffix: str = filepath.suffix
+    if suffix == ".json":
+        return json.loads(filepath.read_text())
+    elif suffix in (".yml", ".yaml"):
+        return yaml.safe_load(filepath.read_text())
+    else:
+        raise ValueError(
+            f"Unsupported file format: {suffix}. Supported formats are .json, .yml, .yaml"
+        )
+
+
+def _convert_paths_to_strings(obj: Any) -> Any:
+    """Recursively convert Path objects to strings in nested data structures.
+
+    Args:
+        obj: The object to convert.
+
+    Returns:
+        The object with Path objects converted to strings.
+    """
+    if isinstance(obj, Path):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {key: _convert_paths_to_strings(value) for key, value in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return type(obj)(_convert_paths_to_strings(item) for item in obj)
+    else:
+        return obj
+
+
+def to_dict(d: dict, filepath: Path) -> None:
+    """Save a dictionary to a YAML file.
+
+    Args:
+        d: The dictionary to save.
+        filepath: Path to the output YAML file.
+    """
+    # Convert Path objects to strings before saving
+    d_converted = _convert_paths_to_strings(d)
+    with open(filepath, "w") as f:
+        yaml.dump(d_converted, f, default_flow_style=False, sort_keys=False)
 
 
 def calculate_scaling(
@@ -1075,6 +1132,8 @@ def fetch_and_save(
     session: requests.Session | None = None,
     params: None | dict[str, Any] = None,
     timeout: float | int = 30,
+    show_progress: bool = True,
+    verbose: bool = True,
 ) -> bool:
     """Fetches data from a URL and saves it to a file, with a retry mechanism.
 
@@ -1092,6 +1151,8 @@ def fetch_and_save(
         session: An optional requests.Session object to use for HTTP requests.
         params: Optional dictionary of query parameters for HTTP requests.
         timeout: The timeout in seconds for HTTP requests.
+        show_progress: Whether to show a progress bar during download.
+        verbose: Whether to print download status messages. Default is True.
 
     Returns:
         True if the file was successfully downloaded, False otherwise.
@@ -1113,7 +1174,8 @@ def fetch_and_save(
 
         while attempts < max_retries:
             try:
-                print(f"Downloading {url} to {file_path}")
+                if verbose:
+                    print(f"Downloading {url} to {file_path}")
                 # Create a temporary file
                 temp_file = tempfile.NamedTemporaryFile(delete=False)
                 temp_file.close()
@@ -1127,9 +1189,10 @@ def fetch_and_save(
 
             except Exception as e:
                 # Log the error
-                print(
-                    f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
-                )
+                if verbose:
+                    print(
+                        f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
+                    )
 
                 # Remove the temporary file if it exists
                 if temp_file is not None and os.path.exists(temp_file.name):
@@ -1151,7 +1214,8 @@ def fetch_and_save(
 
         while attempts < max_retries:
             try:
-                print(f"Downloading {url} to {file_path}")
+                if verbose:
+                    print(f"Downloading {url} to {file_path}")
                 # Attempt to make the request
                 response = session.get(url, stream=True, params=params, timeout=timeout)
                 response.raise_for_status()  # Raises HTTPError for bad status codes
@@ -1160,12 +1224,16 @@ def fetch_and_save(
                 temp_file = tempfile.NamedTemporaryFile(delete=False)
 
                 # Write to the temporary file
-                total_size = int(response.headers.get("content-length", 0))
-                progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-                for data in response.iter_content(chunk_size=chunk_size):
-                    temp_file.write(data)
-                    progress_bar.update(len(data))
-                progress_bar.close()
+                if show_progress:
+                    total_size = int(response.headers.get("content-length", 0))
+                    progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
+                    for data in response.iter_content(chunk_size=chunk_size):
+                        temp_file.write(data)
+                        progress_bar.update(len(data))
+                    progress_bar.close()
+                else:
+                    for data in response.iter_content(chunk_size=chunk_size):
+                        temp_file.write(data)
 
                 # Close the temporary file
                 temp_file.close()
@@ -1177,7 +1245,10 @@ def fetch_and_save(
 
             except requests.RequestException as e:
                 # Log the error
-                print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+                if verbose:
+                    print(
+                        f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}"
+                    )
 
                 # Remove the temporary file if it exists
                 if temp_file is not None and os.path.exists(temp_file.name):
