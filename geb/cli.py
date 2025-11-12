@@ -601,7 +601,7 @@ def init_fn(
     working_directory: str | Path,
     from_example: str,
     basin_id: str | None = None,
-    iso3: str | None = None,
+    ISO3: str | None = None,
     overwrite: bool = False,
 ) -> None:
     """Create a new model.
@@ -614,7 +614,7 @@ def init_fn(
         from_example: Name of the example to use as a base for the model.
         basin_id: Basin ID(s) to use for the model. Can be a comma-separated list of integers.
             If not set, the basin ID is taken from the config file.
-        iso3: ISO3 country code to use for the model. Cannot be used together with --basin-id.
+        ISO3: ISO3 country code to use for the model. Cannot be used together with --basin-id.
         overwrite: If True, overwrite existing config and build config files. Defaults to False.
 
     Raises:
@@ -623,7 +623,7 @@ def init_fn(
         ValueError: If both basin_id and ISO3 are set.
 
     """
-    if basin_id is not None and iso3 is not None:
+    if basin_id is not None and ISO3 is not None:
         raise ValueError("Cannot use --basin-id and --ISO3 together.")
 
     config: Path = Path(config)
@@ -673,12 +673,12 @@ def init_fn(
                 basin_ids: int = int(basin_id)
 
             config_dict["general"]["region"]["subbasin"] = basin_ids
-        elif iso3 is not None:
+        elif ISO3 is not None:
             del config_dict["general"]["region"]["subbasin"]
             config_dict["general"]["region"] = {
                 "geom": {
                     "source": "GADM_level1",
-                    "key": iso3,
+                    "key": ISO3,
                     "column": "GID_0",
                 }
             }
@@ -720,6 +720,7 @@ def init_fn(
 )
 @click.option(
     "--ISO3",
+    "ISO3",
     default=None,
     type=str,
     help="ISO3 country code to use for the model. Cannot be used together with --basin-id.",
