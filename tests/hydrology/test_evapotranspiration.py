@@ -440,14 +440,14 @@ def test_get_fraction_easily_available_soil_water() -> None:
     ):
         p5 = get_fraction_easily_available_soil_water(
             crop_group_number=5,
-            potential_evapotranspiration_m=potential_evapotranspiration,
+            potential_evapotranspiration_full_day_m=potential_evapotranspiration,
         )
 
         assert math.isclose(p5, p5_test, rel_tol=1e-6)
 
         p1 = get_fraction_easily_available_soil_water(
             crop_group_number=1,
-            potential_evapotranspiration_m=potential_evapotranspiration,
+            potential_evapotranspiration_full_day_m=potential_evapotranspiration,
         )
 
         assert math.isclose(p1, p1_test, rel_tol=1e-6)
@@ -514,7 +514,6 @@ def test_evapotranspirate() -> None:
         topwater_m=topwater,
         open_water_evaporation_m=open_water_evaporation,
         minimum_effective_root_depth_m=minimum_effective_root_depth,
-        time_step_hours_h=np.float32(24),  # Daily time step for test
     )
 
     # Basic checks
@@ -566,7 +565,6 @@ def test_calculate_transpiration() -> None:
         w_m=w_cell,
         topwater_m=topwater,
         minimum_effective_root_depth_m=minimum_effective_root_depth,
-        time_step_hours_h=np.float32(24),  # Daily time step for test
     )
 
     # Basic checks
@@ -613,51 +611,17 @@ def test_calculate_bare_soil_evaporation() -> None:
     assert evaporation_frozen == 0.0
 
 
-def test_get_fraction_easily_available_soil_water_time_steps() -> None:
-    """Test get_fraction_easily_available_soil_water with different time steps."""
-    # Test that equivalent daily/hourly rates give same results
-    daily_et = 0.005  # 5mm/day
-    hourly_et = daily_et / 24  # equivalent hourly rate
-
-    p_daily = get_fraction_easily_available_soil_water(
-        crop_group_number=5,
-        potential_evapotranspiration_m=daily_et,
-        time_step_hours_h=24,
-    )
-    p_hourly = get_fraction_easily_available_soil_water(
-        crop_group_number=5,
-        potential_evapotranspiration_m=hourly_et,
-        time_step_hours_h=1,
-    )
-
-    assert math.isclose(p_daily, p_hourly, rel_tol=1e-6)
-
-    # Test with different crop groups
-    for crop_group in [1, 2, 3, 4, 5]:
-        p_daily = get_fraction_easily_available_soil_water(
-            crop_group_number=crop_group,
-            potential_evapotranspiration_m=daily_et,
-            time_step_hours_h=24,
-        )
-        p_hourly = get_fraction_easily_available_soil_water(
-            crop_group_number=crop_group,
-            potential_evapotranspiration_m=hourly_et,
-            time_step_hours_h=1,
-        )
-        assert math.isclose(p_daily, p_hourly, rel_tol=1e-6)
-
-
 def test_get_fraction_easily_available_soil_water_edge_cases() -> None:
     """Test edge cases for get_fraction_easily_available_soil_water."""
     # Very low ET should give high p values
     p_low = get_fraction_easily_available_soil_water(
-        crop_group_number=5, potential_evapotranspiration_m=0.00001, time_step_hours_h=1
+        crop_group_number=5, potential_evapotranspiration_full_day_m=0.00001
     )
     assert p_low > 0.9  # Should be close to 1
 
     # Very high ET should give low p values
     p_high = get_fraction_easily_available_soil_water(
-        crop_group_number=5, potential_evapotranspiration_m=0.01, time_step_hours_h=1
+        crop_group_number=5, potential_evapotranspiration_full_day_m=0.1
     )
     assert p_high < 0.1  # Should be close to 0
 
@@ -665,18 +629,15 @@ def test_get_fraction_easily_available_soil_water_edge_cases() -> None:
     et_test = 0.001
     p1 = get_fraction_easily_available_soil_water(
         crop_group_number=1,
-        potential_evapotranspiration_m=et_test,
-        time_step_hours_h=24,
+        potential_evapotranspiration_full_day_m=et_test,
     )
     p2 = get_fraction_easily_available_soil_water(
         crop_group_number=2,
-        potential_evapotranspiration_m=et_test,
-        time_step_hours_h=24,
+        potential_evapotranspiration_full_day_m=et_test,
     )
     p3 = get_fraction_easily_available_soil_water(
         crop_group_number=3,
-        potential_evapotranspiration_m=et_test,
-        time_step_hours_h=24,
+        potential_evapotranspiration_full_day_m=et_test,
     )
 
     # Crop groups 1 and 2 should have different behavior due to correction
@@ -707,7 +668,6 @@ def test_calculate_transpiration_frozen_soil() -> None:
         w_m=w.copy(),
         topwater_m=0.0,
         minimum_effective_root_depth_m=0.1,
-        time_step_hours_h=24,
     )
 
     assert transpiration_frozen == 0.0
@@ -740,7 +700,6 @@ def test_calculate_transpiration_paddy_irrigation() -> None:
         w_m=w.copy(),
         topwater_m=0.005,  # Topwater available
         minimum_effective_root_depth_m=0.1,
-        time_step_hours_h=24,
     )
 
     # Should use topwater first
@@ -795,84 +754,6 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
 
     # Should be less with open water evaporation
     assert evaporation_with_open_water < evaporation_no_open_water
-
-
-def test_evapotranspirate_different_time_steps() -> None:
-    """Test evapotranspirate with different time steps."""
-    from geb.hydrology.landcovers import NON_PADDY_IRRIGATED
-
-    # Test data
-    wwp = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
-    wfc = np.array([0.25, 0.25, 0.25, 0.25, 0.25, 0.25], dtype=np.float32)
-    wres = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
-    soil_layer_height = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
-    w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
-
-    # Daily totals
-    daily_trans = 0.002
-    daily_evap = 0.001
-    daily_et = 0.003
-
-    # Equivalent hourly rates
-    hourly_trans = daily_trans / 24
-    hourly_evap = daily_evap / 24
-    hourly_et = daily_et / 24
-
-    # Test daily
-    trans_daily, evap_daily, topwater_m = evapotranspirate(
-        soil_is_frozen=False,
-        wwp_m=wwp,
-        wfc_m=wfc,
-        wres_m=wres,
-        soil_layer_height_m=soil_layer_height,
-        land_use_type=NON_PADDY_IRRIGATED,
-        root_depth_m=0.3,
-        crop_map=0,
-        natural_crop_groups=3.0,
-        potential_transpiration_m=daily_trans,
-        potential_bare_soil_evaporation_m=daily_evap,
-        potential_evapotranspiration_m=daily_et,
-        frost_index=0.0,
-        crop_group_number_per_group=np.array([3.0, 4.0, 5.0], dtype=np.float32),
-        w_m=w.copy(),
-        topwater_m=0.0,
-        open_water_evaporation_m=0.0,
-        minimum_effective_root_depth_m=0.1,
-        time_step_hours_h=24,
-    )
-
-    # Test hourly (24 steps of 1 hour each)
-    total_trans_hourly = 0.0
-    total_evap_hourly = 0.0
-
-    for _ in range(24):
-        trans_step, evap_step, topwater_m = evapotranspirate(
-            soil_is_frozen=False,
-            wwp_m=wwp,
-            wfc_m=wfc,
-            wres_m=wres,
-            soil_layer_height_m=soil_layer_height,
-            land_use_type=NON_PADDY_IRRIGATED,
-            root_depth_m=0.3,
-            crop_map=0,
-            natural_crop_groups=3.0,
-            potential_transpiration_m=hourly_trans,
-            potential_bare_soil_evaporation_m=hourly_evap,
-            potential_evapotranspiration_m=hourly_et,
-            frost_index=0.0,
-            crop_group_number_per_group=np.array([3.0, 4.0, 5.0], dtype=np.float32),
-            w_m=w.copy(),
-            topwater_m=0.0,
-            open_water_evaporation_m=0.0,
-            minimum_effective_root_depth_m=0.1,
-            time_step_hours_h=1,
-        )
-        total_trans_hourly += trans_step
-        total_evap_hourly += evap_step
-
-    # Should be approximately equal (allowing for numerical differences)
-    assert abs(total_trans_hourly - trans_daily) < 1e-6
-    assert abs(total_evap_hourly - evap_daily) < 1e-6
 
 
 def test_get_transpiration_factor_edge_cases() -> None:
