@@ -127,10 +127,14 @@ def read_flood_depth(
 
             flood_depth_m = model.results["h"].isel(time=-1)
             assert isinstance(flood_depth_m, xr.DataArray)
-            flood_depth_m: xr.DataArray = flood_depth_m.compute()
 
         else:
             raise ValueError(f"Unknown method: {method}")
+
+        flood_depth_m = xr.where(
+            flood_depth_m >= minimum_flood_depth, flood_depth_m, np.nan, keep_attrs=True
+        )
+        flood_depth_m.attrs["_FillValue"] = np.nan
 
     print(
         f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "

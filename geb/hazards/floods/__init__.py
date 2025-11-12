@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
+import networkx as nx
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -19,7 +19,7 @@ from geb.typing import ArrayFloat32, TwoDArrayInt32
 from geb.workflows.io import load_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
-from ...workflows.io import open_zarr, to_zarr
+from ...workflows.io import load_dict, open_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .sfincs import (
     MultipleSFINCSSimulations,
@@ -29,7 +29,85 @@ from .sfincs import (
 )
 
 if TYPE_CHECKING:
-    from geb.model import GEBModel, Hydrology as Hydrology
+    from geb.model import GEBModel, Hydrology
+
+
+def group_subbasins(
+    river_graph: nx.DiGraph, max_area_m2: float | int
+) -> dict[int, list[int]]:
+    """Groups subbasins in the river graph aiming while keeping the area of each group below max_area_m2.
+
+    Args:
+        river_graph: The river network as a directed graph (networkx DiGraph).
+        max_area_m2: The maximum upstream area (in m²) allowed for each group.
+
+    Returns:
+        A dictionary mapping group IDs to lists of subbasin node IDs.
+    """
+    river_graph = river_graph.copy()
+    # add attribute for merged nodes
+    nx.set_node_attributes(
+        river_graph, {node: [node] for node in river_graph.nodes}, "merged_nodes"
+    )
+
+    # for each node, derive the area of the node by excluding the area of the upstream nodes
+    for node in river_graph.nodes:
+        upstream_nodes = list(river_graph.predecessors(node))
+        upstream_area = sum(
+            river_graph.nodes[up_node]["uparea_m2"] for up_node in upstream_nodes
+        )
+        assert upstream_area >= 0
+        river_graph.nodes[node]["area_m2"] = (
+            river_graph.nodes[node]["uparea_m2"] - upstream_area
+        )
+
+    groups: dict[int, list[int]] = {}
+    group_id: int = 0
+
+    while len(river_graph.nodes) > 1:
+        # get all nodes without predecessors (i.e., headwater nodes)
+        headwater_nodes_to_merge = [
+            (n, river_graph.nodes[n]["area_m2"])
+            for n, d in river_graph.in_degree()
+            if d == 0
+        ]
+        if not headwater_nodes_to_merge:
+            break
+
+        # sort headwater nodes by area descending
+        headwater_nodes_to_merge.sort(key=lambda x: x[1], reverse=True)
+
+        for potential_node_to_merge, _ in headwater_nodes_to_merge:
+            downstream_node = list(river_graph.successors(potential_node_to_merge))
+            assert len(downstream_node) == 1
+            downstream_node = downstream_node[0]
+
+            new_area_after_merge = (
+                river_graph.nodes[downstream_node]["area_m2"]
+                + river_graph.nodes[potential_node_to_merge]["area_m2"]
+            )
+
+            if new_area_after_merge > max_area_m2:
+                groups[group_id] = river_graph.nodes[potential_node_to_merge][
+                    "merged_nodes"
+                ]
+                river_graph.remove_node(potential_node_to_merge)
+                group_id += 1
+                continue
+
+            river_graph.nodes[downstream_node]["merged_nodes"].extend(
+                river_graph.nodes[potential_node_to_merge]["merged_nodes"]
+            )
+            river_graph.nodes[downstream_node]["area_m2"] = new_area_after_merge
+            # remove node
+            river_graph.remove_node(potential_node_to_merge)
+            break
+
+    # add remaining nodes as groups
+    for node in river_graph.nodes:
+        groups[group_id] = river_graph.nodes[node]["merged_nodes"]
+
+    return groups
 
 
 class Floods(Module):
@@ -140,12 +218,11 @@ class Floods(Module):
         """
         sfincs_model = SFINCSRootModel(self.model, name)
         if self.config["force_overwrite"] or not sfincs_model.exists():
-            with open(self.model.files["dict"]["hydrodynamics/DEM_config"]) as f:
-                DEM_config = json.load(f)
-                for entry in DEM_config:
-                    entry["elevtn"] = open_zarr(
-                        self.model.files["other"][entry["path"]]
-                    ).to_dataset(name="elevtn")
+            DEM_config = load_dict(self.model.files["dict"]["hydrodynamics/DEM_config"])
+            for entry in DEM_config:
+                entry["elevtn"] = open_zarr(
+                    self.model.files["other"][entry["path"]]
+                ).to_dataset(name="elevtn")
 
             if region is None:
                 region = load_geom(self.model.files["geom"]["routing/subbasins"])
@@ -268,6 +345,9 @@ class Floods(Module):
         elif self.config["forcing_method"] == "runoff":
             simulation.set_runoff_forcing(
                 runoff_m=forcing_grid,
+                area_m2=self.hydrology.grid.decompress(
+                    self.hydrology.grid.var.cell_area
+                ),
             )
 
         elif self.config["forcing_method"] == "accumulated_runoff":
@@ -315,17 +395,47 @@ class Floods(Module):
             start_time: The start time of the flood event.
             end_time: The end time of the flood event.
         """
-        sfincs_root_model = self.build("entire_region")  # build or read the model
-        sfincs_simulation = self.set_forcing(  # set the forcing
-            sfincs_root_model, start_time, end_time
-        )
-        self.model.logger.info(
-            f"Running SFINCS for {self.model.current_time}..."
-        )  # log the start of the simulation
+        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        rivers = self.model.hydrology.routing.rivers
 
-        sfincs_simulation.run(
-            gpu=self.config["SFINCS"]["gpu"],
-        )  # run the simulation
+        rivers_without_outflow_basin = rivers[~rivers["is_downstream_outflow_subbasin"]]
+
+        river_graph: nx.DiGraph = nx.DiGraph()
+        rivers_in_network = set(rivers_without_outflow_basin.index)
+        for river_id, row in rivers_without_outflow_basin.iterrows():
+            river_graph.add_node(river_id, uparea_m2=row["uparea_m2"])
+            downstream_id = row["downstream_ID"]
+
+            # only add edge if downstream river is in the network and not -1 (ocean)
+            if downstream_id != -1 and downstream_id in rivers_in_network:
+                river_graph.add_edge(river_id, downstream_id)
+
+        grouped_subbasins = group_subbasins(
+            river_graph=river_graph,
+            max_area_m2=1e20,  # very large to force single group only
+        )
+
+        assert len(grouped_subbasins) == 1, "currently only single group supported"
+        for group_id, group in grouped_subbasins.items():
+            group = set(group) | set(
+                rivers.loc[rivers.index.isin(group)]["downstream_ID"]
+            )
+            subbasins_group = subbasins[subbasins.index.isin(group)]
+
+            sfincs_root_model = self.build(
+                f"group_{group_id}", subbasins_group
+            )  # build or read the model
+            sfincs_simulation = self.set_forcing(  # set the forcing
+                sfincs_root_model, start_time, end_time
+            )
+            self.model.logger.info(
+                f"Running SFINCS for {self.model.current_time}..."
+            )  # log the start of the simulation
+
+            sfincs_simulation.run(
+                gpu=self.config["SFINCS"]["gpu"],
+            )  # run the simulation
+
         flood_depth: xr.DataArray = sfincs_simulation.read_max_flood_depth(
             self.config["minimum_flood_depth"]
         )  # read the flood depth results

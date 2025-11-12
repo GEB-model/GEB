@@ -15,6 +15,7 @@ import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import yaml
 
 from geb.workflows.io import load_geom
 
@@ -1036,15 +1037,9 @@ class Bucket:
                     compression="gzip",
                     compression_level=9,
                 )
-            elif isinstance(value, (list, dict, float, int)):
-                with open((path / name).with_suffix(".json"), "w") as f:
-                    json.dump(value, f)
-            elif isinstance(value, str):
-                with open((path / name).with_suffix(".txt"), "w") as f:
-                    f.write(value)
-            elif isinstance(value, datetime):
-                with open((path / name).with_suffix(".datetime"), "w") as f:
-                    f.write(value.isoformat())
+            elif isinstance(value, (list, dict, float, int, str, datetime)):
+                with open((path / name).with_suffix(".yml"), "w") as f:
+                    yaml.safe_dump(value, f, default_flow_style=False)
             elif isinstance(value, np.ndarray):
                 if value.ndim == 0:
                     raise ValueError(
@@ -1104,9 +1099,14 @@ class Bucket:
                     filename.stem,
                     pd.read_parquet(filename),
                 )
+            elif filename.suffix == ".yml":
+                with open(filename, "r") as f:
+                    setattr(self, filename.stem, yaml.safe_load(f))
+            # TODO: Can be removed in 2026
             elif filename.suffix == ".txt":
                 with open(filename, "r") as f:
                     setattr(self, filename.stem, f.read())
+            # TODO: Can be removed in 2026
             elif filename.suffix == ".datetime":
                 with open(filename, "r") as f:
                     setattr(
@@ -1114,6 +1114,7 @@ class Bucket:
                         filename.stem,
                         datetime.fromisoformat(f.read()),
                     )
+            # TODO: Can be removed in 2026
             elif filename.suffix == ".json":
                 with open(filename, "r") as f:
                     setattr(self, filename.stem, json.load(f))
