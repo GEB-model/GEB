@@ -1067,9 +1067,13 @@ class Forcing:
         xmax: float = xmax + buffer
         ymax: float = ymax + buffer
 
-        elevation: xr.DataArray = self.new_data_catalog.fetch(
-            "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, prefix="forcing"
-        ).read(prefix="forcing")
+        elevation: xr.DataArray = (
+            self.new_data_catalog.fetch(
+                "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, prefix="forcing"
+            )
+            .read(prefix="forcing")
+            .compute()
+        )
 
         # FABDEM has nodata values in the ocean, for which we can assume an elevation of 0 m
         elevation = xr.where(~np.isnan(elevation), elevation, 0, keep_attrs=True)
