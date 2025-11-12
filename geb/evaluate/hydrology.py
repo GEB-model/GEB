@@ -25,7 +25,6 @@ from rasterio.features import geometry_mask
 from tqdm import tqdm
 
 from geb.workflows.io import open_zarr, to_zarr
-from geb.workflows.raster import rasterize_like
 
 
 def calculate_hit_rate(model: xr.DataArray, observations: xr.DataArray) -> float:
@@ -1447,7 +1446,7 @@ class Hydrology:
             # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)
             obs = open_zarr(observation)
-            print('obs CRS',obs.rio.crs)
+            print("obs CRS", obs.rio.crs)
             sim = flood_map.rio.reproject_match(obs)
             rivers = gpd.read_parquet(
                 Path("simulation_root")
@@ -1479,18 +1478,18 @@ class Hydrology:
                 out_shape=sim.rio.shape,
                 transform=sim.rio.transform(),
                 all_touched=True,
-                invert=False
+                invert=False,
             )
             sim_no_rivers = sim.where(~rivers_mask_sim).fillna(0)
 
             # Create river mask for observation data
             gdf_buffered_obs = gdf_mercator.to_crs(obs.rio.crs)
             rivers_mask_obs = ~geometry_mask(
-                gdf_buffered_obs.geometry, 
-                out_shape=obs.rio.shape, 
+                gdf_buffered_obs.geometry,
+                out_shape=obs.rio.shape,
                 transform=obs.rio.transform(),
                 all_touched=True,
-                invert=False
+                invert=False,
             )
             obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
 
@@ -2099,7 +2098,7 @@ class Hydrology:
                     observation=self.config["floods"]["event_observation_file"],
                     flood_map_path=flood_map_path,
                     visualization_type="OSM",
-                    output_folder=event_folder
+                    output_folder=event_folder,
                 )
                 print(f"Successfully evaluated: {flood_map_path.name}")
 
