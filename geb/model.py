@@ -853,19 +853,28 @@ class GEBModel(Module, HazardDriver):
         model_build_time_range: dict[str, str] = load_dict(
             self.files["dict"]["model_time_range"]
         )
-        model_build_start_date: datetime.datetime = datetime.datetime.strptime(
-            model_build_time_range["start_date"], "%Y-%m-%d"
-        )
-        model_build_end_date: datetime.datetime = datetime.datetime.strptime(
-            model_build_time_range["end_date"], "%Y-%m-%d"
-        )
 
-        if self.spinup_start < model_build_start_date:
+        model_build_start_date = model_build_time_range["start_date"]
+
+        # TODO: Remove in 2026
+        if isinstance(model_build_start_date, str):
+            model_build_start_date: datetime.datetime = datetime.datetime.fromisoformat(
+                model_build_start_date
+            )
+        model_build_end_date = model_build_time_range["end_date"]
+
+        # TODO: Remove in 2026
+        if isinstance(model_build_end_date, str):
+            model_build_end_date: datetime.datetime = datetime.datetime.fromisoformat(
+                model_build_end_date
+            )
+
+        if self.spinup_start.date() < model_build_start_date:
             raise ValueError(
                 "Spinup start date cannot be before model build start date. Adjust the time range in your build configuration and rebuild the model or adjust the spinup time of the model."
             )
 
-        if self.run_end > model_build_end_date:
+        if self.run_end.date() > model_build_end_date:
             raise ValueError(
                 "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
             )

@@ -122,12 +122,17 @@ class Fabdem(Adapter):
         return tiles
 
     def _tif_intersects_bbox(
-        self, tif_path: Path, xmin: float, xmax: float, ymin: float, ymax: float
+        self,
+        tif_filename: str,
+        xmin: float,
+        xmax: float,
+        ymin: float,
+        ymax: float,
     ) -> bool:
-        """Check if a GeoTIFF file intersects with the bounding box.
+        """Check if a GeoTIFF file in a ZIP intersects with the bounding box.
 
         Args:
-            tif_path: Path to the GeoTIFF file.
+            tif_filename: Name of the TIF file within the ZIP.
             xmin: Minimum longitude of bbox (degrees).
             xmax: Maximum longitude of bbox (degrees).
             ymin: Minimum latitude of bbox (degrees).
@@ -136,56 +141,85 @@ class Fabdem(Adapter):
         Returns:
             True if the TIF intersects with the bbox, False otherwise.
         """
-        try:
-            import rasterio
+        # Parse bounds from filename
+        # FABDEM TIF filenames follow pattern like "N00E000.tif" for 1x1 degree cells
+        base_name = tif_filename[:-4]  # Remove .tif extension
 
-            with rasterio.open(tif_path) as src:
-                tif_bounds = src.bounds
-                # tif_bounds is (left, bottom, right, top) in the CRS coordinates
-                tif_xmin, tif_ymin, tif_xmax, tif_ymax = tif_bounds
+        ns_lat = base_name[0]  # N or S
+        lat_str = base_name[1:3]  # 00
+        ew_lon = base_name[3]  # E or W
+        lon_str = base_name[4:7]  # 000
 
-                # Check for intersection
-                return not (
-                    tif_xmax <= xmin
-                    or tif_xmin >= xmax
-                    or tif_ymax <= ymin
-                    or tif_ymin >= ymax
-                )
-        except Exception:
-            # If we can't read the file, skip it
-            return False
+        lat_val = int(lat_str)
+        lon_val = int(lon_str)
 
-    def _download_and_extract_tile(self, tile_url: str, temp_dir: Path) -> list[Path]:
-        """Download a tile ZIP and extract all GeoTIFF files.
+        # Convert to actual coordinates
+        if ns_lat == "S":
+            lat_min = -lat_val - 1
+            lat_max = -lat_val
+        else:  # N
+            lat_min = lat_val
+            lat_max = lat_val + 1
+
+        if ew_lon == "W":
+            lon_min = -lon_val - 1
+            lon_max = -lon_val
+        else:  # E
+            lon_min = lon_val
+            lon_max = lon_val + 1
+
+        # Check for intersection
+        return not (
+            lon_max <= xmin or lon_min >= xmax or lat_max <= ymin or lat_min >= ymax
+        )
+
+    def _download_and_extract_tile(
+        self,
+        tile_url: str,
+        temp_dir: Path,
+        tile_filename: str,
+        xmin: float,
+        xmax: float,
+        ymin: float,
+        ymax: float,
+    ) -> list[Path]:
+        """Download a tile ZIP and extract only GeoTIFF files that intersect with the bbox.
 
         Args:
             tile_url: URL of the tile ZIP file.
             temp_dir: Temporary directory to extract to.
+            tile_filename: Filename of the tile ZIP.
+            xmin: Minimum longitude of bbox (degrees).
+            xmax: Maximum longitude of bbox (degrees).
+            ymin: Minimum latitude of bbox (degrees).
+            ymax: Maximum latitude of bbox (degrees).
 
         Returns:
-            List of paths to the extracted GeoTIFF files.
+            List of paths to the extracted GeoTIFF files that intersect with the bbox.
 
         Raises:
             RuntimeError: If download or extraction fails.
         """
         try:
-            zip_path = temp_dir / "tile.zip"
-            success = fetch_and_save(
-                tile_url, zip_path, verbose=False, show_progress=False
+            zip_path: Path = temp_dir / tile_filename
+            success: bool = fetch_and_save(
+                tile_url, zip_path, verbose=False, show_progress=True
             )
             if not success:
                 raise RuntimeError(f"Failed to download {tile_url}")
 
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                # Extract all .tif files
-                tif_files = [f for f in zip_ref.namelist() if f.endswith(".tif")]
-                if not tif_files:
-                    raise RuntimeError(f"No TIF files found in {tile_url}")
+                # Get all .tif files in the ZIP
+                tif_files: list[str] = [
+                    f for f in zip_ref.namelist() if f.endswith(".tif")
+                ]
 
-                extracted_paths = []
+                extracted_paths: list[Path] = []
                 for tif_filename in tif_files:
-                    zip_ref.extract(tif_filename, temp_dir)
-                    extracted_paths.append(temp_dir / tif_filename)
+                    # Check if this TIF intersects with bbox before extracting
+                    if self._tif_intersects_bbox(tif_filename, xmin, xmax, ymin, ymax):
+                        zip_ref.extract(tif_filename, temp_dir)
+                        extracted_paths.append(temp_dir / tif_filename)
 
                 return extracted_paths
         except (zipfile.BadZipFile, Exception) as e:
@@ -251,12 +285,10 @@ class Fabdem(Adapter):
                 tile_url: str = f"{url}/{tile_filename}"
 
                 tif_paths: list[Path] = self._download_and_extract_tile(
-                    tile_url, temp_dir
+                    tile_url, temp_dir, tile_filename, xmin, xmax, ymin, ymax
                 )
-                # Filter TIF files to only those that intersect with the bbox
-                for tif_path in tif_paths:
-                    if self._tif_intersects_bbox(tif_path, xmin, xmax, ymin, ymax):
-                        results.append(tif_path)
+                # Add all extracted TIF files (already filtered during extraction)
+                results.extend(tif_paths)
 
             if not results:
                 raise RuntimeError("No FABDEM tiles could be downloaded.")

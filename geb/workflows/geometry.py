@@ -4,11 +4,11 @@ from pathlib import Path
 from typing import Any
 
 import geopandas as gpd
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
 
 
 def read_parquet_with_geom(
-    path: Path, geom: Polygon | None = None, **kwargs: Any
+    path: Path, geom: Polygon | MultiPolygon | None = None, **kwargs: Any
 ) -> gpd.GeoDataFrame:
     """Read a parquet file with optional spatial filtering.
 
@@ -22,7 +22,9 @@ def read_parquet_with_geom(
     """
     if geom is not None:
         assert "bbox" not in kwargs, "Cannot use both geom and bbox"
-        assert isinstance(geom, Polygon)
+        assert isinstance(geom, (Polygon, MultiPolygon)), (
+            "geom must be a Polygon or MultiPolygon"
+        )
         gdf: gpd.GeoDataFrame = gpd.read_parquet(path, **kwargs, bbox=geom.bounds)
         gdf: gpd.GeoDataFrame = gdf[gdf.intersects(geom)]
         return gdf

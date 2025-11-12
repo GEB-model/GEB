@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import warnings
 from typing import TYPE_CHECKING
 
@@ -11,6 +10,7 @@ import statsmodels.api as sm
 from numpy.linalg import LinAlgError
 
 from geb.typing import TwoDArrayFloat32
+from geb.workflows.io import load_dict
 
 from ..data import load_regional_crop_data_from_dict
 from ..store import DynamicArray
@@ -122,20 +122,19 @@ class Market(AgentBaseClass):
             extra_dims_names=["params"],
         )
 
-        with open(self.model.files["dict"]["socioeconomics/inflation_rates"], "r") as f:
-            inflation = json.load(f)
-            inflation["time"] = [int(time) for time in inflation["time"]]
-            start_idx = inflation["time"].index(
-                self.model.config["general"]["spinup_time"].year
-            )
-            end_idx = inflation["time"].index(
-                self.model.config["general"]["end_time"].year
-            )
-            for region in inflation["data"]:
-                region_inflation = [1] + inflation["data"][region][
-                    start_idx + 1 : end_idx + 1
-                ]
-                self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
+        inflation = load_dict(
+            self.model.files["dict"]["socioeconomics/inflation_rates"]
+        )
+        inflation["time"] = [int(time) for time in inflation["time"]]
+        start_idx = inflation["time"].index(
+            self.model.config["general"]["spinup_time"].year
+        )
+        end_idx = inflation["time"].index(self.model.config["general"]["end_time"].year)
+        for region in inflation["data"]:
+            region_inflation = [1] + inflation["data"][region][
+                start_idx + 1 : end_idx + 1
+            ]
+            self.var.cumulative_inflation_per_region = np.cumprod(region_inflation)
 
     def estimate_price_model(self) -> None:
         """Estimate the parameters of the crop price model using OLS regression.

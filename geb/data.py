@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from datetime import date, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
+
+from geb.workflows.io import load_dict
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -85,8 +87,7 @@ def load_regional_crop_data_from_dict(
     Raises:
         ValueError: if the data is invalid according to the validation criteria.
     """
-    with open(model.files["dict"][name], "r") as f:
-        timedata = json.load(f)
+    timedata = load_dict(model.files["dict"][name])
 
     if timedata["type"] == "constant":
         return None, timedata["data"]
@@ -117,8 +118,7 @@ def load_crop_data(files: dict[str, dict[str, str]]) -> dict[np.ndarray]:
     Returns:
         yield_factors: dictonary with np.ndarray of values per crop for each variable.
     """
-    with open(files["dict"]["crops/crop_data"], "r") as f:
-        crop_data = json.load(f)
+    crop_data = load_dict(files["dict"]["crops/crop_data"])
     data = pd.DataFrame.from_dict(crop_data["data"], orient="index")
     data.index = data.index.astype(int)
     return crop_data["type"], data
@@ -152,7 +152,7 @@ def parse_dates(
         )
 
 
-def load_economic_data(fp: str) -> tuple[DateIndex, dict[int, np.ndarray]]:
+def load_economic_data(fp: Path) -> tuple[DateIndex, dict[int, np.ndarray]]:
     """Load economic data from a json file, such as crop prices and inflation.
 
     Args:
@@ -161,8 +161,7 @@ def load_economic_data(fp: str) -> tuple[DateIndex, dict[int, np.ndarray]]:
     Returns:
         A tuple containing a DateIndex object and a dictionary mapping region IDs to numpy arrays of values.
     """
-    with open(fp, "r") as f:
-        data = json.load(f)
+    data = load_dict(fp)
     dates = parse_dates(data["time"])
     date_index = DateIndex(dates)
     d = {int(region_id): values for region_id, values in data["data"].items()}

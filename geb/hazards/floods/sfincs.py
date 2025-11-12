@@ -759,6 +759,16 @@ class SFINCSSimulation:
 
         self.sfincs_model = sfincs_model
 
+        # Track total volumes added via forcings (for water balance debugging)
+        self.total_runoff_volume_m3: float = 0.0
+        self.total_discharge_volume_m3: float = 0.0
+        self.discarded_accumulated_generated_discharge_m3: float = 0.0
+
+    def print_forcing_volume(self) -> None:
+        """Print all forcing volumes for debugging the water balance."""
+        msg = f"SFINCS Forcing volumes: runoff={int(self.total_runoff_volume_m3)} m3, discarded_accumulated={int(self.discarded_accumulated_generated_discharge_m3)} m3, discharge={int(self.total_discharge_volume_m3)} m3"
+        print(msg)
+
     def set_headwater_forcing_from_grid(
         self,
         discharge_grid: xr.DataArray,
@@ -822,7 +832,7 @@ class SFINCSSimulation:
             timeseries: A DataFrame containing the discharge timeseries for each node.
                 The columns should match the index of the nodes GeoDataFrame.
         """
-        # assert np.array_equal(nodes.index, np.arange(1, len(nodes) + 1))
+        assert np.array_equal(nodes.index, np.arange(1, len(nodes) + 1))
         assert set(timeseries.columns) == set(nodes.index)
 
         self.sfincs_model.setup_discharge_forcing(
@@ -833,6 +843,19 @@ class SFINCSSimulation:
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
 
+        assert self.end_time == timeseries.index[-1], (
+            "End time of timeseries does not match simulation end time, this will lead to accounting errors"
+        )
+
+        # the last timestep will not be used in SFINCS because it is the end time, which is why we
+        # discard it
+        self.total_discharge_volume_m3 += (
+            timeseries[:-1].sum(axis=1)
+            * (timeseries.index[1:] - timeseries.index[:-1]).total_seconds()
+        ).sum()
+
+        self.print_forcing_volume()
+
         if self.write_figures:
             self.sfincs_model.plot_basemap(fn_out="src_points_check.png")
             self.sfincs_model.plot_forcing(fn_out="forcing.png")
@@ -840,11 +863,13 @@ class SFINCSSimulation:
     def set_runoff_forcing(
         self,
         runoff_m: xr.DataArray,
+        area_m2: TwoDArrayFloat32,
     ) -> None:
         """Sets up precipitation forcing for the SFINCS model from a gridded dataset.
 
         Args:
             runoff_m: xarray DataArray containing runoff values in m per time step.
+            area_m2: xarray DataArray containing the area of each runoff grid cell in m².
         """
         assert runoff_m.rio.crs is not None, "precipitation_grid should have a crs"
         assert (
@@ -863,6 +888,11 @@ class SFINCSSimulation:
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
 
+        self.total_runoff_volume_m3 += (
+            (runoff_m.isel(time=slice(None, -1)) * area_m2).sum().item()
+        )
+        self.print_forcing_volume()
+
     def set_accumulated_runoff_forcing(
         self,
         runoff_m: xr.DataArray,
@@ -872,7 +902,7 @@ class SFINCSSimulation:
         upstream_area: TwoDArrayFloat32,
         cell_area: TwoDArrayFloat32,
         river_geometry: gpd.GeoDataFrame,
-    ) -> np.float64:
+    ) -> None:
         """Sets up accumulated runoff forcing for the SFINCS model.
 
         This function accumulates the runoff from the provided runoff grid to the starting
@@ -886,9 +916,6 @@ class SFINCSSimulation:
             upstream_area: 2D numpy array of upstream area values for each cell in the grid.
             cell_area: 2D numpy array of cell area values for each cell in the grid.
             river_geometry: GeoDataFrame containing the geometry of the river segments.
-
-        Returns:
-            The mean discarded generated discharge in m³/s due to cells not belonging to any subbasin.
         """
         # select only the time range needed
         runoff_m: xr.DataArray = runoff_m.sel(
@@ -953,11 +980,14 @@ class SFINCSSimulation:
             discarded_generated_discharge_m3_per_s: np.float64 = (
                 accumulated_generated_discharge_m3_per_s[:, 0].mean()
             )
+            # Track discarded volume (m3) from subbasin==0 cells for debugging
+            duration_seconds = (self.end_time - self.start_time).total_seconds()
+            self.discarded_accumulated_generated_discharge_m3 += float(
+                discarded_generated_discharge_m3_per_s * duration_seconds
+            )
             accumulated_generated_discharge_m3_per_s: TwoDArrayFloat64 = (
                 accumulated_generated_discharge_m3_per_s[:, 1:]
             )
-        else:
-            discarded_generated_discharge_m3_per_s: np.float64 = np.float64(0.0)
 
         assert accumulated_generated_discharge_m3_per_s.shape[1] == river_cells.sum()
 
@@ -985,9 +1015,6 @@ class SFINCSSimulation:
             nodes=nodes,
             timeseries=timeseries,
         )
-
-        # return the mean discarded generated discharge for testing purposes
-        return discarded_generated_discharge_m3_per_s
 
     # def setup_outflow_boundary(self) -> None:
     #     # detect whether water level forcing should be set (use this under forcing == coastal) PLot basemap and forcing to check

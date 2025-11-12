@@ -10,7 +10,7 @@ import logging
 import math
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -31,6 +31,7 @@ from shapely.geometry import Point
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
+from geb.workflows.io import load_dict, to_dict
 from geb.workflows.raster import full_like, repeat_grid
 
 from ..workflows.io import open_zarr, to_zarr
@@ -1053,7 +1054,7 @@ def create_multi_basin_configs(
     with open(geul_build_path, "r") as src, open(build_config_path, "w") as dst:
         dst.write(src.read())
 
-    print(f"  Created build.yml in {working_directory}")
+    print(f"Created build.yml in {working_directory}")
 
     # Create model.yml in large_scale directory that inherits from reasonable default
     print("Creating model.yml in large_scale directory...")
@@ -1066,7 +1067,7 @@ def create_multi_basin_configs(
     with open(model_config_path, "w") as f:
         f.write(model_config_content)
 
-    print(f"  Created model.yml in {working_directory}")
+    print(f"Created model.yml in {working_directory}")
 
     cluster_directories = []
 
@@ -1633,9 +1634,7 @@ class GEBModel(
         self.geom: DelayedReader = DelayedReader(reader=gpd.read_parquet)
         self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
         self.array: DelayedReader = DelayedReader(zarr.load)
-        self.dict: DelayedReader = DelayedReader(
-            reader=lambda x: json.load(open(x, "r"))
-        )
+        self.dict: DelayedReader = DelayedReader(reader=load_dict)
         self.other: DelayedReader = DelayedReader(reader=open_zarr)
 
     @build_method
@@ -2085,7 +2084,7 @@ class GEBModel(
         self.set_subgrid(submask, name="mask")
 
     @build_method
-    def set_time_range(self, start_date: datetime, end_date: datetime) -> None:
+    def set_time_range(self, start_date: date, end_date: date) -> None:
         """Sets the time range for the build model.
 
         This time range is used to ensure that all datasets with a time dimension
@@ -2098,7 +2097,7 @@ class GEBModel(
         """
         assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
-            {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+            {"start_date": start_date, "end_date": end_date},
             name="model_time_range",
         )
 
@@ -2111,7 +2110,12 @@ class GEBModel(
         Returns:
             The start date of the model.
         """
-        return datetime.fromisoformat(self.dict["model_time_range"]["start_date"])
+        start_date = self.dict["model_time_range"]["start_date"]
+
+        # TODO: This can be removed in 2026
+        if isinstance(start_date, str):
+            start_date = datetime.fromisoformat(start_date)
+        return start_date
 
     @property
     def end_date(self) -> datetime:
@@ -2122,7 +2126,12 @@ class GEBModel(
         Returns:
             The end date of the model.
         """
-        return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
+        end_date = self.dict["model_time_range"]["end_date"]
+
+        # TODO: This can be removed in 2026
+        if isinstance(end_date, str):
+            end_date = datetime.fromisoformat(end_date)
+        return end_date
 
     @build_method
     def set_ssp(self, ssp: str) -> None:
@@ -2318,7 +2327,7 @@ class GEBModel(
             write: Whether to write the dictionary to disk. If False, the dictionary
                 is only added to the file library, but not written to disk.
         """
-        fp: Path = Path("dict") / (name + ".json")
+        fp: Path = Path("dict") / (name + ".yml")
         fp_with_root: Path = Path(self.root) / fp
         fp_with_root.parent.mkdir(parents=True, exist_ok=True)
         if write:
@@ -2326,8 +2335,7 @@ class GEBModel(
 
             self.files["dict"][name] = fp
 
-            with open(fp_with_root, "w") as f:
-                json.dump(data, f, default=lambda o: o.isoformat(), indent=4)
+            to_dict(data, fp_with_root)
 
         self.dict[name] = fp_with_root
 
@@ -2360,7 +2368,7 @@ class GEBModel(
     @property
     def files_path(self) -> Path:
         """Path to the files.json file that contains the file library."""
-        return Path(self.root, "files.json")
+        return Path(self.root, "files.yml")
 
     def write_file_library(self) -> None:
         """Writes the file library to disk.
@@ -2378,8 +2386,7 @@ class GEBModel(
             else:
                 file_library[type_name].update(type_files)
 
-        with open(self.files_path, "w") as f:
-            json.dump(file_library, f, indent=4, cls=PathEncoder)
+        to_dict(file_library, self.files_path)
 
     def read_or_create_file_library(self) -> dict:
         """Reads the file library from disk.
@@ -2403,8 +2410,7 @@ class GEBModel(
                 "other": {},
             }
         else:
-            with open(Path(self.files_path), "r") as f:
-                files: dict[str, dict[str, str]] = json.load(f)
+            files = load_dict(self.files_path)
 
             # geoms was renamed to geom in the file library. To upgrade old models,
             # we check if "geoms" is in the files and rename it to "geom"
