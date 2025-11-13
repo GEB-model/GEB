@@ -21,24 +21,6 @@ from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
 from geb.workflows.raster import rasterize_like, snap_to_grid
 
 
-def remove_contained_polygons(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Remove polygons that are completely inside another larger polygon.
-
-    Args:
-        gdf: A GeoDataFrame containing the polygons to be filtered.
-    Returns:
-        A GeoDataFrame containing only the polygons that are not completely inside another polygon.
-    """
-    to_drop = set()
-    for i, geom1 in gdf.iterrows():
-        for j, geom2 in gdf.iterrows():
-            if i != j and geom1.geometry.within(
-                geom2.geometry
-            ):  # geom1 is inside geom2
-                to_drop.add(i)
-    return gdf.drop(index=list(to_drop))
-
-
 def get_all_upstream_subbasin_ids(
     river_graph: nx.DiGraph, subbasin_ids: list[int]
 ) -> set[int]:
@@ -691,7 +673,9 @@ class Hydrography:
     @build_method(
         depends_on=["setup_low_elevation_coastal_zone_mask", "setup_coastlines"]
     )
-    def setup_coastal_sfincs_model_regions(self) -> None:
+    def setup_coastal_sfincs_model_regions(
+        self, minimum_coastal_area_deg2: float = 0.0006449015308288645
+    ) -> None:
         """Sets up the coastal sfincs model regions."""
         # load elevation data
         elevation = self.other["DEM/fabdem"]
@@ -726,7 +710,7 @@ class Hydrography:
             if (
                 coastlines.intersects(low_elevation_coastal_zone_polygon.geometry).any()
                 and low_elevation_coastal_zone_polygon["area"]
-                > 0.0006449015308288645  # approx 1 km2 at equator
+                > minimum_coastal_area_deg2  # approx 1 km2 at equator
             ):
                 # if it does, create a sfincs region
                 # get the minimum elevation within the low elevation coastal zone polygon
@@ -762,8 +746,6 @@ class Hydrography:
             geometry=low_elevation_coastal_zone_regions,
             crs=low_elevation_coastal_zone_mask.crs,
         )
-        # remove polygons that are completely inside another larger polygon
-        # filtered_gdf = self.remove_contained_polygons(bbox_gdf).reset_index(drop=True)
 
         # add idx
         bbox_gdf["idx"] = bbox_gdf.index
