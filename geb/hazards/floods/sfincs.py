@@ -878,8 +878,6 @@ class SFINCSSimulation:
                 The columns should match the index of the locations GeoDataFrame.
             buffer: Buffer distance in meters to extend the model domain for coastal forcing points.
         """
-        # assert np.array_equal(locations.index, np.arange(1, len(locations) + 1))
-
         # select only locations that are in the model
         self.sfincs_model.read_forcing()
         self.sfincs_model.setup_waterlevel_forcing(
@@ -955,7 +953,6 @@ class SFINCSSimulation:
             timeseries: A DataFrame containing the discharge timeseries for each node.
                 The columns should match the index of the nodes GeoDataFrame.
         """
-        assert np.array_equal(nodes.index, np.arange(1, len(nodes) + 1))
         assert set(timeseries.columns) == set(nodes.index)
 
         self.sfincs_model.setup_discharge_forcing(
