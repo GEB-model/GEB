@@ -622,11 +622,7 @@ class GEBModel(Module, HazardDriver):
         if subbasins["is_coastal_basin"].any():
             generate_storm_surge_hydrographs(self)
 
-        rp_maps = self.floods.get_return_period_maps()
-        # else:
-        #     rp_maps_coastal = None
-        # rp_maps_riverine = self.floods.get_riverine_return_period_maps()
-        # self.floods.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
+        self.floods.get_return_period_maps()
 
     def evaluate(self, *args: Any, **kwargs: Any) -> None:
         """Call the evaluator to evaluate the model results."""
