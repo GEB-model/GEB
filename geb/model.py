@@ -873,12 +873,12 @@ class GEBModel(Module, HazardDriver):
                 model_build_end_date
             )
 
-        if self.spinup_start.date() < model_build_start_date:
+        if self.spinup_start.date() < model_build_start_date.date():
             raise ValueError(
                 "Spinup start date cannot be before model build start date. Adjust the time range in your build configuration and rebuild the model or adjust the spinup time of the model."
             )
 
-        if self.run_end.date() > model_build_end_date:
+        if self.run_end.date() > model_build_end_date.date():
             raise ValueError(
                 "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
             )
