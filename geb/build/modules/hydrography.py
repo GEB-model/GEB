@@ -8,11 +8,12 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyflwdir
+import rasterio
 import xarray as xr
 from pyflwdir import FlwdirRaster
 from rasterio.features import rasterize
 from scipy.ndimage import value_indices
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
@@ -587,6 +588,179 @@ class Hydrography:
         self.set_grid(river_width, name="routing/river_width")
 
     @build_method
+    def setup_low_elevation_coastal_zone_mask(self) -> None:
+        """Sets up the low elevation coastal zone (LECZ) mask for sfincs models."""
+        # load low elevation coastal zone mask
+        low_elevation_coastal_zone = self.other[
+            "landsurface/low_elevation_coastal_zone"
+        ]
+        mask_data = low_elevation_coastal_zone.values.astype(np.uint8)
+
+        # Get transform from raster metadata
+        transform = low_elevation_coastal_zone.rio.transform()
+
+        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
+        shapes = rasterio.features.shapes(mask_data, mask=None, transform=transform)
+
+        # Build GeoDataFrame from the shapes generator
+        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
+
+        gdf = gpd.GeoDataFrame.from_records(records)
+        gdf.set_geometry("geometry", inplace=True)
+        gdf.crs = low_elevation_coastal_zone.rio.crs
+        # Keep only mask == 1
+        gdf = gdf[gdf["value"] == 1]
+
+        # load mask to select coastal areas in model region
+        # intersect the mask with the low elevation coastal zone mask
+        low_elevation_coastal_zone_mask = gpd.overlay(
+            gdf, self.geom["mask"], how="intersection"
+        )
+        # merge all polygons into a single polygon
+        low_elevation_coastal_zone_mask = gpd.GeoDataFrame(
+            geometry=[low_elevation_coastal_zone_mask.union_all()],
+            crs=gdf.crs,
+        )
+        self.set_geom(
+            low_elevation_coastal_zone_mask,
+            name="coastal/low_elevation_coastal_zone_mask",
+        )
+
+    @build_method
+    def setup_coastlines(self) -> None:
+        """Sets up the coastlines for the model."""
+        # load the coastline from the data catalog
+        fp_coastlines = self.data_catalog.get_source("osm_coastlines").path
+        coastlines = gpd.read_file(fp_coastlines)
+
+        # clip the coastline to overlapping with mask
+        coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
+        # merge all coastlines into a single linestring
+        coastlines = gpd.GeoDataFrame(
+            geometry=[coastlines.union_all()], crs=coastlines.crs
+        )
+
+        # write to model files
+        self.set_geom(coastlines, name="coastal/coastlines")
+
+        # create rectangular box around coastlines
+        if not coastlines.empty:
+            bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
+            bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
+            bbox_gdf.geometry = bbox_gdf.geometry.buffer(
+                0.04, join_style=2
+            )  # buffer by 0.04 degree
+            self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
+
+    @build_method
+    def setup_osm_land_polygons(
+        self,
+    ) -> None:
+        """Sets up the OSM land polygons for the model."""
+        # load the land polygon from the data catalog
+        fp_land_polygons = self.data_catalog.get_source("osm_land_polygons").path
+        land_polygons = gpd.read_file(fp_land_polygons)
+        # select only the land polygons that intersect with the region
+        land_polygons = land_polygons[land_polygons.intersects(self.region.union_all())]
+        # merge all land polygons into a single polygon
+        land_polygons = gpd.GeoDataFrame(
+            geometry=[land_polygons.union_all()], crs=land_polygons.crs
+        )
+
+        # clip and write to model files
+        self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
+
+    @build_method(
+        depends_on=["setup_low_elevation_coastal_zone_mask", "setup_coastlines"]
+    )
+    def setup_coastal_sfincs_model_regions(
+        self, minimum_coastal_area_deg2: float = 0.0006449015308288645
+    ) -> None:
+        """Sets up the coastal sfincs model regions."""
+        # load elevation data
+        elevation = self.other["DEM/fabdem"]
+        # load the lecz mask
+        low_elevation_coastal_zone_mask = self.geom[
+            "coastal/low_elevation_coastal_zone_mask"
+        ]
+        # add small buffer to ensure connection of 'islands' with coastlines
+        low_elevation_coastal_zone_mask.geometry = (
+            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
+        )
+        # split the low elevation coastal zone mask into individual polygons of contiguous areas
+        low_elevation_coastal_zone_polygons = low_elevation_coastal_zone_mask.explode(
+            index_parts=False
+        ).reset_index(drop=True)
+
+        # add area column
+        low_elevation_coastal_zone_polygons["area"] = (
+            low_elevation_coastal_zone_polygons.geometry.area
+        )
+
+        # load the coastlines
+        coastlines = self.geom["coastal/coastlines"]
+        sfincs_regions = []
+        low_elevation_coastal_zone_regions = []
+        initial_water_levels = []
+        for (
+            _,
+            low_elevation_coastal_zone_polygon,
+        ) in low_elevation_coastal_zone_polygons.iterrows():
+            # check if the low elevation coastal zone polygon intersects with the coastline
+            if (
+                coastlines.intersects(low_elevation_coastal_zone_polygon.geometry).any()
+                and low_elevation_coastal_zone_polygon["area"]
+                > minimum_coastal_area_deg2  # approx 1 km2 at equator
+            ):
+                # if it does, create a sfincs region
+                # get the minimum elevation within the low elevation coastal zone polygon
+                mask = elevation.rio.clip_box(
+                    *low_elevation_coastal_zone_polygon.geometry.bounds
+                ).where(
+                    elevation.rio.clip(
+                        [low_elevation_coastal_zone_polygon.geometry], drop=False
+                    ).notnull(),
+                    drop=False,
+                )
+                initial_water_levels.append(float(mask.min().values))
+
+                # create a bounding box around the low elevation coastal zone polygon
+                low_elevation_coastal_zone_polygon_gpd = gpd.GeoDataFrame(
+                    geometry=[low_elevation_coastal_zone_polygon.geometry],
+                    crs=low_elevation_coastal_zone_mask.crs,
+                )
+                bbox = low_elevation_coastal_zone_polygon_gpd.minimum_rotated_rectangle().iloc[
+                    0
+                ]
+                # add a small buffer to ensure connection with coastlines
+                bbox = bbox.buffer(0.04, join_style=2)
+
+                sfincs_regions.append(bbox)
+                low_elevation_coastal_zone_regions.append(
+                    low_elevation_coastal_zone_polygon[0]
+                )
+        bbox_gdf = gpd.GeoDataFrame(
+            geometry=sfincs_regions, crs=low_elevation_coastal_zone_mask.crs
+        )
+        low_elevation_coastal_zone_gdf = gpd.GeoDataFrame(
+            geometry=low_elevation_coastal_zone_regions,
+            crs=low_elevation_coastal_zone_mask.crs,
+        )
+
+        # add idx
+        bbox_gdf["idx"] = bbox_gdf.index
+        low_elevation_coastal_zone_gdf["idx"] = low_elevation_coastal_zone_gdf.index
+        low_elevation_coastal_zone_gdf["area"] = (
+            low_elevation_coastal_zone_gdf.geometry.area
+        )
+        low_elevation_coastal_zone_gdf["initial_water_level"] = initial_water_levels
+        self.set_geom(bbox_gdf, name="coastal/model_regions")
+        self.set_geom(
+            low_elevation_coastal_zone_gdf,
+            name="coastal/lower_elevation_coastal_zone_regions",
+        )
+
+    @build_method
     def setup_waterbodies(
         self,
         command_areas: None | str = None,
@@ -756,22 +930,6 @@ class Hydrography:
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_geom(waterbodies, name="waterbodies/waterbody_data")
-
-    @build_method
-    def setup_coastal_model_regions(self) -> None:
-        """Sets up the coastal model regions for the model.
-
-        This function subdivides the coastal geoms into smaller regions that are used to simulate coastal flooding.
-        """
-        self.logger.info("Setting up coastal model regions")
-        # load river basins and coastline data
-        basins = self.geoms["routing/subbasins"]
-        # get coastal basins
-        coastal_basins = basins[basins["is_coastal_basin"]]
-        coastal_basins.to_file("output/coastal_basins.geojson", driver="GeoJSON")
-
-        # TODO: Implement coastal model region setup
-        pass
 
     def setup_gtsm_water_levels(self, temporal_range: npt.NDArray[np.int32]) -> None:
         """Sets up the GTSM hydrographs for station within the model bounds.

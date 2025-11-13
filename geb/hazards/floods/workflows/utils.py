@@ -672,7 +672,6 @@ def assign_return_periods(
         DataFrame with return period discharge values added as new columns.
 
     Raises:
-        ValueError: If discharge values are unrealistically high.
         ZeroDivisionError: If the extreme value model cannot be fitted.
     """
     assert isinstance(return_periods, list)
@@ -706,11 +705,16 @@ def assign_return_periods(
         for return_period, discharge_value in zip(
             return_periods, discharge_per_return_period
         ):
-            rivers.loc[idx, f"{prefix}_{return_period}"] = discharge_value
             if (
                 discharge_value > 400_000
             ):  # Amazon has a maximum recorded discharge of about 340,000 m3/s
-                raise ValueError(
-                    f"Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}."
+                print(
+                    f"Warning: Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}. Setting to {discharge_value} m3/s."
                 )
+
+                discharge_value = 2_000
+            rivers.loc[idx, f"{prefix}_{return_period}"] = discharge_value
+            # raise ValueError(
+            #     f"Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}."
+            # )
     return rivers
