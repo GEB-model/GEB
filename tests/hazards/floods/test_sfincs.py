@@ -137,6 +137,70 @@ def build_sfincs(
     return sfincs_model
 
 
+def create_sfincs_models(
+    geb_model: GEBModel,
+    subbasins: gpd.GeoDataFrame,
+    rivers: gpd.GeoDataFrame,
+    split: bool,
+) -> list[SFINCSRootModel]:
+    """Create a list of SFINCS models based on whether to split the region.
+
+    Args:
+        geb_model: A GEB model instance with SFINCS configured.
+        subbasins: The subbasins GeoDataFrame.
+        rivers: The rivers GeoDataFrame.
+        split: Whether to split the region into multiple models.
+
+    Returns:
+        A list of SFINCSRootModel instances.
+    """
+    if split:
+        river_graph = create_river_graph(rivers, subbasins)
+
+        # 2e8 nicely splits the test area into 2 parts. If changing the test area, this value
+        # may need to be adjusted.
+        grouped_subbasins = group_subbasins(river_graph, max_area_m2=2e8)
+        assert len(grouped_subbasins) > 1, (
+            "For testing splitting, need multiple groups."
+        )
+
+        sfincs_models: list[SFINCSRootModel] = []
+        for group_id, group in grouped_subbasins.items():
+            group_with_downstream_basins = set(group) | set(
+                rivers.loc[rivers.index.isin(group)]["downstream_ID"]
+            )
+            outflow_basins = group_with_downstream_basins - set(group)
+            subbasins_group = subbasins[
+                subbasins.index.isin(group_with_downstream_basins)
+            ]
+            subbasins_group.loc[
+                subbasins_group.index.isin(outflow_basins),
+                "is_downstream_outflow_subbasin",
+            ] = True
+
+            sfincs_model: SFINCSRootModel = build_sfincs(
+                geb_model,
+                nr_subgrid_pixels=None,
+                region=subbasins_group,
+                name=f"test_group_{group_id}",
+                rivers=rivers[rivers.index.isin(group)],
+            )
+            sfincs_models.append(sfincs_model)
+
+    else:
+        sfincs_models: list[SFINCSRootModel] = [
+            build_sfincs(
+                geb_model,
+                nr_subgrid_pixels=None,
+                region=subbasins,
+                name=TEST_MODEL_NAME,
+                rivers=rivers,
+            )
+        ]
+
+    return sfincs_models
+
+
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_runoff(geb_model: GEBModel) -> None:
     """Test SFINCS with runoff forcing.
@@ -230,49 +294,45 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
 
         subbasins = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
         rivers = geb_model.hydrology.routing.rivers
-        if split:
-            river_graph = create_river_graph(rivers, subbasins)
+        sfincs_models = create_sfincs_models(geb_model, subbasins, rivers, split)
 
-            # 2e8 nicely splits the test area into 2 parts. If changing the test area, this value
-            # may need to be adjusted.
-            grouped_subbasins = group_subbasins(river_graph, max_area_m2=2e8)
-            assert len(grouped_subbasins) > 1, (
-                "For testing splitting, need multiple groups."
-            )
+        runoff_rate_mm_per_hr: float = 1.0  # mm/hr
+        runoff_rate_m_per_hr: float = runoff_rate_mm_per_hr / 1000.0
 
-            sfincs_models: list[SFINCSRootModel] = []
-            for group_id, group in grouped_subbasins.items():
-                group_with_downstream_basins = set(group) | set(
-                    rivers.loc[rivers.index.isin(group)]["downstream_ID"]
-                )
-                outflow_basins = group_with_downstream_basins - set(group)
-                subbasins_group = subbasins[
-                    subbasins.index.isin(group_with_downstream_basins)
-                ]
-                subbasins_group.loc[
-                    subbasins_group.index.isin(outflow_basins),
-                    "is_downstream_outflow_subbasin",
-                ] = True
+        runoff_m: TwoDArrayFloat64 = geb_model.hydrology.grid.decompress(
+            np.full(
+                geb_model.hydrology.grid.compressed_size,
+                runoff_rate_m_per_hr,
+                dtype=np.float64,
+            ),
+            fillvalue=0.0,
+        )
 
-                sfincs_model: SFINCSRootModel = build_sfincs(
-                    geb_model,
-                    nr_subgrid_pixels=None,
-                    region=subbasins_group,
-                    name=f"test_group_{group_id}",
-                    rivers=rivers[rivers.index.isin(group)],
-                )
-                sfincs_models.append(sfincs_model)
+        runoff_m: xr.DataArray = xr.DataArray(
+            runoff_m,
+            dims=["y", "x"],
+            coords={
+                "y": geb_model.hydrology.grid.lat,
+                "x": geb_model.hydrology.grid.lon,
+            },
+        )
 
-        else:
-            sfincs_models: list[SFINCSRootModel] = [
-                build_sfincs(
-                    geb_model,
-                    nr_subgrid_pixels=None,
-                    region=subbasins,
-                    name=TEST_MODEL_NAME,
-                    rivers=geb_model.hydrology.routing.rivers,
-                )
-            ]
+        # repeat for all timesteps
+        runoff_m: xr.DataArray = runoff_m.expand_dims(
+            time=pd.date_range(start=start_time, end=end_time, freq="h")
+        )
+        runoff_m: xr.DataArray = runoff_m.rio.write_crs(4326)
+
+        river_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load(
+            geb_model.files["grid"]["routing/river_ids"], compress=False
+        )
+        upstream_area = geb_model.hydrology.grid.load(
+            geb_model.files["grid"]["routing/upstream_area"], compress=False
+        )
+
+        cell_area = geb_model.hydrology.grid.decompress(
+            geb_model.hydrology.grid.var.cell_area
+        )
 
         total_flood_volume_across_models = 0
         total_discharge_volume_across_models = 0
@@ -286,43 +346,6 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
                 write_figures=True,
             )
 
-            runoff_rate_mm_per_hr: float = 1.0  # mm/hr
-            runoff_rate_m_per_hr: float = runoff_rate_mm_per_hr / 1000.0
-
-            runoff_m: TwoDArrayFloat64 = geb_model.hydrology.grid.decompress(
-                np.full(
-                    geb_model.hydrology.grid.compressed_size,
-                    runoff_rate_m_per_hr,
-                    dtype=np.float64,
-                ),
-                fillvalue=0.0,
-            )
-
-            runoff_m: xr.DataArray = xr.DataArray(
-                runoff_m,
-                dims=["y", "x"],
-                coords={
-                    "y": geb_model.hydrology.grid.lat,
-                    "x": geb_model.hydrology.grid.lon,
-                },
-            )
-
-            # repeat for all timesteps
-            runoff_m: xr.DataArray = runoff_m.expand_dims(
-                time=pd.date_range(start=start_time, end=end_time, freq="h")
-            )
-            runoff_m: xr.DataArray = runoff_m.rio.write_crs(4326)
-
-            river_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load(
-                geb_model.files["grid"]["routing/river_ids"], compress=False
-            )
-            upstream_area = geb_model.hydrology.grid.load(
-                geb_model.files["grid"]["routing/upstream_area"], compress=False
-            )
-
-            cell_area = geb_model.hydrology.grid.decompress(
-                geb_model.hydrology.grid.var.cell_area
-            )
             simulation.set_accumulated_runoff_forcing(
                 runoff_m=runoff_m,
                 river_network=geb_model.hydrology.routing.river_network,
@@ -331,8 +354,11 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
                 upstream_area=upstream_area,
                 cell_area=cell_area,
             )
-            inflow_rivers: gpd.GeoDataFrame = simulation.sfincs_root_model.inflow_rivers
-            if len(inflow_rivers) > 0:
+
+            if simulation.sfincs_root_model.has_inflow:
+                inflow_rivers: gpd.GeoDataFrame = (
+                    simulation.sfincs_root_model.has_inflow
+                )
                 inflow_nodes = inflow_rivers.copy()
                 inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
                     get_start_point
@@ -433,20 +459,15 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
-    "split",
-    [False, True],
-)
-@pytest.mark.parametrize(
     "use_gpu",
     [False] + ([True] if os.getenv("GEB_TEST_GPU", "no") == "yes" else []),
 )
-def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool, split: bool) -> None:
+def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
     """Test SFINCS with discharge forcing from river nodes.
 
     Args:
         geb_model: A GEB model instance with SFINCS configured.
         use_gpu: Whether to use the GPU for the simulation.
-        split: Whether to split up the simulation in multiple parts.
     """
     with WorkingDirectory(working_directory):
         start_time: datetime = datetime(2000, 1, 1, 0)
@@ -497,69 +518,86 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool, split: bool) -
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_discharge_grid_forcing(geb_model: GEBModel) -> None:
+@pytest.mark.parametrize(
+    "split",
+    [False, True],
+)
+def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
     """Test SFINCS with discharge forcing from a grid.
 
     Args:
         geb_model: A GEB model instance with SFINCS configured.
+        split: Whether to split up the simulation in multiple parts.
     """
     with WorkingDirectory(working_directory):
         start_time: datetime = datetime(2000, 1, 1, 0)
         end_time: datetime = datetime(2000, 1, 8, 0)
 
-        region = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
-        sfincs_model: SFINCSRootModel = build_sfincs(
-            geb_model,
-            nr_subgrid_pixels=None,
-            region=region,
-            name=TEST_MODEL_NAME,
-            rivers=geb_model.hydrology.routing.rivers,
-        )
-
-        simulation: SFINCSSimulation = sfincs_model.create_simulation(
-            "grid_forcing_test",
-            start_time=start_time,
-            end_time=end_time,
-            write_figures=True,
-        )
+        subbasins = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
+        rivers = geb_model.hydrology.routing.rivers
+        sfincs_models = create_sfincs_models(geb_model, subbasins, rivers, split)
 
         discharge_rate: float = 10.0  # m3/s
 
-        discharge_grid: xr.DataArray = xr.full_like(
-            sfincs_model.sfincs_model.grid["msk"],
-            discharge_rate,
-            dtype=np.float64,
-        )
+        total_flood_volume_across_models = 0.0
+        total_discharge_volume_across_models = 0.0
 
-        # repeat for all timesteps
-        discharge_grid = discharge_grid.expand_dims(
-            time=pd.date_range(start=start_time, end=end_time, freq="h")
-        )
+        for sfincs_model in sfincs_models:
+            simulation: SFINCSSimulation = sfincs_model.create_simulation(
+                f"grid_forcing_test_{sfincs_model.name}",
+                start_time=start_time,
+                end_time=end_time,
+                write_figures=True,
+            )
 
-        simulation.set_headwater_forcing_from_grid(
-            discharge_grid=discharge_grid,
-        )
+            discharge_grid: xr.DataArray = xr.DataArray(
+                discharge_rate,
+                dims=["y", "x"],
+                coords={
+                    "y": geb_model.hydrology.grid.lat,
+                    "x": geb_model.hydrology.grid.lon,
+                },
+            )
 
-        assert (simulation.path / "sfincs.dis").exists()
-        assert (simulation.path / "sfincs.src").exists()
+            # repeat for all timesteps
+            discharge_grid = discharge_grid.expand_dims(
+                time=pd.date_range(start=start_time, end=end_time, freq="h")
+            )
 
-        assert not simulation.has_outflow_boundary()
+            simulation.set_headwater_forcing_from_grid(
+                discharge_grid=discharge_grid,
+            )
 
-        simulation.run(gpu=False)
-        flood_depth: xr.DataArray = simulation.read_final_flood_depth(
-            minimum_flood_depth=0.00
-        )
-        total_flood_volume: float = simulation.get_flood_volume(flood_depth)
+            discharge_grid = discharge_grid * 2.0
 
-        # compare to total discharge volume tracked by simulation
+            if simulation.sfincs_root_model.has_inflow:
+                simulation.set_inflow_forcing_from_grid(
+                    discharge_grid=discharge_grid,
+                )
+
+            assert (simulation.path / "sfincs.dis").exists()
+            assert (simulation.path / "sfincs.src").exists()
+
+            assert not simulation.has_outflow_boundary()
+
+            simulation.run(gpu=False)
+            flood_depth: xr.DataArray = simulation.read_final_flood_depth(
+                minimum_flood_depth=0.00
+            )
+            total_flood_volume: float = simulation.get_flood_volume(flood_depth)
+
+            total_flood_volume_across_models += total_flood_volume
+            total_discharge_volume_across_models += simulation.total_discharge_volume_m3
+
+            simulation.cleanup()
+
+        # compare total flood volume to total discharge volume across all models
         assert math.isclose(
-            total_flood_volume,
-            simulation.total_discharge_volume_m3,
+            total_flood_volume_across_models,
+            total_discharge_volume_across_models,
             abs_tol=0,
             rel_tol=0.01,
         )
-
-        simulation.cleanup()
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

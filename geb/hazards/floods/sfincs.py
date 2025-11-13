@@ -691,6 +691,24 @@ class SFINCSRootModel:
         inflow_rivers: gpd.GeoDataFrame = self.inflow_rivers
         return self.rivers[~self.rivers.index.isin(inflow_rivers.index)]
 
+    @property
+    def headwater_rivers(self) -> gpd.GeoDataFrame:
+        """Returns a GeoDataFrame of headwater rivers in the model.
+
+        Returns:
+            A GeoDataFrame of headwater rivers.
+        """
+        return self.rivers[self.rivers["maxup"] == 0]
+
+    @property
+    def has_inflow(self) -> bool:
+        """Checks if the model has any inflow rivers.
+
+        Returns:
+            True if the model has inflow rivers, False otherwise.
+        """
+        return not self.inflow_rivers.empty
+
 
 class MultipleSFINCSSimulations:
     """Manages multiple SFINCS simulations as a single entity."""
@@ -809,6 +827,41 @@ class SFINCSSimulation:
         )
         print(msg)
 
+    def set_forcing_from_grid(
+        self, nodes: gpd.GeoDataFrame, discharge_grid: xr.DataArray
+    ) -> None:
+        """Sets up discharge forcing for the SFINCS model from a gridded dataset.
+
+        Args:
+            nodes: A GeoDataFrame containing the locations of the discharge forcing points.
+            discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
+                Usually this is from a hydrological model.
+        """
+        nodes: gpd.GeoDataFrame = nodes.copy()
+        nodes["geometry"] = nodes["geometry"].apply(get_start_point)
+
+        river_representative_points = []
+        for ID in nodes.index:
+            river_representative_points.append(
+                get_representative_river_points(
+                    ID,
+                    nodes,
+                )
+            )
+
+        discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
+            nodes.index,
+            river_representative_points,
+            discharge=discharge_grid,
+        )
+
+        locations = nodes.to_crs(self.sfincs_model.crs)
+
+        self.set_discharge_forcing_from_nodes(
+            nodes=locations,
+            timeseries=discharge_by_river,
+        )
+
     def set_headwater_forcing_from_grid(
         self,
         discharge_grid: xr.DataArray,
@@ -819,46 +872,26 @@ class SFINCSSimulation:
             discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
                 Usually this is from a hydrological model.
         """
-        rivers: gpd.GeoDataFrame = import_rivers(self.root_path)
-        rivers_with_forcing_point: gpd.GeoDataFrame = rivers[
-            ~rivers["is_downstream_outflow_subbasin"]
-        ]
-        headwater_rivers: gpd.GeoDataFrame = rivers_with_forcing_point[
-            rivers_with_forcing_point["maxup"] == 0
-        ]
-
-        inflow_nodes: gpd.GeoDataFrame = headwater_rivers.copy()
-
-        # Only select headwater points. Maxup is the number of upstream river segments.
-        inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(get_start_point)
-
-        river_representative_points = []
-        for ID in headwater_rivers.index:
-            river_representative_points.append(
-                get_representative_river_points(
-                    ID,
-                    headwater_rivers,
-                )
-            )
-
-        discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
-            headwater_rivers.index,
-            river_representative_points,
-            discharge=discharge_grid,
+        headwater_rivers: gpd.GeoDataFrame = self.sfincs_root_model.headwater_rivers
+        self.set_forcing_from_grid(
+            nodes=headwater_rivers,
+            discharge_grid=discharge_grid,
         )
 
-        locations = inflow_nodes.to_crs(self.sfincs_model.crs)
-        index_mapping = {
-            idx: i + 1
-            for i, idx in enumerate(locations.index)  # SFINCS index starts at 1
-        }
-        locations.index = locations.index.map(index_mapping)
-        locations.index.name = "sfincs_idx"
-        discharge_by_river.columns = discharge_by_river.columns.map(index_mapping)
+    def set_inflow_forcing_from_grid(
+        self,
+        discharge_grid: xr.DataArray,
+    ) -> None:
+        """Sets up discharge forcing for the SFINCS model from a gridded dataset.
 
-        self.set_discharge_forcing_from_nodes(
-            nodes=locations,
-            timeseries=discharge_by_river,
+        Args:
+            discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
+                Usually this is from a hydrological model.
+        """
+        inflow_rivers: gpd.GeoDataFrame = self.sfincs_root_model.inflow_rivers
+        self.set_forcing_from_grid(
+            nodes=inflow_rivers,
+            discharge_grid=discharge_grid,
         )
 
     def set_river_inflow(
