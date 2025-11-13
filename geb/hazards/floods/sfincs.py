@@ -944,6 +944,41 @@ class SFINCSSimulation:
             self.sfincs_model.plot_forcing(fn_out="forcing.png")
             self.sfincs_model.plot_basemap(fn_out="basemap.png")
 
+    def set_forcing_from_grid(
+        self, nodes: gpd.GeoDataFrame, discharge_grid: xr.DataArray
+    ) -> None:
+        """Sets up discharge forcing for the SFINCS model from a gridded dataset.
+
+        Args:
+            nodes: A GeoDataFrame containing the locations of the discharge forcing points.
+            discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
+                Usually this is from a hydrological model.
+        """
+        nodes: gpd.GeoDataFrame = nodes.copy()
+        nodes["geometry"] = nodes["geometry"].apply(get_start_point)
+
+        river_representative_points = []
+        for ID in nodes.index:
+            river_representative_points.append(
+                get_representative_river_points(
+                    ID,
+                    nodes,
+                )
+            )
+
+        discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
+            nodes.index,
+            river_representative_points,
+            discharge=discharge_grid,
+        )
+
+        locations = nodes.to_crs(self.sfincs_model.crs)
+
+        self.set_discharge_forcing_from_nodes(
+            nodes=locations,
+            timeseries=discharge_by_river,
+        )
+
     def set_headwater_forcing_from_grid(
         self,
         discharge_grid: xr.DataArray,
