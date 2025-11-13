@@ -34,6 +34,7 @@ from geb.typing import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
+from geb.workflows.raster import rasterize_like
 
 from .workflows import do_mask_flood_plains, get_river_depth, get_river_manning
 from .workflows.return_periods import (
@@ -190,7 +191,7 @@ class SFINCSRootModel:
 
     def build(
         self,
-        DEMs: list[dict[str, str]],
+        DEMs: list[dict[str, str | Path | xr.DataArray]],
         region: gpd.GeoDataFrame,
         rivers: gpd.GeoDataFrame,
         discharge: xr.DataArray,
@@ -249,6 +250,10 @@ class SFINCSRootModel:
             "power_law",
         ], "Method should be 'manning' or 'power_law'"
 
+        assert rivers.intersects(region.union_all()).all(), (
+            "All rivers must intersect the model region"
+        )
+
         self.logger.info("Starting SFINCS model build...")
 
         # build base model
@@ -285,13 +290,6 @@ class SFINCSRootModel:
 
         rivers.plot(ax=ax, color="blue")
         plt.savefig(self.path / "gis" / "rivers.png")
-
-        sf.setup_river_inflow(
-            rivers=rivers.to_crs(sf.crs),
-            keep_rivers_geom=True,
-            river_upa=0,
-            river_len=0,
-        )
 
         if setup_outflow:
             sf.setup_river_outflow(
@@ -462,6 +460,7 @@ class SFINCSRootModel:
         sf.plot_basemap(fn_out="basemap.png")
 
         self.sfincs_model = sf
+        self.rivers = rivers
         return self
 
     @property
@@ -655,6 +654,43 @@ class SFINCSRootModel:
         """
         return self.sfincs_model.grid["msk"] == 1
 
+    @property
+    def inflow_rivers(self) -> gpd.GeoDataFrame:
+        """Returns a GeoDataFrame of rivers that are inflow points to the model.
+
+        Returns:
+            A GeoDataFrame of rivers that are inflow rivers.
+        """
+        non_headwater_rivers: gpd.GeoDataFrame = self.rivers[self.rivers["maxup"] > 0]
+        non_outflow_basins: gpd.GeoDataFrame = non_headwater_rivers[
+            ~non_headwater_rivers["is_downstream_outflow_subbasin"]
+        ]
+        upstream_branches_in_domain = np.unique(
+            self.rivers["downstream_ID"], return_counts=True
+        )
+
+        rivers_with_inflow = []
+        for idx, row in non_outflow_basins.iterrows():
+            if idx in upstream_branches_in_domain[0] and (
+                upstream_branches_in_domain[1][
+                    np.where(upstream_branches_in_domain[0] == idx)
+                ]
+                < row["maxup"]
+            ):
+                rivers_with_inflow.append(idx)
+
+        return self.rivers[self.rivers.index.isin(rivers_with_inflow)]
+
+    @property
+    def non_inflow_rivers(self) -> gpd.GeoDataFrame:
+        """Returns a GeoDataFrame of rivers that are not inflow points to the model.
+
+        Returns:
+            A GeoDataFrame of rivers that are not inflow rivers.
+        """
+        inflow_rivers: gpd.GeoDataFrame = self.inflow_rivers
+        return self.rivers[~self.rivers.index.isin(inflow_rivers.index)]
+
 
 class MultipleSFINCSSimulations:
     """Manages multiple SFINCS simulations as a single entity."""
@@ -825,6 +861,21 @@ class SFINCSSimulation:
             timeseries=discharge_by_river,
         )
 
+    def set_river_inflow(
+        self, nodes: gpd.GeoDataFrame, timeseries: pd.DataFrame
+    ) -> None:
+        """Sets up river inflow boundary conditions for the SFINCS model.
+
+        For inflow we use a negative index.
+
+        """
+        nodes.index = [-idx for idx in nodes.index]  # SFINCS negative index for inflow
+        timeseries.columns = [-col for col in timeseries.columns]
+        self.set_discharge_forcing_from_nodes(
+            nodes=nodes,
+            timeseries=timeseries,
+        )
+
     def set_discharge_forcing_from_nodes(
         self, nodes: gpd.GeoDataFrame, timeseries: pd.DataFrame
     ) -> None:
@@ -836,12 +887,21 @@ class SFINCSSimulation:
             timeseries: A DataFrame containing the discharge timeseries for each node.
                 The columns should match the index of the nodes GeoDataFrame.
         """
-        assert np.array_equal(nodes.index, np.arange(1, len(nodes) + 1))
         assert set(timeseries.columns) == set(nodes.index)
 
+        if "dis" in self.sfincs_model.forcing:
+            assert not np.isin(
+                nodes.index, self.sfincs_model.forcing["dis"].index
+            ).any(), "This forcing would overwrite existing discharge forcing points"
+
+        assert (
+            self.sfincs_model.region.union_all()
+            .contains(nodes.geometry.to_crs(self.sfincs_model.crs))
+            .all()
+        ), "All forcing locations must be within the model region"
+
         self.sfincs_model.setup_discharge_forcing(
-            locations=nodes,
-            timeseries=timeseries,
+            locations=nodes, timeseries=timeseries, merge=True
         )
 
         self.sfincs_model.write_forcing()
@@ -905,7 +965,6 @@ class SFINCSSimulation:
         river_ids: TwoDArrayInt32,
         upstream_area: TwoDArrayFloat32,
         cell_area: TwoDArrayFloat32,
-        river_geometry: gpd.GeoDataFrame,
     ) -> None:
         """Sets up accumulated runoff forcing for the SFINCS model.
 
@@ -919,12 +978,27 @@ class SFINCSSimulation:
             river_ids: 2D numpy array of river segment IDs for each cell in the grid.
             upstream_area: 2D numpy array of upstream area values for each cell in the grid.
             cell_area: 2D numpy array of cell area values for each cell in the grid.
-            river_geometry: GeoDataFrame containing the geometry of the river segments.
         """
         # select only the time range needed
         runoff_m: xr.DataArray = runoff_m.sel(
             time=slice(self.start_time, self.end_time)
         )
+
+        # for accounting purposes, we set all runoff outside the model region to zero
+        region = self.sfincs_model.region.to_crs(runoff_m.rio.crs)
+        region["value"] = 1
+        region_mask = rasterize_like(
+            region,
+            column="value",
+            raster=runoff_m.isel(time=0),
+            dtype=np.int32,
+            nodata=0,
+            all_touched=True,
+        ).astype(bool)
+        original_dimensions = runoff_m.dims
+        runoff_m: xr.DataArray = xr.where(region_mask, runoff_m, 0, keep_attrs=True)
+        # xr.where changes the dimension order sometimes, so we ensure it is correct
+        runoff_m: xr.DataArray = runoff_m.transpose(*original_dimensions)
 
         # we want to get all the discharge upstream from the starting point of each river segment
         # therefore, we first remove all river cells except for the starting point of each river segment
@@ -996,10 +1070,9 @@ class SFINCSSimulation:
         assert accumulated_generated_discharge_m3_per_s.shape[1] == river_cells.sum()
 
         # create the forcing timeseries for each river segment starting point
-        nodes: gpd.GeoDataFrame = river_geometry.copy()
+        nodes: gpd.GeoDataFrame = self.sfincs_root_model.rivers.copy()
         nodes["geometry"] = nodes["geometry"].apply(get_start_point)
-        nodes: gpd.GeoDataFrame = nodes.reset_index()
-        nodes.index = list(np.arange(1, len(nodes) + 1))
+        nodes: gpd.GeoDataFrame = nodes.sort_index()
         timeseries: pd.DataFrame = pd.DataFrame(
             {
                 "time": generated_discharge_m3_per_s.time,
@@ -1008,7 +1081,7 @@ class SFINCSSimulation:
 
         for i, node in nodes.iterrows():
             if node["represented_in_grid"]:
-                idx = np.where(node["COMID"] == river_ids_mapping)[0]
+                idx = np.where(node.name == river_ids_mapping)[0]
                 assert len(idx) == 1
                 idx = idx[0]
                 timeseries[i] = accumulated_generated_discharge_m3_per_s[:, idx]
@@ -1114,9 +1187,9 @@ class SFINCSSimulation:
         pixel_area = abs(
             flood_depth.rio.resolution()[0] * flood_depth.rio.resolution()[1]
         )
+        if hasattr(flood_depth, "compute"):
+            flood_depth = flood_depth.compute()
         flooded_pixels = flood_depth.where(flood_depth > 0).sum().item()
-        if hasattr(flooded_pixels, "compute"):
-            flooded_pixels = flooded_pixels.compute()
         return flooded_pixels * pixel_area
 
     def cleanup(self) -> None:
