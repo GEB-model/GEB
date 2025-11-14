@@ -86,8 +86,6 @@ class GEBModel(Module, HazardDriver):
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
 
-        self.check_time_range()
-
         self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
 
         self.store = Store(self)
@@ -448,6 +446,7 @@ class GEBModel(Module, HazardDriver):
         n_timesteps: int = int(n_timesteps)
         assert n_timesteps > 0, "End time is before or identical to start time"
 
+        self.check_time_range()
         self._initialize(
             create_reporter=True,
             current_time=current_time,
@@ -552,6 +551,7 @@ class GEBModel(Module, HazardDriver):
 
         self.var = self.store.create_bucket("var")
 
+        self.check_time_range()
         self._initialize(
             create_reporter=True,
             current_time=current_time,
