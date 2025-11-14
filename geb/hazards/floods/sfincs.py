@@ -293,7 +293,7 @@ class SFINCSRootModel:
 
             # set zsini based on the minimum elevation
             assert isinstance(sf.config, dict)
-            sf.config["zsini"] = initial_water_level
+            sf.config["zsini"] = initial_water_level  # ty: ignore[invalid-assignment]
 
             if not isinstance(coastal_boundary_exclude_mask, gpd.GeoDataFrame):
                 raise ValueError(
