@@ -213,3 +213,4 @@ python-version = "3.13"
 
 [tool.ty.rules]
 possibly-missing-attribute = "ignore"
+unresolved-attribute = "ignore"
