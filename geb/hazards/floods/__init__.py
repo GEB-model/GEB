@@ -392,7 +392,6 @@ class Floods(Module):
                 cell_area=self.model.hydrology.grid.decompress(
                     self.model.hydrology.grid.var.cell_area
                 ),
-                river_geometry=self.model.hydrology.routing.rivers,
             )
         else:
             raise ValueError(
