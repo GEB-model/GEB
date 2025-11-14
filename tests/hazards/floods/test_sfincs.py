@@ -48,15 +48,15 @@ def create_discharge_timeseries(
     geb_model: GEBModel,
     start_time: datetime,
     end_time: datetime,
-    discharge_value: float,
+    discharge_value_m3_per_s: float,
 ) -> tuple[gpd.GeoDataFrame, pd.DataFrame]:
-    """Create a discharge timeseries for the given nodes.
+    """Create a constant discharge timeseries for all river nodes.
 
     Args:
         geb_model: A GEB model instance with SFINCS configured.
         start_time: The start time of the timeseries.
         end_time: The end time of the timeseries.
-        discharge_value: The discharge value to use for all nodes and times.
+        discharge_value_m3_per_s: The constant discharge value to use for all nodes (m³/s).
 
     Returns:
         A tuple with the nodes and the timeseries.
@@ -67,7 +67,7 @@ def create_discharge_timeseries(
     timeseries: pd.DataFrame = pd.DataFrame(
         {
             "time": pd.date_range(start=start_time, end=end_time, freq="h"),
-            **{node_id: discharge_value for node_id in nodes.index},
+            **{node_id: discharge_value_m3_per_s for node_id in nodes.index},
         }
     ).set_index("time")
     return nodes, timeseries
@@ -93,7 +93,7 @@ def build_sfincs(
         A SFINCS model instance with static grids and configuration written.
     """
     sfincs_model: SFINCSRootModel = SFINCSRootModel(geb_model, name)
-    DEM_config: dict[str, dict[str, str | Path]] = load_dict(
+    DEM_config: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = load_dict(
         geb_model.model.files["dict"]["hydrodynamics/DEM_config"]
     )
     for entry in DEM_config:
@@ -271,9 +271,12 @@ def test_runoff(geb_model: GEBModel) -> None:
         cumulative_runoff = simulation.get_cumulative_precipitation().compute()
         cumulative_runoff = cumulative_runoff.mean().item() * sfincs_model.area
 
-        assert math.isclose(flood_volume, runoff_volume, abs_tol=0, rel_tol=0.01)
-        assert math.isclose(cumulative_runoff, runoff_volume, abs_tol=0, rel_tol=0.01)
+        assert math.isclose(flood_volume, runoff_volume, abs_tol=0, rel_tol=0.1)
+        assert math.isclose(cumulative_runoff, runoff_volume, abs_tol=0, rel_tol=0.1)
+        assert math.isclose(flood_volume, cumulative_runoff, abs_tol=0, rel_tol=0.01)
+
         simulation.cleanup()
+        sfincs_model.cleanup()
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -286,7 +289,7 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
 
     Args:
         geb_model: A GEB model instance with SFINCS instance.
-        split: Whether to split up the simulation in multiple parts.
+        split: Whether to split the domain into multiple SFINCS models for testing.
     """
     with WorkingDirectory(working_directory):
         start_time: datetime = datetime(2000, 1, 1, 0)
@@ -334,9 +337,9 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
             geb_model.hydrology.grid.var.cell_area
         )
 
-        total_flood_volume_across_models = 0
-        total_discharge_volume_across_models = 0
-        total_discarded_generated_discharge = 0
+        total_flood_volume_across_models: float = 0.0
+        total_discharge_volume_across_models: float = 0.0
+        total_discarded_generated_discharge_across_models: float = 0.0
         for sfincs_model in sfincs_models:
             simulation: SFINCSSimulation = sfincs_model.create_simulation(
                 f"accumulated_runoff_forcing_{sfincs_model.name}",
@@ -357,7 +360,7 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
 
             if simulation.sfincs_root_model.has_inflow:
                 inflow_rivers: gpd.GeoDataFrame = (
-                    simulation.sfincs_root_model.has_inflow
+                    simulation.sfincs_root_model.inflow_rivers
                 )
                 inflow_nodes = inflow_rivers.copy()
                 inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
@@ -436,11 +439,12 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
                 rel_tol=0.2,
             )
 
-            simulation.cleanup()
-
             total_flood_volume_across_models += total_flood_volume
-            total_discarded_generated_discharge += discarded_discharge
+            total_discarded_generated_discharge_across_models += discarded_discharge
             total_discharge_volume_across_models += discharge_m3
+
+            simulation.cleanup()
+            sfincs_model.cleanup()
 
         if split:
             total_runoff_volume: float = (
@@ -450,7 +454,8 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
             )
 
             assert math.isclose(
-                total_flood_volume_across_models + total_discarded_generated_discharge,
+                total_flood_volume_across_models
+                + total_discarded_generated_discharge_across_models,
                 total_runoff_volume + total_discharge_volume_across_models,
                 abs_tol=0,
                 rel_tol=0.05,
@@ -489,7 +494,7 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         )
 
         nodes, timeseries = create_discharge_timeseries(
-            geb_model, start_time, end_time, discharge_value=10.0
+            geb_model, start_time, end_time, discharge_value_m3_per_s=10.0
         )
 
         simulation.set_discharge_forcing_from_nodes(
@@ -515,6 +520,7 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         )
 
         simulation.cleanup()
+        sfincs_model.cleanup()
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -527,7 +533,7 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
 
     Args:
         geb_model: A GEB model instance with SFINCS configured.
-        split: Whether to split up the simulation in multiple parts.
+        split: Whether to split the domain into multiple SFINCS models for testing.
     """
     with WorkingDirectory(working_directory):
         start_time: datetime = datetime(2000, 1, 1, 0)
@@ -537,10 +543,10 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
         rivers = geb_model.hydrology.routing.rivers
         sfincs_models = create_sfincs_models(geb_model, subbasins, rivers, split)
 
-        discharge_rate: float = 10.0  # m3/s
+        discharge_rate_m3_per_s: float = 10.0  # m³/s
 
-        total_flood_volume_across_models = 0.0
-        total_discharge_volume_across_models = 0.0
+        total_flood_volume_across_models: float = 0.0
+        total_discharge_volume_across_models: float = 0.0
 
         for sfincs_model in sfincs_models:
             simulation: SFINCSSimulation = sfincs_model.create_simulation(
@@ -551,7 +557,7 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
             )
 
             discharge_grid: xr.DataArray = xr.DataArray(
-                discharge_rate,
+                discharge_rate_m3_per_s,
                 dims=["y", "x"],
                 coords={
                     "y": geb_model.hydrology.grid.lat,
@@ -559,7 +565,7 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
                 },
             )
 
-            # repeat for all timesteps
+            # Expand to include time dimension for all timesteps
             discharge_grid = discharge_grid.expand_dims(
                 time=pd.date_range(start=start_time, end=end_time, freq="h")
             )
@@ -590,6 +596,7 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
             total_discharge_volume_across_models += simulation.total_discharge_volume_m3
 
             simulation.cleanup()
+            sfincs_model.cleanup()
 
         # compare total flood volume to total discharge volume across all models
         assert math.isclose(

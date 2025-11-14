@@ -34,6 +34,7 @@ from geb.typing import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
+from geb.workflows.io import load_geom
 from geb.workflows.raster import rasterize_like
 
 from .workflows import do_mask_flood_plains, get_river_depth, get_river_manning
@@ -269,7 +270,9 @@ class SFINCSRootModel:
             {"geom": region}, res=resolution, crs=crs, rotated=False
         )
 
-        DEMs = [{**DEM, **{"reproj_method": "bilinear"}} for DEM in DEMs]
+        DEMs: list[dict[str, str | Path | xr.DataArray | int]] = [
+            {**DEM, **{"reproj_method": "bilinear"}} for DEM in DEMs
+        ]
         # add zmax to secondary DEM (assumed to be gebco)
         DEMs[1]["zmax"] = 0
 
@@ -289,7 +292,13 @@ class SFINCSRootModel:
             )
 
             # set zsini based on the minimum elevation
+            assert isinstance(sf.config, dict)
             sf.config["zsini"] = initial_water_level
+
+            if not isinstance(coastal_boundary_exclude_mask, gpd.GeoDataFrame):
+                raise ValueError(
+                    "coastal_boundary_exclude_mask must be provided when coastal is True"
+                )
 
             # setup the coastal boundary conditions
             sf.setup_mask_bounds(
@@ -570,7 +579,8 @@ class SFINCSRootModel:
                     recession_limb_hours,
                 )
                 hydrograph: dict[str, Any] = {
-                    time.isoformat(): Q.item() for time, Q in hydrograph.iterrows()
+                    time.isoformat(): Q.item()  # ty: ignore[unresolved-attribute]
+                    for time, Q in hydrograph.iterrows()
                 }
                 rivers_with_forcing_point.at[
                     river_idx, f"hydrograph_{return_period}"
@@ -603,13 +613,17 @@ class SFINCSRootModel:
             **kwargs,
         )
 
-    def create_coastal_simulation(self, return_period: int) -> None:
+    def create_coastal_simulation(self, return_period: int) -> SFINCSSimulation:
         """
         Creates a SFINCS simulation with coastal water level forcing for a specified return period.
 
         It reads the coastal hydrograph timeseries and locations from pre-defined files, and sets the coastal water level forcing for the simulation.
+
         Args:
             return_period: The return period for which to create the coastal simulation.
+
+        Returns:
+            An instance of SFINCSSimulation configured with coastal water level forcing.
         """
         # prepare coastal timeseries and locations
         timeseries = pd.read_csv(
@@ -619,10 +633,8 @@ class SFINCSRootModel:
             index_col=0,
         )
 
-        locations = (
-            gpd.GeoDataFrame(
-                gpd.read_parquet(self.model.files["geom"]["gtsm/stations_coast_rp"])
-            )
+        locations: gpd.GeoDataFrame = (  # ty: ignore[invalid-assignment]
+            load_geom(self.model.files["geom"]["gtsm/stations_coast_rp"])
             .rename(columns={"station_id": "stations"})
             .set_index("stations")
         )
@@ -651,12 +663,12 @@ class SFINCSRootModel:
 
         # set coastal forcing model
         simulation.set_coastal_waterlevel_forcing(
-            timeseries=timeseries, locations=locations
+            locations=locations, timeseries=timeseries
         )
         return simulation
 
     def create_simulation_for_return_period(
-        self, return_period: int | float, coastal: bool = False
+        self, return_period: int, coastal: bool = False
     ) -> MultipleSFINCSSimulations:
         """Creates multiple SFINCS simulations for a specified return period.
 
@@ -803,6 +815,10 @@ class SFINCSRootModel:
         """
         return not self.inflow_rivers.empty
 
+    def cleanup(self) -> None:
+        """Cleans up the SFINCS model directory."""
+        shutil.rmtree(self.path, ignore_errors=True)
+
 
 class MultipleSFINCSSimulations:
     """Manages multiple SFINCS simulations as a single entity."""
@@ -922,7 +938,10 @@ class SFINCSSimulation:
         print(msg)
 
     def set_coastal_waterlevel_forcing(
-        self, locations: gpd.GeoDataFrame, timeseries: pd.DataFrame, buffer: int = 1e5
+        self,
+        locations: gpd.GeoDataFrame,
+        timeseries: pd.DataFrame,
+        buffer: int = 100_000,
     ) -> None:
         """Sets up coastal water level forcing for the SFINCS model from a timeseries.
 
