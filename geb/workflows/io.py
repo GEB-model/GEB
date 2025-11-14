@@ -884,7 +884,7 @@ class AsyncGriddedForcingReader:
             )
 
             # Only apply the NaN workaround if the array actually uses NaN as fill value
-            if np.all(np.isnan(data)):
+            if np.any(np.isnan(data)):
                 retries += 1
                 print(
                     f"Warning: Async read returned all NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
