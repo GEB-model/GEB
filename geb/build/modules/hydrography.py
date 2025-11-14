@@ -588,6 +588,56 @@ class Hydrography:
         self.set_grid(river_width, name="routing/river_width")
 
     @build_method
+    def setup_global_ocean_mean_dynamic_topography(self) -> None:
+        """Sets up the global ocean mean dynamic topography for the model."""
+        global_ocean_mdt_fn = self.data_catalog.get_source(
+            "global_ocean_mean_dynamic_topography"
+        ).path
+
+        global_ocean_mdt = xr.open_dataset(global_ocean_mdt_fn)
+
+        # get the model bounds and buffer by ~2km
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.0166,  # min_lon
+            model_bounds[1] - 0.0166,  # min_lat
+            model_bounds[2] + 0.0166,  # max_lon
+            model_bounds[3] + 0.0166,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
+
+        # get global_ocean_mdt
+        global_ocean_mdt = global_ocean_mdt["mdt"]
+        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
+        global_ocean_mdt = global_ocean_mdt.rename({"latitude": "y", "longitude": "x"})
+
+        # clip to model bounds
+        global_ocean_mdt = global_ocean_mdt.rio.clip_box(
+            minx=min_lon,
+            miny=min_lat,
+            maxx=max_lon,
+            maxy=max_lat,
+        )
+
+        # make sure size global_ocean_mdt.x equals global_ocean_mdt.y (cells are rectangular, make them square)
+        x_res, y_res = global_ocean_mdt.rio.resolution()
+        target_res = min(abs(x_res), abs(y_res))
+
+        global_ocean_mdt = global_ocean_mdt.rio.reproject(
+            dst_crs="EPSG:4326",
+            resolution=target_res,
+            resampling="bilinear",
+        )
+
+        # rename lat lon to y x
+        global_ocean_mdt.to_zarr("test_.zarr")
+
+        self.set_grid(
+            global_ocean_mdt,
+            name="coastal/global_ocean_mean_dynamic_topography",
+        )
+
+    @build_method
     def setup_low_elevation_coastal_zone_mask(self) -> None:
         """Sets up the low elevation coastal zone (LECZ) mask for sfincs models."""
         # load low elevation coastal zone mask
