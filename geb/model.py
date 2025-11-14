@@ -937,10 +937,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             Datetime object representing the end of the current simulation.
         """
-        if self.in_spinup:
-            return self.spinup_end
-        else:
-            return self.run_end
+        return self.simulation_start + self.n_timesteps * self.timestep_length
 
     @property
     def current_timestep(self) -> int:

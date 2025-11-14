@@ -327,11 +327,19 @@ class Floods(Module):
         routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]
         if self.config["forcing_method"] == "headwater_points":
             forcing_grid = self.hydrology.grid.decompress(
-                np.vstack(self.var.discharge_per_timestep)
+                np.vstack(
+                    list(self.var.discharge_per_timestep)
+                    + [
+                        self.var.discharge_per_timestep[-1][-1]
+                    ]  # add last timestep again (ensuring stable forcing during last hour)
+                )
             )
         elif self.config["forcing_method"] == "accumulated_runoff":
             forcing_grid = self.hydrology.grid.decompress(
-                np.vstack(self.var.runoff_m_per_timestep)
+                np.vstack(
+                    list(self.var.runoff_m_per_timestep)
+                    + [self.var.runoff_m_per_timestep[-1][-1]]
+                )  # add last timestep again (ensuring stable forcing during last hour)
             )
         else:
             raise ValueError(
@@ -345,8 +353,9 @@ class Floods(Module):
             data=forcing_grid,
             coords={
                 "time": pd.date_range(
-                    end=self.model.current_time + (routing_substeps - 1) * substep_size,
-                    periods=len(self.var.discharge_per_timestep) * routing_substeps,
+                    end=self.model.current_time
+                    + self.model.timestep_length,  # end of the current timestep
+                    periods=len(self.var.discharge_per_timestep) * routing_substeps + 1,
                     freq=substep_size,
                 ),
                 "y": self.hydrology.grid.lat,
@@ -357,10 +366,7 @@ class Floods(Module):
         )
 
         # ensure that we have forcing data for the entire event period
-        assert (
-            pd.to_datetime(forcing_grid.time.values[-1]).to_pydatetime() + substep_size
-            >= end_time
-        )
+        assert pd.to_datetime(forcing_grid.time.values[-1]).to_pydatetime() >= end_time
         assert pd.to_datetime(forcing_grid.time.values[0]).to_pydatetime() <= start_time
 
         forcing_grid: xr.DataArray = forcing_grid.rio.write_crs(self.model.crs)

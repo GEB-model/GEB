@@ -91,16 +91,11 @@ class HazardDriver:
                 ):
                     event: dict[str, datetime] = copy.deepcopy(event)
 
-                    if (
-                        event["end_time"]
-                        > self.model.simulation_end + self.model.timestep_length
-                    ):
+                    if event["end_time"] > self.model.simulation_end:
                         print(
                             f"Warning: Flood event {event} ends after the model end time {self.simulation_end}. Simulating only part of flood event."
                         )
-                        event["end_time"] = (
-                            self.model.simulation_end + self.model.timestep_length
-                        )
+                        event["end_time"] = self.model.simulation_end
                         assert event["end_time"] > event["start_time"]
 
                     print("Running floods for event:", event)
