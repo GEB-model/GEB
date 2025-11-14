@@ -253,7 +253,7 @@ def clip_region(
     return clipped_mask, *clipped_arrays
 
 
-def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
+def get_river_graph(data_catalog: NewDataCatalog) -> networkx.DiGraph:
     """Create a directed graph for the river network.
 
     Args:
@@ -307,7 +307,7 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
 
 
 def get_subbasin_id_from_coordinate(
-    data_catalog: DataCatalog, lon: float, lat: float
+    data_catalog: NewDataCatalog, lon: float, lat: float
 ) -> int:
     """Find the subbasin ID for a given coordinate.
 
@@ -348,7 +348,7 @@ def get_subbasin_id_from_coordinate(
 
 
 def get_sink_subbasin_id_for_geom(
-    data_catalog: DataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
+    data_catalog: NewDataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
 ) -> list[int]:
     """Find all sink subbasins that intersect with the given geometry.
 
@@ -393,7 +393,7 @@ def get_sink_subbasin_id_for_geom(
 
 
 def get_all_downstream_subbasins_in_geom(
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     geom: gpd.GeoDataFrame,
     logger: logging.Logger,
 ) -> list[int]:
@@ -444,7 +444,7 @@ def get_all_downstream_subbasins_in_geom(
 
 
 def get_subbasin_upstream_areas(
-    data_catalog: DataCatalog, subbasin_ids: list[int]
+    data_catalog: NewDataCatalog, subbasin_ids: list[int]
 ) -> dict[int, float]:
     """Get upstream areas for a list of subbasins.
 
@@ -474,7 +474,7 @@ def get_subbasin_upstream_areas(
 
 
 def cluster_subbasins_by_area_and_proximity(
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     subbasin_ids: list[int],
     target_area_km2: float,  # Target cumulative upstream area per cluster in km² (e.g., Danube basin ~817,000 km²; use appropriate value for other basins)
     area_tolerance: float,
@@ -804,7 +804,7 @@ def cluster_subbasins_by_area_and_proximity(
 
 def save_clusters_to_geoparquet(
     clusters: list[list[int]],
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     output_path: str | Path,
     cluster_prefix: str = "cluster",
 ) -> None:
@@ -860,7 +860,7 @@ def save_clusters_to_geoparquet(
 
 def create_cluster_visualization_map(
     clusters: list[list[int]],
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     output_path: str | Path,
     cluster_prefix: str = "cluster",
     figsize: tuple[int, int] = (16, 12),
@@ -1118,7 +1118,7 @@ def create_multi_basin_configs(
 
 def save_clusters_as_merged_geometries(
     clusters: list[list[int]],
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     river_graph: networkx.DiGraph,
     output_path: str | Path,
     cluster_prefix: str = "cluster",
