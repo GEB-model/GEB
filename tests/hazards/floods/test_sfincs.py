@@ -465,7 +465,7 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
         rivers = geb_model.hydrology.routing.rivers
         sfincs_models = create_sfincs_models(geb_model, subbasins, rivers, split)
 
-        discharge_rate_m3_per_s: float = 10.0  # m³/s
+        discharge_rate_m3_per_s: float = 10.0
 
         total_flood_volume_across_models: float = 0.0
         total_discharge_volume_across_models: float = 0.0
@@ -556,9 +556,12 @@ def test_read(geb_model: GEBModel) -> None:
         assert sfincs_model_build.cell_area == sfincs_model_read.cell_area
         assert sfincs_model_build.area == sfincs_model_read.area
         assert sfincs_model_build.path == sfincs_model_read.path
+        assert sfincs_model_build.rivers.equals(sfincs_model_read.rivers)
 
         for key in sfincs_model_build.sfincs_model.config:
             assert (
                 sfincs_model_build.sfincs_model.config[key]
                 == sfincs_model_read.sfincs_model.config[key]
             )
+
+        sfincs_model_read.cleanup()
