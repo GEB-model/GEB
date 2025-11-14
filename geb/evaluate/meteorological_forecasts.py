@@ -5,11 +5,9 @@ comparing ECMWF ensemble forecasts against ERA5 reanalysis data for precipitatio
 Supports both intensity and cumulative precipitation plotting.
 """
 
-import datetime
 from pathlib import Path
 from typing import Any
 
-import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -392,4 +390,4 @@ class MeteorologicalForecasts:
 
         # Call the rainfall evaluation functions
         evaluate_precipitation_forecasts(plot_type="intensity")
-        evaluate_precipitation_forecasts(plot_type="cumulative")        
+        evaluate_precipitation_forecasts(plot_type="cumulative")
