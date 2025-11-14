@@ -5,9 +5,11 @@ comparing ECMWF ensemble forecasts against ERA5 reanalysis data for precipitatio
 Supports both intensity and cumulative precipitation plotting.
 """
 
+import datetime
 from pathlib import Path
 from typing import Any
 
+import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -117,7 +119,9 @@ class MeteorologicalForecasts:
                         f"Warning: Multiple precipitation files found in {init_folder}, using first: {pr_files[0]}"
                     )
 
-                era5_path = model.input_folder / "other" / "climate" / "pr_hourly.zarr"
+                era5_path = (
+                    model.input_folder / "other" / "climate" / "pr_kg_per_m2_per_s.zarr"
+                )
 
                 # ERA5
                 era5_ds = open_zarr(era5_path)
@@ -388,4 +392,4 @@ class MeteorologicalForecasts:
 
         # Call the rainfall evaluation functions
         evaluate_precipitation_forecasts(plot_type="intensity")
-        evaluate_precipitation_forecasts(plot_type="cumulative")
+        evaluate_precipitation_forecasts(plot_type="cumulative")        
