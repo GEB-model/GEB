@@ -32,6 +32,33 @@ if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
 
+def create_river_graph(
+    rivers: gpd.GeoDataFrame, subbasins: gpd.GeoDataFrame
+) -> nx.DiGraph:
+    """Creates a directed graph representation of the river network.
+
+    Args:
+        rivers: A GeoDataFrame containing the river network with downstream IDs.
+        subbasins: A GeoDataFrame containing the subbasins.
+
+    Returns:
+        A directed graph (networkx DiGraph) representing the river network.
+    """
+    rivers_without_outflow_basin = rivers[~rivers["is_downstream_outflow_subbasin"]]
+
+    river_graph: nx.DiGraph = nx.DiGraph()
+    rivers_in_network = set(rivers_without_outflow_basin.index)
+    for river_id, row in rivers_without_outflow_basin.iterrows():
+        river_graph.add_node(river_id, uparea_m2=row["uparea_m2"])
+        downstream_id = row["downstream_ID"]
+
+        # only add edge if downstream river is in the network and not -1 (ocean)
+        if downstream_id != -1 and downstream_id in rivers_in_network:
+            river_graph.add_edge(river_id, downstream_id)
+
+    return river_graph
+
+
 def group_subbasins(
     river_graph: nx.DiGraph, max_area_m2: float | int
 ) -> dict[int, list[int]]:
@@ -300,15 +327,23 @@ class Floods(Module):
         routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]
         if self.config["forcing_method"] == "headwater_points":
             forcing_grid = self.hydrology.grid.decompress(
-                np.vstack(self.var.discharge_per_timestep)
+                np.vstack(
+                    list(self.var.discharge_per_timestep)
+                    + [
+                        self.var.discharge_per_timestep[-1][-1]
+                    ]  # add last timestep again (ensuring stable forcing during last hour)
+                )
             )
-        elif self.config["forcing_method"] in ("runoff", "accumulated_runoff"):
+        elif self.config["forcing_method"] == "accumulated_runoff":
             forcing_grid = self.hydrology.grid.decompress(
-                np.vstack(self.var.runoff_m_per_timestep)
+                np.vstack(
+                    list(self.var.runoff_m_per_timestep)
+                    + [self.var.runoff_m_per_timestep[-1][-1]]
+                )  # add last timestep again (ensuring stable forcing during last hour)
             )
         else:
             raise ValueError(
-                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'runoff'."
+                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
             )
 
         substep_size: timedelta = self.model.timestep_length / routing_substeps
@@ -318,8 +353,9 @@ class Floods(Module):
             data=forcing_grid,
             coords={
                 "time": pd.date_range(
-                    end=self.model.current_time + (routing_substeps - 1) * substep_size,
-                    periods=len(self.var.discharge_per_timestep) * routing_substeps,
+                    end=self.model.current_time
+                    + self.model.timestep_length,  # end of the current timestep
+                    periods=len(self.var.discharge_per_timestep) * routing_substeps + 1,
                     freq=substep_size,
                 ),
                 "y": self.hydrology.grid.lat,
@@ -330,10 +366,7 @@ class Floods(Module):
         )
 
         # ensure that we have forcing data for the entire event period
-        assert (
-            pd.to_datetime(forcing_grid.time.values[-1]).to_pydatetime() + substep_size
-            >= end_time
-        )
+        assert pd.to_datetime(forcing_grid.time.values[-1]).to_pydatetime() >= end_time
         assert pd.to_datetime(forcing_grid.time.values[0]).to_pydatetime() <= start_time
 
         forcing_grid: xr.DataArray = forcing_grid.rio.write_crs(self.model.crs)
@@ -341,13 +374,6 @@ class Floods(Module):
         if self.config["forcing_method"] == "headwater_points":
             simulation.set_headwater_forcing_from_grid(
                 discharge_grid=forcing_grid,
-            )
-        elif self.config["forcing_method"] == "runoff":
-            simulation.set_runoff_forcing(
-                runoff_m=forcing_grid,
-                area_m2=self.hydrology.grid.decompress(
-                    self.hydrology.grid.var.cell_area
-                ),
             )
 
         elif self.config["forcing_method"] == "accumulated_runoff":
@@ -365,11 +391,10 @@ class Floods(Module):
                 cell_area=self.model.hydrology.grid.decompress(
                     self.model.hydrology.grid.var.cell_area
                 ),
-                river_geometry=self.model.hydrology.routing.rivers,
             )
         else:
             raise ValueError(
-                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points', 'runoff' and 'accumulated_runoff'."
+                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
             )
 
         # Set up river outflow boundary condition for all simulations
@@ -398,18 +423,7 @@ class Floods(Module):
         subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
         rivers = self.model.hydrology.routing.rivers
 
-        rivers_without_outflow_basin = rivers[~rivers["is_downstream_outflow_subbasin"]]
-
-        river_graph: nx.DiGraph = nx.DiGraph()
-        rivers_in_network = set(rivers_without_outflow_basin.index)
-        for river_id, row in rivers_without_outflow_basin.iterrows():
-            river_graph.add_node(river_id, uparea_m2=row["uparea_m2"])
-            downstream_id = row["downstream_ID"]
-
-            # only add edge if downstream river is in the network and not -1 (ocean)
-            if downstream_id != -1 and downstream_id in rivers_in_network:
-                river_graph.add_edge(river_id, downstream_id)
-
+        river_graph = create_river_graph(rivers, subbasins)
         grouped_subbasins = group_subbasins(
             river_graph=river_graph,
             max_area_m2=1e20,  # very large to force single group only

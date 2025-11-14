@@ -1259,7 +1259,6 @@ class Data:
         self.HRU.var.cropGroupNumber = self.split_HRU_data(
             self.HRU.var.cropGroupNumber, HRU
         )
-        self.HRU.var.capriseindex = self.split_HRU_data(self.HRU.var.capriseindex, HRU)
         self.HRU.var.actual_bare_soil_evaporation = self.split_HRU_data(
             self.HRU.var.actual_bare_soil_evaporation, HRU
         )

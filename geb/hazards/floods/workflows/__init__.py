@@ -8,12 +8,13 @@ import numpy.typing as npt
 import pyflwdir
 import xarray as xr
 from hydromt_sfincs import SfincsModel
+from pyflwdir.dem import fill_depressions
 
 
 def get_river_depth(
     river_segments: gpd.GeoDataFrame,
     method: str,
-    parameters: dict[str, float | int],
+    parameters: dict[str, float | int] | None,
     bankfull_column: str,
 ) -> npt.NDArray[np.float32]:
     """Get river depth for each river segment.
@@ -55,6 +56,10 @@ def get_river_depth(
     elif method == "power_law":
         # Calculate 'river depth' using the power law equation
         # Powerlaw equation from Andreadis et al (2013)
+        if not isinstance(parameters, dict):
+            raise ValueError(
+                "Parameters must be provided as a dictionary for power_law method."
+            )
         c = parameters["c"]
         d = parameters["d"]
         depth = c * (river_segments[bankfull_column].astype(float) ** d)
@@ -87,7 +92,7 @@ def get_river_manning(river_segments: gpd.GeoDataFrame) -> npt.NDArray[np.float3
 
 def do_mask_flood_plains(sf: SfincsModel) -> None:
     """Create a floodplain mask using pyflwdir and add it to the SfincsModel as a mask."""
-    elevation, d8 = pyflwdir.dem.fill_depressions(sf.grid.dep.values)
+    elevation, d8 = fill_depressions(sf.grid.dep.values)
 
     flw = pyflwdir.from_array(
         d8,

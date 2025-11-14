@@ -318,7 +318,11 @@ class DynamicArray:
             func, modified_types, modified_args, kwargs
         )
 
-    def __setitem__(self, key: int | slice, value: Any) -> None:
+    def __setitem__(
+        self,
+        key: int | slice | tuple[slice | int | list[bool | int]] | list[bool],
+        value: Any,
+    ) -> None:
         """
         Set item(s) in the active portion of the array.
 
@@ -328,7 +332,9 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
-    def __getitem__(self, key: int | slice) -> DynamicArray | np.ndarray:
+    def __getitem__(
+        self, key: int | slice | tuple[slice | int | list[bool | int]] | list[bool]
+    ) -> DynamicArray | np.ndarray:
         """
         Retrieve item(s) or a sliced DynamicArray.
 
@@ -1187,7 +1193,7 @@ class Store:
             self.model.logger.debug(f"Saving {name}")
             bucket.save(path / name)
 
-    def load(self, omit: None | str = None, path: None | Path = None) -> None:
+    def load(self, path: None | Path = None, omit: None | str = None) -> None:
         """Load the store data from disk into the model.
 
         If no path is provided, it defaults to the store path of the model.
