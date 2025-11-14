@@ -1031,7 +1031,7 @@ class SFINCSSimulation:
         Sets up river inflow boundary conditions for the SFINCS model.
 
         Here, we use negative indices to indicate inflow boundaries, so that they are
-        seperate from the runoff generated in the model domain.
+        separate from the runoff generated in the model domain.
 
         Args:
             nodes: GeoDataFrame containing the locations of river inflow points.
