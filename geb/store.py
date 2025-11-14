@@ -1193,7 +1193,7 @@ class Store:
             self.model.logger.debug(f"Saving {name}")
             bucket.save(path / name)
 
-    def load(self, omit: None | str = None, path: None | Path = None) -> None:
+    def load(self, path: None | Path = None, omit: None | str = None) -> None:
         """Load the store data from disk into the model.
 
         If no path is provided, it defaults to the store path of the model.
