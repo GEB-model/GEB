@@ -145,8 +145,7 @@ def get_root_ratios(
 @njit(cache=True, inline="always")
 def get_fraction_easily_available_soil_water(
     crop_group_number: np.float32,
-    potential_evapotranspiration_m: np.float32,
-    time_step_hours_h: np.float32 = np.float32(24),
+    reference_evapotranspiration_grass_full_day_m: np.float32,
 ) -> np.float32:
     """Calculate the fraction of easily available soil water.
 
@@ -156,18 +155,13 @@ def get_fraction_easily_available_soil_water(
     Args:
         crop_group_number: The crop group number is a indicator of adaptation to dry climate,
             Van Diepen et al., 1988: WOFOST 6.0, Theory and Algorithms p.87
-        potential_evapotranspiration_m: Potential evapotranspiration in m
-        time_step_hours_h: Time step in hours (default 24 for daily)
+        reference_evapotranspiration_grass_full_day_m: Potential evapotranspiration in m for a full day.
 
     Returns:
         The fraction of easily available soil water, p is closer to 0 if evapo is bigger and cropgroup is smaller
     """
-    # Convert to daily equivalent for calibration purposes
-    potential_evapotranspiration_daily = potential_evapotranspiration_m * (
-        np.float32(24) / time_step_hours_h
-    )
     potential_evapotranspiration_cm: np.float32 = (
-        potential_evapotranspiration_daily * np.float32(100)
+        reference_evapotranspiration_grass_full_day_m * np.float32(100)
     )
 
     p: np.float32 = np.float32(1) / (
@@ -278,12 +272,11 @@ def calculate_transpiration(
     crop_map: np.int32,
     natural_crop_groups: np.float32,
     potential_transpiration_m: np.float32,  # [m]
-    potential_evapotranspiration_m: np.float32,  # [m]
+    reference_evapotranspiration_grass_m_hour: np.float32,  # [m]
     crop_group_number_per_group: npt.NDArray[np.float32],
     w_m: npt.NDArray[np.float32],  # [m]
     topwater_m: np.float32,  # [m]
     minimum_effective_root_depth_m: np.float32,  # [m]
-    time_step_hours_h: np.float32 = np.float32(24),  # [h]
 ) -> tuple[np.float32, np.float32]:
     """Calculate transpiration for a single soil cell.
 
@@ -298,12 +291,11 @@ def calculate_transpiration(
         crop_map: Crop map indicating the crop type for the hydrological response unit. -1 indicates no crop.
         natural_crop_groups: Crop group numbers for natural areas (see WOFOST 6.0).
         potential_transpiration_m: Potential transpiration [m].
-        potential_evapotranspiration_m: Potential evapotranspiration [m].
+        reference_evapotranspiration_grass_m_hour: Reference evapotranspiration for grass [m/hour]. This is an hourly value that will be converted to a daily value for the calculation.
         crop_group_number_per_group: Crop group numbers for each crop type.
         w_m: Soil water content [m], shape (N_SOIL_LAYERS,).
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
         minimum_effective_root_depth_m: Minimum effective root depth [m], used to ensure that the effective root depth is not less than this value. Crops can extract water up to this depth.
-        time_step_hours_h: Time step [h] (default 24 for daily).
 
     Returns:
         A tuple containing:
@@ -329,10 +321,10 @@ def calculate_transpiration(
             crop_group_number: np.float32 = crop_group_number_per_group[crop_map]
 
         # vegetation-specific factor for easily available soil water
-        fraction_easily_available_soil_water: np.float32 = (
-            get_fraction_easily_available_soil_water(
-                crop_group_number, potential_evapotranspiration_m, time_step_hours_h
-            )
+        fraction_easily_available_soil_water: np.float32 = get_fraction_easily_available_soil_water(
+            crop_group_number=crop_group_number,
+            reference_evapotranspiration_grass_full_day_m=reference_evapotranspiration_grass_m_hour
+            * np.float32(24.0),
         )
 
         effective_root_depth: np.float32 = np.maximum(
@@ -444,7 +436,6 @@ def evapotranspirate(
     topwater_m: np.float32,  # [m]
     open_water_evaporation_m: np.float32,  # [m]
     minimum_effective_root_depth_m: np.float32,  # [m]
-    time_step_hours_h: np.float32 = np.float32(24),  # [h]
 ) -> tuple[np.float32, np.float32, np.float32]:
     """Evapotranspiration calculation for a single soil cell.
 
@@ -467,7 +458,6 @@ def evapotranspirate(
         topwater_m: Topwater [m], which is the water available for evaporation and transpiration for paddy irrigated fields.
         open_water_evaporation_m: Open water evaporation [m], which is the water evaporated from open water areas.
         minimum_effective_root_depth_m: Minimum effective root depth [m], used to ensure that the effective root depth is not less than this value. Crops can extract water up to this depth.
-        time_step_hours_h: Time step [h] (default 24 for daily).
 
     Returns:
         A tuple containing:
@@ -491,7 +481,6 @@ def evapotranspirate(
         w_m,
         topwater_m,
         minimum_effective_root_depth_m,
-        time_step_hours_h,
     )
 
     actual_bare_soil_evaporation_m = calculate_bare_soil_evaporation(

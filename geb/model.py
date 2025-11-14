@@ -23,7 +23,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
-from geb.workflows.io import load_geom, open_zarr
+from geb.workflows.io import load_dict, load_geom, open_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
@@ -85,6 +85,8 @@ class GEBModel(Module, HazardDriver):
         for data in self.files.values():
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
+
+        self.check_time_range()
 
         self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
 
@@ -365,6 +367,7 @@ class GEBModel(Module, HazardDriver):
         simulate_hydrology: bool = True,
         clean_report_folder: bool = False,
         load_data_from_store: bool = False,
+        omit: None | str = None,
     ) -> None:
         """Initializes the model.
 
@@ -377,6 +380,7 @@ class GEBModel(Module, HazardDriver):
             simulate_hydrology: Whether to simulate hydrology.
             clean_report_folder: Whether to clean the report folder before creating a new reporter.
             load_data_from_store: Whether to load data from the store.
+            omit: Name of the bucket to omit when loading data from the store.
 
         """
         self.in_spinup = in_spinup
@@ -397,13 +401,13 @@ class GEBModel(Module, HazardDriver):
         self.agents = Agents(self)
 
         if load_data_from_store:
-            self.store.load()
+            self.store.load(omit=omit)
 
         # in spinup mode, save the spinup time range to the store for later verification
         # in run mode, verify that the spinup time range matches the stored time range
         if in_spinup:
             self._store_spinup_time_range()
-        else:
+        elif load_data_from_store:
             self._verify_spinup_time_range()
 
         if self.simulate_hydrology:
@@ -609,7 +613,8 @@ class GEBModel(Module, HazardDriver):
             n_timesteps=0,
             timestep_length=relativedelta(years=1),
             load_data_from_store=True,
-            simulate_hydrology=False,
+            # omit="agents",
+            simulate_hydrology=True,
             clean_report_folder=False,
         )
 
@@ -617,11 +622,8 @@ class GEBModel(Module, HazardDriver):
         subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
         if subbasins["is_coastal_basin"].any():
             generate_storm_surge_hydrographs(self)
-            rp_maps_coastal = self.floods.get_coastal_return_period_maps()
-        else:
-            rp_maps_coastal = None
-        rp_maps_riverine = self.floods.get_riverine_return_period_maps()
-        self.floods.merge_return_period_maps(rp_maps_coastal, rp_maps_riverine)
+
+        self.floods.get_return_period_maps()
 
     def evaluate(self, *args: Any, **kwargs: Any) -> None:
         """Call the evaluator to evaluate the model results."""
@@ -841,6 +843,42 @@ class GEBModel(Module, HazardDriver):
             Datetime object with time set to midnight.
         """
         return datetime.datetime.combine(date, datetime.time(0))
+
+    def check_time_range(self) -> None:
+        """Check that the model's spinup and run time ranges are within the model build time range.
+
+        Raises:
+            ValueError: If the spinup start date is before the model build start date.
+            ValueError: If the run end date is after the model build end date.
+        """
+        model_build_time_range: dict[str, str] = load_dict(
+            self.files["dict"]["model_time_range"]
+        )
+
+        model_build_start_date = model_build_time_range["start_date"]
+
+        # TODO: Remove in 2026
+        if isinstance(model_build_start_date, str):
+            model_build_start_date: datetime.datetime = datetime.datetime.fromisoformat(
+                model_build_start_date
+            )
+        model_build_end_date = model_build_time_range["end_date"]
+
+        # TODO: Remove in 2026
+        if isinstance(model_build_end_date, str):
+            model_build_end_date: datetime.datetime = datetime.datetime.fromisoformat(
+                model_build_end_date
+            )
+
+        if self.spinup_start.date() < model_build_start_date:
+            raise ValueError(
+                "Spinup start date cannot be before model build start date. Adjust the time range in your build configuration and rebuild the model or adjust the spinup time of the model."
+            )
+
+        if self.run_end.date() > model_build_end_date:
+            raise ValueError(
+                "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
+            )
 
     @property
     def spinup_start(self) -> datetime.datetime:

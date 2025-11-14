@@ -26,10 +26,7 @@ from zarr.codecs.numcodecs import FixedScaleOffset
 
 from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
-from geb.workflows.io import get_window
-from geb.workflows.raster import (
-    resample_like,
-)
+from geb.workflows.raster import resample_like
 
 from ...workflows.io import calculate_scaling, to_zarr
 
@@ -1313,22 +1310,32 @@ class Forcing:
         Returns:
             elevation data for the forcing grid and the normal grid
         """
-        elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
-        elevation = elevation.isel(
-            band=0,
-            **get_window(
-                elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
-            ),
+        xmin, ymin, xmax, ymax = forcing_grid.rio.bounds(recalc=True)
+
+        buffer: float = 0.5
+        xmin: float = xmin - buffer
+        ymin: float = ymin - buffer
+        xmax: float = xmax + buffer
+        ymax: float = ymax + buffer
+
+        elevation: xr.DataArray = (
+            self.new_data_catalog.fetch(
+                "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, prefix="forcing"
+            )
+            .read(prefix="forcing")
+            .compute()
         )
-        elevation = elevation.drop_vars("band")
-        elevation = xr.where(elevation == -9999, 0, elevation)
-        elevation.attrs["_FillValue"] = np.nan
-        target = forcing_grid.isel(time=0).drop_vars("time")
 
-        elevation_forcing = resample_like(elevation, target, method="bilinear")
-        elevation_forcing = elevation_forcing.chunk({"x": -1, "y": -1})
+        # FABDEM has nodata values in the ocean, for which we can assume an elevation of 0 m
+        elevation = xr.where(~np.isnan(elevation), elevation, 0, keep_attrs=True)
 
-        elevation_forcing = elevation_forcing.rio.write_crs(4326)
+        target: xr.DataArray = forcing_grid.isel(time=0).drop_vars("time")
+
+        elevation_forcing: xr.DataArray = resample_like(
+            elevation, target, method="bilinear"
+        )
+        elevation_forcing: xr.DataArray = elevation_forcing.chunk({"x": -1, "y": -1})
+        elevation_forcing: xr.DataArray = elevation_forcing.rio.write_crs(4326)
 
         return elevation_forcing
 

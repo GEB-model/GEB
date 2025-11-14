@@ -1,5 +1,7 @@
 """GADM data adapter for downloading and processing GADM data."""
 
+from __future__ import annotations
+
 import shutil
 import zipfile
 from pathlib import Path
@@ -30,7 +32,7 @@ class GADM(Adapter):
         self.level = level
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> Path:
+    def fetch(self, url: str) -> GADM:
         """Process GADM Level 1 zip file to extract and convert to parquet.
 
         Args:
@@ -60,3 +62,22 @@ class GADM(Adapter):
             )
             shutil.rmtree(path=uncompressed_file)  # remove uncompressed folder
         return self
+
+    def read(self, **kwargs: Any) -> gpd.GeoDataFrame:
+        """Read the GADM data as a GeoDataFrame.
+
+        Args:
+            **kwargs: Additional keyword arguments to pass to gpd.read_parquet.
+
+        Returns:
+            A GeoDataFrame with the GADM data.
+        """
+        gdf = Adapter.read(self, **kwargs)
+        assert isinstance(gdf, gpd.GeoDataFrame)
+        gdf["GID_0"] = gdf["GID_0"].replace(
+            {"XKO": "XKX"}
+        )  # XKO is a deprecated code for Kosovo, XKX is the new code
+        gdf: gpd.GeoDataFrame = gdf[
+            gdf["GID_0"] != "NA"
+        ]  # Remove entries with invalid ISO3 code
+        return gdf
