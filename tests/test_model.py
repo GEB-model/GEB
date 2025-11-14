@@ -612,7 +612,7 @@ def test_share() -> None:
         share_fn(
             working_directory=Path("."),
             name="test",
-            include_preprocessing=False,
+            include_cache=False,
             include_output=False,
         )
 

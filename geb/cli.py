@@ -1232,7 +1232,7 @@ def evaluate(
 def share_fn(
     working_directory: Path,
     name: str,
-    include_preprocessing: bool,
+    include_cache: bool,
     include_output: bool,
 ) -> None:
     """Share model."""
@@ -1240,8 +1240,8 @@ def share_fn(
         # create a zip file called model.zip with the folders input, and model files
         # in the working directory
         folders: list = ["input"]
-        if include_preprocessing:
-            folders.append("preprocessing")
+        if include_cache:
+            folders.append("cache")
         if include_output:
             folders.append("output")
         files: list = [CONFIG_DEFAULT, BUILD_DEFAULT]
@@ -1314,10 +1314,10 @@ def share_fn(
     help="Name used for the zip file.",
 )
 @click.option(
-    "--include-preprocessing",
+    "--include-cache",
     is_flag=True,
     default=False,
-    help="Include preprocessing files in the zip file.",
+    help="Include cache files in the zip file.",
 )
 @click.option(
     "--include-output",
