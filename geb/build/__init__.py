@@ -2441,19 +2441,38 @@ class GEBModel(
 
     def read_grid(self) -> None:
         """Reads all grid data arrays from disk based on the file library."""
+        # first read and set the mask. This is required.
+        mask: dict[str, dict[str, Path]] = self.files["region_subgrid"]
+        data: xr.DataArray = open_zarr(Path(self.root) / mask["mask"])
+        self.set_grid(data, name="mask", write=False)
+
         for name, fn in self.files["grid"].items():
+            if name == "mask":  # mask already read
+                continue
             data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_grid(data, name=name, write=False)
 
     def read_subgrid(self) -> None:
         """Reads all subgrid data arrays from disk based on the file library."""
+        # first read and set the mask. This is required.
+        mask: dict[str, dict[str, Path]] = self.files["region_subgrid"]
+        data: xr.DataArray = open_zarr(Path(self.root) / mask["mask"])
+        self.set_subgrid(data, name="mask", write=False)
         for name, fn in self.files["subgrid"].items():
+            if name == "mask":  # mask already read
+                continue
             data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_subgrid(data, name=name, write=False)
 
     def read_region_subgrid(self) -> None:
         """Reads all region subgrid data arrays from disk based on the file library."""
+        # first read and set the mask. This is required.
+        mask: dict[str, dict[str, Path]] = self.files["region_subgrid"]
+        data: xr.DataArray = open_zarr(Path(self.root) / mask["mask"])
+        self.set_region_subgrid(data, name="mask", write=False)
         for name, fn in self.files["region_subgrid"].items():
+            if name == "mask":  # mask already read
+                continue
             data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_region_subgrid(data, name=name, write=False)
 
