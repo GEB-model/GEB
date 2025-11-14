@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import requests
 import rioxarray as rxr
 import xarray as xr
 from rioxarray import merge
@@ -200,30 +201,29 @@ class Fabdem(Adapter):
         Raises:
             RuntimeError: If download or extraction fails.
         """
-        try:
-            zip_path: Path = temp_dir / tile_filename
-            success: bool = fetch_and_save(
-                tile_url, zip_path, verbose=False, show_progress=True
-            )
-            if not success:
-                raise RuntimeError(f"Failed to download {tile_url}")
+        # first check that url exists. If it does not, return empty list
+        response = requests.head(tile_url)
+        if response.status_code == 404:
+            return []
+        zip_path: Path = temp_dir / tile_filename
+        success: bool = fetch_and_save(
+            tile_url, zip_path, verbose=False, show_progress=True
+        )
+        if not success:
+            raise RuntimeError(f"Failed to download {tile_url}")
 
-            with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                # Get all .tif files in the ZIP
-                tif_files: list[str] = [
-                    f for f in zip_ref.namelist() if f.endswith(".tif")
-                ]
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            # Get all .tif files in the ZIP
+            tif_files: list[str] = [f for f in zip_ref.namelist() if f.endswith(".tif")]
 
-                extracted_paths: list[Path] = []
-                for tif_filename in tif_files:
-                    # Check if this TIF intersects with bbox before extracting
-                    if self._tif_intersects_bbox(tif_filename, xmin, xmax, ymin, ymax):
-                        zip_ref.extract(tif_filename, temp_dir)
-                        extracted_paths.append(temp_dir / tif_filename)
+            extracted_paths: list[Path] = []
+            for tif_filename in tif_files:
+                # Check if this TIF intersects with bbox before extracting
+                if self._tif_intersects_bbox(tif_filename, xmin, xmax, ymin, ymax):
+                    zip_ref.extract(tif_filename, temp_dir)
+                    extracted_paths.append(temp_dir / tif_filename)
 
-                return extracted_paths
-        except (zipfile.BadZipFile, Exception) as e:
-            raise RuntimeError(f"Failed to download or extract {tile_url}: {e}")
+        return extracted_paths
 
     def _merge_fabdem_tiles(self, tile_paths: list[Path]) -> xr.DataArray:
         """Load FABDEM tiles into a single xarray DataArray.
