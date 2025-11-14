@@ -17,7 +17,7 @@ from geb.hazards.floods import create_river_graph, group_subbasins
 from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
-from geb.typing import TwoDArrayFloat32, TwoDArrayFloat64, TwoDArrayInt32
+from geb.typing import TwoDArrayFloat64, TwoDArrayInt32
 from geb.workflows.io import WorkingDirectory, load_dict, load_geom, open_zarr
 from geb.workflows.raster import rasterize_like
 
@@ -199,84 +199,6 @@ def create_sfincs_models(
         ]
 
     return sfincs_models
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_runoff(geb_model: GEBModel) -> None:
-    """Test SFINCS with runoff forcing.
-
-    Args:
-        geb_model: A GEB model instance with SFINCS instance.
-    """
-    with WorkingDirectory(working_directory):
-        start_time: datetime = datetime(2000, 1, 1, 0)
-        end_time: datetime = datetime(2000, 1, 10, 0)
-
-        region = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
-
-        sfincs_model: SFINCSRootModel = build_sfincs(
-            geb_model,
-            nr_subgrid_pixels=None,
-            region=region,
-            name=TEST_MODEL_NAME,
-            rivers=geb_model.hydrology.routing.rivers,
-        )
-
-        simulation: SFINCSSimulation = sfincs_model.create_simulation(
-            "runoff_forcing_test",
-            start_time=start_time,
-            end_time=end_time,
-            spinup_seconds=0,
-        )
-
-        simulation.sfincs_model.set_config("storecumprcp", 1)
-
-        runoff_rate_mm_per_hr: float = 1.0  # mm/hr
-        runoff_rate_m_per_hr: float = runoff_rate_mm_per_hr / 1000.0
-
-        runoff_m: xr.DataArray = xr.DataArray(
-            sfincs_model.active_cells * runoff_rate_m_per_hr,
-            dims=["y", "x"],
-            coords={
-                "y": sfincs_model.active_cells.y,
-                "x": sfincs_model.active_cells.x,
-            },
-        )
-        runoff_m = runoff_m.rio.write_crs(sfincs_model.sfincs_model.crs)
-
-        # repeat for all timesteps
-        runoff_m: xr.DataArray = runoff_m.expand_dims(
-            time=pd.date_range(start=start_time, end=end_time, freq="h")
-        )
-
-        area_m2: TwoDArrayFloat32 = np.full_like(
-            sfincs_model.active_cells, sfincs_model.cell_area, dtype=np.float32
-        )
-
-        simulation.set_runoff_forcing(runoff_m=runoff_m, area_m2=area_m2)
-
-        assert (simulation.path / "precip_2d.nc").exists()
-        assert (simulation.path / "sfincs.inp").exists()
-
-        simulation.run(gpu=False)
-        flood_depth: xr.DataArray = simulation.read_final_flood_depth(
-            minimum_flood_depth=0.0
-        )
-        # get total flood volume
-        flood_volume: float = simulation.get_flood_volume(flood_depth)
-
-        # Use tracked runoff volume from simulation (m3)
-        runoff_volume: float = simulation.total_runoff_volume_m3
-
-        cumulative_runoff = simulation.get_cumulative_precipitation().compute()
-        cumulative_runoff = cumulative_runoff.mean().item() * sfincs_model.area
-
-        assert math.isclose(flood_volume, runoff_volume, abs_tol=0, rel_tol=0.1)
-        assert math.isclose(cumulative_runoff, runoff_volume, abs_tol=0, rel_tol=0.1)
-        assert math.isclose(flood_volume, cumulative_runoff, abs_tol=0, rel_tol=0.01)
-
-        simulation.cleanup()
-        sfincs_model.cleanup()
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

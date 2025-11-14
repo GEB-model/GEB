@@ -1093,39 +1093,6 @@ class SFINCSSimulation:
             self.sfincs_model.plot_basemap(fn_out="src_points_check.png")
             self.sfincs_model.plot_forcing(fn_out="forcing.png")
 
-    def set_runoff_forcing(
-        self,
-        runoff_m: xr.DataArray,
-        area_m2: TwoDArrayFloat32,
-    ) -> None:
-        """Sets up precipitation forcing for the SFINCS model from a gridded dataset.
-
-        Args:
-            runoff_m: xarray DataArray containing runoff values in m per time step.
-            area_m2: xarray DataArray containing the area of each runoff grid cell in m².
-        """
-        assert runoff_m.rio.crs is not None, "precipitation_grid should have a crs"
-        assert (
-            pd.to_datetime(runoff_m.time[0].item()).to_pydatetime() <= self.start_time
-        )
-        assert pd.to_datetime(runoff_m.time[-1].item()).to_pydatetime() >= self.end_time
-
-        runoff_m: xr.DataArray = runoff_m.sel(
-            time=slice(self.start_time, self.end_time)
-        )
-
-        self.sfincs_model.setup_precip_forcing_from_grid(
-            precip=(runoff_m * 1000).to_dataset(name="precip")
-        )  # convert from m/h to mm/h for SFINCS
-
-        self.sfincs_model.write_forcing()
-        self.sfincs_model.write_config()
-
-        self.total_runoff_volume_m3 += (
-            (runoff_m.isel(time=slice(None, -1)) * area_m2).sum().item()
-        )
-        self.print_forcing_volume()
-
     def set_accumulated_runoff_forcing(
         self,
         runoff_m: xr.DataArray,

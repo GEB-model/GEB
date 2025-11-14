@@ -329,13 +329,13 @@ class Floods(Module):
             forcing_grid = self.hydrology.grid.decompress(
                 np.vstack(self.var.discharge_per_timestep)
             )
-        elif self.config["forcing_method"] in ("runoff", "accumulated_runoff"):
+        elif self.config["forcing_method"] == "accumulated_runoff":
             forcing_grid = self.hydrology.grid.decompress(
                 np.vstack(self.var.runoff_m_per_timestep)
             )
         else:
             raise ValueError(
-                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'runoff'."
+                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
             )
 
         substep_size: timedelta = self.model.timestep_length / routing_substeps
@@ -369,13 +369,6 @@ class Floods(Module):
             simulation.set_headwater_forcing_from_grid(
                 discharge_grid=forcing_grid,
             )
-        elif self.config["forcing_method"] == "runoff":
-            simulation.set_runoff_forcing(
-                runoff_m=forcing_grid,
-                area_m2=self.hydrology.grid.decompress(
-                    self.hydrology.grid.var.cell_area
-                ),
-            )
 
         elif self.config["forcing_method"] == "accumulated_runoff":
             river_ids: TwoDArrayInt32 = self.hydrology.grid.load(
@@ -395,7 +388,7 @@ class Floods(Module):
             )
         else:
             raise ValueError(
-                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points', 'runoff' and 'accumulated_runoff'."
+                f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
             )
 
         # Set up river outflow boundary condition for all simulations
