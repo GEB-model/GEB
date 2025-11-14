@@ -188,6 +188,7 @@ class SFINCSRootModel:
             raise FileNotFoundError(f"SFINCS model not found in {self.path}")
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
         self.sfincs_model.read()
+        self.rivers: gpd.GeoDataFrame = load_geom(self.path / "rivers.geoparquet")
         return self
 
     def build(
@@ -261,10 +262,12 @@ class SFINCSRootModel:
             "All rivers must intersect the model region"
         )
 
+        rivers.to_parquet(self.path / "rivers.geoparquet")
+
         self.logger.info("Starting SFINCS model build...")
 
         # build base model
-        sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+")
+        sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+", write_gis=True)
 
         sf.setup_grid_from_region(
             {"geom": region}, res=resolution, crs=crs, rotated=False
@@ -879,7 +882,6 @@ class SFINCSSimulation:
         start_time: datetime,
         end_time: datetime,
         spinup_seconds: int = 86400,
-        write_gis_files: bool = True,
         write_figures: bool = True,
     ) -> None:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
@@ -891,7 +893,6 @@ class SFINCSSimulation:
             start_time: The start time of the simulation as a datetime object.
             end_time: The end time of the simulation as a datetime object.
             spinup_seconds: The number of seconds to use for model spin-up. Defaults to 86400 (1 day).
-            write_gis_files: Whether to write GIS files for the model. Defaults to True.
             write_figures: Whether to generate and save figures for the model. Defaults to False.
         """
         self._name = simulation_name
@@ -903,22 +904,15 @@ class SFINCSSimulation:
         sfincs_model = sfincs_root_model.sfincs_model
         sfincs_model.set_root(str(self.path), mode="w+")
 
-        # update mode time based on event tstart and tend from event dict
         sfincs_model.setup_config(
-            alpha=0.5
-        )  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
-        sfincs_model.setup_config(tspinup=spinup_seconds)  # spinup time in seconds
-        sfincs_model.setup_config(dtout=900)  # output time step in seconds
-        sfincs_model._write_gis = write_gis_files
-        sfincs_model.setup_config(
-            tref=to_sfincs_datetime(start_time),
-            tstart=to_sfincs_datetime(start_time),
-            tstop=to_sfincs_datetime(end_time),
+            alpha=0.5,  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
+            h73table=1,  # use h-73 table for friction calculation. This is slightly less accurate but up to 30% faster
+            tspinup=spinup_seconds,  # spinup time in seconds
+            dtout=900,  # output time step in seconds
+            tstart=to_sfincs_datetime(start_time),  # simulation start time
+            tstop=to_sfincs_datetime(end_time),  # simulation end time
+            **make_relative_paths(sfincs_model.config, self.root_path, self.path),
         )
-        sfincs_model.setup_config(
-            **make_relative_paths(sfincs_model.config, self.root_path, self.path)
-        )
-
         sfincs_model.write_config()
 
         self.sfincs_model = sfincs_model
@@ -1033,10 +1027,17 @@ class SFINCSSimulation:
     def set_river_inflow(
         self, nodes: gpd.GeoDataFrame, timeseries: pd.DataFrame
     ) -> None:
-        """Sets up river inflow boundary conditions for the SFINCS model.
+        """
+        Sets up river inflow boundary conditions for the SFINCS model.
 
-        For inflow we use a negative index.
+        Here, we use negative indices to indicate inflow boundaries, so that they are
+        seperate from the runoff generated in the model domain.
 
+        Args:
+            nodes: GeoDataFrame containing the locations of river inflow points.
+                The index values are converted to negative values to indicate inflow boundaries.
+            timeseries: DataFrame containing discharge time series (in m^3/s) for each node.
+                The columns should correspond to the node indices; these are also converted to negative values.
         """
         nodes.index = [-idx for idx in nodes.index]  # SFINCS negative index for inflow
         timeseries.columns = [-col for col in timeseries.columns]
