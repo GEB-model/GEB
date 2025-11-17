@@ -534,7 +534,7 @@ def test_multiverse() -> None:
                 mode="w",
             )
 
-        mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
+        mean_discharge_after_forecast: dict[str | int, float] = geb.multiverse(
             return_mean_discharge=True, forecast_issue_datetime=forecast_issue_date
         )
 

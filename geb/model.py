@@ -113,7 +113,6 @@ class GEBModel(Module, HazardDriver):
     @overload
     def multiverse(
         self,
-        variables: list[str],
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = True,
     ) -> dict[Any, float]: ...

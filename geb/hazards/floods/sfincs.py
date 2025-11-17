@@ -906,7 +906,7 @@ class SFINCSSimulation:
 
         sfincs_model.setup_config(
             alpha=0.5,  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
-            h73table=1,  # use h-73 table for friction calculation. This is slightly less accurate but up to 30% faster
+            h73table=1,  # use h^(7/3) table for friction calculation. This is slightly less accurate but up to 30% faster
             tspinup=spinup_seconds,  # spinup time in seconds
             dtout=900,  # output time step in seconds
             tstart=to_sfincs_datetime(start_time),  # simulation start time
@@ -1039,6 +1039,8 @@ class SFINCSSimulation:
             timeseries: DataFrame containing discharge time series (in m^3/s) for each node.
                 The columns should correspond to the node indices; these are also converted to negative values.
         """
+        nodes = nodes.copy()
+        timeseries = timeseries.copy()
         nodes.index = [-idx for idx in nodes.index]  # SFINCS negative index for inflow
         timeseries.columns = [-col for col in timeseries.columns]
         self.set_discharge_forcing_from_nodes(

@@ -342,7 +342,7 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
             )
 
             # Use tracked volumes from the simulation
-            non_discharded_runoff_volume: float = simulation.total_discharge_volume_m3
+            non_discarded_runoff_volume: float = simulation.total_discharge_volume_m3
             discarded_discharge: float = (
                 simulation.discarded_accumulated_generated_discharge_m3
             )
@@ -350,7 +350,7 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
             # compare to total discharge volume
             assert math.isclose(
                 total_flood_volume,
-                non_discharded_runoff_volume,
+                non_discarded_runoff_volume,
                 abs_tol=0,
                 rel_tol=0.01,
             )

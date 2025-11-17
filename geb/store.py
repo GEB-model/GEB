@@ -9,13 +9,19 @@ from collections import deque
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterator,
+)
 
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import yaml
+from numpy.typing import NDArray
 
 from geb.workflows.io import load_geom
 
@@ -320,7 +326,7 @@ class DynamicArray:
 
     def __setitem__(
         self,
-        key: int | slice | tuple[slice | int | list[bool | int]] | list[bool],
+        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
         value: Any,
     ) -> None:
         """
@@ -333,7 +339,8 @@ class DynamicArray:
         self.data.__setitem__(key, value)
 
     def __getitem__(
-        self, key: int | slice | tuple[slice | int | list[bool | int]] | list[bool]
+        self,
+        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
     ) -> DynamicArray | np.ndarray:
         """
         Retrieve item(s) or a sliced DynamicArray.

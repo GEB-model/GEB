@@ -189,7 +189,7 @@ def land_surface_model(
     transpiration_m = np.zeros_like(snow_water_equivalent_m)
     groundwater_recharge_m = np.zeros_like(snow_water_equivalent_m)
 
-    for i in prange(snow_water_equivalent_m.size):
+    for i in prange(snow_water_equivalent_m.size):  # ty: ignore[not-iterable]
         pr_kg_per_m2_per_s_cell = pr_kg_per_m2_per_s[:, i]
         tas_2m_K_cell = tas_2m_K[:, i]
         dewpoint_tas_2m_K_cell = dewpoint_tas_2m_K[:, i]

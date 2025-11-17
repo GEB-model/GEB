@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Hashable, Mapping
 from typing import Any, Literal, overload
 
 import dask
@@ -78,7 +78,7 @@ def pixels_to_coords(
     assert pixels.shape[1] == 2
     if gt[2] + gt[4] == 0:
         coords = np.empty(pixels.shape, dtype=np.float64)
-        for i in prange(coords.shape[0]):
+        for i in prange(coords.shape[0]):  # ty: ignore[not-iterable]
             coords[i, 0] = pixels[i, 0] * gt[1] + gt[0]
             coords[i, 1] = pixels[i, 1] * gt[5] + gt[3]
         return coords
@@ -109,7 +109,7 @@ def sample_from_map(
     x_step = gt[1]
     y_step = gt[5]
     values = np.empty((size,) + array.shape[:-2], dtype=array.dtype)
-    for i in prange(size):
+    for i in prange(size):  # ty: ignore[not-iterable]
         values[i] = array[
             ...,
             int((coords[i, 1] - y_offset) / y_step),
@@ -208,7 +208,7 @@ def coords_to_pixels(
         y_step = gt[5]
         pxs = np.empty(size, dtype=dtype)
         pys = np.empty(size, dtype=dtype)
-        for i in prange(size):
+        for i in prange(size):  # ty: ignore[not-iterable]
             pxs[i] = int((coords[i, 0] - x_offset) / x_step)
             pys[i] = int((coords[i, 1] - y_offset) / y_step)
         return pxs, pys
@@ -818,7 +818,7 @@ def get_area_definition(da: xr.DataArray) -> AreaDefinition:
 def _fill_in_coords(
     target_coords: xr.core.coordinates.DataArrayCoordinates,
     source_coords: xr.core.coordinates.DataArrayCoordinates,
-    data_dims: tuple[str, ...],
+    data_dims: tuple[Hashable, ...],
 ) -> list[xr.core.coordinates.DataArrayCoordinates]:
     """Fill in missing coordinates that are also dimensions from source except for 'x' and 'y' which are taken from target.
 
