@@ -576,7 +576,6 @@ def cluster_subbasins_following_coastline(
     data_catalog: DataCatalog,
     subbasin_ids: list[int],
     target_area_km2: float,  # Target cumulative upstream area per cluster in km² (e.g., Danube basin ~817,000 km²; use appropriate value for other basins)
-    area_tolerance: float,
     logger: logging.Logger,
 ) -> list[list[int]]:
     """Cluster subbasins by following the coastline with performance optimizations.
@@ -591,7 +590,6 @@ def cluster_subbasins_following_coastline(
         data_catalog: Data catalog containing the MERIT basins.
         subbasin_ids: List of downstream COMID values to cluster.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
-        area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
         logger: Logger for progress tracking.
 
     Returns:
@@ -667,10 +665,6 @@ def cluster_subbasins_following_coastline(
     used_subbasins = set()
     remaining_basins = set(subbasin_ids)
     last_added_subbasin = None  # Track the last subbasin added to the previous cluster
-
-    min_area_threshold = target_area_km2 * (1 - area_tolerance)
-    max_area_threshold = target_area_km2 * (1 + area_tolerance)
-
     cluster_number = 1
     total_subbasins = len(subbasin_ids)
 
@@ -732,7 +726,7 @@ def cluster_subbasins_following_coastline(
         logger.info(f"    Starting area: {current_area:,.0f} km²")
 
         # Grow cluster along coastline/proximity with distance threshold (optimized)
-        while current_area < min_area_threshold and remaining_basins:
+        while current_area < target_area_km2 and remaining_basins:
             # Get all adjacent basins for current cluster (lazy computation)
             all_adjacent_basins = set()
             for cluster_basin in current_cluster:
@@ -778,21 +772,17 @@ def cluster_subbasins_following_coastline(
             best_candidate = None
             for candidate_id, distance in candidates:
                 candidate_area = upstream_areas.get(candidate_id, 0)
-                if current_area + candidate_area <= max_area_threshold:
+                if current_area + candidate_area <= target_area_km2:
                     best_candidate = candidate_id
                     break
 
             # Early termination if cluster is already at minimum size and no valid candidates
-            if best_candidate is None and current_area >= min_area_threshold:
+            if best_candidate is None and current_area >= target_area_km2:
                 logger.info(f"Cluster reached minimum area, stopping growth")
                 break
 
             # If no candidate fits, and we're still below minimum, take the closest one
-            if (
-                best_candidate is None
-                and current_area < min_area_threshold
-                and candidates
-            ):
+            if best_candidate is None and current_area < target_area_km2 and candidates:
                 best_candidate = candidates[0][0]
 
             if best_candidate is None:

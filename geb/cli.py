@@ -1495,7 +1495,6 @@ def init_multiple_fn(
     from_example: str,
     geometry_bounds: str,
     target_area_km2: float,
-    area_tolerance: float,
     cluster_prefix: str,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
@@ -1508,7 +1507,6 @@ def init_multiple_fn(
         from_example: Name of the example to use as a base for the models.
         geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
-        area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
         cluster_prefix: Prefix for cluster directory names.
 
     Raises:
@@ -1546,7 +1544,6 @@ def init_multiple_fn(
     logger.info("Starting multiple model initialization")
     logger.info(f"Using geometry bounds: {geometry_bounds}")
     logger.info(f"Target area: {target_area_km2:,.0f} km²")
-    logger.info(f"Area tolerance: {area_tolerance:.1%}")
 
     logger.info("Loading river network...")
     river_graph = get_river_graph(data_catalog_instance)
@@ -1577,7 +1574,6 @@ def init_multiple_fn(
         data_catalog_instance,
         downstream_subbasins,
         target_area_km2=target_area_km2,
-        area_tolerance=area_tolerance,
         logger=logger,
     )
 
@@ -1673,12 +1669,6 @@ def init_multiple_fn(
     help="Target cumulative upstream area per cluster in km². Defaults to 34,000 km².",
 )
 @click.option(
-    "--area-tolerance",
-    default=0.3,
-    type=float,
-    help="Tolerance for target area as fraction (0.3 = 30% tolerance).",
-)
-@click.option(
     "--cluster-prefix",
     default="cluster",
     help="Prefix for cluster directory names. Defaults to 'cluster'.",
@@ -1692,7 +1682,6 @@ def init_multiple(
     from_example: str,
     geometry_bounds: str,
     target_area_km2: float,
-    area_tolerance: float,
     cluster_prefix: str,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.
@@ -1714,7 +1703,6 @@ def init_multiple(
         from_example: Name of the example to use as a base for the models.
         geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select sub-basins
         target_area_km2: Target cumulative upstream area per cluster
-        area_tolerance: Tolerance for the target area as a fraction (e.g., 0.3 for 30% tolerance).
         cluster_prefix: Prefix used for created cluster directory names and output files.
         overwrite: If True, existing cluster directories and files will be overwritten.
 
@@ -1727,7 +1715,6 @@ def init_multiple(
         from_example=from_example,
         geometry_bounds=geometry_bounds,
         target_area_km2=target_area_km2,
-        area_tolerance=area_tolerance,
         cluster_prefix=cluster_prefix,
     )
 
