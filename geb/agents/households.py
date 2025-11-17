@@ -919,6 +919,7 @@ class Households(AgentBaseClass):
             ("residential", "damage_parameters/flood/road/residential/curve"),
             ("unclassified", "damage_parameters/flood/road/unclassified/curve"),
             ("tertiary", "damage_parameters/flood/road/tertiary/curve"),
+            ("tertiary_link", "damage_parameters/flood/road/tertiary_link/curve"),
             ("primary", "damage_parameters/flood/road/primary/curve"),
             ("primary_link", "damage_parameters/flood/road/primary_link/curve"),
             ("secondary", "damage_parameters/flood/road/secondary/curve"),

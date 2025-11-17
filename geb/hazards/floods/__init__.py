@@ -463,50 +463,59 @@ class Floods(Module):
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
 
-        # Load mask of lower elevation coastal zones to activate cells for the different sfincs model regions
-        lower_elevation_coastal_zone_mask = load_geom(
-            self.model.files["geom"]["coastal/lower_elevation_coastal_zone_regions"]
-        )
-
-        # get initial_water_level for model domain
-        initial_water_level = lower_elevation_coastal_zone_mask[
-            "initial_water_level"
-        ].min()
-
-        # buffer lower elevation coastal zone mask to ensure proper inclusion of coastline
-        lower_elevation_coastal_zone_mask["geometry"] = (
-            lower_elevation_coastal_zone_mask.buffer(0.00833333)
-        )
-
-        # load osm land polygons to exclude from coastal boundary cells
-        coastal_boundary_exclude_mask = load_geom(
-            self.model.files["geom"]["coastal/land_polygons"],
-        )
-
-        # add buffer of ~500m to ensure proper exclusion. Buffer should be smaller than that of lower elevation coastal zone mask
-        coastal_boundary_exclude_mask["geometry"] = (
-            coastal_boundary_exclude_mask.buffer(0.004165)
-        )
-
         # load the subbasin geometry for the model domain
         subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
         coastal = subbasins["is_coastal_basin"].any()
 
-        # filter on coastal subbasins only
-        if coastal_only:
-            subbasins = subbasins[subbasins["is_coastal_basin"]]
+        # if coastal load files
+        if coastal:
+            # Load mask of lower elevation coastal zones to activate cells for the different sfincs model regions
+            lower_elevation_coastal_zone_mask = load_geom(
+                self.model.files["geom"]["coastal/lower_elevation_coastal_zone_regions"]
+            )
 
-        # merge region and lower elevation coastal zone mask in a single shapefile
-        model_domain = subbasins.union_all().union(
-            lower_elevation_coastal_zone_mask.union_all()
-        )
+            # get initial_water_level for model domain
+            initial_water_level = lower_elevation_coastal_zone_mask[
+                "initial_water_level"
+            ].min()
 
-        # domain to gpd.GeoDataFrame
-        model_domain = gpd.GeoDataFrame(
-            geometry=[model_domain], crs=lower_elevation_coastal_zone_mask.crs
-        )
+            # buffer lower elevation coastal zone mask to ensure proper inclusion of coastline
+            lower_elevation_coastal_zone_mask["geometry"] = (
+                lower_elevation_coastal_zone_mask.buffer(0.00833333)
+            )
+
+            # load osm land polygons to exclude from coastal boundary cells
+            coastal_boundary_exclude_mask = load_geom(
+                self.model.files["geom"]["coastal/land_polygons"],
+            )
+
+            # add buffer of ~500m to ensure proper exclusion. Buffer should be smaller than that of lower elevation coastal zone mask
+            coastal_boundary_exclude_mask["geometry"] = (
+                coastal_boundary_exclude_mask.buffer(0.004165)
+            )
+
+            # filter on coastal subbasins only
+            if coastal_only:
+                subbasins = subbasins[subbasins["is_coastal_basin"]]
+
+            # merge region and lower elevation coastal zone mask in a single shapefile
+            model_domain = subbasins.union_all().union(
+                lower_elevation_coastal_zone_mask.union_all()
+            )
+
+            # domain to gpd.GeoDataFrame
+            model_domain = gpd.GeoDataFrame(
+                geometry=[model_domain], crs=lower_elevation_coastal_zone_mask.crs
+            )
+            model_name = "coastal_and_inland_region"
+        else:
+            model_domain = subbasins
+            coastal_boundary_exclude_mask = None
+            initial_water_level = None
+            model_name = "inland_region"
+
         sfincs_root_model: SFINCSRootModel = self.build(
-            name="coastal_region",
+            name=model_name,
             region=model_domain,
             coastal=coastal,
             coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
