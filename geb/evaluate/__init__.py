@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .hydrology import Hydrology
+from .meteorological_forecasts import MeteorologicalForecasts
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
-class Evaluate(Hydrology):
+class Evaluate(Hydrology, MeteorologicalForecasts):
     """The main class that implements all evaluation procedures for the GEB model.
 
     Args:
@@ -54,6 +55,7 @@ class Evaluate(Hydrology):
                 "plot_discharge",
                 "evaluate_discharge",
                 "evaluate_hydrodynamics",
+                "evaluate_forecasts",
             ]
         else:
             assert isinstance(methods, (list, tuple)), (

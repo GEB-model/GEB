@@ -186,6 +186,7 @@ class GEBModel(Module, HazardDriver):
                     / "other"
                     / "forecasts"
                     / self.config["general"]["forecasts"]["provider"]
+                    / self.forecast_issue_date
                     / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
                 )  # open the forecast data for the variable
                 # these are the forecast members to loop over
