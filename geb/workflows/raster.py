@@ -859,6 +859,7 @@ def resample_chunked(
 
     Raises:
         ValueError: If the method is not 'bilinear' or 'nearest'.
+        ValueError: If the target DataArray is not chunked.
 
     Returns:
         A new DataArray that has been resampled to match the target's grid.
@@ -874,6 +875,9 @@ def resample_chunked(
 
     source_geo: AreaDefinition = get_area_definition(source)
     target_geo: AreaDefinition = get_area_definition(target)
+
+    if target.chunks is None:
+        raise ValueError("Target DataArray must be chunked for resample_chunked")
 
     indices: dask.Array = resample_blocks(
         gradient_resampler_indices_block,
