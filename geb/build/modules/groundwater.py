@@ -1,10 +1,15 @@
+"""Module for building groundwater related datasets for GEB."""
+
+import geopandas as gpd
 import numpy as np
 import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
-
-from ..workflows.general import (
+from geb.workflows.raster import (
+    convert_nodata,
+    interpolate_na_2d,
+    rasterize_like,
     resample_like,
 )
 
@@ -13,6 +18,7 @@ class GroundWater:
     """Contains all build methods for the groundwater for GEB."""
 
     def __init__(self) -> None:
+        """Initialize the GroundWater class."""
         pass
 
     @build_method(depends_on=["setup_elevation"])
@@ -36,20 +42,17 @@ class GroundWater:
             intial_heads_source: The initial heads dataset to use, options are GLOBGM and Fan. Default is 'GLOBGM'.
             force_one_layer: If True, the model will be forced to use only one layer. Default is True.
         """
-        aquifer_top_elevation = self.grid["landsurface/elevation"].raster.mask_nodata()
-        aquifer_top_elevation.raster.set_crs(4326)
+        aquifer_top_elevation = convert_nodata(
+            self.grid["landsurface/elevation"], new_nodata=np.nan
+        )
         aquifer_top_elevation = self.set_grid(
             aquifer_top_elevation, name="groundwater/aquifer_top_elevation"
         )
 
         # load total thickness
-        total_thickness = (
-            xr.open_dataarray(
-                self.data_catalog.get_source("total_groundwater_thickness_globgm").path
-            )
-            .rename({"lon": "x", "lat": "y"})
-            .rio.write_crs(4326)
-        )
+        total_thickness = self.new_data_catalog.fetch(
+            "total_groundwater_thickness_globgm"
+        ).read()
         total_thickness = total_thickness.isel(
             get_window(total_thickness.x, total_thickness.y, self.bounds, buffer=2)
         )
@@ -60,13 +63,9 @@ class GroundWater:
             maximum_thickness_confined_layer,
         )
 
-        confining_layer = (
-            xr.open_dataarray(
-                self.data_catalog.get_source("thickness_confining_layer_globgm").path
-            )
-            .rename({"lon": "x", "lat": "y"})
-            .rio.write_crs(4326)
-        )
+        confining_layer = self.new_data_catalog.fetch(
+            "thickness_confining_layer_globgm"
+        ).read()
         confining_layer = confining_layer.isel(
             get_window(confining_layer.x, confining_layer.y, self.bounds, buffer=2)
         )
@@ -134,13 +133,9 @@ class GroundWater:
         )
 
         # load hydraulic conductivity
-        hydraulic_conductivity = (
-            xr.open_dataarray(
-                self.data_catalog.get_source("hydraulic_conductivity_globgm").path
-            )
-            .rename({"lon": "x", "lat": "y"})
-            .rio.write_crs(4326)
-        )
+        hydraulic_conductivity = self.new_data_catalog.fetch(
+            "hydraulic_conductivity_globgm"
+        ).read()
         hydraulic_conductivity = hydraulic_conductivity.isel(
             get_window(
                 hydraulic_conductivity.x,
@@ -149,9 +144,9 @@ class GroundWater:
                 buffer=2,
             )
         )
-        hydraulic_conductivity.attrs["_FillValue"] = np.nan
 
-        # because
+        # because hydraulic conductivity is log-normally distributed, we interpolate the log values
+        # after log transformation and then back-transform after interpolation
         hydraulic_conductivity_log = np.log(hydraulic_conductivity)
         hydraulic_conductivity_log = resample_like(
             hydraulic_conductivity_log,
@@ -171,17 +166,12 @@ class GroundWater:
         self.set_grid(hydraulic_conductivity, name="groundwater/hydraulic_conductivity")
 
         # load specific yield
-        specific_yield = (
-            xr.open_dataarray(
-                self.data_catalog.get_source("specific_yield_aquifer_globgm").path
-            )
-            .rename({"lon": "x", "lat": "y"})
-            .rio.write_crs(4326)
-        )
+        specific_yield = self.new_data_catalog.fetch(
+            "specific_yield_aquifer_globgm"
+        ).read()
         specific_yield = specific_yield.isel(
             get_window(specific_yield.x, specific_yield.y, self.bounds, buffer=2)
         )
-        specific_yield.attrs["_FillValue"] = np.nan
 
         specific_yield = resample_like(
             specific_yield,
@@ -199,36 +189,32 @@ class GroundWater:
             specific_yield = specific_yield.expand_dims(layer=["upper"])
         self.set_grid(specific_yield, name="groundwater/specific_yield")
 
-        # load aquifer classification from why_map and write it as a grid
-        why_map = xr.open_dataarray(self.data_catalog.get_source("why_map").path)
-        why_map = why_map.isel(
-            band=0, **get_window(why_map.x, why_map.y, self.bounds, buffer=5)
+        why_map: gpd.GeoDataFrame = self.new_data_catalog.fetch("why_map").read()
+        why_map: gpd.GeoDataFrame = why_map[
+            why_map["HYGEO2"] != 88
+        ]  # remove areas under continuous ice cover
+        why_map["aquifer_classification"] = why_map["HYGEO2"] // 10
+
+        why_map_grid: xr.DataArray = rasterize_like(
+            why_map,
+            "aquifer_classification",
+            raster=aquifer_top_elevation,
+            dtype=np.int16,
+            nodata=-1,
+            all_touched=False,
         )
+        why_map_grid: xr.DataArray = interpolate_na_2d(why_map_grid)
 
-        why_map.x.attrs = {"long_name": "longitude", "units": "degrees_east"}
-        why_map.y.attrs = {"long_name": "latitude", "units": "degrees_north"}
-        why_map.attrs["_FillValue"] = np.nan
-
-        original_dtype = why_map.dtype
-        why_interpolated = resample_like(
-            why_map.astype(np.float64),
-            aquifer_top_elevation,
-            method="nearest",
-        )
-        why_interpolated = why_interpolated.astype(original_dtype)
-
-        self.set_grid(why_interpolated, name="groundwater/why_map")
+        self.set_grid(why_map_grid, name="groundwater/why_map")
 
         if intial_heads_source == "GLOBGM":
             # the GLOBGM DEM has a slight offset, which we fix here before loading it
 
-            reference_globgm_map = xr.open_dataarray(
-                self.data_catalog.get_source("head_upper_globgm").path
-            )
+            reference_globgm_map = self.new_data_catalog.fetch(
+                "head_upper_layer_globgm"
+            ).read()
 
-            dem_globgm = xr.open_dataarray(
-                self.data_catalog.get_source("dem_globgm").path
-            ).rename({"lon": "x", "lat": "y"})
+            dem_globgm = self.new_data_catalog.fetch("dem_globgm").read()
 
             dem_globgm = dem_globgm.assign_coords(
                 x=reference_globgm_map.x.values,
@@ -238,21 +224,20 @@ class GroundWater:
             dem_globgm = dem_globgm.isel(
                 get_window(dem_globgm.x, dem_globgm.y, self.bounds, buffer=2)
             )
-
-            dem = self.grid["landsurface/elevation"].raster.mask_nodata()
+            dem = convert_nodata(self.grid["landsurface/elevation"], new_nodata=np.nan)
 
             # heads
-            head_upper_layer = xr.open_dataarray(
-                self.data_catalog.get_source("head_upper_globgm").path
-            )
+            head_upper_layer = self.new_data_catalog.fetch(
+                "head_upper_layer_globgm"
+            ).read()
             head_upper_layer = head_upper_layer.isel(
-                band=0,
                 **get_window(
                     head_upper_layer.x, head_upper_layer.y, self.bounds, buffer=2
                 ),
             )
 
-            head_upper_layer = head_upper_layer.raster.mask_nodata()
+            head_upper_layer = convert_nodata(head_upper_layer, new_nodata=np.nan)
+
             relative_head_upper_layer = head_upper_layer - dem_globgm
 
             relative_head_upper_layer = resample_like(
@@ -261,17 +246,17 @@ class GroundWater:
 
             head_upper_layer = dem + relative_head_upper_layer
 
-            head_lower_layer = xr.open_dataarray(
-                self.data_catalog.get_source("head_lower_globgm").path
-            )
+            head_lower_layer = self.new_data_catalog.fetch(
+                "head_lower_layer_globgm"
+            ).read()
             head_lower_layer = head_lower_layer.isel(
-                band=0,
                 **get_window(
                     head_lower_layer.x, head_lower_layer.y, self.bounds, buffer=2
                 ),
             )
 
-            head_lower_layer = head_lower_layer.raster.mask_nodata()
+            head_lower_layer = convert_nodata(head_lower_layer, new_nodata=np.nan)
+
             relative_head_lower_layer = head_lower_layer - dem_globgm
 
             relative_head_lower_layer = resample_like(
@@ -334,5 +319,4 @@ class GroundWater:
             )
 
         assert heads.shape == hydraulic_conductivity.shape
-        heads.attrs["_FillValue"] = np.nan
         self.set_grid(heads, name="groundwater/heads")

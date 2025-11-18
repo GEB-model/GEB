@@ -1,25 +1,44 @@
-import math
-from typing import Tuple
+"""Module containing general agent functions and the base class for all agents."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
-from honeybees.agents import AgentBaseClass as HoneybeesAgentBaseClass
 from numba import njit
 
 from geb.module import Module
 from geb.store import DynamicArray
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel
+
 
 @njit(cache=True)
 def downscale_volume(
-    data_gt: Tuple[float, float, float, float, float, float],
-    model_gt: Tuple[float, float, float, float, float, float],
+    data_gt: tuple[float, float, float, float, float, float],
+    model_gt: tuple[float, float, float, float, float, float],
     data: npt.NDArray[np.float32],
     mask: npt.NDArray[np.bool_],
-    grid_to_HRU_uncompressed: npt.NDArray[np.int32],
+    mapping_grid_to_HRU_uncompressed: npt.NDArray[np.int32],
     downscale_mask: npt.NDArray[np.bool_],
     HRU_land_size: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
+    """Downscale a gridded volume to HRU level using area-weighted averaging.
+
+    Args:
+        data_gt: Geotransform of the data to be downscaled.
+        model_gt: Geotransform of the model (target) decompressed HRU grid.
+        data: 2D array of data to be downscaled.
+        mask: 2D boolean array where True indicates no data (e.g., water bodies).
+        mapping_grid_to_HRU_uncompressed: 1D array mapping each grid cell to an HRU index.
+        downscale_mask: 1D boolean array where True indicates HRUs to be excluded from downscaling.
+        HRU_land_size: 1D array of land area for each HRU.
+
+    Returns:
+        1D array of downscaled data at HRU level.
+    """
     xoffset = (model_gt[0] - data_gt[0]) / model_gt[1]
     assert 0.0001 > xoffset - round(xoffset) > -0.0001
     xoffset = round(xoffset)
@@ -63,10 +82,10 @@ def downscale_volume(
                 for xvar in range(x_left, x_right):
                     if not mask[yvar, xvar]:
                         k = yvar * xvarsize + xvar
-                        HRU_right = grid_to_HRU_uncompressed[k]
+                        HRU_right = mapping_grid_to_HRU_uncompressed[k]
                         # assert HRU_right != -1
                         if k > 0:
-                            HRU_left = grid_to_HRU_uncompressed[k - 1]
+                            HRU_left = mapping_grid_to_HRU_uncompressed[k - 1]
                             # assert HRU_left != -1
                         else:
                             HRU_left = 0
@@ -81,10 +100,10 @@ def downscale_volume(
                     for xvar in range(x_left, x_right):
                         if not mask[yvar, xvar]:
                             k = yvar * xvarsize + xvar
-                            HRU_right = grid_to_HRU_uncompressed[k]
+                            HRU_right = mapping_grid_to_HRU_uncompressed[k]
                             # assert HRU_right != -1
                             if k > 0:
-                                HRU_left = grid_to_HRU_uncompressed[k - 1]
+                                HRU_left = mapping_grid_to_HRU_uncompressed[k - 1]
                                 # assert HRU_left != -1
                             else:
                                 HRU_left = 0
@@ -99,27 +118,26 @@ def downscale_volume(
     return downscaled_array
 
 
-class AgentBaseClass(Module, HoneybeesAgentBaseClass):
+class AgentBaseClass(Module):
     """Base class for all agent classes."""
 
-    def __init__(self, model) -> None:
+    def __init__(self, model: GEBModel) -> None:
+        """Initialize the agent base class.
+
+        Args:
+            model: The GEB model instance.
+        """
         if not hasattr(self, "redundancy"):
             self.redundancy = None  # default redundancy is None
-        HoneybeesAgentBaseClass.__init__(self)
         Module.__init__(self, model)
 
-    def get_max_n(self, n):
-        if self.redundancy is None:
-            return n
-        else:
-            max_n = math.ceil(n * (1 + self.redundancy))
-            assert (
-                max_n < 4294967295
-            )  # max value of uint32, consider replacing with uint64
-            return max_n
-
     @property
-    def agent_arrays(self):
+    def agent_arrays(self) -> dict[str, DynamicArray]:
+        """Return a dictionary of all DynamicArray attributes of the agent.
+
+        Raises:
+            AssertionError: If there are duplicate DynamicArray attributes.
+        """
         agent_arrays = {
             name: value
             for name, value in vars(self.var).items()

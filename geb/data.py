@@ -1,9 +1,19 @@
-import json
+"""Several general functions to load and process data for the GEB model."""
+
+from __future__ import annotations
+
 from datetime import date, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
+
+from geb.workflows.io import load_dict
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 class DateIndex:
@@ -56,12 +66,17 @@ class DateIndex:
         return np.searchsorted(self.dates, date, side="right").item() - 1
 
     def __len__(self) -> int:
-        """Return the number of dates in the index."""
+        """Return the number of dates in the index.
+
+        Returns:
+            The number of dates in the index.
+
+        """
         return self.dates.size
 
 
 def load_regional_crop_data_from_dict(
-    model, name
+    model: GEBModel, name: str
 ) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
     """Load crop prices per state from the input data and return a dictionary of states containing 2D array of prices.
 
@@ -72,8 +87,7 @@ def load_regional_crop_data_from_dict(
     Raises:
         ValueError: if the data is invalid according to the validation criteria.
     """
-    with open(model.files["dict"][name], "r") as f:
-        timedata = json.load(f)
+    timedata = load_dict(model.files["dict"][name])
 
     if timedata["type"] == "constant":
         return None, timedata["data"]
@@ -98,20 +112,35 @@ def load_regional_crop_data_from_dict(
         raise ValueError(f"Unknown type: {timedata['type']}")
 
 
-def load_crop_data(files) -> dict[np.ndarray]:
+def load_crop_data(files: dict[str, dict[str, str]]) -> dict[np.ndarray]:
     """Read csv-file of values for crop water depletion.
 
     Returns:
         yield_factors: dictonary with np.ndarray of values per crop for each variable.
     """
-    with open(files["dict"]["crops/crop_data"], "r") as f:
-        crop_data = json.load(f)
+    crop_data = load_dict(files["dict"]["crops/crop_data"])
     data = pd.DataFrame.from_dict(crop_data["data"], orient="index")
     data.index = data.index.astype(int)
     return crop_data["type"], data
 
 
-def parse_dates(date_strings, date_formats=["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y"]):
+def parse_dates(
+    date_strings: list[str],
+    date_formats: list[str] = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y"],
+) -> list[datetime]:
+    """Parse a list of date strings into datetime objects.
+
+    Args:
+        date_strings: List of date strings to parse.
+        date_formats: List of formats to parse (see datetime documentation).
+            Defaults to ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y"].
+
+    Raises:
+        ValueError: If no valid date format is found for one of the date strings.
+
+    Returns:
+        List of datetime objects.
+    """
     for date_format in date_formats:
         try:
             return [datetime.strptime(str(d), date_format) for d in date_strings]
@@ -123,22 +152,17 @@ def parse_dates(date_strings, date_formats=["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%Y
         )
 
 
-def load_economic_data(fp: str) -> tuple[DateIndex, dict[int, np.ndarray]]:
-    with open(fp, "r") as f:
-        data = json.load(f)
+def load_economic_data(fp: Path) -> tuple[DateIndex, dict[int, np.ndarray]]:
+    """Load economic data from a json file, such as crop prices and inflation.
+
+    Args:
+        fp: File path to the json file.
+
+    Returns:
+        A tuple containing a DateIndex object and a dictionary mapping region IDs to numpy arrays of values.
+    """
+    data = load_dict(fp)
     dates = parse_dates(data["time"])
     date_index = DateIndex(dates)
     d = {int(region_id): values for region_id, values in data["data"].items()}
     return (date_index, d)
-
-
-# def load_sprinkler_prices(self, inflation_rates_per_year):
-#     sprinkler_price_2008 = self.model.config['agent_settings']['expected_utility']['adaptation_sprinkler']['adaptation_cost']
-#     #upkeep_price_2008_m2 = 3000 / 10_000  # ha to m2
-#     # create dictory with prices for well_prices per year by applying inflation rates
-#     sprinkler_prices = {2008: sprinkler_price_2008}
-#     for year in range(2009, 2022):
-#         sprinkler_prices[year] = sprinkler_prices[year-1] * inflation_rates_per_year[year]
-#     for year in range(2007, 1960, -1):
-#         sprinkler_prices[year] = sprinkler_prices[year+1] / inflation_rates_per_year[year+1]
-#     return sprinkler_prices

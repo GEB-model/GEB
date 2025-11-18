@@ -9,7 +9,7 @@ jobs:
   check-ruff-errors:
     runs-on: ubuntu-latest
     env:
-      RULES: ANN001,ANN003,ANN201,ANN202,D102,D100,D107
+      RULES: ANN001,ANN201,ANN202,D102,D103
     steps:
       - name: Checkout main branch for baseline
         uses: actions/checkout@v3
@@ -71,7 +71,7 @@ jobs:
           set -o pipefail
           cd main-branch
           # Run ruff, capture full output to file and compute per-rule stats (RULE COUNT)
-          ruff check --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_main_full.txt || true
+          ruff check --isolated --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_main_full.txt || true
           # extract lines like: "<count> <RULE>  <message>" -> produce "RULE COUNT"
           awk '/^[[:space:]]*[0-9]+[[:space:]]+[A-Z0-9_]+/ {print $2" "$1}' ruff_main_full.txt > ruff_main_stats.txt || true
           # expose paths as step outputs for later steps
@@ -83,7 +83,7 @@ jobs:
         run: |
           set -o pipefail
           cd pr-branch
-          ruff check --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_pr_full.txt || true
+          ruff check --isolated --statistics --select "${RULES}" --output-format full . 2>&1 | tee ruff_pr_full.txt || true
           awk '/^[[:space:]]*[0-9]+[[:space:]]+[A-Z0-9_]+/ {print $2" "$1}' ruff_pr_full.txt > ruff_pr_stats.txt || true
           echo "full_file=pr-branch/ruff_pr_full.txt" >> $GITHUB_OUTPUT
           echo "stats_file=pr-branch/ruff_pr_stats.txt" >> $GITHUB_OUTPUT
@@ -116,7 +116,7 @@ jobs:
               echo "Regression detected for rule: $rule (main branch: $base -> pull request: $pr)"
               echo "More info: https://docs.astral.sh/ruff/rules/$rule"
               echo "To replicate locally, run:"
-              COMMAND="ruff check --select "$rule""
+              COMMAND="ruff check --isolated --select "$rule""
               echo $COMMAND
               echo "PR error lines for rule $rule within changed files:"
               # Convert relative paths to full paths in pr-branch directory

@@ -1,8 +1,7 @@
-"""
-Workflow helpers used in the GEB.
-"""
+"""Workflow helpers used in the GEB."""
 
 from time import time
+from typing import Iterable
 
 import numpy as np
 
@@ -58,14 +57,39 @@ class TimingModule:
 def balance_check(
     name: str,
     how: str = "cellwise",
-    influxes: list = [],
-    outfluxes: list = [],
-    prestorages: list = [],
-    poststorages: list = [],
-    tollerance: float = 1e-10,
+    influxes: Iterable = [],
+    outfluxes: Iterable = [],
+    prestorages: Iterable = [],
+    poststorages: Iterable = [],
+    tolerance: float = 1e-10,
     error_identifiers: dict = {},
     raise_on_error: bool = False,
 ) -> bool:
+    """Check the balance of a system, usually for water.
+
+    Essentially checks that influxes + prestorages = outfluxes + poststorages,
+    within a given tolerance.
+
+    Args:
+        name: Name of the balance check, used for printing.
+        how: Method to use for balance check, either 'cellwise' or 'sum'.
+        influxes: List of influx arrays.
+        outfluxes: List of outflux arrays.
+        prestorages: List of pre-storage arrays.
+        poststorages: List of post-storage arrays.
+        tolerance: tolerance for the balance check.
+        error_identifiers: Dictionary of identifiers to help locate errors, e.g. {'x': x_array, 'y': y_array}.
+            Can only be used with how='cellwise'.
+            When an error is found, the values of these identifiers at the location of the maximum error will be printed.
+        raise_on_error: Whether to raise an error if the balance check fails.
+
+    Returns:
+        True if the balance check passes, False otherwise.
+
+    Raises:
+        ValueError: If NaN values are found in the balance calculation.
+        AssertionError: If the balance check fails and raise_on_error is True.
+    """
     income = 0
     out = 0
     store = 0
@@ -95,9 +119,9 @@ def balance_check(
 
         if balance.size == 0:
             return True
-        elif np.abs(balance).max() > tollerance:
+        elif np.abs(balance).max() > tolerance:
             index = np.abs(balance).argmax()
-            text = f"{balance[np.abs(balance).argmax()]} > tollerance {tollerance}, max imbalance at index {index}."
+            text = f"{balance[np.abs(balance).argmax()]} > tolerance {tolerance}, max imbalance at index {index}."
 
             if error_identifiers:
                 text += " Error identifiers: " + ", ".join(
@@ -129,8 +153,8 @@ def balance_check(
         balance = abs(income + store - out)
         if np.isnan(balance):
             raise ValueError("Balance check failed, NaN values found.")
-        if balance > tollerance:
-            text = f"{balance} is larger than tollerance {tollerance}"
+        if balance > tolerance:
+            text = f"{balance} is larger than tolerance {tolerance}"
             if name:
                 print(name, text)
             else:

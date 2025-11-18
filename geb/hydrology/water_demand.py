@@ -1,3 +1,5 @@
+"""Water demand module for the hydrological model."""
+
 # --------------------------------------------------------------------------------
 # This file contains code that has been adapted from an original source available
 # in a public repository under the GNU General Public License. The original code
@@ -19,13 +21,21 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # --------------------------------------------------------------------------------
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import numpy as np
 import numpy.typing as npt
-from honeybees.library.raster import write_to_array
 
-from geb.hydrology.HRUs import load_grid
 from geb.module import Module
+from geb.typing import ArrayFloat32
 from geb.workflows import TimingModule, balance_check
+from geb.workflows.io import load_grid
+from geb.workflows.raster import write_to_array
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel, Hydrology
 
 
 def weighted_sum_per_reservoir(
@@ -33,6 +43,16 @@ def weighted_sum_per_reservoir(
     weights: npt.NDArray[np.float32],
     min_length: int,
 ) -> npt.NDArray[np.float32]:
+    """Calculate weighted sum of values per reservoir.
+
+    Args:
+        farmer_command_area: Array mapping each farmer to a reservoir command area.
+        weights: Values to be summed, weighted by the command area.
+        min_length: Minimum length of the output array, typically the number of reservoirs.
+
+    Returns:
+        Weighted sum of values per reservoir.
+    """
     mask: npt.NDArray[np.bool] = farmer_command_area != -1
     farmer_command_area = farmer_command_area[mask]
     weights = weights[mask]
@@ -49,7 +69,13 @@ class WaterDemand(Module):
         hydrology: The hydrology submodel instance.
     """
 
-    def __init__(self, model, hydrology) -> None:
+    def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
+        """Initialize the water demand module.
+
+        Args:
+            model: The GEB model instance.
+            hydrology: The hydrology submodel instance.
+        """
         super().__init__(model)
         self.hydrology = hydrology
 
@@ -75,7 +101,7 @@ class WaterDemand(Module):
 
         This method initializes the reservoir command areas for the HRU grid.
         """
-        reservoir_command_areas = self.HRU.compress(
+        reservoir_command_areas = self.HRU.convert_subgrid_to_HRU(
             load_grid(self.model.files["subgrid"]["waterbodies/subcommand_areas"]),
             method="last",
         )
@@ -110,7 +136,8 @@ class WaterDemand(Module):
 
         available_channel_storage_m3: np.ndarray = (
             self.hydrology.routing.router.get_available_storage(
-                maximum_abstraction_ratio=0.1
+                Q=self.grid.var.discharge_in_rivers_m3_s_substep,
+                maximum_abstraction_ratio=0.1,
             )
         )
 
@@ -155,13 +182,14 @@ class WaterDemand(Module):
         return withdrawal
 
     def step(
-        self, potential_evapotranspiration: npt.NDArray[np.float32]
+        self, root_depth_m: ArrayFloat32
     ) -> tuple[
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
+        ArrayFloat32,
+        ArrayFloat32,
+        ArrayFloat32,
+        ArrayFloat32,
         float,
+        ArrayFloat32,
     ]:
         """Perform a single time step of the water demand module.
 
@@ -175,7 +203,7 @@ class WaterDemand(Module):
         while for the industry and livestock water demand, a gridded approach is used.
 
         Args:
-            potential_evapotranspiration: Potential evapotranspiration in m per HRU [m].
+            root_depth_m: Root depth in meters for each HRU.
 
         Returns:
             Groundwater abstraction per grid cell [m3].
@@ -184,6 +212,7 @@ class WaterDemand(Module):
                 This is added to the channel flow in the routing module.
             Irrigation loss to evaporation per HRU [m].
             Total water demand loss [m3].
+            The actual irrigation consumption [m].
         """
         timer: TimingModule = TimingModule("Water demand")
 
@@ -207,10 +236,7 @@ class WaterDemand(Module):
         (
             gross_irrigation_demand_m3_per_field,
             gross_potential_irrigation_m3_per_field_limit_adjusted,
-        ) = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(
-            potential_evapotranspiration=potential_evapotranspiration,
-            available_infiltration=self.HRU.var.natural_available_water_infiltration,
-        )
+        ) = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(root_depth_m)
 
         gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32] = (
             self.model.agents.crop_farmers.field_to_farmer(
@@ -363,7 +389,7 @@ class WaterDemand(Module):
                     irrigation_loss_to_evaporation_m,
                     return_flow_irrigation_m,
                 ],
-                tollerance=1e-5,
+                tolerance=1e-5,
             )
 
         self.HRU.var.actual_irrigation_consumption = irrigation_water_consumption_m
@@ -410,7 +436,7 @@ class WaterDemand(Module):
                     irrigation_loss_to_evaporation_m,
                     return_flow_irrigation_m,
                 ],
-                tollerance=1e-6,
+                tolerance=1e-6,
             )
             balance_check(
                 name="water_demand_2",
@@ -432,7 +458,7 @@ class WaterDemand(Module):
                     available_reservoir_storage_m3,
                     available_groundwater_m3,
                 ],
-                tollerance=10000,
+                tolerance=10000,
             )
         if self.model.timing:
             print(timer)
@@ -445,4 +471,5 @@ class WaterDemand(Module):
             return_flow,  # from all sources, re-added in routing
             irrigation_loss_to_evaporation_m,
             total_water_demand_loss_m3,
+            self.HRU.var.actual_irrigation_consumption,
         )

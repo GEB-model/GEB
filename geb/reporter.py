@@ -1,17 +1,28 @@
+"""This module contains the Reporter class, which is used to report data to disk."""
+
+from __future__ import annotations
+
 import datetime
 import re
 import shutil
 from operator import attrgetter
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import zarr
-from honeybees.library.raster import coord_to_pixel
+import zarr.codecs
+import zarr.storage
+from dateutil.relativedelta import relativedelta
 
+from geb.module import Module
 from geb.store import DynamicArray
+from geb.typing import ArrayInt64, TwoDArrayInt32
 from geb.workflows.methods import multi_level_merge
+from geb.workflows.raster import coord_to_pixel
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 WATER_CIRCLE_REPORT_CONFIG = {
     "hydrology": {
@@ -24,14 +35,39 @@ WATER_CIRCLE_REPORT_CONFIG = {
             "type": "scalar",
         },
     },
-    "hydrology.snowfrost": {
+    "hydrology.landsurface": {
         "_water_circle_rain": {
-            "varname": ".rain",
+            "varname": ".rain_m",
             "type": "HRU",
             "function": "weightedsum",
         },
         "_water_circle_snow": {
-            "varname": ".snow",
+            "varname": ".snow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_transpiration": {
+            "varname": ".transpiration_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_bare_soil_evaporation": {
+            "varname": ".bare_soil_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_open_water_evaporation": {
+            "varname": ".open_water_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_interception_evaporation": {
+            "varname": ".interception_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_circle_sublimation_or_deposition": {
+            "varname": ".sublimation_or_deposition_m",
             "type": "HRU",
             "function": "weightedsum",
         },
@@ -64,40 +100,13 @@ WATER_CIRCLE_REPORT_CONFIG = {
             "type": "scalar",
         },
     },
-    "hydrology.landcover": {
-        "_water_circle_transpiration": {
-            "varname": ".actual_transpiration",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_bare_soil_evaporation": {
-            "varname": ".actual_bare_soil_evaporation",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_direct_evaporation": {
-            "varname": ".open_water_evaporation",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_interception_evaporation": {
-            "varname": ".interception_evaporation",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-        "_water_circle_snow_sublimation": {
-            "varname": ".snow_sublimation",
-            "type": "HRU",
-            "function": "weightedsum",
-        },
-    },
 }
 
 
 def create_time_array(
     start: datetime.datetime,
     end: datetime.datetime,
-    timestep: datetime.timedelta,
+    timestep: datetime.timedelta | relativedelta,
     conf: dict,
 ) -> list:
     """Create a time array based on the start and end time, the timestep, and the frequency.
@@ -145,13 +154,28 @@ def create_time_array(
 
 
 class Reporter:
-    """This class is used to report data to disk.
+    """This class is used to report data to disk."""
 
-    Args:
-        model: The GEB model.
-    """
+    def __init__(self, model: GEBModel, clean: bool) -> None:
+        """The constructor for the Reporter class.
 
-    def __init__(self, model, clean) -> None:
+        Loops over the reporter configuration and creates the necessary files and data structures,
+        that are then used while the model is run to add data to.
+
+        For full documentation of the report configuration, see the documentation.
+
+        There are also several pre-defined report configurations that can be activated by adding
+        special keys to the report configuration. These are:
+        - _discharge_stations: if set to True, discharge at all discharge stations is reported.
+        - _water_circle: if set to True, a standard set of variables to monitor the water circle is reported.
+
+        Args:
+            model: The GEB model instance.
+            clean: If True, the report folder is cleaned at the start of the model run.
+
+        Raises:
+            ValueError: If the variable type is not recognized.
+        """
         self.model = model
         if self.model.simulate_hydrology:
             self.hydrology = model.hydrology
@@ -188,11 +212,12 @@ class Reporter:
                             for station_ID, station_info in stations.iterrows():
                                 xy_grid = station_info["snapped_grid_pixel_xy"]
                                 station_reporters[
-                                    f"discharge_daily_m3_s_{station_ID}"
+                                    f"discharge_hourly_m3_per_s_{station_ID}"
                                 ] = {
-                                    "varname": f"grid.var.discharge_m3_s",
+                                    "varname": f"grid.var.discharge_m3_s_per_substep",
                                     "type": "grid",
                                     "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
+                                    "substeps": 24,
                                 }
                             report_config = multi_level_merge(
                                 report_config,
@@ -226,7 +251,9 @@ class Reporter:
         else:
             self.activated = False
 
-    def create_variable(self, config: dict, module_name: str, name: str) -> None:
+    def create_variable(
+        self, config: dict, module_name: str, name: str
+    ) -> list | zarr.storage.LocalStore:
         """This function creates a variable for the reporter.
 
         For
@@ -267,8 +294,8 @@ class Reporter:
                 zarr_group = zarr.open_group(zarr_store, mode="w")
 
                 time = create_time_array(
-                    start=self.model.current_time,
-                    end=self.model.end_time,
+                    start=self.model.simulation_start,
+                    end=self.model.simulation_end,
                     timestep=self.model.timestep_length,
                     conf=config,
                 )
@@ -372,8 +399,8 @@ class Reporter:
                 zarr_group = zarr.open_group(store, mode="w")
 
                 time = create_time_array(
-                    start=self.model.current_time,
-                    end=self.model.end_time,
+                    start=self.model.simulation_start,
+                    end=self.model.simulation_end,
                     timestep=self.model.timestep_length,
                     conf=config,
                 )
@@ -411,7 +438,7 @@ class Reporter:
     def maybe_report_value(
         self,
         module_name: str,
-        name: Union[str, tuple[str, Any]],
+        name: str | tuple[str, Any],
         module: Any,
         local_variables: dict,
         config: dict,
@@ -500,7 +527,11 @@ class Reporter:
         self.process_value(module_name, name, value, config)
 
     def process_value(
-        self, module_name: str, name: str, value: np.ndarray, config: dict
+        self,
+        module_name: str,
+        name: str,
+        value: np.ndarray | int | float | np.floating | np.integer,
+        config: dict,
     ) -> None:
         """Exports an array of values to the export folder.
 
@@ -515,27 +546,64 @@ class Reporter:
                 or if the variable type is not recognized.
             IndexError: If the coordinate is in sample_lon_lat is outside the model domain.
         """
-        if config["type"] in ("grid", "HRU"):
-            if config["function"] is None:
-                if config["type"] == "HRU":
-                    value = self.hydrology.HRU.decompress(value)
-                else:
-                    value = self.hydrology.grid.decompress(value)
+        type_: str | None = config.get("type", None)
+        if type_ is None:
+            raise ValueError(f"Type not specified for {config}.")
+        if type_ in ("grid", "HRU"):
+            if not isinstance(value, np.ndarray):
+                raise ValueError(
+                    f"Value for {module_name}.{name} must be a numpy ndarray, but is {type(value)}."
+                )
 
-                zarr_group = zarr.open_group(self.variables[module_name][name])
+            grid_size = self.hydrology.grid.compressed_size
+            HRU_size = self.hydrology.HRU.compressed_size
+            if type_ == "grid" and value.shape[-1] != grid_size:
+                error = f"Value for {module_name}.{name} has size {value.shape[-1]}, but grid size is {grid_size}."
+                if value.shape[-1] == HRU_size:
+                    error += f" HRU is size {HRU_size}. Did you mean to set type to 'HRU' instead of 'grid'?"
+                raise ValueError(error)
+
+            if type_ == "HRU" and value.shape[-1] != HRU_size:
+                error = f"Value for {module_name}.{name} has size {value.shape[-1]}, but HRU size is {HRU_size}."
+                if value.shape[-1] == grid_size:
+                    error += f" grid id size {grid_size}. Did you mean to set type to 'grid' instead of 'HRU'?"
+                raise ValueError(error)
+
+            if config["function"] is None:
+                if type_ == "HRU":
+                    value: np.ndarray = self.hydrology.HRU.decompress(value)
+                else:
+                    value: np.ndarray = self.hydrology.grid.decompress(value)
+
+                zarr_group: zarr.Group = zarr.open_group(
+                    self.variables[module_name][name]
+                )
+                time_array = zarr_group.get("time")
+                assert isinstance(time_array, zarr.Array), (
+                    "time_array must be a zarr.Array"
+                )
+                time_array: ArrayInt64 = time_array[:]
                 if (
-                    np.isin(self.model.current_time_unix_s, zarr_group["time"][:])
+                    np.isin(self.model.current_time_unix_s, time_array)
                     and value is not None
                 ):
-                    time_index = np.where(
-                        zarr_group["time"][:] == self.model.current_time_unix_s
-                    )[0].item()
+                    time_index = np.where(time_array == self.model.current_time_unix_s)[
+                        0
+                    ].item()
                     if "substeps" in config:
                         time_index_start = np.where(time_index)[0][0]
                         time_index_end = time_index_start + config["substeps"]
-                        zarr_group[name][time_index_start:time_index_end, ...] = value
+                        data_array = zarr_group[name]
+                        assert isinstance(data_array, zarr.Array), (
+                            f"{name} must be a zarr.Array"
+                        )
+                        data_array[time_index_start:time_index_end, ...] = value
                     else:
-                        zarr_group[name][time_index, ...] = value
+                        data_array = zarr_group[name]
+                        assert isinstance(data_array, zarr.Array), (
+                            f"{name} must be a zarr.Array"
+                        )
+                        data_array[time_index, ...] = value
                 return None
             else:
                 function, *args = config["function"].split(",")
@@ -547,39 +615,64 @@ class Reporter:
                     value = np.sum(value)
                 elif function == "nansum":
                     value = np.nansum(value)
-                elif function == "sample_xy":
-                    if config["type"] == "grid":
-                        decompressed_array = self.hydrology.grid.decompress(value)
-                    elif config["type"] == "HRU":
-                        decompressed_array = self.hydrology.HRU.decompress(value)
+                elif function in ("sample_xy", "sample_lonlat"):
+                    # for sample_xy, args are pixel coordinates, which we
+                    # first need to convert to their pixel index in x and y
+                    if function == "sample_lonlat":
+                        if type_ == "grid":
+                            gt: tuple[float, float, float, float, float, float] = (
+                                self.model.hydrology.grid.gt
+                            )
+                        elif type_ == "HRU":
+                            gt: tuple[float, float, float, float, float, float] = (
+                                self.hydrology.HRU.gt
+                            )
+                        else:
+                            raise ValueError(
+                                f"Unknown varname type {config['varname']}"
+                            )
+                        px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
                     else:
-                        raise ValueError(f"Unknown varname type {config['varname']}")
-                    value = decompressed_array[int(args[1]), int(args[0])]
-                elif function == "sample_lonlat":
-                    if config["type"] == "grid":
-                        gt = self.model.hydrology.grid.gt
-                        decompressed_array = self.hydrology.grid.decompress(value)
-                    elif config["type"] == "HRU":
-                        gt = self.hydrology.HRU.gt
-                        decompressed_array = self.hydrology.HRU.decompress(value)
-                    else:
-                        raise ValueError(f"Unknown varname type {config['varname']}")
+                        # for sample_xy, args are pixel indices
+                        px: int = int(args[0])
+                        py: int = int(args[1])
 
-                    px, py = coord_to_pixel((float(args[0]), float(args[1])), gt)
+                    # both for the grid and HRU, the data is stored efficiently, so that
+                    # all data is in a 1D array, and we need to map the pixel coordinates
+                    # to the index in that 1D array
+                    # therefore, we first get the linear mapping and use that to get the index
+                    # then we extract the value at that index
+                    if type_ == "grid":
+                        linear_mapping: TwoDArrayInt32 = (
+                            self.hydrology.grid.linear_mapping
+                        )
+                    elif type_ == "HRU":
+                        linear_mapping: TwoDArrayInt32 = (
+                            self.hydrology.HRU.linear_mapping
+                        )
+                    else:
+                        raise ValueError(f"Unknown varname type {config['varname']}")
 
                     try:
-                        value = decompressed_array[py, px]
+                        idx: int = linear_mapping[py, px]
                     except IndexError:
                         raise IndexError(
-                            f"The coordinate ({args[0]},{args[1]}) is outside the model domain."
+                            f"Coordinate ({px}, {py}) is outside the model domain, which has shape {linear_mapping.shape}."
                         )
+                    if idx == -1:
+                        raise IndexError(
+                            f"Coordinate ({px}, {py}) is not a valid cell."
+                        )
+
+                    # extract the value at that index
+                    value = value[..., idx]
                 elif function in (
                     "weightedmean",
                     "weightednanmean",
                     "weightedsum",
                     "weightednansum",
                 ):
-                    if config["type"] == "HRU":
+                    if type_ == "HRU":
                         cell_area = self.hydrology.HRU.var.cell_area
                     else:
                         cell_area = self.hydrology.grid.var.cell_area
@@ -595,7 +688,7 @@ class Reporter:
                 else:
                     raise ValueError(f"Function {function} not recognized")
 
-        elif config["type"] == "agents":
+        elif type_ == "agents":
             if config["function"] is None:
                 ds = config["_file"]
                 if name not in ds:
@@ -641,6 +734,7 @@ class Reporter:
                         config["_time_index"].dtype
                     )
                 ).item()
+                assert isinstance(value, (np.ndarray, DynamicArray))
                 if value.size < ds[name][index].size:
                     print("Padding array with NaNs or -1 - temporary solution")
                     value = np.pad(
@@ -666,16 +760,29 @@ class Reporter:
                 else:
                     raise ValueError(f"Function {function} not recognized")
 
-        if np.isnan(value):
-            value = None
-
         if module_name not in self.variables:
             self.variables[module_name] = {}
 
         if name not in self.variables[module_name]:
             self.variables[module_name][name] = []
 
-        self.variables[module_name][name].append((self.model.current_time, value))
+        if "substeps" in config:
+            assert isinstance(value, np.ndarray)
+            assert len(value) == config["substeps"], (
+                f"Value for {module_name}.{name} has length {len(value)}, but {config['substeps']} substeps are expected."
+            )
+            self.variables[module_name][name].extend(
+                [
+                    (
+                        self.model.current_time
+                        + i * self.model.timestep_length / config["substeps"],
+                        v,
+                    )
+                    for i, v in enumerate(value)
+                ]
+            )
+        else:
+            self.variables[module_name][name].append((self.model.current_time, value))
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
@@ -697,7 +804,9 @@ class Reporter:
 
                     df.to_csv(folder / (name + ".csv"))
 
-    def report(self, module, local_variables, module_name) -> None:
+    def report(
+        self, module: Module, local_variables: dict[str, Any], module_name: str
+    ) -> None:
         """This method is in every step function to report data to disk.
 
         Args:

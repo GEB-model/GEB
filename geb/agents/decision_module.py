@@ -1,56 +1,78 @@
-from typing import Any
+"""This module contains the DecisionModule class for handling decision-making processes in the GEB model."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numba import njit, prange
+
+if TYPE_CHECKING:
+    from geb.agents import Agents
+    from geb.model import GEBModel
 
 
 class DecisionModule:
     """This class implements the decision module for drought adaptation."""
 
-    def __init__(self, agents) -> None:
+    def __init__(self, model: GEBModel, agents: Agents) -> None:
+        """Initialize the DecisionModule.
+
+        Args:
+            model: The GEB model.
+            agents: The class that includes all agent types (allowing easier communication between agents).
+        """
         self.agents = agents
+        self.model = model
 
     @staticmethod
     @njit(cache=True)
-    def IterateThroughFlood(
-        n_floods: int,
-        total_profits: np.ndarray,
-        profits_no_event: np.ndarray,
+    def IterateThroughFloods(
+        NPV_summed: np.ndarray,
+        n_events: int,
+        discount_rate: float,
         max_T: int,
-        n_agents: int,
-        discount_rate: np.ndarray,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        amenity_value: np.ndarray,
+        expected_damages: np.ndarray,
     ) -> np.ndarray:
-        """This function iterates through each (no)flood event i (see manuscript for details).
+        """This function calculates the NPV of each flood event.
 
-        It calculates the time discounted NPV of each event i:
+        Args:
+            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+            n_events: number of events (droughts and floods) included in model run
+            discount_rate: time discounting rate
+            max_T: time horizon (same for each agent)
+            wealth: array containing the wealth of each household
+            income: array containing the income of each household
+            amenity_value: array containing the amenity value of each household
+            expected_damages: array containing the expected damages of each household under all events i
 
         Returns:
             NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
         """
-        # Allocate array
-        NPV_summed = np.full((n_floods + 3, n_agents), -1, dtype=np.float32)
+        NPV_t0 = (wealth + income + amenity_value).astype(
+            np.float32
+        )  # no flooding in t=0
 
         # Iterate through all floods
-        for i, index in enumerate(np.arange(1, n_floods + 3)):
+        for i, index in enumerate(np.arange(1, n_events + 3)):
             # Check if we are in the last iterations
-            if i < n_floods:
-                NPV_flood_i = total_profits[i]
-                NPV_flood_i = (NPV_flood_i).astype(np.float32)
+            if i < n_events:
+                NPV_event_i = wealth + income + amenity_value - expected_damages[i]
+                NPV_event_i = (NPV_event_i).astype(np.float32)
 
-            # if in the last two iterations do not subtract damages (probs of no event)
-            elif i >= n_floods:
-                NPV_flood_i = profits_no_event
-                NPV_flood_i = NPV_flood_i.astype(np.float32)
-
-            # iterate over NPVs for each year in the time horizon and apply time
-            # discounting
-            NPV_t0 = (profits_no_event).astype(np.float32)  # no flooding in t=0
+            # if in the last two iterations do not subtract damages (probs of no
+            # flood event)
+            elif i >= n_events:
+                NPV_event_i = wealth + income + amenity_value
+                NPV_event_i = NPV_event_i.astype(np.float32)
 
             # Calculate time discounted NPVs
             t_arr = np.arange(1, max_T, dtype=np.float32)
-
-            discounts = 1 / (1 + np.reshape(discount_rate, (-1, 1))) ** t_arr
-            NPV_tx = np.sum(discounts, axis=1) * NPV_flood_i
+            discounts = 1 / (1 + discount_rate) ** t_arr
+            NPV_tx = np.sum(discounts) * NPV_event_i
 
             # Add NPV at t0 (which is not discounted)
             NPV_tx += NPV_t0
@@ -60,10 +82,131 @@ class DecisionModule:
 
         # Store NPV at p=0 for bounds in integration
         NPV_summed[0] = NPV_summed[1]
+        return NPV_summed
+
+    @staticmethod
+    @njit(cache=True)
+    def IterateThroughDroughts(
+        NPV_summed: np.ndarray,
+        n_events: int,
+        discount_rate: float,
+        max_T: int,
+        total_profits: np.ndarray,
+        profits_no_event: np.ndarray,
+    ) -> np.ndarray:
+        """This function calculates the NPV of each drought event.
+
+        Args:
+            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+            n_events: number of events (droughts and floods) included in model run
+            discount_rate: time discounting rate
+            max_T: time horizon (same for each agent)
+            total_profits: array containing the total profits of each household under all events i
+            profits_no_event: array containing the profits of each household under the no flood event
+
+        Returns:
+            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+        """
+        # Iterate through all droughts
+        for i, index in enumerate(np.arange(1, n_events + 3)):
+            # Check if we are in the last iterations
+            if i < n_events:
+                NPV_event_i = total_profits[i]
+                NPV_event_i = (NPV_event_i).astype(np.float32)
+
+            # if in the last two iterations do not subtract damages (probs of no event)
+            elif i >= n_events:
+                NPV_event_i = profits_no_event
+                NPV_event_i = NPV_event_i.astype(np.float32)
+
+            # iterate over NPVs for each year in the time horizon and apply time
+            # discounting
+            NPV_t0 = (profits_no_event).astype(np.float32)  # no flooding in t=0
+
+            # Calculate time discounted NPVs
+            t_arr = np.arange(1, max_T, dtype=np.float32)
+
+            discounts = 1 / (1 + np.reshape(discount_rate, (-1, 1))) ** t_arr
+            NPV_tx = np.sum(discounts, axis=1) * NPV_event_i
+
+            # Add NPV at t0 (which is not discounted)
+            NPV_tx += NPV_t0
+
+            # Store result
+            NPV_summed[index] = NPV_tx
+
+        # Store NPV at p=0 for bounds in integration
+        NPV_summed[0] = NPV_summed[1]
+        return NPV_summed
+
+    def IterateThroughEvents(
+        self,
+        n_events: int,
+        n_agents: int,
+        discount_rate: float,
+        max_T: int,
+        wealth: np.ndarray = None,
+        income: np.ndarray = None,
+        amenity_value: np.ndarray = None,
+        expected_damages: np.ndarray = None,
+        total_profits: np.ndarray = None,
+        profits_no_event: np.ndarray = None,
+        mode: str = None,
+    ) -> np.ndarray:
+        """This function iterates through each (no)flood event i (see manuscript for details).
+
+        It calculates the time discounted NPV of each event i:
+
+        Args:
+            n_events: number of events (droughts and floods) included in model run
+            discount_rate: time discounting rate
+            n_agents: number of household agents in the current admin unit
+            wealth: array containing the wealth of each household
+            income: array containing the income of each household
+            amenity_value: array containing the amenity value of each household'
+            max_T: time horizon (same for each agent)
+            expected_damages: array containing the expected damages of each household under all events i
+            total_profits: array containing the total profits of each household under all events i
+            profits_no_event: array containing the profits of each household under the no flood event
+            mode: either 'flood' or 'drought', indicating which type of event to iterate through
+
+        Returns:
+            NPV_summed: Array containing the summed time discounted NPV for each event i for each agent
+
+        Raises:
+            ValueError: If `mode` is not 'flood' or 'drought'.
+        """
+        # Allocate array
+        NPV_summed = np.full((n_events + 3, n_agents), -1, dtype=np.float32)
+
+        if mode == "flood":
+            NPV_summed = self.IterateThroughFloods(
+                NPV_summed=NPV_summed,
+                n_events=n_events,
+                discount_rate=discount_rate,
+                max_T=max_T,
+                wealth=wealth,
+                income=income,
+                amenity_value=amenity_value,
+                expected_damages=expected_damages,
+            )
+
+        elif mode == "drought":
+            NPV_summed = self.IterateThroughDroughts(
+                NPV_summed=NPV_summed,
+                n_events=n_events,
+                discount_rate=discount_rate,
+                max_T=max_T,
+                total_profits=total_profits,
+                profits_no_event=profits_no_event,
+            )
+
+        else:
+            raise ValueError("Mode must be either 'flood' or 'drought'")
 
         return NPV_summed
 
-    def calcEU_do_nothing(
+    def calcEU_do_nothing_drought(
         self,
         n_agents: int,
         risk_perception: np.ndarray,
@@ -93,13 +236,14 @@ class DecisionModule:
 
         # Part njit, iterate through floods
         n_agents = np.int32(n_agents)
-        NPV_summed = self.IterateThroughFlood(
-            n_floods,
-            total_profits,
-            profits_no_event,
-            max_T,
-            n_agents,
-            discount_rate,
+        NPV_summed = self.IterateThroughEvents(
+            n_events=n_floods,
+            total_profits=total_profits,
+            profits_no_event=profits_no_event,
+            max_T=max_T,
+            n_agents=n_agents,
+            discount_rate=discount_rate,
+            mode="drought",
         )
 
         # Filter out negative NPVs
@@ -146,7 +290,7 @@ class DecisionModule:
 
     @staticmethod
     @njit(cache=True, parallel=True)
-    def calcEU_adapt_numba(
+    def calcEU_adapt_drought_numba(
         expenditure_cap: float,
         loan_duration: int,
         n_agents: int,
@@ -292,12 +436,12 @@ class DecisionModule:
 
         return EU_adapt
 
-    def calcEU_adapt(self, **kwargs: Any):
+    def calcEU_adapt_drought(self, **kwargs: dict):
         assert kwargs["adapted"].dtype == bool
-        return self.calcEU_adapt_numba(**kwargs)
+        return self.calcEU_adapt_drought_numba(**kwargs)
 
     @staticmethod
-    def calcEU_adapt_vectorized(
+    def calcEU_adapt_drought_vectorized(
         *,
         expenditure_cap: float,
         loan_duration: int,
@@ -455,3 +599,216 @@ class DecisionModule:
             EU_adapt[np.isnan(EU_adapt)] = -np.inf
 
         return EU_adapt
+
+    def calcEU_adapt_flood(
+        self,
+        geom_id,
+        n_agents: int,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        expendature_cap,
+        amenity_value: np.ndarray,
+        amenity_weight,
+        risk_perception: np.ndarray,
+        expected_damages_adapt: np.ndarray,
+        adaptation_costs: np.ndarray,
+        time_adapted,
+        loan_duration,
+        p_floods: np.ndarray,
+        T: np.ndarray,
+        r: float,
+        sigma: float,
+        **kwargs: dict,
+    ) -> np.ndarray:
+        """This function calculates the time discounted subjective utility of not undertaking any action.
+
+        Returns:
+            EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
+        """
+        # weigh amenities
+        amenity_value = amenity_value * amenity_weight
+
+        # Ensure p floods is in increasing order
+        indices = np.argsort(p_floods)
+        expected_damages_adapt = expected_damages_adapt[indices]
+        p_floods = np.sort(p_floods)
+
+        # Preallocate arrays
+        n_floods, n_agents = expected_damages_adapt.shape
+        p_all_events = np.full((p_floods.size + 3, n_agents), -1, dtype=np.float32)
+
+        # calculate perceived risk
+        perc_risk = p_floods.repeat(n_agents).reshape(p_floods.size, n_agents)
+        perc_risk *= risk_perception
+        p_all_events[1:-2, :] = perc_risk
+
+        # Cap percieved probability at 0.998. People cannot percieve any flood
+        # event to occur more than once per year
+        if np.max(p_all_events > 0.998):
+            p_all_events[np.where(p_all_events > 0.998)] = 0.998
+
+        # Add lasts p to complete x axis to 1 for trapezoid function (integrate
+        # domain [0,1])
+        p_all_events[-2, :] = p_all_events[-3, :] + 0.001
+        p_all_events[-1, :] = 1
+
+        # Add 0 to ensure we integrate [0, 1]
+        p_all_events[0, :] = 0
+
+        # Prepare arrays
+        max_T = np.int32(np.max(T))
+
+        # Part njit, iterate through events
+        n_agents = np.int32(n_agents)
+        NPV_summed = self.IterateThroughEvents(
+            n_events=n_floods,
+            n_agents=n_agents,
+            discount_rate=r,
+            wealth=wealth,
+            income=income,
+            amenity_value=amenity_value,
+            max_T=max_T,
+            expected_damages=expected_damages_adapt,
+            mode="flood",
+        )
+
+        # some usefull attributes for cost calculations
+        # get time discounted adaptation cost for each agent based on time since adaptation
+        discounts = 1 / (1 + r) ** np.arange(loan_duration)
+
+        # create cost array for years payment left
+        years = np.arange(loan_duration + 1, dtype=np.int32)
+        cost_array = np.full((n_agents, years.size), -1, np.float32)
+        for i, year in enumerate(years):
+            cost_array[:, i] = np.sum(discounts[:year]) * adaptation_costs
+
+        loan_left = (loan_duration - time_adapted).astype(np.int32)
+        loan_left = np.maximum(loan_left, 0)  # cap duration at 0
+        loan_left = np.minimum(loan_left, T)  # cap duration at decision horizon
+
+        # take the calculated adaptation cost based on loan duration left for agents
+        axis_0 = np.array(np.arange(n_agents))
+        # create index to sample from cost array
+        time_discounted_adaptation_cost = cost_array[axis_0, loan_left]
+
+        # subtract from NPV array
+        NPV_summed -= time_discounted_adaptation_cost
+
+        # Filter out negative NPVs
+        NPV_summed = np.maximum(1, NPV_summed)
+        if (NPV_summed == 1).any():
+            n_negative = np.sum(NPV_summed == 1)
+            print(
+                f"[calcEU_adapt] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
+            )
+
+        # Calculate expected utility
+        if sigma == 1:
+            EU_store = np.log(NPV_summed)
+        else:
+            EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
+
+        # Use composite trapezoidal rule integrate EU over event probability
+        y = EU_store
+        x = p_all_events
+        EU_adapt_array = np.trapezoid(y=y, x=x, axis=0)
+
+        # set EU of adapt to -np.inf for thuse unable to afford it [maybe move this earlier to reduce array sizes]
+        constrained = np.where(income * expendature_cap <= adaptation_costs)
+        EU_adapt_array[constrained] = -np.inf
+        # EU_adapt_array *= self.error_terms_stay
+        return EU_adapt_array
+
+    def calcEU_do_nothing_flood(
+        self,
+        geom_id,
+        n_agents: int,
+        wealth: np.ndarray,
+        income: np.ndarray,
+        amenity_value: np.ndarray,
+        amenity_weight,
+        risk_perception: np.ndarray,
+        expected_damages: np.ndarray,
+        adapted: np.ndarray,
+        p_floods: np.ndarray,
+        T: np.ndarray,
+        r: float,
+        sigma: float,
+        **kwargs: dict,
+    ) -> np.ndarray:
+        """This function calculates the time discounted subjective utility of not undertaking any action.
+
+        Returns:
+            EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
+        """
+        # weigh amenities
+        amenity_value = amenity_value * amenity_weight
+
+        # Ensure p floods is in increasing order
+        indices = np.argsort(p_floods)
+        expected_damages = expected_damages[indices]
+        p_floods = np.sort(p_floods)
+
+        # Preallocate arrays
+        n_floods, n_agents = expected_damages.shape
+        p_all_events = np.full((p_floods.size + 3, n_agents), -1, dtype=np.float32)
+
+        # calculate perceived risk
+        perc_risk = p_floods.repeat(n_agents).reshape(p_floods.size, n_agents)
+        perc_risk *= risk_perception
+        p_all_events[1:-2, :] = perc_risk
+
+        # Cap percieved probability at 0.998. People cannot percieve any flood
+        # event to occur more than once per year
+        if np.max(p_all_events > 0.998):
+            p_all_events[np.where(p_all_events > 0.998)] = 0.998
+
+        # Add lasts p to complete x axis to 1 for trapezoid function (integrate
+        # domain [0,1])
+        p_all_events[-2, :] = p_all_events[-3, :] + 0.001
+        p_all_events[-1, :] = 1
+
+        # Add 0 to ensure we integrate [0, 1]
+        p_all_events[0, :] = 0
+
+        # Prepare arrays
+        max_T = np.int32(np.max(T))
+
+        # Part njit, iterate through events
+        n_agents = np.int32(n_agents)
+        NPV_summed = self.IterateThroughEvents(
+            n_events=n_floods,
+            n_agents=n_agents,
+            discount_rate=r,
+            wealth=wealth,
+            income=income,
+            amenity_value=amenity_value,
+            max_T=max_T,
+            expected_damages=expected_damages,
+            mode="flood",
+        )
+
+        # Filter out negative NPVs
+        NPV_summed = np.maximum(1, NPV_summed)
+
+        if (NPV_summed == 1).any():
+            n_negative = np.sum(NPV_summed == 1)
+            print(
+                f"[calcEU_do_nothing] Warning, {n_negative} negative NPVs encountered in {geom_id} ({np.round(n_negative / NPV_summed.size * 100, 2)}%)"
+            )
+
+        # Calculate expected utility
+        if sigma == 1:
+            EU_store = np.log(NPV_summed)
+        else:
+            EU_store = (NPV_summed ** (1 - sigma)) / (1 - sigma)
+
+        # Use composite trapezoidal rule integrate EU over event probability
+        y = EU_store
+        x = p_all_events
+        EU_do_nothing_array = np.trapezoid(y=y, x=x, axis=0)
+
+        # People who already adapted cannot not adapt
+        EU_do_nothing_array[np.where(adapted == 1)] = -np.inf
+
+        return EU_do_nothing_array

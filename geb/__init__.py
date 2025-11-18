@@ -8,6 +8,7 @@ import platform
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import xarray as xr
 from dotenv import load_dotenv
 from llvmlite import binding
@@ -22,13 +23,22 @@ load_dotenv()
 os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
 
 # Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
-if Path("/scistor/ivm/GEB").exists():
-    os.environ["GEB_DATA_ROOT"] = "/scistor/ivm/GEB/data_catalog/"
-    os.environ["SFINCS_SIF"] = (
-        "/ada-software/containers/sfincs-cpu-v2.2.0-col-dEze-Release.sif"
+if Path("/research/BETA-IVM-HPC/GEB").exists():
+    os.environ["GEB_DATA_ROOT"] = "/research/BETA-IVM-HPC/GEB/data_catalog/"
+    os.environ["SFINCS_CONTAINER"] = os.getenv(
+        "SFINCS_CONTAINER",
+        "/ada-software/containers/sfincs-cpu-v2.2.0-col-dEze-Release.sif",
     )
-    os.environ["SFINCS_SIF_GPU"] = (
-        "/ada-software/containers/sfincs-gpu.coldeze_combo_ccall.sif"
+    os.environ["SFINCS_CONTAINER_GPU"] = os.getenv(
+        "SFINCS_CONTAINER_GPU",
+        "/ada-software/containers/sfincs-gpu.coldeze_combo_ccall.sif",
+    )
+else:
+    os.environ["SFINCS_SIF_CONTAINER"] = os.getenv(
+        "SFINCS_SIF_CONTAINER", "deltares/sfincs-cpu:sfincs-v2.2.0-col-dEze-Release"
+    )
+    os.environ["SFINCS_SIF_CONTAINER_GPU"] = os.getenv(
+        "SFINCS_SIF_CONTAINER_GPU", "mvanormondt/sfincs-gpu:coldeze_combo_ccall"
     )
 
 
@@ -108,7 +118,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     _check_tbb_version_compatible()
 
     @njit(parallel=True)
-    def test_threading_layer():
+    def test_threading_layer() -> npt.NDArray[np.int32]:
         array = np.zeros(10, dtype=np.int32)
         """Test function to check if TBB is loaded correctly."""
         for i in prange(10):

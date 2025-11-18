@@ -1,7 +1,8 @@
+"""Command line interface for GEB."""
+
 import cProfile
 import functools
 import importlib
-import json
 import logging
 import os
 import platform
@@ -13,23 +14,39 @@ import zipfile
 from operator import attrgetter
 from pathlib import Path
 from pstats import Stats
-from typing import Any
+from typing import Any, Callable
 
 import click
+import geopandas as gpd
 import yaml
-from honeybees.visualization.canvas import Canvas
-from honeybees.visualization.ModularVisualization import ModularServer
-from honeybees.visualization.modules.ChartVisualization import ChartModule
+from shapely.geometry import box
 
 from geb import __version__
 from geb.build import GEBModel as GEBModelBuild
+from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.calibrate import calibrate as geb_calibrate
 from geb.model import GEBModel
-from geb.multirun import multi_run as geb_multi_run
-from geb.sensitivity import sensitivity_analysis as geb_sensitivity_analysis
-from geb.workflows.io import WorkingDirectory
+from geb.workflows.io import WorkingDirectory, load_dict, to_dict
 from geb.workflows.methods import multi_level_merge
+
+PROFILING_DEFAULT: bool = False
+OPTIMIZE_DEFAULT: bool = False
+TIMING_DEFAULT: bool = False
+WORKING_DIRECTORY_DEFAULT: Path = Path(".")
+CONFIG_DEFAULT: Path = Path("model.yml")
+UPDATE_DEFAULT: Path = Path("update.yml")
+BUILD_DEFAULT: Path = Path("build.yml")
+DATA_CATALOG_DEFAULT: Path = (
+    Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"
+)
+DATA_PROVIDER_DEFAULT: str = os.environ.get("GEB_DATA_PROVIDER", "default")
+DATA_ROOT_DEFAULT: Path = Path(
+    os.environ.get(
+        "GEB_DATA_ROOT",
+        Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / ".." / "data_catalog",
+    )
+)
+ALTER_FROM_MODEL_DEFAULT: Path = Path("../base")
 
 
 class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
@@ -39,7 +56,21 @@ class DetectDuplicateKeysYamlLoader(yaml.SafeLoader):
         ValueError: If a duplicate key is found in the YAML mapping.
     """
 
-    def construct_mapping(self, node, deep=False):
+    def construct_mapping(
+        self, node: yaml.nodes.MappingNode, deep: bool = False
+    ) -> dict:
+        """Construct a mapping from a YAML node, checking for duplicate keys.
+
+        Args:
+            node: The YAML node to construct the mapping from.
+            deep: Whether to perform a deep construction of the mapping. Defaults to False.
+
+        Raises:
+            ValueError: If a duplicate key is found in the YAML mapping.
+
+        Returns:
+            dict: The constructed mapping.
+        """
         mapping = {}
         for key_node, value_node in node.value:
             key = self.construct_object(key_node, deep=deep)
@@ -70,10 +101,12 @@ def parse_config(
     if isinstance(config_path, dict):
         config = config_path
     else:
-        config = yaml.load(
+        config: dict | None = yaml.load(
             open(current_directory / config_path, "r"),
             Loader=DetectDuplicateKeysYamlLoader,
         )
+        if config is None:
+            config = {}
         current_directory = current_directory / Path(config_path).parent
 
     if "inherits" in config:
@@ -97,7 +130,14 @@ def parse_config(
     return config
 
 
-def create_logger(fp):
+def create_logger(fp: Path) -> logging.Logger:
+    """Create logger with console and file handler.
+
+    Args:
+        fp: Path to the log file.
+    Returns:
+        Logger instance.
+    """
     logger = logging.getLogger("GEB")
     # remove any previous handlers
     for handler in logger.handlers[:]:
@@ -125,75 +165,132 @@ def create_logger(fp):
 @click.group()
 @click.version_option(__version__, message="GEB version: %(version)s")
 @click.pass_context
-def cli(ctx) -> None:  # , quiet, verbose):
-    """Command line interface for GEB."""
-    if ctx.obj is None:
-        ctx.obj = {}
+def cli(context: click.core.Context) -> None:
+    """Command line interface for GEB.
+
+    Args:
+        context: Click context. (Auto-filled by click)
+    """
+    if context.obj is None:
+        context.obj = {}
 
 
-def click_config(func):
-    default: str = "model.yml"
+def click_config(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator to add config option to a click command.
+
+    Useful to add the same option to multiple commands.
+
+    Args:
+        func: Function to decorate.
+
+    Returns:
+        Decorated function.
+    """
 
     @click.option(
         "--config",
         "-c",
-        default=default,
-        help=f"Path of the model configuration file. Defaults to '{default}'.",
+        type=click.Path(path_type=Path),
+        default=Path(CONFIG_DEFAULT),
+        help=f"Path of the model configuration file. Defaults to '{CONFIG_DEFAULT}'.",
     )
     @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        """Wrapper function for config option.
+
+        Args:
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
+
+        Returns:
+            The result of the wrapped function.
+        """
         return func(*args, **kwargs)
 
     return wrapper
 
 
-def working_directory_option(func):
+def working_directory_option(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator to add working directory option to a click command.
+
+    Useful to add the same option to multiple commands.
+
+    Args:
+        func: Function to decorate.
+
+    Returns:
+        Decorated function.
+    """
+
     @click.option(
         "--working-directory",
         "-wd",
-        default=".",
+        type=click.Path(path_type=Path),
+        default=Path(WORKING_DIRECTORY_DEFAULT),
         help="Working directory for model. Default is the current directory.",
     )
     @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        """Wrapper function for working directory option.
+
+        Returns:
+            The result of the wrapped function.
+        """
         return func(*args, **kwargs)
 
     return wrapper
 
 
-def click_run_options():
-    def decorator(func):
+def click_run_options() -> Any:
+    """Decorator to add run options to a click command.
+
+    Useful to add the same options to multiple commands.
+
+    Returns:
+        Decorator function.
+    """
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        """Decorator function to add run options to a click command.
+
+        Args:
+            func: Function to decorate.
+
+        Returns:
+            Decorated function.
+        """
+
         @click_config
         @working_directory_option
         @click.option(
-            "--gui",
-            is_flag=True,
-            help="""The model can be run with a graphical user interface in a browser. The visual interface is useful to display the results in real-time while the model is running and to better understand what is going on. You can simply start or stop the model with the click of a buttion, or advance the model by an `x` number of timesteps. However, the visual interface is much slower than running the model without it.""",
-        )
-        @click.option(
-            "--no-browser",
-            is_flag=True,
-            help="""Run graphical user interface, but serve interface through the server but do not open the browser. You may connect to the server from a browswer. This option is only works in combination with the graphical user interface.""",
-        )
-        @click.option(
-            "--port",
-            type=int,
-            default=8521,
-            help="""Port used for graphical user interface (default: 8521)""",
-        )
-        @click.option(
             "--profiling",
             is_flag=True,
+            default=PROFILING_DEFAULT,
             help="Run GEB with profiling. If this option is used a file `profiling_stats.cprof` is saved in the working directory.",
         )
         @click.option(
             "--optimize",
             is_flag=True,
+            default=OPTIMIZE_DEFAULT,
             help="Run GEB in optimized mode, skipping asserts and water balance checks.",
         )
-        @click.option("--timing", is_flag=True, help="Run GEB with timing.")
+        @click.option(
+            "--timing",
+            is_flag=True,
+            default=TIMING_DEFAULT,
+            help="Run GEB with timing.",
+        )
         @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            """Wrapper function for run options.
+
+            Args:
+                *args: Positional arguments.
+                **kwargs: Keyword arguments.
+
+            Returns:
+                The result of the wrapped function.
+            """
             return func(*args, **kwargs)
 
         return wrapper
@@ -203,39 +300,55 @@ def click_run_options():
 
 def run_model_with_method(
     method: str | None,
-    profiling: bool,
-    config,
-    working_directory,
-    gui,
-    no_browser,
-    port,
-    timing,
-    optimize,
+    config: dict | str = CONFIG_DEFAULT,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    timing: bool = TIMING_DEFAULT,
+    profiling: bool = PROFILING_DEFAULT,
+    optimize: bool = OPTIMIZE_DEFAULT,
     method_args: dict = {},
-    close_after_run=True,
-) -> GEBModel | None:
+    close_after_run: bool = True,
+) -> GEBModel:
     """Run model with a specific method.
 
+    Args:
+        method: Method to run on the model. If None, the model is created but no method is run.
+        config: Path to the model configuration file or a dict with the config.
+        working_directory: Working directory for the model.
+        timing: If True, run the model with timing, printing the time taken for specific methods.
+        profiling: If True, run the model with profiling.
+        optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
+        method_args: Optional arguments to pass to the method.
+        close_after_run: If True, close the model after running the method. Defaults to True.
+
     Returns:
-        GEBModel if gui is False, else None
+        Instance of GEBModel
+
+    Raises:
+        SystemExit: If the model is restarted in optimized mode.
     """
     # check if we need to run the model in optimized mode
     # if the model is already running in optimized mode, we don't need to restart it
     # or else we start an infinite loop
     if optimize and sys.flags.optimize == 0:
-        if platform.system() == "Windows":
-            # If the script is not a .py file, we need to add the .exe extension
-            if not sys.argv[0].endswith(".py"):
-                sys.argv[0] = sys.argv[0] + ".exe"
-            subprocess.run([sys.executable, "-O"] + sys.argv)
-        else:
-            os.execv(sys.executable, ["-O"] + sys.argv)
+        # If the script is not a .py file, we need to add the .exe extension
+        if platform.system() == "Windows" and not sys.argv[0].endswith(".py"):
+            sys.argv[0] = sys.argv[0] + ".exe"
+        command: list[str] = [sys.executable, "-O"] + sys.argv
+        raise SystemExit(subprocess.run(command).returncode)
 
     with WorkingDirectory(working_directory):
         config: dict[str, Any] = parse_config(config)
 
+        # TODO: This can be removed in 2026
+        if not Path("input/files.yml").exists() and Path("input/files.json").exists():
+            # convert input/files.json to input/files.yml
+            json_files: dict[str, Any] = load_dict(
+                Path("input/files.json"),
+            )
+            to_dict(json_files, Path("input/files.yml"))
+
         files: dict[str, Any] = parse_config(
-            "input/files.json"
+            load_dict(Path("input/files.yml"))
             if "files" not in config["general"]
             else config["general"]["files"]
         )
@@ -246,107 +359,95 @@ def run_model_with_method(
             "timing": timing,
         }
 
-        if not gui:
-            if profiling:
-                profile = cProfile.Profile()
-                profile.enable()
+        if profiling:
+            profile = cProfile.Profile()
+            profile.enable()
 
-            geb = GEBModel(**model_params)
-            if method is not None:
-                getattr(geb, method)(**method_args)
-            if close_after_run:
-                geb.close()
+        geb = GEBModel(**model_params)
+        if method is not None:
+            getattr(geb, method)(**method_args)
+        if close_after_run:
+            geb.close()
 
-            if profiling:
-                profile.disable()
-                with open("profiling_stats.cprof", "w") as stream:
-                    stats = Stats(profile, stream=stream)
-                    stats.strip_dirs()
-                    stats.sort_stats("cumtime")
-                    stats.dump_stats(".prof_stats")
-                    stats.print_stats()
-                profile.dump_stats("profile.prof")
+        if profiling:
+            profile.disable()
+            with open("profiling_stats.cprof", "w") as stream:
+                stats = Stats(profile, stream=stream)
+                stats.strip_dirs()
+                stats.sort_stats("cumtime")
+                stats.dump_stats(".prof_stats")
+                stats.print_stats()
+            profile.dump_stats("profile.prof")
 
-            return geb
-
-        else:
-            # Using the GUI, GEB runs in an asyncio event loop. This is not compatible with
-            # the event loop started for reading data, unless we use nest_asyncio.
-            # so that's what we do here.
-            import nest_asyncio
-
-            nest_asyncio.apply()
-
-            if profiling:
-                print("Profiling not available for browser version")
-            server_elements = [Canvas(max_canvas_height=800, max_canvas_width=1200)]
-            if "draw" in config and "plot" in config["draw"] and config["draw"]["plot"]:
-                server_elements = server_elements + [
-                    ChartModule(series) for series in config["draw"]["plot"]
-                ]
-
-            DISPLAY_TIMESTEPS = [1, 10, 100, 1000]
-
-            server = ModularServer(
-                "GEB",
-                GEBModel,
-                server_elements,
-                DISPLAY_TIMESTEPS,
-                model_params=model_params,
-                port=None,
-                initialization_method=method,
-            )
-            server.launch(port=port, browser=no_browser)
+        return geb
 
 
 @cli.command()
 @click_run_options()
 def run(*args: Any, **kwargs: Any) -> None:
+    """Run model.
+
+    Can be run after model spinup.
+
+    Args:
+        *args: Positional arguments to pass to the run function.
+        **kwargs: Keyword arguments to pass to the run function.
+
+    """
     run_model_with_method(method="run", *args, **kwargs)
 
 
 @cli.command()
 @click_run_options()
 def spinup(*args: Any, **kwargs: Any) -> None:
+    """Run model spinup.
+
+    Can be run after model build.
+
+    Args:
+        *args: Positional arguments to pass to the spinup function.
+        **kwargs: Keyword arguments to pass to the spinup function.
+
+    """
     run_model_with_method(method="spinup", *args, **kwargs)
 
 
 @cli.command()
 @click.argument("method", required=True)
 @click_run_options()
-def exec(method, *args: Any, **kwargs: Any) -> None:
+def exec(method: str, *args: Any, **kwargs: Any) -> None:
+    """Execute a specific method on the model.
+
+    Args:
+        method: Method to run on the model.
+        *args: Positional arguments to pass to the method.
+        **kwargs: Keyword arguments to pass to the method.
+    """
     run_model_with_method(method=method, *args, **kwargs)
 
 
-@cli.command()
-@click_config
-@working_directory_option
-def calibrate(config, working_directory) -> None:
-    with WorkingDirectory(working_directory):
-        config = parse_config(config)
-        geb_calibrate(config, working_directory)
+def click_build_options(
+    build_config: Path = BUILD_DEFAULT, build_config_help_extra: str | None = None
+) -> Any:
+    """Decorator to add build options to a click command.
 
+    Args:
+        build_config: Default path to the build config file.
+        build_config_help_extra: Extra help text for the build config option.
 
-@cli.command()
-@click_config
-@working_directory_option
-def sensitivity(config, working_directory) -> None:
-    with WorkingDirectory(working_directory):
-        config = parse_config(config)
-        geb_sensitivity_analysis(config, working_directory)
+    Returns:
+        Decorator function.
+    """
 
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        """Decorator function to add build options to a click command.
 
-@cli.command()
-@click_config
-@working_directory_option
-def multirun(config, working_directory) -> None:
-    with WorkingDirectory(working_directory):
-        config = parse_config(config)
-        geb_multi_run(config, working_directory)
+        Args:
+            func: Function to decorate.
 
-
-def click_build_options(build_config="build.yml", build_config_help_extra=None):
-    def decorator(func):
+        Returns:
+            Decorated function.
+        """
         build_config_help = (
             f"Path of the model build configuration file. Defaults to '{build_config}'."
         )
@@ -359,34 +460,43 @@ def click_build_options(build_config="build.yml", build_config_help_extra=None):
         @click.option(
             "--build-config",
             "-b",
-            default=build_config,
+            type=click.Path(path_type=Path),
+            default=Path(build_config),
             help=build_config_help,
         )
         @working_directory_option
         @click.option(
             "--data-catalog",
             "-d",
-            type=str,
-            default=Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml",
-            help="""Path to data catalog YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to data_catalog.yml""",
+            type=click.Path(path_type=Path),
+            default=Path(DATA_CATALOG_DEFAULT),
+            help=f"""Path to data catalog YAML files. By default the data_catalog in the examples is used. If this is not set, defaults to {DATA_CATALOG_DEFAULT}""",
         )
         @click.option(
             "--data-provider",
             "-p",
-            default=os.environ.get("GEB_DATA_PROVIDER", "default"),
+            type=str,
+            default=DATA_PROVIDER_DEFAULT,
             help="Data variant to use from data catalog (see hydroMT documentation).",
         )
         @click.option(
             "--data-root",
             "-r",
-            default=os.environ.get(
-                "GEB_DATA_ROOT",
-                Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / ".." / "data_catalog",
-            ),
+            type=click.Path(path_type=Path),
+            default=Path(DATA_ROOT_DEFAULT),
             help="Root folder where the data is located. When the environment variable GEB_DATA_ROOT is set, this is used as the root folder for the data catalog. If not set, defaults to the data_catalog folder in parent of the GEB source code directory.",
         )
         @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any):
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            """Wrapper function for build options.
+
+            Args:
+            *args: Positional arguments.
+            **kwargs: Keyword arguments.
+
+            Returns:
+            The result of the wrapped function.
+            """
             return func(*args, **kwargs)
 
         return wrapper
@@ -394,7 +504,20 @@ def click_build_options(build_config="build.yml", build_config_help_extra=None):
     return decorator
 
 
-def get_model_builder_class(custom_model) -> type:
+def get_model_builder_class(custom_model: None | str) -> type:
+    """Get model builder class.
+
+    This is usually the GEBModelBuild class, but can be a custom model builder class
+    from the geb.build.custom_models module. This class would usually
+    specify some custom build methods, but largely re-use the existing GEBModelBuild methods.
+
+    Args:
+        custom_model: Name of the custom model to use. If None, the default GEBModelBuild is used.
+            custom_models are available in the geb.build.custom_models module.
+
+    Returns:
+        Model builder class.
+    """
     if custom_model is None:
         return GEBModelBuild
     else:
@@ -429,17 +552,17 @@ def customize_data_catalog(data_catalog: Path, data_root: None | Path = None) ->
 
         with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml") as tmp:
             yaml.dump(data_catalog_yml, tmp, default_flow_style=False)
-        return tmp.name
+        return Path(tmp.name)
     else:
         return data_catalog
 
 
 def get_builder(
-    config: str | Path,
-    data_catalog: str | Path,
+    config: Path | dict[str, Any],
+    data_catalog: Path,
     custom_model: str | None,
     data_provider: str | None,
-    data_root: str | Path | None,
+    data_root: Path | None,
 ) -> GEBModelBuild:
     """Get model builder.
 
@@ -461,7 +584,7 @@ def get_builder(
 
     arguments = {
         "root": input_folder,
-        "data_catalogs": data_catalog,
+        "data_catalog": data_catalog,
         "logger": create_logger("build.log"),
         "data_provider": data_provider,
     }
@@ -478,6 +601,7 @@ def init_fn(
     working_directory: str | Path,
     from_example: str,
     basin_id: str | None = None,
+    ISO3: str | None = None,
     overwrite: bool = False,
 ) -> None:
     """Create a new model.
@@ -488,15 +612,20 @@ def init_fn(
         update_config: Path to the model update configuration file to create.
         working_directory: Working directory for the model.
         from_example: Name of the example to use as a base for the model.
-        basin_id:Basin ID(s) to use for the model. Can be a comma-separated list of integers.
+        basin_id: Basin ID(s) to use for the model. Can be a comma-separated list of integers.
             If not set, the basin ID is taken from the config file.
+        ISO3: ISO3 country code to use for the model. Cannot be used together with --basin-id.
         overwrite: If True, overwrite existing config and build config files. Defaults to False.
 
     Raises:
         FileExistsError: If the config or build config file already exists and overwrite is False.
         FileNotFoundError: If the example folder does not exist.
+        ValueError: If both basin_id and ISO3 are set.
 
     """
+    if basin_id is not None and ISO3 is not None:
+        raise ValueError("Cannot use --basin-id and --ISO3 together.")
+
     config: Path = Path(config)
     build_config: Path = Path(build_config)
     update_config: Path = Path(update_config)
@@ -530,7 +659,7 @@ def init_fn(
             )
 
         config_dict: dict = yaml.load(
-            open(example_folder / "model.yml", "r"),
+            open(example_folder / CONFIG_DEFAULT, "r"),
             Loader=DetectDuplicateKeysYamlLoader,
         )
 
@@ -544,13 +673,22 @@ def init_fn(
                 basin_ids: int = int(basin_id)
 
             config_dict["general"]["region"]["subbasin"] = basin_ids
+        elif ISO3 is not None:
+            del config_dict["general"]["region"]["subbasin"]
+            config_dict["general"]["region"] = {
+                "geom": {
+                    "source": "GADM_level1",
+                    "key": ISO3,
+                    "column": "GID_0",
+                }
+            }
 
         with open(config, "w") as f:
             # do not sort keys, to keep the order of the config file
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
-        shutil.copy(example_folder / "build.yml", build_config)
-        shutil.copy(example_folder / "update.yml", update_config)
+        shutil.copy(example_folder / BUILD_DEFAULT, build_config)
+        shutil.copy(example_folder / UPDATE_DEFAULT, update_config)
 
 
 @cli.command()
@@ -558,13 +696,15 @@ def init_fn(
 @click.option(
     "--build-config",
     "-b",
-    default="build.yml",
-    help="Path of the model build configuration file. Defaults to 'build.yml'.",
+    type=click.Path(path_type=Path),
+    default=Path(BUILD_DEFAULT),
+    help=f"Path of the model build configuration file. Defaults to '{BUILD_DEFAULT}'.",
 )
 @click.option(
     "--update-config",
     "-u",
-    default="update.yml",
+    type=click.Path(path_type=Path),
+    default=Path(UPDATE_DEFAULT),
     help="Path of the model update configuration file.",
 )
 @click.option(
@@ -576,7 +716,14 @@ def init_fn(
     "--basin-id",
     default=None,
     type=str,
-    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file.",
+    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file. Cannot be used together with --ISO3.",
+)
+@click.option(
+    "--ISO3",
+    "ISO3",
+    default=None,
+    type=str,
+    help="ISO3 country code to use for the model. Cannot be used together with --basin-id.",
 )
 @click.option(
     "--overwrite",
@@ -591,13 +738,126 @@ def init(*args: Any, **kwargs: Any) -> None:
     init_fn(*args, **kwargs)
 
 
+def set_fn(
+    config: Path,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    **kwargs: Any,
+) -> None:
+    """Set model configuration values by updating a YAML configuration file.
+
+    This function loads the existing configuration from the specified file,
+    updates it with the provided keyword arguments (supporting nested keys
+    using dot notation, e.g., 'section.subsection.key'), and saves the
+    modified configuration back to the file.
+
+        config: Path to the model configuration file (as a string or Path object).
+        working_directory: Working directory for the model.
+        **kwargs: Keyword arguments representing keys and values to set in the config.
+                  Keys can be nested using dots (e.g., 'model.lr' sets 'lr' under 'model').
+
+    Note:
+        If a nested key does not exist, intermediate dictionaries are created automatically.
+        The file is overwritten with the updated configuration in YAML format.
+
+    Args:
+        config: Path to the model configuration file.
+        working_directory: Working directory for the model.
+        **kwargs: Keyword arguments to set in the config file.
+
+    Raises:
+        KeyError: If a specified key does not exist in the config and cannot be created.
+    """
+    with WorkingDirectory(working_directory):
+        config_dict: dict[str, Any] = parse_config(config)
+        for key, value in kwargs.items():
+            if key.endswith("+"):
+                key: str = key[:-1]
+                create: bool = True
+            else:
+                create: bool = False
+
+            keys: list[str] = key.split(".")
+            d = config_dict
+
+            for k in keys[:-1]:
+                if k not in d or not isinstance(d[k], dict):
+                    if create:
+                        d[k] = {}
+                    else:
+                        raise KeyError(
+                            f"Key '{k}' not found in config. If you want to create it, use the '+' suffix for the KEY."
+                        )
+                d: dict[str, Any] = d[k]
+
+            if value == "null":
+                value = None
+            elif value == "true":
+                value = True
+            elif value == "false":
+                value = False
+
+            if not create and keys[-1] not in d:
+                raise KeyError(
+                    f"Key '{keys[-1]}' not found in config. If you want to create it, use the '+' suffix for the KEY."
+                )
+            d[keys[-1]] = value
+
+        with open(config, "w") as f:
+            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+
+
+@cli.command(context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
+@click_config
+@working_directory_option
+@click.pass_context
+def set(ctx: click.Context, config: Path, working_directory: Path) -> None:
+    """Set model configuration values.
+
+    Accepts parameter assignments in the form key=value, where keys can use
+    dot notation for nested values (e.g., model.param1=0.5).
+
+    By default, only existing keys can be updated. To create new keys,
+    append a '+' to the key (e.g., model.new_param+=10).
+
+    Args:
+        ctx: Click context containing extra arguments.
+        config: Path to the model configuration file.
+        working_directory: Working directory for the model.
+
+    """
+    # Parse extra arguments as key=value pairs
+    params = {}
+    for arg in ctx.args:
+        if "=" in arg:
+            key, value = arg.split("=", 1)
+            # Try to convert value to appropriate type
+            try:
+                # Try int first
+                value = int(value)
+            except ValueError:
+                try:
+                    # Try float
+                    value = float(value)
+                except ValueError:
+                    # Keep as string
+                    pass
+            params[key] = value
+        else:
+            click.echo(
+                f"Warning: Ignoring invalid argument '{arg}'. Expected format: key=value",
+                err=True,
+            )
+
+    set_fn(config=config, working_directory=working_directory, **params)
+
+
 def build_fn(
-    data_catalog,
-    config,
-    build_config,
-    working_directory,
-    data_provider,
-    data_root,
+    data_catalog: Path = DATA_CATALOG_DEFAULT,
+    config: Path | dict[str, Any] = CONFIG_DEFAULT,
+    build_config: Path | dict[str, Any] = BUILD_DEFAULT,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    data_provider: str = DATA_PROVIDER_DEFAULT,
+    data_root: Path = DATA_ROOT_DEFAULT,
 ) -> None:
     """Build model.
 
@@ -633,46 +893,98 @@ def build_fn(
 @cli.command()
 @click_build_options()
 def build(*args: Any, **kwargs: Any) -> None:
+    """Build model with configuration file.
+
+    This command reads the model configuration file and the build configuration file
+    and executes the build methods specified in the build configuration file.
+
+    Args:
+        *args: Positional arguments to pass to the build function.
+        **kwargs: Keyword arguments to pass to the build function.
+    """
     build_fn(*args, **kwargs)
 
 
 def alter_fn(
-    data_catalog,
-    config: dict,
-    build_config: dict,
-    working_directory: Path | str,
-    from_model: str,
-    data_provider,
-    data_root,
+    data_catalog: Path = DATA_CATALOG_DEFAULT,
+    config: Path = CONFIG_DEFAULT,
+    build_config: Path | dict[str, Any] = BUILD_DEFAULT,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    from_model: Path = ALTER_FROM_MODEL_DEFAULT,
+    data_provider: str = DATA_PROVIDER_DEFAULT,
+    data_root: Path = DATA_ROOT_DEFAULT,
 ) -> None:
+    """Create alternative version from base model with only changed files.
+
+    This function is useful to create a new model based on an existing one, but with
+    only a few changes. It will copy the base model and overwrite the files that are
+    specified in the config and build config files. The rest of the files will be
+    linked to the original model to reduce disk space.
+
+    Args:
+        data_catalog: Path to the data catalog file.
+        config: Path to the model configuration file.
+        build_config: Path to the model build configuration file.
+        working_directory: Working directory for the model.
+        from_model: Folder for the existing model.
+        data_provider: Data variant to use from data catalog (see hydroMT documentation).
+        data_root: Root folder where the data is located. If None, the data catalog is not modified.
+    """
     from_model: Path = Path(from_model)
 
     with WorkingDirectory(working_directory):
         original_config: Path = from_model / config
 
-        config_dict: dict[str, str] = {"inherits": str(original_config)}
-        with open(config, "w") as f:
-            # do not sort keys, to keep the order of the config file
-            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+        # if config does not exist, create a new config that inherits from the original model
+        if not config.exists():
+            original_config: Path = from_model / config
+
+            config_dict: dict[str, str] = {"inherits": str(original_config)}
+            with open(config, "w") as f:
+                # do not sort keys, to keep the order of the config file
+                yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+
+        # if config exists, we just make sure it inherits from the original model
+        # if this is set already, we just leave it as is and assume the user knows what they are doing
+        else:
+            # Read existing config
+            with open(config, "r") as f:
+                raw_config = yaml.load(f, Loader=DetectDuplicateKeysYamlLoader)
+            if "inherits" not in raw_config:
+                raw_config["inherits"] = str(from_model / config)
+            with open(config, "w") as f:
+                yaml.dump(raw_config, f, default_flow_style=False, sort_keys=False)
 
         config_from_original_model = parse_config(from_model / config)
         input_folder: Path = Path(config_from_original_model["general"]["input_folder"])
 
         original_input_path: Path = from_model / input_folder
 
-        with open(original_input_path / "files.json", "r") as f:
-            original_files = json.load(f)
+        # TODO: This can be removed in 2026
+        if (
+            not (original_input_path / "files.yml").exists()
+            and (original_input_path / "files.json").exists()
+        ):
+            # convert input/files.json to input/files.yml
+            json_files: dict[str, Any] = load_dict(
+                (original_input_path / "files.json"),
+            )
+            to_dict(json_files, original_input_path / "files.yml")
+            # remove the original json file
+            (original_input_path / "files.json").unlink()
 
-            for file_class, files in original_files.items():
-                for file_name, file_path in files.items():
-                    if not file_path.startswith("/"):
-                        original_files[file_class][file_name] = str(
-                            Path("..") / original_input_path / file_path
-                        )
+        original_files = load_dict(original_input_path / "files.yml")
+
+        for file_class, files in original_files.items():
+            for file_name, file_path in files.items():
+                if not file_path.startswith("/"):
+                    original_files[file_class][file_name] = str(
+                        Path("..") / original_input_path / file_path
+                    )
 
         input_folder.mkdir(parents=True, exist_ok=True)
-        with open(input_folder / "files.json", "w") as f:
-            json.dump(original_files, f, indent=4)
+        with open(input_folder / "files.yml", "w") as f:
+            yaml.dump(original_files, f, default_flow_style=False)
 
         build_config = parse_config(build_config)
         model = get_builder(
@@ -697,7 +1009,12 @@ def alter_fn(
 
 @cli.command()
 @click_build_options()
-@click.option("--from-model", default="../base", help="Folder for the existing model.")
+@click.option(
+    "--from-model",
+    type=click.Path(path_type=Path),
+    default=ALTER_FROM_MODEL_DEFAULT,
+    help="Folder for the existing model.",
+)
 def alter(*args: Any, **kwargs: Any) -> None:
     """Create alternative version from base model with only changed files.
 
@@ -710,12 +1027,12 @@ def alter(*args: Any, **kwargs: Any) -> None:
 
 
 def update_fn(
-    data_catalog,
-    config,
-    build_config,
-    working_directory,
-    data_provider,
-    data_root,
+    data_catalog: Path = DATA_CATALOG_DEFAULT,
+    config: Path | dict[str, Any] = CONFIG_DEFAULT,
+    build_config: Path = BUILD_DEFAULT,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    data_provider: str = DATA_PROVIDER_DEFAULT,
+    data_root: Path = DATA_ROOT_DEFAULT,
 ) -> None:
     """Update model.
 
@@ -733,16 +1050,16 @@ def update_fn(
         ValueError: if build_config is not a str or dict.
     """
     with WorkingDirectory(working_directory):
-        if isinstance(build_config, str):
-            build_config_list: list[str] = build_config.split("::")
-            build_config_file: str = build_config_list[0]
+        if isinstance(build_config, Path):
+            build_config_list: list[str] = str(build_config).split("::")
+            build_config_file: Path = Path(build_config_list[0])
 
             try:
-                build_config: dict[Any] = parse_config(build_config_file)
+                build_config: dict[str, Any] = parse_config(build_config_file)
             except FileNotFoundError:
-                if ":" in build_config_file and "::" not in build_config_file:
+                if ":" in str(build_config_file) and "::" not in str(build_config_file):
                     raise FileNotFoundError(
-                        f"Build config file '{build_config_file}' not found. Did you mean '{build_config_file.replace(':', '::')}'?"
+                        f"Build config file '{str(build_config_file)}' not found. Did you mean '{str(build_config_file).replace(':', '::')}'?"
                     )
                 raise
 
@@ -802,7 +1119,7 @@ def update_fn(
             }
 
         else:
-            raise ValueError
+            raise ValueError("build_config must be a str or dict.")
 
         model = get_builder(
             config,
@@ -819,10 +1136,16 @@ def update_fn(
 
 @cli.command()
 @click_build_options(
-    build_config="update.yml",
+    build_config=UPDATE_DEFAULT,
     build_config_help_extra="Optionally, you can specify a specific method within the update file using :: syntax, e.g., 'update.yml::setup_economic_data' to only run the setup_economic_data method. If the method ends with a '+', all subsequent methods are run as well.",
 )
 def update(*args: Any, **kwargs: Any) -> None:
+    """Update model with configuration file.
+
+    Args:
+        *args: Positional arguments to pass to the update function.
+        **kwargs: Keyword arguments to pass to the update function.
+    """
     update_fn(*args, **kwargs)
 
 
@@ -830,7 +1153,7 @@ def update(*args: Any, **kwargs: Any) -> None:
 @click_run_options()
 @click.option(
     "--methods",
-    default="plot_discharge,evaluate_discharge",
+    default="plot_discharge,evaluate_discharge,evaluate_hydrodynamics,evaluate_forecasts",
     help="Comma-seperated list of methods to evaluate. Currently supported methods: 'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.",
 )
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
@@ -854,28 +1177,40 @@ def update(*args: Any, **kwargs: Any) -> None:
     help="correct_Q_obs can be flagged to correct the Q_obs discharge timeseries for the difference in upstream area between the Q_obs station and the simulated discharge",
 )
 def evaluate(
-    working_directory,
-    config: dict | str,
     methods: str,
     spinup_name: str,
     run_name: str,
-    include_spinup,
-    include_yearly_plots,
-    correct_q_obs,
-    port,
-    gui,
-    no_browser,
-    profiling,
-    optimize,
-    timing,
+    include_spinup: bool,
+    include_yearly_plots: bool,
+    correct_q_obs: bool,
+    working_directory: Path = WORKING_DIRECTORY_DEFAULT,
+    config: dict[str, Any] | Path = CONFIG_DEFAULT,
+    profiling: bool = PROFILING_DEFAULT,
+    optimize: bool = OPTIMIZE_DEFAULT,
+    timing: bool = TIMING_DEFAULT,
 ) -> None:
+    """Evaluate model, for example by comparing observed and simulated discharge.
+
+    Args:
+        methods: Comma-seperated list of methods to evaluate. Currently supported methods: '
+            'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.
+        spinup_name: Name of the evaluation run.
+        run_name: Name of the run to evaluate.
+        include_spinup: Include spinup in evaluation.
+        include_yearly_plots: Create yearly plots in evaluation.
+        correct_q_obs: correct_Q_obs can be flagged to correct the Q_obs discharge timeseries
+            for the difference in upstream area between the Q_obs station and the simulated discharge.
+        working_directory: Working directory for the model.
+        config: Path to the model configuration file or a dict with the config.
+        profiling: If True, run the model with profiling.
+        optimize: If True, run the model in optimized mode, skipping asserts and water balance checks.
+        timing: If True, run the model with timing, printing the time taken for specific methods
+    """
     # If no methods are provided, pass None to run_model_with_method
     methods_list: list[str] = methods.split(",")
     methods_list: list[str] = [
         method.replace("-", "_").strip() for method in methods_list
     ]
-    spinup_name: str
-    run_name: str
     run_model_with_method(
         method="evaluate",
         method_args={
@@ -888,16 +1223,18 @@ def evaluate(
         },
         working_directory=working_directory,
         config=config,
-        port=port,
-        gui=gui,
-        no_browser=no_browser,
         profiling=profiling,
         optimize=optimize,
         timing=timing,
     )
 
 
-def share_fn(working_directory, name, include_preprocessing, include_output) -> None:
+def share_fn(
+    working_directory: Path,
+    name: str,
+    include_preprocessing: bool,
+    include_output: bool,
+) -> None:
     """Share model."""
     with WorkingDirectory(working_directory):
         # create a zip file called model.zip with the folders input, and model files
@@ -907,8 +1244,8 @@ def share_fn(working_directory, name, include_preprocessing, include_output) -> 
             folders.append("preprocessing")
         if include_output:
             folders.append("output")
-        files: list = ["model.yml", "build.yml"]
-        optional_files: list = ["update.yml", "data_catalog.yml"]
+        files: list = [CONFIG_DEFAULT, BUILD_DEFAULT]
+        optional_files: list = [UPDATE_DEFAULT, DATA_CATALOG_DEFAULT]
         optional_folders: list = ["data"]
         zip_filename: str = f"{name}.zip"
         with zipfile.ZipFile(zip_filename, "w") as zipf:
@@ -991,6 +1328,449 @@ def share_fn(working_directory, name, include_preprocessing, include_output) -> 
 def share(*args: Any, **kwargs: Any) -> None:
     """Share model as a zip file."""
     share_fn(*args, **kwargs)
+
+
+@cli.command()
+@click.argument(
+    "method",
+    required=True,
+    type=click.Choice(["size", "license", "fetch"], case_sensitive=True),
+)
+def data_catalog(method: str) -> None:
+    """Method to interact directly with the data catalog.
+
+    Raises:
+        ValueError: If the method is not recognized.
+    """
+    data_catalog = NewDataCatalog()
+    if method == "size":
+        print("Total size of data catalog:", data_catalog.size())
+    elif method == "license":
+        data_catalog.print_licenses()
+    elif method == "fetch":
+        data_catalog.fetch_global()
+    else:
+        raise ValueError(f"Unknown method '{method}'.")
+
+
+@cli.command(
+    context_settings=dict(ignore_unknown_options=True, allow_interspersed_args=False)
+)
+@click.argument(
+    "workflow_name",
+    required=True,
+    type=click.Choice(
+        ["calibrate", "sensitivity", "multirun", "benchmark"], case_sensitive=True
+    ),
+)
+@click.option(
+    "--cores",
+    "-c",
+    default="all",
+    help="Number of cores to use. Default is 'all'.",
+)
+@click.option(
+    "--profile",
+    "-p",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Snakemake profile to use. If not specified, uses profiles/{workflow_name}.",
+)
+@click.option(
+    "--dryrun",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Perform a dry run without executing jobs.",
+)
+@click.option(
+    "--config-override",
+    "-co",
+    multiple=True,
+    help="Override config values (e.g., -co REGION=geul -co NGEN=10).",
+)
+@working_directory_option
+@click.argument("snakemake_args", nargs=-1, type=click.UNPROCESSED)
+def workflow(
+    workflow_name: str,
+    cores: str,
+    profile: Path | None,
+    dryrun: bool,
+    config_override: tuple[str, ...],
+    working_directory: Path,
+    snakemake_args: tuple[str, ...],
+) -> None:
+    """Run a Snakemake workflow for GEB.
+
+    Available workflows:
+    - calibrate: Evolutionary algorithm calibration
+    - sensitivity: Sensitivity analysis
+    - multirun: Multiple scenario runs
+
+    Examples:
+        geb workflow calibrate --cores 8
+        geb workflow calibrate --profile profiles/cluster
+        geb workflow calibrate -co REGION=geul -co NGEN=10
+        geb workflow sensitivity --dryrun
+
+    Args:
+        workflow_name: Name of the workflow to run.
+        cores: Number of cores to use.
+        profile: Snakemake profile directory.
+        dryrun: Whether to perform a dry run.
+        config_override: Config values to override.
+        working_directory: Working directory for the workflow.
+        snakemake_args: Additional arguments to pass to snakemake.
+    """
+    # Get GEB package directory for workflow files
+    geb_dir = Path(os.environ.get("GEB_PACKAGE_DIR")).parent
+
+    with WorkingDirectory(working_directory):
+        # Build snakemake command
+        cmd: list[str] = ["snakemake", "--directory", str(working_directory)]
+
+        # Determine and add snakefile and configfile from GEB package
+        snakefile = geb_dir / "workflow" / f"Snakefile_{workflow_name}"
+        if not snakefile.exists():
+            click.echo(f"Error: Workflow file {snakefile} not found.", err=True)
+            sys.exit(1)
+        cmd.extend(["-s", str(snakefile)])
+
+        # Add workflow config file
+        configfile = geb_dir / "workflow" / "config" / f"{workflow_name}.yml"
+        if configfile.exists():
+            cmd.extend(["--configfile", str(configfile)])
+
+        # Add profile if specified and exists
+        if profile is not None:
+            if not profile.is_absolute():
+                # Try relative to GEB package directory first
+                profile_candidate = geb_dir / profile
+                if profile_candidate.exists():
+                    profile = profile_candidate
+            if Path(profile).exists():
+                cmd.extend(["--profile", str(profile)])
+        else:
+            # No profile specified, use default settings
+            cmd.extend(["--cores", cores])
+
+        # Add dry run flag
+        if dryrun:
+            cmd.append("-n")
+
+        # Process config overrides
+        config_overrides_dict = {}
+        if config_override:
+            for override in config_override:
+                if "=" in override:
+                    key, value = override.split("=", 1)
+                    config_overrides_dict[key] = value
+                else:
+                    click.echo(
+                        f"Warning: Invalid config override '{override}'. Expected format: KEY=VALUE",
+                        err=True,
+                    )
+
+        if config_overrides_dict:
+            cmd.append("--config")
+            for key, value in config_overrides_dict.items():
+                cmd.append(f"{key}={value}")
+
+        # Add additional snakemake arguments
+        cmd.extend(snakemake_args)
+
+        # Print command
+        click.echo(f"Running: {' '.join(cmd)}")
+
+        # Execute snakemake in the working directory
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
+
+def init_multiple_fn(
+    config: str | Path,
+    build_config: str | Path,
+    update_config: str | Path,
+    working_directory: str | Path,
+    from_example: str,
+    geometry_bounds: str,
+    target_area_km2: float,
+    area_tolerance: float,
+    cluster_prefix: str,
+    overwrite: bool,
+    save_geoparquet: str | Path | None,
+    save_map: str | Path | None,
+) -> None:
+    """Create multiple models from a geometry by clustering downstream subbasins.
+
+    Args:
+        config: Path to the base model configuration file.
+        build_config: Path to the base model build configuration file.
+        update_config: Path to the base model update configuration file.
+        working_directory: Working directory for the models.
+        from_example: Name of the example to use as a base for the models.
+        geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
+        target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
+        area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
+        cluster_prefix: Prefix for cluster directory names.
+        overwrite: If True, overwrite existing directories and files.
+        save_geoparquet: Path to save clusters as geoparquet file. If None, no file is saved.
+        save_map: Path to save visualization map as PNG file. If None, no map is created.
+
+    Raises:
+        FileExistsError: If directories already exist and overwrite is False.
+        FileNotFoundError: If the example folder does not exist.
+        ValueError: If geometry_bounds format is invalid.
+    """
+    from geb.build import (
+        cluster_subbasins_by_area_and_proximity,
+        create_cluster_visualization_map,
+        create_multi_basin_configs,
+        get_all_downstream_subbasins_in_geom,
+        get_river_graph,
+        save_clusters_as_merged_geometries,
+        save_clusters_to_geoparquet,
+    )
+    from geb.build.data_catalog import NewDataCatalog
+
+    config: Path = Path(config)
+    build_config: Path = Path(build_config)
+    update_config: Path = Path(update_config)
+    working_directory: Path = Path(working_directory)
+
+    # Create the models/large_scale directory structure
+    models_dir = Path.cwd().parent / "models"
+    large_scale_dir = models_dir / "large_scale"
+    if not large_scale_dir.exists():
+        large_scale_dir.mkdir(parents=True, exist_ok=True)
+
+    # Always create geoparquet and map files in large_scale directory if not specified
+    if save_geoparquet is None:
+        save_geoparquet = large_scale_dir / f"{cluster_prefix}_clusters.geoparquet"
+    if save_map is None:
+        save_map = large_scale_dir / f"{cluster_prefix}_clusters_map.png"
+
+    # Parse geometry bounds
+    try:
+        bounds = [float(x.strip()) for x in geometry_bounds.split(",")]
+        if len(bounds) != 4:
+            raise ValueError
+        xmin, ymin, xmax, ymax = bounds
+    except ValueError:
+        raise ValueError(
+            "geometry_bounds must be in format 'xmin,ymin,xmax,ymax' with numeric values"
+        )
+
+    bbox_geom = gpd.GeoDataFrame(
+        geometry=[box(xmin, ymin, xmax, ymax)], crs="EPSG:4326"
+    )
+
+    # Initialize data catalog and logger
+    data_catalog_instance = NewDataCatalog()
+    logger = create_logger(working_directory / "init_multiple.log")
+
+    logger.info("Starting multiple model initialization")
+    logger.info(f"Using geometry bounds: {geometry_bounds}")
+    logger.info(f"Target area: {target_area_km2:,.0f} km²")
+    logger.info(f"Area tolerance: {area_tolerance:.1%}")
+
+    logger.info("Loading river network...")
+    river_graph = get_river_graph(data_catalog_instance)
+
+    logger.info("Finding downstream subbasins in geometry...")
+    downstream_subbasins = get_all_downstream_subbasins_in_geom(
+        data_catalog_instance, bbox_geom, logger
+    )
+
+    if not downstream_subbasins:
+        raise ValueError("No downstream subbasins found in the specified geometry")
+
+    logger.info(f"Found {len(downstream_subbasins)} downstream subbasins")
+
+    logger.info("Clustering subbasins by area and proximity...")
+    clusters = cluster_subbasins_by_area_and_proximity(
+        data_catalog_instance,
+        downstream_subbasins,
+        target_area_km2=target_area_km2,
+        area_tolerance=area_tolerance,
+        logger=logger,
+    )
+
+    logger.info(f"Created {len(clusters)} clusters")
+
+    # Check for existing directories if not overwriting
+    if not overwrite:
+        for i in range(len(clusters)):
+            cluster_dir = large_scale_dir / f"{cluster_prefix}_{i:03d}"
+            if cluster_dir.exists():
+                raise FileExistsError(
+                    f"Cluster directory {cluster_dir} already exists. Remove --no-overwrite flag to overwrite."
+                )
+
+    # Verify example folder exists
+    example_folder: Path = (
+        Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / "examples" / from_example
+    )
+    if not example_folder.exists():
+        raise FileNotFoundError(
+            f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
+        )
+
+    logger.info(f"Creating cluster configurations using example: {from_example}")
+    # Create cluster configurations
+    cluster_directories = create_multi_basin_configs(
+        clusters=clusters,
+        working_directory=large_scale_dir,
+        cluster_prefix=cluster_prefix,
+    )
+
+    logger.info(f"Saving clusters to geoparquet: {save_geoparquet}")
+    # Save clusters to geoparquet (always create)
+    save_clusters_to_geoparquet(
+        clusters=clusters,
+        data_catalog=data_catalog_instance,
+        output_path=save_geoparquet,
+        cluster_prefix=cluster_prefix,
+    )
+
+    # Save clusters as merged geometries (complete basins as single polygons)
+    merged_basins_path = (
+        save_geoparquet.parent / f"complete_basins_{save_geoparquet.stem}.geoparquet"
+    )
+    logger.info(f"Saving complete basins as merged geometries: {merged_basins_path}")
+    save_clusters_as_merged_geometries(
+        clusters=clusters,
+        data_catalog=data_catalog_instance,
+        river_graph=river_graph,
+        output_path=merged_basins_path,
+        cluster_prefix=cluster_prefix,
+        include_upstream=True,  # Include all upstream subbasins in merged geometry
+    )
+
+    logger.info(f"Creating visualization map: {save_map}")
+    # Create visualization map (always create)
+    create_cluster_visualization_map(
+        clusters=clusters,
+        data_catalog=data_catalog_instance,
+        output_path=save_map,
+        cluster_prefix=cluster_prefix,
+    )
+
+    logger.info(
+        f"Successfully created {len(cluster_directories)} model configurations:"
+    )
+    for cluster_dir in cluster_directories:
+        logger.info(f"  {cluster_dir.relative_to(large_scale_dir)}")
+
+    logger.info("To build all models, run:")
+    logger.info(f"  cd {large_scale_dir}")
+    logger.info(f"  for dir in {cluster_prefix}_*/; do")
+    logger.info(f"    echo 'Building model in $dir'")
+    logger.info(f"    cd $dir && geb build && cd ..")
+    logger.info(f"  done")
+
+    logger.info("Multiple model initialization completed successfully")
+
+
+@cli.command()
+@click_config
+@click.option(
+    "--build-config",
+    "-b",
+    default=BUILD_DEFAULT,
+    help=f"Path of the model build configuration file. Defaults to '{BUILD_DEFAULT}'.",
+)
+@click.option(
+    "--update-config",
+    "-u",
+    default=UPDATE_DEFAULT,
+    help="Path of the model update configuration file.",
+)
+@click.option(
+    "--from-example",
+    default="geul",
+    help="Name of the example to use as a base for the models. Defaults to 'geul'.",
+)
+@click.option(
+    "--geometry-bounds",
+    default="-10.0,35.0,40.0,70.0",  # World: "-180.0,-90.0,180.0,90.0" Western Europe: "-10.0,35.0,20.0,70.0" Europe: "-10.0,35.0,40.0,70.0"
+    required=True,
+    type=str,
+    help="Bounding box as 'xmin,ymin,xmax,ymax' to select subbasins (e.g., '5.0,50.0,15.0,55.0' for parts of Europe). Defaults to Europe coverage.",
+)
+@click.option(
+    "--target-area-km2",
+    default=34000.0,
+    type=float,
+    help="Target cumulative upstream area per cluster in km². Defaults to 34,000 km².",
+)
+@click.option(
+    "--area-tolerance",
+    default=0.3,
+    type=float,
+    help="Tolerance for target area as fraction (0.3 = 30% tolerance).",
+)
+@click.option(
+    "--cluster-prefix",
+    default="cluster",
+    help="Prefix for cluster directory names. Defaults to 'cluster'.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=True,
+    help="If set, overwrite existing cluster directories and files.",
+)
+@click.option(
+    "--save-geoparquet",
+    type=click.Path(),
+    help="Save clusters to geoparquet file at this path. If not specified, saves to 'models/clusters.geoparquet'.",
+)
+@click.option(
+    "--save-map",
+    type=click.Path(),
+    help="Save visualization map to PNG file at this path. If not specified, saves to 'models/clusters_map.png'.",
+)
+@working_directory_option
+def init_multiple(
+    config: str,
+    build_config: str,
+    update_config: str,
+    working_directory: Path,
+    from_example: str,
+    geometry_bounds: str,
+    target_area_km2: float,
+    area_tolerance: float,
+    cluster_prefix: str,
+    overwrite: bool,
+    save_geoparquet: str | None,
+    save_map: str | None,
+) -> None:
+    """Initialize multiple models by clustering downstream subbasins in a geometry.
+
+    This command identifies all downstream subbasins (outlets) within a specified
+    bounding box, clusters them by proximity and cumulative upstream area, and
+    creates separate model configurations for each cluster.
+
+    Example for parts of Europe:
+        geb init_multiple --geometry-bounds="5.0,50.0,15.0,55.0"
+
+    By default, a region covering Europe is used. Use --geometry-bounds to specify a different region.
+    """
+    init_multiple_fn(
+        config=config,
+        build_config=build_config,
+        update_config=update_config,
+        working_directory=working_directory,
+        from_example=from_example,
+        geometry_bounds=geometry_bounds,
+        target_area_km2=target_area_km2,
+        area_tolerance=area_tolerance,
+        cluster_prefix=cluster_prefix,
+        overwrite=overwrite,
+        save_geoparquet=save_geoparquet,
+        save_map=save_map,
+    )
 
 
 if __name__ == "__main__":
