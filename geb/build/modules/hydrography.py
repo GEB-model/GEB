@@ -1094,7 +1094,7 @@ class Hydrography:
                 subset = ds.isel(stations=station_idx).drop_vars(
                     ["station_x_coordinate", "station_y_coordinate"]
                 )
-                gtsm_data_region.append(subset.waterlevel.to_pandas())
+                gtsm_data_region.append(subset.surge.to_pandas())
                 print(f"Processed GTSM data for {year}-{month:02d}")
                 ds.close()
         gtsm_data_region_pd = pd.concat(gtsm_data_region, axis=0)
