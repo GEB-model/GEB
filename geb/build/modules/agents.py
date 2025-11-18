@@ -2470,7 +2470,7 @@ class Agents:
         fraction_sw_irrigation_data.attrs["_FillValue"] = np.nan
 
         fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
-            **get_window(
+            get_window(
                 fraction_sw_irrigation_data.x,
                 fraction_sw_irrigation_data.y,
                 self.bounds,
@@ -2487,7 +2487,7 @@ class Agents:
         fraction_gw_irrigation_data.attrs["_FillValue"] = np.nan
 
         fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
-            **get_window(
+            get_window(
                 fraction_gw_irrigation_data.x,
                 fraction_gw_irrigation_data.y,
                 self.bounds,

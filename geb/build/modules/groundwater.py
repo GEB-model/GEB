@@ -231,7 +231,7 @@ class GroundWater:
                 "head_upper_layer_globgm"
             ).read()
             head_upper_layer = head_upper_layer.isel(
-                **get_window(
+                get_window(
                     head_upper_layer.x, head_upper_layer.y, self.bounds, buffer=2
                 ),
             )
@@ -250,7 +250,7 @@ class GroundWater:
                 "head_lower_layer_globgm"
             ).read()
             head_lower_layer = head_lower_layer.isel(
-                **get_window(
+                get_window(
                     head_lower_layer.x, head_lower_layer.y, self.bounds, buffer=2
                 ),
             )

@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -157,7 +158,7 @@ class Crops:
         crop_prices: str | int | float,
         translate_crop_names: dict | None = None,
         adjust_currency: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Process crop price inputs into model-ready time series or constants.
 
         Args:
@@ -776,7 +777,7 @@ class Crops:
     @build_method(depends_on=["set_time_range"])
     def setup_cultivation_costs(
         self,
-        cultivation_costs: str | int | float | None = 0,
+        cultivation_costs: str | int | float = 0,
         translate_crop_names: dict[str, str] | None = None,
         adjust_currency: bool = False,
     ) -> None:
@@ -805,7 +806,7 @@ class Crops:
     )
     def setup_crop_prices(
         self,
-        crop_prices: str | int | float | None = "FAO_stat",
+        crop_prices: str | int | float = "FAO_stat",
         translate_crop_names: dict[str, str] | None = None,
         adjust_currency: bool = False,
     ) -> None:
@@ -877,8 +878,8 @@ class Crops:
                         self.data_catalog.get_source(dataset_name).path
                     )
                     crop_map = crop_map.isel(
+                        get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
                         band=0,
-                        **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
                     )
 
                     crop_map = crop_map.fillna(0)
@@ -1011,8 +1012,8 @@ class Crops:
         )
 
         MIRCA_unit_grid = MIRCA_unit_grid.isel(
+            get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
             band=0,
-            **get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
         )
 
         crop_calendar = parse_MIRCA2000_crop_calendar(
