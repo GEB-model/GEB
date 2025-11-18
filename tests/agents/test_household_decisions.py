@@ -1,5 +1,7 @@
 """Test suite for household decision making module."""
 
+from typing import Any
+
 import numpy as np
 from pytest import fixture
 
@@ -9,8 +11,12 @@ from geb.agents.decision_module import (
 
 
 @fixture
-def decision_template() -> None:
-    """This function creates a decision template for the decision module."""
+def decision_template() -> dict[str, Any]:
+    """This function creates a decision template for the decision module.
+
+    Returns:
+        A dictionary containing the parameters for the decision module.
+    """
     geom_id = "<GeoID>"
     n_agents = 100
     return_periods = np.array([10, 50])
