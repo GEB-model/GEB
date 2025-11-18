@@ -164,7 +164,9 @@ def test_rasterize_like(dtype: type) -> None:
     gdf = gpd.GeoDataFrame({"value": [1, 2]}, geometry=[poly1, poly2], crs="EPSG:28992")
 
     nodata = 255
-    result = rasterize_like(gdf, "value", raster, dtype, nodata, all_touched=True)
+    result = rasterize_like(
+        gdf, column="value", raster=raster, dtype=dtype, nodata=nodata, all_touched=True
+    )
 
     assert isinstance(result, xr.DataArray)
     assert result.shape == raster.shape
@@ -205,7 +207,12 @@ def test_rasterize_like_geographic() -> None:
     nodata = -1
 
     result_geo = rasterize_like(
-        gdf, "value", raster_geo, dtype, nodata, all_touched=False
+        gdf,
+        column="value",
+        raster=raster_geo,
+        dtype=dtype,
+        nodata=nodata,
+        all_touched=False,
     )
 
     assert isinstance(result_geo, xr.DataArray)
