@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import LineString
 
-from geb.hazards.floods import assign_return_periods
+from geb.hazards.floods.workflows.utils import assign_return_periods
 
 
 def test_assign_return_periods_basic() -> None:
