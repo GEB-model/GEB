@@ -1000,9 +1000,6 @@ def assign_return_periods(
         - Anderson-Darling bootstrap p-value threshold selection
         - Return level estimation
 
-    Retains original warning behaviour:
-        - If RL > 400,000 m³/s, issue warning and set to 2,000 m³/s.
-
     Args:
         rivers: GeoDataFrame with river IDs (index must match columns in discharge_dataframe).
         discharge_dataframe: Time series DataFrame (datetime index) for all rivers.
@@ -1016,8 +1013,12 @@ def assign_return_periods(
 
     Raises:
         TypeError: If discharge series does not have a DatetimeIndex.
+        RuntimeError: If GPD-POT analysis fails for a river.
+        ValueError: If discharge value exceeds maximum threshold of 400,000 m³/s.
     """
     assert isinstance(return_periods, list)
+    if not all((isinstance(T, (int, float)) and T > 0) for T in return_periods):
+        raise ValueError("All return periods must be positive numbers (years > 0).")
     return_periods_arr = np.asarray(return_periods, float)
 
     for idx in tqdm(rivers.index, total=len(rivers), desc="GPD-POT Return Periods"):
@@ -1043,12 +1044,8 @@ def assign_return_periods(
                 min_exceed=min_exceed,
                 nboot=nboot,
             )
-
         except Exception as e:
-            print(f"Warning: GPD-POT failed for river {idx}: {e}")
-            for T in return_periods:
-                rivers.loc[idx, f"{prefix}_{T}"] = np.nan
-            continue
+            raise RuntimeError(f"GPD-POT analysis failed for river {idx}: {e}") from e
 
         # Extract return levels
         rl_values = result["rl_table"]["GPD_POT_RL"].values
@@ -1058,11 +1055,9 @@ def assign_return_periods(
             discharge_value = float(rl)
 
             if discharge_value > 400_000:
-                print(
-                    f"Warning: Discharge value for T={T} is too high: "
-                    f"{discharge_value:.2f} m³/s for river {idx}. Setting to 2000 m³/s."
+                raise ValueError(
+                    f"Discharge value for T={T} years exceeds maximum threshold of 400,000 m³/s: {discharge_value:.0f} m³/s for river {idx}"
                 )
-                discharge_value = 2000.0  # remove later, ask Lars if problem fixed
 
             rivers.loc[idx, f"{prefix}_{T}"] = discharge_value
 

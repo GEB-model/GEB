@@ -928,18 +928,6 @@ wheels = [
 ]
 
 [[package]]
-name = "emcee"
-version = "3.1.6"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/cb/53/1045ee878cb24281387079f8ee4f0ade1622c6aae1ed1fd91a53e4fa5b19/emcee-3.1.6.tar.gz", hash = "sha256:11af4daf6ab8f9ca69681e3c29054665db7bbd87fd4eb8e437d2c3a1248c637d", size = 2871117, upload-time = "2024-04-19T10:03:19.555Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/ef/2196b9bf88ffa1bde45853c72df021fbd07a8fa91a0f59a22d14a050dc04/emcee-3.1.6-py2.py3-none-any.whl", hash = "sha256:f2d63752023bdccf744461450e512a5b417ae7d28f18e12acd76a33de87580cb", size = 47351, upload-time = "2024-04-19T10:03:17.522Z" },
-]
-
-[[package]]
 name = "et-xmlfile"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1208,7 +1196,6 @@ dependencies = [
     { name = "permetrics" },
     { name = "plotly" },
     { name = "pyarrow" },
-    { name = "pyextremes" },
     { name = "pyflwdir" },
     { name = "pyogrio" },
     { name = "pyresample" },
@@ -1298,7 +1285,6 @@ requires-dist = [
     { name = "plotly", specifier = ">=6.2.0" },
     { name = "pyarrow", specifier = ">=17.0.0" },
     { name = "pybind11", marker = "extra == 'plantfate'", specifier = ">=2.13.6" },
-    { name = "pyextremes", specifier = ">=2.3.3" },
     { name = "pyflwdir", specifier = ">=0.5.9" },
     { name = "pyogrio", specifier = ">=0.9.0" },
     { name = "pyresample", specifier = ">=1.32.0" },
@@ -3443,22 +3429,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/1a/d9/c248c103856f807ef70c18a4f986693a46a8ffe1602e5d361485da502d20/pydantic_core-2.41.5-cp313-cp313-win32.whl", hash = "sha256:650ae77860b45cfa6e2cdafc42618ceafab3a2d9a3811fcfbd3bbf8ac3c40d36", size = 1994679, upload-time = "2025-11-04T13:40:50.619Z" },
     { url = "https://files.pythonhosted.org/packages/9e/8b/341991b158ddab181cff136acd2552c9f35bd30380422a639c0671e99a91/pydantic_core-2.41.5-cp313-cp313-win_amd64.whl", hash = "sha256:79ec52ec461e99e13791ec6508c722742ad745571f234ea6255bed38c6480f11", size = 2019766, upload-time = "2025-11-04T13:40:52.631Z" },
     { url = "https://files.pythonhosted.org/packages/73/7d/f2f9db34af103bea3e09735bb40b021788a5e834c81eedb541991badf8f5/pydantic_core-2.41.5-cp313-cp313-win_arm64.whl", hash = "sha256:3f84d5c1b4ab906093bdc1ff10484838aca54ef08de4afa9de0f5f14d69639cd", size = 1981005, upload-time = "2025-11-04T13:40:54.734Z" },
-]
-
-[[package]]
-name = "pyextremes"
-version = "2.4.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "emcee" },
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "scipy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b0/a7/77b48043885f41d7f33dd89f678e93bbe84fea61635707452b0f1624f1d3/pyextremes-2.4.0.tar.gz", hash = "sha256:993b42da829e30e299d35102a3b8d27608a474354daa0da6c55d0aceee4a05ce", size = 41946, upload-time = "2025-11-09T05:09:05.633Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/ce/a7eaafed8fef23757cf1ac9865469f6c72ef67878af3e047ae165831593b/pyextremes-2.4.0-py3-none-any.whl", hash = "sha256:785a6ea7ceaad4a7890f7fc8cf532ed3a4bb47cd7981df1c6d66eee17b89c23f", size = 58941, upload-time = "2025-11-09T05:09:04.003Z" },
 ]
 
 [[package]]
