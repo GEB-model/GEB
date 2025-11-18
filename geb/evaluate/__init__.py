@@ -73,6 +73,7 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
         for method in methods:
             if hasattr(self, method):
                 attr = getattr(self, method)
+                print(f"Running evaluation method: {method}")
             else:
                 raise ValueError(
                     f"Method {method} is not implemented in Evaluate class."

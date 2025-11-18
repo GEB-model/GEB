@@ -26,28 +26,39 @@ class MeteorologicalForecasts:
         pass
 
     def evaluate_forecasts(
-        self, model: Any, output_folder: Path, *args: Any, **kwargs: Any
+        self,
+        spinup_name: str = "spinup",
+        run_name: str = "default",
+        include_spinup: bool = False,
+        include_yearly_plots: bool = False,
+        correct_Q_obs: bool = False,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         """Evaluate meteorological forecasts by comparing different forecast types at different initialisation times (00:00 (not yet vs 12:00) UTC).
 
         It compares ERA5 reanalysis data against forecast types such as ensemble forecasts and deterministic forecasts.
 
         Args:
-            model: The forecast model to evaluate.
-            output_folder: The folder to save evaluation outputs.
+            spinup_name: Name of the spinup run (not used for meteorological evaluation).
+            run_name: Name of the simulation run (not used for meteorological evaluation).
+            include_spinup: Whether to include spinup run (not used for meteorological evaluation).
+            include_yearly_plots: Whether to create yearly plots (not used for meteorological evaluation).
+            correct_Q_obs: Whether to correct Q_obs data (not used for meteorological evaluation).
             *args: Additional positional arguments.
             **kwargs: Additional keyword arguments.
 
         Raises:
             ValueError: If the forecast model path does not exist.
         """
+        print("Evaluating meteorological forecasts...")
         # Create forecast output folder within the evaluate folder
-        forecast_folder: Path = output_folder / "forecasts"
+        forecast_folder: Path = self.output_folder_evaluate / "forecasts"
         forecast_folder.mkdir(parents=True, exist_ok=True)
 
         # Base path for forecast data
         forecast_base_path: Path = (
-            model.input_folder
+            self.model.input_folder
             / "other"
             / "forecasts"
             / "ECMWF"
@@ -118,7 +129,10 @@ class MeteorologicalForecasts:
                     )
 
                 era5_path = (
-                    model.input_folder / "other" / "climate" / "pr_kg_per_m2_per_s.zarr"
+                    self.model.input_folder
+                    / "other"
+                    / "climate"
+                    / "pr_kg_per_m2_per_s.zarr"
                 )
 
                 # ERA5
