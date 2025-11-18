@@ -5,12 +5,54 @@ on multiple basin clusters created by init_multiple command.
 """
 
 import os
+import yaml
 from pathlib import Path
 
 # Get configuration with defaults
-CLUSTER_PREFIX = config.get("CLUSTER_PREFIX", "test")
+CLUSTER_PREFIX = config.get("CLUSTER_PREFIX", "WE")
 LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", "../models/large_scale")
 EVALUATION_METHODS = config.get("EVALUATION_METHODS", "plot_discharge,evaluate_discharge")
+
+def get_basin_area_km2(cluster_name):
+    """Read basin area from cluster's model.yml file."""
+    model_yml_path = Path(LARGE_SCALE_DIR) / cluster_name / "base" / "model.yml"
+    
+    if not model_yml_path.exists():
+        print(f"Warning: model.yml not found for {cluster_name}, using default area")
+        return 30000.0  # Default area for unknown basins
+    
+    try:
+        with open(model_yml_path, 'r') as f:
+            config_data = yaml.safe_load(f)
+        
+        # Extract basin area if available
+        if 'basin' in config_data and 'total_area_km2' in config_data['basin']:
+            area = float(config_data['basin']['total_area_km2'])
+            print(f"Basin area for {cluster_name}: {area:,.0f} km²")
+            return area
+        else:
+            print(f"Warning: No basin area found for {cluster_name}, using default")
+            return 30000.0  # Default area
+    except Exception as e:
+        print(f"Error reading basin area for {cluster_name}: {e}")
+        return 30000.0  # Default area
+
+def get_resources(cluster_name, base_memory_mb):
+    """Get both memory allocation and SLURM partition based on basin size."""
+    area_km2 = get_basin_area_km2(cluster_name)
+    
+    # Define scaling based on basin size
+    if area_km2 > 600000:  # Very large basins (like Danube ~817k km²)
+        memory_mb = min(base_memory_mb * 4, 128000)  # Up to 128GB
+        partition = "ivm-fat" 
+    elif area_km2 > 35000:  # Large basins (your preferred threshold)
+        memory_mb = min(base_memory_mb * 2, 56000)  # Up to 56GB
+        partition = "ivm"
+    else:  # Standard basins
+        memory_mb = base_memory_mb
+        partition = "ivm"
+    
+    return memory_mb, partition
 
 # Dynamically discover cluster directories
 def get_cluster_names():
@@ -33,11 +75,12 @@ if not CLUSTER_NAMES:
 
 print(f"Found {len(CLUSTER_NAMES)} clusters: {CLUSTER_NAMES}")
 
-# Configure which clusters need high memory (can be set in config)
-HIGH_MEM_CLUSTERS = config.get("HIGH_MEM_CLUSTERS", [])
-
-# Rule order: prefer standard run over high-memory run
-ruleorder: run_cluster > run_cluster_highmem
+# Print basin areas and memory allocation for each cluster (for debugging)
+for cluster_name in CLUSTER_NAMES:
+    area_km2 = get_basin_area_km2(cluster_name)
+    build_mem, partition = get_resources(cluster_name, 32000)
+    run_mem, _ = get_resources(cluster_name, 56000)
+    print(f"Cluster {cluster_name}: {area_km2:,.0f} km² → {partition} partition (build: {build_mem/1000:.0f}GB, run: {run_mem/1000:.0f}GB)")
 
 # Rule to build a cluster
 rule build_cluster:
@@ -48,10 +91,10 @@ rule build_cluster:
     log:
         f"{LARGE_SCALE_DIR}/{{cluster}}/base/logs/build.log"
     resources:
-        mem_mb=32000,  # Increased from 16GB to 32GB
+        mem_mb=lambda wildcards: get_resources(wildcards.cluster, 32000)[0],
         runtime=240,
         cpus=2,
-        slurm_partition="ivm",
+        slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 32000)[1],
         slurm_account=os.environ.get("USER", "default")
     shell:
         """
@@ -71,10 +114,10 @@ rule spinup_cluster:
     log:
         f"{LARGE_SCALE_DIR}/{{cluster}}/base/logs/spinup.log"
     resources:
-        mem_mb=48000,  # Increased from 24GB to 48GB
+        mem_mb=lambda wildcards: get_resources(wildcards.cluster, 48000)[0],
         runtime=480,
         cpus=4,
-        slurm_partition="ivm",
+        slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 48000)[1],
         slurm_account=os.environ.get("USER", "default")
     shell:
         """
@@ -94,46 +137,16 @@ rule run_cluster:
     log:
         f"{LARGE_SCALE_DIR}/{{cluster}}/base/logs/run.log"
     resources:
-        mem_mb=56000,  # Increased from 32GB to 56GB (max for ivm partition)
-        runtime=1440,
+        mem_mb=lambda wildcards: get_resources(wildcards.cluster, 56000)[0],
+        runtime=8640,
         cpus=6,
-        slurm_partition="ivm",  # Using regular ivm partition (56GB < 60GB limit)
+        slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 56000)[1],
         slurm_account=os.environ.get("USER", "default")
     shell:
         """
         mkdir -p $(dirname {log})
         cd {params.cluster_dir}
         # Set scratch directory for temporary files to reduce memory usage
-        export TMPDIR=/scratch/$SLURM_JOB_ID
-        mkdir -p $TMPDIR
-        geb run 2>&1 | tee {log}
-        # Clean up scratch files
-        rm -rf $TMPDIR
-        """
-
-# Rule for high-memory simulation runs (use when standard run needs >60GB)
-rule run_cluster_highmem:
-    input:
-        f"{LARGE_SCALE_DIR}/{{cluster}}/base/spinup.done"
-    output:
-        touch(f"{LARGE_SCALE_DIR}/{{cluster}}/base/run.done")
-    params:
-        cluster_dir=lambda wildcards: f"{LARGE_SCALE_DIR}/{wildcards.cluster}/base"
-    log:
-        f"{LARGE_SCALE_DIR}/{{cluster}}/base/logs/run_highmem.log"
-    wildcard_constraints:
-        cluster="|".join(HIGH_MEM_CLUSTERS) if HIGH_MEM_CLUSTERS else "NONE"
-    resources:
-        mem_mb=128000,  # 128GB for large simulations
-        runtime=1440,
-        cpus=8,
-        slurm_partition="ivm-fat",  # Use fat partition for high RAM jobs
-        slurm_account=os.environ.get("USER", "default")
-    shell:
-        """
-        mkdir -p $(dirname {log})
-        cd {params.cluster_dir}
-        # Set scratch directory for temporary files
         export TMPDIR=/scratch/$SLURM_JOB_ID
         mkdir -p $TMPDIR
         geb run 2>&1 | tee {log}
@@ -165,54 +178,29 @@ rule evaluate_cluster:
         geb evaluate --methods {params.methods} 2>&1 | tee {log}
         """
 
-# Rule to run complete pipeline for a single cluster
-rule complete_cluster:
-    input:
-        f"{LARGE_SCALE_DIR}/{{cluster}}/base/evaluate.done"
-    output:
-        touch(f"{LARGE_SCALE_DIR}/{{cluster}}/complete.done")
-
-# Rule to run all clusters through build phase
-rule build_all_clusters:
-    input:
-        expand(f"{LARGE_SCALE_DIR}/{{cluster}}/base/build.done", cluster=CLUSTER_NAMES)
-    output:
-        touch(f"{LARGE_SCALE_DIR}/all_builds.done")
-
-# Rule to run all clusters through spinup phase
-rule spinup_all_clusters:
-    input:
-        expand(f"{LARGE_SCALE_DIR}/{{cluster}}/base/spinup.done", cluster=CLUSTER_NAMES)
-    output:
-        touch(f"{LARGE_SCALE_DIR}/all_spinups.done")
-
-# Rule to run all clusters through main simulation
-rule run_all_clusters:
-    input:
-        expand(f"{LARGE_SCALE_DIR}/{{cluster}}/base/run.done", cluster=CLUSTER_NAMES)
-    output:
-        touch(f"{LARGE_SCALE_DIR}/all_runs.done")
-
-# Rule to evaluate all clusters
-rule evaluate_all_clusters:
+# Default target - run everything
+rule all:
     input:
         expand(f"{LARGE_SCALE_DIR}/{{cluster}}/base/evaluate.done", cluster=CLUSTER_NAMES)
-    output:
-        touch(f"{LARGE_SCALE_DIR}/all_evaluations.done")
-
-# Rule to run complete pipeline for all clusters
-rule all_clusters_complete:
-    input:
-        expand(f"{LARGE_SCALE_DIR}/{{cluster}}/complete.done", cluster=CLUSTER_NAMES)
-    output:
-        touch(f"{LARGE_SCALE_DIR}/all_complete.done")
     shell:
         f"""
         echo "All {len(CLUSTER_NAMES)} clusters completed successfully!"
         echo "Completed clusters: {' '.join(CLUSTER_NAMES)}"
         """
 
-# Default target - run everything
-rule all:
+# Convenience rules for running specific phases across all clusters
+rule build_all:
     input:
-        expand(f"{LARGE_SCALE_DIR}/{{cluster}}/complete.done", cluster=CLUSTER_NAMES)
+        expand(f"{LARGE_SCALE_DIR}/{{cluster}}/base/build.done", cluster=CLUSTER_NAMES)
+
+rule spinup_all:
+    input:
+        expand(f"{LARGE_SCALE_DIR}/{{cluster}}/base/spinup.done", cluster=CLUSTER_NAMES)
+
+rule run_all:
+    input:
+        expand(f"{LARGE_SCALE_DIR}/{{cluster}}/base/run.done", cluster=CLUSTER_NAMES)
+
+rule evaluate_all:
+    input:
+        expand(f"{LARGE_SCALE_DIR}/{{cluster}}/base/evaluate.done", cluster=CLUSTER_NAMES)

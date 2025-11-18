@@ -4,33 +4,24 @@
 LARGE_SCALE_DIR: "/scistor/ivm/tbr910/GEB/models/large_scale"
 
 # Prefix used when creating clusters (e.g., test_000, test_001, etc.)
-CLUSTER_PREFIX: "test"
-
-# Clusters that require high memory (>60GB) - use ivm-fat partition
-# Add cluster names here if they need the high-memory rule
-# Example: ["test_002", "test_005"]
-HIGH_MEM_CLUSTERS: ["test_000", "test_001"]  # Add clusters that need 128GB RAM
+CLUSTER_PREFIX: "WE"
 
 # Evaluation methods to run for each cluster
 EVALUATION_METHODS: "plot_discharge,evaluate_discharge"
 
-# Resource configuration (adjust based on your system)
-RESOURCES:
-  # Memory allocation per job (MB)
-  build_mem: 40000
-  spinup_mem: 40000
-  run_mem: 40000
-  evaluate_mem: 40000
-
-  # Runtime limits (minutes)
-  build_time: 1440    # 24 hours
-  spinup_time: 1440   # 24 hours
-  run_time: 1440      # 24 hours
-  evaluate_time: 1440  # 24 hours
+# Automatic Memory Allocation:
+# Memory and partition are now automatically determined based on basin size in model.yml
+# Basin areas > 60,000 km² automatically use ivm-fat partition with up to 128GB RAM
+# Basin areas < 60,000 km² use ivm partition with scaled memory allocation
+# 
+# Memory scaling factors:
+# - Build: 32GB base (up to 128GB for very large basins)
+# - Spinup: 48GB base (up to 192GB for very large basins) 
+# - Run: 56GB base (up to 224GB for very large basins, capped at partition limits)
 
 # Parallel execution settings
 PARALLEL:
   # Maximum number of clusters to run simultaneously
   # Adjust based on your system's memory and CPU capacity
-  max_concurrent_builds: 4
-  max_concurrent_runs: 2
+  max_concurrent_builds: 10
+  max_concurrent_runs: 10

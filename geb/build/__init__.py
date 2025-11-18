@@ -1048,6 +1048,8 @@ def create_multi_basin_configs(
     clusters: list[list[int]],
     working_directory: Path,
     cluster_prefix: str = "cluster",
+    data_catalog: DataCatalog | None = None,
+    river_graph: networkx.DiGraph | None = None,
 ) -> list[Path]:
     """Create separate config files and directories for each cluster of subbasins.
 
@@ -1055,6 +1057,8 @@ def create_multi_basin_configs(
         clusters: List of clusters, where each cluster is a list of COMID values.
         working_directory: Working directory for the models (large_scale directory).
         cluster_prefix: Prefix for cluster directory names.
+        data_catalog: Data catalog for calculating basin areas (optional).
+        river_graph: River graph for finding upstream subbasins (optional).
 
     Returns:
         List of paths to created cluster directories.
@@ -1121,11 +1125,24 @@ def create_multi_basin_configs(
         # Convert all cluster values to regular Python integers
         cluster_ints = [int(subbasin_id) for subbasin_id in cluster]
 
+        # Calculate basin area if data_catalog and river_graph are provided
+        total_basin_area_km2 = None
+        if data_catalog is not None and river_graph is not None:
+            print(f"  Calculating basin area for {cluster_prefix}_{i:03d}...")
+            total_basin_area_km2 = calculate_cluster_basin_area(
+                cluster, data_catalog, river_graph
+            )
+            print(f"  Basin area: {total_basin_area_km2:,.0f} km²")
+
         # Create the configuration dictionary
         model_config = {
             "inherits": "../../model.yml",
             "general": {"region": {"subbasin": cluster_ints}},
         }
+
+        # Add basin area if calculated
+        if total_basin_area_km2 is not None:
+            model_config["basin"] = {"total_area_km2": round(total_basin_area_km2, 2)}
 
         with open(model_config_path, "w") as f:
             yaml.dump(model_config, f, default_flow_style=False, sort_keys=False)
@@ -1139,6 +1156,59 @@ def create_multi_basin_configs(
     )
 
     return cluster_directories
+
+
+def calculate_cluster_basin_area(
+    cluster: list[int],
+    data_catalog: DataCatalog,
+    river_graph: networkx.DiGraph,
+) -> float:
+    """Calculate the total basin area for a cluster of downstream subbasins.
+
+    Args:
+        cluster: List of downstream COMID values for the cluster.
+        data_catalog: Data catalog containing the MERIT basins.
+        river_graph: River graph for finding upstream subbasins.
+
+    Returns:
+        Total basin area in km².
+    """
+    # Find all upstream subbasins for this cluster
+    cluster_all_subbasins = set()
+    for downstream_subbasin in cluster:
+        upstream_subbasins = set(networkx.ancestors(river_graph, downstream_subbasin))
+        upstream_subbasins.add(downstream_subbasin)
+        cluster_all_subbasins.update(upstream_subbasins)
+
+    subbasins_to_merge = list(cluster_all_subbasins)
+
+    # Load geometries for subbasins in this cluster
+    cluster_geometries = gpd.read_parquet(
+        data_catalog.fetch("merit_basins_catchments").path,
+        filters=[("COMID", "in", subbasins_to_merge)],
+    ).set_index("COMID")
+
+    # Union all geometries to create a single merged polygon
+    merged_geometry = cluster_geometries.geometry.union_all()
+
+    # Calculate area using equal area projection (EPSG:6933)
+    if merged_geometry.geom_type == "MultiPolygon":
+        # Handle MultiPolygon case
+        total_area_m2 = sum(
+            float(
+                gpd.GeoSeries([geom], crs="EPSG:4326").to_crs("EPSG:6933").area.iloc[0]
+            )
+            for geom in merged_geometry.geoms
+        )
+    else:
+        # Single polygon case
+        total_area_m2 = float(
+            gpd.GeoSeries([merged_geometry], crs="EPSG:4326")
+            .to_crs("EPSG:6933")
+            .area.iloc[0]
+        )
+
+    return float(total_area_m2 / 1e6)  # Convert m² to km² and ensure Python float
 
 
 def save_clusters_as_merged_geometries(
@@ -1169,7 +1239,12 @@ def save_clusters_as_merged_geometries(
 
         print(f"Processing cluster {cluster_idx + 1}/{len(clusters)}: {cluster_id}")
 
-        # Find all upstream subbasins for this cluster
+        # Calculate area using the shared function
+        total_area_km2 = calculate_cluster_basin_area(
+            downstream_subbasins, data_catalog, river_graph
+        )
+
+        # Find all upstream subbasins for geometry creation
         cluster_all_subbasins = set()
         for downstream_subbasin in downstream_subbasins:
             upstream_subbasins = set(
@@ -1191,23 +1266,6 @@ def save_clusters_as_merged_geometries(
 
         # Union all geometries to create a single merged polygon
         merged_geometry = cluster_geometries.geometry.union_all()
-
-        # calculate area
-        if merged_geometry.geom_type == "MultiPolygon":
-            # Handle MultiPolygon case
-            total_area_m2 = sum(
-                gpd.GeoSeries([geom], crs="EPSG:4326").to_crs("EPSG:6933").area.iloc[0]
-                for geom in merged_geometry.geoms
-            )
-        else:
-            # Single polygon case
-            total_area_m2 = (
-                gpd.GeoSeries([merged_geometry], crs="EPSG:4326")
-                .to_crs("EPSG:6933")
-                .area.iloc[0]
-            )
-
-        total_area_km2 = total_area_m2 / 1e6  # Convert m² to km²
 
         merged_cluster_data.append(
             {

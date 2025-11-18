@@ -1595,6 +1595,8 @@ def init_multiple_fn(
         clusters=clusters,
         working_directory=large_scale_dir,
         cluster_prefix=cluster_prefix,
+        data_catalog=data_catalog_instance,
+        river_graph=river_graph,
     )
 
     # save geoparquet and maps to default location
