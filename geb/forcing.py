@@ -179,7 +179,7 @@ class ForcingLoader(ABC):
         self.n: int = n
         self.variable: str = variable
         self.reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-            model.files["other"][f"climate/{variable}"], variable, asynchronous=False
+            model.files["other"][f"climate/{variable}"], variable, asynchronous=True
         )
 
         self.indices, self.weights = generate_bilinear_interpolation_weights(
