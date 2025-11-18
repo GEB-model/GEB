@@ -42,7 +42,7 @@ def load_soilgrids(
             )
             da: xr.DataArray = (
                 da.isel(
-                    **get_window(
+                    get_window(
                         da.x, da.y, region.to_crs(da.rio.crs).total_bounds, buffer=30
                     ),
                 )
