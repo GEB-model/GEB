@@ -15,6 +15,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
+import yaml
 from hydromt_sfincs import SfincsModel, utils
 from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from pyextremes import EVA
@@ -414,7 +415,31 @@ def run_sfincs_simulation(
         # to the version string
         if not version.endswith(".sif"):
             version: str = "docker://" + version
+
+        n = yaml.safe_load(open(model_root.parents[3] / "model.yml"))["hazards"][
+            "floods"
+        ].get("ncpus", "auto")
+        cpu_mask = (
+            "0"
+            if (
+                c := (
+                    int(
+                        os.getenv("SLURM_CPUS_PER_TASK")
+                        or os.getenv("SLURM_CPUS_ON_NODE")
+                        or os.cpu_count()
+                    )
+                    if n == "auto"
+                    else int(n)
+                )
+            )
+            == 1
+            else f"0-{c - 1}"
+        )
+
         cmd: list[str] = [
+            "taskset",
+            "-c",
+            cpu_mask,  # get user defined or automatically detected number of CPUs
             "apptainer",
             "run",
             "-B",  ## Bind mount
