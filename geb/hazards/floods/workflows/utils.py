@@ -15,7 +15,6 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
-import yaml
 from hydromt_sfincs import SfincsModel, utils
 from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from scipy.stats import genpareto, kstest
@@ -346,7 +345,10 @@ def check_docker_running() -> bool | None:
 
 
 def run_sfincs_simulation(
-    model_root: Path, simulation_root: Path, gpu: bool | str = "auto"
+    model_root: Path,
+    simulation_root: Path,
+    gpu: bool | str = "auto",
+    ncpus: int | str = "auto",
 ) -> int:
     """Run SFINCS simulation using either Apptainer or Docker.
 
@@ -357,6 +359,8 @@ def run_sfincs_simulation(
             The simulation directory must be a subdirectory of the model root directory.
         gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
             the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
+        ncpus: Number of CPUs to use. Can be a positive integer or 'auto'. In auto mode,
+            uses SLURM environment variables or system CPU count. Use lower amount when running SFINCS in interactive mode.
 
     Raises:
         ValueError: If gpu is not True, False, or 'auto'.
@@ -416,30 +420,23 @@ def run_sfincs_simulation(
         if not version.endswith(".sif"):
             version: str = "docker://" + version
 
-        n = yaml.safe_load(open(model_root.parents[3] / "model.yml"))["hazards"][
-            "floods"
-        ].get("ncpus", "auto")
-        cpu_mask = (
-            "0"
-            if (
-                c := (
-                    int(
-                        os.getenv("SLURM_CPUS_PER_TASK")
-                        or os.getenv("SLURM_CPUS_ON_NODE")
-                        or os.cpu_count()
-                    )
-                    if n == "auto"
-                    else int(n)
-                )
+        if not (ncpus == "auto" or (isinstance(ncpus, int) and ncpus > 0)):
+            raise ValueError("ncpus must be a positive integer or 'auto'")
+        c = (
+            int(
+                os.getenv("SLURM_CPUS_PER_TASK")
+                or os.getenv("SLURM_CPUS_ON_NODE")
+                or os.cpu_count()
             )
-            == 1
-            else f"0-{c - 1}"
+            if ncpus == "auto"
+            else int(ncpus)
         )
+        ncpus = "0" if c == 1 else f"0-{c - 1}"
 
         cmd: list[str] = [
             "taskset",
             "-c",
-            cpu_mask,  # get user defined or automatically detected number of CPUs
+            ncpus,  # get user defined or automatically detected number of CPUs
             "apptainer",
             "run",
             "-B",  ## Bind mount
@@ -906,7 +903,10 @@ def gpd_pot_ad_auto(
 
         try:
             sigma, xi = fit_gpd_mle(y)
-        except:
+        except Exception as e:
+            print(
+                f"Exception in fit_gpd_mle(y) for threshold u={u}: {type(e).__name__}: {e}"
+            )
             diagnostics.append(
                 (u, np.nan, np.nan, n_exc, np.nan, np.nan, np.nan, np.nan)
             )
