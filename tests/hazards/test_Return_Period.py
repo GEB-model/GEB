@@ -132,8 +132,8 @@ def test_assign_return_periods_custom_prefix() -> None:
 def test_assign_return_periods_extreme_values() -> None:
     """Test assign_return_periods with extreme discharge values.
 
-    Verifies that the warning threshold of 400,000 m³/s is applied
-    and values are capped at 2,000 m³/s.
+    Verifies that the function handles extreme discharge values appropriately
+    and produces reasonable return period estimates.
     """
     rivers = gpd.GeoDataFrame(
         {
@@ -162,14 +162,10 @@ def test_assign_return_periods_extreme_values() -> None:
         nboot=50,
     )
 
-    # The value should be capped if it exceeds 400,000
+    # The value should give an error if it exceeds 400,000
     q_value = result.loc[1, "Q_1000"]
-    if q_value == 2000.0:
-        # Warning was triggered and value was capped
-        assert True
-    else:
-        # Value was reasonable and not capped
-        assert q_value <= 400_000
+
+    assert q_value <= 400_000
 
 
 def test_assign_return_periods_insufficient_data() -> None:

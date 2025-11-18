@@ -15,6 +15,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
+import yaml
 from hydromt_sfincs import SfincsModel, utils
 from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from scipy.stats import genpareto, kstest
@@ -348,7 +349,6 @@ def run_sfincs_simulation(
     model_root: Path,
     simulation_root: Path,
     gpu: bool | str = "auto",
-    ncpus: int | str = "auto",
 ) -> int:
     """Run SFINCS simulation using either Apptainer or Docker.
 
@@ -359,8 +359,6 @@ def run_sfincs_simulation(
             The simulation directory must be a subdirectory of the model root directory.
         gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
             the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
-        ncpus: Number of CPUs to use. Can be a positive integer or 'auto'. In auto mode,
-            uses SLURM environment variables or system CPU count. Use lower amount when running SFINCS in interactive mode.
 
     Raises:
         ValueError: If gpu is not True, False, or 'auto'.
@@ -419,17 +417,17 @@ def run_sfincs_simulation(
         # to the version string
         if not version.endswith(".sif"):
             version: str = "docker://" + version
-
-        if not (ncpus == "auto" or (isinstance(ncpus, int) and ncpus > 0)):
-            raise ValueError("ncpus must be a positive integer or 'auto'")
+        n = yaml.safe_load(open(model_root.parents[3] / "model.yml"))["hazards"][
+            "floods"
+        ].get("ncpus", "auto")
         c = (
             int(
                 os.getenv("SLURM_CPUS_PER_TASK")
                 or os.getenv("SLURM_CPUS_ON_NODE")
                 or os.cpu_count()
             )
-            if ncpus == "auto"
-            else int(ncpus)
+            if n == "auto"
+            else int(n)
         )
         ncpus = "0" if c == 1 else f"0-{c - 1}"
 
@@ -829,6 +827,7 @@ def gpd_pot_ad_auto(
     nboot: int = 2000,
     return_periods: np.ndarray | None = None,
     mrl_grid_q: np.ndarray | None = None,
+    mrl_top_fraction: float = 0.75,
     random_seed: int = 123,
 ) -> dict:
     """Automated GPD-POT analysis with threshold selection using Anderson-Darling test.
@@ -846,6 +845,7 @@ def gpd_pot_ad_auto(
         nboot: Number of bootstrap samples for p-value calculation (dimensionless).
         return_periods: Array of return periods in years for return level calculation (years).
         mrl_grid_q: Quantiles for mean residual life plot baseline (dimensionless).
+        mrl_top_fraction: Fraction of top quantiles to use for linear fit in mean residual life plot (dimensionless).
         random_seed: Random seed for reproducibility (dimensionless).
 
     Returns:
@@ -880,7 +880,7 @@ def gpd_pot_ad_auto(
     mrl_grid_u = np.quantile(daily_max.values, mrl_grid_q)
     mrl_vals = mean_residual_life(daily_max.values, mrl_grid_u)
 
-    top_idx = int(len(mrl_vals) * 0.75)
+    top_idx = int(len(mrl_vals) * mrl_top_fraction)
     if np.sum(~np.isnan(mrl_vals[top_idx:])) >= 3:
         a_lin, b_lin = np.polyfit(mrl_grid_u[top_idx:], mrl_vals[top_idx:], 1)
     else:
