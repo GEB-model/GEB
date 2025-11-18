@@ -1087,7 +1087,7 @@ class Hydrography:
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM").path.format(
+                f = self.data_catalog.get_source("GTSM_surge").path.format(
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
