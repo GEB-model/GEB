@@ -596,20 +596,19 @@ class Hydrography:
 
         global_ocean_mdt = xr.open_dataset(global_ocean_mdt_fn)
 
-        # get the model bounds and buffer by ~2km
+        # get the model bounds and buffer by ~10km
         model_bounds = self.bounds
         model_bounds = (
-            model_bounds[0] - 0.0166,  # min_lon
-            model_bounds[1] - 0.0166,  # min_lat
-            model_bounds[2] + 0.0166,  # max_lon
-            model_bounds[3] + 0.0166,  # max_lat
+            model_bounds[0] - 0.083,  # min_lon
+            model_bounds[1] - 0.083,  # min_lat
+            model_bounds[2] + 0.083,  # max_lon
+            model_bounds[3] + 0.083,  # max_lat
         )
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
-        # get global_ocean_mdt
+        # reproject global_ocean_mdt to 0.008333 grid (~1km)
         global_ocean_mdt = global_ocean_mdt["mdt"]
         global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
-        global_ocean_mdt = global_ocean_mdt.rename({"latitude": "y", "longitude": "x"})
 
         # clip to model bounds
         global_ocean_mdt = global_ocean_mdt.rio.clip_box(
@@ -619,20 +618,24 @@ class Hydrography:
             maxy=max_lat,
         )
 
-        # make sure size global_ocean_mdt.x equals global_ocean_mdt.y (cells are rectangular, make them square)
-        x_res, y_res = global_ocean_mdt.rio.resolution()
-        target_res = min(abs(x_res), abs(y_res))
+        # # set padding of one cell
+        # global_ocean_mdt = global_ocean_mdt.pad(
+        #     {
+        #         "latitude": 1,  # pad 1 cell on each side
+        #         "longitude": 1,
+        #     },
+        #     mode="edge",
+        # )
+        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
 
-        global_ocean_mdt = global_ocean_mdt.rio.reproject(
-            dst_crs="EPSG:4326",
-            resolution=target_res,
-            resampling="bilinear",
-        )
+        global_ocean_mdt.to_zarr("test.zarr")
 
-        # rename lat lon to y x
-        global_ocean_mdt.to_zarr("test_.zarr")
-
-        self.set_grid(
+        # set datatype to float32 and set fillvalue to np.nan
+        global_ocean_mdt = global_ocean_mdt.astype(np.float32)
+        global_ocean_mdt.encoding["_FillValue"] = np.nan
+        global_ocean_mdt.attrs["_FillValue"] = np.nan
+        # write to model
+        self.set_other(
             global_ocean_mdt,
             name="coastal/global_ocean_mean_dynamic_topography",
         )
