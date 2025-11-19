@@ -16,7 +16,6 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
-import yaml
 from hydromt_sfincs import SfincsModel, utils
 from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
 from scipy.stats import genpareto, kstest
@@ -349,6 +348,7 @@ def check_docker_running() -> bool | None:
 def run_sfincs_simulation(
     model_root: Path,
     simulation_root: Path,
+    ncpus: int | str = "auto",
     gpu: bool | str = "auto",
 ) -> int:
     """Run SFINCS simulation using either Apptainer or Docker.
@@ -358,6 +358,7 @@ def run_sfincs_simulation(
         simulation_root: Path to the simulation root directory.
             Some paths in the configuration will be made relative to this path.
             The simulation directory must be a subdirectory of the model root directory.
+        ncpus: Number of CPUs to use. Can be an integer or 'auto' to automatically detect the number of CPUs.
         gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
             the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
 
@@ -418,24 +419,22 @@ def run_sfincs_simulation(
         # to the version string
         if not version.endswith(".sif"):
             version: str = "docker://" + version
-        n = yaml.safe_load(open(model_root.parents[3] / "model.yml"))["hazards"][
-            "floods"
-        ].get("ncpus", "auto")
+
         c = (
             int(
                 os.getenv("SLURM_CPUS_PER_TASK")
                 or os.getenv("SLURM_CPUS_ON_NODE")
                 or os.cpu_count()
             )
-            if n == "auto"
-            else int(n)
+            if ncpus == "auto"
+            else int(ncpus)
         )
-        ncpus = "0" if c == 1 else f"0-{c - 1}"
+        ncpus_str = "0" if c == 1 else f"0-{c - 1}"
 
         cmd: list[str] = [
             "taskset",
             "-c",
-            ncpus,  # get user defined or automatically detected number of CPUs
+            ncpus_str,  # get user defined or automatically detected number of CPUs
             "apptainer",
             "run",
             "-B",  ## Bind mount
