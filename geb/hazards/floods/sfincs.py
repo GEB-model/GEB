@@ -876,7 +876,7 @@ class SFINCSSimulation:
         locations: gpd.GeoDataFrame,
         timeseries: pd.DataFrame,
         buffer: int = 1e5,
-        offset=None,
+        offset: xr.DataArray | None = None,
     ) -> None:
         """Sets up coastal water level forcing for the SFINCS model from a timeseries.
 
