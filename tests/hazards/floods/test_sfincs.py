@@ -18,7 +18,7 @@ from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
 from geb.typing import TwoDArrayFloat64, TwoDArrayInt32
-from geb.workflows.io import WorkingDirectory, load_dict, load_geom, open_zarr
+from geb.workflows.io import WorkingDirectory, load_geom, open_zarr
 from geb.workflows.raster import rasterize_like
 
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -75,7 +75,7 @@ def create_discharge_timeseries(
 
 def build_sfincs(
     geb_model: GEBModel,
-    nr_subgrid_pixels: int | None,
+    subgrid: bool,
     region: gpd.GeoDataFrame,
     name: str,
     rivers: gpd.GeoDataFrame,
@@ -84,7 +84,7 @@ def build_sfincs(
 
     Args:
         geb_model: A GEB model instance with SFINCS configured.
-        nr_subgrid_pixels: Number of subgrid pixels to use. If None, no subgrid pixels are used.
+        subgrid: Whether to use subgrid pixels in the SFINCS model.
         region: A GeoDataFrame defining the region to build the SFINCS model for.
         name: The name of the SFINCS model. Used for the folder name.
         rivers: A GeoDataFrame with the river network.
@@ -93,13 +93,14 @@ def build_sfincs(
         A SFINCS model instance with static grids and configuration written.
     """
     sfincs_model: SFINCSRootModel = SFINCSRootModel(geb_model, name)
-    DEM_config: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = load_dict(
-        geb_model.model.files["dict"]["hydrodynamics/DEM_config"]
+    DEM_config: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = (
+        geb_model.floods.DEM_config.copy()
     )
     for entry in DEM_config:
-        entry["elevtn"] = open_zarr(
-            geb_model.model.files["other"][entry["path"]]
-        ).to_dataset(name="elevtn")
+        if "elevtn" not in entry:
+            entry["elevtn"] = open_zarr(
+                geb_model.model.files["other"][entry["path"]]
+            ).to_dataset(name="elevtn")
 
     sfincs_model.build(
         region=region,
@@ -113,9 +114,8 @@ def build_sfincs(
             geb_model.model.var.river_width_beta
         ),
         mannings=geb_model.floods.mannings,
-        resolution=500,
-        nr_subgrid_pixels=nr_subgrid_pixels,
-        crs=geb_model.floods.crs,
+        grid_size_multiplier=10,
+        subgrid=subgrid,
         depth_calculation_method=geb_model.model.config["hydrology"]["routing"][
             "river_depth"
         ]["method"],
@@ -129,10 +129,10 @@ def build_sfincs(
         setup_outflow=False,
     )
 
-    if nr_subgrid_pixels is None:
-        assert (sfincs_model.path / "sfincs.dep").exists()
-    else:
+    if subgrid:
         assert (sfincs_model.path / "sfincs_subgrid.nc").exists()
+    else:
+        assert (sfincs_model.path / "sfincs.dep").exists()
 
     return sfincs_model
 
@@ -142,6 +142,7 @@ def create_sfincs_models(
     subbasins: gpd.GeoDataFrame,
     rivers: gpd.GeoDataFrame,
     split: bool,
+    subgrid: bool = False,
 ) -> list[SFINCSRootModel]:
     """Create a list of SFINCS models based on whether to split the region.
 
@@ -150,6 +151,7 @@ def create_sfincs_models(
         subbasins: The subbasins GeoDataFrame.
         rivers: The rivers GeoDataFrame.
         split: Whether to split the region into multiple models.
+        subgrid: Whether to use subgrid pixels in the SFINCS models.
 
     Returns:
         A list of SFINCSRootModel instances.
@@ -180,7 +182,7 @@ def create_sfincs_models(
 
             sfincs_model: SFINCSRootModel = build_sfincs(
                 geb_model,
-                nr_subgrid_pixels=None,
+                subgrid=subgrid,
                 region=subbasins_group,
                 name=f"test_group_{group_id}",
                 rivers=rivers[rivers.index.isin(group)],
@@ -191,7 +193,7 @@ def create_sfincs_models(
         sfincs_models: list[SFINCSRootModel] = [
             build_sfincs(
                 geb_model,
-                nr_subgrid_pixels=None,
+                subgrid=subgrid,
                 region=subbasins,
                 name=TEST_MODEL_NAME,
                 rivers=rivers,
@@ -203,19 +205,39 @@ def create_sfincs_models(
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
-    "split",
-    [False, True],
+    ["split", "geographic", "subgrid"],
+    [
+        (False, True, False),
+        (True, True, False),
+        (False, False, False),
+        (False, False, True),
+    ],
 )
-def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
+def test_accumulated_runoff(
+    geb_model: GEBModel, split: bool, geographic: bool, subgrid: bool
+) -> None:
     """Test SFINCS with accumulated runoff forcing.
 
     Args:
         geb_model: A GEB model instance with SFINCS instance.
         split: Whether to split the domain into multiple SFINCS models for testing.
+        geographic: Whether to use geographic coordinates (lat/lon) or projected coordinates.
+        subgrid: Whether to use subgrid pixels in the SFINCS model.
     """
     with WorkingDirectory(working_directory):
         start_time: datetime = datetime(2000, 1, 1, 0)
         end_time: datetime = datetime(2000, 1, 10, 0)
+
+        if not geographic:
+            geb_model.floods.DEM_config
+
+            dem: xr.DataArray = open_zarr(
+                geb_model.model.files["other"][geb_model.floods.DEM_config[0]["path"]]
+            )
+
+            geb_model.floods.DEM_config[0]["elevtn"] = dem.rio.reproject(
+                dst_crs=dem.rio.estimate_utm_crs(),
+            ).to_dataset(name="elevtn")
 
         subbasins = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
         rivers = geb_model.hydrology.routing.rivers
@@ -358,7 +380,7 @@ def test_accumulated_runoff(geb_model: GEBModel, split: bool) -> None:
                 total_flood_volume,
                 total_runoff_volume + discharge_m3 - discarded_discharge,
                 abs_tol=0,
-                rel_tol=0.2,
+                rel_tol=0.1,
             )
 
             total_flood_volume_across_models += total_flood_volume
@@ -403,7 +425,7 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         region = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
         sfincs_model = build_sfincs(
             geb_model,
-            nr_subgrid_pixels=None,
+            subgrid=False,
             region=region,
             name=TEST_MODEL_NAME,
             rivers=geb_model.hydrology.routing.rivers,
@@ -540,7 +562,7 @@ def test_read(geb_model: GEBModel) -> None:
         region = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
         sfincs_model_build = build_sfincs(
             geb_model,
-            nr_subgrid_pixels=None,
+            subgrid=False,
             region=region,
             name=TEST_MODEL_NAME,
             rivers=geb_model.hydrology.routing.rivers,

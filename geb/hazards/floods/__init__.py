@@ -161,6 +161,10 @@ class Floods(Module):
             else {}
         )
 
+        self.DEM_config: list[dict[str, Any]] = load_dict(
+            self.model.files["dict"]["hydrodynamics/DEM_config"]
+        )
+
         self.HRU = model.hydrology.HRU
 
         if self.model.simulate_hydrology:
@@ -245,8 +249,7 @@ class Floods(Module):
         """
         sfincs_model = SFINCSRootModel(self.model, name)
         if self.config["force_overwrite"] or not sfincs_model.exists():
-            DEM_config = load_dict(self.model.files["dict"]["hydrodynamics/DEM_config"])
-            for entry in DEM_config:
+            for entry in self.DEM_config:
                 entry["elevtn"] = open_zarr(
                     self.model.files["other"][entry["path"]]
                 ).to_dataset(name="elevtn")
@@ -255,7 +258,7 @@ class Floods(Module):
                 region = load_geom(self.model.files["geom"]["routing/subbasins"])
             sfincs_model.build(
                 region=region,
-                DEMs=DEM_config,
+                DEMs=self.DEM_config,
                 rivers=self.model.hydrology.routing.rivers,
                 discharge=self.discharge_spinup_ds,
                 river_width_alpha=self.model.hydrology.grid.decompress(
@@ -265,9 +268,8 @@ class Floods(Module):
                     self.model.var.river_width_beta
                 ),
                 mannings=self.mannings,
-                resolution=self.config["resolution"],
-                nr_subgrid_pixels=self.config["nr_subgrid_pixels"],
-                crs=self.crs,
+                grid_size_multiplier=self.config["grid_size_multiplier"],
+                subgrid=self.config["subgrid"],
                 depth_calculation_method=self.model.config["hydrology"]["routing"][
                     "river_depth"
                 ]["method"],

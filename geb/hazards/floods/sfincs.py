@@ -9,6 +9,7 @@ and read simulation results.
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +36,7 @@ from geb.typing import (
     TwoDArrayInt32,
 )
 from geb.workflows.io import load_geom
-from geb.workflows.raster import rasterize_like
+from geb.workflows.raster import calculate_cell_area, clip_region, rasterize_like
 
 from .workflows import do_mask_flood_plains, get_river_depth, get_river_manning
 from .workflows.return_periods import (
@@ -200,9 +201,8 @@ class SFINCSRootModel:
         river_width_alpha: npt.NDArray[np.float32],
         river_width_beta: npt.NDArray[np.float32],
         mannings: xr.DataArray,
-        resolution: float | int,
-        nr_subgrid_pixels: int | None,
-        crs: str,
+        subgrid: bool,
+        grid_size_multiplier: int,
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
         mask_flood_plains: bool = False,
@@ -225,9 +225,10 @@ class SFINCSRootModel:
             river_width_alpha: An numpy array of river width alpha parameters. Used for calculating river width.
             river_width_beta: An numpy array of river width beta parameters. Used for calculating river width
             mannings: A xarray DataArray of Manning's n values for the rivers.
-            resolution: The resolution of the requested SFINCS model grid in meters.
-            nr_subgrid_pixels: The number of subgrid pixels to use for the SFINCS model. Must be an even number.
-            crs: The coordinate reference system to use for the model.
+            grid_size_multiplier: The number of grid cells to combine when setting up the model grid.
+                if 1, no combining is done.
+                if 2, every 2x2 grid cells are combined into one cell, etc.
+            subgrid: Whether to set up subgrid pixels for the model.
             depth_calculation_method: The method to use for calculating river depth. Can be 'manning' or 'power_law'.
             depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
@@ -242,16 +243,15 @@ class SFINCSRootModel:
 
         Raises:
             ValueError: if depth_calculation_method is not 'manning' or 'power_law',
-            ValueError: if nr_subgrid_pixels is not None and not positive even number.
-            ValueError: if resolution is not positive.
+            ValueError: if grid_size_multiplier is not a positive integer.
 
         """
-        if nr_subgrid_pixels is not None and nr_subgrid_pixels <= 0:
-            raise ValueError("nr_subgrid_pixels must be a positive number")
-        if nr_subgrid_pixels is not None and nr_subgrid_pixels % 2 != 0:
-            raise ValueError("nr_subgrid_pixels must be an even number")
-        if resolution <= 0:
-            raise ValueError("Resolution must be a positive number")
+        if not isinstance(grid_size_multiplier, int) or grid_size_multiplier <= 0:
+            raise ValueError("grid_size_multiplier must be a positive integer")
+        if grid_size_multiplier == 1 and subgrid:
+            raise ValueError(
+                "Cannot use subgrid pixels when grid_size_multiplier is 1 (no aggregation)"
+            )
 
         assert depth_calculation_method in [
             "manning",
@@ -268,16 +268,52 @@ class SFINCSRootModel:
 
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+", write_gis=True)
+        self.sfincs_model = sf
+        mask = DEMs[0]["elevtn"]["elevtn"]
 
-        sf.setup_grid_from_region(
-            {"geom": region}, res=resolution, crs=crs, rotated=False
+        region_burned: xr.DataArray = rasterize_like(
+            gdf=region.to_crs(mask.rio.crs),
+            burn_value=1,
+            raster=mask,
+            dtype=np.int32,
+            nodata=0,
+            all_touched=True,
+        ).astype(bool)
+        assert isinstance(mask, xr.DataArray)
+
+        resolution: tuple[float, float] = mask.rio.resolution()
+        if abs(abs(resolution[0]) - abs(resolution[1])) > 1e-10:
+            raise ValueError("DEM resolution must be square pixels")
+
+        mask: xr.DataArray = clip_region(
+            region_burned, align=abs(resolution[0]) * grid_size_multiplier
+        )[0]
+
+        # if y axis is descending (usually for geographical grids), flip it
+        if mask.y[-1] < mask.y[0]:
+            mask: xr.DataArray = mask.isel(y=slice(None, None, -1))
+
+        geotransformation = mask.rio.transform(recalc=True)
+        crs = mask.rio.crs
+        if not crs.is_epsg_code:
+            raise ValueError("CRS must be an EPSG code")
+
+        sf.setup_grid(
+            x0=geotransformation.c,
+            y0=geotransformation.f,
+            dx=geotransformation.a * grid_size_multiplier,
+            dy=geotransformation.e * grid_size_multiplier,
+            mmax=mask.rio.width // grid_size_multiplier + 1,
+            nmax=mask.rio.height // grid_size_multiplier + 1,
+            rotation=0.0,
+            epsg=crs.to_epsg(),
         )
+        if crs.is_geographic:
+            sf.setup_config(crsgeo=1)
 
         DEMs: list[dict[str, str | Path | xr.DataArray | int]] = [
             {**DEM, **{"reproj_method": "bilinear"}} for DEM in DEMs
         ]
-        # add zmax to secondary DEM (assumed to be gebco)
-        DEMs[1]["zmax"] = 0
 
         # HydroMT-SFINCS only accepts datasets with an 'elevtn' variable. Therefore, the following
         # is a bit convoluted. We first open the dataarray, then convert it to a dataset,
@@ -330,12 +366,14 @@ class SFINCSRootModel:
         rivers.plot(ax=ax, color="blue")
         plt.savefig(self.path / "gis" / "rivers.png")
 
+        outflow_river_upa: int = 0
+        outflow_river_len: int = 0
         if setup_outflow:
             sf.setup_river_outflow(
                 rivers=rivers.to_crs(sf.crs),
                 keep_rivers_geom=True,
-                river_upa=0,
-                river_len=0,
+                river_upa=outflow_river_upa,
+                river_len=outflow_river_len,
                 btype="waterlevel",
             )
 
@@ -344,10 +382,11 @@ class SFINCSRootModel:
             gdf_riv=rivers.to_crs(sf.crs),
             gdf_mask=sf.region,
             src_type="outflow",
-            buffer=sf.reggrid.dx,  # type: ignore
-            river_upa=0,
-            river_len=0,
-        )
+            buffer=self.estimated_cell_size_m,
+            river_upa=outflow_river_upa,
+            river_len=outflow_river_len,
+        ).to_crs(sf.crs)
+
         # give error if outflow greater than 1
         if len(outflow_points) > 1 and setup_outflow:
             raise ValueError(
@@ -432,17 +471,19 @@ class SFINCSRootModel:
         assert rivers["depth"].notnull().all(), "River depth cannot be null"
         assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
 
+        # only burn rivers that are wider than the grid size
+        rivers_to_burn: gpd.GeoDataFrame = rivers[
+            rivers["width"] > self.estimated_cell_size_m
+        ].copy()
+
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
         # including mannings roughness.
-        if nr_subgrid_pixels is not None:
+        if subgrid:
             self.logger.info(
-                f"Setting up SFINCS subgrid with {nr_subgrid_pixels} subgrid pixels..."
+                f"Setting up SFINCS subgrid with {grid_size_multiplier} subgrid pixels..."
             )
             # only burn rivers that are wider than the subgrid pixel size
-            rivers_to_burn: gpd.GeoDataFrame = rivers[
-                rivers["width"] > resolution / nr_subgrid_pixels
-            ].copy()
             sf.setup_subgrid(
                 datasets_dep=DEMs,
                 datasets_rgh=[
@@ -459,7 +500,7 @@ class SFINCSRootModel:
                 ],
                 write_dep_tif=True,
                 write_man_tif=True,
-                nr_subgrid_pixels=nr_subgrid_pixels,
+                nr_subgrid_pixels=grid_size_multiplier,
                 nlevels=20,
                 nrmax=500,
             )
@@ -469,10 +510,6 @@ class SFINCSRootModel:
             self.logger.info(
                 "Setting up SFINCS without subgrid - burning rivers into main grid..."
             )
-            # only burn rivers that are wider than the grid size
-            rivers_to_burn: gpd.GeoDataFrame = rivers[
-                rivers["width"] > resolution
-            ].copy()
             # first set up the mannings roughness with the default method
             # (we already have the DEM set up)
             sf.setup_manning_roughness(
@@ -491,7 +528,7 @@ class SFINCSRootModel:
                 rivwth_name="width",
                 rivdph_name="depth",
                 manning_name="manning",
-                segment_length=sf.reggrid.dx,
+                segment_length=90.0,
             )
             # set the modified grids back to the model
             sf.set_grid(elevation, name="dep")
@@ -505,12 +542,29 @@ class SFINCSRootModel:
 
         sf.plot_basemap(fn_out="basemap.png")
 
-        self.sfincs_model = sf
         self.rivers = rivers
         return self
 
     @property
-    def area(self) -> float | int:
+    def elevation(self) -> xr.DataArray:
+        """Returns the elevation grid of the SFINCS model.
+
+        Returns:
+            The elevation grid as an xarray DataArray.
+        """
+        return self.sfincs_model.grid["dep"]
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Returns the shape of the SFINCS model grid.
+
+        Returns:
+            The shape of the SFINCS model grid as a tuple (nrows, ncols).
+        """
+        return self.sfincs_model.grid["dep"].shape
+
+    @property
+    def region_area(self) -> float | int:
         """Returns the area of the SFINCS model region in square kilometers.
 
         Returns:
@@ -519,16 +573,54 @@ class SFINCSRootModel:
         return self.sfincs_model.grid["msk"].sum().item() * self.cell_area
 
     @property
-    def cell_area(self) -> float | int:
+    def is_geographic(self) -> bool:
+        """Returns whether the SFINCS model uses a geographic coordinate system.
+
+        Returns:
+            True if the SFINCS model uses a geographic coordinate system, False otherwise.
+        """
+        return self.sfincs_model.crs.is_geographic
+
+    @property
+    def cell_area(self) -> float | int | xr.DataArray:
         """Returns the area of a single cell in the SFINCS model grid in square meters.
 
         Returns:
             The area of a single cell in the SFINCS model grid in m².
         """
-        return (
-            self.sfincs_model.grid["msk"].rio.resolution()[0]
-            * self.sfincs_model.grid["msk"].rio.resolution()[1]
-        )
+        if self.is_geographic:
+            cell_area: xr.DataArray = xr.full_like(
+                self.elevation, np.nan, dtype=np.float32
+            )
+            cell_area.values = calculate_cell_area(
+                self.elevation.rio.transform(), shape=self.shape
+            )
+            return cell_area
+        else:
+            return (
+                self.sfincs_model.grid["msk"].rio.resolution()[0]
+                * self.sfincs_model.grid["msk"].rio.resolution()[1]
+            )
+
+    @property
+    def estimated_cell_size_m(self) -> float:
+        """Returns the estimated cell size of the SFINCS model grid in meters.
+
+        For geographic coordinate systems, this is an approximate value based on the average
+        cell area. For projected coordinate systems, this is the actual cell size.
+
+        Returns:
+            The estimated cell size of the SFINCS model grid in meters.
+        """
+        if self.is_geographic:
+            avg_cell_area = self.cell_area.mean().item()
+            estimated_cell_size = np.sqrt(avg_cell_area)
+            return estimated_cell_size
+        else:
+            return math.sqrt(
+                self.sfincs_model.grid["msk"].rio.resolution()[0]
+                * self.sfincs_model.grid["msk"].rio.resolution()[1]
+            )
 
     def estimate_discharge_for_return_periods(
         self,
@@ -909,6 +1001,7 @@ class SFINCSSimulation:
             h73table=1,  # use h^(7/3) table for friction calculation. This is slightly less accurate but up to 30% faster
             tspinup=spinup_seconds,  # spinup time in seconds
             dtout=900,  # output time step in seconds
+            tref=to_sfincs_datetime(start_time),  # reference time for the simulation
             tstart=to_sfincs_datetime(start_time),  # simulation start time
             tstop=to_sfincs_datetime(end_time),  # simulation end time
             **make_relative_paths(sfincs_model.config, self.root_path, self.path),
@@ -1323,13 +1416,9 @@ class SFINCSSimulation:
         Returns:
             The total flood volume in cubic meters.
         """
-        pixel_area = abs(
-            flood_depth.rio.resolution()[0] * flood_depth.rio.resolution()[1]
-        )
         if hasattr(flood_depth, "compute"):
             flood_depth = flood_depth.compute()
-        flooded_pixels = flood_depth.where(flood_depth > 0).sum().item()
-        return flooded_pixels * pixel_area
+        return (flood_depth * self.sfincs_root_model.cell_area).sum().item()
 
     def cleanup(self) -> None:
         """Cleans up the simulation directory by removing temporary files."""
