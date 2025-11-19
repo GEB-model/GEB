@@ -618,18 +618,10 @@ class Hydrography:
             maxy=max_lat,
         )
 
-        # # set padding of one cell
-        # global_ocean_mdt = global_ocean_mdt.pad(
-        #     {
-        #         "latitude": 1,  # pad 1 cell on each side
-        #         "longitude": 1,
-        #     },
-        #     mode="edge",
-        # )
+        # write crs
         global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
-
-        global_ocean_mdt.to_zarr("test.zarr")
-
+        # drop unused columns
+        global_ocean_mdt = global_ocean_mdt.squeeze(drop=True)
         # set datatype to float32 and set fillvalue to np.nan
         global_ocean_mdt = global_ocean_mdt.astype(np.float32)
         global_ocean_mdt.encoding["_FillValue"] = np.nan

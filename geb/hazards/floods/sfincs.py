@@ -650,9 +650,13 @@ class SFINCSRootModel:
             end_time=timeseries.index[-1],
         )
 
+        offset = xr.open_dataarray(
+            self.model.files["other"]["coastal/global_ocean_mean_dynamic_topography"]
+        ).rio.write_crs("EPSG:4326")
+
         # set coastal forcing model
         simulation.set_coastal_waterlevel_forcing(
-            timeseries=timeseries, locations=locations
+            timeseries=timeseries, locations=locations, offset=offset
         )
         return simulation
 
@@ -868,7 +872,11 @@ class SFINCSSimulation:
         print(msg)
 
     def set_coastal_waterlevel_forcing(
-        self, locations: gpd.GeoDataFrame, timeseries: pd.DataFrame, buffer: int = 1e5
+        self,
+        locations: gpd.GeoDataFrame,
+        timeseries: pd.DataFrame,
+        buffer: int = 1e5,
+        offset=None,
     ) -> None:
         """Sets up coastal water level forcing for the SFINCS model from a timeseries.
 
@@ -877,11 +885,12 @@ class SFINCSSimulation:
             timeseries: A DataFrame containing the water level timeseries for each node.
                 The columns should match the index of the locations GeoDataFrame.
             buffer: Buffer distance in meters to extend the model domain for coastal forcing points.
+            offset: The offset of water levels based on the m
         """
         # select only locations that are in the model
         self.sfincs_model.read_forcing()
         self.sfincs_model.setup_waterlevel_forcing(
-            locations=locations, timeseries=timeseries, buffer=buffer
+            locations=locations, timeseries=timeseries, buffer=buffer, offset=offset
         )
         self.sfincs_model.write_forcing()
         self.sfincs_model.write_config()
