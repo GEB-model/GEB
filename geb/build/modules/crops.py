@@ -878,7 +878,7 @@ class Crops:
                         self.data_catalog.get_source(dataset_name).path
                     )
                     crop_map = crop_map.isel(
-                        get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
+                        **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
                         band=0,
                     )
 
@@ -1012,7 +1012,7 @@ class Crops:
         )
 
         MIRCA_unit_grid = MIRCA_unit_grid.isel(
-            get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
+            **get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
             band=0,
         )
 
