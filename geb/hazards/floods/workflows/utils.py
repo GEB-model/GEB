@@ -88,9 +88,9 @@ def read_flood_depth(
     # For unknown reasons, sometimes reading the results fails the first time
     # but succeeds the second time. Therefore, we try twice here.
     try:
-        model.read_results(engine="h5netcdf")
+        model.read_results()
     except OSError:
-        model.read_results(engine="h5netcdf")
+        model.read_results()
 
     # to detect whether SFINCS was run with subgrid, we check if the 'sbgfile' key exists in the config
     # to be extra safe, we also check if the value is not None or has has length > 0
