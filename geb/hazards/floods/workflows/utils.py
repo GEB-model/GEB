@@ -4,6 +4,7 @@ import os
 import platform
 import shutil
 import subprocess
+import warnings
 from datetime import datetime
 from os.path import isfile, join
 from pathlib import Path
@@ -941,9 +942,40 @@ def gpd_pot_ad_auto(
     )
 
     diag_df["xi_step"] = diag_df["xi"].diff().abs().bfill()
-
     # ---- Pick threshold = highest AD p-value ----
     valid = diag_df.dropna(subset=["p_ad"])
+
+    # If no valid thresholds (e.g., too few exceedances / bootstrap failed),
+    # return a safe structure with NaN RLs so upstream code can handle it.
+    if valid.empty:
+        rl_table = pd.DataFrame(
+            {
+                "T_years": return_periods.astype(int),
+                "GPD_POT_RL": np.full(len(return_periods), np.nan),
+            }
+        )
+        chosen = {
+            "u": np.nan,
+            "sigma": np.nan,
+            "xi": np.nan,
+            "p_ad": np.nan,
+            "n_exc": 0,
+            "lambda_per_year": np.nan,
+            "pct": np.nan,
+        }
+        # optional informative print
+        print(
+            "No valid thresholds found in gpd_pot_ad_auto — returning NaN return levels."
+        )
+        return {
+            "daily_max": daily_max,
+            "years": years,
+            "diag_df": diag_df,
+            "chosen": chosen,
+            "rl_table": rl_table,
+        }
+
+    # normal path: pick threshold with largest AD p-value
     best = valid.loc[valid["p_ad"].idxmax()]
 
     u_star = float(best["u"])
@@ -991,30 +1023,28 @@ def assign_return_periods(
     min_exceed: int = 30,
     nboot: int = 2000,
 ) -> gpd.GeoDataFrame:
-    """
-    Assign return periods to rivers using GPD-POT (daily maxima + AD bootstrap threshold selection).
+    """Assign return periods to rivers using GPD-POT analysis.
 
-    Replaces EVA/BM method with:
-        - daily maxima resampling
-        - GPD-POT exceedance model
+    Uses Generalized Pareto Distribution Peaks-Over-Threshold method with:
+        - Daily maxima resampling from input time series
+        - GPD-POT exceedance model fitting above threshold
         - Anderson-Darling bootstrap p-value threshold selection
-        - Return level estimation
+        - Return level estimation for specified return periods
 
     Args:
-        rivers: GeoDataFrame with river IDs (index must match columns in discharge_dataframe).
-        discharge_dataframe: Time series DataFrame (datetime index) for all rivers.
-        return_periods: Return periods (years) to compute.
-        prefix: Output column prefix (default "Q").
-        min_exceed: Minimum exceedances needed for GPD fit.
-        nboot: Bootstrap size for AD threshold selection.
+        rivers: GeoDataFrame with river IDs as index that must match columns in discharge_dataframe.
+        discharge_dataframe: Time series DataFrame with datetime index containing discharge data for all rivers (m³/s).
+        return_periods: List of return periods in years to compute return levels for.
+        prefix: Column prefix for output return level columns. Defaults to "Q".
+        min_exceed: Minimum number of exceedances required for reliable GPD fit. Defaults to 30.
+        nboot: Number of bootstrap samples for Anderson-Darling threshold selection. Defaults to 2000.
 
     Returns:
-        Updated rivers GeoDataFrame with RL columns added.
+        Updated rivers GeoDataFrame with return level columns added (m³/s).
 
     Raises:
         TypeError: If discharge series does not have a DatetimeIndex.
-        RuntimeError: If GPD-POT analysis fails for a river.
-        ValueError: If discharge value exceeds maximum threshold of 400,000 m³/s.
+        ValueError: If return periods contain non-positive values.
     """
     assert isinstance(return_periods, list)
     if not all((isinstance(T, (int, float)) and T > 0) for T in return_periods):
@@ -1045,20 +1075,49 @@ def assign_return_periods(
                 nboot=nboot,
             )
         except Exception as e:
-            raise RuntimeError(f"GPD-POT analysis failed for river {idx}: {e}") from e
-
-        # Extract return levels
-        rl_values = result["rl_table"]["GPD_POT_RL"].values
-
-        # Assign and apply warnings like original code
-        for T, rl in zip(return_periods, rl_values):
-            discharge_value = float(rl)
-
-            if discharge_value > 400_000:
-                raise ValueError(
-                    f"Discharge value for T={T} years exceeds maximum threshold of 400,000 m³/s: {discharge_value:.0f} m³/s for river {idx}"
+            # If the threshold-selection routine raises, handle gracefully:
+            # assign NaNs for all requested return periods and continue.
+            warnings.warn(
+                f"GPD-POT analysis raised an exception for river {idx}: {type(e).__name__}: {e}. "
+                "Assigning NaN for return levels.",
+                UserWarning,
+            )
+            rl_values = np.array([np.nan] * len(return_periods_arr))
+        else:
+            # defensive extraction of rl values
+            try:
+                rl_values = (
+                    result.get("rl_table", pd.DataFrame())
+                    .get("GPD_POT_RL", pd.Series([np.nan] * len(return_periods_arr)))
+                    .values
                 )
+            except Exception:
+                rl_values = np.array([np.nan] * len(return_periods_arr))
 
+        # Assign and apply warnings/guards
+        MAX_Q = 400_000
+        for T, rl in zip(return_periods, rl_values):
+            # safe conversion to float - handle NaN / weird objects
+            try:
+                discharge_value = float(rl)
+            except Exception:
+                discharge_value = float("nan")
+
+            # If non-finite, store NaN
+            if not np.isfinite(discharge_value):
+                rivers.loc[idx, f"{prefix}_{T}"] = np.nan
+                continue
+
+            # Cap values to a safe maximum rather than raising on extremely large extrapolations
+            if discharge_value > MAX_Q:
+                warnings.warn(
+                    f"Computed return level for T={T} years for river {idx} ({discharge_value:.3g}) "
+                    f"exceeds maximum cap {MAX_Q}. Capping to {MAX_Q}.",
+                    UserWarning,
+                )
+                discharge_value = float(MAX_Q)
+
+            # Finally assign the (sanitized) value
             rivers.loc[idx, f"{prefix}_{T}"] = discharge_value
 
     return rivers
