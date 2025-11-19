@@ -122,9 +122,18 @@ class LandSurface:
         ymin: float = bounds[1] - buffer
         xmax: float = bounds[2] + buffer
         ymax: float = bounds[3] + buffer
-        fabdem: xr.DataArray = self.new_data_catalog.fetch(
-            "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, prefix="hydrodynamics"
-        ).read(prefix="hydrodynamics")
+        fabdem: xr.DataArray = (
+            self.new_data_catalog.fetch(
+                "fabdem",
+                xmin=xmin,
+                xmax=xmax,
+                ymin=ymin,
+                ymax=ymax,
+                prefix="hydrodynamics",
+            )
+            .read(prefix="hydrodynamics")
+            .compute()
+        )
 
         target: xr.DataArray = self.subgrid["mask"]
         assert target.rio.crs is not None, "target grid must have a crs"
@@ -221,11 +230,6 @@ class LandSurface:
         )
 
         global_countries["geometry"] = global_countries.centroid
-        # Renaming XKO to XKX
-        self.logger.info("Renaming XKO to XKX in global countries")
-        global_countries["ISO3"] = global_countries["ISO3"].replace(
-            {"XKO": "XKX"}
-        )  # XKO is a deprecated code for Kosovo, XKX is the new code
         global_countries = global_countries.set_index("ISO3")
 
         self.set_geom(global_countries, name="global_countries")
@@ -234,9 +238,13 @@ class LandSurface:
             f"Region database must contain unique region IDs ({self.data_catalog[region_database].path})"
         )
 
+        # allow some tolerance, especially for regions that coincide with coastlines, in which
+        # case the region boundaries may be slightly outside the model region due to differences
+        # in coastline representation. This is especially relevant for islands.
         assert bounds_are_within(
             self.region.total_bounds,
             regions.to_crs(self.region.crs).total_bounds,
+            tolerance=0.1,
         )
 
         region_id_mapping = {
@@ -249,12 +257,6 @@ class LandSurface:
         assert "ISO3" in regions.columns, (
             f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
         )
-
-        regions.replace(
-            {"ISO3": {"XKO": "XKX"}}, inplace=True
-        )  # XKO is a deprecated code for Kosovo, XKX is the new code
-
-        self.logger.info(f"Renamed XKO to XKX in regions")
 
         self.set_geom(regions, name="regions")
 

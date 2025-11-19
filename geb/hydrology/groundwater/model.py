@@ -291,7 +291,7 @@ class ModFlowSimulation:
             "heads"
         )  # heads is set after loading the model or writing to disk
 
-        self.hash_file = os.path.join(self.working_directory, "input_hash")
+        self.hash_file = Path(self.working_directory) / "input_hash"
 
         self.save_flows = False
 
@@ -310,8 +310,8 @@ class ModFlowSimulation:
                 sim.write_simulation()
                 self.write_hash_to_disk()
             except:
-                if os.path.exists(self.hash_file):
-                    os.remove(self.hash_file)
+                if self.hash_file.exists():
+                    self.hash_file.unlink()
                 raise
             # sim.run_simulation()
         elif self.verbose:
@@ -738,8 +738,7 @@ class ModFlowSimulation:
         This is used to check if the model input has changed next run
         and if the model can be loaded from disk.
         """
-        with open(self.hash_file, "wb") as f:
-            f.write(self.hash)
+        self.hash_file.write_text(self.hash.hex())
 
     def load_from_disk(self, arguments: dict[str, Any]) -> bool:
         """Check if the model input has changed and load from disk if not.
@@ -761,11 +760,11 @@ class ModFlowSimulation:
         self.hash = hashlib.md5(
             json.dumps(hashable_dict, sort_keys=True).encode()
         ).digest()
-        if not os.path.exists(self.hash_file):
+        if not self.hash_file.exists():
             prev_hash = None
         else:
-            with open(self.hash_file, "rb") as f:
-                prev_hash = f.read()
+            prev_hash = bytes.fromhex(self.hash_file.read_text())
+
         if prev_hash == self.hash and not self.never_load_from_disk:
             return True
         else:
@@ -1207,7 +1206,7 @@ class ModFlowSimulation:
         """
         self.mf6.finalize()
 
-    def restore(self, heads: ArrayFloat64) -> None:
+    def restore(self, heads: TwoDArrayFloat64) -> None:
         """Restore the model to a previous state by setting the heads.
 
         Args:

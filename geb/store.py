@@ -15,6 +15,7 @@ import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import yaml
 
 from geb.workflows.io import load_geom
 
@@ -1036,15 +1037,9 @@ class Bucket:
                     compression="gzip",
                     compression_level=9,
                 )
-            elif isinstance(value, (list, dict, float, int)):
-                with open((path / name).with_suffix(".json"), "w") as f:
-                    json.dump(value, f)
-            elif isinstance(value, str):
-                with open((path / name).with_suffix(".txt"), "w") as f:
-                    f.write(value)
-            elif isinstance(value, datetime):
-                with open((path / name).with_suffix(".datetime"), "w") as f:
-                    f.write(value.isoformat())
+            elif isinstance(value, (list, dict, float, int, str, datetime)):
+                with open((path / name).with_suffix(".yml"), "w") as f:
+                    yaml.safe_dump(value, f, default_flow_style=False)
             elif isinstance(value, np.ndarray):
                 if value.ndim == 0:
                     raise ValueError(
@@ -1104,9 +1099,14 @@ class Bucket:
                     filename.stem,
                     pd.read_parquet(filename),
                 )
+            elif filename.suffix == ".yml":
+                with open(filename, "r") as f:
+                    setattr(self, filename.stem, yaml.safe_load(f))
+            # TODO: Can be removed in 2026
             elif filename.suffix == ".txt":
                 with open(filename, "r") as f:
                     setattr(self, filename.stem, f.read())
+            # TODO: Can be removed in 2026
             elif filename.suffix == ".datetime":
                 with open(filename, "r") as f:
                     setattr(
@@ -1114,6 +1114,7 @@ class Bucket:
                         filename.stem,
                         datetime.fromisoformat(f.read()),
                     )
+            # TODO: Can be removed in 2026
             elif filename.suffix == ".json":
                 with open(filename, "r") as f:
                     setattr(self, filename.stem, json.load(f))
@@ -1186,7 +1187,7 @@ class Store:
             self.model.logger.debug(f"Saving {name}")
             bucket.save(path / name)
 
-    def load(self, path: None | Path = None) -> None:
+    def load(self, omit: None | str = None, path: None | Path = None) -> None:
         """Load the store data from disk into the model.
 
         If no path is provided, it defaults to the store path of the model.
@@ -1195,6 +1196,7 @@ class Store:
             path: A Path object representing the directory to load the model data from. Defaults to None.
                 In this case, a default path is used. In most cases this should not be changed, but can
                 be useful for special cases such as forecasting and testing.
+            omit: An optional string. If provided, any bucket whose name contains this string will be skipped during loading.
         """
         if path is None:
             path = self.path
@@ -1202,6 +1204,9 @@ class Store:
         for bucket_folder in path.iterdir():
             # Mac OS X creates a .DS_Store file in directories, which we ignore
             if bucket_folder.name == ".DS_Store":
+                continue
+            elif omit is not None and omit in bucket_folder.name:
+                self.model.logger.info(f"Skipping loading of bucket {bucket_folder}")
                 continue
             bucket = Bucket().load(bucket_folder)
 

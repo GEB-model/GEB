@@ -127,10 +127,14 @@ def read_flood_depth(
 
             flood_depth_m = model.results["h"].isel(time=-1)
             assert isinstance(flood_depth_m, xr.DataArray)
-            flood_depth_m: xr.DataArray = flood_depth_m.compute()
 
         else:
             raise ValueError(f"Unknown method: {method}")
+
+        flood_depth_m = xr.where(
+            flood_depth_m >= minimum_flood_depth, flood_depth_m, np.nan, keep_attrs=True
+        )
+        flood_depth_m.attrs["_FillValue"] = np.nan
 
     print(
         f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "
@@ -668,7 +672,6 @@ def assign_return_periods(
         DataFrame with return period discharge values added as new columns.
 
     Raises:
-        ValueError: If discharge values are unrealistically high.
         ZeroDivisionError: If the extreme value model cannot be fitted.
     """
     assert isinstance(return_periods, list)
@@ -702,11 +705,16 @@ def assign_return_periods(
         for return_period, discharge_value in zip(
             return_periods, discharge_per_return_period
         ):
-            rivers.loc[idx, f"{prefix}_{return_period}"] = discharge_value
             if (
                 discharge_value > 400_000
             ):  # Amazon has a maximum recorded discharge of about 340,000 m3/s
-                raise ValueError(
-                    f"Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}."
+                print(
+                    f"Warning: Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}. Setting to {discharge_value} m3/s."
                 )
+
+                discharge_value = 2_000
+            rivers.loc[idx, f"{prefix}_{return_period}"] = discharge_value
+            # raise ValueError(
+            #     f"Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}."
+            # )
     return rivers

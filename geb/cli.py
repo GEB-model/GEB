@@ -3,7 +3,6 @@
 import cProfile
 import functools
 import importlib
-import json
 import logging
 import os
 import platform
@@ -27,7 +26,7 @@ from geb.build import GEBModel as GEBModelBuild
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory
+from geb.workflows.io import WorkingDirectory, load_dict, to_dict
 from geb.workflows.methods import multi_level_merge
 
 PROFILING_DEFAULT: bool = False
@@ -340,8 +339,16 @@ def run_model_with_method(
     with WorkingDirectory(working_directory):
         config: dict[str, Any] = parse_config(config)
 
+        # TODO: This can be removed in 2026
+        if not Path("input/files.yml").exists() and Path("input/files.json").exists():
+            # convert input/files.json to input/files.yml
+            json_files: dict[str, Any] = load_dict(
+                Path("input/files.json"),
+            )
+            to_dict(json_files, Path("input/files.yml"))
+
         files: dict[str, Any] = parse_config(
-            "input/files.json"
+            load_dict(Path("input/files.yml"))
             if "files" not in config["general"]
             else config["general"]["files"]
         )
@@ -594,6 +601,7 @@ def init_fn(
     working_directory: str | Path,
     from_example: str,
     basin_id: str | None = None,
+    ISO3: str | None = None,
     overwrite: bool = False,
 ) -> None:
     """Create a new model.
@@ -604,15 +612,20 @@ def init_fn(
         update_config: Path to the model update configuration file to create.
         working_directory: Working directory for the model.
         from_example: Name of the example to use as a base for the model.
-        basin_id:Basin ID(s) to use for the model. Can be a comma-separated list of integers.
+        basin_id: Basin ID(s) to use for the model. Can be a comma-separated list of integers.
             If not set, the basin ID is taken from the config file.
+        ISO3: ISO3 country code to use for the model. Cannot be used together with --basin-id.
         overwrite: If True, overwrite existing config and build config files. Defaults to False.
 
     Raises:
         FileExistsError: If the config or build config file already exists and overwrite is False.
         FileNotFoundError: If the example folder does not exist.
+        ValueError: If both basin_id and ISO3 are set.
 
     """
+    if basin_id is not None and ISO3 is not None:
+        raise ValueError("Cannot use --basin-id and --ISO3 together.")
+
     config: Path = Path(config)
     build_config: Path = Path(build_config)
     update_config: Path = Path(update_config)
@@ -660,6 +673,15 @@ def init_fn(
                 basin_ids: int = int(basin_id)
 
             config_dict["general"]["region"]["subbasin"] = basin_ids
+        elif ISO3 is not None:
+            del config_dict["general"]["region"]["subbasin"]
+            config_dict["general"]["region"] = {
+                "geom": {
+                    "source": "GADM_level1",
+                    "key": ISO3,
+                    "column": "GID_0",
+                }
+            }
 
         with open(config, "w") as f:
             # do not sort keys, to keep the order of the config file
@@ -694,7 +716,14 @@ def init_fn(
     "--basin-id",
     default=None,
     type=str,
-    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file.",
+    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file. Cannot be used together with --ISO3.",
+)
+@click.option(
+    "--ISO3",
+    "ISO3",
+    default=None,
+    type=str,
+    help="ISO3 country code to use for the model. Cannot be used together with --basin-id.",
 )
 @click.option(
     "--overwrite",
@@ -931,19 +960,31 @@ def alter_fn(
 
         original_input_path: Path = from_model / input_folder
 
-        with open(original_input_path / "files.json", "r") as f:
-            original_files = json.load(f)
+        # TODO: This can be removed in 2026
+        if (
+            not (original_input_path / "files.yml").exists()
+            and (original_input_path / "files.json").exists()
+        ):
+            # convert input/files.json to input/files.yml
+            json_files: dict[str, Any] = load_dict(
+                (original_input_path / "files.json"),
+            )
+            to_dict(json_files, original_input_path / "files.yml")
+            # remove the original json file
+            (original_input_path / "files.json").unlink()
 
-            for file_class, files in original_files.items():
-                for file_name, file_path in files.items():
-                    if not file_path.startswith("/"):
-                        original_files[file_class][file_name] = str(
-                            Path("..") / original_input_path / file_path
-                        )
+        original_files = load_dict(original_input_path / "files.yml")
+
+        for file_class, files in original_files.items():
+            for file_name, file_path in files.items():
+                if not file_path.startswith("/"):
+                    original_files[file_class][file_name] = str(
+                        Path("..") / original_input_path / file_path
+                    )
 
         input_folder.mkdir(parents=True, exist_ok=True)
-        with open(input_folder / "files.json", "w") as f:
-            json.dump(original_files, f, indent=4)
+        with open(input_folder / "files.yml", "w") as f:
+            yaml.dump(original_files, f, default_flow_style=False)
 
         build_config = parse_config(build_config)
         model = get_builder(
@@ -1112,7 +1153,7 @@ def update(*args: Any, **kwargs: Any) -> None:
 @click_run_options()
 @click.option(
     "--methods",
-    default="plot_discharge,evaluate_discharge",
+    default="plot_discharge,evaluate_discharge,evaluate_hydrodynamics,evaluate_forecasts",
     help="Comma-seperated list of methods to evaluate. Currently supported methods: 'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.",
 )
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")

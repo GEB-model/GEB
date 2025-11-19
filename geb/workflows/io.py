@@ -24,6 +24,7 @@ import rasterio
 import requests
 import s3fs
 import xarray as xr
+import yaml
 import zarr
 import zarr.storage
 from dask.diagnostics import ProgressBar
@@ -156,15 +157,58 @@ def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
 
 
 def load_dict(filepath: Path) -> dict[str, Any]:
-    """Load a dictionary for the GEB model from disk.
+    """Load a dictionary from a JSON or YAML file.
 
     Args:
-        filepath: Path to the dictionary file.
+        filepath: Path to the JSON or YAML file.
 
     Returns:
         A dictionary containing the data.
+
+    Raises:
+        ValueError: If the file extension is not supported.
     """
-    return json.loads(filepath.read_text())
+    suffix: str = filepath.suffix
+    if suffix == ".json":
+        return json.loads(filepath.read_text())
+    elif suffix in (".yml", ".yaml"):
+        return yaml.safe_load(filepath.read_text())
+    else:
+        raise ValueError(
+            f"Unsupported file format: {suffix}. Supported formats are .json, .yml, .yaml"
+        )
+
+
+def _convert_paths_to_strings(obj: Any) -> Any:
+    """Recursively convert Path objects to strings in nested data structures.
+
+    Args:
+        obj: The object to convert.
+
+    Returns:
+        The object with Path objects converted to strings.
+    """
+    if isinstance(obj, Path):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {key: _convert_paths_to_strings(value) for key, value in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return type(obj)(_convert_paths_to_strings(item) for item in obj)
+    else:
+        return obj
+
+
+def to_dict(d: dict, filepath: Path) -> None:
+    """Save a dictionary to a YAML file.
+
+    Args:
+        d: The dictionary to save.
+        filepath: Path to the output YAML file.
+    """
+    # Convert Path objects to strings before saving
+    d_converted = _convert_paths_to_strings(d)
+    with open(filepath, "w") as f:
+        yaml.dump(d_converted, f, default_flow_style=False, sort_keys=False)
 
 
 def calculate_scaling(
@@ -270,8 +314,14 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     ds: xr.Dataset = xr.open_dataset(
         zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
     )
+    if "spatial_ref" in ds.data_vars:
+        spatial_ref_data = ds["spatial_ref"]
+        ds = ds.drop_vars("spatial_ref")
+        ds = ds.assign_coords(spatial_ref=spatial_ref_data)
     if len(ds.data_vars) > 1:
-        raise ValueError("Only one data variable is supported")
+        raise ValueError(
+            f"Only one data variable is supported, found multiple: {list(ds.data_vars)}"
+        )
 
     da: xr.DataArray = ds[list(ds.data_vars)[0]]
 
