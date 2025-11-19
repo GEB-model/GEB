@@ -16,6 +16,7 @@ from geb.hydrology.snow_glaciers import (
     snow_model,
     update_snow_temperature,
 )
+from geb.typing import ArrayFloat32
 
 from ..testconfig import output_folder
 
@@ -579,34 +580,19 @@ def test_snowpack_development_scenario() -> None:
         17.625 * dewpoint_C / (243.04 + dewpoint_C)
     ).astype(np.float32)
 
-    params = {
-        "n_hours": n_hours,
-        "precip_series": precip_series,
-        "air_temp_series": air_temp_series,
-        "sw_rad_series": sw_rad_series,
-        "lw_rad_series": lw_rad_series,
-        "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.float32(95000.0),
-        "wind_speed": np.float32(2.0),
-        "initial_swe": np.float32(0.02),
-        "initial_lw": np.float32(0.0),
-        "initial_snow_temp": np.float32(-2.0),
-        "activate_layer_thickness_m": np.float32(0.2),
-    }
-
     results = _run_scenario(
-        n_hours=params["n_hours"],
-        precip_series=params["precip_series"],
-        air_temp_series=params["air_temp_series"],
-        sw_rad_series=params["sw_rad_series"],
-        lw_rad_series=params["lw_rad_series"],
-        vapor_pressure_series=params["vapor_pressure_series"],
-        pressure=params["pressure"],
-        wind_speed=params["wind_speed"],
-        initial_swe=params["initial_swe"],
-        initial_lw=params["initial_lw"],
-        initial_snow_temp=params["initial_snow_temp"],
-        activate_layer_thickness_m=params["activate_layer_thickness_m"],
+        n_hours=n_hours,
+        precip_series=precip_series,
+        air_temp_series=air_temp_series,
+        sw_rad_series=sw_rad_series,
+        lw_rad_series=lw_rad_series,
+        vapor_pressure_series=vapor_pressure_series,
+        pressure=np.full(n_hours, 95000.0, dtype=np.float32),
+        wind_speed=np.full(n_hours, 2.0, dtype=np.float32),
+        initial_swe=np.float32(0.02),
+        initial_lw=np.float32(0.0),
+        initial_snow_temp=np.float32(-2.0),
+        activate_layer_thickness_m=np.float32(0.2),
     )
 
     assert np.any(results["melt_log"] > 0)
@@ -618,15 +604,15 @@ def test_snowpack_development_scenario() -> None:
         timesteps=timesteps,
         swe_log=results["swe_log"],
         lw_log=results["lw_log"],
-        precip_log=params["precip_series"] * 1000,  # Convert to mm/hr
+        precip_log=precip_series * 1000,  # Convert to mm/hr
         runoff_log=results["runoff_log"] * 1000,  # Convert to mm/hr
         melt_runoff_log=results["melt_runoff_log"] * 1000,
         direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,  # Convert to mm/hr
         refreezing_log=results["refreezing_log"] * 1000,  # Convert to mm/hr
-        air_temp_log=params["air_temp_series"],
-        sw_rad_log=params["sw_rad_series"],
-        downward_lw_rad_log=params["lw_rad_series"],
+        air_temp_log=air_temp_series,
+        sw_rad_log=sw_rad_series,
+        downward_lw_rad_log=lw_rad_series,
         upward_lw_rad_log=results["upward_lw_rad_log"],
         net_sw_rad_log=results["net_sw_rad_log"],
         snow_temp_log=results["snow_temp_log"],
@@ -661,34 +647,19 @@ def test_snowpack_arctic_scenario() -> None:
         17.625 * dewpoint_C / (243.04 + dewpoint_C)
     ).astype(np.float32)
 
-    params = {
-        "n_hours": n_hours,
-        "precip_series": precip_series,
-        "air_temp_series": air_temp_series,
-        "sw_rad_series": sw_rad_series,
-        "lw_rad_series": lw_rad_series,
-        "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.float32(101000.0),
-        "wind_speed": np.float32(3.0),
-        "initial_swe": np.float32(0.1),
-        "initial_lw": np.float32(0.0),
-        "initial_snow_temp": np.float32(-10.0),
-        "activate_layer_thickness_m": np.float32(0.2),
-    }
-
     results = _run_scenario(
-        n_hours=params["n_hours"],
-        precip_series=params["precip_series"],
-        air_temp_series=params["air_temp_series"],
-        sw_rad_series=params["sw_rad_series"],
-        lw_rad_series=params["lw_rad_series"],
-        vapor_pressure_series=params["vapor_pressure_series"],
-        pressure=params["pressure"],
-        wind_speed=params["wind_speed"],
-        initial_swe=params["initial_swe"],
-        initial_lw=params["initial_lw"],
-        initial_snow_temp=params["initial_snow_temp"],
-        activate_layer_thickness_m=params["activate_layer_thickness_m"],
+        n_hours=n_hours,
+        precip_series=precip_series,
+        air_temp_series=air_temp_series,
+        sw_rad_series=sw_rad_series,
+        lw_rad_series=lw_rad_series,
+        vapor_pressure_series=vapor_pressure_series,
+        pressure=np.full(n_hours, 101000.0, dtype=np.float32),
+        wind_speed=np.full(n_hours, 3.0, dtype=np.float32),
+        initial_swe=np.float32(0.1),
+        initial_lw=np.float32(0.0),
+        initial_snow_temp=np.float32(-10.0),
+        activate_layer_thickness_m=np.float32(0.2),
     )
 
     assert np.sum(results["melt_log"]) < 0.001
@@ -700,15 +671,15 @@ def test_snowpack_arctic_scenario() -> None:
         timesteps=timesteps,
         swe_log=results["swe_log"],
         lw_log=results["lw_log"],
-        precip_log=params["precip_series"] * 1000,
+        precip_log=precip_series * 1000,
         runoff_log=results["runoff_log"] * 1000,
         melt_runoff_log=results["melt_runoff_log"] * 1000,
         direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
-        air_temp_log=params["air_temp_series"],
-        sw_rad_log=params["sw_rad_series"],
-        downward_lw_rad_log=params["lw_rad_series"],
+        air_temp_log=air_temp_series,
+        sw_rad_log=sw_rad_series,
+        downward_lw_rad_log=lw_rad_series,
         upward_lw_rad_log=results["upward_lw_rad_log"],
         net_sw_rad_log=results["net_sw_rad_log"],
         snow_temp_log=results["snow_temp_log"],
@@ -744,34 +715,19 @@ def test_snowpack_high_altitude_scenario() -> None:
         17.625 * dewpoint_C / (243.04 + dewpoint_C)
     ).astype(np.float32)
 
-    params = {
-        "n_hours": n_hours,
-        "precip_series": precip_series,
-        "air_temp_series": air_temp_series,
-        "sw_rad_series": sw_rad_series,
-        "lw_rad_series": lw_rad_series,
-        "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.float32(60000.0),
-        "wind_speed": np.float32(5.0),
-        "initial_swe": np.float32(0.15),
-        "initial_lw": np.float32(0.0),
-        "initial_snow_temp": np.float32(-5.0),
-        "activate_layer_thickness_m": np.float32(0.2),
-    }
-
     results = _run_scenario(
-        n_hours=params["n_hours"],
-        precip_series=params["precip_series"],
-        air_temp_series=params["air_temp_series"],
-        sw_rad_series=params["sw_rad_series"],
-        lw_rad_series=params["lw_rad_series"],
-        vapor_pressure_series=params["vapor_pressure_series"],
-        pressure=params["pressure"],
-        wind_speed=params["wind_speed"],
-        initial_swe=params["initial_swe"],
-        initial_lw=params["initial_lw"],
-        initial_snow_temp=params["initial_snow_temp"],
-        activate_layer_thickness_m=params["activate_layer_thickness_m"],
+        n_hours=n_hours,
+        precip_series=precip_series,
+        air_temp_series=air_temp_series,
+        sw_rad_series=sw_rad_series,
+        lw_rad_series=lw_rad_series,
+        vapor_pressure_series=vapor_pressure_series,
+        pressure=np.full(n_hours, 60000.0, dtype=np.float32),
+        wind_speed=np.full(n_hours, 5.0, dtype=np.float32),
+        initial_swe=np.float32(0.15),
+        initial_lw=np.float32(0.0),
+        initial_snow_temp=np.float32(-5.0),
+        activate_layer_thickness_m=np.float32(0.2),
     )
 
     assert np.any(results["melt_log"] > 0)
@@ -781,15 +737,15 @@ def test_snowpack_high_altitude_scenario() -> None:
         timesteps=timesteps,
         swe_log=results["swe_log"],
         lw_log=results["lw_log"],
-        precip_log=params["precip_series"] * 1000,
+        precip_log=precip_series * 1000,
         runoff_log=results["runoff_log"] * 1000,
         melt_runoff_log=results["melt_runoff_log"] * 1000,
         direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
-        air_temp_log=params["air_temp_series"],
-        sw_rad_log=params["sw_rad_series"],
-        downward_lw_rad_log=params["lw_rad_series"],
+        air_temp_log=air_temp_series,
+        sw_rad_log=sw_rad_series,
+        downward_lw_rad_log=lw_rad_series,
         upward_lw_rad_log=results["upward_lw_rad_log"],
         net_sw_rad_log=results["net_sw_rad_log"],
         snow_temp_log=results["snow_temp_log"],
@@ -928,34 +884,19 @@ def test_complete_ablation_scenario() -> None:
         17.625 * dewpoint_C / (243.04 + dewpoint_C)
     ).astype(np.float32)
 
-    params = {
-        "n_hours": n_hours,
-        "precip_series": precip_series,
-        "air_temp_series": air_temp_series,
-        "sw_rad_series": sw_rad_series,
-        "lw_rad_series": lw_rad_series,
-        "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.float32(98000.0),
-        "wind_speed": np.float32(3.0),
-        "initial_swe": np.float32(0.05),
-        "initial_lw": np.float32(0.0),
-        "initial_snow_temp": np.float32(-1.0),
-        "activate_layer_thickness_m": np.float32(0.2),
-    }
-
     results = _run_scenario(
-        n_hours=params["n_hours"],
-        precip_series=params["precip_series"],
-        air_temp_series=params["air_temp_series"],
-        sw_rad_series=params["sw_rad_series"],
-        lw_rad_series=params["lw_rad_series"],
-        vapor_pressure_series=params["vapor_pressure_series"],
-        pressure=params["pressure"],
-        wind_speed=params["wind_speed"],
-        initial_swe=params["initial_swe"],
-        initial_lw=params["initial_lw"],
-        initial_snow_temp=params["initial_snow_temp"],
-        activate_layer_thickness_m=params["activate_layer_thickness_m"],
+        n_hours=n_hours,
+        precip_series=precip_series,
+        air_temp_series=air_temp_series,
+        sw_rad_series=sw_rad_series,
+        lw_rad_series=lw_rad_series,
+        vapor_pressure_series=vapor_pressure_series,
+        pressure=np.full(n_hours, 98000.0, dtype=np.float32),
+        wind_speed=np.full(n_hours, 3.0, dtype=np.float32),
+        initial_swe=np.float32(0.05),
+        initial_lw=np.float32(0.0),
+        initial_snow_temp=np.float32(-1.0),
+        activate_layer_thickness_m=np.float32(0.2),
     )
 
     ablation_time_step = np.where(results["swe_log"] <= 1e-6)[0]
@@ -975,15 +916,15 @@ def test_complete_ablation_scenario() -> None:
         timesteps=timesteps,
         swe_log=results["swe_log"],
         lw_log=results["lw_log"],
-        precip_log=params["precip_series"] * 1000,
+        precip_log=precip_series * 1000,
         runoff_log=results["runoff_log"] * 1000,
         melt_runoff_log=results["melt_runoff_log"] * 1000,
         direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
-        air_temp_log=params["air_temp_series"],
-        sw_rad_log=params["sw_rad_series"],
-        downward_lw_rad_log=params["lw_rad_series"],
+        air_temp_log=air_temp_series,
+        sw_rad_log=sw_rad_series,
+        downward_lw_rad_log=lw_rad_series,
         upward_lw_rad_log=results["upward_lw_rad_log"],
         net_sw_rad_log=results["net_sw_rad_log"],
         snow_temp_log=results["snow_temp_log"],
@@ -1007,34 +948,19 @@ def test_deposition_scenario() -> None:
         17.625 * dewpoint_C / (243.04 + dewpoint_C)
     ).astype(np.float32)
 
-    params = {
-        "n_hours": n_hours,
-        "precip_series": precip_series,
-        "air_temp_series": air_temp_series,
-        "sw_rad_series": sw_rad_series,
-        "lw_rad_series": lw_rad_series,
-        "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.float32(100000.0),
-        "wind_speed": np.float32(2.0),
-        "initial_swe": np.float32(0.02),
-        "initial_lw": np.float32(0.0),
-        "initial_snow_temp": np.float32(-10.0),
-        "activate_layer_thickness_m": np.float32(0.2),
-    }
-
     results = _run_scenario(
-        n_hours=params["n_hours"],
-        precip_series=params["precip_series"],
-        air_temp_series=params["air_temp_series"],
-        sw_rad_series=params["sw_rad_series"],
-        lw_rad_series=params["lw_rad_series"],
-        vapor_pressure_series=params["vapor_pressure_series"],
-        pressure=params["pressure"],
-        wind_speed=params["wind_speed"],
-        initial_swe=params["initial_swe"],
-        initial_lw=params["initial_lw"],
-        initial_snow_temp=params["initial_snow_temp"],
-        activate_layer_thickness_m=params["activate_layer_thickness_m"],
+        n_hours=n_hours,
+        precip_series=precip_series,
+        air_temp_series=air_temp_series,
+        sw_rad_series=sw_rad_series,
+        lw_rad_series=lw_rad_series,
+        vapor_pressure_series=vapor_pressure_series,
+        pressure=np.full(n_hours, 100000.0, dtype=np.float32),
+        wind_speed=np.full(n_hours, 2.0, dtype=np.float32),
+        initial_swe=np.float32(0.02),
+        initial_lw=np.float32(0.0),
+        initial_snow_temp=np.float32(-10.0),
+        activate_layer_thickness_m=np.float32(0.2),
     )
 
     assert np.all(results["sublimation_log"] > 0)
@@ -1045,15 +971,15 @@ def test_deposition_scenario() -> None:
         timesteps=timesteps,
         swe_log=results["swe_log"],
         lw_log=results["lw_log"],
-        precip_log=params["precip_series"] * 1000,
+        precip_log=precip_series * 1000,
         runoff_log=results["runoff_log"] * 1000,
         melt_runoff_log=results["melt_runoff_log"] * 1000,
         direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
-        air_temp_log=params["air_temp_series"],
-        sw_rad_log=params["sw_rad_series"],
-        downward_lw_rad_log=params["lw_rad_series"],
+        air_temp_log=air_temp_series,
+        sw_rad_log=sw_rad_series,
+        downward_lw_rad_log=lw_rad_series,
         upward_lw_rad_log=results["upward_lw_rad_log"],
         net_sw_rad_log=results["net_sw_rad_log"],
         snow_temp_log=results["snow_temp_log"],
@@ -1086,34 +1012,19 @@ def test_intermittent_snowfall_scenario() -> None:
         17.625 * dewpoint_C / (243.04 + dewpoint_C)
     ).astype(np.float32)
 
-    params = {
-        "n_hours": n_hours,
-        "precip_series": precip_series,
-        "air_temp_series": air_temp_series,
-        "sw_rad_series": sw_rad_series,
-        "lw_rad_series": lw_rad_series,
-        "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.float32(96000.0),
-        "wind_speed": np.float32(2.5),
-        "initial_swe": np.float32(0.0),
-        "initial_lw": np.float32(0.0),
-        "initial_snow_temp": np.float32(0.0),
-        "activate_layer_thickness_m": np.float32(0.2),
-    }
-
     results = _run_scenario(
-        n_hours=params["n_hours"],
-        precip_series=params["precip_series"],
-        air_temp_series=params["air_temp_series"],
-        sw_rad_series=params["sw_rad_series"],
-        lw_rad_series=params["lw_rad_series"],
-        vapor_pressure_series=params["vapor_pressure_series"],
-        pressure=params["pressure"],
-        wind_speed=params["wind_speed"],
-        initial_swe=params["initial_swe"],
-        initial_lw=params["initial_lw"],
-        initial_snow_temp=params["initial_snow_temp"],
-        activate_layer_thickness_m=params["activate_layer_thickness_m"],
+        n_hours=n_hours,
+        precip_series=precip_series,
+        air_temp_series=air_temp_series,
+        sw_rad_series=sw_rad_series,
+        lw_rad_series=lw_rad_series,
+        vapor_pressure_series=vapor_pressure_series,
+        pressure=np.full(n_hours, 96000.0, dtype=np.float32),
+        wind_speed=np.full(n_hours, 2.5, dtype=np.float32),
+        initial_swe=np.float32(0.0),
+        initial_lw=np.float32(0.0),
+        initial_snow_temp=np.float32(0.0),
+        activate_layer_thickness_m=np.float32(0.2),
     )
 
     assert results["swe_log"][35] > results["swe_log"][29]
@@ -1125,15 +1036,15 @@ def test_intermittent_snowfall_scenario() -> None:
         timesteps=timesteps,
         swe_log=results["swe_log"],
         lw_log=results["lw_log"],
-        precip_log=params["precip_series"] * 1000,
+        precip_log=precip_series * 1000,
         runoff_log=results["runoff_log"] * 1000,
         melt_runoff_log=results["melt_runoff_log"] * 1000,
         direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
-        air_temp_log=params["air_temp_series"],
-        sw_rad_log=params["sw_rad_series"],
-        downward_lw_rad_log=params["lw_rad_series"],
+        air_temp_log=air_temp_series,
+        sw_rad_log=sw_rad_series,
+        downward_lw_rad_log=lw_rad_series,
         upward_lw_rad_log=results["upward_lw_rad_log"],
         net_sw_rad_log=results["net_sw_rad_log"],
         snow_temp_log=results["snow_temp_log"],
@@ -1162,34 +1073,19 @@ def test_snow_introduction_after_bare_ground() -> None:
         17.625 * dewpoint_C / (243.04 + dewpoint_C)
     ).astype(np.float32)
 
-    params = {
-        "n_hours": n_hours,
-        "precip_series": precip_series,
-        "air_temp_series": air_temp_series,
-        "sw_rad_series": sw_rad_series,
-        "lw_rad_series": lw_rad_series,
-        "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.float32(96000.0),
-        "wind_speed": np.float32(2.5),
-        "initial_swe": np.float32(0.0),
-        "initial_lw": np.float32(0.0),
-        "initial_snow_temp": np.float32(0.0),
-        "activate_layer_thickness_m": np.float32(0.2),
-    }
-
     results = _run_scenario(
-        n_hours=params["n_hours"],
-        precip_series=params["precip_series"],
-        air_temp_series=params["air_temp_series"],
-        sw_rad_series=params["sw_rad_series"],
-        lw_rad_series=params["lw_rad_series"],
-        vapor_pressure_series=params["vapor_pressure_series"],
-        pressure=params["pressure"],
-        wind_speed=params["wind_speed"],
-        initial_swe=params["initial_swe"],
-        initial_lw=params["initial_lw"],
-        initial_snow_temp=params["initial_snow_temp"],
-        activate_layer_thickness_m=params["activate_layer_thickness_m"],
+        n_hours=n_hours,
+        precip_series=precip_series,
+        air_temp_series=air_temp_series,
+        sw_rad_series=sw_rad_series,
+        lw_rad_series=lw_rad_series,
+        vapor_pressure_series=vapor_pressure_series,
+        pressure=np.full(n_hours, 96000.0, dtype=np.float32),
+        wind_speed=np.full(n_hours, 2.5, dtype=np.float32),
+        initial_swe=np.float32(0.0),
+        initial_lw=np.float32(0.0),
+        initial_snow_temp=np.float32(0.0),
+        activate_layer_thickness_m=np.float32(0.2),
     )
 
     # Check that initially there's no snow
@@ -1200,7 +1096,7 @@ def test_snow_introduction_after_bare_ground() -> None:
     assert results["snow_temp_log"][-1] < 0.0  # Should be cold
 
     # Water balance check
-    total_precip = np.sum(params["precip_series"])
+    total_precip = np.sum(precip_series)
     total_runoff = np.sum(results["runoff_log"])
     sublimation_loss = -np.sum(
         results["sublimation_log"][results["sublimation_log"] < 0], dtype=np.float64
@@ -1208,9 +1104,7 @@ def test_snow_introduction_after_bare_ground() -> None:
     deposition_gain = np.sum(
         results["sublimation_log"][results["sublimation_log"] > 0], dtype=np.float64
     )
-    total_water_in = (
-        params["initial_swe"] + params["initial_lw"] + total_precip + deposition_gain
-    )
+    total_water_in = np.float32(0.0) + np.float32(0.0) + total_precip + deposition_gain
     total_water_out = (
         results["swe_log"][-1] + results["lw_log"][-1] + total_runoff + sublimation_loss
     )
@@ -1249,40 +1143,23 @@ def test_glacier_ice_scenario() -> None:
 
     air_temp_series[72:] += 30  # Warmer period in the second half
 
-    params = {
-        "n_hours": n_hours,
-        "precip_series": precip_series,
-        "air_temp_series": air_temp_series,
-        "sw_rad_series": sw_rad_series,
-        "lw_rad_series": lw_rad_series,
-        "vapor_pressure_series": vapor_pressure_series,
-        "pressure": np.float32(70000.0),
-        "wind_speed": np.float32(2.0),
-        "initial_swe": np.float32(10.0),
-        "initial_lw": np.float32(0.0),
-        "initial_snow_temp": np.float32(-1.0),
-        "activate_layer_thickness_m": np.float32(
-            2.0
-        ),  # Deeper active layer for glaciers
-    }
-
     results = _run_scenario(
-        n_hours=params["n_hours"],
-        precip_series=params["precip_series"],
-        air_temp_series=params["air_temp_series"],
-        sw_rad_series=params["sw_rad_series"],
-        lw_rad_series=params["lw_rad_series"],
-        vapor_pressure_series=params["vapor_pressure_series"],
-        pressure=params["pressure"],
-        wind_speed=params["wind_speed"],
-        initial_swe=params["initial_swe"],
-        initial_lw=params["initial_lw"],
-        initial_snow_temp=params["initial_snow_temp"],
-        activate_layer_thickness_m=params["activate_layer_thickness_m"],
+        n_hours=n_hours,
+        precip_series=precip_series,
+        air_temp_series=air_temp_series,
+        sw_rad_series=sw_rad_series,
+        lw_rad_series=lw_rad_series,
+        vapor_pressure_series=vapor_pressure_series,
+        pressure=np.full(n_hours, 70000.0, dtype=np.float32),
+        wind_speed=np.full(n_hours, 2.0, dtype=np.float32),
+        initial_swe=np.float32(10.0),
+        initial_lw=np.float32(0.0),
+        initial_snow_temp=np.float32(-1.0),
+        activate_layer_thickness_m=np.float32(2.0),  # Deeper active layer for glaciers
     )
 
     assert np.sum(results["melt_log"]) > 0
-    assert np.max(params["air_temp_series"]) > 10.0
+    assert np.max(air_temp_series) > 10.0
     assert np.sum(results["runoff_log"]) >= 0
 
     _plot_scenario_results(
@@ -1290,15 +1167,15 @@ def test_glacier_ice_scenario() -> None:
         timesteps=timesteps,
         swe_log=results["swe_log"],
         lw_log=results["lw_log"],
-        precip_log=params["precip_series"] * 1000,
+        precip_log=precip_series * 1000,
         runoff_log=results["runoff_log"] * 1000,
         melt_runoff_log=results["melt_runoff_log"] * 1000,
         direct_rainfall_log=results["direct_rainfall_log"] * 1000,
         sublimation_log=results["sublimation_log"] * 1000,
         refreezing_log=results["refreezing_log"] * 1000,
-        air_temp_log=params["air_temp_series"],
-        sw_rad_log=params["sw_rad_series"],
-        downward_lw_rad_log=params["lw_rad_series"],
+        air_temp_log=air_temp_series,
+        sw_rad_log=sw_rad_series,
+        downward_lw_rad_log=lw_rad_series,
         upward_lw_rad_log=results["upward_lw_rad_log"],
         net_sw_rad_log=results["net_sw_rad_log"],
         snow_temp_log=results["snow_temp_log"],
@@ -1540,18 +1417,18 @@ def _plot_scenario_results(
 
 def _run_scenario(
     n_hours: int,
-    precip_series: np.ndarray,
-    air_temp_series: np.ndarray,
-    sw_rad_series: np.ndarray,
-    lw_rad_series: np.ndarray,
-    vapor_pressure_series: np.ndarray,
-    pressure: np.ndarray,
-    wind_speed: np.ndarray,
-    initial_swe: np.ndarray,
-    initial_lw: np.ndarray,
-    initial_snow_temp: np.ndarray,
+    precip_series: ArrayFloat32,
+    air_temp_series: ArrayFloat32,
+    sw_rad_series: ArrayFloat32,
+    lw_rad_series: ArrayFloat32,
+    vapor_pressure_series: ArrayFloat32,
+    pressure: ArrayFloat32,
+    wind_speed: ArrayFloat32,
+    initial_swe: np.float32,
+    initial_lw: np.float32,
+    initial_snow_temp: np.float32,
     activate_layer_thickness_m: np.float32,
-) -> dict[str, np.ndarray]:
+) -> dict[str, ArrayFloat32]:
     """
     Helper function to run a snow model scenario and log results.
 
@@ -1596,16 +1473,8 @@ def _run_scenario(
 
     for i in range(n_hours):
         # Select the correct forcing value (for constants or time series)
-        current_wind_speed = (
-            wind_speed
-            if not isinstance(wind_speed, np.ndarray)
-            else (wind_speed[i] if len(wind_speed) > 1 else wind_speed[0])
-        )
-        current_pressure = (
-            pressure
-            if not isinstance(pressure, np.ndarray)
-            else (pressure[i] if len(pressure) > 1 else pressure[0])
-        )
+        current_wind_speed = wind_speed[i]
+        current_pressure = pressure[i]
 
         # Convert precipitation from m/hr (test unit) to kg/m²/s (model unit)
         # 1 m/hr = 1000 kg/m²/hr = 1000/3600 kg/m²/s = 1/3.6 kg/m²/s

@@ -202,6 +202,7 @@ class Fabdem(Adapter):
             RuntimeError: If download or extraction fails.
         """
         # first check that url exists. If it does not, return empty list
+        # this is because not all tiles exist (e.g., over ocean)
         response = requests.head(tile_url)
         if response.status_code == 404:
             return []

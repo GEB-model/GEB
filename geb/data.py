@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
+from geb.typing import ThreeDArrayFloat32
 from geb.workflows.io import load_dict
 
 if TYPE_CHECKING:
@@ -77,7 +78,7 @@ class DateIndex:
 
 def load_regional_crop_data_from_dict(
     model: GEBModel, name: str
-) -> tuple[dict[dict[date, int]], dict[str, np.ndarray]]:
+) -> tuple[DateIndex | None, ThreeDArrayFloat32]:
     """Load crop prices per state from the input data and return a dictionary of states containing 2D array of prices.
 
     Returns:
@@ -112,7 +113,7 @@ def load_regional_crop_data_from_dict(
         raise ValueError(f"Unknown type: {timedata['type']}")
 
 
-def load_crop_data(files: dict[str, dict[str, str]]) -> dict[np.ndarray]:
+def load_crop_data(files: dict[str, dict[str, Path]]) -> tuple[dict, pd.DataFrame]:
     """Read csv-file of values for crop water depletion.
 
     Returns:

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import math
+from collections.abc import Hashable, Mapping
 from typing import Any, Literal, overload
 
 import dask
@@ -78,7 +79,7 @@ def pixels_to_coords(
     assert pixels.shape[1] == 2
     if gt[2] + gt[4] == 0:
         coords = np.empty(pixels.shape, dtype=np.float64)
-        for i in prange(coords.shape[0]):
+        for i in prange(coords.shape[0]):  # ty: ignore[not-iterable]
             coords[i, 0] = pixels[i, 0] * gt[1] + gt[0]
             coords[i, 1] = pixels[i, 1] * gt[5] + gt[3]
         return coords
@@ -109,7 +110,7 @@ def sample_from_map(
     x_step = gt[1]
     y_step = gt[5]
     values = np.empty((size,) + array.shape[:-2], dtype=array.dtype)
-    for i in prange(size):
+    for i in prange(size):  # ty: ignore[not-iterable]
         values[i] = array[
             ...,
             int((coords[i, 1] - y_offset) / y_step),
@@ -208,7 +209,7 @@ def coords_to_pixels(
         y_step = gt[5]
         pxs = np.empty(size, dtype=dtype)
         pys = np.empty(size, dtype=dtype)
-        for i in prange(size):
+        for i in prange(size):  # ty: ignore[not-iterable]
             pxs[i] = int((coords[i, 0] - x_offset) / x_step)
             pys[i] = int((coords[i, 1] - y_offset) / y_step)
         return pxs, pys
@@ -370,43 +371,64 @@ def full_like(
 
 
 def rasterize_like(
-    gpd: gpd.GeoDataFrame,
-    column: str,
+    gdf: gpd.GeoDataFrame,
     raster: xr.DataArray,
     dtype: type,
     nodata: float | int | bool,
     all_touched: bool = False,
+    column: str | None = None,
+    burn_value: float | int | bool | None = None,
+    name: str | None = "rasterized",
     **kwargs: Any,
 ) -> xr.DataArray:
     """Rasterize a geometry to match the spatial properties of a given raster.
 
     Args:
-        gpd: The geodataframe containing geometries to rasterize
-        column: The column in the GeoDataFrame to use for rasterization values
+        gdf: The geodataframe containing geometries to rasterize
         raster: The reference raster DataArray to match spatial properties
         dtype: The data type of the output rasterized array
         nodata: The nodata value to use in the output array
         all_touched: If True, all pixels touched by geometries will be burned in
+        column: If provided, values from this column will be used for rasterization.
+            Cannot be used together with `burn_value`.
+        burn_value: If provided, this value will be used for all geometries instead of values from a column.
+            Cannot be used together with `column`.
+        name: If provided, the name of the output DataArray. If 'column' is provided and name is not set,
+            the name will be set to the column name.
         **kwargs: Additional keyword arguments to pass to rasterio.features.rasterize
 
     Returns:
         A new DataArray with the rasterized geometry, matching the spatial properties of the input raster.
             The name of the DataArray will be set to the provided column name.
 
+    Raises:
+        ValueError: If both `column` and `burn_value` are provided or if neither is provided.
+
     """
+    if (column is None and burn_value is None) or (
+        column is not None and burn_value is not None
+    ):
+        raise ValueError("Either column or burn_value must be provided, but not both.")
+
+    if name == "rasterized" and column is not None:
+        name: str = column
+
     da: xr.DataArray = full_like(
         data=raster,
         fill_value=nodata,
         nodata=nodata,
         attrs=raster.attrs,
         dtype=dtype,
-        name=column,
+        name=name,
     )
-    geoms: gpd.Geoseries = gpd.geometry
+    geoms: gpd.Geoseries = gdf.geometry
 
-    assert da.rio.crs == gpd.crs, "CRS of raster and GeoDataFrame must match"
+    assert da.rio.crs == gdf.crs, "CRS of raster and GeoDataFrame must match"
 
-    values: list[Any] = gpd[column].tolist()
+    if burn_value is not None:
+        values = [burn_value] * len(gdf)
+    else:
+        values: list[Any] = gdf[column].tolist()
     shapes: list[tuple[Polygon, int | float]] = list(zip(geoms, values, strict=True))
     out = rasterize(
         shapes,
@@ -818,7 +840,7 @@ def get_area_definition(da: xr.DataArray) -> AreaDefinition:
 def _fill_in_coords(
     target_coords: xr.core.coordinates.DataArrayCoordinates,
     source_coords: xr.core.coordinates.DataArrayCoordinates,
-    data_dims: tuple[str, ...],
+    data_dims: tuple[Hashable, ...],
 ) -> list[xr.core.coordinates.DataArrayCoordinates]:
     """Fill in missing coordinates that are also dimensions from source except for 'x' and 'y' which are taken from target.
 
@@ -859,6 +881,7 @@ def resample_chunked(
 
     Raises:
         ValueError: If the method is not 'bilinear' or 'nearest'.
+        ValueError: If the target DataArray is not chunked.
 
     Returns:
         A new DataArray that has been resampled to match the target's grid.
@@ -874,6 +897,9 @@ def resample_chunked(
 
     source_geo: AreaDefinition = get_area_definition(source)
     target_geo: AreaDefinition = get_area_definition(target)
+
+    if target.chunks is None:
+        raise ValueError("Target DataArray must be chunked for resample_chunked")
 
     indices: dask.Array = resample_blocks(
         gradient_resampler_indices_block,
@@ -933,3 +959,75 @@ def calculate_cell_area(
     )
     height_m = distance_1_degree_latitude * abs(affine_transform.e)
     return (width_m * height_m).astype(np.float32)
+
+
+def clip_region(
+    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int
+) -> tuple[xr.DataArray, ...]:
+    """Use the given mask to clip the mask itself and the given data arrays.
+
+    The clipping is done to the bounding box of the True values in the mask. The bounding box
+    is aligned to the given align value. The align value is in the same units as the coordinates
+    of the mask and data arrays.
+
+    Args:
+        mask: The mask to use for clipping. Must be a 2D boolean DataArray with x and y coordinates.
+            True values indicate the area to keep.
+        *data_arrays: The data arrays to clip. Must have the same x and y coordinates as the mask.
+        align: Align the bounding box to a specific grid spacing. For example, when this is set to 1
+            the bounding box will be aligned to whole numbers. If set to 0.5, the bounding box will
+            be aligned to 0.5 intervals.
+
+    Returns:
+        A tuple containing the clipped mask and the clipped data arrays.
+
+    Raises:
+        ValueError: If the data arrays do not have the same shape or coordinates as the mask.
+    """
+    rows, cols = np.where(mask)
+    mincol = cols.min()
+    maxcol = cols.max()
+    minrow = rows.min()
+    maxrow = rows.max()
+
+    minx = mask.x[mincol].item()
+    maxx = mask.x[maxcol].item()
+    miny = mask.y[minrow].item()
+    maxy = mask.y[maxrow].item()
+
+    xres, yres = mask.rio.resolution()
+
+    mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
+    maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
+    minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
+    maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
+
+    assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
+    assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
+    assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
+    assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
+
+    assert mincol_aligned <= mincol
+    assert maxcol_aligned >= maxcol
+    assert minrow_aligned <= minrow
+    assert maxrow_aligned >= maxrow
+
+    clipped_mask = mask.isel(
+        y=slice(minrow_aligned, maxrow_aligned),
+        x=slice(mincol_aligned, maxcol_aligned),
+    )
+    clipped_arrays = []
+    for da in data_arrays:
+        if da.shape != mask.shape:
+            raise ValueError("All data arrays must have the same shape as the mask.")
+        if not np.array_equal(da.x, mask.x) or not np.array_equal(da.y, mask.y):
+            raise ValueError(
+                "All data arrays must have the same coordinates as the mask."
+            )
+        clipped_arrays.append(
+            da.isel(
+                y=slice(minrow_aligned, maxrow_aligned),
+                x=slice(mincol_aligned, maxcol_aligned),
+            )
+        )
+    return clipped_mask, *clipped_arrays

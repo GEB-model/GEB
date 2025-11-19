@@ -814,7 +814,7 @@ class Hydrography:
         assert waterbodies["waterbody_type"].dtype == np.int32
 
         water_body_id: xr.DataArray = rasterize_like(
-            gpd=waterbodies,
+            gdf=waterbodies,
             column="waterbody_id",
             raster=self.grid["mask"],
             nodata=-1,
@@ -823,7 +823,7 @@ class Hydrography:
         )
 
         sub_water_body_id: xr.DataArray = rasterize_like(
-            gpd=waterbodies,
+            gdf=waterbodies,
             column="waterbody_id",
             raster=self.subgrid["mask"],
             nodata=-1,
@@ -872,7 +872,7 @@ class Hydrography:
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
             command_area_raster = rasterize_like(
-                gpd=command_areas,
+                gdf=command_areas,
                 column="waterbody_id",
                 raster=self.grid["mask"],
                 nodata=-1,
@@ -882,7 +882,7 @@ class Hydrography:
             self.set_grid(command_area_raster, name="waterbodies/command_area")
 
             subcommand_area_raster = rasterize_like(
-                gpd=command_areas,
+                gdf=command_areas,
                 column="waterbody_id",
                 raster=self.subgrid["mask"],
                 nodata=-1,

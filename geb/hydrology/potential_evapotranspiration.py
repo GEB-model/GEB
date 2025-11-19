@@ -205,7 +205,7 @@ def get_reference_evapotranspiration(
     wind_10m_m_per_s: np.float32,
     albedo_canopy: np.float32 = np.float32(0.13),
     albedo_water: np.float32 = np.float32(0.05),
-) -> tuple[np.float32, np.float32, np.float32]:
+) -> tuple[np.float32, np.float32, np.float32, np.float32]:
     """Calculate potential evapotranspiration based on Penman-Monteith equation.
 
     Penman-Montheith equation:
