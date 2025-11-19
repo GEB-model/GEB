@@ -7,7 +7,6 @@ Notes:
 import inspect
 import json
 import logging
-import math
 import os
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -32,7 +31,7 @@ from shapely.geometry import Point
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.workflows.io import load_dict, to_dict
-from geb.workflows.raster import full_like, repeat_grid
+from geb.workflows.raster import clip_region, full_like, repeat_grid
 
 from ..workflows.io import open_zarr, to_zarr
 from .modules import (
@@ -179,78 +178,6 @@ def boolean_mask_to_graph(
                 G.add_edge((y, x), (ny, nx))
 
     return G
-
-
-def clip_region(
-    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int
-) -> tuple[xr.DataArray, ...]:
-    """Use the given mask to clip the mask itself and the given data arrays.
-
-    The clipping is done to the bounding box of the True values in the mask. The bounding box
-    is aligned to the given align value. The align value is in the same units as the coordinates
-    of the mask and data arrays.
-
-    Args:
-        mask: The mask to use for clipping. Must be a 2D boolean DataArray with x and y coordinates.
-            True values indicate the area to keep.
-        *data_arrays: The data arrays to clip. Must have the same x and y coordinates as the mask.
-        align: Align the bounding box to a specific grid spacing. For example, when this is set to 1
-            the bounding box will be aligned to whole numbers. If set to 0.5, the bounding box will
-            be aligned to 0.5 intervals.
-
-    Returns:
-        A tuple containing the clipped mask and the clipped data arrays.
-
-    Raises:
-        ValueError: If the data arrays do not have the same shape or coordinates as the mask.
-    """
-    rows, cols = np.where(mask)
-    mincol = cols.min()
-    maxcol = cols.max()
-    minrow = rows.min()
-    maxrow = rows.max()
-
-    minx = mask.x[mincol].item()
-    maxx = mask.x[maxcol].item()
-    miny = mask.y[minrow].item()
-    maxy = mask.y[maxrow].item()
-
-    xres, yres = mask.rio.resolution()
-
-    mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
-    maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
-    minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
-    maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
-
-    assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
-    assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
-
-    assert mincol_aligned <= mincol
-    assert maxcol_aligned >= maxcol
-    assert minrow_aligned <= minrow
-    assert maxrow_aligned >= maxrow
-
-    clipped_mask = mask.isel(
-        y=slice(minrow_aligned, maxrow_aligned),
-        x=slice(mincol_aligned, maxcol_aligned),
-    )
-    clipped_arrays = []
-    for da in data_arrays:
-        if da.shape != mask.shape:
-            raise ValueError("All data arrays must have the same shape as the mask.")
-        if not np.array_equal(da.x, mask.x) or not np.array_equal(da.y, mask.y):
-            raise ValueError(
-                "All data arrays must have the same coordinates as the mask."
-            )
-        clipped_arrays.append(
-            da.isel(
-                y=slice(minrow_aligned, maxrow_aligned),
-                x=slice(mincol_aligned, maxcol_aligned),
-            )
-        )
-    return clipped_mask, *clipped_arrays
 
 
 def get_river_graph(data_catalog: NewDataCatalog) -> networkx.DiGraph:
@@ -734,7 +661,7 @@ def cluster_subbasins_by_area_and_proximity(
 
             if not candidates:
                 logger.info(
-                    f"    No more candidates within cluster growth distance threshold"
+                    "    No more candidates within cluster growth distance threshold"
                 )
                 break
 
@@ -751,7 +678,7 @@ def cluster_subbasins_by_area_and_proximity(
 
             # Early termination if cluster is already at minimum size and no valid candidates
             if best_candidate is None and current_area >= min_area_threshold:
-                logger.info(f"    Cluster reached minimum area, stopping growth")
+                logger.info("    Cluster reached minimum area, stopping growth")
                 break
 
             # If no candidate fits, and we're still below minimum, take the closest one
@@ -763,7 +690,7 @@ def cluster_subbasins_by_area_and_proximity(
                 best_candidate = candidates[0][0]
 
             if best_candidate is None:
-                logger.info(f"    No suitable candidates found")
+                logger.info("    No suitable candidates found")
                 break
 
             # Add the best candidate
@@ -1235,7 +1162,7 @@ def save_clusters_as_merged_geometries(
     multipolygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "MultiPolygon"])
     polygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "Polygon"])
 
-    print(f"\nSaved merged cluster geometries:")
+    print("\nSaved merged cluster geometries:")
     print(f"  Total clusters: {len(clusters)}")
     print(f"  Total area covered: {total_area:,.0f} km²")
     print(
@@ -1257,7 +1184,7 @@ def save_clusters_as_merged_geometries(
     print(f"  File saved to: {output_path}")
 
     # Show individual cluster info
-    print(f"\nCluster details:")
+    print("\nCluster details:")
     for _, row in merged_gdf.iterrows():
         geom_info = f" ({row['geometry_type']}"
         if row["num_geometry_parts"] > 1:
@@ -2442,9 +2369,11 @@ class GEBModel(
     def read_grid(self) -> None:
         """Reads all grid data arrays from disk based on the file library."""
         # first read and set the mask. This is required.
-        mask: dict[str, dict[str, Path]] = self.files["region_subgrid"]
-        data: xr.DataArray = open_zarr(Path(self.root) / mask["mask"])
-        self.set_grid(data, name="mask", write=False)
+        grid_files: dict[str, dict[str, Path]] = self.files["grid"]
+        if len(grid_files) == 0:
+            return
+        mask: xr.DataArray = open_zarr(Path(self.root) / grid_files["mask"])
+        self.set_grid(mask, name="mask", write=False)
 
         for name, fn in self.files["grid"].items():
             if name == "mask":  # mask already read
@@ -2455,9 +2384,11 @@ class GEBModel(
     def read_subgrid(self) -> None:
         """Reads all subgrid data arrays from disk based on the file library."""
         # first read and set the mask. This is required.
-        mask: dict[str, dict[str, Path]] = self.files["region_subgrid"]
-        data: xr.DataArray = open_zarr(Path(self.root) / mask["mask"])
-        self.set_subgrid(data, name="mask", write=False)
+        subgrid_files: dict[str, dict[str, Path]] = self.files["subgrid"]
+        if len(subgrid_files) == 0:
+            return
+        mask: xr.DataArray = open_zarr(Path(self.root) / subgrid_files["mask"])
+        self.set_subgrid(mask, name="mask", write=False)
         for name, fn in self.files["subgrid"].items():
             if name == "mask":  # mask already read
                 continue
@@ -2467,9 +2398,11 @@ class GEBModel(
     def read_region_subgrid(self) -> None:
         """Reads all region subgrid data arrays from disk based on the file library."""
         # first read and set the mask. This is required.
-        mask: dict[str, dict[str, Path]] = self.files["region_subgrid"]
-        data: xr.DataArray = open_zarr(Path(self.root) / mask["mask"])
-        self.set_region_subgrid(data, name="mask", write=False)
+        region_subgrid_files: dict[str, dict[str, Path]] = self.files["region_subgrid"]
+        if len(region_subgrid_files) == 0:
+            return
+        mask: xr.DataArray = open_zarr(Path(self.root) / region_subgrid_files["mask"])
+        self.set_region_subgrid(mask, name="mask", write=False)
         for name, fn in self.files["region_subgrid"].items():
             if name == "mask":  # mask already read
                 continue
