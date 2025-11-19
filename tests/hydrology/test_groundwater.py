@@ -8,7 +8,7 @@ import math
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal, TypedDict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,9 +21,27 @@ from geb.hydrology.groundwater.model import (
     get_groundwater_storage_m,
     get_water_table_depth,
 )
+from geb.typing import ArrayFloat32, ArrayFloat64, TwoDArrayBool
 from geb.workflows.raster import calculate_cell_area, compress
 
 from ..testconfig import output_folder, tmp_folder
+
+
+class ModFlowParams(TypedDict):
+    """Type definition for ModFlowSimulation parameters."""
+
+    model: Any  # DummyModel in tests, GEBModel in production
+    topography: ArrayFloat32
+    gt: tuple[float, float, float, float, float, float]
+    specific_storage: ArrayFloat32
+    specific_yield: ArrayFloat32
+    layer_boundary_elevation: ArrayFloat32
+    basin_mask: TwoDArrayBool
+    hydraulic_conductivity: ArrayFloat32
+    heads: ArrayFloat64
+    heads_update_callback: Callable[[ArrayFloat64], None]
+    verbose: bool
+    never_load_from_disk: bool
 
 
 def decompress(
@@ -37,11 +55,16 @@ def decompress(
 
     Returns:
         The decompressed array.
+
+    Raises:
+        ValueError: If the array is not 1D or 2D.
     """
     if array.ndim == 1:
         out = np.full(mask.shape, np.nan)
     elif array.ndim == 2:
         out = np.full((array.shape[0], *mask.shape), np.nan)
+    else:
+        raise ValueError(f"Array must be 1D or 2D, got {array.ndim}D")
     out[..., ~mask] = array
     return out
 
@@ -132,7 +155,7 @@ class DummyModel:
         return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
 
 
-default_params = {
+default_params: ModFlowParams = {
     "model": DummyModel(),
     "gt": gt,
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),

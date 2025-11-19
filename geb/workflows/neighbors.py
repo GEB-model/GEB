@@ -85,7 +85,7 @@ def find_neighbors_numba(
         (map_search_source_to_target.size, n_neighbor), nanvalue, dtype=dtype
     )
     n_unique_hashcodes = search_target_unique_hashcodes.size
-    for u in nb.prange(search_source_unique_hashcodes.size):
+    for u in nb.prange(search_source_unique_hashcodes.size):  # ty: ignore[not-iterable]
         search_source_hashcode = search_source_unique_hashcodes[u]
         x, y = geohash.decode(
             search_source_hashcode, bits, minx=minx, maxx=maxx, miny=miny, maxy=maxy
