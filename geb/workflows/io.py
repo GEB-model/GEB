@@ -321,8 +321,14 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     ds: xr.Dataset = xr.open_dataset(
         zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
     )
+    if "spatial_ref" in ds.data_vars:
+        spatial_ref_data = ds["spatial_ref"]
+        ds = ds.drop_vars("spatial_ref")
+        ds = ds.assign_coords(spatial_ref=spatial_ref_data)
     if len(ds.data_vars) > 1:
-        raise ValueError("Only one data variable is supported")
+        raise ValueError(
+            f"Only one data variable is supported, found multiple: {list(ds.data_vars)}"
+        )
 
     da: xr.DataArray = ds[list(ds.data_vars)[0]]
 

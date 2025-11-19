@@ -322,7 +322,7 @@ class SFINCSRootModel:
 
         if mask_flood_plains:
             do_mask_flood_plains(sf)
-        elif coastal:
+        if coastal:
             sf.setup_mask_active(
                 mask=region,
                 zmin=-21,  # minimum elevation for valid cells
