@@ -448,7 +448,8 @@ class Floods(Module):
             )  # log the start of the simulation
 
             sfincs_simulation.run(
-                gpu=self.config["SFINCS"]["gpu"],
+                ncpus=self.config.get("SFINCS", {}).get("ncpus", "auto"),
+                gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
             )  # run the simulation
 
         flood_depth: xr.DataArray = sfincs_simulation.read_max_flood_depth(
@@ -554,7 +555,8 @@ class Floods(Module):
                 )
             )
             simulation.run(
-                gpu=self.config["SFINCS"]["gpu"],
+                ncpus=self.config.get("SFINCS", {}).get("ncpus", "auto"),
+                gpu=self.config.get("SFINCS", {}).get("gpu", "auto"),
             )
             flood_depth_return_period: xr.DataArray = simulation.read_max_flood_depth(
                 self.config["minimum_flood_depth"]

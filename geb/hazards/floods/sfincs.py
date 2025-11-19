@@ -1007,14 +1007,17 @@ class MultipleSFINCSSimulations:
         """
         self.simulations = simulations
 
-    def run(self, gpu: bool) -> None:
+    def run(self, ncpus: int | str = "auto", gpu: bool | str = "auto") -> None:
         """Runs all contained SFINCS simulations.
 
         Args:
-            gpu: Whether to use GPU acceleration for the simulations.
+            ncpus: Number of CPU cores to use for the simulation. Can be
+                an integer or 'auto' to automatically detect available cores.
+            gpu: Whether to use GPU acceleration for the simulations. Can be
+                True, False, or 'auto' to automatically detect GPU availability.
         """
         for simulation in self.simulations:
-            simulation.run(gpu=gpu)
+            simulation.run(ncpus=ncpus, gpu=gpu)
 
     def read_max_flood_depth(self, minimum_flood_depth: float | int) -> xr.DataArray:
         """Reads the maximum flood depth map from the simulation output.
@@ -1464,17 +1467,23 @@ class SFINCSSimulation:
 
     #     self.sfincs_model.write_forcing()
 
-    def run(self, gpu: bool | str) -> None:
+    def run(self, ncpus: int | str = "auto", gpu: bool | str = "auto") -> None:
         """Runs the SFINCS simulation.
 
         Args:
+            ncpus: Number of CPU cores to use for the simulation. Can be
+                an integer or 'auto' to automatically detect available cores.
             gpu: Whether to use GPU acceleration for the simulation. Can be
                 True, False, or 'auto' to automatically detect GPU availability.
         """
         assert gpu in [True, False, "auto"], "gpu must be True, False, or 'auto'"
+        assert ncpus == "auto" or (isinstance(ncpus, int) and ncpus > 0), (
+            "ncpus must be 'auto' or a positive integer"
+        )
         run_sfincs_simulation(
             simulation_root=self.path,
             model_root=self.root_path,
+            ncpus=ncpus,
             gpu=gpu,
         )
 
