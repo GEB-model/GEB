@@ -590,6 +590,12 @@ class Hydrography:
     @build_method
     def setup_global_ocean_mean_dynamic_topography(self) -> None:
         """Sets up the global ocean mean dynamic topography for the model."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_global_ocean_mean_dynamic_topography"
+            )
+            return
+
         global_ocean_mdt_fn = self.data_catalog.get_source(
             "global_ocean_mean_dynamic_topography"
         ).path
@@ -635,6 +641,12 @@ class Hydrography:
     @build_method
     def setup_low_elevation_coastal_zone_mask(self) -> None:
         """Sets up the low elevation coastal zone (LECZ) mask for sfincs models."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_low_elevation_coastal_zone_mask"
+            )
+            return
+
         # load low elevation coastal zone mask
         low_elevation_coastal_zone = self.other[
             "landsurface/low_elevation_coastal_zone"
@@ -674,6 +686,10 @@ class Hydrography:
     @build_method
     def setup_coastlines(self) -> None:
         """Sets up the coastlines for the model."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info("No coastal basins found, skipping setup_coastlines")
+            return
+
         # load the coastline from the data catalog
         fp_coastlines = self.data_catalog.get_source("osm_coastlines").path
         coastlines = gpd.read_file(fp_coastlines)
@@ -702,6 +718,12 @@ class Hydrography:
         self,
     ) -> None:
         """Sets up the OSM land polygons for the model."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_osm_land_polygons"
+            )
+            return
+
         # load the land polygon from the data catalog
         fp_land_polygons = self.data_catalog.get_source("osm_land_polygons").path
         land_polygons = gpd.read_file(fp_land_polygons)
@@ -722,6 +744,12 @@ class Hydrography:
         self, minimum_coastal_area_deg2: float = 0.0006449015308288645
     ) -> None:
         """Sets up the coastal sfincs model regions."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_coastal_sfincs_model_regions"
+            )
+            return
+
         # load elevation data
         elevation = self.other["DEM/fabdem"]
         # load the lecz mask
