@@ -211,11 +211,6 @@ class GroundWater(Module):
         self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
         baseflow = groundwater_drainage * channel_ratio
 
-        # capriseindex is 1 where capilary rise occurs
-        self.hydrology.HRU.capriseindex = self.hydrology.to_HRU(
-            data=np.float32(self.grid.var.capillar > 0)
-        )
-
         self.report(locals())
 
         return baseflow

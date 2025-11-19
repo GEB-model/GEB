@@ -23,8 +23,8 @@ general:
 hazards:
   floods:
     simulate: false
-    resolution: 100
-    nr_subgrid_pixels: 4
+    grid_size_multiplier: 4
+    subgrid: true
     flood_risk: false
     gpu: auto
     ncpus: auto # can be number or 'auto', use less cpus when running on interactive session

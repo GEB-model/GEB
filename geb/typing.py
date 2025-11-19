@@ -13,6 +13,7 @@ ArrayUint32 = np.ndarray[tuple[int], np.dtype[np.uint32]]
 ArrayInt64 = np.ndarray[tuple[int], np.dtype[np.int64]]
 ArrayUint64 = np.ndarray[tuple[int], np.dtype[np.uint64]]
 ArrayBool = np.ndarray[tuple[int], np.dtype[np.bool_]]
+ArrayDatetime64 = np.ndarray[tuple[int], np.dtype[np.datetime64]]
 
 TwoDArrayFloat32 = np.ndarray[tuple[int, int], np.dtype[np.float32]]
 TwoDArrayFloat64 = np.ndarray[tuple[int, int], np.dtype[np.float64]]
