@@ -1579,7 +1579,7 @@ class CropFarmers(AgentBaseClass):
                         ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
                     ].astype(np.float64),
                 ),
-                tollerance=50,
+                tolerance=50,
             )
 
             # make sure the total water consumption plus 'wasted' irrigation water (evaporation + return flow) is equal to the total water withdrawal

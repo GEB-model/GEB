@@ -431,20 +431,20 @@ class Observations:
             Q_obs_merged, region_mask
         )  # filter Q_obs stations based on the region shapefile
 
-        # Fallback to monthly if the clipped selection is empty (skip custom_river_stations on retry)
-        if len(Q_obs_clipped.id) == 0:
-            self.logger.info(
-                "No discharge stations found in the region with daily GRDC. Trying GRDC_monthly."
-            )
-            Q_obs = _open_Q_obs(Q_obs_source_monthly, "GRDC_monthly")
-            Q_obs_merged = Q_obs.copy()
-            Q_obs_clipped = clip_Q_obs(Q_obs_merged, region_shapefile)
+        # # Fallback to monthly if the clipped selection is empty (skip custom_river_stations on retry)
+        # if len(Q_obs_clipped.id) == 0:
+        #     self.logger.info(
+        #         "No discharge stations found in the region with daily GRDC. Trying GRDC_monthly."
+        #     )
+        #     Q_obs = _open_Q_obs(Q_obs_source_monthly, "GRDC_monthly")
+        #     Q_obs_merged = Q_obs.copy()
+        #     Q_obs_clipped = clip_Q_obs(Q_obs_merged, region_shapefile)
 
-            if len(Q_obs_clipped.id) > 0:
-                self.logger.warning(
-                    f"Found {len(Q_obs_clipped.id)} discharge station(s) with mean monthly discharge data. Continuing with monthly data."
-                )
-                Q_obs_clipped.attrs["title"] = "Mean monthly discharge (MQ)"
+        #     if len(Q_obs_clipped.id) > 0:
+        #         self.logger.warning(
+        #             f"Found {len(Q_obs_clipped.id)} discharge station(s) with mean monthly discharge data. Continuing with monthly data."
+        #         )
+        #         Q_obs_clipped.attrs["title"] = "Mean monthly discharge (MQ)"
 
         if len(Q_obs_clipped.id) == 0:
             # No stations found - create empty files
