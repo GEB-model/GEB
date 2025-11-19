@@ -20,10 +20,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import pyflwdir
+import rasterio
 import xarray as xr
 from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.workflows import burn_river_rect, river_source_points
 from pyflwdir import FlwdirRaster
+from pyflwdir.dem import fill_depressions
 from scipy.ndimage import value_indices
 from tqdm import tqdm
 
@@ -38,7 +41,7 @@ from geb.typing import (
 from geb.workflows.io import load_geom
 from geb.workflows.raster import calculate_cell_area, clip_region, rasterize_like
 
-from .workflows import do_mask_flood_plains, get_river_depth, get_river_manning
+from .workflows import get_river_depth, get_river_manning
 from .workflows.return_periods import (
     assign_calculation_group,
     get_topological_stream_order,
@@ -190,6 +193,7 @@ class SFINCSRootModel:
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
         self.sfincs_model.read()
         self.rivers: gpd.GeoDataFrame = load_geom(self.path / "rivers.geoparquet")
+        self.region: gpd.GeoDataFrame = load_geom(self.path / "region.geoparquet")
         return self
 
     def build(
@@ -205,17 +209,12 @@ class SFINCSRootModel:
         grid_size_multiplier: int,
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
-        mask_flood_plains: bool = False,
         coastal: bool = False,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_outflow: bool = True,
         initial_water_level: float = 0.0,
     ) -> SFINCSRootModel:
         """Build a SFINCS model.
-
-        Notes:
-            mask_flood_plains is currently quite unstable and should be used with caution. Sometimes it leads
-            to wrong regions being masked, which can lead to errors in the model.
 
         Args:
             DEMs: List of DEM datasets to use for the model. Should be a list of dictionaries with 'path' and 'name' keys.
@@ -232,7 +231,6 @@ class SFINCSRootModel:
             depth_calculation_method: The method to use for calculating river depth. Can be 'manning' or 'power_law'.
             depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
-            mask_flood_plains: Whether to autodelineate flood plains and mask them. Defaults to False.
             coastal: Whether to set up coastal boundary conditions. Defaults to False.
             coastal_boundary_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition cells.
             setup_outflow: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
@@ -262,17 +260,29 @@ class SFINCSRootModel:
             "All rivers must intersect the model region"
         )
 
-        rivers.to_parquet(self.path / "rivers.geoparquet")
+        # Remove rivers that are not represented in the grid and have no upstream rivers
+        # TODO: Make an upstream flag in preprocessing for upstream rivers that is more
+        # general than the MERIT-hydro specific 'maxup' attribute
+        self.rivers: gpd.GeoDataFrame = rivers[
+            (rivers["maxup"] > 0) | (rivers["represented_in_grid"])
+        ]
+        self.rivers.to_parquet(self.path / "rivers.geoparquet")
 
         self.logger.info("Starting SFINCS model build...")
 
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+", write_gis=True)
         self.sfincs_model = sf
-        mask = DEMs[0]["elevtn"]["elevtn"]
+        mask_ds = DEMs[0]["elevtn"]
+        assert isinstance(mask_ds, xr.Dataset)
+        mask: xr.DataArray = mask_ds["elevtn"]
+
+        self.region: gpd.GeoDataFrame = region.to_crs(mask.rio.crs)
+        self.region.to_parquet(self.path / "region.geoparquet")
+        del region
 
         region_burned: xr.DataArray = rasterize_like(
-            gdf=region.to_crs(mask.rio.crs),
+            gdf=self.region.to_crs(mask.rio.crs),
             burn_value=1,
             raster=mask,
             dtype=np.int32,
@@ -320,16 +330,10 @@ class SFINCSRootModel:
         # and set the name as elevtn.
         sf.setup_dep(datasets_dep=DEMs)
 
-        if mask_flood_plains:
-            do_mask_flood_plains(sf)
-        if coastal:
-            sf.setup_mask_active(
-                mask=region,
-                zmin=-21,  # minimum elevation for valid cells
-                drop_area=1,  # drops areas that are smaller than 1km2,
-                reset_mask=True,
-            )
+        flood_plain: gpd.GeoDataFrame = self.get_flood_plain()
+        sf.setup_mask_active(flood_plain, reset_mask=True)
 
+        if coastal:
             # set zsini based on the minimum elevation
             assert isinstance(sf.config, dict)
             sf.config["zsini"] = initial_water_level  # ty: ignore[invalid-assignment]
@@ -347,30 +351,18 @@ class SFINCSRootModel:
                 all_touched=True,
             )
 
-        else:
-            sf.setup_mask_active(
-                region, zmin=-21, reset_mask=True
-            )  # TODO: Improve mask setup
-
         # in one plot plot the region boundary as well as the rivers and save to file
         fig, ax = plt.subplots(figsize=(10, 10))
-        region.boundary.plot(ax=ax, color="black")
+        self.region.boundary.plot(ax=ax, color="black")
 
-        # Remove rivers that are not represented in the grid and have no upstream rivers
-        # TODO: Make an upstream flag in preprocessing for upstream rivers that is more
-        # general than the MERIT-hydro specific 'maxup' attribute
-        rivers: gpd.GeoDataFrame = rivers[
-            (rivers["maxup"] > 0) | (rivers["represented_in_grid"])
-        ]
-
-        rivers.plot(ax=ax, color="blue")
+        self.rivers.plot(ax=ax, color="blue")
         plt.savefig(self.path / "gis" / "rivers.png")
 
         outflow_river_upa: int = 0
         outflow_river_len: int = 0
         if setup_outflow:
             sf.setup_river_outflow(
-                rivers=rivers.to_crs(sf.crs),
+                rivers=self.rivers.to_crs(sf.crs),
                 keep_rivers_geom=True,
                 river_upa=outflow_river_upa,
                 river_len=outflow_river_len,
@@ -379,7 +371,7 @@ class SFINCSRootModel:
 
         # find outflow points and save for later use
         outflow_points = river_source_points(
-            gdf_riv=rivers.to_crs(sf.crs),
+            gdf_riv=self.rivers.to_crs(sf.crs),
             gdf_mask=sf.region,
             src_type="outflow",
             buffer=self.estimated_cell_size_m,
@@ -428,14 +420,14 @@ class SFINCSRootModel:
                 json.dump({"outflow_elevation": elevation_value}, f)
 
         river_representative_points = []
-        for ID in rivers.index:
+        for ID in self.rivers.index:
             river_representative_points.append(
-                get_representative_river_points(ID, rivers)
+                get_representative_river_points(ID, self.rivers)
             )
 
         discharge_by_river, river_parameters = (
             get_discharge_and_river_parameters_by_river(
-                rivers.index.tolist(),
+                self.rivers.index.tolist(),
                 river_representative_points,
                 discharge=discharge,
                 river_width_alpha=river_width_alpha,
@@ -443,37 +435,41 @@ class SFINCSRootModel:
             )
         )
 
-        rivers = assign_return_periods(rivers, discharge_by_river, return_periods=[2])
+        self.rivers = assign_return_periods(
+            self.rivers, discharge_by_river, return_periods=[2]
+        )
 
-        river_width_unknown_mask = rivers["width"].isnull()
+        river_width_unknown_mask = self.rivers["width"].isnull()
 
-        rivers.loc[river_width_unknown_mask, "width"] = get_river_width(
+        self.rivers.loc[river_width_unknown_mask, "width"] = get_river_width(
             river_parameters["river_width_alpha"][river_width_unknown_mask],
             river_parameters["river_width_beta"][river_width_unknown_mask],
-            rivers.loc[river_width_unknown_mask, "Q_2"],
+            self.rivers.loc[river_width_unknown_mask, "Q_2"],
         ).astype(np.float64)
 
-        rivers["depth"] = get_river_depth(
-            rivers,
+        self.rivers["depth"] = get_river_depth(
+            self.rivers,
             method=depth_calculation_method,
             parameters=depth_calculation_parameters,
             bankfull_column="Q_2",
         )
 
-        rivers["manning"] = get_river_manning(rivers)
+        self.rivers["manning"] = get_river_manning(self.rivers)
 
-        export_rivers(self.path, rivers)
+        export_rivers(self.path, self.rivers)
 
         # Because hydromt-sfincs does a lot of filling default values when data
         # is missing, we need to be extra sure that the required columns are
         # present and contain valid data.
-        assert rivers["width"].notnull().all(), "River width cannot be null"
-        assert rivers["depth"].notnull().all(), "River depth cannot be null"
-        assert rivers["manning"].notnull().all(), "River Manning's n cannot be null"
+        assert self.rivers["width"].notnull().all(), "River width cannot be null"
+        assert self.rivers["depth"].notnull().all(), "River depth cannot be null"
+        assert self.rivers["manning"].notnull().all(), (
+            "River Manning's n cannot be null"
+        )
 
         # only burn rivers that are wider than the grid size
-        rivers_to_burn: gpd.GeoDataFrame = rivers[
-            rivers["width"] > self.estimated_cell_size_m
+        rivers_to_burn: gpd.GeoDataFrame = self.rivers[
+            self.rivers["width"] > self.estimated_cell_size_m
         ].copy()
 
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
@@ -542,8 +538,98 @@ class SFINCSRootModel:
 
         sf.plot_basemap(fn_out="basemap.png")
 
-        self.rivers = rivers
         return self
+
+    def get_flood_plain(self, maximum_hand: float = 30.0) -> gpd.GeoDataFrame:
+        """Returns the flood plain grid of the SFINCS model.
+
+        Args:
+            maximum_hand: The maximum Height Above Nearest Drainage (HAND) value to consider as flood plain, in meters. Default is 30.0 m.
+
+        Returns:
+            The flood plain as a GeoDataFrame.
+        """
+        region_raster = rasterize_like(
+            gdf=self.region,
+            raster=self.elevation,
+            dtype=np.uint8,
+            nodata=0,
+            burn_value=1,
+            all_touched=True,
+        ).astype(bool)
+
+        # get a raster of all drainage cells (i.e., 0 HAND). We do so
+        # by burning the rivers into a raster
+        drainage_cells = rasterize_like(
+            gdf=self.rivers.to_crs(self.elevation.rio.crs),
+            raster=self.elevation,
+            dtype=np.uint8,
+            nodata=0,
+            burn_value=1,
+            all_touched=True,
+        ).astype(bool)
+
+        # obtain the elevation grid. Some cells on the outside of the region
+        # drain to a location outside the region. In the HAND calculation,
+        # these cells are given a very low HAND, and thus would also be part of
+        # the floodplain. To avoid this, we set the cells outside the region
+        # to a very low elevation, so that cells that drain outside the region
+        # get an extremly high HAND value, and thus will not be part of the
+        # flood plain.
+        elevation = self.elevation.values.copy()
+        elevation[~region_raster.values] = -10_000
+
+        # Fill depressions to ensure proper flow direction calculation
+        elevation, d8 = fill_depressions(elevation, nodata=np.nan)
+        flow_raster = pyflwdir.from_array(
+            d8,
+            transform=self.elevation.rio.transform(),
+            latlon=self.is_geographic,
+        )
+
+        height_above_nearest_drainage = xr.full_like(
+            self.elevation, np.nan, dtype=np.float32
+        )
+        height_above_nearest_drainage.values = flow_raster.hand(
+            drain=drainage_cells.values, elevtn=elevation
+        )
+        height_above_nearest_drainage = xr.where(
+            height_above_nearest_drainage != -9999.0,
+            height_above_nearest_drainage,
+            np.nan,
+        )
+        height_above_nearest_drainage = xr.where(
+            region_raster,
+            height_above_nearest_drainage,
+            np.nan,
+        )
+
+        flood_plain: xr.DataArray = height_above_nearest_drainage <= maximum_hand
+
+        # convert flood plain raster to vector
+        flood_plain_geom = list(
+            rasterio.features.shapes(
+                flood_plain.astype(np.uint8),
+                mask=flood_plain,
+                connectivity=8,
+                transform=flood_plain.rio.transform(recalc=True),
+            ),
+        )
+        flood_plain_geom = gpd.GeoDataFrame.from_features(
+            [{"geometry": geom[0], "properties": {}} for geom in flood_plain_geom],
+            crs=flood_plain.rio.crs,
+        )
+
+        return flood_plain_geom
+
+    @property
+    def mask(self) -> xr.DataArray:
+        """Returns the mask grid of the SFINCS model.
+
+        Returns:
+            The mask grid as an xarray DataArray.
+        """
+        return self.sfincs_model.grid["msk"]
 
     @property
     def elevation(self) -> xr.DataArray:
@@ -562,15 +648,6 @@ class SFINCSRootModel:
             The shape of the SFINCS model grid as a tuple (nrows, ncols).
         """
         return self.sfincs_model.grid["dep"].shape
-
-    @property
-    def region_area(self) -> float | int:
-        """Returns the area of the SFINCS model region in square kilometers.
-
-        Returns:
-            The area of the SFINCS model region in m².
-        """
-        return self.sfincs_model.grid["msk"].sum().item() * self.cell_area
 
     @property
     def is_geographic(self) -> bool:
@@ -597,9 +674,13 @@ class SFINCSRootModel:
             )
             return cell_area
         else:
-            return (
-                self.sfincs_model.grid["msk"].rio.resolution()[0]
-                * self.sfincs_model.grid["msk"].rio.resolution()[1]
+            return xr.full_like(
+                self.elevation,
+                (
+                    self.sfincs_model.grid["dep"].rio.resolution()[0]
+                    * self.sfincs_model.grid["dep"].rio.resolution()[1]
+                ),
+                dtype=np.float32,
             )
 
     @property
@@ -1151,6 +1232,9 @@ class SFINCSSimulation:
                 The index should start at 1 and be consecutive (1, 2, 3, ...).
             timeseries: A DataFrame containing the discharge timeseries for each node.
                 The columns should match the index of the nodes GeoDataFrame.
+
+        Raises:
+            ValueError: If forcing locations are outside the model region.
         """
         assert set(timeseries.columns) == set(nodes.index)
 
@@ -1164,6 +1248,28 @@ class SFINCSSimulation:
             .contains(nodes.geometry.to_crs(self.sfincs_model.crs))
             .all()
         ), "All forcing locations must be within the model region"
+
+        reprojected_nodes = nodes.to_crs(
+            self.sfincs_root_model.sfincs_model.grid["msk"].rio.crs
+        )
+        x_points: xr.DataArray = xr.DataArray(
+            reprojected_nodes.geometry.x,
+            dims="points",
+        )
+        y_points: xr.DataArray = xr.DataArray(
+            reprojected_nodes.geometry.y,
+            dims="points",
+        )
+
+        in_masked_area: xr.DataArray = self.sfincs_root_model.sfincs_model.grid[
+            "msk"
+        ].sel(
+            x=x_points,
+            y=y_points,
+            method="nearest",
+        )
+        if not (in_masked_area > 0).all():
+            raise ValueError("Some forcing locations are outside the active model area")
 
         self.sfincs_model.setup_discharge_forcing(
             locations=nodes, timeseries=timeseries, merge=True
@@ -1217,19 +1323,18 @@ class SFINCSSimulation:
         )
 
         # for accounting purposes, we set all runoff outside the model region to zero
-        region = self.sfincs_model.region.to_crs(runoff_m.rio.crs)
-        region["value"] = 1
         region_mask = rasterize_like(
-            region,
-            column="value",
+            self.sfincs_root_model.region.to_crs(runoff_m.rio.crs),
+            burn_value=1,
             raster=runoff_m.isel(time=0),
             dtype=np.int32,
             nodata=0,
             all_touched=True,
         ).astype(bool)
+
         original_dimensions = runoff_m.dims
         runoff_m: xr.DataArray = xr.where(region_mask, runoff_m, 0, keep_attrs=True)
-        # xr.where changes the dimension order sometimes, so we ensure it is correct
+        # xr.where changes the dimension order, so we need to transpose it back
         runoff_m: xr.DataArray = runoff_m.transpose(*original_dimensions)
 
         # we want to get all the discharge upstream from the starting point of each river segment

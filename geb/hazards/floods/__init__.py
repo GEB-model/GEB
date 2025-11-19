@@ -279,7 +279,6 @@ class Floods(Module):
                 if "parameters"
                 in self.model.config["hydrology"]["routing"]["river_depth"]
                 else {},
-                mask_flood_plains=False,  # setting this to True sometimes leads to errors
                 coastal=coastal,
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
                 setup_outflow=not coastal,
