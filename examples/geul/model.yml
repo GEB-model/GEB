@@ -26,6 +26,8 @@ hazards:
     grid_size_multiplier: 4
     subgrid: true
     flood_risk: false
+    gpu: auto
+    ncpus: auto # can be number or 'auto', use less cpus when running on interactive session
     force_overwrite: true
     return_periods:
       - 2
