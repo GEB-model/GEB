@@ -210,6 +210,7 @@ class SFINCSRootModel:
         depth_calculation_method: str,
         depth_calculation_parameters: dict[str, float | int] | None = None,
         coastal: bool = False,
+        low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_outflow: bool = True,
         initial_water_level: float = 0.0,
@@ -232,6 +233,7 @@ class SFINCSRootModel:
             depth_calculation_parameters: A dictionary of parameters for the depth calculation method. Only used if
                 depth_calculation_method is 'power_law', in which case it should contain 'c' and 'd' keys.
             coastal: Whether to set up coastal boundary conditions. Defaults to False.
+            low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
             coastal_boundary_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition cells.
             setup_outflow: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
@@ -343,6 +345,17 @@ class SFINCSRootModel:
                     "coastal_boundary_exclude_mask must be provided when coastal is True"
                 )
 
+            # activate low elevation coastal zone
+            if not isinstance(low_elevation_coastal_zone_mask, gpd.GeoDataFrame):
+                raise ValueError(
+                    "low_elevation_coastal_zone_mask must be provided when coastal is True"
+                )
+            sf.setup_mask_active(
+                include_mask=low_elevation_coastal_zone_mask,
+                mask_buffer=5000,
+                reset_mask=False,
+            )
+
             # setup the coastal boundary conditions
             sf.setup_mask_bounds(
                 btype="waterlevel",
@@ -351,6 +364,7 @@ class SFINCSRootModel:
                 all_touched=True,
             )
 
+        #
         # in one plot plot the region boundary as well as the rivers and save to file
         fig, ax = plt.subplots(figsize=(10, 10))
         self.region.boundary.plot(ax=ax, color="black")
