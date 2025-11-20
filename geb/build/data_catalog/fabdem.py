@@ -30,6 +30,9 @@ from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
 
+# FABDEM is only available over land, so not all tiles exist. This is a set of
+# all available 10x10-degree tile names which we use to check if the tile
+# should exist before attempting download.
 available_tiles: set[str] = {
     "N00E000-N10E010",
     "N00E010-N10E020",
@@ -562,7 +565,7 @@ class Fabdem(Adapter):
         # Extract tile name from filename (remove "_FABDEM_V1-2.zip")
         tile_name = tile_filename.replace("_FABDEM_V1-2.zip", "")
 
-        # Check if tile is in available tiles
+        # Check if tile is in available tiles (only land tiles exist)
         if tile_name not in available_tiles:
             return []
 
