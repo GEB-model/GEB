@@ -1155,7 +1155,8 @@ def fetch_and_save(
     file_path: Path,
     overwrite: bool = False,
     max_retries: int = 3,
-    delay: float | int = 5,
+    delay_seconds: float | int = 5,
+    double_delay: bool = False,
     chunk_size: int = 16384,
     session: requests.Session | None = None,
     params: None | dict[str, Any] = None,
@@ -1174,7 +1175,8 @@ def fetch_and_save(
         file_path: The local path to save the file to.
         overwrite: If True, overwrite the file if it already exists.
         max_retries: The maximum number of times to retry a failed download.
-        delay: The delay in seconds between retries.
+        delay_seconds: The delay in seconds between retries.
+        double_delay: If True, double the delay between retries on each attempt.
         chunk_size: The chunk size for streaming downloads.
         session: An optional requests.Session object to use for HTTP requests.
         params: Optional dictionary of query parameters for HTTP requests.
@@ -1199,6 +1201,7 @@ def fetch_and_save(
         fs = s3fs.S3FileSystem(anon=True)
         attempts = 0
         temp_file = None
+        current_delay_seconds: int | float = delay_seconds
 
         while attempts < max_retries:
             try:
@@ -1229,7 +1232,9 @@ def fetch_and_save(
                 # Increment the attempt counter and wait before retrying
                 attempts += 1
                 if attempts < max_retries:
-                    time.sleep(delay)
+                    time.sleep(current_delay_seconds)
+                    if double_delay:
+                        current_delay_seconds *= 2
 
         # If all attempts fail, raise an exception
         raise RuntimeError(
@@ -1239,6 +1244,7 @@ def fetch_and_save(
     elif url.startswith("http://") or url.startswith("https://"):
         attempts = 0
         temp_file = None
+        current_delay_seconds: int | float = delay_seconds
 
         while attempts < max_retries:
             try:
@@ -1284,7 +1290,10 @@ def fetch_and_save(
 
                 # Increment the attempt counter and wait before retrying
                 attempts += 1
-                time.sleep(delay)
+                if attempts < max_retries:
+                    time.sleep(current_delay_seconds)
+                    if double_delay:
+                        current_delay_seconds *= 2
 
         # If all attempts fail, raise an exception
         raise RuntimeError(
