@@ -870,7 +870,6 @@ def build_fn(
         data_provider: Data variant to use from data catalog (see hydroMT documentation).
         data_root: Root folder where the data is located. If None, the data catalog is not modified.
         continue_: Continue previous build if it was interrupted or failed.
-
     """
     with WorkingDirectory(working_directory):
         build_config = parse_config(build_config)
@@ -901,7 +900,7 @@ def build_fn(
     "continue_",
     is_flag=True,
     default=False,
-    help="Continue previous build if it was interrupted or failed.",
+    help="Continue previous build if it was interrupted or failed. Note that the progress is delete anytime build without continue or update is run.",
 )
 def build(*args: Any, **kwargs: Any) -> None:
     """Build model with configuration file.
