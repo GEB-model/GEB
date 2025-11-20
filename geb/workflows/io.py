@@ -1160,6 +1160,7 @@ def fetch_and_save(
     session: requests.Session | None = None,
     params: None | dict[str, Any] = None,
     timeout: float | int = 30,
+    double_timeout: bool = False,
     show_progress: bool = True,
     verbose: bool = True,
 ) -> bool:
@@ -1179,6 +1180,7 @@ def fetch_and_save(
         session: An optional requests.Session object to use for HTTP requests.
         params: Optional dictionary of query parameters for HTTP requests.
         timeout: The timeout in seconds for HTTP requests.
+        double_timeout: If True, double the delay between retries on each attempt.
         show_progress: Whether to show a progress bar during download.
         verbose: Whether to print download status messages. Default is True.
 
@@ -1199,6 +1201,7 @@ def fetch_and_save(
         fs = s3fs.S3FileSystem(anon=True)
         attempts = 0
         temp_file = None
+        current_delay = delay
 
         while attempts < max_retries:
             try:
@@ -1229,7 +1232,9 @@ def fetch_and_save(
                 # Increment the attempt counter and wait before retrying
                 attempts += 1
                 if attempts < max_retries:
-                    time.sleep(delay)
+                    time.sleep(current_delay)
+                    if double_timeout:
+                        current_delay *= 2
 
         # If all attempts fail, raise an exception
         raise RuntimeError(
@@ -1239,6 +1244,7 @@ def fetch_and_save(
     elif url.startswith("http://") or url.startswith("https://"):
         attempts = 0
         temp_file = None
+        current_delay: int | float = delay
 
         while attempts < max_retries:
             try:
@@ -1284,7 +1290,10 @@ def fetch_and_save(
 
                 # Increment the attempt counter and wait before retrying
                 attempts += 1
-                time.sleep(delay)
+                if attempts < max_retries:
+                    time.sleep(current_delay)
+                    if double_timeout:
+                        current_delay *= 2
 
         # If all attempts fail, raise an exception
         raise RuntimeError(
