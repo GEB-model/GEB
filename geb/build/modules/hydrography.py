@@ -588,8 +588,65 @@ class Hydrography:
         self.set_grid(river_width, name="routing/river_width")
 
     @build_method
+    def setup_global_ocean_mean_dynamic_topography(self) -> None:
+        """Sets up the global ocean mean dynamic topography for the model."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_global_ocean_mean_dynamic_topography"
+            )
+            return
+
+        global_ocean_mdt_fn = self.data_catalog.get_source(
+            "global_ocean_mean_dynamic_topography"
+        ).path
+
+        global_ocean_mdt = xr.open_dataset(global_ocean_mdt_fn)
+
+        # get the model bounds and buffer by ~10km
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.083,  # min_lon
+            model_bounds[1] - 0.083,  # min_lat
+            model_bounds[2] + 0.083,  # max_lon
+            model_bounds[3] + 0.083,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
+
+        # reproject global_ocean_mdt to 0.008333 grid (~1km)
+        global_ocean_mdt = global_ocean_mdt["mdt"]
+        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
+
+        # clip to model bounds
+        global_ocean_mdt = global_ocean_mdt.rio.clip_box(
+            minx=min_lon,
+            miny=min_lat,
+            maxx=max_lon,
+            maxy=max_lat,
+        )
+
+        # write crs
+        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
+        # drop unused columns
+        global_ocean_mdt = global_ocean_mdt.squeeze(drop=True)
+        # set datatype to float32 and set fillvalue to np.nan
+        global_ocean_mdt = global_ocean_mdt.astype(np.float32)
+        global_ocean_mdt.encoding["_FillValue"] = np.nan
+        global_ocean_mdt.attrs["_FillValue"] = np.nan
+        # write to model
+        self.set_other(
+            global_ocean_mdt,
+            name="coastal/global_ocean_mean_dynamic_topography",
+        )
+
+    @build_method
     def setup_low_elevation_coastal_zone_mask(self) -> None:
         """Sets up the low elevation coastal zone (LECZ) mask for sfincs models."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_low_elevation_coastal_zone_mask"
+            )
+            return
+
         # load low elevation coastal zone mask
         low_elevation_coastal_zone = self.other[
             "landsurface/low_elevation_coastal_zone"
@@ -629,6 +686,10 @@ class Hydrography:
     @build_method
     def setup_coastlines(self) -> None:
         """Sets up the coastlines for the model."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info("No coastal basins found, skipping setup_coastlines")
+            return
+
         # load the coastline from the data catalog
         fp_coastlines = self.data_catalog.get_source("osm_coastlines").path
         coastlines = gpd.read_file(fp_coastlines)
@@ -657,6 +718,12 @@ class Hydrography:
         self,
     ) -> None:
         """Sets up the OSM land polygons for the model."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_osm_land_polygons"
+            )
+            return
+
         # load the land polygon from the data catalog
         fp_land_polygons = self.data_catalog.get_source("osm_land_polygons").path
         land_polygons = gpd.read_file(fp_land_polygons)
@@ -677,6 +744,12 @@ class Hydrography:
         self, minimum_coastal_area_deg2: float = 0.0006449015308288645
     ) -> None:
         """Sets up the coastal sfincs model regions."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_coastal_sfincs_model_regions"
+            )
+            return
+
         # load elevation data
         elevation = self.other["DEM/fabdem"]
         # load the lecz mask
@@ -1034,14 +1107,14 @@ class Hydrography:
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM").path.format(
+                f = self.data_catalog.get_source("GTSM_surge").path.format(
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
                 subset = ds.isel(stations=station_idx).drop_vars(
                     ["station_x_coordinate", "station_y_coordinate"]
                 )
-                gtsm_data_region.append(subset.waterlevel.to_pandas())
+                gtsm_data_region.append(subset.surge.to_pandas())
                 print(f"Processed GTSM data for {year}-{month:02d}")
                 ds.close()
         gtsm_data_region_pd = pd.concat(gtsm_data_region, axis=0)
