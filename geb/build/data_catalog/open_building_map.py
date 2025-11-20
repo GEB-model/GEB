@@ -17,6 +17,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import bz2
+import geopandas as gpd
 import mercantile
 import numpy as np
 import rioxarray as rxr
@@ -24,6 +26,7 @@ import xarray as xr
 from pyquadkey2 import quadkey
 from rioxarray import merge
 from tqdm import tqdm
+import pandas as pd
 
 from geb.workflows.io import fetch_and_save, open_zarr, to_zarr
 
@@ -33,26 +36,33 @@ from .base import Adapter
 class OpenBuildingMap(Adapter):
     """Dataset adapter for OpenBuildingMap data."""
 
-    def _quadkeys_for_box(self, xmin, xmax, ymin, ymax, zoom=6) -> None:
+    def _quadkeys_for_box(self, bounds, zoom=6) -> None:
         """Gets the open building dataset. First it finds the quadkeys of tile within the model domain. Then it downloads the data and clips it to gdl region included in the domain."""
         quadkeys = []
 
         # iterate over tiles intersecting the bbox
-        for tile in mercantile.tiles(xmin, xmax, ymin, ymax, zoom):
+        for tile in mercantile.tiles(*bounds, zoom):
             qk = quadkey.from_tile((tile.x, tile.y), level=zoom)
             quadkeys.append(qk.key)
 
-        pass
+        return quadkeys
+
+    def _extract_buildings_in_geom(self, gpkg_filename, geom) -> gpd.GeoDataFrame:
+        # load buildings
+        buildings = gpd.read_file(gpkg_filename)
+        buildings = buildings[buildings.intersects(geom)]
+        if len(buildings) == 0:
+            print("No buildings found in region geom")
+            return
+        else:
+            return buildings
+        # only keep buildings that intersect with the geom
 
     def _download_and_extract_tile(
         self,
         tile_url: str,
         temp_dir: Path,
         tile_filename: str,
-        xmin: float,
-        xmax: float,
-        ymin: float,
-        ymax: float,
     ) -> list[Path]:
         """Download a tile ZIP and extract only GeoTIFF files that intersect with the bbox.
 
@@ -85,22 +95,14 @@ class OpenBuildingMap(Adapter):
         if not success:
             raise RuntimeError(f"Failed to download {tile_url}")
 
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            # Get all .tif files in the ZIP
-            gpkg_files: list[str] = [
-                f for f in zip_ref.namelist() if f.endswith(".gpkg")
-            ]
+        # Extract building.gpkg
+        gpkg_filename = str(zip_path).replace(".bz2", "")
+        gpkg_filename = gpkg_filename.replace("building.", "building_")
+        with bz2.open(zip_path, "rb") as f_in, open(gpkg_filename, "wb") as f_out:
+            f_out.write(f_in.read())
+        return Path(gpkg_filename)
 
-            extracted_paths: list[Path] = []
-            for tif_filename in gpkg_files:
-                zip_ref.extract(tif_filename, temp_dir)
-                extracted_paths.append(temp_dir / tif_filename)
-
-        return extracted_paths
-
-    def fetch(
-        self, url: str, xmin: float, xmax: float, ymin: float, ymax: float, prefix: str
-    ):
+    def fetch(self, url: str, geom, prefix: str):
         """Download OpenBuildingMap tiles intersecting a bbox.
 
         Args:
@@ -117,29 +119,34 @@ class OpenBuildingMap(Adapter):
         Raises:
             RuntimeError: If no tiles could be downloaded.
         """
-        filepath: Path = self.get_filepath(prefix)
-        if (filepath).exists():
-            return self
+        # filepath: Path = self.get_filepath(prefix)
+        # if (filepath).exists():
+        #     return self
 
-        tiles: list = self._quadkeys_for_box(xmin, xmax, ymin, ymax)
-
+        # get bounds for geom
+        bounds = geom.bounds
+        tiles: list = self._quadkeys_for_box(bounds)
+        tiles = ["122000"]
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
-            results: list[Path] = []
+            list_of_buildings_in_geom: list[gpd.GeoDataFrame] = []
 
             for tile in tqdm(tiles, desc="Downloading OpenBuildingMap tiles"):
-                tile_filename = f"OpenBuildingMap_tile_{tile}.gpkg"
+                tile_filename = f"building.{tile}.gpkg.bz2"
                 tile_url: str = f"{url}/{tile_filename}"
 
-                tif_paths: list[Path] = self._download_and_extract_tile(
-                    tile_url, temp_dir, tile_filename, xmin, xmax, ymin, ymax
+                gpkg_filename: Path = self._download_and_extract_tile(
+                    tile_url, temp_dir, tile_filename
                 )
-                # Add all extracted TIF files (already filtered during extraction)
-                results.extend(tif_paths)
+                # Add all extracted geopackage files (already filtered during extraction)
+                buildings = self._extract_buildings_in_geom(gpkg_filename, geom)
+                list_of_buildings_in_geom.append(buildings)
+        # concatenate all buildings
+        buildings_in_geom = pd.concat(list_of_buildings_in_geom, ignore_index=True)
 
-            if not results:
-                raise RuntimeError("No OpenBuildingMap tiles could be downloaded.")
-
-            results
+        if len(buildings) == 0:
+            raise RuntimeError("No OpenBuildingMap features were found in model domain")
+        # write to file
+        buildings_in_geom.to_parquet(f"{prefix}/open_building_map.geoparquet")
 
         return self

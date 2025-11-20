@@ -4,13 +4,12 @@ import math
 from datetime import datetime
 
 import geopandas as gpd
+import mercantile
 import numpy as np
 import pandas as pd
-import mercantile
-from pyquadkey2 import quadkey
-
 import xarray as xr
 from dateutil.relativedelta import relativedelta
+from pyquadkey2 import quadkey
 from tqdm import tqdm
 
 from geb.agents.crop_farmers import (
@@ -1550,18 +1549,12 @@ class Agents:
     def get_open_building_data(self) -> None:
         """Gets the open building dataset. First it finds the quadkeys of tile within the model domain. Then it downloads the data and clips it to gdl region included in the domain."""
         # get model domain
-        bbox = self.bounds
 
-        zoom = 6
-
-        quadkeys = []
-
-        # iterate over tiles intersecting the bbox
-        for tile in mercantile.tiles(*bbox, zoom):
-            qk = quadkey.from_tile((tile.x, tile.y), level=zoom)
-            quadkeys.append(qk.key)
-
-        pass
+        open_building_map = self.new_data_catalog.fetch(
+            "open_building_map",
+            geom=self.region.union_all(),
+            prefix="assets",
+        ).read(prefix="assets")
 
     def get_buildings_per_GDL_region(self) -> None:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid.
