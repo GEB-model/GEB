@@ -508,11 +508,6 @@ class Floods(Module):
                 self.model.files["geom"]["coastal/land_polygons"],
             )
 
-            # add buffer of ~500m to ensure proper exclusion. Buffer should be smaller than that of lower elevation coastal zone mask
-            # coastal_boundary_exclude_mask["geometry"] = (
-            #     coastal_boundary_exclude_mask.buffer(0.004165)
-            # )
-
             # filter on coastal subbasins only
             if coastal_only:
                 subbasins = subbasins[subbasins["is_coastal_basin"]]
