@@ -757,7 +757,7 @@ class Hydrography:
         self.set_geom(bbox_gdf, name="coastal/model_regions")
         self.set_geom(
             low_elevation_coastal_zone_gdf,
-            name="coastal/lower_elevation_coastal_zone_regions",
+            name="coastal/low_elevation_coastal_zone_mask",
         )
 
     @build_method
