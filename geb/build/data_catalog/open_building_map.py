@@ -126,7 +126,6 @@ class OpenBuildingMap(Adapter):
         # get bounds for geom
         bounds = geom.bounds
         tiles: list = self._quadkeys_for_box(bounds)
-        tiles = ["122000"]
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
             list_of_buildings_in_geom: list[gpd.GeoDataFrame] = []
