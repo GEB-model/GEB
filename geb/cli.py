@@ -858,6 +858,7 @@ def build_fn(
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     data_provider: str = DATA_PROVIDER_DEFAULT,
     data_root: Path = DATA_ROOT_DEFAULT,
+    continue_: bool = False,
 ) -> None:
     """Build model.
 
@@ -868,7 +869,7 @@ def build_fn(
         working_directory: Working directory for the model.
         data_provider: Data variant to use from data catalog (see hydroMT documentation).
         data_root: Root folder where the data is located. If None, the data catalog is not modified.
-
+        continue_: Continue previous build if it was interrupted or failed.
     """
     with WorkingDirectory(working_directory):
         build_config = parse_config(build_config)
@@ -887,11 +888,20 @@ def build_fn(
         model.build(
             methods=methods,
             region=parse_config(config)["general"]["region"],
+            continue_=continue_,
         )
 
 
 @cli.command()
 @click_build_options()
+@click.option(
+    "--continue",
+    "-c",
+    "continue_",
+    is_flag=True,
+    default=False,
+    help="Continue previous build if it was interrupted or failed. Note that the progress is deleted anytime build without continue or update is run.",
+)
 def build(*args: Any, **kwargs: Any) -> None:
     """Build model with configuration file.
 
@@ -999,8 +1009,6 @@ def alter_fn(
             for method, args in build_config.items()
             if not method.startswith("_")
         }
-
-        model.read()
 
         model.update(
             methods=methods,
@@ -1129,8 +1137,6 @@ def update_fn(
             data_root,
         )
 
-        model.read()
-
         model.update(methods=methods)
 
 
@@ -1232,7 +1238,7 @@ def evaluate(
 def share_fn(
     working_directory: Path,
     name: str,
-    include_preprocessing: bool,
+    include_cache: bool,
     include_output: bool,
 ) -> None:
     """Share model."""
@@ -1240,8 +1246,8 @@ def share_fn(
         # create a zip file called model.zip with the folders input, and model files
         # in the working directory
         folders: list = ["input"]
-        if include_preprocessing:
-            folders.append("preprocessing")
+        if include_cache:
+            folders.append("cache")
         if include_output:
             folders.append("output")
         files: list = [CONFIG_DEFAULT, BUILD_DEFAULT]
@@ -1314,10 +1320,10 @@ def share_fn(
     help="Name used for the zip file.",
 )
 @click.option(
-    "--include-preprocessing",
+    "--include-cache",
     is_flag=True,
     default=False,
-    help="Include preprocessing files in the zip file.",
+    help="Include cache files in the zip file.",
 )
 @click.option(
     "--include-output",

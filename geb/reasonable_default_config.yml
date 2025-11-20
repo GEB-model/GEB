@@ -19,11 +19,10 @@ general:
 hazards:
   floods:
     simulate: false
-    forcing_method: accumulated_runoff  # headwater_points, runoff, accumulated_runoff
+    forcing_method: accumulated_runoff  # headwater_points, accumulated_runoff
     minimum_flood_depth: 0.05
-    resolution: 150
-    nr_subgrid_pixels: 4
-    crs: auto
+    grid_size_multiplier: 1  # must be integer. The first DEM is used for the grid. This multiplier increases the grid cell size (i.e., reduces resolution) by this factor.
+    subgrid: false
     force_overwrite: true
     write_figures: true  # whether to generate and save diagnostic figures
     return_periods:

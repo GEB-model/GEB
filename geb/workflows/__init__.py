@@ -104,15 +104,12 @@ def balance_check(
         poststorages = [poststorages]
 
     if how == "cellwise":
-        for fluxIn in influxes:
-            income += fluxIn
-        for fluxOut in outfluxes:
-            out += fluxOut
-        for preStorage in prestorages:
-            store += preStorage
-        for endStorage in poststorages:
-            store -= endStorage
-        balance = income + store - out
+        inflow: np.ndarray = np.add.reduce(influxes)
+        outflow: np.ndarray = np.add.reduce(outfluxes)
+        prestorage: np.ndarray = np.add.reduce(prestorages)
+        poststorage: np.ndarray = np.add.reduce(poststorages)
+
+        balance = inflow - outflow + prestorage - poststorage
 
         if np.isnan(balance).any():
             raise ValueError("Balance check failed, NaN values found.")

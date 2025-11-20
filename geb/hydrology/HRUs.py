@@ -1103,7 +1103,7 @@ class Data:
             raise NotImplementedError
         return output_data
 
-    def to_grid(self, *, HRU_data: npt.NDArray | float, fn: str) -> npt.NDArray | float:
+    def to_grid(self, *, HRU_data: np.ndarray, fn: str) -> np.ndarray:
         """Function to convert from HRUs to grid.
 
         Args:
@@ -1118,35 +1118,30 @@ class Data:
         """
         assert fn is not None
         assert not isinstance(HRU_data, list)
-        if isinstance(
-            HRU_data, float
-        ):  # check if data is simple float. Otherwise should be numpy array.
-            outdata = HRU_data
-        else:
-            assert isinstance(HRU_data, np.ndarray)
-            if HRU_data.ndim == 1:
-                outdata = to_grid(
-                    HRU_data,
+        assert isinstance(HRU_data, np.ndarray)
+        if HRU_data.ndim == 1:
+            outdata = to_grid(
+                HRU_data,
+                self.HRU.var.grid_to_HRU,
+                self.HRU.var.land_use_ratio,
+                fn,
+            )
+        elif HRU_data.ndim == 2:
+            # Create output array with shape (first_dim, grid_size)
+            output_data = np.zeros(
+                (HRU_data.shape[0], self.HRU.var.grid_to_HRU.size),
+                dtype=HRU_data.dtype,
+            )
+            for i in range(HRU_data.shape[0]):
+                output_data[i] = to_grid(
+                    HRU_data[i],
                     self.HRU.var.grid_to_HRU,
                     self.HRU.var.land_use_ratio,
                     fn,
                 )
-            elif HRU_data.ndim == 2:
-                # Create output array with shape (first_dim, grid_size)
-                output_data = np.zeros(
-                    (HRU_data.shape[0], self.HRU.var.grid_to_HRU.size),
-                    dtype=HRU_data.dtype,
-                )
-                for i in range(HRU_data.shape[0]):
-                    output_data[i] = to_grid(
-                        HRU_data[i],
-                        self.HRU.var.grid_to_HRU,
-                        self.HRU.var.land_use_ratio,
-                        fn,
-                    )
-                outdata = output_data
-            else:
-                raise NotImplementedError("Only 1D and 2D arrays are supported")
+            outdata = output_data
+        else:
+            raise NotImplementedError("Only 1D and 2D arrays are supported")
 
         return outdata
 
@@ -1259,7 +1254,6 @@ class Data:
         self.HRU.var.cropGroupNumber = self.split_HRU_data(
             self.HRU.var.cropGroupNumber, HRU
         )
-        self.HRU.var.capriseindex = self.split_HRU_data(self.HRU.var.capriseindex, HRU)
         self.HRU.var.actual_bare_soil_evaporation = self.split_HRU_data(
             self.HRU.var.actual_bare_soil_evaporation, HRU
         )

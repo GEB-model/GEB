@@ -4,6 +4,7 @@ import functools
 import inspect
 import logging
 from logging import Logger
+from pathlib import Path
 from typing import Any, Callable
 
 import matplotlib.pyplot as plt
@@ -221,6 +222,31 @@ class _build_method:
         return list(nx.dfs_preorder_nodes(self.tree, method, depth_limit=depth_limit))[
             1:
         ]
+
+    def record_progress(self, progress_path: Path, method: str) -> None:
+        """Record progress to txt progress file.
+
+        Args:
+            progress_path: Path to the progress file.
+            method: Method that has been completed.
+        """
+        with open(progress_path, "a") as f:
+            f.write(f"{method}\n")
+
+    def read_progress(self, progress_path: Path) -> list[str]:
+        """Get the list of methods that have been completed from the progress file.
+
+        Args:
+            progress_path: Path to the progress file.
+
+        Returns:
+            A list of methods that have been completed.
+        """
+        if not progress_path.exists():
+            return []
+        with open(progress_path, "r") as f:
+            completed_methods = f.read().splitlines()
+        return completed_methods
 
     @property
     def methods(self) -> list[str]:

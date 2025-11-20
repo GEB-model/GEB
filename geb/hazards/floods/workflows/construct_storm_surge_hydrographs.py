@@ -43,8 +43,9 @@ def generate_storm_surge_hydrographs(model: Any, make_plot: bool = False) -> Non
     for station in station_ids["station_id"]:
         df_event[station] = {}
         df_event_spring[station] = {}
-        tidepd = waterlevels[int(station)]
+        waterlevelpd = waterlevels[int(station)]
         surgepd = surge[int(station)]
+        tidepd = waterlevelpd - surgepd
         average_tide_signal, spring_tide_signal = generate_tide_signals(
             station, tidepd, make_plot=make_plot
         )

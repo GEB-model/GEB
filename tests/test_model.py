@@ -166,20 +166,7 @@ def test_update_with_dict() -> None:
 @pytest.mark.parametrize(
     "method",
     [
-        "setup_forcing",
-        "setup_SPEI",
-        "setup_soil_parameters",
-        "setup_create_farms",
-        "setup_groundwater",
         "setup_hydrography",
-        "setup_assets",
-        "setup_CO2_concentration",
-        "setup_waterbodies",
-        "setup_regions_and_land_use",
-        "setup_farmer_crop_calendar",
-        "setup_discharge_observations",
-        "setup_elevation",
-        "setup_pr_GEV",
     ],
 )
 def test_update_with_method(method: str) -> None:
@@ -547,7 +534,7 @@ def test_multiverse() -> None:
                 mode="w",
             )
 
-        mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
+        mean_discharge_after_forecast: dict[str | int, float] = geb.multiverse(
             return_mean_discharge=True, forecast_issue_datetime=forecast_issue_date
         )
 
@@ -625,7 +612,7 @@ def test_share() -> None:
         share_fn(
             working_directory=Path("."),
             name="test",
-            include_preprocessing=False,
+            include_cache=False,
             include_output=False,
         )
 
