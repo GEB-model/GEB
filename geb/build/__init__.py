@@ -2819,15 +2819,24 @@ class GEBModel(
 
         self.logger.info("Finished!")
 
-    def build(self, region: dict, methods: dict, continue_: bool) -> None:
+    def build(
+        self, region: dict, methods: dict[str, dict[str, Any] | None], continue_: bool
+    ) -> None:
         """Build the model with the specified region and methods.
 
         Args:
             region: A dictionary defining the region to build the model for.
             methods: A dictionary with method names as keys and their parameters as values.
             continue_: Continue previous build if it was interrupted or failed.
+
+        Raises:
+            ValueError: If "setup_region" is not in methods when building a new model.
         """
         methods: dict[str, dict[str, Any] | None] = methods or {}
+        if "setup_region" not in methods:
+            raise ValueError(
+                '"setup_region" must be present in methods when building a new model.'
+            )
         methods["setup_region"].update(region=region)
 
         # if not continuing, remove existing files path
