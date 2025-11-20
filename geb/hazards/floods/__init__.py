@@ -228,6 +228,7 @@ class Floods(Module):
         name: str,
         region: gpd.GeoDataFrame | None = None,
         coastal: bool = False,
+        low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         initial_water_level: float = 0.0,
     ) -> SFINCSRootModel:
@@ -241,6 +242,7 @@ class Floods(Module):
             name: Name of the SFINCS model (used for the model root directory).
             region: The region to build the SFINCS model for. If None, the entire model region is used.
             coastal: Whether to only include coastal areas in the model.
+            low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
             coastal_boundary_exclude_mask: GeoDataFrame defining the areas to exclude from the coastal model boundary cells.
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
 
@@ -279,8 +281,8 @@ class Floods(Module):
                 if "parameters"
                 in self.model.config["hydrology"]["routing"]["river_depth"]
                 else {},
-                mask_flood_plains=False,  # setting this to True sometimes leads to errors
                 coastal=coastal,
+                low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
                 setup_outflow=not coastal,
                 initial_water_level=initial_water_level,
@@ -487,28 +489,23 @@ class Floods(Module):
         # if coastal load files
         if coastal:
             # Load mask of lower elevation coastal zones to activate cells for the different sfincs model regions
-            lower_elevation_coastal_zone_mask = load_geom(
-                self.model.files["geom"]["coastal/lower_elevation_coastal_zone_regions"]
+            low_elevation_coastal_zone_mask = load_geom(
+                self.model.files["geom"]["coastal/low_elevation_coastal_zone_mask"]
             )
 
             # get initial_water_level for model domain
-            initial_water_level = lower_elevation_coastal_zone_mask[
+            initial_water_level = low_elevation_coastal_zone_mask[
                 "initial_water_level"
             ].min()
 
-            # buffer lower elevation coastal zone mask to ensure proper inclusion of coastline
-            lower_elevation_coastal_zone_mask["geometry"] = (
-                lower_elevation_coastal_zone_mask.buffer(0.00833333)
+            # # buffer lower elevation coastal zone mask to ensure proper inclusion of coastline
+            low_elevation_coastal_zone_mask["geometry"] = (
+                low_elevation_coastal_zone_mask.buffer(0.00833333)
             )
 
             # load osm land polygons to exclude from coastal boundary cells
             coastal_boundary_exclude_mask = load_geom(
                 self.model.files["geom"]["coastal/land_polygons"],
-            )
-
-            # add buffer of ~500m to ensure proper exclusion. Buffer should be smaller than that of lower elevation coastal zone mask
-            coastal_boundary_exclude_mask["geometry"] = (
-                coastal_boundary_exclude_mask.buffer(0.004165)
             )
 
             # filter on coastal subbasins only
@@ -517,12 +514,12 @@ class Floods(Module):
 
             # merge region and lower elevation coastal zone mask in a single shapefile
             model_domain = subbasins.union_all().union(
-                lower_elevation_coastal_zone_mask.union_all()
+                low_elevation_coastal_zone_mask.union_all()
             )
 
             # domain to gpd.GeoDataFrame
             model_domain = gpd.GeoDataFrame(
-                geometry=[model_domain], crs=lower_elevation_coastal_zone_mask.crs
+                geometry=[model_domain], crs=low_elevation_coastal_zone_mask.crs
             )
             model_name = "coastal_and_inland_region"
         else:
@@ -536,6 +533,7 @@ class Floods(Module):
             region=model_domain,
             coastal=coastal,
             coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
+            low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
             initial_water_level=initial_water_level,
         )
 
