@@ -5,7 +5,7 @@ from math import isclose
 import matplotlib.pyplot as plt
 import numpy as np
 
-from geb.build.modules.forcing import get_pressure_correction_factor
+from geb.forcing import get_pressure_correction_factor
 
 from ...testconfig import output_folder
 

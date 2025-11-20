@@ -86,10 +86,7 @@ class Households(AgentBaseClass):
             if "households" in self.model.config["agent_settings"]
             else {}
         )
-        self.decision_module = DecisionModule(
-            model=self.model,
-            agents=self.agents,
-        )
+        self.decision_module = DecisionModule()
 
         if self.config["adapt"]:
             self.load_flood_maps()

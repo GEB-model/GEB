@@ -183,6 +183,8 @@ class HazardDriver:
                 ):
                     event: dict[str, datetime] = copy.deepcopy(event)
 
+                    # the actual end time is the end of the day of the simulation. Therefore,
+                    # its the simulation end time plus one timestep length
                     if (
                         event["end_time"]
                         > self.model.simulation_end + self.model.timestep_length
