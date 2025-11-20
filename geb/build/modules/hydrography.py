@@ -371,7 +371,7 @@ class Hydrography:
             custom_rivers_width_m_column: The column name in the custom rivers file that contains the river width in meters.
                 must be provided if custom_rivers is provided.
             custom_rivers_depth_m_column: The column name in the custom rivers file that contains the river depth in meters.
-                must be provided if custom_rivers is provided.
+                Must be provided if custom_rivers is provided.
 
         Raises:
             FileNotFoundError: If the custom rivers file is not found.
