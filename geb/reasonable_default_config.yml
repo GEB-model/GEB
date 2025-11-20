@@ -36,6 +36,9 @@ hazards:
       - 250
       - 500
       - 1000
+    events:
+    - start_time: 2021-07-12 09:00:00
+      end_time: 2021-07-20 09:00:00
     SFINCS:
       gpu: auto  # True, False, "auto". If "auto", it will check if a GPU is available using nvidia-smi.
   damage:

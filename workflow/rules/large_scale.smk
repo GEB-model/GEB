@@ -13,6 +13,11 @@ CLUSTER_PREFIX = config.get("CLUSTER_PREFIX", "WE")
 LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", "../models/large_scale")
 EVALUATION_METHODS = config.get("EVALUATION_METHODS", "plot_discharge,evaluate_discharge")
 
+def get_cluster_priority(wildcards):
+    """Calculate priority for cluster - lower numbers get higher priority (executed first)."""
+    cluster_name = wildcards.cluster
+    return CLUSTER_PRIORITIES.get(cluster_name, 500)
+
 def get_basin_area_km2(cluster_name):
     """Read basin area from cluster's model.yml file."""
     model_yml_path = Path(LARGE_SCALE_DIR) / cluster_name / "base" / "model.yml"
@@ -54,7 +59,7 @@ def get_resources(cluster_name, base_memory_mb):
     
     return memory_mb, partition
 
-# Dynamically discover cluster directories
+# Dynamically discover cluster directories (run only once)
 def get_cluster_names():
     """Find all cluster directories matching the pattern."""
     large_scale_path = Path(LARGE_SCALE_DIR)
@@ -68,12 +73,22 @@ def get_cluster_names():
     
     return sorted(cluster_dirs)
 
-CLUSTER_NAMES = get_cluster_names()
+# Cache the cluster names to avoid repeated discovery
+if 'CLUSTER_NAMES' not in globals():
+    CLUSTER_NAMES = get_cluster_names()
+    if not CLUSTER_NAMES:
+        raise ValueError(f"No cluster directories found in {LARGE_SCALE_DIR} matching pattern {CLUSTER_PREFIX}_*")
+    print(f"Found {len(CLUSTER_NAMES)} clusters: {CLUSTER_NAMES}")
 
-if not CLUSTER_NAMES:
-    raise ValueError(f"No cluster directories found in {LARGE_SCALE_DIR} matching pattern {CLUSTER_PREFIX}_*")
-
-print(f"Found {len(CLUSTER_NAMES)} clusters: {CLUSTER_NAMES}")
+# Create static priority mapping for sequential ordering (000→001→002→etc.)
+CLUSTER_PRIORITIES = {}
+for cluster_name in CLUSTER_NAMES:
+    try:
+        cluster_num = int(cluster_name.split('_')[-1])
+        CLUSTER_PRIORITIES[cluster_name] = 1000 - cluster_num  # Higher number = higher priority
+    except (ValueError, IndexError):
+        CLUSTER_PRIORITIES[cluster_name] = 500  # Default priority for malformed names
+print(f"Cluster priorities: {dict(list(CLUSTER_PRIORITIES.items())[:5])}...")  # Show first 5
 
 # Print basin areas and memory allocation for each cluster (for debugging)
 for cluster_name in CLUSTER_NAMES:
@@ -92,7 +107,7 @@ rule build_cluster:
         f"{LARGE_SCALE_DIR}/{{cluster}}/base/logs/build.log"
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster, 32000)[0],
-        runtime=240,
+        runtime=7200,  # 5 days
         cpus=2,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 32000)[1],
         slurm_account=os.environ.get("USER", "default")
@@ -115,7 +130,7 @@ rule spinup_cluster:
         f"{LARGE_SCALE_DIR}/{{cluster}}/base/logs/spinup.log"
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster, 48000)[0],
-        runtime=480,
+        runtime=7200,  # 5 days
         cpus=4,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 48000)[1],
         slurm_account=os.environ.get("USER", "default")
@@ -138,7 +153,7 @@ rule run_cluster:
         f"{LARGE_SCALE_DIR}/{{cluster}}/base/logs/run.log"
     resources:
         mem_mb=lambda wildcards: get_resources(wildcards.cluster, 56000)[0],
-        runtime=8640,
+        runtime=7200,  # 5 days
         cpus=6,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 56000)[1],
         slurm_account=os.environ.get("USER", "default")
@@ -167,7 +182,7 @@ rule evaluate_cluster:
         f"{LARGE_SCALE_DIR}/{{cluster}}/base/logs/evaluate.log"
     resources:
         mem_mb=16000,
-        runtime=120,
+        runtime=7200,  # 5 days
         cpus=2,
         slurm_partition="ivm",
         slurm_account=os.environ.get("USER", "default")
