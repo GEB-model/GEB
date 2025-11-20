@@ -2828,6 +2828,8 @@ class GEBModel(
             continue_: Continue previous build if it was interrupted or failed.
         """
         methods: dict[str, dict[str, Any]] = methods or {}
+        if "setup_region" not in methods:
+            raise ValueError('"setup_region" must be present in methods when building a new model.')
         methods["setup_region"].update(region=region)
 
         # if not continuing, remove existing files path
