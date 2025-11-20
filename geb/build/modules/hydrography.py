@@ -351,8 +351,8 @@ class Hydrography:
     def setup_hydrography(
         self,
         custom_rivers: str | None = None,
-        width_m_column: str | None = None,
-        depth_m_column: str | None = None,
+        custom_rivers_width_m_column: str | None = None,
+        custom_rivers_depth_m_column: str | None = None,
     ) -> None:
         """Sets up the hydrography for the model.
 
@@ -368,15 +368,15 @@ class Hydrography:
             custom_rivers: Optional path to a custom river shapefile. The MERIT rivers will still be
                 used to create the river raster, but the burning of rivers in the DEM will be done
                 based on the custom river shapefile. Must be readable by geopandas.read_file() or geopandas.read_parquet().
-            width_m_column: The column name in the custom rivers file that contains the river width in meters.
+            custom_rivers_width_m_column: The column name in the custom rivers file that contains the river width in meters.
                 must be provided if custom_rivers is provided.
-            depth_m_column: The column name in the custom rivers file that contains the river depth in meters.
+            custom_rivers_depth_m_column: The column name in the custom rivers file that contains the river depth in meters.
                 must be provided if custom_rivers is provided.
 
         Raises:
             FileNotFoundError: If the custom rivers file is not found.
-            ValueError: If width_m_column or depth_m_column is not provided when using custom_rivers.
-            KeyError: If width_m_column or depth_m_column is not found in the custom rivers file.
+            ValueError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not provided when using custom_rivers.
+            KeyError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not found in the custom rivers file.
         """
         if custom_rivers is not None:
             custom_rivers: Path = Path(custom_rivers)
@@ -388,22 +388,25 @@ class Hydrography:
             else:
                 custom_rivers_gdf = gpd.read_file(custom_rivers)
             custom_rivers_gdf = custom_rivers_gdf.to_crs("EPSG:4326")
-            if width_m_column is None or depth_m_column is None:
+            if (
+                custom_rivers_width_m_column is None
+                or custom_rivers_depth_m_column is None
+            ):
                 raise ValueError(
-                    "width_m_column and depth_m_column must be provided when using custom_rivers"
+                    "custom_rivers_width_m_column and custom_rivers_depth_m_column must be provided when using custom_rivers"
                 )
-            if width_m_column not in custom_rivers_gdf.columns:
+            if custom_rivers_width_m_column not in custom_rivers_gdf.columns:
                 raise KeyError(
-                    f"width_m_column '{width_m_column}' not found in custom rivers file"
+                    f"custom_rivers_width_m_column '{custom_rivers_width_m_column}' not found in custom rivers file"
                 )
-            if depth_m_column not in custom_rivers_gdf.columns:
+            if custom_rivers_depth_m_column not in custom_rivers_gdf.columns:
                 raise KeyError(
-                    f"depth_m_column '{depth_m_column}' not found in custom rivers file"
+                    f"custom_rivers_depth_m_column '{custom_rivers_depth_m_column}' not found in custom rivers file"
                 )
             custom_rivers_gdf = custom_rivers_gdf.rename(
                 columns={
-                    width_m_column: "width",
-                    depth_m_column: "depth",
+                    custom_rivers_width_m_column: "width",
+                    custom_rivers_depth_m_column: "depth",
                 }
             )
             self.set_geom(custom_rivers_gdf, name="routing/custom_rivers")
