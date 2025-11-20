@@ -6,6 +6,7 @@ from datetime import datetime
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import mercantile
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
@@ -1542,6 +1543,14 @@ class Agents:
 
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
+
+    @build_method
+    def get_open_building_data(self) -> None:
+        """Gets the open building dataset"""
+        # get model domain
+
+        # key quadkeys within model domain
+        pass
 
     def get_buildings_per_GDL_region(self) -> None:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid.
