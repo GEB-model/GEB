@@ -286,6 +286,11 @@ class Floods(Module):
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
                 setup_outflow=not coastal,
                 initial_water_level=initial_water_level,
+                custom_rivers_to_burn=load_geom(
+                    self.model.files["geom"]["routing/custom_rivers"]
+                )
+                if "routing/custom_rivers" in self.model.files["geom"]
+                else None,
             )
         else:
             sfincs_model.read()
