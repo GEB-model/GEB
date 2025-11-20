@@ -2827,7 +2827,7 @@ class GEBModel(
             methods: A dictionary with method names as keys and their parameters as values.
             continue_: Continue previous build if it was interrupted or failed.
         """
-        methods: dict[str, dict[str, Any]] = methods or {}
+        methods: dict[str, dict[str, Any] | None] = methods or {}
         methods["setup_region"].update(region=region)
 
         # if not continuing, remove existing files path
