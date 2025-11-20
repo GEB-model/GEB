@@ -571,11 +571,11 @@ class Fabdem(Adapter):
         success: bool = fetch_and_save(
             tile_url,
             zip_path,
+            delay_seconds=1,
             verbose=False,
             show_progress=True,
-            double_timeout=True,
-            max_retries=17,
-            delay=1,
+            double_delay=True,
+            max_retries=17,  # will be total of ~day
         )
         if not success:
             raise RuntimeError(f"Failed to download {tile_url}")
@@ -616,7 +616,9 @@ class Fabdem(Adapter):
         Returns:
             Path to the local FABDEM data file.
         """
-        assert self.root is not None
+        assert self.root is not None, (
+            "Root directory must be set before calling get_filepath"
+        )
         filepath: Path = self.root / f"{prefix}_{self.filename}"
         return filepath
 
