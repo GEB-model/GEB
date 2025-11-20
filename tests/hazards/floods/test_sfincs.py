@@ -129,7 +129,7 @@ def build_sfincs(
         custom_rivers_to_burn=load_geom(
             geb_model.files["geom"]["routing/custom_rivers"]
         )
-        if "routing/custom_rivers" in self.model.files["geom"]
+        if "routing/custom_rivers" in geb_model.files["geom"]
         else None,
     )
 
