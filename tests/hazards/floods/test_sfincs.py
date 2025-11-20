@@ -126,6 +126,11 @@ def build_sfincs(
         in geb_model.floods.model.config["hydrology"]["routing"]["river_depth"]
         else {},
         setup_outflow=False,
+        custom_rivers_to_burn=load_geom(
+            geb_model.files["geom"]["routing/custom_rivers"]
+        )
+        if "routing/custom_rivers" in self.model.files["geom"]
+        else None,
     )
 
     if subgrid:
