@@ -5,7 +5,6 @@ Notes:
 """
 
 import inspect
-import json
 import logging
 import os
 from contextlib import contextmanager
@@ -79,30 +78,6 @@ def suppress_logging_warning(logger: logging.Logger) -> Iterator[None]:
         yield
     finally:
         logger.setLevel(current_level)  # Restore the original logging level
-
-
-class PathEncoder(json.JSONEncoder):
-    """Custom JSON encoder to handle Path objects.
-
-    Paths are converted to their string representation in posix format.
-    All files should be posix format to ensure compatibility across different operating systems.
-    """
-
-    def default(self, obj: object) -> Any:
-        """Convert Path objects to strings for JSON serialization.
-
-        Ottherwise, use the default serialization.
-
-        Args:
-            obj: Object to serialize.
-
-        Returns:
-            The serialized object. For Path objects, this is a string.
-        """
-        if isinstance(obj, Path):
-            obj = obj.as_posix()
-            return str(obj)
-        return super().default(obj)
 
 
 def boolean_mask_to_graph(
@@ -2294,8 +2269,13 @@ class GEBModel(
 
     @property
     def files_path(self) -> Path:
-        """Path to the files.json file that contains the file library."""
+        """Path to the files.yml file that contains the file library."""
         return Path(self.root, "files.yml")
+
+    @property
+    def progress_path(self) -> Path:
+        """Path to the progress file that contains the build progress."""
+        return Path(self.root, "progress.txt")
 
     def write_file_library(self) -> None:
         """Writes the file library to disk.
@@ -2777,31 +2757,91 @@ class GEBModel(
         # call the method
         func(*args, **kwargs)
 
-    def run_methods(self, methods: dict[str, Any], validate_order: bool = True) -> None:
+    def run_methods(
+        self,
+        methods: dict[str, Any],
+        validate_order: bool = True,
+        record_progress: bool = False,
+        continue_: bool = False,
+    ) -> None:
         """Run methods in the order specified in the methods dictionary.
 
         Args:
             methods: A dictionary with method names as keys and their parameters as values.
             validate_order: If True, validate the order of methods using the build_method decorator.
+            record_progress: If True, record progress after each method.
+            continue_: Continue previous build if it was interrupted or failed.
+
+        Raises:
+            ValueError: If continuing a build and completed methods are not in the methods to run
+                or if the order is incorrect.
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
         build_method.validate_methods(methods, validate_order=validate_order)
         self.files = self.read_or_create_file_library()
+
+        if not continue_:
+            # if not continuing, remove existing progress file
+            self.progress_path.unlink(missing_ok=True)
+
+        completed_methods: list[str] = (
+            build_method.read_progress(self.progress_path) if continue_ else []
+        )
+
+        # check if all completed methods are in the methods to run and if order is correct
+        if continue_:
+            methods_to_run = list(methods.keys())
+            for i, completed_method in enumerate(completed_methods):
+                if completed_method not in methods_to_run:
+                    raise ValueError(
+                        f"Cannot continue build: completed method {completed_method} not in methods to run. Restore the method or start a new build."
+                    )
+                if completed_method != methods_to_run[i]:
+                    raise ValueError(
+                        f"Cannot continue build: completed method {completed_method} is out of order. Restore the method order or start a new build."
+                    )
+
         for method in methods:
+            if method in completed_methods:
+                self.logger.info(f"Skipping already completed method: {method}")
+                continue
+
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
             self.write_file_library()
 
+            if record_progress:
+                build_method.record_progress(
+                    self.progress_path,
+                    method,
+                )
+
         self.logger.info("Finished!")
 
-    def build(self, region: dict, methods: dict) -> None:
-        """Build the model with the specified region and methods."""
-        methods: dict[str:Any] = methods or {}
-        methods["setup_region"].update(region=region)
-        self.files_path.unlink(missing_ok=True)
+    def build(self, region: dict, methods: dict, continue_: bool) -> None:
+        """Build the model with the specified region and methods.
 
-        self.run_methods(methods, validate_order=True and type(self) is GEBModel)
+        Args:
+            region: A dictionary defining the region to build the model for.
+            methods: A dictionary with method names as keys and their parameters as values.
+            continue_: Continue previous build if it was interrupted or failed.
+        """
+        methods: dict[str, dict[str, Any]] = methods or {}
+        methods["setup_region"].update(region=region)
+
+        # if not continuing, remove existing files path
+        if continue_:
+            self.read()
+        else:
+            self.files_path.unlink(missing_ok=True)
+
+        self.run_methods(
+            methods,
+            validate_order=True and type(self) is GEBModel,
+            record_progress=True,
+            continue_=continue_,
+        )
 
     def update(
         self,
@@ -2816,6 +2856,8 @@ class GEBModel(
             ValueError: If "setup_region" is in methods, as this can only be called when
                 building a new model.
         """
+        self.read()
+
         methods = methods or {}
 
         if "setup_region" in methods:
