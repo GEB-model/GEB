@@ -239,7 +239,7 @@ class SFINCSRootModel:
             setup_outflow: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
             custom_rivers_to_burn: A GeoDataFrame of custom rivers to burn into the model grid. If None, uses the provided rivers GeoDataFrame.
-                Can only be used with depth_calculation_method 'power_law'.
+                dataframe must contain 'width' and 'depth' columns.
 
         Returns:
             The SFINCSRootModel instance with the built model.
