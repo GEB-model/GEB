@@ -881,6 +881,7 @@ class SFINCSRootModel:
         The method groups rivers by their calculation group and creates a separate
         simulation for each group. Each simulation is configured with discharge
         hydrographs corresponding to the specified return period.
+
         Args:
             return_period: The return period for which to create simulations.
             coastal: Whether to create a coastal simulation.
@@ -889,6 +890,11 @@ class SFINCSRootModel:
             An instance of MultipleSFINCSSimulations containing the created simulations.
                 This class aims to emulate a single SFINCSSimulation instance as if
                 it was one.
+
+        Raises:
+            ValueError: If inflow node indices cannot be converted to integers,
+                if the discharge DataFrame columns cannot be converted to integers,
+                or if the discharge hydrographs contain NaN values.
         """
         rivers: gpd.GeoDataFrame = import_rivers(self.path, postfix="_return_periods")
         assert (~rivers["is_downstream_outflow_subbasin"]).all()
@@ -915,19 +921,34 @@ class SFINCSRootModel:
             simulation_root.mkdir(parents=True, exist_ok=True)
 
             inflow_nodes = group_rivers.copy()
-            inflow_nodes = inflow_nodes.reset_index(drop=True)
+            # Keep the original index (river IDs) so they don't collide with existing forcing points.
             inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(get_start_point)
 
-            Q: list[pd.DataFrame] = [
-                pd.DataFrame.from_dict(
-                    data=inflow_nodes[f"hydrograph_{return_period}"].iloc[idx],
-                    orient="index",
-                    columns=[idx],
-                )
-                for idx in inflow_nodes.index
-            ]
-            Q: pd.DataFrame = pd.concat(Q, axis=1)
+            # Ensure indices are integer-like (helpful for later comparisons)
+            try:
+                inflow_nodes.index = pd.Index(inflow_nodes.index).astype(int)
+            except Exception:
+                raise ValueError("Inflow node indices must be convertible to integers")
+
+            # Build list of hydrograph DataFrames using the original node indices as column names
+            Q_list: list[pd.DataFrame] = []
+            for node_idx in inflow_nodes.index:
+                hydro = inflow_nodes.at[node_idx, f"hydrograph_{return_period}"]
+                # hydro is expected to be dict-like {iso_timestamp: Q} — convert to DataFrame with column named node_idx
+                df = pd.DataFrame.from_dict(hydro, orient="index", columns=[node_idx])
+                Q_list.append(df)
+
+            # Concatenate the per-node series into a single DataFrame; index -> timestamps
+            Q: pd.DataFrame = pd.concat(Q_list, axis=1)
             Q.index = pd.to_datetime(Q.index)
+
+            # Ensure columns have consistent integer dtype (same as inflow_nodes.index)
+            try:
+                Q.columns = pd.Index(Q.columns).astype(int)
+            except Exception:
+                raise ValueError(
+                    "Discharge DataFrame columns must be convertible to integers"
+                )
 
             assert not np.isnan(Q.values).any(), (
                 "NaN values found in discharge hydrographs"

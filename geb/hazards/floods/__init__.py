@@ -530,6 +530,7 @@ class Floods(Module):
         else:
             model_domain = subbasins
             coastal_boundary_exclude_mask = None
+            low_elevation_coastal_zone_mask = None
             initial_water_level = None
             model_name = "inland_region"
 
