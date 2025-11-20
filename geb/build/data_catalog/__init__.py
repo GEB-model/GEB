@@ -19,6 +19,7 @@ from .lowder import Lowder
 from .merit_basins import MeritBasinsCatchments, MeritBasinsRivers
 from .merit_hydro import MeritHydroDir, MeritHydroElv
 from .merit_sword import MeritSword
+from .open_building_map import OpenBuildingMap
 from .open_street_map import OpenStreetMap
 from .soilgrids import SoilGrids
 from .sword import Sword
@@ -531,6 +532,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "version": "v16",
             "license": "CC BY 4.0",
             "url": "doi.org/10.5281/zenodo.14727521",
+        },
+    },
+    "open_building_map": {
+        "adapter": OpenBuildingMap(
+            folder="fabdem",
+            local_version=1,
+            filename="open_building_map.parquet",
+            cache="local",
+        ),
+        "url": "https://datapub.gfz.de/download/10.5880.GFZ.LKUT.2025.002-Caweb/2025-002_Oostwegel-et-al_data/",
+        "source": {
+            "name": "FABDEM",
+            "author": "Oostwegel et al. (2025)",
+            "version": "1",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://dataservices.gfz-potsdam.de/panmetaworks/showshort.php?id=45829b80-e892-11ef-914a-f12b0080820d",
+            "paper_doi": "https://doi.org/10.5880/GFZ.LKUT.2025.002",
         },
     },
     "open_street_map": {
