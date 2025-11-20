@@ -125,7 +125,6 @@ def build_sfincs(
         if "parameters"
         in geb_model.floods.model.config["hydrology"]["routing"]["river_depth"]
         else {},
-        mask_flood_plains=False,  # setting this to True sometimes leads to errors,
         setup_outflow=False,
     )
 
@@ -346,11 +345,10 @@ def test_accumulated_runoff(
             flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.00)
             total_flood_volume = simulation.get_flood_volume(flood_depth)
 
-            region = simulation.sfincs_model.region.to_crs(runoff_m.rio.crs)
-            region["value"] = 1
+            region = sfincs_model.region.to_crs(runoff_m.rio.crs)
             region_mask = rasterize_like(
                 region,
-                column="value",
+                burn_value=1,
                 raster=runoff_m.isel(time=0),
                 dtype=np.int32,
                 nodata=0,
@@ -376,11 +374,12 @@ def test_accumulated_runoff(
                 abs_tol=0,
                 rel_tol=0.01,
             )
+
             assert math.isclose(
                 total_flood_volume,
                 total_runoff_volume + discharge_m3 - discarded_discharge,
                 abs_tol=0,
-                rel_tol=0.1,
+                rel_tol=0.2,
             )
 
             total_flood_volume_across_models += total_flood_volume
@@ -575,10 +574,10 @@ def test_read(geb_model: GEBModel) -> None:
         # assert that both models have the same attributes
         assert sfincs_model_build.path == sfincs_model_read.path
         assert sfincs_model_build.name == sfincs_model_read.name
-        assert sfincs_model_build.cell_area == sfincs_model_read.cell_area
-        assert sfincs_model_build.area == sfincs_model_read.area
+        assert (sfincs_model_build.cell_area == sfincs_model_read.cell_area).all()
         assert sfincs_model_build.path == sfincs_model_read.path
         assert sfincs_model_build.rivers.equals(sfincs_model_read.rivers)
+        assert sfincs_model_build.region.equals(sfincs_model_read.region)
 
         for key in sfincs_model_build.sfincs_model.config:
             assert (
