@@ -7,6 +7,8 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import mercantile
+from pyquadkey2 import quadkey
+
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
@@ -1546,10 +1548,19 @@ class Agents:
 
     @build_method
     def get_open_building_data(self) -> None:
-        """Gets the open building dataset"""
+        """Gets the open building dataset. First it finds the quadkeys of tile within the model domain. Then it downloads the data and clips it to gdl region included in the domain."""
         # get model domain
+        bbox = self.bounds
 
-        # key quadkeys within model domain
+        zoom = 6
+
+        quadkeys = []
+
+        # iterate over tiles intersecting the bbox
+        for tile in mercantile.tiles(*bbox, zoom):
+            qk = quadkey.from_tile((tile.x, tile.y), level=zoom)
+            quadkeys.append(qk.key)
+
         pass
 
     def get_buildings_per_GDL_region(self) -> None:
