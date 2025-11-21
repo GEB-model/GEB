@@ -158,14 +158,16 @@ class OpenBuildingMap(Adapter):
                 )
                 # Add all extracted geopackage files (already filtered during extraction)
                 buildings = self._extract_buildings_in_geom(gpkg_filename, geom)
-                list_of_buildings_in_geom.append(buildings)
+                if buildings is not None:
+                    list_of_buildings_in_geom.append(buildings)
         # concatenate all buildings
         buildings_in_geom = pd.concat(list_of_buildings_in_geom, ignore_index=True)
 
         # raise error if no buildings are found in model region
-        if len(buildings) == 0:
+        if len(list_of_buildings_in_geom) == 0:
             raise RuntimeError("No OpenBuildingMap features were found in model domain")
         # write to file
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         buildings_in_geom.to_parquet(self.path)
 
         return self
