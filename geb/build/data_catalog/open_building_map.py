@@ -27,6 +27,7 @@ from pyquadkey2 import quadkey
 from rioxarray import merge
 from tqdm import tqdm
 import pandas as pd
+import pyogrio
 
 from geb.workflows.io import fetch_and_save, open_zarr, to_zarr
 
@@ -49,7 +50,12 @@ class OpenBuildingMap(Adapter):
 
     def _extract_buildings_in_geom(self, gpkg_filename, geom) -> gpd.GeoDataFrame:
         # load buildings
-        buildings = gpd.read_file(gpkg_filename)
+        buildings = gpd.read_file(
+            gpkg_filename,
+            engine="pyogrio",
+            bbox=geom.bounds,
+            columns=["id", "occupancy", "floorspace", "height", "geometry"],
+        )
         buildings = buildings[buildings.intersects(geom)]
         if len(buildings) == 0:
             print("No buildings found in region geom")
@@ -146,6 +152,6 @@ class OpenBuildingMap(Adapter):
         if len(buildings) == 0:
             raise RuntimeError("No OpenBuildingMap features were found in model domain")
         # write to file
-        buildings_in_geom.to_parquet(f"{prefix}/open_building_map.geoparquet")
+        buildings_in_geom.to_parquet(f"open_building_map.geoparquet")
 
         return self
