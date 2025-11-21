@@ -1560,6 +1560,9 @@ class Agents:
             prefix="assets",
         ).read()
 
+        # write to input folder
+        self.set_geom(buildings, name="assets/open_building_map")
+
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
         buildings["lon"] = centroids.x
