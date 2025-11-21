@@ -285,7 +285,6 @@ def test_accumulated_runoff(
 
         total_flood_volume_across_models: float = 0.0
         total_discharge_volume_across_models: float = 0.0
-        total_discarded_generated_discharge_across_models: float = 0.0
         for sfincs_model in sfincs_models:
             simulation: SFINCSSimulation = sfincs_model.create_simulation(
                 f"accumulated_runoff_forcing_{sfincs_model.name}",
@@ -298,7 +297,6 @@ def test_accumulated_runoff(
             simulation.set_accumulated_runoff_forcing(
                 runoff_m=runoff_m,
                 river_network=geb_model.hydrology.routing.river_network,
-                mask=~geb_model.hydrology.grid.mask,
                 river_ids=river_ids,
                 basin_ids=basin_ids,
                 upstream_area=upstream_area,
@@ -369,32 +367,28 @@ def test_accumulated_runoff(
             )
 
             # Use tracked volumes from the simulation
-            non_discarded_runoff_volume: float = simulation.total_discharge_volume_m3
-            discarded_discharge: float = (
-                simulation.discarded_accumulated_generated_discharge_m3
-            )
+            total_discharge_volume_m3: float = simulation.total_discharge_volume_m3
 
             # compare to total discharge volume
             assert math.isclose(
                 total_flood_volume,
-                non_discarded_runoff_volume,
+                total_discharge_volume_m3,
                 abs_tol=0,
                 rel_tol=0.01,
             )
 
             assert math.isclose(
                 total_flood_volume,
-                total_runoff_volume + discharge_m3 - discarded_discharge,
+                total_runoff_volume + discharge_m3,
                 abs_tol=0,
                 rel_tol=0.02,
             )
 
             total_flood_volume_across_models += total_flood_volume
-            total_discarded_generated_discharge_across_models += discarded_discharge
             total_discharge_volume_across_models += discharge_m3
 
-            simulation.cleanup()
-            sfincs_model.cleanup()
+            # simulation.cleanup()
+            # sfincs_model.cleanup()
 
         if split:
             total_runoff_volume: float = (
@@ -404,8 +398,7 @@ def test_accumulated_runoff(
             )
 
             assert math.isclose(
-                total_flood_volume_across_models
-                + total_discarded_generated_discharge_across_models,
+                total_flood_volume_across_models,
                 total_runoff_volume + total_discharge_volume_across_models,
                 abs_tol=0,
                 rel_tol=0.05,

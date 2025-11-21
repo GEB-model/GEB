@@ -18,6 +18,7 @@ from shapely.geometry import LineString, Point, shape
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
+from geb.typing import ArrayBool, ArrayFloat32, ArrayInt32
 from geb.workflows.raster import rasterize_like, snap_to_grid
 
 
@@ -373,16 +374,16 @@ class Hydrography:
             ],  # this mask is True within study area
         )
 
-        original_upstream_area = self.full_like(
+        upstream_area_high_res = self.full_like(
             original_d8_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        original_upstream_area_data = flow_raster_original.upstream_area(
+        upstream_area_high_res_data = flow_raster_original.upstream_area(
             unit="m2"
         ).astype(np.float32)
-        original_upstream_area_data[original_upstream_area_data == -9999.0] = np.nan
-        original_upstream_area.data = original_upstream_area_data
+        upstream_area_high_res_data[upstream_area_high_res_data == -9999.0] = np.nan
+        upstream_area_high_res.data = upstream_area_high_res_data
         self.set_other(
-            original_upstream_area, name="drainage/original_d8_upstream_area"
+            upstream_area_high_res, name="drainage/original_d8_upstream_area"
         )
 
         elevation_coarsened = original_d8_elevation.coarsen(
@@ -544,6 +545,45 @@ class Hydrography:
             assert ys.size > 0, "No xy coordinates found for river segment"
             rivers.at[COMID, "hydrography_xy"] = list(zip(xs, ys, strict=True))
             rivers.at[COMID, "hydrography_upstream_area_m2"] = (
+                upstream_area_sorted.tolist()
+            )
+
+        # Derive the xy coordinates of the river network. Here the coordinates
+        # are the PIXEL coordinates for the coarse drainage network.
+        rivers["hydrography_high_res_lons_lats"] = [[]] * len(rivers)
+        rivers["hydrography_high_res_upstream_area_m2"] = [[]] * len(rivers)
+        xy_per_river_segment = value_indices(river_raster_HD, ignore_value=-1)
+
+        represented_rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
+        for river_ID in represented_rivers.index:
+            (ys, xs) = xy_per_river_segment[river_ID]
+            upstream_area: ArrayFloat32 = upstream_area_high_res_data[ys, xs]
+            nan_mask: ArrayBool = np.isnan(upstream_area)
+
+            upstream_area = upstream_area[~nan_mask]
+            ys: ArrayInt32 = ys[~nan_mask]
+            xs: ArrayInt32 = xs[~nan_mask]
+
+            assert not np.isnan(upstream_area).any()
+
+            up_to_downstream_ids = np.argsort(upstream_area)
+            upstream_area_sorted = upstream_area[up_to_downstream_ids]
+
+            assert (river_raster_HD[ys, xs] == river_ID).all(), (
+                f"River segment {river_ID} has inconsistent raster values"
+            )
+
+            ys: npt.NDArray[np.int64] = ys[up_to_downstream_ids]
+            xs: npt.NDArray[np.int64] = xs[up_to_downstream_ids]
+
+            lats: ArrayFloat32 = upstream_area_high_res.y.values[ys]
+            lons: ArrayFloat32 = upstream_area_high_res.x.values[xs]
+
+            assert ys.size > 0, "No xy coordinates found for river segment"
+            rivers.at[river_ID, "hydrography_high_res_lons_lats"] = list(
+                zip(lons.tolist(), lats.tolist(), strict=True)
+            )
+            rivers.at[river_ID, "hydrography_high_res_upstream_area_m2"] = (
                 upstream_area_sorted.tolist()
             )
 

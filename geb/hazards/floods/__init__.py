@@ -390,7 +390,6 @@ class Floods(Module):
             simulation.set_accumulated_runoff_forcing(
                 runoff_m=forcing_grid,
                 river_network=self.model.hydrology.routing.river_network,
-                mask=~self.model.hydrology.grid.mask,
                 river_ids=river_ids,
                 basin_ids=basin_ids,
                 upstream_area=self.model.hydrology.grid.decompress(
