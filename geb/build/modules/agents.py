@@ -4,12 +4,10 @@ import math
 from datetime import datetime
 
 import geopandas as gpd
-import mercantile
 import numpy as np
 import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
-from pyquadkey2 import quadkey
 from tqdm import tqdm
 
 from geb.agents.crop_farmers import (
@@ -1554,7 +1552,9 @@ class Agents:
             "open_building_map",
             geom=self.region.union_all(),
             prefix="assets",
-        ).read(prefix="assets")
+        ).read()
+
+        a = 0
 
     def get_buildings_per_GDL_region(self) -> None:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid.
