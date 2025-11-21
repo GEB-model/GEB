@@ -12,24 +12,19 @@ Notes:
 
 """
 
+import bz2
 import tempfile
-import zipfile
 from pathlib import Path
 from typing import Any
 
-import bz2
 import geopandas as gpd
 import mercantile
-import numpy as np
-import rioxarray as rxr
-import xarray as xr
-from pyquadkey2 import quadkey
-from rioxarray import merge
-from tqdm import tqdm
 import pandas as pd
-import pyogrio
+from pyquadkey2 import quadkey
+from shapely import geometry
+from tqdm import tqdm
 
-from geb.workflows.io import fetch_and_save, open_zarr, to_zarr
+from geb.workflows.io import fetch_and_save
 
 from .base import Adapter
 
@@ -37,8 +32,22 @@ from .base import Adapter
 class OpenBuildingMap(Adapter):
     """Dataset adapter for OpenBuildingMap data."""
 
-    def _quadkeys_for_box(self, bounds, zoom=6) -> None:
-        """Gets the open building dataset. First it finds the quadkeys of tile within the model domain. Then it downloads the data and clips it to gdl region included in the domain."""
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize the adapter for FABDEM.
+
+        Args:
+            *args: Additional positional arguments passed to the base Adapter class.
+            **kwargs: Additional keyword arguments passed to the base Adapter class.
+        """
+        super().__init__(*args, **kwargs)
+
+    def _quadkeys_for_box(self, bounds: tuple, zoom: int = 6) -> None:
+        """Gets the open building dataset. First it finds the quadkeys of tile within the model domain. Then it downloads the data and clips it to gdl region included in the domain.
+
+        Args:
+            bounds: Bounds of the geom for which to get quadkeys that intersect.
+            zoom: Zoom level of the quadkeys.
+        """
         quadkeys = []
 
         # iterate over tiles intersecting the bbox
@@ -48,7 +57,17 @@ class OpenBuildingMap(Adapter):
 
         return quadkeys
 
-    def _extract_buildings_in_geom(self, gpkg_filename, geom) -> gpd.GeoDataFrame:
+    def _extract_buildings_in_geom(
+        self, gpkg_filename: Path, geom: geometry.polygon.Polygon
+    ) -> gpd.GeoDataFrame:
+        """This function reads the downloaded geopackage containing the buildings. It the extracts only the buildings that lie within the geom.
+
+        Args:
+            gpkg_filename: filename of the dowloaded geopackage.
+            geom: geom representing the model region.
+        Returns:
+            A geopandas geodataframe containing all building within the geom.
+        """
         # load buildings
         buildings = gpd.read_file(
             gpkg_filename,
@@ -56,33 +75,29 @@ class OpenBuildingMap(Adapter):
             bbox=geom.bounds,
             columns=["id", "occupancy", "floorspace", "height", "geometry"],
         )
+        # only keep buildings that intersect with the geom
         buildings = buildings[buildings.intersects(geom)]
         if len(buildings) == 0:
             print("No buildings found in region geom")
             return
         else:
             return buildings
-        # only keep buildings that intersect with the geom
 
     def _download_and_extract_tile(
         self,
         tile_url: str,
         temp_dir: Path,
         tile_filename: str,
-    ) -> list[Path]:
-        """Download a tile ZIP and extract only GeoTIFF files that intersect with the bbox.
+    ) -> Path:
+        """Download a tile .bz2 and extract only GeoTIFF files that intersect with the bbox.
 
         Args:
             tile_url: URL of the tile ZIP file.
             temp_dir: Temporary directory to extract to.
             tile_filename: Filename of the tile ZIP.
-            xmin: Minimum longitude of bbox (degrees).
-            xmax: Maximum longitude of bbox (degrees).
-            ymin: Minimum latitude of bbox (degrees).
-            ymax: Maximum latitude of bbox (degrees).
 
         Returns:
-            List of paths to the extracted GeoTIFF files that intersect with the bbox.
+            Path to the dowloaded geopackage files.
 
         Raises:
             RuntimeError: If download or extraction fails after all retries.
@@ -108,26 +123,24 @@ class OpenBuildingMap(Adapter):
             f_out.write(f_in.read())
         return Path(gpkg_filename)
 
-    def fetch(self, url: str, geom, prefix: str):
+    def fetch(
+        self, url: str, geom: geometry.polygon.Polygon, prefix: str
+    ) -> "OpenBuildingMap":
         """Download OpenBuildingMap tiles intersecting a bbox.
 
         Args:
-            xmin: Minimum longitude of area of interest (degrees).
-            xmax: Maximum longitude of area of interest (degrees).
-            ymin: Minimum latitude of area of interest (degrees).
-            ymax: Maximum latitude of area of interest (degrees).
-            url: Base URL of the FABDEM server.
+            url: Base URL of the OpenStreetMap server.
+            geom: Polygon of the model region.
             prefix: Prefix for the local storage path.
 
         Returns:
-            The Fabdem instance.
+            The OpenBuildingMap instance.
 
         Raises:
-            RuntimeError: If no tiles could be downloaded.
+            RuntimeError: If no buildings can be downloaded for the model region.
         """
-        # filepath: Path = self.get_filepath(prefix)
-        # if (filepath).exists():
-        #     return self
+        if self.path.exists():
+            return self
 
         # get bounds for geom
         bounds = geom.bounds
@@ -149,9 +162,23 @@ class OpenBuildingMap(Adapter):
         # concatenate all buildings
         buildings_in_geom = pd.concat(list_of_buildings_in_geom, ignore_index=True)
 
+        # raise error if no buildings are found in model region
         if len(buildings) == 0:
             raise RuntimeError("No OpenBuildingMap features were found in model domain")
         # write to file
-        buildings_in_geom.to_parquet(f"open_building_map.geoparquet")
+        buildings_in_geom.to_parquet(self.path)
 
         return self
+
+    def read(self, **kwargs: Any) -> gpd.GeoDataFrame:
+        """Read the OpenBuildingMap data as a GeoDataFrame.
+
+        Args:
+            **kwargs: Additional keyword arguments to pass to gpd.read_parquet.
+
+        Returns:
+            A GeoDataFrame with the GADM data.
+        """
+        gdf = Adapter.read(self, **kwargs)
+        assert isinstance(gdf, gpd.GeoDataFrame)
+        return gdf
