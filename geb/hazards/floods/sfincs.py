@@ -246,6 +246,8 @@ class SFINCSRootModel:
             ValueError: if grid_size_multiplier is not a positive integer.
 
         """
+        self.cleanup()
+
         if not isinstance(grid_size_multiplier, int) or grid_size_multiplier <= 0:
             raise ValueError("grid_size_multiplier must be a positive integer")
         if grid_size_multiplier == 1 and subgrid:
@@ -1116,6 +1118,8 @@ class SFINCSSimulation:
         self.end_time = end_time
         self.sfincs_root_model = sfincs_root_model
 
+        self.cleanup()
+
         sfincs_model = sfincs_root_model.sfincs_model
         sfincs_model.set_root(str(self.path), mode="w+")
 
@@ -1345,6 +1349,7 @@ class SFINCSSimulation:
         river_network: FlwdirRaster,
         mask: TwoDArrayBool,
         river_ids: TwoDArrayInt32,
+        basin_ids: TwoDArrayInt32,
         upstream_area: TwoDArrayFloat32,
         cell_area: TwoDArrayFloat32,
     ) -> None:
@@ -1358,6 +1363,7 @@ class SFINCSSimulation:
             river_network: FlwdirRaster representing the river network flow directions.
             mask: Boolean mask indicating the cells within the river basin.
             river_ids: 2D numpy array of river segment IDs for each cell in the grid.
+            basin_ids: 2D numpy array of basin IDs for each cell in the grid.
             upstream_area: 2D numpy array of upstream area values for each cell in the grid.
             cell_area: 2D numpy array of cell area values for each cell in the grid.
         """
@@ -1366,20 +1372,10 @@ class SFINCSSimulation:
             time=slice(self.start_time, self.end_time)
         )
 
-        # for accounting purposes, we set all runoff outside the model region to zero
-        region_mask = rasterize_like(
-            self.sfincs_root_model.region.to_crs(runoff_m.rio.crs),
-            burn_value=1,
-            raster=runoff_m.isel(time=0),
-            dtype=np.int32,
-            nodata=0,
-            all_touched=True,
-        ).astype(bool)
-
-        original_dimensions = runoff_m.dims
-        runoff_m: xr.DataArray = xr.where(region_mask, runoff_m, 0, keep_attrs=True)
-        # xr.where changes the dimension order, so we need to transpose it back
-        runoff_m: xr.DataArray = runoff_m.transpose(*original_dimensions)
+        valid_cells: TwoDArrayBool = np.isin(
+            basin_ids, self.sfincs_root_model.rivers.index
+        )
+        runoff_m = xr.where(valid_cells, runoff_m, 0.0)
 
         # we want to get all the discharge upstream from the starting point of each river segment
         # therefore, we first remove all river cells except for the starting point of each river segment

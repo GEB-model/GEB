@@ -384,11 +384,15 @@ class Floods(Module):
             river_ids: TwoDArrayInt32 = self.hydrology.grid.load(
                 self.model.files["grid"]["routing/river_ids"], compress=False
             )
+            basin_ids: TwoDArrayInt32 = self.hydrology.grid.load(
+                self.model.files["grid"]["routing/basin_ids"], compress=False
+            )
             simulation.set_accumulated_runoff_forcing(
                 runoff_m=forcing_grid,
                 river_network=self.model.hydrology.routing.river_network,
                 mask=~self.model.hydrology.grid.mask,
                 river_ids=river_ids,
+                basin_ids=basin_ids,
                 upstream_area=self.model.hydrology.grid.decompress(
                     self.model.hydrology.grid.var.upstream_area
                 ),
