@@ -1224,7 +1224,7 @@ def evaluate(
             "spinup_name": spinup_name,
             "run_name": run_name,
             "include_spinup": include_spinup,
-            "include_yearly_plots": include_yearly_plots,
+            "include_yearly_plots": "True",
             "correct_Q_obs": correct_q_obs,
         },
         working_directory=working_directory,

@@ -156,7 +156,7 @@ class Hydrology:
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
-        include_yearly_plots: bool = False,
+        include_yearly_plots: bool = True,
         correct_Q_obs: bool = False,
     ) -> None:
         """Evaluate the discharge grid from GEB against observations from the Q_obs database.
@@ -269,7 +269,7 @@ class Hydrology:
         evaluation_per_station: list = []
 
         print("Starting discharge evaluation...")
-
+        print(Q_obs)
         for ID in tqdm(Q_obs.columns):
             # create a discharge timeseries dataframe
             discharge_Q_obs_df = Q_obs[ID]
@@ -520,8 +520,9 @@ class Hydrology:
                 # Making yearly plots for every year in validation_df
                 # Get available years from validation_df (intersection of obs & sim time range)
                 if include_yearly_plots:
+                    print("yearly plots!!!")
                     years_to_plot = sorted(validation_df.index.year.unique())
-
+                    print(years_to_plot)
                     for year in years_to_plot:
                         # Filter data for the current year
                         one_year_df = validation_df[validation_df.index.year == year]

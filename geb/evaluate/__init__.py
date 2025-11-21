@@ -33,7 +33,7 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
-        include_yearly_plots: bool = False,
+        include_yearly_plots: bool = True,
         correct_Q_obs: bool = False,
     ) -> None:
         """Run the evaluation methods.
