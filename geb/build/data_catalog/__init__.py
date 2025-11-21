@@ -536,7 +536,7 @@ data_catalog: dict[str, dict[str, Any]] = {
     },
     "open_building_map": {
         "adapter": OpenBuildingMap(
-            folder="fabdem",
+            folder="open_building_map",
             local_version=1,
             filename="open_building_map.parquet",
             cache="local",
