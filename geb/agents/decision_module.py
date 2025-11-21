@@ -217,6 +217,7 @@ class DecisionModule:
         discount_rate: float,
         sigma: float,
         subjective: bool = True,
+        **kwargs: dict,
     ) -> np.ndarray:
         """This function calculates the time discounted subjective utility of not undertaking any action.
 

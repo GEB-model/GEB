@@ -31,6 +31,7 @@ from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
     abstract_water,
+    compute_premiums_and_best_contracts_numba,
     crop_profit_difference_njit_parallel,
     farmer_command_area,
     find_most_similar_index,
@@ -873,6 +874,11 @@ class CropFarmers(AgentBaseClass):
         self.var.why_class[:] = sample_from_map(
             why_map, self.var.locations.data, self.grid.gt
         )
+        # TODO: check why some agents sample outside map boundaries
+        classes, counts = np.unique(
+            self.var.why_class[self.var.why_class >= 0], return_counts=True
+        )
+        self.var.why_class[self.var.why_class < 0] = classes[counts.argmax()]
 
         ## Load in the GEV_parameters, calculated from the extreme value distribution of the SPEI timeseries, and load in the original SPEI data
         self.var.GEV_parameters = DynamicArray(
@@ -1927,7 +1933,6 @@ class CropFarmers(AgentBaseClass):
         self.var.harvested_crop.fill(-1)
         # If there are fields to be harvested, compute yield ratio and various related metrics
         if np.count_nonzero(harvest):
-            print(f"Harvesting {np.count_nonzero(harvest)} fields.")
             # Get yield ratio for the harvested crops
             yield_ratio_per_field = self.get_yield_ratio(
                 harvest,
@@ -1943,11 +1948,19 @@ class CropFarmers(AgentBaseClass):
             harvested_area = self.HRU.var.cell_area[harvest]
 
             harvested_crops = self.HRU.var.crop_map[harvest]
+
             max_yield_per_crop = np.take(
                 self.var.crop_data["reference_yield_kg_m2"].values, harvested_crops
             )
             harvesting_farmers = np.unique(harvesting_farmer_fields)
 
+            number_of_harvesting_fields = np.count_nonzero(harvested_crops)
+            print(
+                f"Harvesting {number_of_harvesting_fields} fields with crops: "
+                f"{np.unique(harvested_crops[harvested_crops >= 0])}"
+            )
+            if 23 in np.unique(harvested_crops[harvested_crops >= 0]):
+                pass
             # it's okay for some crop prices to be nan, as they will be filtered out in the next step
             crop_prices = self.agents.market.crop_prices
             region_id_per_field = self.var.region_id
@@ -2452,6 +2465,41 @@ class CropFarmers(AgentBaseClass):
             npt.NDArray[np.floating], npt.NDArray[np.floating]]: Best strike, exit,
                 rate, and capped premium per farmer.
         """
+        # Make a series of candidate insurance contracts and find the optimal contract
+        # with the least basis risk considering past losses
+        mask_columns = np.all(self.var.yearly_income == 0, axis=0)
+
+        potential_insured_loss_masked = potential_insured_loss[:, ~mask_columns]
+        history_masked = history[:, ~mask_columns]
+
+        (
+            best_strike_idx,
+            best_exit_idx,
+            best_rate_idx,
+            best_rmse,
+            best_prem,
+        ) = compute_premiums_and_best_contracts_numba(
+            gev_params,
+            history_masked,
+            potential_insured_loss_masked,
+            strike_vals,
+            exit_vals,
+            rate_vals,
+            n_sims=100,
+            seed=42,
+        )
+
+        best_strike = strike_vals[best_strike_idx]
+        best_exit = exit_vals[best_exit_idx]
+        best_rate = rate_vals[best_rate_idx]
+        best_premiums = best_prem * 1.3  # add loading factor
+
+        return (
+            best_strike,
+            best_exit,
+            best_rate,
+            np.minimum(best_premiums, government_premium_cap),
+        )
 
     def insured_payouts_index(
         self,
@@ -3266,7 +3314,7 @@ class CropFarmers(AgentBaseClass):
             "risk_perception": self.var.risk_perception.data,
             "total_annual_costs": total_annual_costs_m2,
             "adaptation_costs": annual_cost_m2,
-            "adapted": adapted,
+            "adapted": adapted.data,
             "time_adapted": self.var.time_adapted[:, WELL_ADAPTATION].data,
             "T": np.full(
                 self.var.n,
@@ -3275,7 +3323,7 @@ class CropFarmers(AgentBaseClass):
                 ]["decision_horizon"],
             ),
             "discount_rate": self.var.discount_rate.data,
-            "extra_constraint": extra_constraint,
+            "extra_constraint": extra_constraint.data,
         }
 
         # Calculate the EU of not adapting and adapting respectively
@@ -3685,7 +3733,7 @@ class CropFarmers(AgentBaseClass):
             adapted = np.zeros_like(interest_rate, dtype=bool)
         else:
             extra_constraint = np.ones_like(interest_rate, dtype=bool)
-            adapted = self.var.adaptations[:, adaptation_type] > 0
+            adapted = (self.var.adaptations[:, adaptation_type] > 0).data
 
         for idx, adaptation_type in enumerate(adaptation_types):
             # Compute profits with index insurance
@@ -3793,6 +3841,11 @@ class CropFarmers(AgentBaseClass):
                 np.sum(SEUT_adaptation_decision),
                 "(-)",
             )
+
+        # Check whether a single agent does not have multiple insurances
+        assert not np.any(
+            (self.var.adaptations.data[:, adaptation_types] == 1).sum(1) > 1
+        )
 
     def update_adaptation_decision(
         self,
@@ -4089,7 +4142,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Initialize the well unit cost array with zeros
-        well_unit_cost = np.full_like(self.var.why_class, np.nan, dtype=np.float32)
+        well_unit_cost = np.full_like(self.var.why_class.data, np.nan, dtype=np.float32)
 
         # Assign unit costs to each agent based on their well class using boolean indexing
         well_unit_cost[self.var.why_class == 1] = well_cost_class_1[

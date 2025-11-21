@@ -77,7 +77,7 @@ agent_settings:
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
     microcredit:
-      ruleset: base
+      ruleset: no-adaptation
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
@@ -87,7 +87,8 @@ agent_settings:
       size: 10 # nr of neighbors
     expected_utility:
       insurance:
-        duration: 1
+        duration: 2
+        seut_factor: 1
         personal_insurance: 
           ruleset: no-adaptation
         index_insurance: 
@@ -106,6 +107,7 @@ agent_settings:
       adaptation_irrigation_expansion:
         ruleset: no-adaptation
       adaptation_well:
+        seut_factor: 1
         loan_duration: 21
         lifespan: 20
         decision_horizon: 20

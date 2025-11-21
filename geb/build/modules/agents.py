@@ -15,6 +15,7 @@ from geb.agents.crop_farmers import (
     INDEX_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
     PERSONAL_INSURANCE_ADAPTATION,
+    PR_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
@@ -2539,6 +2540,7 @@ class Agents:
                         FIELD_EXPANSION_ADAPTATION,
                         PERSONAL_INSURANCE_ADAPTATION,
                         INDEX_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
