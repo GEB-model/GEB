@@ -995,9 +995,11 @@ def gpd_pot_ad_auto(
     # ---- Return levels ----
     RLs = gpd_return_level(u_star, sigma_star, xi_star, lambda_per_year, return_periods)
     rl_table = pd.DataFrame({"T_years": return_periods.astype(int), "GPD_POT_RL": RLs})
-    print("Automatic threshold selection (Anderson-Darling bootstrap)")
     print(
-        f"Chosen threshold corresponds to approximately the {pct:.2f}th percentile of daily maxima"
+        "Automatic threshold selection for exceedances done (checked by Anderson-Darling goodness-of-fit parameter test)."
+    )
+    print(
+        f"Chosen threshold corresponds to approximately the {pct:.2f}th percentile of daily maxima of discharge."
     )
 
     return {
@@ -1079,6 +1081,7 @@ def assign_return_periods(
                 min_exceed=min_exceed,
                 nboot=nboot,
             )
+            print(f"GPD-POT analysis completed for river {idx}.")
         except Exception as e:
             # If the threshold-selection routine raises, handle gracefully:
             # assign NaNs for all requested return periods and continue.
