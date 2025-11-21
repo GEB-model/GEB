@@ -1198,6 +1198,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pyflwdir" },
     { name = "pyogrio" },
+    { name = "pyquadkey2" },
     { name = "pyresample" },
     { name = "pystac" },
     { name = "pystac-client" },
@@ -1287,6 +1288,7 @@ requires-dist = [
     { name = "pybind11", marker = "extra == 'plantfate'", specifier = ">=2.13.6" },
     { name = "pyflwdir", specifier = ">=0.5.9" },
     { name = "pyogrio", specifier = ">=0.9.0" },
+    { name = "pyquadkey2", specifier = ">=0.3.2" },
     { name = "pyresample", specifier = ">=1.32.0" },
     { name = "pystac", specifier = ">=1.14.1" },
     { name = "pystac-client", specifier = ">=0.9.0" },
@@ -3538,6 +3540,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cc/27/ea9809966cc47d2d51e6d5ae631ea895f7c7c7b9b3c29718f900a8f7d197/pyproj-3.7.2-cp313-cp313t-win_amd64.whl", hash = "sha256:f54d91ae18dd23b6c0ab48126d446820e725419da10617d86a1b69ada6d881d3", size = 6375414, upload-time = "2025-08-14T12:04:59.861Z" },
     { url = "https://files.pythonhosted.org/packages/5b/f8/1ef0129fba9a555c658e22af68989f35e7ba7b9136f25758809efec0cd6e/pyproj-3.7.2-cp313-cp313t-win_arm64.whl", hash = "sha256:fc52ba896cfc3214dc9f9ca3c0677a623e8fdd096b257c14a31e719d21ff3fdd", size = 6262501, upload-time = "2025-08-14T12:05:01.39Z" },
 ]
+
+[[package]]
+name = "pyquadkey2"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3c/a2/45497d197df18186fbb3fa665fcc6ac179d392642ce36d23ad919c77e6ed/pyquadkey2-0.3.2.tar.gz", hash = "sha256:0c41a4b030169a772bb2b7dab7ebb9b5598e4f9a88378357a1efb69e7ab6f8f6", size = 70319, upload-time = "2024-12-31T13:05:36.519Z" }
 
 [[package]]
 name = "pyreadline3"
