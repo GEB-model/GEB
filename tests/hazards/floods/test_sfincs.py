@@ -387,8 +387,8 @@ def test_accumulated_runoff(
             total_flood_volume_across_models += total_flood_volume
             total_discharge_volume_across_models += discharge_m3
 
-            # simulation.cleanup()
-            # sfincs_model.cleanup()
+            simulation.cleanup()
+            sfincs_model.cleanup()
 
         if split:
             total_runoff_volume: float = (
