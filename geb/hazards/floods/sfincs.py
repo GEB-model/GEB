@@ -1498,40 +1498,6 @@ class SFINCSSimulation:
             timeseries=timeseries,
         )
 
-    # def setup_outflow_boundary(self) -> None:
-    #     # detect whether water level forcing should be set (use this under forcing == coastal) PLot basemap and forcing to check
-    #     if (
-    #         self.sfincs_model.grid["msk"] == 2
-    #     ).any():  # if mask is 2, the model requires water level forcing
-    #         waterlevel = self.sfincs_model.data_catalog.get_dataset(
-    #             "waterlevel"
-    #         ).compute()  # define water levels and stations in data_catalog.yml
-
-    #         locations = gpd.GeoDataFrame(
-    #             index=waterlevel.stations,
-    #             geometry=gpd.points_from_xy(
-    #                 waterlevel.station_x_coordinate, waterlevel.station_y_coordinate
-    #             ),
-    #             crs=4326,
-    #         )
-
-    #         timeseries = pd.DataFrame(
-    #             index=waterlevel.time, columns=waterlevel.stations, data=waterlevel.data
-    #         )
-    #         assert timeseries.columns.equals(locations.index)
-
-    #         locations = locations.reset_index(names="stations")
-    #         locations.index = (
-    #             locations.index + 1
-    #         )  # for hydromt/SFINCS index should start at 1
-    #         timeseries.columns = locations.index
-
-    #         self.sfincs_model.setup_waterlevel_forcing(
-    #             timeseries=timeseries, locations=locations
-    #         )
-
-    #     self.sfincs_model.write_forcing()
-
     def run(self, ncpus: int | str = "auto", gpu: bool | str = "auto") -> None:
         """Runs the SFINCS simulation.
 
