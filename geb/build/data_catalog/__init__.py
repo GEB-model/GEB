@@ -543,7 +543,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         ),
         "url": "https://datapub.gfz.de/download/10.5880.GFZ.LKUT.2025.002-Caweb/2025-002_Oostwegel-et-al_data/",
         "source": {
-            "name": "FABDEM",
+            "name": "OpenBuildingMap",
             "author": "Oostwegel et al. (2025)",
             "version": "1",
             "license": "CC BY-NC-SA 4.0",

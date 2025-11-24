@@ -5,7 +5,7 @@ gpkg tiles from the remote bz2 packages hosted by OpenBuildingMap.
 Tiles are quadkey level 6 and downloaded individually.
 
 Notes:
-    - FABDEM distributes 10x10-degree tiles as individual ZIP files.
+    - OpenBuildingMap distributes quadkey level 6 tiles as individual bz2 (zipped) files.
       Tile filenames follow the pattern " building.002232.gpkg.bz2" where the integers
       indicate the quadkey of the tile. See the OpenBuildingMap documentation for details.
     - Coverage spans the global land areas.
@@ -33,7 +33,7 @@ class OpenBuildingMap(Adapter):
     """Dataset adapter for OpenBuildingMap data."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize the adapter for FABDEM.
+        """Initialize the adapter for OpenBuildingMap.
 
         Args:
             *args: Additional positional arguments passed to the base Adapter class.
