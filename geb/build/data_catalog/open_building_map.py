@@ -46,7 +46,7 @@ class OpenBuildingMap(Adapter):
 
         Args:
             bounds: Bounds of the geom for which to get quadkeys that intersect.
-            zoom: Zoom level of the quadkeys.
+            zoom: Zoom level of the quadkeys. Zoomlevel 6 is used for open building map.
         """
         quadkeys = []
 
@@ -68,14 +68,14 @@ class OpenBuildingMap(Adapter):
         Returns:
             A geopandas geodataframe containing all building within the geom.
         """
-        # load buildings
+        # load buildings (should already be masked by region in this step)
         buildings = gpd.read_file(
             gpkg_filename,
             engine="pyogrio",
-            bbox=geom.bounds,
+            mask=geom,
             columns=["id", "occupancy", "floorspace", "height", "geometry"],
         )
-        # only keep buildings that intersect with the geom
+        # only keep buildings that intersect with the geom (to be sure, maybe can be removed)
         buildings = buildings[buildings.intersects(geom)]
         if len(buildings) == 0:
             print("No buildings found in region geom")
