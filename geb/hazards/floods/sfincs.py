@@ -40,7 +40,12 @@ from geb.typing import (
     TwoDArrayInt32,
 )
 from geb.workflows.io import load_geom
-from geb.workflows.raster import calculate_cell_area, clip_region, rasterize_like
+from geb.workflows.raster import (
+    calculate_cell_area,
+    clip_region,
+    pad_xy,
+    rasterize_like,
+)
 
 from .workflows import get_river_depth, get_river_manning
 from .workflows.return_periods import (
@@ -245,7 +250,7 @@ class SFINCSRootModel:
         Raises:
             ValueError: if depth_calculation_method is not 'manning' or 'power_law',
             ValueError: if grid_size_multiplier is not a positive integer.
-
+            ValueError: if resolution of DEM is not square pixels.
         """
         self.cleanup()
 
@@ -286,8 +291,20 @@ class SFINCSRootModel:
         self.region.to_parquet(self.path / "region.geoparquet")
         del region
 
+        # in case the first DEM does not fully cover the region, we pad it. Because
+        # of the alignment, the padding must increase with the grid_size_multiplier
+        minx, miny, maxx, maxy = self.region.total_bounds
+        mask: xr.DataArray = pad_xy(
+            mask,
+            minx=minx - abs(mask.rio.resolution()[1]) * grid_size_multiplier,
+            miny=miny - abs(mask.rio.resolution()[0]) * grid_size_multiplier,
+            maxx=maxx + abs(mask.rio.resolution()[1]) * grid_size_multiplier,
+            maxy=maxy + abs(mask.rio.resolution()[0]) * grid_size_multiplier,
+            return_slice=False,
+        )
+
         region_burned: xr.DataArray = rasterize_like(
-            gdf=self.region.to_crs(mask.rio.crs),
+            gdf=self.region,
             burn_value=1,
             raster=mask,
             dtype=np.int32,
@@ -367,7 +384,6 @@ class SFINCSRootModel:
                 all_touched=True,
             )
 
-        #
         # in one plot plot the region boundary as well as the rivers and save to file
         fig, ax = plt.subplots(figsize=(10, 10))
         self.region.boundary.plot(ax=ax, color="black")
