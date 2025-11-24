@@ -1554,15 +1554,15 @@ class Agents:
             geom=self.region.union_all(), columns=["GDLcode", "geometry"]
         )
 
-        fp_buildings = self.files["geom"]["assets/buildings"]
-        buildings = gpd.read_parquet(f"{self.root}/{fp_buildings}")[
-            ["osm_id", "osm_way_id", "geometry"]
-        ]
-        # replace None with -1
-        buildings["osm_id"] = buildings["osm_id"].replace({None: -1}).astype(np.int64)
-        buildings["osm_way_id"] = (
-            buildings["osm_way_id"].replace({None: -1}).astype(np.int64)
-        )
+        buildings = self.new_data_catalog.fetch(
+            "open_building_map",
+            geom=self.region.union_all(),
+            prefix="assets",
+        ).read()
+
+        # write to input folder
+        self.set_geom(buildings, name="assets/open_building_map")
+
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
         buildings["lon"] = centroids.x
@@ -1782,11 +1782,8 @@ class Agents:
                         lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
                         agents_allocated_to_building["coord_Y"] = lat_agents
                         agents_allocated_to_building["coord_X"] = lon_agents
-                        agents_allocated_to_building["osm_id"] = np.array(
-                            buildings_grid_cell["osm_id"]
-                        )[building_id]
-                        agents_allocated_to_building["osm_way_id"] = np.array(
-                            buildings_grid_cell["osm_way_id"]
+                        agents_allocated_to_building["building_id"] = np.array(
+                            buildings_grid_cell["id"]
                         )[building_id]
 
                         allocated_agents = pd.concat(
@@ -1816,11 +1813,8 @@ class Agents:
                         lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
                         agents_allocated_to_building["coord_Y"] = lat_agents
                         agents_allocated_to_building["coord_X"] = lon_agents
-                        agents_allocated_to_building["osm_id"] = np.array(
-                            buildings_grid_cell["osm_id"]
-                        )[building_id]
-                        agents_allocated_to_building["osm_way_id"] = np.array(
-                            buildings_grid_cell["osm_way_id"]
+                        agents_allocated_to_building["building_id"] = np.array(
+                            buildings_grid_cell["id"]
                         )[building_id]
 
                         allocated_agents = pd.concat(
@@ -1851,11 +1845,8 @@ class Agents:
                             ]
                             agents_allocated_to_building["coord_Y"] = lat_agents
                             agents_allocated_to_building["coord_X"] = lon_agents
-                            agents_allocated_to_building["osm_id"] = np.array(
-                                buildings_grid_cell["osm_id"]
-                            )[building_id]
-                            agents_allocated_to_building["osm_way_id"] = np.array(
-                                buildings_grid_cell["osm_way_id"]
+                            agents_allocated_to_building["building_id"] = np.array(
+                                buildings_grid_cell["id"]
                             )[building_id]
 
                             allocated_agents = pd.concat(
@@ -1895,8 +1886,7 @@ class Agents:
                 "education_level",
                 "wealth_index",
                 "rural",
-                "osm_id",
-                "osm_way_id",
+                "building_id",
                 "disp_income",
                 "income_percentile",
                 # "building_id"
@@ -1929,12 +1919,12 @@ class Agents:
                 # only keep households with region
                 household_characteristics[column] = data[households_with_region]
                 # assert that there in no None in arrays
-                if np.sum(household_characteristics[column] == None) > 0:
+                if np.sum(household_characteristics[column] is None) > 0:
                     self.logger.warning(
-                        f"Found {np.sum(household_characteristics[column] == None)} None values in {column} for {GDL_code}"
+                        f"Found {np.sum(household_characteristics[column] is None)} None values in {column} for {GDL_code}"
                     )
                     household_characteristics[column][
-                        household_characteristics[column] == None
+                        household_characteristics[column] is None
                     ] = -1
 
             # ensure that all households have a region assigned
