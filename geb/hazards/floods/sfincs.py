@@ -1353,8 +1353,17 @@ class SFINCSSimulation:
     ) -> None:
         """Sets up accumulated runoff forcing for the SFINCS model.
 
-        This function accumulates the runoff from the provided runoff grid to the starting
-        points of each river segment in the river network.
+        This function accumulates the runoff from the provided runoff grid to the river network
+        and sets it as discharge forcing for the SFINCS model. For each river cell in the low-resolution
+        runoff grid, the upstream area is determined and the runoff from all cells in that upstream
+        area is accumulated to the river cell. The accumulated discharge is then set as forcing
+        for the SFINCS model.
+
+        In some cases, the upstream area of the most upstream low-res river point is larger than the
+        upstream erea of the most upstream high-res river point. This means that the runoff
+        would be added further downstream. To avoid this, we check if this is the case, and if so,
+        we scale the upstream area of the low-res river points to match the upstream area of the
+        most upstream high-res river point.
 
         Args:
             runoff_m: xarray DataArray containing runoff values in m per time step.
@@ -1385,8 +1394,8 @@ class SFINCSSimulation:
         river_inflow_IDs = np.full_like(river_ids, -1, dtype=np.int64)
         xy_per_river_segment = value_indices(river_ids, ignore_value=-1)
         for ID, (ys, xs) in xy_per_river_segment.items():
-            assert len(ys) < INFLOW_MULTIPLICATION_FACTOR, (
-                f"River segment has more than {INFLOW_MULTIPLICATION_FACTOR} cells, which is not supported."
+            assert len(ys) < INFLOW_MULTIPLICATION_FACTOR - 2, (
+                f"River segment has more than {INFLOW_MULTIPLICATION_FACTOR - 2} cells, which is not supported."
                 "Increase the multiplication factor in the inflow ID calculation."
             )
 
@@ -1475,15 +1484,62 @@ class SFINCSSimulation:
                 np.abs(hydrography_high_res_upstream_area_m2 - upstream_area_low_res)
             )
 
+            discharge_m3_per_s = accumulated_generated_discharge_m3_per_s[:, mapped_idx]
+
+            # we want the runoff to start at the headwater of the river. However, sometimes due to
+            # the low resultion hydrology, it is inherent that sometimes the inflow point is not at the headwater
+            # but somewhere downstream. In that case, we need to add an additional inflow point at the headwater
+            # and scale the discharge accordingly, based on the upstream area at the headwater and the upstream area.
+            # We then place the normal inflow point at the closest high-res point, but with the discharge reduced accordingly.
+            if (
+                inflow_offset == 0  # check if this is the most upstream low-res point
+                and closest_upstream_area_index
+                != 0  # check if the clostest high-res point is not the high-res headwater point
+                and river["maxup"] == 0  # check if this river is a headwater river
+            ):
+                # create an additional inflow point at the headwater
+                lon_headwater, lat_headwater = hydrography_high_res_lons_lats[0]
+                nodes.append(Point(lon_headwater, lat_headwater))
+
+                # for the index, we create a unique index based on the river ID. The headwater point
+                # will always have offset INFLOW_MULTIPLICATION_FACTOR - 1 which will not
+                # collide with any other inflow point
+                headwater_idx = (
+                    river_ID * INFLOW_MULTIPLICATION_FACTOR
+                    + INFLOW_MULTIPLICATION_FACTOR
+                    - 1
+                )
+                inflow_IDs_gdf.append(headwater_idx)
+
+                # find the upstream areas of both the low-res downstream point
+                # and the high-res headwater point
+                upstream_area_downstream_point_m2 = (
+                    hydrography_high_res_upstream_area_m2[closest_upstream_area_index]
+                )
+                upstream_area_headwater_point_m2 = (
+                    hydrography_high_res_upstream_area_m2[0]
+                )
+
+                # scale the discharge based on the upstream areas
+                headwater_discharge_m3_per_s = (
+                    discharge_m3_per_s
+                    * upstream_area_headwater_point_m2
+                    / upstream_area_downstream_point_m2
+                )
+                timeseries[headwater_idx] = headwater_discharge_m3_per_s
+
+                # reduce the discharge at the downstream point accordingly
+                discharge_m3_per_s = discharge_m3_per_s - headwater_discharge_m3_per_s
+
             # get the lon lat of the closest high-res point
             lon, lat = hydrography_high_res_lons_lats[closest_upstream_area_index]
 
+            # add the normal inflow point
             nodes.append(Point(lon, lat))
             inflow_IDs_gdf.append(inflow_idx)
 
-            timeseries[inflow_idx] = accumulated_generated_discharge_m3_per_s[
-                :, mapped_idx
-            ]
+            # add the timeseries
+            timeseries[inflow_idx] = discharge_m3_per_s
 
         # create and sort the final nodes and timeseries
         nodes: gpd.GeoDataFrame = gpd.GeoDataFrame(
