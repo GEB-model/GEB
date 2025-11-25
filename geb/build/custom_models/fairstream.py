@@ -1502,25 +1502,22 @@ class fairSTREAMModel(GEBModel):
         ``replace_crop``, and writes the updated calendar back into the model
         store via ``self.set_array``.
         """
-        BAJRA = 0
-        GROUNDNUT = 1
-        JOWAR = 2
-        PADDY = 3
-        SUGARCANE = 4
-        WHEAT = 5
+        # BAJRA = 0
+        # GROUNDNUT = 1
+        # JOWAR = 2
+        # PADDY = 3
+        # SUGARCANE = 4
+        # WHEAT = 5
         GRAM = 6
-        MAIZE = 7
+        # MAIZE = 7
         MOONG = 8
-        RAGI = 9
-        SUNFLOWER = 10
+        # RAGI = 9
+        # SUNFLOWER = 10
         TUR = 11
         import zarr
 
         crop_calendar = zarr.load(
             "/net/sys/pscst001/export/BETA-IVM-BAZIS/mka483/GEB_p3/GEB_models/models/bhima/base/input/array/agents/farmers/crop_calendar.zarr"
-        )
-        crop_calendar_rotation_years = zarr.load(
-            "/net/sys/pscst001/export/BETA-IVM-BAZIS/mka483/GEB_p3/GEB_models/models/bhima/base/input/array/agents/farmers/crop_calendar_rotation_years.zarr"
         )
         most_common_check = [TUR, MOONG, GRAM]
         replaced_value = [TUR, MOONG, GRAM]

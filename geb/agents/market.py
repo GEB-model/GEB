@@ -312,7 +312,6 @@ class Market(AgentBaseClass):
             and "dynamic_market" in self.config
             and self.config["dynamic_market"] is True
         ):
-            index = self._crop_prices[0].get(self.model.current_time)
             simulated_price = self.get_modelled_crop_prices()
             return simulated_price
         else:
