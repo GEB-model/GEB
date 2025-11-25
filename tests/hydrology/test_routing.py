@@ -21,7 +21,7 @@ from geb.hydrology.routing import (
     get_channel_ratio,
     update_node_kinematic,
 )
-from geb.typing import ArrayFloat32, ArrayInt32
+from geb.types import ArrayFloat32, ArrayInt32
 
 
 def test_fill_discharge_gaps() -> None:

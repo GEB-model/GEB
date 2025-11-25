@@ -29,7 +29,7 @@ import numpy as np
 import numpy.typing as npt
 
 from geb.module import Module
-from geb.typing import ArrayFloat32
+from geb.types import ArrayFloat32
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import load_grid
 from geb.workflows.raster import write_to_array

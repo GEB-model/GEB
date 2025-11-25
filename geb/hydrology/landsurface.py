@@ -9,7 +9,7 @@ import zarr
 from numba import njit, prange  # noqa: F401
 
 from geb.module import Module
-from geb.typing import ArrayFloat32, ArrayInt32, TwoDArrayBool, TwoDArrayFloat32
+from geb.types import ArrayFloat32, ArrayInt32, TwoDArrayBool, TwoDArrayFloat32
 from geb.workflows import balance_check
 from geb.workflows.io import load_grid
 
