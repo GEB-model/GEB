@@ -63,3 +63,7 @@ Raises:
 ## Checking and formatting
 
 - Code can be checked and formatted using ruff: `uv run ruff check` and `uv run ruff format`.
+
+## Type annotations
+
+- Code can be type checked using ty: `uv run ty check`

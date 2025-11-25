@@ -5,9 +5,7 @@ Notes:
 """
 
 import inspect
-import json
 import logging
-import math
 import os
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -32,7 +30,7 @@ from shapely.geometry import Point
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.workflows.io import load_dict, to_dict
-from geb.workflows.raster import full_like, repeat_grid
+from geb.workflows.raster import clip_region, full_like, repeat_grid
 
 from ..workflows.io import open_zarr, to_zarr
 from .modules import (
@@ -80,30 +78,6 @@ def suppress_logging_warning(logger: logging.Logger) -> Iterator[None]:
         yield
     finally:
         logger.setLevel(current_level)  # Restore the original logging level
-
-
-class PathEncoder(json.JSONEncoder):
-    """Custom JSON encoder to handle Path objects.
-
-    Paths are converted to their string representation in posix format.
-    All files should be posix format to ensure compatibility across different operating systems.
-    """
-
-    def default(self, obj: object) -> Any:
-        """Convert Path objects to strings for JSON serialization.
-
-        Ottherwise, use the default serialization.
-
-        Args:
-            obj: Object to serialize.
-
-        Returns:
-            The serialized object. For Path objects, this is a string.
-        """
-        if isinstance(obj, Path):
-            obj = obj.as_posix()
-            return str(obj)
-        return super().default(obj)
 
 
 def boolean_mask_to_graph(
@@ -181,79 +155,7 @@ def boolean_mask_to_graph(
     return G
 
 
-def clip_region(
-    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int
-) -> tuple[xr.DataArray, ...]:
-    """Use the given mask to clip the mask itself and the given data arrays.
-
-    The clipping is done to the bounding box of the True values in the mask. The bounding box
-    is aligned to the given align value. The align value is in the same units as the coordinates
-    of the mask and data arrays.
-
-    Args:
-        mask: The mask to use for clipping. Must be a 2D boolean DataArray with x and y coordinates.
-            True values indicate the area to keep.
-        *data_arrays: The data arrays to clip. Must have the same x and y coordinates as the mask.
-        align: Align the bounding box to a specific grid spacing. For example, when this is set to 1
-            the bounding box will be aligned to whole numbers. If set to 0.5, the bounding box will
-            be aligned to 0.5 intervals.
-
-    Returns:
-        A tuple containing the clipped mask and the clipped data arrays.
-
-    Raises:
-        ValueError: If the data arrays do not have the same shape or coordinates as the mask.
-    """
-    rows, cols = np.where(mask)
-    mincol = cols.min()
-    maxcol = cols.max()
-    minrow = rows.min()
-    maxrow = rows.max()
-
-    minx = mask.x[mincol].item()
-    maxx = mask.x[maxcol].item()
-    miny = mask.y[minrow].item()
-    maxy = mask.y[maxrow].item()
-
-    xres, yres = mask.rio.resolution()
-
-    mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
-    maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
-    minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
-    maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
-
-    assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
-    assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
-
-    assert mincol_aligned <= mincol
-    assert maxcol_aligned >= maxcol
-    assert minrow_aligned <= minrow
-    assert maxrow_aligned >= maxrow
-
-    clipped_mask = mask.isel(
-        y=slice(minrow_aligned, maxrow_aligned),
-        x=slice(mincol_aligned, maxcol_aligned),
-    )
-    clipped_arrays = []
-    for da in data_arrays:
-        if da.shape != mask.shape:
-            raise ValueError("All data arrays must have the same shape as the mask.")
-        if not np.array_equal(da.x, mask.x) or not np.array_equal(da.y, mask.y):
-            raise ValueError(
-                "All data arrays must have the same coordinates as the mask."
-            )
-        clipped_arrays.append(
-            da.isel(
-                y=slice(minrow_aligned, maxrow_aligned),
-                x=slice(mincol_aligned, maxcol_aligned),
-            )
-        )
-    return clipped_mask, *clipped_arrays
-
-
-def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
+def get_river_graph(data_catalog: NewDataCatalog) -> networkx.DiGraph:
     """Create a directed graph for the river network.
 
     Args:
@@ -307,7 +209,7 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
 
 
 def get_subbasin_id_from_coordinate(
-    data_catalog: DataCatalog, lon: float, lat: float
+    data_catalog: NewDataCatalog, lon: float, lat: float
 ) -> int:
     """Find the subbasin ID for a given coordinate.
 
@@ -348,7 +250,7 @@ def get_subbasin_id_from_coordinate(
 
 
 def get_sink_subbasin_id_for_geom(
-    data_catalog: DataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
+    data_catalog: NewDataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
 ) -> list[int]:
     """Find all sink subbasins that intersect with the given geometry.
 
@@ -393,7 +295,7 @@ def get_sink_subbasin_id_for_geom(
 
 
 def get_all_downstream_subbasins_in_geom(
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     geom: gpd.GeoDataFrame,
     logger: logging.Logger,
 ) -> list[int]:
@@ -444,7 +346,7 @@ def get_all_downstream_subbasins_in_geom(
 
 
 def get_subbasin_upstream_areas(
-    data_catalog: DataCatalog, subbasin_ids: list[int]
+    data_catalog: NewDataCatalog, subbasin_ids: list[int]
 ) -> dict[int, float]:
     """Get upstream areas for a list of subbasins.
 
@@ -474,7 +376,7 @@ def get_subbasin_upstream_areas(
 
 
 def cluster_subbasins_by_area_and_proximity(
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     subbasin_ids: list[int],
     target_area_km2: float,  # Target cumulative upstream area per cluster in km² (e.g., Danube basin ~817,000 km²; use appropriate value for other basins)
     area_tolerance: float,
@@ -734,7 +636,7 @@ def cluster_subbasins_by_area_and_proximity(
 
             if not candidates:
                 logger.info(
-                    f"    No more candidates within cluster growth distance threshold"
+                    "    No more candidates within cluster growth distance threshold"
                 )
                 break
 
@@ -751,7 +653,7 @@ def cluster_subbasins_by_area_and_proximity(
 
             # Early termination if cluster is already at minimum size and no valid candidates
             if best_candidate is None and current_area >= min_area_threshold:
-                logger.info(f"    Cluster reached minimum area, stopping growth")
+                logger.info("    Cluster reached minimum area, stopping growth")
                 break
 
             # If no candidate fits, and we're still below minimum, take the closest one
@@ -763,7 +665,7 @@ def cluster_subbasins_by_area_and_proximity(
                 best_candidate = candidates[0][0]
 
             if best_candidate is None:
-                logger.info(f"    No suitable candidates found")
+                logger.info("    No suitable candidates found")
                 break
 
             # Add the best candidate
@@ -804,7 +706,7 @@ def cluster_subbasins_by_area_and_proximity(
 
 def save_clusters_to_geoparquet(
     clusters: list[list[int]],
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     output_path: str | Path,
     cluster_prefix: str = "cluster",
 ) -> None:
@@ -860,7 +762,7 @@ def save_clusters_to_geoparquet(
 
 def create_cluster_visualization_map(
     clusters: list[list[int]],
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     output_path: str | Path,
     cluster_prefix: str = "cluster",
     figsize: tuple[int, int] = (16, 12),
@@ -1118,7 +1020,7 @@ def create_multi_basin_configs(
 
 def save_clusters_as_merged_geometries(
     clusters: list[list[int]],
-    data_catalog: DataCatalog,
+    data_catalog: NewDataCatalog,
     river_graph: networkx.DiGraph,
     output_path: str | Path,
     cluster_prefix: str = "cluster",
@@ -1235,7 +1137,7 @@ def save_clusters_as_merged_geometries(
     multipolygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "MultiPolygon"])
     polygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "Polygon"])
 
-    print(f"\nSaved merged cluster geometries:")
+    print("\nSaved merged cluster geometries:")
     print(f"  Total clusters: {len(clusters)}")
     print(f"  Total area covered: {total_area:,.0f} km²")
     print(
@@ -1257,7 +1159,7 @@ def save_clusters_as_merged_geometries(
     print(f"  File saved to: {output_path}")
 
     # Show individual cluster info
-    print(f"\nCluster details:")
+    print("\nCluster details:")
     for _, row in merged_gdf.iterrows():
         geom_info = f" ({row['geometry_type']}"
         if row["num_geometry_parts"] > 1:
@@ -2367,8 +2269,13 @@ class GEBModel(
 
     @property
     def files_path(self) -> Path:
-        """Path to the files.json file that contains the file library."""
+        """Path to the files.yml file that contains the file library."""
         return Path(self.root, "files.yml")
+
+    @property
+    def progress_path(self) -> Path:
+        """Path to the progress file that contains the build progress."""
+        return Path(self.root, "progress.txt")
 
     def write_file_library(self) -> None:
         """Writes the file library to disk.
@@ -2441,19 +2348,44 @@ class GEBModel(
 
     def read_grid(self) -> None:
         """Reads all grid data arrays from disk based on the file library."""
+        # first read and set the mask. This is required.
+        grid_files: dict[str, dict[str, Path]] = self.files["grid"]
+        if len(grid_files) == 0:
+            return
+        mask: xr.DataArray = open_zarr(Path(self.root) / grid_files["mask"])
+        self.set_grid(mask, name="mask", write=False)
+
         for name, fn in self.files["grid"].items():
+            if name == "mask":  # mask already read
+                continue
             data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_grid(data, name=name, write=False)
 
     def read_subgrid(self) -> None:
         """Reads all subgrid data arrays from disk based on the file library."""
+        # first read and set the mask. This is required.
+        subgrid_files: dict[str, dict[str, Path]] = self.files["subgrid"]
+        if len(subgrid_files) == 0:
+            return
+        mask: xr.DataArray = open_zarr(Path(self.root) / subgrid_files["mask"])
+        self.set_subgrid(mask, name="mask", write=False)
         for name, fn in self.files["subgrid"].items():
+            if name == "mask":  # mask already read
+                continue
             data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_subgrid(data, name=name, write=False)
 
     def read_region_subgrid(self) -> None:
         """Reads all region subgrid data arrays from disk based on the file library."""
+        # first read and set the mask. This is required.
+        region_subgrid_files: dict[str, dict[str, Path]] = self.files["region_subgrid"]
+        if len(region_subgrid_files) == 0:
+            return
+        mask: xr.DataArray = open_zarr(Path(self.root) / region_subgrid_files["mask"])
+        self.set_region_subgrid(mask, name="mask", write=False)
         for name, fn in self.files["region_subgrid"].items():
+            if name == "mask":  # mask already read
+                continue
             data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_region_subgrid(data, name=name, write=False)
 
@@ -2825,31 +2757,100 @@ class GEBModel(
         # call the method
         func(*args, **kwargs)
 
-    def run_methods(self, methods: dict[str, Any], validate_order: bool = True) -> None:
+    def run_methods(
+        self,
+        methods: dict[str, Any],
+        validate_order: bool = True,
+        record_progress: bool = False,
+        continue_: bool = False,
+    ) -> None:
         """Run methods in the order specified in the methods dictionary.
 
         Args:
             methods: A dictionary with method names as keys and their parameters as values.
             validate_order: If True, validate the order of methods using the build_method decorator.
+            record_progress: If True, record progress after each method.
+            continue_: Continue previous build if it was interrupted or failed.
+
+        Raises:
+            ValueError: If continuing a build and completed methods are not in the methods to run
+                or if the order is incorrect.
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
         build_method.validate_methods(methods, validate_order=validate_order)
         self.files = self.read_or_create_file_library()
+
+        if not continue_:
+            # if not continuing, remove existing progress file
+            self.progress_path.unlink(missing_ok=True)
+
+        completed_methods: list[str] = (
+            build_method.read_progress(self.progress_path) if continue_ else []
+        )
+
+        # check if all completed methods are in the methods to run and if order is correct
+        if continue_:
+            methods_to_run = list(methods.keys())
+            for i, completed_method in enumerate(completed_methods):
+                if completed_method not in methods_to_run:
+                    raise ValueError(
+                        f"Cannot continue build: completed method {completed_method} not in methods to run. Restore the method or start a new build."
+                    )
+                if completed_method != methods_to_run[i]:
+                    raise ValueError(
+                        f"Cannot continue build: completed method {completed_method} is out of order. Restore the method order or start a new build."
+                    )
+
         for method in methods:
+            if method in completed_methods:
+                self.logger.info(f"Skipping already completed method: {method}")
+                continue
+
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
             self.write_file_library()
 
+            if record_progress:
+                build_method.record_progress(
+                    self.progress_path,
+                    method,
+                )
+
         self.logger.info("Finished!")
 
-    def build(self, region: dict, methods: dict) -> None:
-        """Build the model with the specified region and methods."""
-        methods: dict[str:Any] = methods or {}
-        methods["setup_region"].update(region=region)
-        self.files_path.unlink(missing_ok=True)
+    def build(
+        self, region: dict, methods: dict[str, dict[str, Any] | None], continue_: bool
+    ) -> None:
+        """Build the model with the specified region and methods.
 
-        self.run_methods(methods, validate_order=True and type(self) is GEBModel)
+        Args:
+            region: A dictionary defining the region to build the model for.
+            methods: A dictionary with method names as keys and their parameters as values.
+            continue_: Continue previous build if it was interrupted or failed.
+
+        Raises:
+            ValueError: If "setup_region" is not in methods when building a new model.
+        """
+        methods: dict[str, dict[str, Any] | None] = methods or {}
+        if "setup_region" not in methods:
+            raise ValueError(
+                '"setup_region" must be present in methods when building a new model.'
+            )
+        methods["setup_region"].update(region=region)
+
+        # if not continuing, remove existing files path
+        if continue_:
+            self.read()
+        else:
+            self.files_path.unlink(missing_ok=True)
+
+        self.run_methods(
+            methods,
+            validate_order=True and type(self) is GEBModel,
+            record_progress=True,
+            continue_=continue_,
+        )
 
     def update(
         self,
@@ -2864,6 +2865,8 @@ class GEBModel(
             ValueError: If "setup_region" is in methods, as this can only be called when
                 building a new model.
         """
+        self.read()
+
         methods = methods or {}
 
         if "setup_region" in methods:

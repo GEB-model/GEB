@@ -2,28 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import numpy as np
 from numba import njit, prange
-
-if TYPE_CHECKING:
-    from geb.agents import Agents
-    from geb.model import GEBModel
 
 
 class DecisionModule:
     """This class implements the decision module for drought adaptation."""
-
-    def __init__(self, model: GEBModel, agents: Agents) -> None:
-        """Initialize the DecisionModule.
-
-        Args:
-            model: The GEB model.
-            agents: The class that includes all agent types (allowing easier communication between agents).
-        """
-        self.agents = agents
-        self.model = model
 
     @staticmethod
     @njit(cache=True)
@@ -145,13 +129,13 @@ class DecisionModule:
         n_agents: int,
         discount_rate: float,
         max_T: int,
-        wealth: np.ndarray = None,
-        income: np.ndarray = None,
-        amenity_value: np.ndarray = None,
-        expected_damages: np.ndarray = None,
-        total_profits: np.ndarray = None,
-        profits_no_event: np.ndarray = None,
-        mode: str = None,
+        wealth: np.ndarray | None = None,
+        income: np.ndarray | None = None,
+        amenity_value: np.ndarray | None = None,
+        expected_damages: np.ndarray | None = None,
+        total_profits: np.ndarray | None = None,
+        profits_no_event: np.ndarray | None = None,
+        mode: str | None = None,
     ) -> np.ndarray:
         """This function iterates through each (no)flood event i (see manuscript for details).
 
@@ -353,7 +337,7 @@ class DecisionModule:
         # Iterate only through agents who can afford to adapt
         unconstrained_indices = np.where(unconstrained_mask)[0]
 
-        for idx in prange(unconstrained_indices.size):
+        for idx in prange(unconstrained_indices.size):  # ty: ignore[not-iterable]
             i = unconstrained_indices[idx]
 
             # Loan payment years remaining

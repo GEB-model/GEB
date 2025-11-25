@@ -9,13 +9,19 @@ from collections import deque
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterator,
+)
 
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import yaml
+from numpy.typing import NDArray
 
 from geb.workflows.io import load_geom
 
@@ -318,7 +324,11 @@ class DynamicArray:
             func, modified_types, modified_args, kwargs
         )
 
-    def __setitem__(self, key: int | slice, value: Any) -> None:
+    def __setitem__(
+        self,
+        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
+        value: Any,
+    ) -> None:
         """
         Set item(s) in the active portion of the array.
 
@@ -328,7 +338,10 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
-    def __getitem__(self, key: int | slice) -> DynamicArray | np.ndarray:
+    def __getitem__(
+        self,
+        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
+    ) -> DynamicArray | np.ndarray:
         """
         Retrieve item(s) or a sliced DynamicArray.
 
@@ -1187,7 +1200,7 @@ class Store:
             self.model.logger.debug(f"Saving {name}")
             bucket.save(path / name)
 
-    def load(self, omit: None | str = None, path: None | Path = None) -> None:
+    def load(self, path: None | Path = None, omit: None | str = None) -> None:
         """Load the store data from disk into the model.
 
         If no path is provided, it defaults to the store path of the model.

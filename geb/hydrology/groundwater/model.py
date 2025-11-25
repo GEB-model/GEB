@@ -38,7 +38,7 @@ from numba import njit
 from pyproj import CRS, Transformer
 from xmipy import XmiWrapper
 
-from geb.typing import (
+from geb.types import (
     ArrayFloat32,
     ArrayFloat64,
     TwoDArrayFloat32,

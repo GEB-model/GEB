@@ -33,7 +33,7 @@ import numpy as np
 import numpy.typing as npt
 
 from geb.module import Module
-from geb.typing import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
+from geb.types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
 from geb.workflows import balance_check
 
 from ..routing import get_channel_ratio
@@ -210,11 +210,6 @@ class GroundWater(Module):
         # this is the capillary rise for the NEXT timestep
         self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
         baseflow = groundwater_drainage * channel_ratio
-
-        # capriseindex is 1 where capilary rise occurs
-        self.hydrology.HRU.capriseindex = self.hydrology.to_HRU(
-            data=np.float32(self.grid.var.capillar > 0)
-        )
 
         self.report(locals())
 
