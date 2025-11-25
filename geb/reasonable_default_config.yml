@@ -103,6 +103,12 @@ agent_settings:
         loan_duration: 21
         decision_horizon: 20
         m2_cost: 1
+        return_fraction_surface: 0.75
+        return_fraction_sprinkler: 0.3
+        return_fraction_drip:  0.2
+        irr_eff_surface: 0.60
+        irr_eff_sprinkler: 0.75
+        irr_eff_drip:  0.95
       adaptation_irrigation_expansion:
         ruleset: no-adaptation
       adaptation_well:

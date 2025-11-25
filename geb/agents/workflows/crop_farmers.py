@@ -810,7 +810,7 @@ def abstract_water(
     groundwater_depth: npt.NDArray[np.float32],
     available_reservoir_storage_m3: npt.NDArray[np.float32],
     command_area_by_farmer: npt.NDArray[np.int32],
-    return_fraction: float,
+    return_fraction: npt.NDArray[np.float32],
     well_depth: npt.NDArray[np.float32],
     remaining_irrigation_limit_m3_reservoir: npt.NDArray[np.float32],
     remaining_irrigation_limit_m3_channel: npt.NDArray[np.float32],
@@ -848,7 +848,7 @@ def abstract_water(
         groundwater_depth: Groundwater depth per grid cell (m).
         available_reservoir_storage_m3: Available reservoir storage (m³).
         command_area_by_farmer: Reservoir command area per farmer (``-1`` if none).
-        return_fraction: Fraction of applied losses that return as return-flow.
+        return_fraction: Per-farmer fraction of applied losses that return as return-flow.
         well_depth: Per-farmer well depth (m).
         remaining_irrigation_limit_m3_reservoir: Remaining seasonal limit (m³).
         remaining_irrigation_limit_m3_channel: Remaining seasonal limit (m³).
@@ -899,6 +899,7 @@ def abstract_water(
             continue
 
         command_area_farmer = command_area_by_farmer[farmer]
+        return_fraction_farmer = return_fraction[farmer]
 
         if surface_irrigated[farmer]:
             maximum_abstraction_channel_m3_farmer = (
@@ -1011,7 +1012,7 @@ def abstract_water(
 
                 assert water_consumption_m[field] >= 0
                 assert water_withdrawal_m[field] >= 0
-                assert 1 >= return_fraction >= 0
+                assert 1 >= return_fraction_farmer >= 0
 
                 water_consumption_m[field] = (
                     water_withdrawal_m[field] * irrigation_efficiency[farmer]
@@ -1020,7 +1021,9 @@ def abstract_water(
                     water_withdrawal_m[field] - water_consumption_m[field]
                 )
                 assert irrigation_loss_m >= 0
-                irrigation_return_flow_m[field] = irrigation_loss_m * return_fraction
+                irrigation_return_flow_m[field] = (
+                    irrigation_loss_m * return_fraction_farmer
+                )
                 irrigation_evaporation_m[field] = (
                     irrigation_loss_m - irrigation_return_flow_m[field]
                 )

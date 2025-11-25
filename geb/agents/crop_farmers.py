@@ -724,13 +724,32 @@ class CropFarmers(AgentBaseClass):
 
         # Set irrigation efficiency data
         irrigation_mask = self.is_irrigated
-        self.var.irrigation_efficiency = DynamicArray(
-            n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=0.50
-        )
+        self.var.irr_eff_surface = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["irr_eff_surface"]
+        self.var.return_fraction_surface = self.model.config["agent_settings"][
+            "farmers"
+        ]["expected_utility"]["adaptation_sprinkler"]["return_fraction_surface"]
 
-        # self.var.irrigation_efficiency = DynamicArray(
-        #     n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=1.0
-        # )
+        self.var.irr_eff_drip = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["irr_eff_drip"]
+        self.var.return_fraction_drip = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["adaptation_sprinkler"]["return_fraction_drip"]
+
+        self.var.return_fraction = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=self.var.return_fraction_surface,
+        )
+        self.var.irrigation_efficiency = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=self.var.irr_eff_surface,
+        )
 
         rng = np.random.default_rng(42)
         self.var.irrigation_efficiency[irrigation_mask] = rng.choice(
@@ -1487,9 +1506,7 @@ class CropFarmers(AgentBaseClass):
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             groundwater_depth=groundwater_depth,
             command_area_by_farmer=self.command_area,
-            return_fraction=self.model.config["agent_settings"]["farmers"][
-                "return_fraction"
-            ],
+            return_fraction=self.var.return_fraction.data,
             well_depth=self.var.well_depth.data,
             remaining_irrigation_limit_m3_reservoir=self.var.remaining_irrigation_limit_m3_reservoir.data,
             remaining_irrigation_limit_m3_channel=self.var.remaining_irrigation_limit_m3_channel.data,
@@ -3256,18 +3273,19 @@ class CropFarmers(AgentBaseClass):
 
         adapted = self.var.adaptations[:, WELL_ADAPTATION] > 0
 
-        # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
-        # and who's wells are much shallower than the groundwater depth
-        self.reset_well_status(
-            farmer_yield_probability_relation,
-            adapted,
-            groundwater_depth,
-            self.blank_additional_differentiator,
-        )
-
         # Define extra constraints (farmers' wells must reach groundwater)
         well_reaches_groundwater = self.var.well_depth > groundwater_depth
         extra_constraint = well_reaches_groundwater
+
+        # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
+        # and who's wells are much shallower than the groundwater depth
+        self.reset_adaptation_status(
+            farmer_yield_probability_relation=farmer_yield_probability_relation,
+            adapted=adapted,
+            additional_diffentiator_expiration=extra_constraint,
+            additional_diffentiator_grouping=self.blank_additional_differentiator,
+            adaptation_type=WELL_ADAPTATION,
+        )
 
         energy_cost_m2 = energy_cost / self.field_size_per_farmer
         water_cost_m2 = water_cost / self.field_size_per_farmer
@@ -3365,37 +3383,41 @@ class CropFarmers(AgentBaseClass):
 
     def adapt_irrigation_efficiency(
         self,
-        farmer_yield_probability_relation: npt.NDArray[np.floating],
-        energy_cost: npt.NDArray[np.floating],
-        water_cost: npt.NDArray[np.floating],
+        farmer_yield_probability_relation: npt.NDArray[np.floating[Any]],
+        energy_cost: npt.NDArray[np.floating[Any]],
+        water_cost: npt.NDArray[np.floating[Any]],
+        adaptation_costs_m2: npt.NDArray[np.floating[Any]],
+        adaptation_type: int,
+        efficiency: float,
+        return_fraction: float,
     ) -> None:
         """Handle the adaptation of farmers to more efficient irrigation.
 
         Evaluates whether farmers adopt higher-efficiency irrigation systems by
         comparing expected utilities (SEUT) of adapting versus doing nothing, while
         accounting for loan costs, energy/water cost differences, and access
-        constraints. Updates adaptation state and irrigation efficiency in place.
+        constraints. Updates adaptation state, irrigation efficiency, and return
+        fraction in place.
 
         Args:
-            farmer_yield_probability_relation (npt.NDArray[np.floating]): Per-farmer
-                yield-SPEI relationship used to evaluate profits under drought risk.
-            energy_cost (npt.NDArray[np.floating]): Annual energy cost per farmer.
-            water_cost (npt.NDArray[np.floating]): Annual water cost per farmer.
-        """
-        # placeholder
-        m2_adaptation_costs = np.full(
-            self.var.n,
-            self.model.config["agent_settings"]["farmers"]["expected_utility"][
-                "adaptation_sprinkler"
-            ]["m2_cost"],
-        )
+            farmer_yield_probability_relation: Per-farmer parameters for the
+                yield-SPEI relation used to evaluate profits under drought risk.
+                Shape (n_agents, 2).
+            energy_cost: Annual energy cost per farmer (LCU/year). Shape (n_agents,).
+            water_cost: Annual water cost per farmer (LCU/year). Shape (n_agents,).
+            adaptation_costs_m2: Capital cost per m² for the efficiency upgrade
+                (LCU/m²). Shape (n_agents,).
+            adaptation_type: Index of the adaptation slot/column to update.
+            efficiency: New irrigation efficiency to assign to adopters (0-1).
+            return_fraction: Fraction of non-consumed irrigation water returning
+                as runoff (0-1).
 
+        """
         loan_duration = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["adaptation_sprinkler"]["loan_duration"]
 
-        # Placeholder
-        costs_irrigation_system = m2_adaptation_costs * self.field_size_per_farmer
+        costs_irrigation_system = adaptation_costs_m2 * self.field_size_per_farmer
 
         interest_rate = self.var.interest_rate.data
 
@@ -3418,19 +3440,18 @@ class CropFarmers(AgentBaseClass):
             axis=1,
         )
 
+        # To determine the benefit of irrigation, those who have above 90% irrigation efficiency have adapted
+        adapted = self.var.adaptations[:, adaptation_type] > 0
+
         # Reset farmers' status and irrigation type who exceeded the lifespan of their adaptation
         # or who's never had access to irrigation water
-        expired_adaptations = (
-            self.var.time_adapted[:, IRRIGATION_EFFICIENCY_ADAPTATION]
-            == self.var.lifespan_irrigation
-        ) | has_irrigation_access
-        self.var.adaptations[expired_adaptations, IRRIGATION_EFFICIENCY_ADAPTATION] = -1
-        self.var.time_adapted[
-            expired_adaptations, IRRIGATION_EFFICIENCY_ADAPTATION
-        ] = -1
-
-        # To determine the benefit of irrigation, those who have above 90% irrigation efficiency have adapted
-        adapted = self.var.adaptations[:, IRRIGATION_EFFICIENCY_ADAPTATION] > 0
+        self.reset_adaptation_status(
+            farmer_yield_probability_relation=farmer_yield_probability_relation,
+            adapted=adapted,
+            additional_diffentiator_expiration=has_irrigation_access,
+            additional_diffentiator_grouping=self.blank_additional_differentiator,
+            adaptation_type=adaptation_type,
+        )
 
         energy_cost_m2 = energy_cost / self.field_size_per_farmer
         water_cost_m2 = water_cost / self.field_size_per_farmer
@@ -3454,6 +3475,8 @@ class CropFarmers(AgentBaseClass):
             farmer_yield_probability_relation,
         )
 
+        within_budget = self.budget_check(total_annual_costs_m2)
+
         total_profits_adaptation = (
             total_profits_adaptation + energy_diff_m2 + water_diff_m2
         )
@@ -3464,7 +3487,7 @@ class CropFarmers(AgentBaseClass):
         # Construct a dictionary of parameters to pass to the decision module functions
         decision_params = {
             "loan_duration": loan_duration,
-            "expenditure_cap": self.var.expenditure_cap,
+            "expenditure_cap": within_budget,
             "n_agents": self.var.n,
             "sigma": self.var.risk_aversion.data,
             "p_droughts": 1 / self.var.p_droughts[:-1],
@@ -3475,8 +3498,8 @@ class CropFarmers(AgentBaseClass):
             "risk_perception": self.var.risk_perception.data,
             "total_annual_costs": total_annual_costs_m2,
             "adaptation_costs": annual_cost_m2,
-            "adapted": adapted,
-            "time_adapted": self.var.time_adapted[:, IRRIGATION_EFFICIENCY_ADAPTATION],
+            "adapted": adapted.data,
+            "time_adapted": self.var.time_adapted[:, adaptation_type].data,
             "T": np.full(
                 self.var.n,
                 self.model.config["agent_settings"]["farmers"]["expected_utility"][
@@ -3496,7 +3519,7 @@ class CropFarmers(AgentBaseClass):
         assert (SEUT_do_nothing != -1).any() or (SEUT_adapt != -1).any()
 
         SEUT_adaptation_decision = self.update_adaptation_decision(
-            adaptation_type=IRRIGATION_EFFICIENCY_ADAPTATION,
+            adaptation_type=adaptation_type,
             adapted=adapted,
             loan_duration=loan_duration,
             annual_cost=annual_cost,
@@ -3506,12 +3529,13 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Update irrigation efficiency for farmers who adapted
-        self.var.irrigation_efficiency[SEUT_adaptation_decision] = 0.9
+        self.var.irrigation_efficiency[SEUT_adaptation_decision] = efficiency
+        self.var.return_fraction[SEUT_adaptation_decision] = return_fraction
 
         # Print the percentage of adapted households
         percentage_adapted = round(
-            np.sum(self.var.adapted[:, IRRIGATION_EFFICIENCY_ADAPTATION])
-            / len(self.var.adapted[:, IRRIGATION_EFFICIENCY_ADAPTATION])
+            np.sum(self.var.adaptations[:, adaptation_type] > 0)
+            / len(self.var.adaptations[:, adaptation_type])
             * 100,
             2,
         )
@@ -4620,12 +4644,13 @@ class CropFarmers(AgentBaseClass):
 
         return gains_adaptation, ids_to_switch_to
 
-    def reset_well_status(
+    def reset_adaptation_status(
         self,
         farmer_yield_probability_relation: npt.NDArray[np.floating],
         adapted: npt.NDArray[np.bool_],
-        groundwater_depth: npt.NDArray[np.floating],
-        additional_diffentiator: npt.NDArray[np.integer],
+        additional_diffentiator_expiration: npt.NDArray[np.bool_],
+        additional_diffentiator_grouping: npt.NDArray[np.integer],
+        adaptation_type: npt.NDArray[np.integer],
     ) -> None:
         """Expire shallow/aged wells and refresh affected farmers' histories.
 
@@ -4635,10 +4660,10 @@ class CropFarmers(AgentBaseClass):
         income/potential-income/SPEI histories accordingly.
         """
         expired_adaptations = (
-            self.var.time_adapted[:, WELL_ADAPTATION] == self.var.lifespan_well
-        ) | (groundwater_depth > self.var.well_depth)
-        self.var.adaptations[expired_adaptations, WELL_ADAPTATION] = -1
-        self.var.time_adapted[expired_adaptations, WELL_ADAPTATION] = -1
+            self.var.time_adapted[:, adaptation_type] == self.var.lifespan_well
+        ) | additional_diffentiator_expiration
+        self.var.adaptations[expired_adaptations, adaptation_type] = -1
+        self.var.time_adapted[expired_adaptations, adaptation_type] = -1
 
         # Determine the IDS of the most similar group of yield
         (
@@ -4648,7 +4673,9 @@ class CropFarmers(AgentBaseClass):
             profits_no_event_adaptation,
             ids_to_switch_to,
         ) = self.profits_SEUT(
-            additional_diffentiator, ~adapted, farmer_yield_probability_relation
+            additional_diffentiator_grouping,
+            ~adapted,
+            farmer_yield_probability_relation,
         )
         # Update yield-SPEI relation
         new_id_final = ids_to_switch_to[expired_adaptations]
@@ -5265,8 +5292,20 @@ class CropFarmers(AgentBaseClass):
                         )
                         timer.finish_split("irr well")
                     if self.sprinkler_adaptation_active:
+                        adaptation_costs_m2 = np.full(
+                            self.var.n,
+                            self.model.config["agent_settings"]["farmers"][
+                                "expected_utility"
+                            ]["adaptation_sprinkler"]["m2_cost"],
+                        )
                         self.adapt_irrigation_efficiency(
-                            farmer_yield_probability_relation, energy_cost, water_cost
+                            farmer_yield_probability_relation,
+                            energy_cost,
+                            water_cost,
+                            adaptation_costs_m2,
+                            IRRIGATION_EFFICIENCY_ADAPTATION,
+                            self.var.irr_eff_drip,
+                            self.var.return_fraction_drip,
                         )
 
                         timer.finish_split("irr efficiency")
