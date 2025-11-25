@@ -86,8 +86,6 @@ class GEBModel(Module, HazardDriver):
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
 
-        self.check_time_range()
-
         self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
 
         self.store = Store(self)
@@ -115,7 +113,6 @@ class GEBModel(Module, HazardDriver):
     @overload
     def multiverse(
         self,
-        variables: list[str],
         forecast_issue_datetime: datetime.datetime,
         return_mean_discharge: bool = True,
     ) -> dict[Any, float]: ...
@@ -449,6 +446,7 @@ class GEBModel(Module, HazardDriver):
         n_timesteps: int = int(n_timesteps)
         assert n_timesteps > 0, "End time is before or identical to start time"
 
+        self.check_time_range()
         self._initialize(
             create_reporter=True,
             current_time=current_time,
@@ -553,6 +551,7 @@ class GEBModel(Module, HazardDriver):
 
         self.var = self.store.create_bucket("var")
 
+        self.check_time_range()
         self._initialize(
             create_reporter=True,
             current_time=current_time,
@@ -938,10 +937,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             Datetime object representing the end of the current simulation.
         """
-        if self.in_spinup:
-            return self.spinup_end
-        else:
-            return self.run_end
+        return self.simulation_start + (self.n_timesteps - 1) * self.timestep_length
 
     @property
     def current_timestep(self) -> int:

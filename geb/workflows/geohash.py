@@ -27,7 +27,7 @@ def encode_locations(
         hashcodes: Geohash codes array for all locations.
     """
     hashcodes = np.empty(locations.shape[0], np.int64)
-    for i in nb.prange(locations.shape[0]):
+    for i in nb.prange(locations.shape[0]):  # ty: ignore[not-iterable]
         hashcodes[i] = encode(locations[i, 0], locations[i, 1], minx, maxx, miny, maxy)
     return hashcodes
 
@@ -51,7 +51,7 @@ def reduce_precision(
         geohashes_reduced_precision = geohashes
     else:
         geohashes_reduced_precision = np.zeros(geohashes.size, dtype=np.int64)
-    for i in nb.prange(geohashes.size):
+    for i in nb.prange(geohashes.size):  # ty: ignore[not-iterable]
         geohashes_reduced_precision[i] = geohashes[i] >> (61 - bits) | precision_tag
     return geohashes_reduced_precision
 
@@ -263,7 +263,7 @@ def shift_multiple(gh: np.int64, bits: int, shifts: np.ndarray) -> np.ndarray:
     unwidened_gh = unwiden(gh)
     unwidened_shifted_gh = unwiden(gh >> 1)
     precision = get_precision_tag(bits)
-    for i in prange(shifts.shape[0]):
+    for i in prange(shifts.shape[0]):  # ty: ignore[not-iterable]
         if (bits & 1) == 0:
             sx = shifts[i, 1]
             sy = shifts[i, 0]
@@ -465,7 +465,7 @@ def plot_geohash_shifts(
     lond = (maxlon - minlon) / 10
 
     ax.set_extent((minlon - lond, maxlon + lond, minlat - latd, maxlat + latd))
-    ax.add_image(imagery, 14)
+    ax.add_image(imagery, 14)  # ty: ignore[too-many-positional-arguments,invalid-argument-type]  add image is enhanced by cartopy, but not in typeshed
 
     ax.set_title(
         f"lon: {lon}, lat: {lat}, radius: {radius}, bits: {bits}", size="x-small"

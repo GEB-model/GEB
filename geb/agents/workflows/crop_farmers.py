@@ -1294,7 +1294,7 @@ def crop_profit_difference_njit_parallel(
         weight_total += w
 
     # Parallel only over groups
-    for group_id in prange(n_groups):
+    for group_id in prange(n_groups):  # ty: ignore[not-iterable]
         unique_group = unique_crop_groups[group_id]
         unique_farmer_groups = find_matching_rows(crop_elevation_group, unique_group)
 
@@ -1442,7 +1442,7 @@ def compute_premiums_and_best_contracts_numba(
     best_rmse_arr = np.empty(n_agents, dtype=np.float64)
     best_prem_arr = np.empty(n_agents, dtype=np.float64)
 
-    for agent_idx in prange(n_agents):
+    for agent_idx in prange(n_agents):  # ty: ignore[not-iterable]
         shape = -gev_params[agent_idx, 0]
         loc = gev_params[agent_idx, 1]
         scale = gev_params[agent_idx, 2]

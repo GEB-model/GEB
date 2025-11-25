@@ -202,7 +202,7 @@ class CropFarmers(AgentBaseClass):
             self.grid = model.hydrology.grid
 
         self.redundancy = reduncancy
-        self.decision_module = DecisionModule(self.model, self.agents)
+        self.decision_module = DecisionModule()
 
         self.inflation_rate = load_economic_data(
             self.model.files["dict"]["socioeconomics/inflation_rates"]

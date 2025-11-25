@@ -4,6 +4,8 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
+from geb.types import ArrayFloat32
+
 from .landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 
 # TODO: Load this dynamically as global var (see soil.py)
@@ -102,7 +104,7 @@ def rise_from_groundwater(
 
 @njit(cache=True, inline="always")
 def get_infiltration_capacity(
-    saturated_hydraulic_conductivity: npt.NDArray[np.float32],
+    saturated_hydraulic_conductivity: ArrayFloat32,
 ) -> np.float32:
     """Calculate the infiltration capacity for a single cell.
 
@@ -144,31 +146,24 @@ def infiltration(
             - infiltration: Infiltration into the soil for the cell in meters.
     """
     # Calculate potential infiltration for the cell
-    potential_infiltration = get_infiltration_capacity(saturated_hydraulic_conductivity)
+    potential_infiltration: np.float32 = get_infiltration_capacity(
+        saturated_hydraulic_conductivity
+    )
+    top_layer_capacity: np.float32 = ws[0] - w[0]
+    potential_infiltration = min(potential_infiltration, top_layer_capacity)
 
     # Calculate infiltration for the cell
-    infiltration_amount = min(
+    infiltration_amount: np.float32 = min(
         potential_infiltration
         * ~soil_is_frozen
         * ~(land_use_type == SEALED)  # no infiltration on sealed areas
         * ~(land_use_type == OPEN_WATER),  # no infiltration on open water
         topwater_m,
     )
-
-    remaining_infiltration = np.float32(infiltration_amount)
-    for layer in range(N_SOIL_LAYERS):
-        capacity = ws[layer] - w[layer]
-        if remaining_infiltration > capacity:
-            w[layer] = ws[layer]  # fill the layer to capacity
-            remaining_infiltration -= capacity
-        else:
-            w[layer] += remaining_infiltration
-            remaining_infiltration = np.float32(0)
-            w[layer] = min(w[layer], ws[layer])
-            break
-
-    infiltration_amount -= remaining_infiltration
     topwater_m -= infiltration_amount
+
+    w[0] += infiltration_amount
+    w[0] = min(w[0], ws[0])  # ensure that the top layer does not exceed saturation
 
     # Calculate direct runoff
     direct_runoff = max(

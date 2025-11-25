@@ -2197,6 +2197,6 @@ class Hydrology:
                         f"Detailed performance metrics saved as: {event_folder / detailed_filename}"
                     )
 
-        print(f"Completed processing event: {event_name}\n")
+            print(f"Completed processing event: {event_name}\n")
 
-    print("Flood map performance metrics calculated for all events.")
+        print("Flood map performance metrics calculated for all events.")

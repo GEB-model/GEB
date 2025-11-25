@@ -3,6 +3,7 @@
 import geopandas as gpd
 import numpy as np
 import xarray as xr
+from pyflwdir.dem import fill_depressions
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
@@ -93,8 +94,9 @@ class LandSurface:
             {
                 "name": "fabdem",
                 "zmin": 0.001,
+                "fill_depressions": True,
             },
-            {"name": "gebco"},
+            {"name": "gebco", "zmax": 0.0, "fill_depressions": False},
         ],
     ) -> None:
         """Sets up the elevation data for the model.
@@ -157,7 +159,7 @@ class LandSurface:
                     DEM_raster = DEM_raster.isel(band=0)
 
                 DEM_raster = DEM_raster.isel(
-                    **get_window(
+                    get_window(
                         DEM_raster.x,
                         DEM_raster.y,
                         tuple(
@@ -172,6 +174,10 @@ class LandSurface:
                 )
 
             DEM_raster = convert_nodata(DEM_raster.astype(np.float32), np.nan)
+
+            if "fill_depressions" in DEM and DEM["fill_depressions"]:
+                DEM_raster.values, d8 = fill_depressions(DEM_raster.values)
+
             self.set_other(
                 DEM_raster,
                 name=f"DEM/{DEM['name']}",
@@ -311,7 +317,7 @@ class LandSurface:
         )
 
         region_ids: xr.DataArray = rasterize_like(
-            gpd=self.geom["regions"],
+            gdf=self.geom["regions"],
             column="region_id",
             raster=region_mask,
             dtype=np.int32,
@@ -430,7 +436,7 @@ class LandSurface:
         )
         forest_kc.attrs["_FillValue"] = np.nan
         forest_kc: xr.DataArray = forest_kc.isel(
-            **get_window(
+            get_window(
                 forest_kc.x,
                 forest_kc.y,
                 self.bounds,
@@ -464,7 +470,7 @@ class LandSurface:
             )
             interception_capacity.attrs["_FillValue"] = np.nan
             interception_capacity: xr.DataArray = interception_capacity.isel(
-                **get_window(
+                get_window(
                     interception_capacity.x,
                     interception_capacity.y,
                     self.bounds,
@@ -524,7 +530,7 @@ class LandSurface:
             .rio.write_crs(4326)
         )
         crop_group = crop_group.isel(
-            **get_window(
+            get_window(
                 crop_group.x,
                 crop_group.y,
                 self.bounds,

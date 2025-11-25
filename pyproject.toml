@@ -38,7 +38,6 @@ dependencies = [
     "pandas>=2.3.0",
     "permetrics>=2.0.0",
     "pyarrow>=17.0.0",
-    "pyextremes>=2.3.3",
     "pyflwdir>=0.5.9",
     "pyogrio>=0.9.0",
     "pyresample>=1.32.0",
@@ -72,6 +71,7 @@ dependencies = [
     "pytest-plt>=1.1.1",
     "pytest-benchmark>=5.2.1",
     "imageio>=2.37.2",
+    "pyquadkey2>=0.3.2",
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"
@@ -204,7 +204,7 @@ addopts = "--ignore=.venv"
 
 [tool.ty.environment]
 python-version = "3.13"
-extra-paths = ["./typings"]
 
 [tool.ty.rules]
 possibly-missing-attribute = "ignore"
+unresolved-attribute = "ignore"
