@@ -1117,6 +1117,7 @@ class SFINCSSimulation:
         end_time: datetime,
         spinup_seconds: int = 86400,
         write_figures: bool = True,
+        flood_map_output_interval_seconds: int = 900,
     ) -> None:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
 
@@ -1128,6 +1129,8 @@ class SFINCSSimulation:
             end_time: The end time of the simulation as a datetime object.
             spinup_seconds: The number of seconds to use for model spin-up. Defaults to 86400 (1 day).
             write_figures: Whether to generate and save figures for the model. Defaults to False.
+            flood_map_output_interval_seconds: The interval in seconds at which to output flood maps. Defaults to 900 (15 minutes).
+                0 means no output.
         """
         self._name = simulation_name
         self.write_figures = write_figures
@@ -1144,7 +1147,8 @@ class SFINCSSimulation:
             alpha=0.5,  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
             h73table=1,  # use h^(7/3) table for friction calculation. This is slightly less accurate but up to 30% faster
             tspinup=spinup_seconds,  # spinup time in seconds
-            dtout=900,  # output time step in seconds
+            dtout=flood_map_output_interval_seconds,  # output time step in seconds
+            dtmaxout=9999999,  # only report max flood depth at the end of the simulation
             tref=to_sfincs_datetime(start_time),  # reference time for the simulation
             tstart=to_sfincs_datetime(start_time),  # simulation start time
             tstop=to_sfincs_datetime(end_time),  # simulation end time

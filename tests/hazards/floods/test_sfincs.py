@@ -292,6 +292,7 @@ def test_accumulated_runoff(
                 end_time=end_time,
                 spinup_seconds=0,
                 write_figures=True,
+                flood_map_output_interval_seconds=0,
             )
 
             simulation.set_accumulated_runoff_forcing(
