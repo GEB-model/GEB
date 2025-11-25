@@ -11,6 +11,26 @@ import xarray as xr
 from damagescanner.vector import VectorScanner as VectorScannerDS
 from damagescanner.vector import VectorExposure as VectorExposureDS
 import numpy as np
+from tqdm import tqdm
+
+
+# TODO replace this with numba njit
+def _get_damage_per_object(_object, multi_curves, cell_area_m2):
+    coverage = np.array(_object["coverage"]) * cell_area_m2
+    for curve in multi_curves:
+        _object[curve] = (
+            np.sum(
+                np.interp(
+                    _object["values"],
+                    multi_curves[curve].index,
+                    multi_curves[curve].values,
+                )
+                * coverage
+            )
+            * _object["maximum_damage"]
+        )
+
+    return _object[multi_curves.keys()]
 
 
 def VectorScannerMultiCurves(
@@ -29,25 +49,13 @@ def VectorScannerMultiCurves(
         gridded=False,
     )
     # calculate damages
-    for i, asset in features.iterrows():
-        coverage = np.array(asset["coverage"]) * cell_area_m2
-        if coverage.sum() > 0:
-            for curve in multi_curves:
-                features.at[i, curve] = (
-                    np.sum(
-                        np.interp(
-                            asset["values"],
-                            multi_curves[curve].index,
-                            multi_curves[curve].values,
-                        )
-                        * coverage
-                    )
-                    * asset["maximum_damage"]
-                )
-        else:
-            for curve in multi_curves:
-                features.at[i, curve] = 0
-    return features[multi_curves.keys()]
+    tqdm.pandas(desc="Calculating damage", disable=disable_progress)
+
+    result = features.progress_apply(
+        lambda _object: _get_damage_per_object(_object, multi_curves, cell_area_m2),
+        axis=1,
+    )
+    return result
 
 
 def VectorScanner(

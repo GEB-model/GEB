@@ -1085,7 +1085,12 @@ class Households(AgentBaseClass):
                 agent_df,
                 building_multicurve,
             )
-
+            print(
+                f"Damages rp{return_period}: {damages_do_not_adapt[i].sum() / 1e6} million"
+            )
+            print(
+                f"Damages adapt rp{return_period}: {damages_adapt[i].sum() / 1e6} million"
+            )
         return damages_do_not_adapt, damages_adapt
 
     def flood(self, flood_depth: xr.DataArray) -> float:
