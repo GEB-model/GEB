@@ -156,18 +156,22 @@ class Households(AgentBaseClass):
 
     def update_building_attributes(self) -> None:
         """Update building attributes based on household data."""
-        # Start by computing occupancy from the var.building_id array
-        building_id_series = pd.Series(self.var.building_id.data)
+        # Start by computing occupancy from the var.building_id_of_household array
+        building_id_of_household_series = pd.Series(
+            self.var.building_id_of_household.data
+        )
 
         # Drop NaNs and convert to string format (matching building ID format)
-        building_id_counts = building_id_series.dropna().astype(int).value_counts()
+        building_id_of_household_counts = (
+            building_id_of_household_series.dropna().astype(int).value_counts()
+        )
         # Initialize occupancy column
         self.buildings["occupancy"] = 0
 
         # Map the counts back to the buildings dataframe
         self.buildings["occupancy"] = (
             self.buildings["id"]
-            .map(building_id_counts)
+            .map(building_id_of_household_counts)
             .fillna(self.buildings["occupancy"])
         )
 
@@ -201,16 +205,18 @@ class Households(AgentBaseClass):
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
         """Update the floodproofing status of buildings based on adapting households."""
         # Extract and clean OSM IDs from adapting households
-        building_id = pd.DataFrame(
-            np.unique(self.var.building_id.data[household_adapting])
+        building_id_of_household = pd.DataFrame(
+            np.unique(self.var.building_id_of_household.data[household_adapting])
         ).dropna()
-        building_id = building_id.astype(int).astype(str)
-        building_id["flood_proofed"] = True
-        building_id = building_id.set_index(0)
+        building_id_of_household = building_id_of_household.astype(int).astype(str)
+        building_id_of_household["flood_proofed"] = True
+        building_id_of_household = building_id_of_household.set_index(0)
 
         # Add/Update the flood_proofed status in buildings based on OSM way IDs
         self.buildings["flood_proofed"] = (
-            self.buildings["id"].astype(str).map(building_id["flood_proofed"])
+            self.buildings["id"]
+            .astype(str)
+            .map(building_id_of_household["flood_proofed"])
         )
 
         # Replace NaNs with False (i.e., buildings not in the adapting households list)
@@ -255,10 +261,12 @@ class Households(AgentBaseClass):
         )
 
         # load building id household
-        building_id = load_array(
-            self.model.files["array"]["agents/households/building_id"]
+        building_id_of_household = load_array(
+            self.model.files["array"]["agents/households/building_id_of_household"]
         )
-        self.var.building_id = DynamicArray(building_id, max_n=self.max_n)
+        self.var.building_id_of_household = DynamicArray(
+            building_id_of_household, max_n=self.max_n
+        )
 
         # update building attributes based on household data
         if self.config["adapt"]:
@@ -1005,6 +1013,15 @@ class Households(AgentBaseClass):
         self.construct_income_distribution()
         self.assign_household_attributes()
 
+    def assign_damages_to_agents(self, agent_df, buildings_with_damages):
+        merged = agent_df.merge(
+            buildings_with_damages.rename(columns={"id": "building_id_of_household"}),
+            on="building_id_of_household",
+            how="left",
+        )
+        merged = merged.replace(np.nan, 0)
+        return merged["damage"].to_numpy()
+
     def calculate_building_flood_damages(self) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
@@ -1019,9 +1036,15 @@ class Households(AgentBaseClass):
         buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
             self.flood_maps[self.return_periods[0]].rio.crs
         )
+
+        # create a pandas data array for assigning damage to the agents:
+        agent_df = pd.DataFrame(
+            {"building_id_of_household": self.var.building_id_of_household}
+        )
+
         # subset building to those exposed to flooding
         buildings = buildings[buildings["flooded"]]
-
+        # buildings.geometry = buildings.geometry.centroid
         for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
 
@@ -1062,24 +1085,13 @@ class Households(AgentBaseClass):
             # Save the damages to the dataframe
             buildings_with_damages_floodproofed = buildings[["id"]]
             buildings_with_damages_floodproofed["damage"] = damage_flood_proofed
-
-            # add damages to agents (unprotected buildings)
-            for _, row in buildings_with_damages.iterrows():
-                damage = row["damage"]
-                building_id = int(row["id"])
-                idx_agents_in_building = np.where(self.var.building_id == building_id)[
-                    0
-                ]
-                damages_do_not_adapt[i, idx_agents_in_building] = damage
-
-            # add damages to agents (flood-proofed buildings)
-            for _, row in buildings_with_damages_floodproofed.iterrows():
-                damage = row["damage"]
-                building_id = int(row["id"])
-                idx_agents_in_building = np.where(self.var.building_id == building_id)[
-                    0
-                ]
-                damages_adapt[i, idx_agents_in_building] = damage
+            # merged["damage"] is aligned with agents
+            damages_do_not_adapt[i] = self.assign_damages_to_agents(
+                agent_df, buildings_with_damages
+            )
+            damages_adapt[i] = self.assign_damages_to_agents(
+                agent_df, buildings_with_damages_floodproofed
+            )
 
         return damages_do_not_adapt, damages_adapt
 
