@@ -220,6 +220,7 @@ class SFINCSRootModel:
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_outflow: bool = True,
         initial_water_level: float = 0.0,
+        custom_rivers_to_burn: gpd.GeoDataFrame | None = None,
     ) -> SFINCSRootModel:
         """Build a SFINCS model.
 
@@ -243,6 +244,8 @@ class SFINCSRootModel:
             coastal_boundary_exclude_mask: A GeoDataFrame defining areas to exclude from the coastal boundary condition cells.
             setup_outflow: Whether to set up an outflow boundary condition. Defaults to True. Mostly used for testing purposes.
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
+            custom_rivers_to_burn: A GeoDataFrame of custom rivers to burn into the model grid. If None, uses the provided rivers GeoDataFrame.
+                dataframe must contain 'width' and 'depth' columns.
 
         Returns:
             The SFINCSRootModel instance with the built model.
@@ -468,42 +471,51 @@ class SFINCSRootModel:
             )
         )
 
-        self.rivers = assign_return_periods(
-            self.rivers, discharge_by_river, return_periods=[2]
-        )
+        if custom_rivers_to_burn is not None:
+            rivers_to_burn = custom_rivers_to_burn.to_crs(sf.crs)
+            if "width" not in rivers_to_burn.columns:
+                raise ValueError(
+                    "Custom rivers to burn must have a 'width' column when using custom rivers"
+                )
+            if "depth" not in rivers_to_burn.columns:
+                raise ValueError(
+                    "Custom rivers to burn must have a 'depth' column when using custom rivers"
+                )
+        else:
+            rivers_to_burn = assign_return_periods(
+                self.rivers, discharge_by_river, return_periods=[2]
+            )
 
-        river_width_unknown_mask = self.rivers["width"].isnull()
+            river_width_unknown_mask = rivers_to_burn["width"].isnull()
 
-        self.rivers.loc[river_width_unknown_mask, "width"] = get_river_width(
-            river_parameters["river_width_alpha"][river_width_unknown_mask],
-            river_parameters["river_width_beta"][river_width_unknown_mask],
-            self.rivers.loc[river_width_unknown_mask, "Q_2"],
-        ).astype(np.float64)
+            rivers_to_burn.loc[river_width_unknown_mask, "width"] = get_river_width(
+                river_parameters["river_width_alpha"][river_width_unknown_mask],
+                river_parameters["river_width_beta"][river_width_unknown_mask],
+                rivers_to_burn.loc[river_width_unknown_mask, "Q_2"],
+            ).astype(np.float64)
 
-        self.rivers["depth"] = get_river_depth(
-            self.rivers,
-            method=depth_calculation_method,
-            parameters=depth_calculation_parameters,
-            bankfull_column="Q_2",
-        )
+            rivers_to_burn["depth"] = get_river_depth(
+                rivers_to_burn,
+                method=depth_calculation_method,
+                parameters=depth_calculation_parameters,
+                bankfull_column="Q_2",
+            )
 
-        self.rivers["manning"] = get_river_manning(self.rivers)
-
-        export_rivers(self.path, self.rivers)
+        rivers_to_burn["manning"] = get_river_manning(rivers_to_burn)
 
         # Because hydromt-sfincs does a lot of filling default values when data
         # is missing, we need to be extra sure that the required columns are
         # present and contain valid data.
-        assert self.rivers["width"].notnull().all(), "River width cannot be null"
-        assert self.rivers["depth"].notnull().all(), "River depth cannot be null"
-        assert self.rivers["manning"].notnull().all(), (
+        assert rivers_to_burn["width"].notnull().all(), "River width cannot be null"
+        assert rivers_to_burn["depth"].notnull().all(), "River depth cannot be null"
+        assert rivers_to_burn["manning"].notnull().all(), (
             "River Manning's n cannot be null"
         )
 
         # only burn rivers that are wider than the grid size
-        rivers_to_burn: gpd.GeoDataFrame = self.rivers[
-            self.rivers["width"] > self.estimated_cell_size_m
-        ].copy()
+        rivers_to_burn: gpd.GeoDataFrame = rivers_to_burn[
+            rivers_to_burn["width"] > self.estimated_cell_size_m
+        ]
 
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
