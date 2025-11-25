@@ -2250,6 +2250,9 @@ class Soil(Module):
 
         # Soil moisture
         soil_moisture = np.nan_to_num(self.HRU.var.w.sum(axis=0))
+        soil_moisture_grid = self.hydrology.to_grid(
+            HRU_data=soil_moisture, fn="weightednanmean"
+        )
 
         soil_moisture_forest_HRU = soil_moisture.copy()
         soil_moisture_forest_HRU[self.HRU.var.land_use_type != FOREST] = np.nan
@@ -2304,6 +2307,10 @@ class Soil(Module):
             )
 
         # Groundwater recharge
+        groundwater_recharge_grid = self.hydrology.to_grid(
+            HRU_data=groundwater_recharge, fn="weightednanmean"
+        )
+
         groundwater_recharge_forest_HRU = groundwater_recharge.copy()
         groundwater_recharge_forest_HRU[self.HRU.var.land_use_type != FOREST] = (
             np.nan
