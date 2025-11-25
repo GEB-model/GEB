@@ -1452,14 +1452,14 @@ class Hydrology:
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"
-                / "run"
-                / "segments.geoparquet"
+                / "group_0"
+                / "rivers.geoparquet"
             )
             region = gpd.read_file(
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"
-                / "run"
+                / "group_0"
                 / "gis"
                 / "region.geojson"
             ).to_crs(obs.rio.crs)

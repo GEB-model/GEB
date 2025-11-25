@@ -186,7 +186,8 @@ class GEBModel(Module, HazardDriver):
                     / "other"
                     / "forecasts"
                     / self.config["general"]["forecasts"]["provider"]
-                    / self.forecast_issue_date
+                    / self.config["general"]["forecasts"]["processing"]
+                    / str(forecast_issue_datetime)
                     / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
                 )  # open the forecast data for the variable
                 # these are the forecast members to loop over
@@ -870,15 +871,15 @@ class GEBModel(Module, HazardDriver):
                 model_build_end_date
             )
 
-        if self.spinup_start.date() < model_build_start_date:
-            raise ValueError(
-                "Spinup start date cannot be before model build start date. Adjust the time range in your build configuration and rebuild the model or adjust the spinup time of the model."
-            )
+        # if self.spinup_start.date() < model_build_start_date:
+        #    raise ValueError(
+        #        "Spinup start date cannot be before model build start date. Adjust the time range in your build configuration and rebuild the model or adjust the spinup time of the model."
+        #    )
 
-        if self.run_end.date() > model_build_end_date:
-            raise ValueError(
-                "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
-            )
+        # if self.run_end.date() > model_build_end_date:
+        #    raise ValueError(
+        #        "Run end date cannot be after model build end date. Adjust the time range in your build configuration and rebuild the model or adjust the simulation end time of the model."
+        #    )
 
     @property
     def spinup_start(self) -> datetime.datetime:

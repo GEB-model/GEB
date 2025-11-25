@@ -15,6 +15,7 @@ general:
   forecasts:
     use: false
     provider: ECMWF
+    processing: merged_control_ensemble  # options: merged_control_ensemble, control_forecast, probabilistic_forecast
 
 hazards:
   floods:

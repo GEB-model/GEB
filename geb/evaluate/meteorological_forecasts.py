@@ -56,13 +56,19 @@ class MeteorologicalForecasts:
         forecast_folder: Path = self.output_folder_evaluate / "forecasts"
         forecast_folder.mkdir(parents=True, exist_ok=True)
 
+        processing_forecasts = (
+            self.model.config.get("general", {})
+            .get("forecasts", {})
+            .get("processing", [])
+        )
+
         # Base path for forecast data
         forecast_base_path: Path = (
             self.model.input_folder
             / "other"
             / "forecasts"
             / "ECMWF"
-            / "merged_control_ensemble"
+            / processing_forecasts  # or self.config["general"]["forecasts"]["processing"]
         )
 
         if not forecast_base_path.exists():
@@ -90,6 +96,18 @@ class MeteorologicalForecasts:
             if plot_type not in ["intensity", "cumulative"]:
                 raise ValueError(
                     f"plot_type must be 'intensity' or 'cumulative', got '{plot_type}'"
+                )
+
+            # Extract event datetime from model configuration
+            flood_events = (
+                self.model.config.get("hazards", {}).get("floods", {}).get("events", [])
+            )
+            moment_of_flooding: pd.Timestamp | None = None
+
+            # Check for optional moment_of_flooding setting
+            if "moment_of_flooding" in flood_events[0]:
+                moment_of_flooding = pd.to_datetime(
+                    str(flood_events[0]["moment_of_flooding"])
                 )
 
             def load_forecast_data(
@@ -185,7 +203,7 @@ class MeteorologicalForecasts:
                 ax.set_xlim(x_start, x_end)
                 ax.set_xticks(x_ticks)
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m %H:%M"))
-                ax.tick_params(axis="x", rotation=45)
+                ax.tick_params(axis="x", rotation=90)
                 ax.grid(True)
 
             def plot_rainfall_data(
@@ -197,6 +215,7 @@ class MeteorologicalForecasts:
                 init_time_str: str,
                 plot_type: str = "intensity",
                 show_legend: bool = False,
+                moment_of_flooding: pd.Timestamp | None = None,
                 x_start: pd.Timestamp = pd.Timestamp("2024-04-26 00:00"),
                 x_end: pd.Timestamp = pd.Timestamp("2024-05-16 00:00"),
             ) -> None:
@@ -209,6 +228,7 @@ class MeteorologicalForecasts:
                     ensemble_data: Ensemble forecast precipitation data (mm/h for intensity, mm for cumulative).
                     control_time: Time array for the forecast data (e.g. timesteps corresponding to the data).
                     init_time_str: Initialization time identifier string (e.g., '20240429T000000').
+                    moment_of_flooding: Optional moment when flooding actually occurred. If None, no flooding line is shown.
                     plot_type: If "cumulative", format for cumulative data. If "intensity", format for intensity.
                     show_legend: Whether to show the legend on this subplot.
                     x_start: Start time for x-axis.
@@ -251,17 +271,15 @@ class MeteorologicalForecasts:
                     label="Ensemble spread of all the members",
                 )
 
-                # Add moment of flooding line
-                moment_of_inundation: pd.Timestamp = pd.Timestamp(
-                    "2024-05-06T00:00:00.000000000"
-                )
-                ax.axvline(
-                    moment_of_inundation,
-                    color="red",
-                    linestyle="--",
-                    linewidth=2,
-                    label="Moment of Flooding Guaíba Lake",
-                )
+                # Add moment of flooding line only if specified in configuration
+                if moment_of_flooding is not None:
+                    ax.axvline(
+                        moment_of_flooding,
+                        color="red",
+                        linestyle="--",
+                        linewidth=2,
+                        label="Moment of Flooding",
+                    )
 
                 # Set title and formatting
                 ax.set_title(
@@ -275,6 +293,7 @@ class MeteorologicalForecasts:
                 else:
                     ax.set_yticks(range(0, 47, 5))  # For intensity mm/h values
 
+                # Use static x-axis bounds
                 x_ticks: list[pd.Timestamp] = pd.date_range(
                     start=x_start, end=x_end, freq="12h"
                 )
@@ -348,6 +367,7 @@ class MeteorologicalForecasts:
                     ensemble_data=ensemble_data,
                     control_time=time_data,
                     init_time_str=init_time,
+                    moment_of_flooding=moment_of_flooding,
                     plot_type=plot_type,
                     show_legend=show_legend_flag,  # Only show legend on first right subplot
                 )
