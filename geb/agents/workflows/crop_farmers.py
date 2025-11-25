@@ -421,10 +421,7 @@ def withdraw_reservoir(
     #     irrigation_water_demand_field_m_limit_adjusted, np.float32(0)
     # )
 
-    return (
-        irrigation_water_demand_field_m,
-        # irrigation_water_demand_field_m_limit_adjusted,
-    )
+    return irrigation_water_demand_field_m
 
 
 @njit(cache=True)
@@ -950,10 +947,7 @@ def abstract_water(
                 if surface_irrigated[farmer]:
                     # command areas
                     if command_area_farmer != -1:  # -1 means no command area
-                        (
-                            irrigation_water_demand_field_m,
-                            # irrigation_water_demand_field_m_limit_adjusted,
-                        ) = withdraw_reservoir(
+                        irrigation_water_demand_field_m = withdraw_reservoir(
                             command_area=command_area_farmer,
                             field=field,
                             farmer=farmer,

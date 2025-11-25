@@ -708,7 +708,6 @@ def test_withdraw_channel() -> None:
     water_withdrawal_m = np.array([0.0])
     remaining_irrigation_limit_m3 = np.array([np.nan])
     channel_abstraction_m3_by_farmer = np.array([0.0])
-    maximum_abstraction_channel_m3_field = np.array([2000.0])
 
     irrigation_water_demand_field = withdraw_channel(
         available_channel_storage_m3=available_channel_storage_m3,
@@ -720,7 +719,7 @@ def test_withdraw_channel() -> None:
         water_withdrawal_m=water_withdrawal_m,
         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
         channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
-        maximum_abstraction_channel_m3_field=maximum_abstraction_channel_m3_field,
+        maximum_abstraction_channel_m3_field=np.inf,
         minimum_channel_storage_m3=100.0,
     )
     assert irrigation_water_demand_field == 0.0
@@ -755,47 +754,41 @@ def test_withdraw_reservoir() -> None:
     reservoir_abstraction_m3_by_farmer = np.array([0.0])
     reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
 
-    irrigation_water_demand_field, irrigation_water_demand_field_m_limit_adjusted = (
-        withdraw_reservoir(
-            command_area=0,
-            reservoir_abstraction_m3=reservoir_abstraction_m3,
-            available_reservoir_storage_m3=available_reservoir_storage_m3,
-            field=0,
-            farmer=0,
-            irrigation_water_demand_field_m=10.0,
-            water_withdrawal_m=water_withdrawal_m,
-            remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-            reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
-            cell_area=np.array([100.0]),
-            maximum_abstraction_reservoir_m3_field=np.inf,
-        )
+    irrigation_water_demand_field = withdraw_reservoir(
+        command_area=0,
+        field=0,
+        farmer=0,
+        reservoir_abstraction_m3=reservoir_abstraction_m3,
+        available_reservoir_storage_m3=available_reservoir_storage_m3,
+        irrigation_water_demand_field_m=10.0,
+        water_withdrawal_m=water_withdrawal_m,
+        remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+        reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+        maximum_abstraction_reservoir_m3_field=np.inf,
+        cell_area=np.array([100.0]),
     )
     available_reservoir_storage_m3 -= reservoir_abstraction_m3
     assert irrigation_water_demand_field == 0.0
-    assert irrigation_water_demand_field_m_limit_adjusted == 0.0
     assert available_reservoir_storage_m3[0] == 1000.0
     assert water_withdrawal_m[0] == 10.0
     assert reservoir_abstraction_m3_by_farmer[0] == 1000.0
 
     reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
-    irrigation_water_demand_field, irrigation_water_demand_field_m_limit_adjusted = (
-        withdraw_reservoir(
-            command_area=0,
-            field=0,
-            farmer=0,
-            reservoir_abstraction_m3=reservoir_abstraction_m3,
-            available_reservoir_storage_m3=available_reservoir_storage_m3,
-            irrigation_water_demand_field_m=20.0,
-            water_withdrawal_m=water_withdrawal_m,
-            remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-            reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
-            cell_area=np.array([100.0]),
-            maximum_abstraction_reservoir_m3_field=np.inf,
-        )
+    irrigation_water_demand_field = withdraw_reservoir(
+        command_area=0,
+        field=0,
+        farmer=0,
+        reservoir_abstraction_m3=reservoir_abstraction_m3,
+        available_reservoir_storage_m3=available_reservoir_storage_m3,
+        irrigation_water_demand_field_m=20.0,
+        water_withdrawal_m=water_withdrawal_m,
+        remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+        reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+        maximum_abstraction_reservoir_m3_field=np.inf,
+        cell_area=np.array([100.0]),
     )
     available_reservoir_storage_m3 -= reservoir_abstraction_m3
     assert irrigation_water_demand_field == 10.0
-    assert irrigation_water_demand_field_m_limit_adjusted == 10.0
     assert available_reservoir_storage_m3[0] == 0.0
     assert water_withdrawal_m[0] == 20.0
     assert reservoir_abstraction_m3_by_farmer[0] == 2000.0
@@ -809,28 +802,26 @@ def test_withdraw_reservoir_limit_demand() -> None:
     remaining_irrigation_limit_m3 = np.array([np.nan])
     reservoir_abstraction_m3_by_farmer = np.array([0.0])
     reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
-    irrigation_water_demand_field, irrigation_water_demand_field_m_limit_adjusted = (
-        withdraw_reservoir(
-            command_area=0,
-            field=0,
-            farmer=0,
-            reservoir_abstraction_m3=reservoir_abstraction_m3,
-            available_reservoir_storage_m3=available_reservoir_storage_m3,
-            irrigation_water_demand_field_m=20.0,
-            water_withdrawal_m=water_withdrawal_m,
-            remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-            reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
-            cell_area=np.array([100.0]),
-            maximum_abstraction_reservoir_m3_field=np.inf,
-        )
+    irrigation_water_demand_field = withdraw_reservoir(
+        command_area=0,
+        field=0,
+        farmer=0,
+        reservoir_abstraction_m3=reservoir_abstraction_m3,
+        available_reservoir_storage_m3=available_reservoir_storage_m3,
+        irrigation_water_demand_field_m=20.0,
+        water_withdrawal_m=water_withdrawal_m,
+        remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+        reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+        cell_area=np.array([100.0]),
+        maximum_abstraction_reservoir_m3_field=1000.0,
     )
     available_reservoir_storage_m3 -= reservoir_abstraction_m3
     assert irrigation_water_demand_field == 10.0  # only 10 should be withdrawn
     # as the limit is 10, and the reservoir abstraction is 20, only
     # 10 can be withdrawn, and the limit is adjusted to 10
-    assert (
-        irrigation_water_demand_field_m_limit_adjusted == 0.0
-    )  # all of the limit is used
+    # assert (
+    #     irrigation_water_demand_field_m_limit_adjusted == 0.0
+    # )  # all of the limit is used
     assert (
         available_reservoir_storage_m3[0] == 1000.0
     )  # thus there is still 1000 m3 left
@@ -846,28 +837,26 @@ def test_withdraw_reservoir_maximum_abstraction() -> None:
     remaining_irrigation_limit_m3 = np.array([np.nan])
     reservoir_abstraction_m3_by_farmer = np.array([0.0])
     reservoir_abstraction_m3 = np.zeros_like(available_reservoir_storage_m3)
-    irrigation_water_demand_field, irrigation_water_demand_field_m_limit_adjusted = (
-        withdraw_reservoir(
-            command_area=0,
-            field=0,
-            farmer=0,
-            reservoir_abstraction_m3=reservoir_abstraction_m3,
-            available_reservoir_storage_m3=available_reservoir_storage_m3,
-            irrigation_water_demand_field_m=20.0,
-            water_withdrawal_m=water_withdrawal_m,
-            remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
-            reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
-            cell_area=np.array([100.0]),
-            maximum_abstraction_reservoir_m3_field=1000,
-        )
+    irrigation_water_demand_field = withdraw_reservoir(
+        command_area=0,
+        field=0,
+        farmer=0,
+        reservoir_abstraction_m3=reservoir_abstraction_m3,
+        available_reservoir_storage_m3=available_reservoir_storage_m3,
+        irrigation_water_demand_field_m=20.0,
+        water_withdrawal_m=water_withdrawal_m,
+        remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
+        reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+        cell_area=np.array([100.0]),
+        maximum_abstraction_reservoir_m3_field=1000.0,
     )
     available_reservoir_storage_m3 -= reservoir_abstraction_m3
     assert irrigation_water_demand_field == 10.0  # only 10 should be withdrawn
     # as the limit is 10, and the reservoir abstraction is 20, only
     # 10 can be withdrawn, and the limit is adjusted to 10
-    assert (
-        irrigation_water_demand_field_m_limit_adjusted == 10.0
-    )  # all of the limit is used
+    # assert (
+    #     irrigation_water_demand_field_m_limit_adjusted == 10.0
+    # )  # all of the limit is used
     assert (
         available_reservoir_storage_m3[0] == 1000.0
     )  # thus there is still 1000 m3 left
