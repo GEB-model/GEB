@@ -1013,7 +1013,17 @@ class Households(AgentBaseClass):
         self.construct_income_distribution()
         self.assign_household_attributes()
 
-    def assign_damages_to_agents(self, agent_df, buildings_with_damages):
+    def assign_damages_to_agents(
+        self, agent_df: pd.DataFrame, buildings_with_damages: pd.DataFrame
+    ) -> np.ndarray:
+        """This function assigns the building damages calculated by the vector scanner to the corresponding households.
+
+        Args:
+            agent_df: Pandas dataframe that contains the open building map building id assigned to each agent.
+            buildings_with_damages: Pandas dataframe constructed by the vector scanner that contains the damages for each building.
+        Returns:
+            merged["damage"].to_numpy(): Numpy array of the damages for each agent.
+        """
         merged = agent_df.merge(
             buildings_with_damages.rename(columns={"id": "building_id_of_household"}),
             on="building_id_of_household",
