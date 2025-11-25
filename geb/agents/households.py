@@ -23,7 +23,7 @@ from ..hydrology.landcovers import (
     FOREST,
 )
 from ..store import DynamicArray
-from ..workflows.damage_scanner import VectorScanner
+from ..workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.io import load_array, load_table, open_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
@@ -1024,13 +1024,16 @@ class Households(AgentBaseClass):
         Returns:
             merged["damage"].to_numpy(): Numpy array of the damages for each agent.
         """
+
         merged = agent_df.merge(
             buildings_with_damages.rename(columns={"id": "building_id_of_household"}),
             on="building_id_of_household",
             how="left",
-        )
-        merged = merged.replace(np.nan, 0)
-        return merged["damage"].to_numpy()
+        ).fillna(0)
+        damages_do_not_adapt = merged["damages"].to_numpy()
+        damages_adapt = merged["damages_flood_proofed"].to_numpy()
+
+        return damages_do_not_adapt, damages_adapt
 
     def calculate_building_flood_damages(self) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
@@ -1043,6 +1046,7 @@ class Households(AgentBaseClass):
         """
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+
         buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
             self.flood_maps[self.return_periods[0]].rio.crs
         )
@@ -1058,49 +1062,28 @@ class Households(AgentBaseClass):
         for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
 
-            # Calculate damages to building structure (unprotected buildings)
-            damage_unprotected: pd.Series = VectorScanner(
-                features=buildings.rename(
+            building_multicurve = buildings.copy()
+            multi_curves = {
+                "damages": self.buildings_structure_curve["building_unprotected"],
+                "damages_flood_proofed": self.buildings_structure_curve[
+                    "building_flood_proofed"
+                ],
+            }
+            damage_buildings: pd.Series = VectorScannerMultiCurves(
+                features=building_multicurve.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
                 hazard=flood_map,
-                vulnerability_curves=self.buildings_structure_curve,
-                disable_progress=True,
+                multi_curves=multi_curves,
+                disable_progress=False,
             )
-            total_damage_structure = damage_unprotected.sum()
-            print(
-                f"damages to building unprotected structure rp{return_period} are: {round(total_damage_structure / 1e6, 2)} M€"
-            )
-
-            # Save the damages to the dataframe
-            buildings_with_damages = buildings[["id"]]
-            buildings_with_damages["damage"] = damage_unprotected
-
-            # Calculate damages to building structure (floodproofed buildings)
-            buildings_floodproofed = buildings.copy()
-            buildings_floodproofed["object_type"] = "building_flood_proofed"
-            damage_flood_proofed: pd.Series = VectorScanner(
-                features=buildings_floodproofed.rename(
-                    columns={"maximum_damage_m2": "maximum_damage"}
-                ),
-                hazard=flood_map,
-                vulnerability_curves=self.buildings_structure_curve,
-                disable_progress=True,
-            )
-            total_damage_structure = damage_flood_proofed.sum()
-            print(
-                f"damages to building flood-proofed structure rp{return_period} are: {round(total_damage_structure / 1e6, 2)} M€"
-            )
-
-            # Save the damages to the dataframe
-            buildings_with_damages_floodproofed = buildings[["id"]]
-            buildings_with_damages_floodproofed["damage"] = damage_flood_proofed
+            building_multicurve = pd.concat(
+                [building_multicurve, damage_buildings], axis=1
+            )[["id", "damages", "damages_flood_proofed"]]
             # merged["damage"] is aligned with agents
-            damages_do_not_adapt[i] = self.assign_damages_to_agents(
-                agent_df, buildings_with_damages
-            )
-            damages_adapt[i] = self.assign_damages_to_agents(
-                agent_df, buildings_with_damages_floodproofed
+            damages_do_not_adapt[i], damages_adapt[i] = self.assign_damages_to_agents(
+                agent_df,
+                building_multicurve,
             )
 
         return damages_do_not_adapt, damages_adapt

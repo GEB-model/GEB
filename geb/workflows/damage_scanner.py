@@ -9,6 +9,45 @@ import geopandas as gpd
 import pandas as pd
 import xarray as xr
 from damagescanner.vector import VectorScanner as VectorScannerDS
+from damagescanner.vector import VectorExposure as VectorExposureDS
+import numpy as np
+
+
+def VectorScannerMultiCurves(
+    features: gpd.GeoDataFrame,
+    hazard: xr.DataArray,
+    multi_curves: dict,
+    disable_progress: bool = False,
+):
+    # get vector exposure
+    features, object_col, hazard_crs, cell_area_m2 = VectorExposureDS(
+        hazard_file=hazard,
+        feature_file=features,
+        asset_type=None,
+        object_col="object_type",
+        disable_progress=disable_progress,
+        gridded=False,
+    )
+    # calculate damages
+    for i, asset in features.iterrows():
+        coverage = np.array(asset["coverage"]) * cell_area_m2
+        if coverage.sum() > 0:
+            for curve in multi_curves:
+                features.at[i, curve] = (
+                    np.sum(
+                        np.interp(
+                            asset["values"],
+                            multi_curves[curve].index,
+                            multi_curves[curve].values,
+                        )
+                        * coverage
+                    )
+                    * asset["maximum_damage"]
+                )
+        else:
+            for curve in multi_curves:
+                features.at[i, curve] = 0
+    return features[multi_curves.keys()]
 
 
 def VectorScanner(
