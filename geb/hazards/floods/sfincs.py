@@ -296,10 +296,10 @@ class SFINCSRootModel:
         minx, miny, maxx, maxy = self.region.total_bounds
         mask: xr.DataArray = pad_xy(
             mask,
-            minx=minx - abs(mask.rio.resolution()[1]) * grid_size_multiplier,
-            miny=miny - abs(mask.rio.resolution()[0]) * grid_size_multiplier,
-            maxx=maxx + abs(mask.rio.resolution()[1]) * grid_size_multiplier,
-            maxy=maxy + abs(mask.rio.resolution()[0]) * grid_size_multiplier,
+            minx=minx - abs(mask.rio.resolution()[0]) * grid_size_multiplier,
+            miny=miny - abs(mask.rio.resolution()[1]) * grid_size_multiplier,
+            maxx=maxx + abs(mask.rio.resolution()[0]) * grid_size_multiplier,
+            maxy=maxy + abs(mask.rio.resolution()[1]) * grid_size_multiplier,
             return_slice=False,
         )
 
@@ -1376,7 +1376,7 @@ class SFINCSSimulation:
         for the SFINCS model.
 
         In some cases, the upstream area of the most upstream low-res river point is larger than the
-        upstream erea of the most upstream high-res river point. This means that the runoff
+        upstream area of the most upstream high-res river point. This means that the runoff
         would be added further downstream. To avoid this, we check if this is the case, and if so,
         we scale the upstream area of the low-res river points to match the upstream area of the
         most upstream high-res river point.
@@ -1411,7 +1411,7 @@ class SFINCSSimulation:
         xy_per_river_segment = value_indices(river_ids, ignore_value=-1)
         for ID, (ys, xs) in xy_per_river_segment.items():
             assert len(ys) < INFLOW_MULTIPLICATION_FACTOR - 2, (
-                f"River segment has more than {INFLOW_MULTIPLICATION_FACTOR - 2} cells, which is not supported."
+                f"River segment has more than {INFLOW_MULTIPLICATION_FACTOR - 2} cells, which is not supported. "
                 "Increase the multiplication factor in the inflow ID calculation."
             )
 
@@ -1422,7 +1422,9 @@ class SFINCSSimulation:
             xs_up_to_down: npt.NDArray[np.int64] = xs[up_to_downstream_ids]
 
             for i in range(len(ys_up_to_down)):
-                inflow_ID: np.int64 = np.int64(ID) * np.int64(100000) + np.int64(i)
+                inflow_ID: np.int64 = np.int64(ID) * np.int64(
+                    INFLOW_MULTIPLICATION_FACTOR
+                ) + np.int64(i)
                 assert inflow_ID < 9_223_372_036_854_775_807, (
                     "Inflow ID exceeds maximum int64 value."
                 )
@@ -1503,14 +1505,14 @@ class SFINCSSimulation:
             discharge_m3_per_s = accumulated_generated_discharge_m3_per_s[:, mapped_idx]
 
             # we want the runoff to start at the headwater of the river. However, sometimes due to
-            # the low resultion hydrology, it is inherent that sometimes the inflow point is not at the headwater
+            # the low resolution hydrology, it is inherent that sometimes the inflow point is not at the headwater
             # but somewhere downstream. In that case, we need to add an additional inflow point at the headwater
             # and scale the discharge accordingly, based on the upstream area at the headwater and the upstream area.
             # We then place the normal inflow point at the closest high-res point, but with the discharge reduced accordingly.
             if (
                 inflow_offset == 0  # check if this is the most upstream low-res point
                 and closest_upstream_area_index
-                != 0  # check if the clostest high-res point is not the high-res headwater point
+                != 0  # check if the closest high-res point is not the high-res headwater point
                 and river["maxup"] == 0  # check if this river is a headwater river
             ):
                 # create an additional inflow point at the headwater

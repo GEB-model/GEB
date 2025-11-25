@@ -528,8 +528,8 @@ class Hydrography:
 
         # Derive the xy coordinates of the river network. Here the coordinates
         # are the PIXEL coordinates for the coarse drainage network.
-        rivers["hydrography_xy"] = [[]] * len(rivers)
-        rivers["hydrography_upstream_area_m2"] = [[]] * len(rivers)
+        rivers["hydrography_xy"] = [[] for _ in range(len(rivers))]
+        rivers["hydrography_upstream_area_m2"] = [[] for _ in range(len(rivers))]
         xy_per_river_segment = value_indices(river_raster_LR, ignore_value=-1)
         for COMID, (ys, xs) in xy_per_river_segment.items():
             upstream_area = upstream_area_data[ys, xs]
@@ -549,9 +549,11 @@ class Hydrography:
             )
 
         # Derive the xy coordinates of the river network. Here the coordinates
-        # are the PIXEL coordinates for the coarse drainage network.
-        rivers["hydrography_high_res_lons_lats"] = [[]] * len(rivers)
-        rivers["hydrography_high_res_upstream_area_m2"] = [[]] * len(rivers)
+        # are the PIXEL coordinates for the high-resolution drainage network.
+        rivers["hydrography_high_res_lons_lats"] = [[] for _ in range(len(rivers))]
+        rivers["hydrography_high_res_upstream_area_m2"] = [
+            [] for _ in range(len(rivers))
+        ]
         xy_per_river_segment = value_indices(river_raster_HD, ignore_value=-1)
 
         represented_rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
