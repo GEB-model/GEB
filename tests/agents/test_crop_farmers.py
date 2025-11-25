@@ -646,6 +646,7 @@ def test_withdraw_groundwater() -> None:
         water_withdrawal_m=water_withdrawal_m,
         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
         groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
+        maximum_abstraction_groundwater_m3_field=np.inf,
     )
     available_groundwater_m3 -= groundwater_abstraction_m3
     assert irrigation_water_demand_field == 0.0
@@ -668,6 +669,7 @@ def test_withdraw_groundwater() -> None:
         water_withdrawal_m=water_withdrawal_m,
         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
         groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
+        maximum_abstraction_groundwater_m3_field=np.inf,
     )
     assert irrigation_water_demand_field == 10.0
     assert groundwater_abstraction_m3[0] == 1000.0
@@ -692,6 +694,7 @@ def test_withdraw_groundwater() -> None:
         water_withdrawal_m=water_withdrawal_m,
         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
         groundwater_abstraction_m3_by_farmer=groundwater_abstraction_m3_by_farmer,
+        maximum_abstraction_groundwater_m3_field=np.inf,
     )
     assert irrigation_water_demand_field == 20.0
     assert groundwater_abstraction_m3[0] == 0.0
@@ -705,6 +708,7 @@ def test_withdraw_channel() -> None:
     water_withdrawal_m = np.array([0.0])
     remaining_irrigation_limit_m3 = np.array([np.nan])
     channel_abstraction_m3_by_farmer = np.array([0.0])
+    maximum_abstraction_channel_m3_field = np.array([2000.0])
 
     irrigation_water_demand_field = withdraw_channel(
         available_channel_storage_m3=available_channel_storage_m3,
@@ -716,6 +720,7 @@ def test_withdraw_channel() -> None:
         water_withdrawal_m=water_withdrawal_m,
         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
         channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+        maximum_abstraction_channel_m3_field=maximum_abstraction_channel_m3_field,
         minimum_channel_storage_m3=100.0,
     )
     assert irrigation_water_demand_field == 0.0
@@ -733,6 +738,7 @@ def test_withdraw_channel() -> None:
         water_withdrawal_m=water_withdrawal_m,
         remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
         channel_abstraction_m3_by_farmer=channel_abstraction_m3_by_farmer,
+        maximum_abstraction_channel_m3_field=np.inf,
         minimum_channel_storage_m3=100.0,
     )
     assert irrigation_water_demand_field == 11.0  # keep 100 m3 in the channel
@@ -757,7 +763,6 @@ def test_withdraw_reservoir() -> None:
             field=0,
             farmer=0,
             irrigation_water_demand_field_m=10.0,
-            irrigation_water_demand_field_m_limit_adjusted=10.0,
             water_withdrawal_m=water_withdrawal_m,
             remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
             reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
@@ -781,7 +786,6 @@ def test_withdraw_reservoir() -> None:
             reservoir_abstraction_m3=reservoir_abstraction_m3,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             irrigation_water_demand_field_m=20.0,
-            irrigation_water_demand_field_m_limit_adjusted=20.0,
             water_withdrawal_m=water_withdrawal_m,
             remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
             reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
@@ -813,7 +817,6 @@ def test_withdraw_reservoir_limit_demand() -> None:
             reservoir_abstraction_m3=reservoir_abstraction_m3,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             irrigation_water_demand_field_m=20.0,
-            irrigation_water_demand_field_m_limit_adjusted=10.0,
             water_withdrawal_m=water_withdrawal_m,
             remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
             reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
@@ -851,7 +854,6 @@ def test_withdraw_reservoir_maximum_abstraction() -> None:
             reservoir_abstraction_m3=reservoir_abstraction_m3,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             irrigation_water_demand_field_m=20.0,
-            irrigation_water_demand_field_m_limit_adjusted=20.0,
             water_withdrawal_m=water_withdrawal_m,
             remaining_irrigation_limit_m3=remaining_irrigation_limit_m3,
             reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
