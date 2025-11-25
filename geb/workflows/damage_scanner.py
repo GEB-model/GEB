@@ -48,10 +48,12 @@ def VectorScannerMultiCurves(
         disable_progress=disable_progress,
         gridded=False,
     )
+    # filter out features with no coverage
+    filtered_features = features[features["values"].str.len() > 0]
     # calculate damages
     tqdm.pandas(desc="Calculating damage", disable=disable_progress)
 
-    result = features.progress_apply(
+    result = filtered_features.progress_apply(
         lambda _object: _get_damage_per_object(_object, multi_curves, cell_area_m2),
         axis=1,
     )
