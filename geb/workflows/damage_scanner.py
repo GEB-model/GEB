@@ -14,23 +14,32 @@ import numpy as np
 from numba import njit, prange
 
 
-@njit(parallel=True, cache=True)
-def compute_all(values_arr, coverage_arr, max_arr, curve_x, curve_y):
-    n_obj = values_arr.size
+@njit(parallel=True, fastmath=True)
+def compute_all_numba(values, coverage, max_arr, curve_x, curve_y, slopes):
+    n_obj = values.size
     n_curves = curve_y.shape[0]
     out = np.empty((n_obj, n_curves))
 
-    for i in prange(n_obj):  # parallel!
-        value = values_arr[i]
-        coverage = coverage_arr[i]
+    for i in prange(n_obj):
+        v = values[i]
+        cov = coverage[i]
         m = max_arr[i]
 
-        for c in range(n_curves):
-            cy = curve_y[c]
-            interp_vals = np.interp(value, curve_x, cy)
-            s = interp_vals * coverage
+        # --- searchsorted (scalar) ---
+        j = np.searchsorted(curve_x, v) - 1
+        if j < 0:
+            j = 0
+        elif j >= curve_x.size - 1:
+            j = curve_x.size - 2
 
-            out[i, c] = s * m
+        # interpolate x coordinate offset
+        dx = v - curve_x[j]
+
+        for c in range(n_curves):
+            # slope-based linear interpolation
+            s = curve_y[c, j] + slopes[c, j] * dx
+
+            out[i, c] = s * cov * m
 
     return out
 
@@ -71,9 +80,21 @@ def VectorScannerMultiCurves(
     coverage_arr = np.stack(filtered["coverage_summed"].to_numpy()) * cell_area_m2
     max_arr = filtered["maximum_damage"].to_numpy()
 
-    damage_matrix = compute_all(
-        average_inundation_arr, coverage_arr, max_arr, curve_x, curve_y
+    curve_x = multi_curves[curve_names[0]].index.values.astype(np.float64)
+    curve_y = np.vstack([multi_curves[k].values for k in curve_names]).astype(
+        np.float64
     )
+    curve_slopes = np.diff(curve_y) / np.diff(curve_x)
+
+    damage_matrix = compute_all_numba(
+        average_inundation_arr.astype(np.float64),
+        coverage_arr.astype(np.float64),
+        max_arr.astype(np.float64),
+        curve_x,
+        curve_y,
+        curve_slopes,
+    )
+
     damage_df = pd.DataFrame(damage_matrix, columns=curve_names, index=filtered.index)
 
     return damage_df
