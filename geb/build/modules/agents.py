@@ -15,11 +15,12 @@ from geb.agents.crop_farmers import (
     INDEX_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
     PERSONAL_INSURANCE_ADAPTATION,
+    PR_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
-from geb.typing import ArrayBool, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.types import ArrayBool, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
     clip_with_grid,
@@ -2528,6 +2529,7 @@ class Agents:
                         FIELD_EXPANSION_ADAPTATION,
                         PERSONAL_INSURANCE_ADAPTATION,
                         INDEX_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,

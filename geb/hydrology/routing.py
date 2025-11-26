@@ -13,7 +13,7 @@ import pyflwdir.core
 from numba import njit
 
 from geb.module import Module
-from geb.typing import (
+from geb.types import (
     ArrayBool,
     ArrayFloat32,
     ArrayFloat64,

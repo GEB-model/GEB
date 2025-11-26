@@ -182,19 +182,10 @@ extend-select = ["I"]
 preview = true
 
 [tool.ruff.lint.extend-per-file-ignores]
-"geb/agents/{crop_farmers,decision_module,households}.py" = [
+"geb/agents/{decision_module,households}.py" = [
     "ANN001",
     "ANN201",
-    "ANN202",
     "D102",
-    "D103",
-]
-"geb/agents/workflows/crop_farmers.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D102",
-    "D103",
 ]
 
 [tool.ruff.lint.isort]

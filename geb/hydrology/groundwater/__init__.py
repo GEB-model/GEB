@@ -33,7 +33,7 @@ import numpy as np
 import numpy.typing as npt
 
 from geb.module import Module
-from geb.typing import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
+from geb.types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
 from geb.workflows import balance_check
 
 from ..routing import get_channel_ratio

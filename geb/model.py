@@ -654,7 +654,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path("simulation_root") / self.run_name
+        folder = Path(self.config["general"]["simulation_root"]) / self.run_name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -665,7 +665,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path("simulation_root") / "spinup"
+        folder = Path(self.config["general"]["simulation_root"]) / "spinup"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 

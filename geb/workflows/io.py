@@ -36,7 +36,7 @@ from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.blosc import BloscShuffle
 
-from geb.typing import ArrayDatetime64
+from geb.types import ArrayDatetime64
 
 
 def load_table(fp: Path | str) -> pd.DataFrame:

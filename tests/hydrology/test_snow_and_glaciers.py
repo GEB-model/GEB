@@ -16,7 +16,7 @@ from geb.hydrology.snow_glaciers import (
     snow_model,
     update_snow_temperature,
 )
-from geb.typing import ArrayFloat32
+from geb.types import ArrayFloat32
 
 from ..testconfig import output_folder
 

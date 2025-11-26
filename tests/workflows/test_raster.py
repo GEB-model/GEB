@@ -476,7 +476,7 @@ def test_pad_xy(pad_bounds: tuple[int, int, int, int]) -> None:
     )
 
     padded_da, returned_slice = pad_xy(
-        original_da.rio,
+        original_da,
         minx,
         miny,
         maxx,
@@ -552,7 +552,7 @@ def test_pad_xy_geographical(pad_bounds: tuple[int, int, int, int]) -> None:
     )
 
     padded_da, returned_slice = pad_xy(
-        original_da.rio,
+        original_da,
         minx,
         miny,
         maxx,

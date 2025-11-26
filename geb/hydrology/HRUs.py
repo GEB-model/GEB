@@ -16,7 +16,7 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import KDTree
 
-from geb.typing import (
+from geb.types import (
     ArrayFloat32,
     ArrayInt32,
     ThreeDArrayFloat32,
@@ -493,17 +493,17 @@ class Grid(BaseVariables):
     @property
     def pr_gev_c(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of rainfall distribution for grid."""
-        return load_grid(self.model.files["grid"]["climate/pr_gev_c"])
+        return load_grid(self.model.files["other"]["climate/pr_gev_c"])
 
     @property
     def pr_gev_loc(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of rainfall distribution for grid."""
-        return load_grid(self.model.files["grid"]["climate/pr_gev_loc"])
+        return load_grid(self.model.files["other"]["climate/pr_gev_loc"])
 
     @property
     def pr_gev_scale(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of rainfall distribution for grid."""
-        return load_grid(self.model.files["grid"]["climate/pr_gev_scale"])
+        return load_grid(self.model.files["other"]["climate/pr_gev_scale"])
 
 
 class HRUs(BaseVariables):

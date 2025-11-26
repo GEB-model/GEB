@@ -21,7 +21,7 @@ from geb.hydrology.groundwater.model import (
     get_groundwater_storage_m,
     get_water_table_depth,
 )
-from geb.typing import ArrayFloat32, ArrayFloat64, TwoDArrayBool
+from geb.types import ArrayFloat32, ArrayFloat64, TwoDArrayBool
 from geb.workflows.raster import calculate_cell_area, compress
 
 from ..testconfig import output_folder, tmp_folder
