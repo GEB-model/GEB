@@ -19,7 +19,7 @@ from shapely.geometry import LineString, Point, shape
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
-from geb.typing import ArrayBool, ArrayFloat32, ArrayInt32
+from geb.types import ArrayBool, ArrayFloat32, ArrayInt32
 from geb.workflows.raster import rasterize_like, snap_to_grid
 
 
