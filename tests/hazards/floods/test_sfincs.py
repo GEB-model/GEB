@@ -18,7 +18,7 @@ from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
 from geb.types import TwoDArrayFloat64, TwoDArrayInt32
-from geb.workflows.io import WorkingDirectory, load_geom, open_zarr
+from geb.workflows.io import WorkingDirectory, load_geom, load_grid, open_zarr
 from geb.workflows.raster import rasterize_like
 
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -277,6 +277,9 @@ def test_accumulated_runoff(
         river_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load(
             geb_model.files["grid"]["routing/river_ids"], compress=False
         )
+        basin_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load(
+            geb_model.files["grid"]["routing/basin_ids"], compress=False
+        )
         upstream_area = geb_model.hydrology.grid.load(
             geb_model.files["grid"]["routing/upstream_area"], compress=False
         )
@@ -287,7 +290,6 @@ def test_accumulated_runoff(
 
         total_flood_volume_across_models: float = 0.0
         total_discharge_volume_across_models: float = 0.0
-        total_discarded_generated_discharge_across_models: float = 0.0
         for sfincs_model in sfincs_models:
             simulation: SFINCSSimulation = sfincs_model.create_simulation(
                 f"accumulated_runoff_forcing_{sfincs_model.name}",
@@ -300,8 +302,8 @@ def test_accumulated_runoff(
             simulation.set_accumulated_runoff_forcing(
                 runoff_m=runoff_m,
                 river_network=geb_model.hydrology.routing.river_network,
-                mask=~geb_model.hydrology.grid.mask,
                 river_ids=river_ids,
+                basin_ids=basin_ids,
                 upstream_area=upstream_area,
                 cell_area=cell_area,
             )
@@ -350,6 +352,9 @@ def test_accumulated_runoff(
             flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.00)
             total_flood_volume = simulation.get_flood_volume(flood_depth)
 
+            basin_id_grid = load_grid(geb_model.files["grid"]["routing/basin_ids"])
+
+            valid_cells = np.isin(basin_id_grid, sfincs_model.rivers.index)
             region = sfincs_model.region.to_crs(runoff_m.rio.crs)
             region_mask = rasterize_like(
                 region,
@@ -362,33 +367,29 @@ def test_accumulated_runoff(
 
             total_runoff_volume: float = (
                 runoff_rate_m_per_hr
-                * (region_mask * cell_area).sum().item()
+                * np.nansum((valid_cells * cell_area))
                 * ((end_time - start_time).total_seconds() / 3600.0)
             )
 
             # Use tracked volumes from the simulation
-            non_discarded_runoff_volume: float = simulation.total_discharge_volume_m3
-            discarded_discharge: float = (
-                simulation.discarded_accumulated_generated_discharge_m3
-            )
+            total_discharge_volume_m3: float = simulation.total_discharge_volume_m3
 
             # compare to total discharge volume
             assert math.isclose(
                 total_flood_volume,
-                non_discarded_runoff_volume,
+                total_discharge_volume_m3,
                 abs_tol=0,
                 rel_tol=0.01,
             )
 
             assert math.isclose(
                 total_flood_volume,
-                total_runoff_volume + discharge_m3 - discarded_discharge,
+                total_runoff_volume + discharge_m3,
                 abs_tol=0,
-                rel_tol=0.2,
+                rel_tol=0.02,
             )
 
             total_flood_volume_across_models += total_flood_volume
-            total_discarded_generated_discharge_across_models += discarded_discharge
             total_discharge_volume_across_models += discharge_m3
 
             simulation.cleanup()
@@ -402,8 +403,7 @@ def test_accumulated_runoff(
             )
 
             assert math.isclose(
-                total_flood_volume_across_models
-                + total_discarded_generated_discharge_across_models,
+                total_flood_volume_across_models,
                 total_runoff_volume + total_discharge_volume_across_models,
                 abs_tol=0,
                 rel_tol=0.05,

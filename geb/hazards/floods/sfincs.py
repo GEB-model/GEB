@@ -28,18 +28,23 @@ from hydromt_sfincs.workflows import burn_river_rect, river_source_points
 from pyflwdir import FlwdirRaster
 from pyflwdir.dem import fill_depressions
 from scipy.ndimage import value_indices
+from shapely.geometry import Point
 from tqdm import tqdm
 
-from geb.hydrology.routing import get_river_width
 from geb.types import (
-    ArrayInt32,
+    ArrayInt64,
     TwoDArrayBool,
     TwoDArrayFloat32,
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
 from geb.workflows.io import load_geom
-from geb.workflows.raster import calculate_cell_area, clip_region, rasterize_like
+from geb.workflows.raster import (
+    calculate_cell_area,
+    clip_region,
+    pad_xy,
+    rasterize_like,
+)
 
 from .workflows import get_river_depth, get_river_manning
 from .workflows.return_periods import (
@@ -247,8 +252,10 @@ class SFINCSRootModel:
         Raises:
             ValueError: if depth_calculation_method is not 'manning' or 'power_law',
             ValueError: if grid_size_multiplier is not a positive integer.
-
+            ValueError: if resolution of DEM is not square pixels.
         """
+        self.cleanup()
+
         if not isinstance(grid_size_multiplier, int) or grid_size_multiplier <= 0:
             raise ValueError("grid_size_multiplier must be a positive integer")
         if grid_size_multiplier == 1 and subgrid:
@@ -286,8 +293,20 @@ class SFINCSRootModel:
         self.region.to_parquet(self.path / "region.geoparquet")
         del region
 
+        # in case the first DEM does not fully cover the region, we pad it. Because
+        # of the alignment, the padding must increase with the grid_size_multiplier
+        minx, miny, maxx, maxy = self.region.total_bounds
+        mask: xr.DataArray = pad_xy(
+            mask,
+            minx=minx - abs(mask.rio.resolution()[0]) * grid_size_multiplier,
+            miny=miny - abs(mask.rio.resolution()[1]) * grid_size_multiplier,
+            maxx=maxx + abs(mask.rio.resolution()[0]) * grid_size_multiplier,
+            maxy=maxy + abs(mask.rio.resolution()[1]) * grid_size_multiplier,
+            return_slice=False,
+        )
+
         region_burned: xr.DataArray = rasterize_like(
-            gdf=self.region.to_crs(mask.rio.crs),
+            gdf=self.region,
             burn_value=1,
             raster=mask,
             dtype=np.int32,
@@ -367,7 +386,6 @@ class SFINCSRootModel:
                 all_touched=True,
             )
 
-        #
         # in one plot plot the region boundary as well as the rivers and save to file
         fig, ax = plt.subplots(figsize=(10, 10))
         self.region.boundary.plot(ax=ax, color="black")
@@ -1128,6 +1146,8 @@ class SFINCSSimulation:
         self.end_time = end_time
         self.sfincs_root_model = sfincs_root_model
 
+        self.cleanup()
+
         sfincs_model = sfincs_root_model.sfincs_model
         sfincs_model.set_root(str(self.path), mode="w+")
 
@@ -1148,13 +1168,11 @@ class SFINCSSimulation:
         # Track total volumes added via forcings (for water balance debugging)
         self.total_runoff_volume_m3: float = 0.0
         self.total_discharge_volume_m3: float = 0.0
-        self.discarded_accumulated_generated_discharge_m3: float = 0.0
 
     def print_forcing_volume(self) -> None:
         """Print all forcing volumes for debugging the water balance."""
         msg: str = (
             f"SFINCS Forcing volumes: runoff={int(self.total_runoff_volume_m3)} m3, "
-            f"discarded discharge={int(self.discarded_accumulated_generated_discharge_m3)} m3, "
             f"discharge={int(self.total_discharge_volume_m3)} m3"
         )
         print(msg)
@@ -1355,71 +1373,87 @@ class SFINCSSimulation:
         self,
         runoff_m: xr.DataArray,
         river_network: FlwdirRaster,
-        mask: TwoDArrayBool,
         river_ids: TwoDArrayInt32,
+        basin_ids: TwoDArrayInt32,
         upstream_area: TwoDArrayFloat32,
         cell_area: TwoDArrayFloat32,
     ) -> None:
         """Sets up accumulated runoff forcing for the SFINCS model.
 
-        This function accumulates the runoff from the provided runoff grid to the starting
-        points of each river segment in the river network.
+        This function accumulates the runoff from the provided runoff grid to the river network
+        and sets it as discharge forcing for the SFINCS model. For each river cell in the low-resolution
+        runoff grid, the upstream area is determined and the runoff from all cells in that upstream
+        area is accumulated to the river cell. The accumulated discharge is then set as forcing
+        for the SFINCS model.
+
+        In some cases, the upstream area of the most upstream low-res river point is larger than the
+        upstream area of the most upstream high-res river point. This means that the runoff
+        would be added further downstream. To avoid this, we check if this is the case, and if so,
+        we scale the upstream area of the low-res river points to match the upstream area of the
+        most upstream high-res river point.
 
         Args:
             runoff_m: xarray DataArray containing runoff values in m per time step.
             river_network: FlwdirRaster representing the river network flow directions.
-            mask: Boolean mask indicating the cells within the river basin.
             river_ids: 2D numpy array of river segment IDs for each cell in the grid.
+            basin_ids: 2D numpy array of basin IDs for each cell in the grid.
             upstream_area: 2D numpy array of upstream area values for each cell in the grid.
             cell_area: 2D numpy array of cell area values for each cell in the grid.
         """
+        INFLOW_MULTIPLICATION_FACTOR = 100000
+
         # select only the time range needed
         runoff_m: xr.DataArray = runoff_m.sel(
             time=slice(self.start_time, self.end_time)
         )
 
-        # for accounting purposes, we set all runoff outside the model region to zero
-        region_mask = rasterize_like(
-            self.sfincs_root_model.region.to_crs(runoff_m.rio.crs),
-            burn_value=1,
-            raster=runoff_m.isel(time=0),
-            dtype=np.int32,
-            nodata=0,
-            all_touched=True,
-        ).astype(bool)
+        # mask out all basins that are not in the model
+        mask: TwoDArrayBool = np.isin(basin_ids, self.sfincs_root_model.rivers.index)
+        runoff_m = xr.where(mask, runoff_m, 0.0)  # set runoff to 0 outside model basins
+        river_ids = np.where(
+            mask, river_ids, -1
+        )  # set river IDs to -1 outside model basins
 
-        original_dimensions = runoff_m.dims
-        runoff_m: xr.DataArray = xr.where(region_mask, runoff_m, 0, keep_attrs=True)
-        # xr.where changes the dimension order, so we need to transpose it back
-        runoff_m: xr.DataArray = runoff_m.transpose(*original_dimensions)
-
-        # we want to get all the discharge upstream from the starting point of each river segment
-        # therefore, we first remove all river cells except for the starting point of each river segment
-        # TODO: this can be changed so that runoff is added along the river segment, rather than
-        # just the most upstream point
+        # first, we want to create unique IDs for each river cell. To allow us to map
+        # it back to the original river segment, we create IDs as follows:
+        # inflow_ID = river_segment_ID * INFLOW_MULTIPLICATION_FACTOR + offset
+        # where offset is a number from 0 to N-1, with N being the number of cells in the river segment
+        river_inflow_IDs = np.full_like(river_ids, -1, dtype=np.int64)
         xy_per_river_segment = value_indices(river_ids, ignore_value=-1)
-        for COMID, (ys, xs) in xy_per_river_segment.items():
+        for ID, (ys, xs) in xy_per_river_segment.items():
+            assert len(ys) < INFLOW_MULTIPLICATION_FACTOR - 2, (
+                f"River segment has more than {INFLOW_MULTIPLICATION_FACTOR - 2} cells, which is not supported. "
+                "Increase the multiplication factor in the inflow ID calculation."
+            )
+
             river_upstream_area = upstream_area[ys, xs]
             up_to_downstream_ids = np.argsort(river_upstream_area)
 
             ys_up_to_down: npt.NDArray[np.int64] = ys[up_to_downstream_ids]
             xs_up_to_down: npt.NDArray[np.int64] = xs[up_to_downstream_ids]
 
-            for i in range(1, len(ys_up_to_down)):
-                river_ids[ys_up_to_down[i], xs_up_to_down[i]] = -1
+            for i in range(len(ys_up_to_down)):
+                inflow_ID: np.int64 = np.int64(ID) * np.int64(
+                    INFLOW_MULTIPLICATION_FACTOR
+                ) + np.int64(i)
+                assert inflow_ID < 9_223_372_036_854_775_807, (
+                    "Inflow ID exceeds maximum int64 value."
+                )
+                river_inflow_IDs[ys_up_to_down[i], xs_up_to_down[i]] = inflow_ID
 
-        # confirm that each river segment is represented by exactly one cell
-        assert (np.unique(river_ids, return_counts=True)[1][1:] == 1).all()
-
-        river_cells: TwoDArrayBool = river_ids != -1
-        river_ids_mapping: ArrayInt32 = river_ids[river_cells]
+        river_cells: TwoDArrayBool = river_inflow_IDs != -1
+        river_ids_mapping: ArrayInt64 = river_inflow_IDs[river_cells]
 
         # starting from each river cell, create an upstream basin map for which
         # the discharge will be accumulated
-        subbasins: ArrayInt32 = river_network.basins(
+        # .basins() must have river IDs starting from 1, so we use IDs from 1 to N + 1
+        # then, we subtract 1 to make it zero based again
+        subbasins: ArrayInt64 = river_network.basins(
             np.where(river_cells.ravel())[0],
-            ids=np.arange(1, river_cells.sum() + 1, step=1, dtype=np.int32),
+            ids=np.arange(1, river_ids_mapping.size + 1, step=1, dtype=np.int64),
         )[mask]
+        assert not (subbasins == 0).any()
+        subbasins -= 1  # make zero based
 
         timestep_size: xr.DataArray = runoff_m.time.diff(dim="time").astype(
             "timedelta64[s]"
@@ -1433,7 +1467,7 @@ class SFINCSSimulation:
             runoff_m * cell_area / timestep_size_seconds
         )
 
-        # accumulate generated discharge to the river starting points
+        # accumulate generated discharge for each river cell
         accumulated_generated_discharge_m3_per_s: TwoDArrayFloat64 = (
             np.apply_along_axis(
                 func1d=lambda x: np.bincount(subbasins, weights=x),
@@ -1441,84 +1475,113 @@ class SFINCSSimulation:
                 arr=generated_discharge_m3_per_s.values[:, mask],
             )
         )
-
-        # a subbasin value of 0 means that the cell does not belong to any subbasin
-        # this is possible for cells that flow into the river segment closest
-        # to the outlet of the river network
-        # therefore, we discard the generated discharge from these cells
-        if (subbasins == 0).any():
-            # for testing, we return the mean discarded generated discharge
-            discarded_generated_discharge_m3_per_s: np.float64 = (
-                accumulated_generated_discharge_m3_per_s[:, 0].mean()
-            )
-            # Track discarded volume (m3) from subbasin==0 cells for debugging
-            duration_seconds = (self.end_time - self.start_time).total_seconds()
-            self.discarded_accumulated_generated_discharge_m3 += float(
-                discarded_generated_discharge_m3_per_s * duration_seconds
-            )
-            accumulated_generated_discharge_m3_per_s: TwoDArrayFloat64 = (
-                accumulated_generated_discharge_m3_per_s[:, 1:]
-            )
-
+        assert (
+            accumulated_generated_discharge_m3_per_s.shape[1] == river_ids_mapping.size
+        )
         assert accumulated_generated_discharge_m3_per_s.shape[1] == river_cells.sum()
 
-        # create the forcing timeseries for each river segment starting point
-        nodes: gpd.GeoDataFrame = self.sfincs_root_model.rivers.copy()
-        nodes["geometry"] = nodes["geometry"].apply(get_start_point)
-        nodes: gpd.GeoDataFrame = nodes.sort_index()
+        # create empty timeseries and nodes
         timeseries: pd.DataFrame = pd.DataFrame(
             {
                 "time": generated_discharge_m3_per_s.time,
             }
         ).set_index("time")
+        inflow_IDs_gdf: list[int] = []
+        nodes: list[Point] = []
 
-        for i, node in nodes.iterrows():
-            if node["represented_in_grid"]:
-                idx = np.where(node.name == river_ids_mapping)[0]
-                assert len(idx) == 1
-                idx = idx[0]
-                timeseries[i] = accumulated_generated_discharge_m3_per_s[:, idx]
-            else:
-                timeseries[i] = 0.0
+        for mapped_idx in range(accumulated_generated_discharge_m3_per_s.shape[1]):
+            inflow_idx: int = river_ids_mapping[mapped_idx]
+
+            # find the original river segment and offset
+            river_ID = inflow_idx // INFLOW_MULTIPLICATION_FACTOR
+            inflow_offset = inflow_idx % INFLOW_MULTIPLICATION_FACTOR
+
+            river: gpd.GeoSeries = self.sfincs_root_model.rivers.loc[river_ID]
+
+            # confirm we have the correct inflow point
+            xy_low_res = river["hydrography_xy"][inflow_offset]
+            assert river_inflow_IDs[xy_low_res[1], xy_low_res[0]] == inflow_idx
+
+            # find the high-res location corresponding to the low-res inflow point
+            hydrography_upstream_area_m2 = river["hydrography_upstream_area_m2"]
+            upstream_area_low_res = hydrography_upstream_area_m2[inflow_offset]
+            hydrography_high_res_lons_lats = river["hydrography_high_res_lons_lats"]
+            hydrography_high_res_upstream_area_m2 = river[
+                "hydrography_high_res_upstream_area_m2"
+            ]
+            closest_upstream_area_index = np.argmin(
+                np.abs(hydrography_high_res_upstream_area_m2 - upstream_area_low_res)
+            )
+
+            discharge_m3_per_s = accumulated_generated_discharge_m3_per_s[:, mapped_idx]
+
+            # we want the runoff to start at the headwater of the river. However, sometimes due to
+            # the low resolution hydrology, it is inherent that sometimes the inflow point is not at the headwater
+            # but somewhere downstream. In that case, we need to add an additional inflow point at the headwater
+            # and scale the discharge accordingly, based on the upstream area at the headwater and the upstream area.
+            # We then place the normal inflow point at the closest high-res point, but with the discharge reduced accordingly.
+            if (
+                inflow_offset == 0  # check if this is the most upstream low-res point
+                and closest_upstream_area_index
+                != 0  # check if the closest high-res point is not the high-res headwater point
+                and river["maxup"] == 0  # check if this river is a headwater river
+            ):
+                # create an additional inflow point at the headwater
+                lon_headwater, lat_headwater = hydrography_high_res_lons_lats[0]
+                nodes.append(Point(lon_headwater, lat_headwater))
+
+                # for the index, we create a unique index based on the river ID. The headwater point
+                # will always have offset INFLOW_MULTIPLICATION_FACTOR - 1 which will not
+                # collide with any other inflow point
+                headwater_idx = (
+                    river_ID * INFLOW_MULTIPLICATION_FACTOR
+                    + INFLOW_MULTIPLICATION_FACTOR
+                    - 1
+                )
+                inflow_IDs_gdf.append(headwater_idx)
+
+                # find the upstream areas of both the low-res downstream point
+                # and the high-res headwater point
+                upstream_area_downstream_point_m2 = (
+                    hydrography_high_res_upstream_area_m2[closest_upstream_area_index]
+                )
+                upstream_area_headwater_point_m2 = (
+                    hydrography_high_res_upstream_area_m2[0]
+                )
+
+                # scale the discharge based on the upstream areas
+                headwater_discharge_m3_per_s = (
+                    discharge_m3_per_s
+                    * upstream_area_headwater_point_m2
+                    / upstream_area_downstream_point_m2
+                )
+                timeseries[headwater_idx] = headwater_discharge_m3_per_s
+
+                # reduce the discharge at the downstream point accordingly
+                discharge_m3_per_s = discharge_m3_per_s - headwater_discharge_m3_per_s
+
+            # get the lon lat of the closest high-res point
+            lon, lat = hydrography_high_res_lons_lats[closest_upstream_area_index]
+
+            # add the normal inflow point
+            nodes.append(Point(lon, lat))
+            inflow_IDs_gdf.append(inflow_idx)
+
+            # add the timeseries
+            timeseries[inflow_idx] = discharge_m3_per_s
+
+        # create and sort the final nodes and timeseries
+        nodes: gpd.GeoDataFrame = gpd.GeoDataFrame(
+            index=inflow_IDs_gdf, geometry=nodes, crs=4326
+        )
+
+        nodes: gpd.GeoDataFrame = nodes.sort_index()
+        timeseries: pd.DataFrame = timeseries.sort_index(axis=1)
 
         self.set_discharge_forcing_from_nodes(
             nodes=nodes,
             timeseries=timeseries,
         )
-
-    # def setup_outflow_boundary(self) -> None:
-    #     # detect whether water level forcing should be set (use this under forcing == coastal) PLot basemap and forcing to check
-    #     if (
-    #         self.sfincs_model.grid["msk"] == 2
-    #     ).any():  # if mask is 2, the model requires water level forcing
-    #         waterlevel = self.sfincs_model.data_catalog.get_dataset(
-    #             "waterlevel"
-    #         ).compute()  # define water levels and stations in data_catalog.yml
-
-    #         locations = gpd.GeoDataFrame(
-    #             index=waterlevel.stations,
-    #             geometry=gpd.points_from_xy(
-    #                 waterlevel.station_x_coordinate, waterlevel.station_y_coordinate
-    #             ),
-    #             crs=4326,
-    #         )
-
-    #         timeseries = pd.DataFrame(
-    #             index=waterlevel.time, columns=waterlevel.stations, data=waterlevel.data
-    #         )
-    #         assert timeseries.columns.equals(locations.index)
-
-    #         locations = locations.reset_index(names="stations")
-    #         locations.index = (
-    #             locations.index + 1
-    #         )  # for hydromt/SFINCS index should start at 1
-    #         timeseries.columns = locations.index
-
-    #         self.sfincs_model.setup_waterlevel_forcing(
-    #             timeseries=timeseries, locations=locations
-    #         )
-
-    #     self.sfincs_model.write_forcing()
 
     def run(self, ncpus: int | str = "auto", gpu: bool | str = "auto") -> None:
         """Runs the SFINCS simulation.
