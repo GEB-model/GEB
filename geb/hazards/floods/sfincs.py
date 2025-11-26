@@ -31,6 +31,7 @@ from scipy.ndimage import value_indices
 from shapely.geometry import Point
 from tqdm import tqdm
 
+from geb.hydrology.routing import get_river_width
 from geb.types import (
     ArrayInt64,
     TwoDArrayBool,
