@@ -56,7 +56,7 @@ def VectorScannerMultiCurves(
         features: Geopandas dataframe that contains the buildings to calculate damages for.
         hazard: xr.DataArray that contains the flood map for wich to calculate damages.
         multicurves: Dictionary containing the damage curves.
-        weighted_average: Bool to indicate whether to use weighted inundation averages for 
+        weighted_average: Bool to indicate whether to use weighted inundation averages (preciser but slower).
     Returns
         damage_df: Pandas dataframe that contains the calculated damages for each curve in a column."""
 
