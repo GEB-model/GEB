@@ -27,7 +27,7 @@ from rasterio.features import rasterize
 from scipy.interpolate import griddata
 from shapely.geometry import Polygon
 
-from geb.typing import (
+from geb.types import (
     TwoDArrayFloat32,
     TwoDArrayFloat64,
 )
