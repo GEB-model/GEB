@@ -559,8 +559,38 @@ def bounds_are_within(
     )
 
 
+@overload
 def pad_xy(
-    array_rio: rioxarray.raster_array.RasterArray,
+    da: xr.DataArray,
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+    constant_values: float
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
+    return_slice: Literal[True] = True,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
+
+
+@overload
+def pad_xy(
+    da: xr.DataArray,
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+    constant_values: float
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
+    return_slice: Literal[False] = False,
+) -> xr.DataArray: ...
+
+
+def pad_xy(
+    da: xr.DataArray,
     minx: float,
     miny: float,
     maxx: float,
@@ -579,7 +609,7 @@ def pad_xy(
     imprecision.
 
     Args:
-        array_rio: rio assecor of xarray DataArray
+        da: the DataArray to pad.
         minx: Minimum bound for x coordinate.
         miny: Minimum bound for y coordinate.
         maxx: Maximum bound for x coordinate.
@@ -597,10 +627,12 @@ def pad_xy(
     data.
 
     """
+    array_rio: rioxarray.rioxarray.RioXarrayAccessor = da.rio
+
     left, bottom, right, top = array_rio._internal_bounds()
     resolution_x, resolution_y = array_rio.resolution()
-    y_coord: xarray.DataArray | np.ndarray = array_rio._obj[array_rio.y_dim].values
-    x_coord: xarray.DataArray | np.ndarray = array_rio._obj[array_rio.x_dim].values
+    y_coord: xarray.DataArray | np.ndarray = da[array_rio.y_dim].values
+    x_coord: xarray.DataArray | np.ndarray = da[array_rio.x_dim].values
 
     y_before = y_after = 0
     x_before = x_after = 0
@@ -637,7 +669,7 @@ def pad_xy(
     if constant_values is None:
         constant_values = np.nan if array_rio.nodata is None else array_rio.nodata
 
-    superset = array_rio._obj.pad(
+    superset = da.pad(
         pad_width={
             array_rio.x_dim: (x_before, x_after),
             array_rio.y_dim: (y_before, y_after),

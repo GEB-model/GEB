@@ -284,7 +284,7 @@ class LandSurface:
 
         # TODO: Is there a better way to do this?
         region_mask, region_subgrid_slice = pad_xy(
-            self.subgrid["mask"].rio,
+            self.subgrid["mask"],
             pad_minx,
             pad_miny,
             pad_maxx,
