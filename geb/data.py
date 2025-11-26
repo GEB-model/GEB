@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
-from geb.typing import ThreeDArrayFloat32
+from geb.types import ThreeDArrayFloat32
 from geb.workflows.io import load_dict
 
 if TYPE_CHECKING:

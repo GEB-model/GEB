@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from numba import njit
 
-from geb.typing import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.raster import pixels_to_coords
 
 

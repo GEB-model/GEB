@@ -17,7 +17,7 @@ from dateutil.relativedelta import relativedelta
 
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.typing import ArrayInt64, TwoDArrayInt32
+from geb.types import ArrayInt64, TwoDArrayInt32
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
 
