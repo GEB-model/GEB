@@ -121,7 +121,7 @@ def read_flood_depth(
             except KeyError:
                 raise KeyError(
                     f"The specified end_time {end_time} is not in the results time dimension. \
-                    Consider whether the reporting interval of SFINCS is expteded \
+                    Consider whether the reporting interval of SFINCS is expected \
                     to include the end_time."
                 )
             assert isinstance(water_surface_elevation, xr.DataArray)
@@ -154,7 +154,7 @@ def read_flood_depth(
             except KeyError:
                 raise KeyError(
                     f"The specified end_time {end_time} is not in the results time dimension. \
-                    Consider whether the reporting interval of SFINCS is expteded \
+                    Consider whether the reporting interval of SFINCS is expected \
                     to include the end_time."
                 )
 
