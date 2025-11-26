@@ -11,23 +11,26 @@ import xarray as xr
 from damagescanner.vector import VectorScanner as VectorScannerDS
 from damagescanner.vector import VectorExposure as VectorExposureDS
 import numpy as np
-from numba import njit
+from numba import njit, prange
 
 
-@njit(cache=True)
+@njit(parallel=True, cache=True)
 def compute_all(values_arr, coverage_arr, max_arr, curve_x, curve_y):
-    n_obj = values_arr.shape[0]
+    n_obj = values_arr.size
     n_curves = curve_y.shape[0]
     out = np.empty((n_obj, n_curves))
 
-    for i in range(n_obj):
-        values = values_arr[i]
+    for i in prange(n_obj):  # parallel!
+        value = values_arr[i]
         coverage = coverage_arr[i]
         m = max_arr[i]
 
         for c in range(n_curves):
-            interp_vals = np.interp(values, curve_x, curve_y[c])
-            out[i, c] = interp_vals * m * coverage
+            cy = curve_y[c]
+            interp_vals = np.interp(value, curve_x, cy)
+            s = interp_vals * coverage
+
+            out[i, c] = s * m
 
     return out
 
@@ -55,7 +58,7 @@ def VectorScannerMultiCurves(
 
     # Vectorized list comprehensions (very fast)
     filtered["coverage_summed"] = [np.sum(c) for c in covs]
-    filtered["average_inundation"] = [np.max(v) for v in vals]
+    filtered["average_inundation"] = [np.mean(v) for v in vals]
 
     # calculate damages
     curve_names = list(multi_curves.keys())
