@@ -11,26 +11,25 @@ import xarray as xr
 from damagescanner.vector import VectorScanner as VectorScannerDS
 from damagescanner.vector import VectorExposure as VectorExposureDS
 import numpy as np
-from tqdm import tqdm
+from numba import njit
 
 
-# TODO replace this with numba njit
-def _get_damage_per_object(_object, multi_curves, cell_area_m2):
-    coverage = np.array(_object["coverage"]) * cell_area_m2
-    for curve in multi_curves:
-        _object[curve] = (
-            np.sum(
-                np.interp(
-                    _object["values"],
-                    multi_curves[curve].index,
-                    multi_curves[curve].values,
-                )
-                * coverage
-            )
-            * _object["maximum_damage"]
-        )
+@njit(cache=True)
+def compute_all(values_arr, coverage_arr, max_arr, curve_x, curve_y):
+    n_obj = values_arr.shape[0]
+    n_curves = curve_y.shape[0]
+    out = np.empty((n_obj, n_curves))
 
-    return _object[multi_curves.keys()]
+    for i in range(n_obj):
+        values = values_arr[i]
+        coverage = coverage_arr[i]
+        m = max_arr[i]
+
+        for c in range(n_curves):
+            interp_vals = np.interp(values, curve_x, curve_y[c])
+            out[i, c] = interp_vals * m * coverage
+
+    return out
 
 
 def VectorScannerMultiCurves(
@@ -48,16 +47,33 @@ def VectorScannerMultiCurves(
         disable_progress=disable_progress,
         gridded=False,
     )
-    # filter out features with no coverage
-    filtered_features = features[features["values"].str.len() > 0]
-    # calculate damages
-    tqdm.pandas(desc="Calculating damage", disable=disable_progress)
+    # Filter
+    filtered = features[features["values"].str.len() > 1].copy()
 
-    result = filtered_features.progress_apply(
-        lambda _object: _get_damage_per_object(_object, multi_curves, cell_area_m2),
-        axis=1,
+    vals = filtered["values"].tolist()
+    covs = filtered["coverage"].tolist()
+
+    # Vectorized list comprehensions (very fast)
+    filtered["coverage_summed"] = [np.sum(c) for c in covs]
+    filtered["average_inundation"] = [np.max(v) for v in vals]
+
+    # calculate damages
+    curve_names = list(multi_curves.keys())
+    curve_x = multi_curves[curve_names[0]].index.values
+    curve_y = np.vstack([multi_curves[name].values for name in curve_names])
+
+    average_inundation_arr = np.stack(
+        filtered["average_inundation"].to_numpy()
+    )  # shape (n_obj, n_cells)
+    coverage_arr = np.stack(filtered["coverage_summed"].to_numpy()) * cell_area_m2
+    max_arr = filtered["maximum_damage"].to_numpy()
+
+    damage_matrix = compute_all(
+        average_inundation_arr, coverage_arr, max_arr, curve_x, curve_y
     )
-    return result
+    damage_df = pd.DataFrame(damage_matrix, columns=curve_names, index=filtered.index)
+
+    return damage_df
 
 
 def VectorScanner(
