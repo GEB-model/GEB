@@ -11,6 +11,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from pgmpy.estimators import BayesianEstimator, HillClimbSearch, K2Score
 from pgmpy.factors.discrete import State
@@ -31,6 +32,174 @@ from geb.build.methods import build_method
 from geb.workflows.raster import repeat_grid
 
 from .. import GEBModel
+
+
+def replace_crop(
+    crop_calendar_per_farmer: npt.NDArray[np.integer],
+    crop_values: Sequence[int] | npt.NDArray[np.integer],
+    replaced_crop_values: Sequence[int] | npt.NDArray[np.integer],
+) -> npt.NDArray[np.integer]:
+    """Replace specified crops with the most common pattern of the most frequent matching crop.
+
+    Finds the most frequent crop among ``crop_values`` present in the farmers'
+    calendars, determines the most common cropping *pattern* (row) for that crop,
+    and replaces any crops in ``replaced_crop_values`` with that pattern.
+
+    Notes:
+        This function uses internal assertions to validate assumptions about
+        multiple-cropping variants. If those assumptions are violated, an
+        ``AssertionError`` may occur.
+
+    Args:
+        crop_calendar_per_farmer: Crop calendars per farmer (e.g., shape
+            ``(n_farmers, n_rows, n_cols)``) with crop IDs (``-1`` for empty).
+        crop_values: Candidate crop IDs to scan for the most frequent crop.
+        replaced_crop_values: Crop IDs to be replaced wherever found.
+
+    Returns:
+        Updated crop calendars (same shape as input).
+    """
+    # Find the most common crop value among the given crop_values
+    crop_instances = crop_calendar_per_farmer[:, :, 0][
+        np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
+    ]
+
+    # if none of the crops are present, no need to replace anything
+    if crop_instances.size == 0:
+        return crop_calendar_per_farmer
+
+    crops, crop_counts = np.unique(crop_instances, return_counts=True)
+    most_common_crop = crops[np.argmax(crop_counts)]
+
+    # Determine if there are multiple cropping versions of this crop and assign it to the most common
+    new_crop_types = crop_calendar_per_farmer[
+        (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
+        :,
+        :,
+    ]
+    unique_rows, counts = np.unique(new_crop_types, axis=0, return_counts=True)
+    max_index = np.argmax(counts)
+    crop_replacement = unique_rows[max_index]
+
+    crop_replacement_only_crops = crop_replacement[crop_replacement[:, -1] != -1]
+    if crop_replacement_only_crops.shape[0] > 1:
+        assert (
+            np.unique(crop_replacement_only_crops[:, [1, 3]], axis=0).shape[0]
+            == crop_replacement_only_crops.shape[0]
+        )
+
+    for replaced_crop in replaced_crop_values:
+        # Check where to be replaced crop is
+        crop_mask = (crop_calendar_per_farmer[:, :, 0] == replaced_crop).any(axis=1)
+        # Replace the crop
+        crop_calendar_per_farmer[crop_mask] = crop_replacement
+
+    return crop_calendar_per_farmer
+
+
+# Manual replacement of certain crops
+def replace_crop(
+    crop_calendar_per_farmer: npt.NDArray[np.integer],
+    crop_values: Sequence[int] | npt.NDArray[np.integer],
+    replaced_crop_values: Sequence[int] | npt.NDArray[np.integer],
+) -> npt.NDArray[np.integer]:
+    """Replace specified crops with the most common pattern of the most frequent matching crop.
+
+    Finds the most frequent crop among ``crop_values`` present in farmers'
+    calendars, determines that crop’s most common *pattern* (entire row), and
+    replaces any crops in ``replaced_crop_values`` with that pattern.
+
+    Args:
+        crop_calendar_per_farmer: Crop calendars per farmer (e.g., shape
+            ``(n_farmers, n_rows, n_cols)``) with crop IDs (``-1`` for empty).
+        crop_values: Candidate crop IDs to scan for the most frequent crop.
+        replaced_crop_values: Crop IDs to be replaced wherever found.
+
+    Returns:
+        Updated crop calendars (same shape as input).
+
+    """
+    # Find the most common crop value among the given crop_values
+    crop_instances = crop_calendar_per_farmer[:, :, 0][
+        np.isin(crop_calendar_per_farmer[:, :, 0], crop_values)
+    ]
+
+    # if none of the crops are present, no need to replace anything
+    if crop_instances.size == 0:
+        return crop_calendar_per_farmer
+
+    crops, crop_counts = np.unique(crop_instances, return_counts=True)
+    most_common_crop = crops[np.argmax(crop_counts)]
+
+    # Determine if there are multiple cropping versions of this crop and assign it to the most common
+    new_crop_types = crop_calendar_per_farmer[
+        (crop_calendar_per_farmer[:, :, 0] == most_common_crop).any(axis=1),
+        :,
+        :,
+    ]
+    unique_rows, counts = np.unique(new_crop_types, axis=0, return_counts=True)
+    max_index = np.argmax(counts)
+    crop_replacement = unique_rows[max_index]
+
+    crop_replacement_only_crops = crop_replacement[crop_replacement[:, -1] != -1]
+    if crop_replacement_only_crops.shape[0] > 1:
+        assert (
+            np.unique(crop_replacement_only_crops[:, [1, 3]], axis=0).shape[0]
+            == crop_replacement_only_crops.shape[0]
+        )
+
+    for replaced_crop in replaced_crop_values:
+        # Check where to be replaced crop is
+        crop_mask = (crop_calendar_per_farmer[:, :, 0] == replaced_crop).any(axis=1)
+        # Replace the crop
+        crop_calendar_per_farmer[crop_mask] = crop_replacement
+
+    return crop_calendar_per_farmer
+
+
+def unify_crop_variants(
+    crop_calendar_per_farmer: npt.NDArray[np.integer],
+    target_crop: int,
+) -> npt.NDArray[np.integer]:
+    """Unify all variants of a target crop to its most common pattern.
+
+    Finds every row whose first element equals ``target_crop``, determines the
+    most frequent full-row pattern among those matches, and replaces all
+    occurrences of ``target_crop`` with that most common variant.
+
+    Args:
+        crop_calendar_per_farmer (npt.NDArray[np.integer]): Crop calendars
+            (e.g., shape ``(n_farmers, n_rows, n_cols)``) with crop IDs in
+            the first column of the last axis.
+        target_crop (int): Crop ID to normalize.
+
+    Returns:
+        npt.NDArray[np.integer]: Updated crop calendars with the target crop
+        normalized to a single, most-common variant.
+    """
+    # Create a mask for all entries whose first value == target_crop
+    mask = crop_calendar_per_farmer[..., 0] == target_crop
+
+    # If the crop does not appear at all, nothing to do
+    if not np.any(mask):
+        return crop_calendar_per_farmer
+
+    # Extract only the rows/entries that match the target crop
+    crop_entries = crop_calendar_per_farmer[mask]
+
+    # Among these crop rows, find unique variants and their counts
+    # (axis=0 ensures we treat each row/entry as a unit)
+    unique_variants, variant_counts = np.unique(
+        crop_entries, axis=0, return_counts=True
+    )
+
+    # The most common variant is the unique variant with the highest count
+    most_common_variant = unique_variants[np.argmax(variant_counts)]
+
+    # Replace all the target_crop rows with the most common variant
+    crop_calendar_per_farmer[mask] = most_common_variant
+
+    return crop_calendar_per_farmer
 
 
 class Survey:
@@ -1323,145 +1492,36 @@ class fairSTREAMModel(GEBModel):
             name="agents/farmers/crop_calendar_rotation_years",
         )
 
-    # @build_method(depends_on=["setup_create_farms", "setup_cell_area"])
-    # def setup_farmer_characteristics(
-    #     self,
-    #     risk_aversion_mean,
-    #     risk_aversion_std,
-    #     discount_rate_mean,
-    #     discount_rate_std,
-    #     interest_rate,
-    #     overwrite_bayesian_network=False,
-    # ) -> None:
-    #     def normalize(array):
-    #         return (array - np.min(array)) / (np.max(array) - np.min(array))
+    @build_method(depends_on="setup_farmer_crop_calendar")
+    def adjust_crop_calendar(self) -> None:
+        """Adjust the crop calendar by unifying certain crop variants.
 
-    #     education_levels = self.array["agents/farmers/education_level"]
-    #     household_head_age = self.array["agents/farmers/age_household_head"]
+        Loads crop calendar arrays from Zarr files, replaces any occurrences of
+        TUR, MOONG, and GRAM with the most common pattern among those crops using
+        ``replace_crop``, and writes the updated calendar back into the model
+        store via ``self.set_array``.
+        """
+        # BAJRA = 0
+        # GROUNDNUT = 1
+        # JOWAR = 2
+        # PADDY = 3
+        # SUGARCANE = 4
+        # WHEAT = 5
+        GRAM = 6
+        # MAIZE = 7
+        MOONG = 8
+        # RAGI = 9
+        # SUNFLOWER = 10
+        TUR = 11
+        import zarr
 
-    #     # Calculate intention factor based on age and education
-    #     # Intention factor scales negatively with age and positively with education level
-    #     intention_factor_raw = normalize(education_levels) - normalize(
-    #         household_head_age
-    #     )
+        crop_calendar = zarr.load(
+            "/net/sys/pscst001/export/BETA-IVM-BAZIS/mka483/GEB_p3/GEB_models/models/bhima/base/input/array/agents/farmers/crop_calendar.zarr"
+        )
+        most_common_check = [TUR, MOONG, GRAM]
+        replaced_value = [TUR, MOONG, GRAM]
+        crop_calendar_per_farmer = replace_crop(
+            crop_calendar, most_common_check, replaced_value
+        )
 
-    #     # Adjust the intention factor to center it around a mean of 0.5
-    #     # The total intention of age, education and neighbor effects can scale to 1
-    #     intention_factor = np.interp(intention_factor_raw, [-1, 1], [0.25, 0.75])
-
-    #     self.set_array(intention_factor, name="agents/farmers/intention_factor")
-
-    #     bayesian_net_folder = Path(self.root).parent / "preprocessing" / "bayesian_net"
-    #     bayesian_net_folder.mkdir(exist_ok=True, parents=True)
-
-    #     # IHDS_survey = IHDSSurvey()
-    #     # IHDS_survey.parse_crops(path=Path("data") / "IHDS_I.csv")
-    #     # save_path = bayesian_net_folder / "IHDS.bif"
-    #     # if not save_path.exists() or overwrite_bayesian_network:
-    #     #     IHDS_survey.learn_structure()
-    #     #     IHDS_survey.estimate_parameters(
-    #     #         plot=False, save=bayesian_net_folder / "IHDS.png"
-    #     #     )
-    #     #     IHDS_survey.save(save_path)
-    #     # else:
-    #     #     IHDS_survey.read(save_path)
-
-    #     farmer_survey = FarmerSurvey()
-    #     farmer_survey.parse(path=Path("data") / "survey_results_cleaned.zip")
-    #     # save_path = bayesian_net_folder / "farmer_survey.bif"
-    #     # if not save_path.exists() or overwrite_bayesian_network:
-    #     #     farmer_survey.learn_structure()
-    #     #     farmer_survey.estimate_parameters(
-    #     #         plot=False, save=bayesian_net_folder / "farmer_survey.png"
-    #     #     )
-    #     #     farmer_survey.save(save_path)
-    #     # else:
-    #     #     farmer_survey.read(save_path)
-
-    #     farmer_survey.learn_structure()
-    #     farmer_survey.estimate_parameters(
-    #         plot=False, save=bayesian_net_folder / "farmer_survey.png"
-    #     )
-
-    #     farmer_survey.create_mapper(
-    #         "risk_aversion",
-    #         mean=risk_aversion_mean,
-    #         std=risk_aversion_std,
-    #         nan_value=-1,
-    #         save=bayesian_net_folder / "risk_aversion_mapper.png",
-    #         invert=True,
-    #     )
-
-    #     # High values (5) means very short term planning, low values (1) means very long term planning
-    #     farmer_survey.create_mapper(
-    #         "discount_rate",
-    #         mean=discount_rate_mean,
-    #         std=discount_rate_std,
-    #         nan_value=-1,
-    #         save=bayesian_net_folder / "discount_rate_mapper.png",
-    #         invert=True,
-    #     )
-
-    #     # n_farmers = self.array["agents/farmers/id"].size
-
-    #     farms = self.subgrid["agents/farmers/farms"]
-    #     farm_ids, farm_size_n_cells = np.unique(farms, return_counts=True)
-    #     farm_size_n_cells = farm_size_n_cells[farm_ids != -1]
-    #     farm_ids = farm_ids[farm_ids != -1]
-
-    #     mean_cell_size = self.subgrid["cell_area"].mean()
-    #     farm_size_m2 = farm_size_n_cells * mean_cell_size.compute().item()
-    #     farm_size_bins = farmer_survey.bin(
-    #         farm_size_m2 / 10_000,
-    #         "How large is the area you grow crops on in hectares?",
-    #     )
-    #     groups, group_inverse, group_counts = np.unique(
-    #         farm_size_bins, return_inverse=True, return_counts=True
-    #     )
-
-    #     # TODO: should this be float32?
-    #     perceived_effectivity = np.full_like(farm_size_m2, -1, dtype=np.int32)
-    #     risk_aversion_raw = np.full_like(farm_size_m2, -1, dtype=np.int32)
-    #     discount_rate_raw = np.full_like(farm_size_m2, -1, dtype=np.int32)
-
-    #     for group_count, (group, group_size) in enumerate(zip(groups, group_counts)):
-    #         group_mask = group_inverse == group_count
-
-    #         farmer_survey_samples = farmer_survey.sample(
-    #             n=group_size,
-    #             evidence=[group],
-    #             evidence_columns=["field_size"],
-    #             show_progress=False,
-    #         )
-
-    #         perceived_effectivity[group_mask] = farmer_survey_samples[
-    #             "perceived_effectivity"
-    #         ].values.astype(
-    #             int
-    #         )  # use array to avoid mathing on index, convert to int to make sure it is an integer
-    #         risk_aversion_raw[group_mask] = farmer_survey_samples[
-    #             "risk_aversion"
-    #         ].astype(int)
-    #         discount_rate_raw[group_mask] = farmer_survey_samples[
-    #             "discount_rate"
-    #         ].astype(int)
-
-    #         # IHDS_survey_samples = IHDS_survey.sample(
-    #         #     n=group_size,
-    #         #     evidence=[group],
-    #         #     evidence_columns=["field_size"],
-    #         #     show_progress=False,
-    #         # )
-
-    #     risk_aversion = np.array(
-    #         farmer_survey.apply_mapper("risk_aversion", risk_aversion_raw)
-    #     )
-    #     discount_rate = np.array(
-    #         farmer_survey.apply_mapper("discount_rate", discount_rate_raw)
-    #     )
-
-    #     self.set_array(
-    #         perceived_effectivity, name="agents/farmers/perceived_effectivity"
-    #     )
-    #     self.set_array(risk_aversion, name="agents/farmers/risk_aversion")
-    #     self.set_array(discount_rate, name="agents/farmers/discount_rate")
+        self.set_array(crop_calendar_per_farmer, name="agents/farmers/crop_calendar")
