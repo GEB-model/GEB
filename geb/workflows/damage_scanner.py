@@ -48,6 +48,7 @@ def VectorScannerMultiCurves(
     features: gpd.GeoDataFrame,
     hazard: xr.DataArray,
     multi_curves: dict,
+    weighted_average: bool = False,
 ):
     """This function calculates damages for all features using two curves (with and without floodproofing)
 
@@ -55,6 +56,7 @@ def VectorScannerMultiCurves(
         features: Geopandas dataframe that contains the buildings to calculate damages for.
         hazard: xr.DataArray that contains the flood map for wich to calculate damages.
         multicurves: Dictionary containing the damage curves.
+        weighted_average: Bool to indicate whether to use weighted inundation averages for 
     Returns
         damage_df: Pandas dataframe that contains the calculated damages for each curve in a column."""
 
@@ -70,11 +72,16 @@ def VectorScannerMultiCurves(
     # Filter to only process buildings that are inundated
     filtered = features[features["values"].str.len() > 1].copy()
 
-    # Since each feature contains a list, I now take the sum of the area exposed and the average inundation (could be replaced by a weighed average.)
+    # Since each feature contains a list, I now take the sum of the area exposed and the weighed average inundation.
     vals = filtered["values"].tolist()
     covs = filtered["coverage"].tolist()
     filtered["coverage_summed"] = [np.sum(c) for c in covs]
-    filtered["average_inundation"] = [np.mean(v) for v in vals]
+    if weighted_average:
+        filtered["average_inundation"] = [
+            np.average(a=v, weights=c) for v, c in zip(vals, covs)
+        ]
+    else:
+        filtered["average_inundation"] = [np.mean(v) for v in vals]
 
     # Convert all to numpy arrays.
     average_inundation_arr = np.stack(
