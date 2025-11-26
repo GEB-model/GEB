@@ -297,6 +297,9 @@ def test_accumulated_runoff(
                 end_time=end_time,
                 spinup_seconds=0,
                 write_figures=True,
+                flood_map_output_interval_seconds=(
+                    end_time - start_time
+                ).total_seconds(),
             )
 
             simulation.set_accumulated_runoff_forcing(
@@ -439,6 +442,7 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
             "nodes_forcing_test",
             start_time=start_time,
             end_time=end_time,
+            flood_map_output_interval_seconds=(end_time - start_time).total_seconds(),
         )
 
         nodes, timeseries = create_discharge_timeseries(
@@ -502,6 +506,9 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
                 start_time=start_time,
                 end_time=end_time,
                 write_figures=True,
+                flood_map_output_interval_seconds=(
+                    end_time - start_time
+                ).total_seconds(),
             )
 
             discharge_grid: xr.DataArray = xr.DataArray(
