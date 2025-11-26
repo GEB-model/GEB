@@ -16,7 +16,7 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import KDTree
 
-from geb.typing import (
+from geb.types import (
     ArrayFloat32,
     ArrayInt32,
     ThreeDArrayFloat32,

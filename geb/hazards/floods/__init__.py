@@ -15,7 +15,7 @@ import xarray as xr
 from shapely.geometry.point import Point
 
 from geb.module import Module
-from geb.typing import ArrayFloat32, TwoDArrayInt32
+from geb.types import ArrayFloat32, TwoDArrayInt32
 from geb.workflows.io import load_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
@@ -286,6 +286,11 @@ class Floods(Module):
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
                 setup_outflow=not coastal,
                 initial_water_level=initial_water_level,
+                custom_rivers_to_burn=load_geom(
+                    self.model.files["geom"]["routing/custom_rivers"]
+                )
+                if "routing/custom_rivers" in self.model.files["geom"]
+                else None,
             )
         else:
             sfincs_model.read()

@@ -22,7 +22,7 @@ from scipy.stats import genpareto, kstest
 from shapely.geometry import LineString, Point
 from tqdm import tqdm
 
-from geb.typing import ArrayFloat32, ArrayInt64
+from geb.types import ArrayFloat32, ArrayInt64
 
 
 def export_rivers(

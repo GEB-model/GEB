@@ -17,7 +17,7 @@ from geb.hazards.floods import create_river_graph, group_subbasins
 from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
-from geb.typing import TwoDArrayFloat64, TwoDArrayInt32
+from geb.types import TwoDArrayFloat64, TwoDArrayInt32
 from geb.workflows.io import WorkingDirectory, load_geom, load_grid, open_zarr
 from geb.workflows.raster import rasterize_like
 
@@ -126,6 +126,11 @@ def build_sfincs(
         in geb_model.floods.model.config["hydrology"]["routing"]["river_depth"]
         else {},
         setup_outflow=False,
+        custom_rivers_to_burn=load_geom(
+            geb_model.files["geom"]["routing/custom_rivers"]
+        )
+        if "routing/custom_rivers" in geb_model.files["geom"]
+        else None,
     )
 
     if subgrid:

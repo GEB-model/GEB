@@ -1,6 +1,7 @@
 """Build methods for the hydrography for GEB."""
 
 import os
+from pathlib import Path
 
 import geopandas as gpd
 import networkx as nx
@@ -348,7 +349,12 @@ class Hydrography:
         self.set_geom(subbasins, name="routing/subbasins")
 
     @build_method
-    def setup_hydrography(self) -> None:
+    def setup_hydrography(
+        self,
+        custom_rivers: str | None = None,
+        custom_rivers_width_m_column: str | None = None,
+        custom_rivers_depth_m_column: str | None = None,
+    ) -> None:
         """Sets up the hydrography for the model.
 
         Steps:
@@ -358,7 +364,54 @@ class Hydrography:
             4. Rasterize the river network, and setting up variables to link
                 the low-resolution and high resolution grids.
             5. Calculate river attributes such as river length, river slope, and river width.
+
+        Args:
+            custom_rivers: Optional path to a custom river shapefile. The MERIT rivers will still be
+                used to create the river raster, but the burning of rivers in the DEM will be done
+                based on the custom river shapefile. Must be readable by geopandas.read_file() or geopandas.read_parquet().
+            custom_rivers_width_m_column: The column name in the custom rivers file that contains the river width in meters.
+                must be provided if custom_rivers is provided.
+            custom_rivers_depth_m_column: The column name in the custom rivers file that contains the river depth in meters.
+                Must be provided if custom_rivers is provided.
+
+        Raises:
+            FileNotFoundError: If the custom rivers file is not found.
+            ValueError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not provided when using custom_rivers.
+            KeyError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not found in the custom rivers file.
         """
+        if custom_rivers is not None:
+            custom_rivers: Path = Path(custom_rivers)
+            self.logger.info(f"Using custom rivers from {custom_rivers}")
+            if not custom_rivers.exists():
+                raise FileNotFoundError(f"Custom rivers file {custom_rivers} not found")
+            if custom_rivers.suffix in [".parquet", ".pq", ".geoparquet"]:
+                custom_rivers_gdf = gpd.read_parquet(custom_rivers)
+            else:
+                custom_rivers_gdf = gpd.read_file(custom_rivers)
+            custom_rivers_gdf = custom_rivers_gdf.to_crs("EPSG:4326")
+            if (
+                custom_rivers_width_m_column is None
+                or custom_rivers_depth_m_column is None
+            ):
+                raise ValueError(
+                    "custom_rivers_width_m_column and custom_rivers_depth_m_column must be provided when using custom_rivers"
+                )
+            if custom_rivers_width_m_column not in custom_rivers_gdf.columns:
+                raise KeyError(
+                    f"custom_rivers_width_m_column '{custom_rivers_width_m_column}' not found in custom rivers file"
+                )
+            if custom_rivers_depth_m_column not in custom_rivers_gdf.columns:
+                raise KeyError(
+                    f"custom_rivers_depth_m_column '{custom_rivers_depth_m_column}' not found in custom rivers file"
+                )
+            custom_rivers_gdf = custom_rivers_gdf.rename(
+                columns={
+                    custom_rivers_width_m_column: "width",
+                    custom_rivers_depth_m_column: "depth",
+                }
+            )
+            self.set_geom(custom_rivers_gdf, name="routing/custom_rivers")
+
         original_d8_elevation = self.other["drainage/original_d8_elevation"]
         original_d8_ldd = self.other["drainage/original_d8_flow_directions"]
         original_d8_ldd_data = original_d8_ldd.values
@@ -601,6 +654,22 @@ class Hydrography:
         )
         COMID_IDs_raster.data = river_raster_LR
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
+
+        basin_ids = self.full_like(
+            outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
+        )
+
+        river_linear_indices = np.where(COMID_IDs_raster.values.ravel() != -1)[0]
+        basin_ids.values = flow_raster.basins(
+            idxs=river_linear_indices,
+            ids=COMID_IDs_raster.values.ravel()[river_linear_indices],
+        )
+        basin_ids = xr.where(flow_raster.mask.reshape(basin_ids.shape), basin_ids, -1)
+        assert (
+            np.unique(basin_ids.values[basin_ids.values != -1])
+            == np.unique(COMID_IDs_raster.values[COMID_IDs_raster.values != -1])
+        ).all()
+        self.set_grid(basin_ids, name="routing/basin_ids")
 
         SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lengths(
             self.new_data_catalog, rivers
