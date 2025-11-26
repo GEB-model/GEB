@@ -179,6 +179,8 @@ def add_station_Q_obs(
             "id": [station_id],  # Assign the station ID
         },
     )
+    print(station_name)
+    print(new_station_ds)
     # Add the new station to the Q_obs dataset
     Q_obs_merged = xr.concat([Q_obs, new_station_ds], dim="id")
 
@@ -386,13 +388,17 @@ class Observations:
         Q_obs_merged = Q_obs.copy()  # Ensure Q_obs_merged is always defined
 
         if custom_river_stations is not None:
+            Q_obs_merged = Q_obs
+            current_max_id = Q_obs_merged.id.values.max()
+
             for station in os.listdir(Path(self.root).parent / custom_river_stations):
+                print(station)
                 if not station.endswith(".csv"):
                     # raise error
                     raise ValueError(f"File {station} is not a csv file")
                 else:
                     station_name = station[:-4]
-
+                    print(station_name)
                     if not (
                         Path(self.root).parent / Path(custom_river_stations)
                     ).is_dir():
@@ -416,10 +422,19 @@ class Observations:
 
                     # add station to Q_obs if station is not already in Q_obs
                     if station_name not in Q_obs.station_name.values:
-                        station_id = int(Q_obs.id.max() + 1)  # ID for the new station
+                        print("adding G_obs")
+                        current_max_id += 1
+                        station_id = int(current_max_id)
+                        # ID for the new station
+                        print(station_id)
                         Q_obs_merged = add_station_Q_obs(
-                            station_id, station_name, Q_obs, station_coords, Q_station
+                            station_id,
+                            station_name,
+                            Q_obs_merged,
+                            station_coords,
+                            Q_station,
                         )  # name, coordinates, dataframe
+
                     else:
                         station_id = int(
                             Q_obs.id.values[Q_obs.station_name.values == station_name][
@@ -430,7 +445,7 @@ class Observations:
         Q_obs_clipped = clip_Q_obs(
             Q_obs_merged, region_mask
         )  # filter Q_obs stations based on the region shapefile
-
+        print(Q_obs_clipped)
         if len(Q_obs_clipped.id) == 0:
             # No stations found - create empty files
             self.logger.warning(
@@ -500,7 +515,7 @@ class Observations:
         # Snapping to river and validation of discharges
         # create list for results of snapping
         discharge_snapping_results = []
-
+        print(Q_obs_clipped.id.values)
         # start looping over the Q_obs stations
         for station_id in tqdm(Q_obs_clipped.id.values):
             # create Q_obs variables
