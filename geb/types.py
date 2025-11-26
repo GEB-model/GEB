@@ -25,6 +25,7 @@ TwoDArrayUint8 = np.ndarray[tuple[int, int], np.dtype[np.uint8]]
 TwoDArrayUint16 = np.ndarray[tuple[int, int], np.dtype[np.uint16]]
 TwoDArrayUint32 = np.ndarray[tuple[int, int], np.dtype[np.uint32]]
 TwoDArrayUint64 = np.ndarray[tuple[int, int], np.dtype[np.uint64]]
+TwoDArrayInt = np.ndarray[tuple[int, int], np.dtype[np.integer]]
 TwoDArrayBool = np.ndarray[tuple[int, int], np.dtype[np.bool_]]
 
 ThreeArrayInt32 = np.ndarray[tuple[int, int, int], np.dtype[np.int32]]

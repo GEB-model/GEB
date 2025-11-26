@@ -12,11 +12,14 @@ import numpy.typing as npt
 import pandas as pd
 import rasterio
 import xarray as xr
+from pyproj import CRS
 from rasterio.features import shapes
+from rasterio.transform import Affine
 from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
+from geb.types import TwoDArrayBool, TwoDArrayInt
 from geb.workflows.io import load_dict
 
 from ..hydrology.landcovers import (
@@ -33,7 +36,9 @@ if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
-def from_landuse_raster_to_polygon(mask, transform, crs) -> gpd.GeoDataFrame:
+def from_landuse_raster_to_polygon(
+    mask: TwoDArrayBool | TwoDArrayInt, transform: Affine, crs: str | int | CRS
+) -> gpd.GeoDataFrame:
     """Convert raster data into separate GeoDataFrames for specified land use values.
 
     Args:
@@ -44,6 +49,9 @@ def from_landuse_raster_to_polygon(mask, transform, crs) -> gpd.GeoDataFrame:
     Returns:
         A GeoDataFrame containing polygons for the specified land use values.
     """
+    import pdb
+
+    pdb.set_trace()
     shapes_gen = shapes(mask.astype(np.uint8), mask=mask, transform=transform)
 
     polygons = []
@@ -99,6 +107,7 @@ class Households(AgentBaseClass):
 
     @property
     def name(self) -> str:
+        """Return the name of the agent type."""
         return "agents.households"
 
     def load_flood_maps(self) -> None:
@@ -532,7 +541,7 @@ class Households(AgentBaseClass):
 
             damage_probability_map.to_file(output_path)
 
-    def warning_strategy_1(self, prob_threshold=0.6) -> None:
+    def warning_strategy_1(self, prob_threshold: float = 0.6) -> None:
         # I probably should use the probability_maps as argument for this function instead of getting it inside the function
         # ideally add an option to choose the warning strategy
 
@@ -601,7 +610,7 @@ class Households(AgentBaseClass):
         path = os.path.join(self.model.output_folder, "warnings_log.csv")
         pd.DataFrame(warnings_log).to_csv(path, index=False)
 
-    def infrastructure_warning_strategy(self, prob_threshold=0.6) -> None:
+    def infrastructure_warning_strategy(self, prob_threshold: float = 0.6) -> None:
         # Load postal codes and substations
         PC4 = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
         substations = gpd.read_parquet(
@@ -783,6 +792,7 @@ class Households(AgentBaseClass):
         print(f"N households that adapted: {len(household_adapting)}")
 
     def load_objects(self) -> None:
+        """Load buildings, roads, and rail geometries from model files."""
         # Load buildings
         self.buildings = gpd.read_parquet(
             self.model.files["geom"]["assets/open_building_map"]
@@ -805,6 +815,7 @@ class Households(AgentBaseClass):
         self.rail["object_type"] = "rail"
 
     def load_max_damage_values(self) -> None:
+        """Load maximum damage values from model files and store them in the model variables."""
         # Load maximum damages
         self.var.max_dam_buildings_structure = float(
             load_dict(
@@ -888,6 +899,7 @@ class Households(AgentBaseClass):
         )
 
     def load_damage_curves(self) -> None:
+        """Load damage curves from model files and store them in the model variables."""
         # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
         road_curves = []
         road_types = [
@@ -1002,6 +1014,7 @@ class Households(AgentBaseClass):
         )
 
     def spinup(self) -> None:
+        """This function runs the spin-up process for the household agents."""
         self.construct_income_distribution()
         self.assign_household_attributes()
 
@@ -1293,6 +1306,7 @@ class Households(AgentBaseClass):
         )
 
     def step(self) -> None:
+        """Advance the households by one time step."""
         if (
             self.config["adapt"]
             and self.model.current_time.month == 1
@@ -1306,9 +1320,19 @@ class Households(AgentBaseClass):
         self.report(locals())
 
     @property
-    def n(self):
+    def n(self) -> int:
+        """Number of households in the agent class.
+
+        Returns:
+            Number of households.
+        """
         return self.var.locations.shape[0]
 
     @property
-    def population(self):
+    def population(self) -> int:
+        """Total total number of people in all households.
+
+        Returns:
+            Total population.
+        """
         return self.var.sizes.data.sum()

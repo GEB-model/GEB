@@ -181,13 +181,6 @@ select = [
 extend-select = ["I"]
 preview = true
 
-[tool.ruff.lint.extend-per-file-ignores]
-"geb/agents/{decision_module,households}.py" = [
-    "ANN001",
-    "ANN201",
-    "D102",
-]
-
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]
 combine-as-imports = true
