@@ -21,6 +21,7 @@ hazards:
     simulate: false
     forcing_method: accumulated_runoff  # headwater_points, accumulated_runoff
     minimum_flood_depth: 0.05
+    flood_map_output_interval_seconds: null  # interval in seconds to output flood maps. null means no output.
     grid_size_multiplier: 1  # must be integer. The first DEM is used for the grid. This multiplier increases the grid cell size (i.e., reduces resolution) by this factor.
     subgrid: false
     force_overwrite: true

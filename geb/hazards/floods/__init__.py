@@ -331,6 +331,9 @@ class Floods(Module):
             start_time=start_time,
             end_time=end_time,
             write_figures=self.config["write_figures"],
+            flood_map_output_interval_seconds=self.config[
+                "flood_map_output_interval_seconds"
+            ],
         )
 
         routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]

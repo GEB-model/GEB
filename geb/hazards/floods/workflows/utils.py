@@ -52,7 +52,11 @@ def import_rivers(model_root: Path, postfix: str = "") -> gpd.GeoDataFrame:
 
 
 def read_flood_depth(
-    model_root: Path, simulation_root: Path, method: str, minimum_flood_depth: float
+    model_root: Path,
+    simulation_root: Path,
+    method: str,
+    minimum_flood_depth: float,
+    end_time: datetime,
 ) -> xr.DataArray:
     """Read the maximum flood depth from the SFINCS model results.
 
@@ -72,12 +76,14 @@ def read_flood_depth(
         minimum_flood_depth: The minimum flood depth to apply during downscaling (in meters).
         method: The method to use for calculating flood depth. Options are 'max' for maximum flood depth
             and 'final' for flood depth at the final time step.
+        end_time: The end time of the simulation.
 
     Returns:
         The maximum flood depth downscaled to subgrid resolution.
 
     Raises:
         ValueError: If an unknown method is provided.
+        KeyError: If the specified end_time is not in the results time dimension.
     """
     # Read SFINCS model, config and results
     model: SfincsModel = SfincsModel(
@@ -106,7 +112,18 @@ def read_flood_depth(
             assert isinstance(water_surface_elevation, xr.DataArray)
         elif method == "final":
             # get water surface elevation at the final time step (with respect to sea level)
-            water_surface_elevation = model.results["zs"].isel(timemax=-1)
+            all_water_surface_elevation: xr.Dataset | xr.DataArray = model.results["zs"]
+            assert isinstance(all_water_surface_elevation, xr.DataArray)
+            try:
+                water_surface_elevation: xr.DataArray = all_water_surface_elevation.sel(
+                    time=end_time
+                )
+            except KeyError:
+                raise KeyError(
+                    f"The specified end_time {end_time} is not in the results time dimension. \
+                    Consider whether the reporting interval of SFINCS is expteded \
+                    to include the end_time."
+                )
             assert isinstance(water_surface_elevation, xr.DataArray)
         else:
             raise ValueError(f"Unknown method: {method}")
@@ -121,24 +138,30 @@ def read_flood_depth(
             hmin=minimum_flood_depth,
             reproj_method="bilinear",  # maybe use "nearest" for coastal
         )
-        flood_depth_m = flood_depth_m.rio.write_crs(model.crs)
+        flood_depth_m: xr.DataArray = flood_depth_m.rio.write_crs(model.crs)
 
     else:
-        surface_elevation = model.grid.get("dep")
         if method == "max":
-            flood_depth_m = model.results["hmax"].max(dim="timemax")
+            flood_depth_m: xr.Dataset | xr.DataArray = model.results["hmax"].max(
+                dim="timemax"
+            )
             assert isinstance(flood_depth_m, xr.DataArray)
         elif method == "final":
-            flood_depth_m_zs = model.results["zs"].isel(time=-1) - surface_elevation
-            flood_depth_m_zs = flood_depth_m_zs.compute()
-
-            flood_depth_m = model.results["h"].isel(time=-1)
-            assert isinstance(flood_depth_m, xr.DataArray)
+            flood_depth_m_all_steps: xr.Dataset | xr.DataArray = model.results["h"]
+            assert isinstance(flood_depth_m_all_steps, xr.DataArray)
+            try:
+                flood_depth_m: xr.DataArray = flood_depth_m_all_steps.sel(time=end_time)
+            except KeyError:
+                raise KeyError(
+                    f"The specified end_time {end_time} is not in the results time dimension. \
+                    Consider whether the reporting interval of SFINCS is expteded \
+                    to include the end_time."
+                )
 
         else:
             raise ValueError(f"Unknown method: {method}")
 
-        flood_depth_m = xr.where(
+        flood_depth_m: xr.DataArray = xr.where(
             flood_depth_m >= minimum_flood_depth, flood_depth_m, np.nan, keep_attrs=True
         )
         flood_depth_m.attrs["_FillValue"] = np.nan
@@ -157,7 +180,7 @@ def read_flood_depth(
     )
 
     # Plot flood depth with colorbar
-    cbar_kwargs = {"shrink": 0.6, "anchor": (0, 0)}
+    cbar_kwargs: dict[str, float | tuple[int, int]] = {"shrink": 0.6, "anchor": (0, 0)}
     flood_depth_m.plot(
         x="x",
         y="y",
