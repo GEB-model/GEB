@@ -1155,6 +1155,10 @@ class SFINCSSimulation:
         sfincs_model = sfincs_root_model.sfincs_model
         sfincs_model.set_root(str(self.path), mode="w+")
 
+        # Clear any existing forcing data to prevent conflicts between multiple RP simulations
+        if hasattr(sfincs_model, "_forcing"):
+            sfincs_model._forcing.clear()
+
         sfincs_model.setup_config(
             alpha=0.5,  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
             h73table=1,  # use h^(7/3) table for friction calculation. This is slightly less accurate but up to 30% faster
