@@ -15,7 +15,7 @@ import xarray as xr
 from shapely.geometry.point import Point
 
 from geb.module import Module
-from geb.typing import ArrayFloat32, TwoDArrayInt32
+from geb.types import ArrayFloat32, TwoDArrayInt32
 from geb.workflows.io import load_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
@@ -286,6 +286,11 @@ class Floods(Module):
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
                 setup_outflow=not coastal,
                 initial_water_level=initial_water_level,
+                custom_rivers_to_burn=load_geom(
+                    self.model.files["geom"]["routing/custom_rivers"]
+                )
+                if "routing/custom_rivers" in self.model.files["geom"]
+                else None,
             )
         else:
             sfincs_model.read()
@@ -326,6 +331,9 @@ class Floods(Module):
             start_time=start_time,
             end_time=end_time,
             write_figures=self.config["write_figures"],
+            flood_map_output_interval_seconds=self.config[
+                "flood_map_output_interval_seconds"
+            ],
         )
 
         routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]
@@ -384,11 +392,14 @@ class Floods(Module):
             river_ids: TwoDArrayInt32 = self.hydrology.grid.load(
                 self.model.files["grid"]["routing/river_ids"], compress=False
             )
+            basin_ids: TwoDArrayInt32 = self.hydrology.grid.load(
+                self.model.files["grid"]["routing/basin_ids"], compress=False
+            )
             simulation.set_accumulated_runoff_forcing(
                 runoff_m=forcing_grid,
                 river_network=self.model.hydrology.routing.river_network,
-                mask=~self.model.hydrology.grid.mask,
                 river_ids=river_ids,
+                basin_ids=basin_ids,
                 upstream_area=self.model.hydrology.grid.decompress(
                     self.model.hydrology.grid.var.upstream_area
                 ),

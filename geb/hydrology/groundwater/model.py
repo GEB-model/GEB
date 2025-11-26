@@ -38,7 +38,7 @@ from numba import njit
 from pyproj import CRS, Transformer
 from xmipy import XmiWrapper
 
-from geb.typing import (
+from geb.types import (
     ArrayFloat32,
     ArrayFloat64,
     TwoDArrayFloat32,
@@ -49,7 +49,7 @@ from geb.workflows.io import WorkingDirectory
 if TYPE_CHECKING:
     from geb.model import GEBModel
 
-MODFLOW_VERSION: str = "6.6.2"
+MODFLOW_VERSION: str = "6.6.3"
 
 
 @njit(cache=True)
@@ -1204,7 +1204,9 @@ class ModFlowSimulation:
         This method should be called at the end of the model run to ensure that all
         resources are properly released.
         """
+        print("Finalizing MODFLOW model")
         self.mf6.finalize()
+        print("MODFLOW model finalized")
 
     def restore(self, heads: TwoDArrayFloat64) -> None:
         """Restore the model to a previous state by setting the heads.

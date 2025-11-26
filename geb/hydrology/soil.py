@@ -4,7 +4,7 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
-from geb.typing import ArrayFloat32
+from geb.types import ArrayFloat32
 
 from .landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 

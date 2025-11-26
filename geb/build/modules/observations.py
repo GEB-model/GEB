@@ -451,7 +451,6 @@ class Observations:
             self.logger.warning(
                 "No discharge stations found in the region. Creating empty files"
             )
-
             # Create empty snapping results Excel file with proper columns
             empty_cols = [
                 "Q_obs_station_name",

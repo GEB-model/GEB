@@ -1020,6 +1020,51 @@ class Crops:
             self.data_catalog,
             MIRCA_units=np.unique(MIRCA_unit_grid.values),
         )
+
+        def fix_365_in_crop_calendar(
+            crop_calendar: dict[str, list[tuple[float, np.ndarray]]],
+        ) -> None:
+            """Replace any 365 day-of-year values with 364 in the 4th column.
+
+            Scans each (area, arr) pair in every dictionary entry. If a value 365 is
+            found, it asserts that it appears only in column index 3 and then rewrites
+            it to 364. Increments a running count of replacements and raises a
+            ValueError if a 365 is found outside column 3.
+
+            Raises:
+                ValueError: If any 365 is found outside column index 3 (the 4th column).
+
+            Returns:
+                A dictionary of crop calendars where the 365 length crops are now 364 days.
+            """
+            total_replacements = 0
+
+            crop_calendar_adjusted = crop_calendar.copy()
+
+            for key, entries in crop_calendar_adjusted.items():
+                for i, (area, arr) in enumerate(entries):
+                    rows, cols = np.where(arr == 365)
+
+                    if rows.size == 0:
+                        continue  # nothing to change in this array
+
+                    # Safety: all 365s must be in column index 3 (4th column)
+                    if not np.all(cols == 3):
+                        raise ValueError(
+                            f"Found 365 outside column 3 for key={key}, index={i}: "
+                            f"indices={list(zip(rows, cols))}"
+                        )
+
+                    # Do the replacement
+                    arr[rows, 3] = 364
+                    entries[i] = (area, arr)
+                    total_replacements += rows.size
+
+            return crop_calendar_adjusted
+
+        # Replace crop growth time of 365 with 364 as 365 leads to many issues
+        crop_calendar = fix_365_in_crop_calendar(crop_calendar)
+
         if any(value in [None, "", [], {}] for value in crop_calendar.values()):
             missing_mirca_unit = [
                 unit for unit, calendars in crop_calendar.items() if not calendars

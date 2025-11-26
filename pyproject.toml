@@ -71,6 +71,7 @@ dependencies = [
     "pytest-plt>=1.1.1",
     "pytest-benchmark>=5.2.1",
     "imageio>=2.37.2",
+    "pyquadkey2>=0.3.2",
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"
@@ -181,14 +182,7 @@ extend-select = ["I"]
 preview = true
 
 [tool.ruff.lint.extend-per-file-ignores]
-"geb/agents/{crop_farmers,decision_module,households}.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D102",
-    "D103",
-]
-"geb/agents/workflows/crop_farmers.py" = [
+"geb/agents/{decision_module,households}.py" = [
     "ANN001",
     "ANN201",
     "ANN202",

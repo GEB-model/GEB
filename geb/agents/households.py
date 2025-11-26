@@ -162,28 +162,18 @@ class Households(AgentBaseClass):
 
     def update_building_attributes(self) -> None:
         """Update building attributes based on household data."""
-        # Start by computing occupancy from the var.osm_id and var.osm_way_id arrays
-        osm_id_series = pd.Series(self.var.osm_id.data)
-        osm_way_id_series = pd.Series(self.var.osm_way_id.data)
+        # Start by computing occupancy from the var.building_id array
+        building_id_series = pd.Series(self.var.building_id.data)
 
         # Drop NaNs and convert to string format (matching building ID format)
-        osm_id_counts = osm_id_series.dropna().astype(int).astype(str).value_counts()
-        osm_way_id_counts = (
-            osm_way_id_series.dropna().astype(int).astype(str).value_counts()
-        )
-
+        building_id_counts = building_id_series.dropna().astype(int).value_counts()
         # Initialize occupancy column
         self.buildings["occupancy"] = 0
 
         # Map the counts back to the buildings dataframe
         self.buildings["occupancy"] = (
-            self.buildings["osm_id"]
-            .map(osm_id_counts)
-            .fillna(self.buildings["occupancy"])
-        )
-        self.buildings["occupancy"] = (
-            self.buildings["osm_way_id"]
-            .map(osm_way_id_counts)
+            self.buildings["id"]
+            .map(building_id_counts)
             .fillna(self.buildings["occupancy"])
         )
 
@@ -217,27 +207,16 @@ class Households(AgentBaseClass):
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
         """Update the floodproofing status of buildings based on adapting households."""
         # Extract and clean OSM IDs from adapting households
-        osm_ids = pd.DataFrame(
-            np.unique(self.var.osm_id.data[household_adapting])
+        building_id = pd.DataFrame(
+            np.unique(self.var.building_id.data[household_adapting])
         ).dropna()
-        osm_ids = osm_ids.astype(int).astype(str)
-        osm_ids["flood_proofed"] = True
-        osm_ids = osm_ids.set_index(0)
-
-        # Extract and clean OSM way IDs from adapting households
-        osm_way_ids = pd.DataFrame(
-            np.unique(self.var.osm_way_id.data[household_adapting])
-        ).dropna()
-        osm_way_ids = osm_way_ids.astype(int).astype(str)
-        osm_way_ids["flood_proofed"] = True
-        osm_way_ids = osm_way_ids.set_index(0)
+        building_id = building_id.astype(int).astype(str)
+        building_id["flood_proofed"] = True
+        building_id = building_id.set_index(0)
 
         # Add/Update the flood_proofed status in buildings based on OSM way IDs
         self.buildings["flood_proofed"] = (
-            self.buildings["osm_way_id"].astype(str).map(osm_way_ids["flood_proofed"])
-        )
-        self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(
-            self.buildings["osm_id"].astype(str).map(osm_ids["flood_proofed"])
+            self.buildings["id"].astype(str).map(building_id["flood_proofed"])
         )
 
         # Replace NaNs with False (i.e., buildings not in the adapting households list)
@@ -282,13 +261,10 @@ class Households(AgentBaseClass):
         )
 
         # load building id household
-        osm_id = load_array(self.model.files["array"]["agents/households/osm_id"])
-        self.var.osm_id = DynamicArray(osm_id, max_n=self.max_n)
-
-        osm_way_id = load_array(
-            self.model.files["array"]["agents/households/osm_way_id"]
+        building_id = load_array(
+            self.model.files["array"]["agents/households/building_id"]
         )
-        self.var.osm_way_id = DynamicArray(osm_way_id, max_n=self.max_n)
+        self.var.building_id = DynamicArray(building_id, max_n=self.max_n)
 
         # update building attributes based on household data
         if self.config["adapt"]:
@@ -929,7 +905,9 @@ class Households(AgentBaseClass):
 
     def load_objects(self) -> None:
         # Load buildings
-        self.buildings = gpd.read_parquet(self.model.files["geom"]["assets/buildings"])
+        self.buildings = gpd.read_parquet(
+            self.model.files["geom"]["assets/open_building_map"]
+        )
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
@@ -1183,9 +1161,8 @@ class Households(AgentBaseClass):
             )
 
             # Save the damages to the dataframe
-            buildings_with_damages = buildings[["osm_id", "osm_way_id"]]
+            buildings_with_damages = buildings[["id"]]
             buildings_with_damages["damage"] = damage_unprotected
-            # damage_unprotected = damage_unprotected[["osm_id", "osm_way_id", "damage"]]
 
             # Calculate damages to building structure (floodproofed buildings)
             buildings_floodproofed = buildings.copy()
@@ -1204,36 +1181,26 @@ class Households(AgentBaseClass):
             )
 
             # Save the damages to the dataframe
-            buildings_with_damages_floodproofed = buildings[["osm_id", "osm_way_id"]]
+            buildings_with_damages_floodproofed = buildings[["id"]]
             buildings_with_damages_floodproofed["damage"] = damage_flood_proofed
 
             # add damages to agents (unprotected buildings)
             for _, row in buildings_with_damages.iterrows():
                 damage = row["damage"]
-                if row["osm_id"] is not None:
-                    osm_id = int(row["osm_id"])
-                    idx_agents_in_building = np.where(self.var.osm_id == osm_id)[0]
-                    damages_do_not_adapt[i, idx_agents_in_building] = damage
-                else:
-                    osm_way_id = int(row["osm_way_id"])
-                    idx_agents_in_building_way = np.where(
-                        self.var.osm_way_id == osm_way_id
-                    )[0]
-                    damages_do_not_adapt[i, idx_agents_in_building_way] = damage
+                building_id = int(row["id"])
+                idx_agents_in_building = np.where(self.var.building_id == building_id)[
+                    0
+                ]
+                damages_do_not_adapt[i, idx_agents_in_building] = damage
 
             # add damages to agents (flood-proofed buildings)
             for _, row in buildings_with_damages_floodproofed.iterrows():
                 damage = row["damage"]
-                if row["osm_id"] is not None:
-                    osm_id = int(row["osm_id"])
-                    idx_agents_in_building = np.where(self.var.osm_id == osm_id)[0]
-                    damages_adapt[i, idx_agents_in_building] = damage
-                else:
-                    osm_way_id = int(row["osm_way_id"])
-                    idx_agents_in_building_way = np.where(
-                        self.var.osm_way_id == osm_way_id
-                    )[0]
-                    damages_adapt[i, idx_agents_in_building_way] = damage
+                building_id = int(row["id"])
+                idx_agents_in_building = np.where(self.var.building_id == building_id)[
+                    0
+                ]
+                damages_adapt[i, idx_agents_in_building] = damage
 
         return damages_do_not_adapt, damages_adapt
 
@@ -1428,7 +1395,7 @@ class Households(AgentBaseClass):
                 self.var.municipal_water_demand_per_capita_m3_baseline
                 * self.var.sizes
                 * water_demand_multiplier_per_household
-            )
+            ) * self.config["adjust_demand_factor"]
         elif self.config["water_demand"]["method"] == "custom_value":
             # Function to set a custom_value for household water demand. All households have the same demand.
             custom_value = self.config["water_demand"]["custom_value"]["value"]

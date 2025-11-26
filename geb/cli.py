@@ -900,7 +900,7 @@ def build_fn(
     "continue_",
     is_flag=True,
     default=False,
-    help="Continue previous build if it was interrupted or failed. Note that the progress is deleted anytime build without continue or update is run.",
+    help="Continue previous build if it was interrupted or failed.",
 )
 def build(*args: Any, **kwargs: Any) -> None:
     """Build model with configuration file.

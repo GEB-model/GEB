@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from geb.typing import ArrayFloat32
+from geb.types import ArrayFloat32
 
 from ..hydrology.landcovers import SEALED
 from .general import AgentBaseClass, downscale_volume
