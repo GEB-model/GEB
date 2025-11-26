@@ -818,7 +818,7 @@ def test_withdraw_reservoir_limit_demand() -> None:
     )
     available_reservoir_storage_m3 -= reservoir_abstraction_m3
     assert irrigation_water_demand_field == 10.0  # only 10 should be withdrawn
-    assert maximum_abstraction_reservoir_m3_field == irrigation_water_demand_field
+    assert maximum_abstraction_reservoir_m3_field == reservoir_abstraction_m3
     assert (
         available_reservoir_storage_m3[0] == 1000.0
     )  # thus there is still 1000 m3 left
