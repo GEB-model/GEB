@@ -1033,10 +1033,15 @@ class Crops:
 
             Raises:
                 ValueError: If any 365 is found outside column index 3 (the 4th column).
+
+            Returns:
+                A dictionary of crop calendars where the 365 length crops are now 364 days.
             """
             total_replacements = 0
 
-            for key, entries in crop_calendar.items():
+            crop_calendar_adjusted = crop_calendar.copy()
+
+            for key, entries in crop_calendar_adjusted.items():
                 for i, (area, arr) in enumerate(entries):
                     rows, cols = np.where(arr == 365)
 
@@ -1055,8 +1060,10 @@ class Crops:
                     entries[i] = (area, arr)
                     total_replacements += rows.size
 
+            return crop_calendar_adjusted
+
         # Replace crop growth time of 365 with 364 as 365 leads to many issues
-        fix_365_in_crop_calendar(crop_calendar)
+        crop_calendar = fix_365_in_crop_calendar(crop_calendar)
 
         if any(value in [None, "", [], {}] for value in crop_calendar.values()):
             missing_mirca_unit = [

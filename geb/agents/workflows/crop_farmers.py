@@ -416,11 +416,6 @@ def withdraw_reservoir(
         irrigation_water_demand_field_m, np.float32(0)
     )
 
-    # irrigation_water_demand_field_m_limit_adjusted -= reservoir_abstraction_m_cell
-    # irrigation_water_demand_field_m_limit_adjusted = np.maximum(
-    #     irrigation_water_demand_field_m_limit_adjusted, np.float32(0)
-    # )
-
     return irrigation_water_demand_field_m
 
 
@@ -940,10 +935,6 @@ def abstract_water(
                 irrigation_water_demand_field_m = (
                     gross_irrigation_demand_m3_per_field[field] / cell_area[field]
                 )
-                # irrigation_water_demand_field_m_limit_adjusted = (
-                #     gross_irrigation_demand_m3_per_field_limit_adjusted[field]
-                #     / cell_area[field]
-                # )
                 assert 1 >= irrigation_water_demand_field_m >= 0
                 if surface_irrigated[farmer]:
                     # command areas
@@ -955,7 +946,6 @@ def abstract_water(
                             reservoir_abstraction_m3=reservoir_abstraction_m3,
                             available_reservoir_storage_m3=available_reservoir_storage_m3,
                             irrigation_water_demand_field_m=irrigation_water_demand_field_m,
-                            # irrigation_water_demand_field_m_limit_adjusted=irrigation_water_demand_field_m_limit_adjusted,
                             water_withdrawal_m=water_withdrawal_m,
                             remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_reservoir,
                             reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,

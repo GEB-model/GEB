@@ -1356,10 +1356,10 @@ class CropFarmers(AgentBaseClass):
         by Robert et al. (2018) https://doi.org/10.1016/j.ejor.2017.08.029
         """
         hourly_irrigation_maximum = 79.93 * (self.groundwater_depth + 0.01) ** -0.728
-        crop_growth_lengths = self.var.crop_calendar[:, :, 2].data
-        crop_growth_lengths = np.where(
-            crop_growth_lengths == -1, 0, crop_growth_lengths
-        )
+        # crop_growth_lengths = self.var.crop_calendar[:, :, 2].data
+        # crop_growth_lengths = np.where(
+        #     crop_growth_lengths == -1, 0, crop_growth_lengths
+        # )
         total_hours = 365 * 5
         yearly_irrigation_total = hourly_irrigation_maximum * total_hours
         return yearly_irrigation_total
@@ -1515,7 +1515,6 @@ class CropFarmers(AgentBaseClass):
             maximum_abstraction_channel_m3_by_farmer=maximum_abstraction_channel_m3_by_farmer,
             maximum_abstraction_groundwater_m3_by_farmer=maximum_abstraction_groundwater_m3_by_farmer,
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
-            # gross_irrigation_demand_m3_per_field_limit_adjusted=gross_irrigation_demand_m3_per_field_limit_adjusted,
         )
 
         assert (water_withdrawal_m < 1).all()
@@ -1980,7 +1979,6 @@ class CropFarmers(AgentBaseClass):
                 pass
             # it's okay for some crop prices to be nan, as they will be filtered out in the next step
             crop_prices = self.agents.market.crop_prices
-            region_id_per_field = self.var.region_id
 
             # Determine the region ids of harvesting farmers, as crop prices differ per region
 
@@ -2095,8 +2093,8 @@ class CropFarmers(AgentBaseClass):
         Farmers that experience a drought event have their drought timer reset.
 
         Args:
-            harvesting_farmers (np.ndarray): Indices of farmers currently harvesting.
-            current_crop_age (np.ndarray): Current crop age for each farmer.
+            harvesting_farmers: Indices of farmers currently harvesting.
+            current_crop_age: Current crop age for each farmer.
 
         Todo:
             Perhaps move the constant to the model.yml.
@@ -3948,7 +3946,7 @@ class CropFarmers(AgentBaseClass):
         # random_values = np.random.rand(*intention_factor_adjusted.shape)
         # intention_mask = random_values < intention_factor_adjusted
 
-        SEUT_adaptation_decision = SEUT_adaptation_decision  # & intention_mask
+        # SEUT_adaptation_decision = SEUT_adaptation_decision  # & intention_mask
 
         # Update the adaptation status
         self.var.adaptations[SEUT_adaptation_decision, adaptation_type] = 1
@@ -5315,7 +5313,7 @@ class CropFarmers(AgentBaseClass):
 
                     if (
                         self.personal_insurance_adaptation_active
-                        # and self.index_insurance_adaptation_active
+                        and self.index_insurance_adaptation_active
                         and self.pr_insurance_adaptation_active
                     ):
                         # In scenario with both insurance, compare simultaneously
@@ -5323,7 +5321,7 @@ class CropFarmers(AgentBaseClass):
                             np.array(
                                 [
                                     PERSONAL_INSURANCE_ADAPTATION,
-                                    # INDEX_INSURANCE_ADAPTATION,
+                                    INDEX_INSURANCE_ADAPTATION,
                                     PR_INSURANCE_ADAPTATION,
                                 ]
                             ),
@@ -5331,12 +5329,12 @@ class CropFarmers(AgentBaseClass):
                             farmer_yield_probability_relation_base,
                             [
                                 farmer_yield_probability_relation_insured_personal,
-                                # farmer_yield_probability_relation_insured_index,
+                                farmer_yield_probability_relation_insured_index,
                                 farmer_yield_probability_relation_insured_pr,
                             ],
                             [
                                 self.var.personal_premium,
-                                # self.var.index_premium,
+                                self.var.index_premium,
                                 self.var.pr_premium,
                             ],
                         )
