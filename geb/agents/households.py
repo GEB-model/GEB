@@ -1075,7 +1075,6 @@ class Households(AgentBaseClass):
                 ),
                 hazard=flood_map,
                 multi_curves=multi_curves,
-                disable_progress=False,
             )
             building_multicurve = pd.concat(
                 [building_multicurve, damage_buildings], axis=1
