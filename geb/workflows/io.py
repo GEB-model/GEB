@@ -121,7 +121,7 @@ def load_grid(
         assert isinstance(data_array, zarr.Array)
         data = data_array[:]
         assert isinstance(data, np.ndarray)
-        data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
+        data = np.float32(data) if data.dtype == np.float64 else data
         if return_transform_and_crs:
             x_array: zarr.Array | zarr.Group = group["x"]
             assert isinstance(x_array, zarr.Array)
@@ -1124,7 +1124,7 @@ class WorkingDirectory:
             The context manager instance.
         """
         # Store the current working directory
-        self._original_path: str = os.getcwd()
+        self._original_path = os.getcwd()
 
         # Change to the new directory
         os.chdir(self._new_path)

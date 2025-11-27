@@ -1139,7 +1139,7 @@ class Routing(Module):
         total_runoff_m: ArrayFloat32,
         channel_abstraction_m3: ArrayFloat32,
         return_flow: ArrayFloat32,
-        reference_evapotranspiration_water_m: ArrayFloat32,
+        reference_evapotranspiration_water_m: TwoDArrayFloat32,
     ) -> tuple[
         np.float32,
         np.float32,
