@@ -3,6 +3,7 @@
 import math
 
 import numpy as np
+
 from geb.hydrology.erosion.hillslope import get_particle_fall_velocity
 
 
