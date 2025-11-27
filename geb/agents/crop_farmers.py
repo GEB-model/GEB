@@ -510,6 +510,7 @@ class CropFarmers(AgentBaseClass):
         self.var.remaining_irrigation_limit_m3 = DynamicArray(
             n=self.var.n, max_n=self.var.max_n, fill_value=np.nan, dtype=np.float32
         )
+
         self.var.irrigation_limit_reset_day_index = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -517,6 +518,39 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,  # reset on day 0
         )
 
+        # ============================================================
+        # NEW: irrigation budget (monetary) per farmer
+        # 从配置中读取灌溉预算（货币），单位与水价一致（例如 €/m3 → €）
+        water_price_cfg = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["water_price"]
+
+        # 每个农户的年度标称灌溉预算（如果 model.yml 里没写，就为 NaN）
+        irrigation_budget_value = float(
+            water_price_cfg.get("irrigation_budget_monetary", np.nan)
+        )
+
+        # 每个农户的“名义预算”：一年开始时的总预算上限
+        self.var.irrigation_budget_monetary = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+        self.var.irrigation_budget_monetary[:] = irrigation_budget_value
+
+        # 每年内“剩余”的可用预算（每天随着取水被扣减）
+        self.var.remaining_irrigation_budget_monetary = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+        # 初始：剩余预算 = 名义预算
+        self.var.remaining_irrigation_budget_monetary[:] = (
+            self.var.irrigation_budget_monetary[:]
+        )
+        
         self.var.yield_ratios_drought_event = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -1225,6 +1259,14 @@ class CropFarmers(AgentBaseClass):
         if __debug__:
             irrigation_limit_pre = self.var.remaining_irrigation_limit_m3.copy()
             available_channel_storage_m3_pre = available_channel_storage_m3.copy()
+        
+        # 读一下是否启用成本优先（方便同时传给 workflows）
+        use_cost_priority = np.bool_(
+            self.model.config["agent_settings"]["farmers"].get(
+                "use_cost_priority", False
+            )
+        )
+        
         (
             self.var.channel_abstraction_m3_by_farmer[:],
             self.var.reservoir_abstraction_m3_by_farmer[:],
@@ -1263,9 +1305,10 @@ class CropFarmers(AgentBaseClass):
             unit_cost_channel=np.float32(self.var.water_costs_m3_channel),
             unit_cost_reservoir=np.float32(self.var.water_costs_m3_reservoir),
             unit_cost_groundwater=np.float32(self.var.water_costs_m3_groundwater),
-            use_cost_priority=np.bool_(
-                self.model.config["agent_settings"]["farmers"].get("use_cost_priority", False)
-            ),
+            use_cost_priority=use_cost_priority,
+            # ★ 新增：预算数组，形状 (n_farmers,)
+            #   这里假定你已经在 var 里定义了 remaining_irrigation_budget_monetary
+            remaining_irrigation_budget_monetary=self.var.remaining_irrigation_budget_monetary.data,
         )
 
         assert (water_withdrawal_m < 1).all()
@@ -4736,6 +4779,13 @@ class CropFarmers(AgentBaseClass):
                 self.var.remaining_irrigation_limit_m3[:] = (
                     self.var.irrigation_limit_m3[:]
                 )
+
+                # NEW: reset remaining irrigation budget (monetary)
+                # 每年 1 月 1 日，把“剩余预算”重置为“名义预算”
+                if hasattr(self.var, "irrigation_budget_monetary"):
+                    self.var.remaining_irrigation_budget_monetary[:] = (
+                        self.var.irrigation_budget_monetary[:]
+                    )
 
                 # Save SPEI after 1 year, otherwise doesnt line up with harvests
                 self.save_yearly_spei()
