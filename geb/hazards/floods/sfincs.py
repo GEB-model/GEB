@@ -9,6 +9,7 @@ and read simulation results.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import shutil
 from datetime import datetime
@@ -286,6 +287,13 @@ class SFINCSRootModel:
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+", write_gis=True)
         self.sfincs_model = sf
+
+        # Configure the model's logger and all handlers to DEBUG level
+        # This must be done AFTER creating SfincsModel when handlers are initialized
+        sf.logger.setLevel(logging.DEBUG)
+        for handler in sf.logger.handlers:
+            handler.setLevel(logging.DEBUG)
+
         mask_ds = DEMs[0]["elevtn"]
         assert isinstance(mask_ds, xr.Dataset)
         mask: xr.DataArray = mask_ds["elevtn"]
@@ -406,6 +414,9 @@ class SFINCSRootModel:
             )
 
         # find outflow points and save for later use
+        self.logger.info(
+            f"Searching for outflow points with buffer={self.estimated_cell_size_m} m, "
+        )
         outflow_points = river_source_points(
             gdf_riv=self.rivers.to_crs(sf.crs),
             gdf_mask=sf.region,
@@ -413,7 +424,9 @@ class SFINCSRootModel:
             buffer=self.estimated_cell_size_m,
             river_upa=outflow_river_upa,
             river_len=outflow_river_len,
+            logger=self.logger,
         ).to_crs(sf.crs)
+        self.logger.info(f"Found {len(outflow_points)} outflow point(s)")
 
         # give error if outflow greater than 1
         if len(outflow_points) > 1 and setup_outflow:
@@ -829,7 +842,7 @@ class SFINCSRootModel:
             An instance of SFINCSSimulation with the configured forcing.
         """
         return SFINCSSimulation(
-            self,
+            self.path,
             *args,
             **kwargs,
         )
@@ -1123,7 +1136,7 @@ class SFINCSSimulation:
 
     def __init__(
         self,
-        sfincs_root_model: SFINCSRootModel,
+        sfincs_root_model_path: Path,
         simulation_name: str,
         start_time: datetime,
         end_time: datetime,
@@ -1134,7 +1147,7 @@ class SFINCSSimulation:
         """Initializes a SFINCSSimulation with specific forcing and configuration.
 
         Args:
-            sfincs_root_model: An instance of SFINCSRootModel containing the base model.
+            sfincs_root_model_path: Path to the root SFINCS model directory.
             simulation_name: A string representing the name of the simulation.
                 Also used to create the path to write the file to disk.
             start_time: The start time of the simulation as a datetime object.
@@ -1148,12 +1161,20 @@ class SFINCSSimulation:
         self.write_figures = write_figures
         self.start_time = start_time
         self.end_time = end_time
-        self.sfincs_root_model = sfincs_root_model
+        self.root_model_path = sfincs_root_model_path
 
         self.cleanup()
 
-        sfincs_model = sfincs_root_model.sfincs_model
+        # Read a new independent instance of the SFINCS model to avoid shared state
+        sfincs_model = SfincsModel(root=str(sfincs_root_model_path), mode="r")
+        sfincs_model.read()
         sfincs_model.set_root(str(self.path), mode="w+")
+
+        # Configure the model's logger and all handlers to DEBUG level
+        # This must be done AFTER reading SfincsModel when handlers are initialized
+        sfincs_model.logger.setLevel(logging.DEBUG)
+        for handler in sfincs_model.logger.handlers:
+            handler.setLevel(logging.DEBUG)
 
         sfincs_model.setup_config(
             alpha=0.5,  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
@@ -1257,7 +1278,11 @@ class SFINCSSimulation:
             discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
                 Usually this is from a hydrological model.
         """
-        headwater_rivers: gpd.GeoDataFrame = self.sfincs_root_model.headwater_rivers
+        # Load rivers from file and filter for headwater rivers
+        root_rivers: gpd.GeoDataFrame = load_geom(
+            self.root_model_path / "rivers.geoparquet"
+        )
+        headwater_rivers: gpd.GeoDataFrame = root_rivers[root_rivers["maxup"] == 0]
         self.set_forcing_from_grid(
             nodes=headwater_rivers,
             discharge_grid=discharge_grid,
@@ -1273,7 +1298,34 @@ class SFINCSSimulation:
             discharge_grid: Path to a raster file or an xarray DataArray containing discharge values in m^3/s.
                 Usually this is from a hydrological model.
         """
-        inflow_rivers: gpd.GeoDataFrame = self.sfincs_root_model.inflow_rivers
+        # Load rivers from file and compute inflow rivers
+        root_rivers: gpd.GeoDataFrame = load_geom(
+            self.root_model_path / "rivers.geoparquet"
+        )
+
+        # Replicate the inflow_rivers property logic
+        non_headwater_rivers: gpd.GeoDataFrame = root_rivers[root_rivers["maxup"] > 0]
+        non_outflow_basins: gpd.GeoDataFrame = non_headwater_rivers[
+            ~non_headwater_rivers["is_downstream_outflow_subbasin"]
+        ]
+        upstream_branches_in_domain = np.unique(
+            root_rivers["downstream_ID"], return_counts=True
+        )
+
+        rivers_with_inflow = []
+        for idx, row in non_outflow_basins.iterrows():
+            downstream_ID = row["downstream_ID"]
+            if downstream_ID not in root_rivers.index:
+                continue
+            upstream_branches_count = upstream_branches_in_domain[1][
+                upstream_branches_in_domain[0] == downstream_ID
+            ][0]
+            if upstream_branches_count > 1:
+                rivers_with_inflow.append(idx)
+
+        inflow_rivers: gpd.GeoDataFrame = root_rivers[
+            root_rivers.index.isin(rivers_with_inflow)
+        ]
         self.set_forcing_from_grid(
             nodes=inflow_rivers,
             discharge_grid=discharge_grid,
@@ -1330,9 +1382,7 @@ class SFINCSSimulation:
             .all()
         ), "All forcing locations must be within the model region"
 
-        reprojected_nodes = nodes.to_crs(
-            self.sfincs_root_model.sfincs_model.grid["msk"].rio.crs
-        )
+        reprojected_nodes = nodes.to_crs(self.sfincs_model.grid["msk"].rio.crs)
         x_points: xr.DataArray = xr.DataArray(
             reprojected_nodes.geometry.x,
             dims="points",
@@ -1342,9 +1392,7 @@ class SFINCSSimulation:
             dims="points",
         )
 
-        in_masked_area: xr.DataArray = self.sfincs_root_model.sfincs_model.grid[
-            "msk"
-        ].sel(
+        in_masked_area: xr.DataArray = self.sfincs_model.grid["msk"].sel(
             x=x_points,
             y=y_points,
             method="nearest",
@@ -1415,7 +1463,10 @@ class SFINCSSimulation:
         )
 
         # mask out all basins that are not in the model
-        mask: TwoDArrayBool = np.isin(basin_ids, self.sfincs_root_model.rivers.index)
+        root_rivers: gpd.GeoDataFrame = load_geom(
+            self.root_model_path / "rivers.geoparquet"
+        )
+        mask: TwoDArrayBool = np.isin(basin_ids, root_rivers.index)
         runoff_m = xr.where(mask, runoff_m, 0.0)  # set runoff to 0 outside model basins
         river_ids = np.where(
             mask, river_ids, -1
@@ -1503,7 +1554,13 @@ class SFINCSSimulation:
             river_ID = inflow_idx // INFLOW_MULTIPLICATION_FACTOR
             inflow_offset = inflow_idx % INFLOW_MULTIPLICATION_FACTOR
 
-            river: gpd.GeoSeries = self.sfincs_root_model.rivers.loc[river_ID]
+            # Load rivers on first iteration (reuse for all iterations)
+            if mapped_idx == 0:
+                root_rivers_loop: gpd.GeoDataFrame = load_geom(
+                    self.root_model_path / "rivers.geoparquet"
+                )
+
+            river: gpd.GeoSeries = root_rivers_loop.loc[river_ID]
 
             # confirm we have the correct inflow point
             xy_low_res = river["hydrography_xy"][inflow_offset]
@@ -1657,7 +1714,26 @@ class SFINCSSimulation:
         """
         if hasattr(flood_depth, "compute"):
             flood_depth = flood_depth.compute()
-        return (flood_depth * self.sfincs_root_model.cell_area).sum().item()
+
+        # Calculate cell area based on the model's CRS
+        if self.sfincs_model.crs.is_geographic:
+            cell_area: xr.DataArray = xr.full_like(
+                self.sfincs_model.grid["dep"], np.nan, dtype=np.float32
+            )
+            cell_area.values = calculate_cell_area(
+                self.sfincs_model.grid["dep"].rio.transform(),
+                shape=self.sfincs_model.grid["dep"].shape,
+            )
+        else:
+            cell_area = xr.full_like(
+                self.sfincs_model.grid["dep"],
+                (
+                    self.sfincs_model.grid["dep"].rio.resolution()[0]
+                    * self.sfincs_model.grid["dep"].rio.resolution()[1]
+                ),
+                dtype=np.float32,
+            )
+        return (flood_depth * cell_area).sum().item()
 
     def cleanup(self) -> None:
         """Cleans up the simulation directory by removing temporary files."""
@@ -1666,7 +1742,7 @@ class SFINCSSimulation:
     @property
     def root_path(self) -> Path:
         """Returns the root directory for the SFINCS model files."""
-        return self.sfincs_root_model.path
+        return self.root_model_path
 
     @property
     def path(self) -> Path:
