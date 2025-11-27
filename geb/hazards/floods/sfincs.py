@@ -9,6 +9,7 @@ and read simulation results.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import shutil
 from datetime import datetime
@@ -286,6 +287,13 @@ class SFINCSRootModel:
         # build base model
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+", write_gis=True)
         self.sfincs_model = sf
+
+        # Configure the model's logger and all handlers to DEBUG level
+        # This must be done AFTER creating SfincsModel when handlers are initialized
+        sf.logger.setLevel(logging.DEBUG)
+        for handler in sf.logger.handlers:
+            handler.setLevel(logging.DEBUG)
+
         mask_ds = DEMs[0]["elevtn"]
         assert isinstance(mask_ds, xr.Dataset)
         mask: xr.DataArray = mask_ds["elevtn"]
@@ -406,6 +414,9 @@ class SFINCSRootModel:
             )
 
         # find outflow points and save for later use
+        self.logger.info(
+            f"Searching for outflow points with buffer={self.estimated_cell_size_m} m, "
+        )
         outflow_points = river_source_points(
             gdf_riv=self.rivers.to_crs(sf.crs),
             gdf_mask=sf.region,
@@ -413,7 +424,9 @@ class SFINCSRootModel:
             buffer=self.estimated_cell_size_m,
             river_upa=outflow_river_upa,
             river_len=outflow_river_len,
+            logger=self.logger,
         ).to_crs(sf.crs)
+        self.logger.info(f"Found {len(outflow_points)} outflow point(s)")
 
         # give error if outflow greater than 1
         if len(outflow_points) > 1 and setup_outflow:
@@ -1156,6 +1169,12 @@ class SFINCSSimulation:
         sfincs_model = SfincsModel(root=str(sfincs_root_model_path), mode="r")
         sfincs_model.read()
         sfincs_model.set_root(str(self.path), mode="w+")
+
+        # Configure the model's logger and all handlers to DEBUG level
+        # This must be done AFTER reading SfincsModel when handlers are initialized
+        sfincs_model.logger.setLevel(logging.DEBUG)
+        for handler in sfincs_model.logger.handlers:
+            handler.setLevel(logging.DEBUG)
 
         sfincs_model.setup_config(
             alpha=0.5,  # alpha is the parameter for the CFL-condition reduction. Decrease for additional numerical stability, minimum value is 0.1 and maximum is 0.75 (0.5 default value)
