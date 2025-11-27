@@ -427,7 +427,7 @@ def check_buffer_size(
 
 def to_zarr(
     da: xr.DataArray,
-    path: str | Path | zarr.storage.LocalStore,
+    path: str | Path,
     crs: int | pyproj.CRS,
     x_chunksize: int = 350,
     y_chunksize: int = 350,
@@ -1116,7 +1116,6 @@ class WorkingDirectory:
             new_path: The path to the directory to change into.
         """
         self._new_path = new_path
-        self._original_path = None  # To store the original path
 
     def __enter__(self) -> "WorkingDirectory":
         """Enters the context, changing the current working directory.
@@ -1125,7 +1124,7 @@ class WorkingDirectory:
             The context manager instance.
         """
         # Store the current working directory
-        self._original_path = os.getcwd()
+        self._original_path: str = os.getcwd()
 
         # Change to the new directory
         os.chdir(self._new_path)
