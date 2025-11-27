@@ -1018,13 +1018,9 @@ def clip_region(
     """
     rows, cols = np.where(mask)
     mincol = cols.min()
-    print(mincol)
     maxcol = cols.max()
-    print(maxcol)
     minrow = rows.min()
-    print(minrow)
     maxrow = rows.max()
-    print(maxrow)
 
     minx = mask.x[mincol].item()
     maxx = mask.x[maxcol].item()
@@ -1032,16 +1028,11 @@ def clip_region(
     maxy = mask.y[maxrow].item()
 
     xres, yres = mask.rio.resolution()
-    print(xres)
-    print(yres)
+
     mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
-    print(mincol_aligned)
     maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
-    print(maxcol_aligned)
     minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
-    print(minrow_aligned)
     maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
-    print(maxrow_aligned)
 
     assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
     assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
@@ -1052,8 +1043,6 @@ def clip_region(
     assert maxcol_aligned >= maxcol
     assert minrow_aligned <= minrow
     assert maxrow_aligned >= maxrow
-
-    minrow_aligned = max(0, minrow_aligned)
 
     clipped_mask = mask.isel(
         y=slice(minrow_aligned, maxrow_aligned),
@@ -1073,8 +1062,4 @@ def clip_region(
                 x=slice(mincol_aligned, maxcol_aligned),
             )
         )
-
-    print(mask.y.values[:5], mask.y.values[-5:])
-    print(minrow_aligned, maxrow_aligned)
-    print(clipped_mask)
     return clipped_mask, *clipped_arrays

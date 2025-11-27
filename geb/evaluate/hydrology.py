@@ -1560,22 +1560,21 @@ class Hydrology:
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"
-                / "run"
-                / "segments.geoparquet"
-            )
-            region = gpd.read_file(
+                / "group_0"
+                / "rivers.geoparquet"
+            ).to_crs(obs.rio.crs)
+            region = gpd.read_parquet(
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"
-                / "run"
-                / "gis"
-                / "region.geojson"
+                / "group_0"
+                / "region.geoparquet"
             ).to_crs(obs.rio.crs)
 
             # Step 2: Clip out rivers from observations and simulations
             crs_wgs84 = CRS.from_epsg(4326)
             crs_mercator = CRS.from_epsg(3857)
-            rivers.set_crs(crs_wgs84, inplace=True)
+            # rivers.set_crs(crs_wgs84, inplace=True)
             gdf_mercator = rivers.to_crs(crs_mercator)
             gdf_mercator["geometry"] = gdf_mercator.buffer(gdf_mercator["width"] / 2)
 
@@ -1605,7 +1604,7 @@ class Hydrology:
             obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
 
             # Step 4: Optionally clip using extra validation region from config yml
-            extra_validation_path = self.config["hazards"]["floods"].get(
+            extra_validation_path = self.config["floods"].get(
                 "extra_validation_region", None
             )
 
@@ -1626,7 +1625,7 @@ class Hydrology:
                 clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
 
             # Step 5: Mask water depth values
-            hmin = 0.15
+            hmin = 0.0
             sim_extra_clipped = sim_extra_clipped.raster.reproject_like(obs_region)
             simulation_final = sim_extra_clipped > hmin
             observation_final = obs_region > 0
