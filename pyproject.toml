@@ -185,9 +185,7 @@ preview = true
 "geb/agents/{decision_module,households}.py" = [
     "ANN001",
     "ANN201",
-    "ANN202",
     "D102",
-    "D103",
 ]
 
 [tool.ruff.lint.isort]

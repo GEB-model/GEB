@@ -388,17 +388,12 @@ class Observations:
         Q_obs_merged = Q_obs.copy()  # Ensure Q_obs_merged is always defined
 
         if custom_river_stations is not None:
-            Q_obs_merged = Q_obs
-            current_max_id = Q_obs_merged.id.values.max()
-
             for station in os.listdir(Path(self.root).parent / custom_river_stations):
-                print(station)
                 if not station.endswith(".csv"):
                     # raise error
                     raise ValueError(f"File {station} is not a csv file")
                 else:
                     station_name = station[:-4]
-                    print(station_name)
                     if not (
                         Path(self.root).parent / Path(custom_river_stations)
                     ).is_dir():
@@ -422,11 +417,9 @@ class Observations:
 
                     # add station to Q_obs if station is not already in Q_obs
                     if station_name not in Q_obs.station_name.values:
-                        print("adding G_obs")
-                        current_max_id += 1
-                        station_id = int(current_max_id)
-                        # ID for the new station
-                        print(station_id)
+                        station_id = int(
+                            Q_obs_merged.id.max() + 1
+                        )  # ID for the new station
                         Q_obs_merged = add_station_Q_obs(
                             station_id,
                             station_name,
