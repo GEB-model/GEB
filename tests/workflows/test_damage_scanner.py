@@ -89,7 +89,7 @@ def vulnerability_curves() -> pd.DataFrame:
             "residential": [0.0, 0.2, 0.3],
             "commercial": [0.0, 0.4, 0.6],
         },
-        index=[0, 1, 2],
+        index=np.array([0, 1, 2]),
     )
 
 

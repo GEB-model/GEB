@@ -85,7 +85,9 @@ def test_estimate_initial_lake_storage_and_outflow_height() -> None:
     avg_outflow = np.array([2.494])
     river_width = get_river_width(avg_outflow)
     lake_factor = get_lake_factor(
-        river_width=river_width, overflow_coefficient_mu=0.577, lake_a_factor=1
+        river_width=river_width,
+        overflow_coefficient_mu=np.float32(0.577),
+        lake_a_factor=np.float32(1),
     )
 
     outflow_height = estimate_outflow_height(
