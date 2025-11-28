@@ -645,6 +645,12 @@ class SFINCSRootModel:
             latlon=self.is_geographic,
         )
 
+        # also add all cells with large upstream from the DEM to the drainage cells
+        upstream_area: TwoDArrayFloat64 = flow_raster.upstream_area(unit="m2")
+        drainage_cells: xr.DataArray = drainage_cells | (
+            upstream_area > 25_000_000
+        )  # 25 km²
+
         height_above_nearest_drainage = xr.full_like(
             self.elevation, np.nan, dtype=np.float32
         )
