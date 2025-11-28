@@ -153,9 +153,9 @@ def test_vector_scanner_multicurves(
     assert math.isclose(
         damage.loc[5]["residential"], 0.0
     )  # 1m2, no hazard severity, residential, max_damage 100
-    # assert math.isclose(
-    #     damage.loc[6]["residential"], 0.0
-    # )  # 1m2, hazard is nan, residential, max_damage 100
+    assert math.isclose(
+        damage.loc[6]["residential"], 0.0
+    )  # 1m2, hazard is nan, residential, max_damage 100
 
     assert math.isclose(
         damage.loc[7]["residential"], 10.0
