@@ -36,7 +36,7 @@ from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.blosc import BloscShuffle
 
-from geb.types import ArrayDatetime64
+from geb.types import ArrayDatetime64, ThreeDArray, TwoDArray
 
 
 def load_table(fp: Path | str) -> pd.DataFrame:
@@ -87,7 +87,7 @@ def load_grid(
 
 def load_grid(
     filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
-) -> np.ndarray | tuple[np.ndarray, Affine, str]:
+) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
     """Load a raster grid from a .tif or .zarr file.
 
     Args:
@@ -104,14 +104,15 @@ def load_grid(
     if filepath.suffix == ".tif":
         warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
         with rasterio.open(filepath) as src:
-            data: np.ndarray = src.read(layer)
-            data: np.ndarray = (
+            data: TwoDArray | ThreeDArray = src.read(layer)
+            data: TwoDArray | ThreeDArray = (
                 data.astype(np.float32) if data.dtype == np.float64 else data
             )
             if return_transform_and_crs:
                 return data, src.transform, src.crs
             else:
                 return data
+
     elif filepath.suffix == ".zarr":
         store: zarr.storage.LocalStore = zarr.storage.LocalStore(
             filepath, read_only=True
@@ -120,8 +121,9 @@ def load_grid(
         data_array: zarr.Array | zarr.Group = group[filepath.stem]
         assert isinstance(data_array, zarr.Array)
         data = data_array[:]
-        assert isinstance(data, np.ndarray)
-        data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
+        data: TwoDArray | ThreeDArray = (
+            data.asfloat(np.float32) if data.dtype == np.float64 else data
+        )
         if return_transform_and_crs:
             x_array: zarr.Array | zarr.Group = group["x"]
             assert isinstance(x_array, zarr.Array)
@@ -427,7 +429,7 @@ def check_buffer_size(
 
 def to_zarr(
     da: xr.DataArray,
-    path: str | Path | zarr.storage.LocalStore,
+    path: str | Path,
     crs: int | pyproj.CRS,
     x_chunksize: int = 350,
     y_chunksize: int = 350,
@@ -1116,7 +1118,6 @@ class WorkingDirectory:
             new_path: The path to the directory to change into.
         """
         self._new_path = new_path
-        self._original_path = None  # To store the original path
 
     def __enter__(self) -> "WorkingDirectory":
         """Enters the context, changing the current working directory.
