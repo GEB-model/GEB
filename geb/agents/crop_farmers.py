@@ -1845,10 +1845,10 @@ class CropFarmers(AgentBaseClass):
                 ),
                 prestorages=(
                     irrigation_limit_pre_reservoir[
-                        ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
                     ].astype(np.float64),
                     irrigation_limit_pre_channel[
-                        ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
                     ].astype(np.float64),
                     irrigation_limit_pre_groundwater[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
@@ -5190,16 +5190,16 @@ class CropFarmers(AgentBaseClass):
 
         ## yearly actions
         if self.model.current_time.month == 1 and self.model.current_time.day == 1:
+            self.var.remaining_irrigation_limit_m3_reservoir[:] = (
+                self.var.irrigation_limit_m3[:]
+            )
+            self.var.remaining_irrigation_limit_m3_channel[:] = (
+                self.irrigation_limit_reservoir_mdb[:]
+            )
+            self.var.remaining_irrigation_limit_m3_groundwater[:] = (
+                self.var.irrigation_limit_m3[:]
+            )
             if self.model.current_time.year > self.model.spinup_start.year:
-                self.var.remaining_irrigation_limit_m3_reservoir[:] = (
-                    self.var.irrigation_limit_m3[:]
-                )
-                self.var.remaining_irrigation_limit_m3_channel[:] = (
-                    self.irrigation_limit_reservoir_mdb[:]
-                )
-                self.var.remaining_irrigation_limit_m3_groundwater[:] = (
-                    self.var.irrigation_limit_m3[:]
-                )
                 # reset the irrigation limit, but only if a full year has passed already. Otherwise
                 # the cumulative water deficit is not year completed.
                 self.save_yearly_spei()
