@@ -20,7 +20,7 @@ from numba import njit, prange
 def compute_all_numba(
     values: np.ndarray,
     coverage: np.ndarray,
-    max_arr: np.ndarray,
+    max_damage_arr: np.ndarray,
     curve_x: np.ndarray,
     curve_y: np.ndarray,
     slopes: np.ndarray,
@@ -28,11 +28,11 @@ def compute_all_numba(
     """Numba-accelerated function to compute damages for multiple objects and multiple curves.
 
     Args:
-        values: np.ndarray of shape (n_obj,) containing the inundation values for each object.
-        coverage: np.ndarray of shape (n_obj,) containing the coverage area for each object.
-        max_arr: np.ndarray of shape (n_obj,) containing the maximum damage for each object.
-        curve_x: np.ndarray of shape (n_points,) containing the x-coordinates of the damage curves.
-        curve_y: np.ndarray of shape (n_curves, n_points) containing the y-coordinates of the damage curves.
+        values: np.ndarray of shape (n_obj,) containing the inundation values in m for each object.
+        coverage: np.ndarray of shape (n_obj,) containing the coverage area in m2 for each object.
+        max_damage_arr: np.ndarray of shape (n_obj,) containing the maximum damage in EUR for each object.
+        curve_x: np.ndarray of shape (n_points,) containing the inundation values of the damage curves.
+        curve_y: np.ndarray of shape (n_curves, n_points) containing the damage factors of the damage curves.
         slopes: np.ndarray of shape (n_curves, n_points-1) containing the slopes of the damage curves.
     Returns:
         out: np.ndarray of shape (n_obj, n_curves) containing the computed damages for each object and curve.
@@ -46,7 +46,7 @@ def compute_all_numba(
     for i in prange(n_obj):
         v = values[i]
         cov = coverage[i]
-        m = max_arr[i]
+        m = max_damage_arr[i]
 
         # --- searchsorted (scalar) ---
         j = np.searchsorted(curve_x, v) - 1
@@ -78,11 +78,11 @@ def VectorScannerMultiCurves(
 
     Args:
         features: Geopandas dataframe that contains the buildings to calculate damages for.
-        hazard: xr.DataArray that contains the flood map for wich to calculate damages.
-        multi_curves: Dictionary containing the damage curves.
+        hazard: xr.DataArray that contains the flood map with inundation levels in m for which to calculate damages.
+        multi_curves: Dictionary containing the damage curves that map inundation depth (meters) to damage ratios.
         weighted_average: Bool to indicate whether to use weighted inundation averages (preciser but slower).
     Returns:
-        damage_df: Pandas dataframe that contains the calculated damages for each curve in a column.
+        damage_df: Pandas dataframe that contains the calculated damages in EUR for each curve in a column.
     """
     # get vector exposure, this is returned as a list for each building containing the area in flood plain cell (coverage) and the the inundation height (values).
     features, _, _, cell_area_m2 = VectorExposureDS(
@@ -108,18 +108,16 @@ def VectorScannerMultiCurves(
         filtered["average_inundation"] = [np.mean(v) for v in vals]
 
     # Convert all to numpy arrays.
-    average_inundation_arr = np.stack(
+    average_inundation_m_arr = np.stack(
         filtered["average_inundation"].to_numpy()
     )  # shape (n_obj, n_cells)
     coverage_arr = np.stack(filtered["coverage_summed"].to_numpy()) * cell_area_m2
-    max_arr = filtered["maximum_damage"].to_numpy()
+    max_damage_arr = filtered["maximum_damage"].to_numpy()
 
     # Convert the damage curves to numpy arrays
     curve_names = list(multi_curves.keys())
-    curve_x = multi_curves[curve_names[0]].index.values
-    curve_y = np.vstack([multi_curves[name].values for name in curve_names])
     curve_x = multi_curves[curve_names[0]].index.values.astype(np.float64)
-    curve_y = np.vstack([multi_curves[k].values for k in curve_names]).astype(
+    curve_y = np.vstack([multi_curves[name].values for name in curve_names]).astype(
         np.float64
     )
 
@@ -128,9 +126,9 @@ def VectorScannerMultiCurves(
 
     # Compute all damages
     damage_matrix = compute_all_numba(
-        average_inundation_arr.astype(np.float64),
+        average_inundation_m_arr.astype(np.float64),
         coverage_arr.astype(np.float64),
-        max_arr.astype(np.float64),
+        max_damage_arr.astype(np.float64),
         curve_x,
         curve_y,
         curve_slopes,

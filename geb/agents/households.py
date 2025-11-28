@@ -1015,14 +1015,14 @@ class Households(AgentBaseClass):
 
     def assign_damages_to_agents(
         self, agent_df: pd.DataFrame, buildings_with_damages: pd.DataFrame
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """This function assigns the building damages calculated by the vector scanner to the corresponding households.
 
         Args:
             agent_df: Pandas dataframe that contains the open building map building id assigned to each agent.
             buildings_with_damages: Pandas dataframe constructed by the vector scanner that contains the damages for each building.
         Returns:
-            merged["damage"].to_numpy(): Numpy array of the damages for each agent.
+            Tuple[np.ndarray, np.ndarray]: A tuple containing damage arrays for (unprotected buildings, flood-proofed buildings).
         """
         merged = agent_df.merge(
             buildings_with_damages.rename(columns={"id": "building_id_of_household"}),
@@ -1061,7 +1061,6 @@ class Households(AgentBaseClass):
 
         # subset building to those exposed to flooding
         buildings = buildings[buildings["flooded"]]
-        # buildings.geometry = buildings.geometry.centroid
         for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
 
