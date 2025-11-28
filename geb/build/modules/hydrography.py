@@ -378,6 +378,7 @@ class Hydrography:
             FileNotFoundError: If the custom rivers file is not found.
             ValueError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not provided when using custom_rivers.
             KeyError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not found in the custom rivers file.
+            AssertionError: If some large rivers are not represented in the grid.
         """
         if custom_rivers is not None:
             custom_rivers: Path = Path(custom_rivers)
