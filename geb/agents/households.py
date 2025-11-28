@@ -1043,7 +1043,7 @@ class Households(AgentBaseClass):
         based on the flood maps and the building footprints.
 
         Args:
-            v: Verbosity flag.
+            verbose: Verbosity flag.
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
         """
