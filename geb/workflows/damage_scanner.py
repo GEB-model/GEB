@@ -16,7 +16,6 @@ from damagescanner.vector import (
 from numba import njit, prange
 
 
-# ---------------------------------------------------------
 @njit(parallel=True, fastmath=True)
 def compute_all_numba(
     values: np.ndarray,
