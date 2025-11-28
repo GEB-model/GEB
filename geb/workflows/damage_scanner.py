@@ -16,7 +16,7 @@ from damagescanner.vector import (
 from numba import njit, prange
 
 
-@njit(parallel=True, fastmath=True)
+# @njit(parallel=True, fastmath=True)
 def compute_all_numba(
     values: np.ndarray,
     coverage: np.ndarray,
@@ -94,7 +94,7 @@ def VectorScannerMultiCurves(
         gridded=False,
     )
     # Filter to only process buildings that are inundated
-    filtered = features[features["values"].str.len() > 1].copy()
+    filtered = features[features["values"].str.len() > 0].copy()
 
     # Since each feature contains a list, I now take the sum of the area exposed and the weighed average inundation.
     vals = filtered["values"].tolist()
