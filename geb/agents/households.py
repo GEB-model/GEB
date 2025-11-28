@@ -1035,7 +1035,7 @@ class Households(AgentBaseClass):
         return damages_do_not_adapt, damages_adapt
 
     def calculate_building_flood_damages(
-        self, v=False
+        self, v: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
