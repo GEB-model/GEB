@@ -582,7 +582,8 @@ class Reporter:
                 assert isinstance(time_array, zarr.Array), (
                     "time_array must be a zarr.Array"
                 )
-                time_array: ArrayInt64 = time_array[:]
+                time_array = time_array[:]
+                assert isinstance(time_array, ArrayInt64)
                 if (
                     np.isin(self.model.current_time_unix_s, time_array)
                     and value is not None
@@ -654,7 +655,7 @@ class Reporter:
                         raise ValueError(f"Unknown varname type {config['varname']}")
 
                     try:
-                        idx: int = linear_mapping[py, px]
+                        idx = linear_mapping[py, px]
                     except IndexError:
                         raise IndexError(
                             f"Coordinate ({px}, {py}) is outside the model domain, which has shape {linear_mapping.shape}."
