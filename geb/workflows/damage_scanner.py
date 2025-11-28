@@ -16,7 +16,7 @@ from damagescanner.vector import (
 from numba import njit, prange
 
 
-# @njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True)
 def compute_all_numba(
     values: np.ndarray,
     coverage: np.ndarray,
@@ -72,7 +72,7 @@ def VectorScannerMultiCurves(
     features: gpd.GeoDataFrame,
     hazard: xr.DataArray,
     multi_curves: dict,
-    weighted_average: bool = False,
+    weighted_average: bool = True,
 ) -> pd.DataFrame:
     """This function calculates damages for all features using two curves (with and without floodproofing).
 
@@ -85,7 +85,7 @@ def VectorScannerMultiCurves(
         damage_df: Pandas dataframe that contains the calculated damages for each curve in a column.
     """
     # get vector exposure, this is returned as a list for each building containing the area in flood plain cell (coverage) and the the inundation height (values).
-    features, object_col, hazard_crs, cell_area_m2 = VectorExposureDS(
+    features, _, _, cell_area_m2 = VectorExposureDS(
         hazard_file=hazard,
         feature_file=features,
         asset_type=None,

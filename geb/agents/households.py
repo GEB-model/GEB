@@ -1034,12 +1034,16 @@ class Households(AgentBaseClass):
 
         return damages_do_not_adapt, damages_adapt
 
-    def calculate_building_flood_damages(self) -> tuple[np.ndarray, np.ndarray]:
+    def calculate_building_flood_damages(
+        self, v=False
+    ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
         It iterates over the return periods and calculates the damages for each household
         based on the flood maps and the building footprints.
 
+        Args:
+            v: Verbosity flag.
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
         """
@@ -1083,12 +1087,13 @@ class Households(AgentBaseClass):
                 agent_df,
                 building_multicurve,
             )
-            print(
-                f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
-            )
-            print(
-                f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
-            )
+            if v:
+                print(
+                    f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
+                )
+                print(
+                    f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
+                )
         return damages_do_not_adapt, damages_adapt
 
     def flood(self, flood_depth: xr.DataArray) -> float:
