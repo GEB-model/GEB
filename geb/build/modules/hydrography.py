@@ -1148,25 +1148,25 @@ class Hydrography:
                     predicate="intersects",
                 )
                 rivers = rivers.reset_index().rename(columns={"index": "COMID"})
-
                 # Attach volume_total for tie-breaking between multiple intersecting reservoirs
                 rivers = rivers.merge(
                     reservoirs[["waterbody_id", "volume_total"]],
                     on="waterbody_id",
                     how="left",
                 )
-
                 # If a river segment (COMID) appears multiple times, keep the row with the largest reservoir volume
                 rivers = rivers.sort_values(
                     "volume_total", ascending=False
                 ).drop_duplicates(subset="COMID", keep="first")
-
                 # Restore COMID as index and drop sjoin helper column
                 rivers = rivers.set_index("COMID").drop(columns=["index_right"])
-                # Loop from up to downstream and set all downstream river values with relevant reservoir id
-                rivers["n_downstream"] = rivers["all_downstream_ids"].str.len()
+
+                # Columns to track state per segment
                 rivers["waterbody_id_propagated"] = np.nan
                 has_reservoir = rivers["waterbody_id"].notna()
+
+                # Loop from up to downstream and set all downstream river values with relevant reservoir id
+                rivers["n_downstream"] = rivers["all_downstream_ids"].str.len()
                 reservoir_segments = (
                     rivers[has_reservoir].sort_values(
                         "n_downstream", ascending=False
@@ -1179,6 +1179,7 @@ class Hydrography:
                     wb_new = row["waterbody_id"]
                     vol_new = wb_volume.get(wb_new, np.nan)
 
+                    # This segment + all its downstream segments
                     segs = [comid] + row["all_downstream_ids"]
 
                     for seg in segs:
@@ -1189,7 +1190,7 @@ class Hydrography:
                             rivers.at[seg, "waterbody_id_propagated"] = wb_new
                             continue
 
-                        # Compare volumes
+                        # Look up old volume
                         vol_old = wb_volume.get(current_id, np.nan)
 
                         # If we don't know the old volume but know the new → overwrite
@@ -1201,10 +1202,30 @@ class Hydrography:
                         if pd.isna(vol_new):
                             continue
 
+                        # --- 5× rule ---
+                        # If old reservoir is at least 5× bigger → keep old
+                        # Otherwise → overwrite with new
                         if vol_old >= ratio_threshold * vol_new:
+                            # keep old
                             continue
                         else:
                             rivers.at[seg, "waterbody_id_propagated"] = wb_new
+
+                # map the reservoir ids to whole model cells
+                basin_ids = self.grid["routing/basin_ids"]
+                s_map = rivers["waterbody_id_propagated"]
+                flat_ids = basin_ids.values.ravel()
+                mapped_flat = s_map.reindex(flat_ids).to_numpy()
+                mapped_flat[np.isnan(mapped_flat)] = -1
+                mapped = mapped_flat.reshape(basin_ids.shape).astype("int32")
+                waterbody_grid = xr.DataArray(
+                    mapped,
+                    coords=basin_ids.coords,
+                    dims=basin_ids.dims,
+                    name="routing/waterbody_id_propagated",
+                    attrs={"_FillValue": -1},
+                )
+
                 pass
             else:
                 command_areas = self.full_like(
