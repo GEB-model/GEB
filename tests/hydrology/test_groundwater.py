@@ -107,13 +107,13 @@ heads = np.full((NLAY, YSIZE, XSIZE), 0, dtype=np.float32)
 for layer in range(NLAY):
     heads[layer] = topography - 2
 
-GEB_PACACKAGE_DIR_str: str | None = os.environ.get("GEB_PACKAGE_DIR")
-if GEB_PACACKAGE_DIR_str is None:
+GEB_PACKAGE_DIR_str: str | None = os.environ.get("GEB_PACKAGE_DIR")
+if GEB_PACKAGE_DIR_str is None:
     raise RuntimeError("GEB_PACKAGE_DIR environment variable is not set.")
 
 default_params: ModFlowParams = {
     "working_directory": tmp_folder / "modflow",
-    "modflow_bin_folder": Path(GEB_PACACKAGE_DIR_str) / "modflow" / "bin",
+    "modflow_bin_folder": Path(GEB_PACKAGE_DIR_str) / "modflow" / "bin",
     "gt": gt,
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),
     "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.8), basin_mask),
