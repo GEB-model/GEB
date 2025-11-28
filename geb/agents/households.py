@@ -1035,7 +1035,7 @@ class Households(AgentBaseClass):
         return damages_do_not_adapt, damages_adapt
 
     def calculate_building_flood_damages(
-        self, v: bool = False
+        self, verbose: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
@@ -1086,7 +1086,7 @@ class Households(AgentBaseClass):
                 agent_df,
                 building_multicurve,
             )
-            if v:
+            if verbose:
                 print(
                     f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
                 )
