@@ -311,10 +311,8 @@ def test_accumulated_runoff(
                 cell_area=cell_area,
             )
 
-            if simulation.sfincs_root_model.has_inflow:
-                inflow_rivers: gpd.GeoDataFrame = (
-                    simulation.sfincs_root_model.inflow_rivers
-                )
+            if simulation.sfincs_model.has_inflow:
+                inflow_rivers: gpd.GeoDataFrame = simulation.sfincs_model.inflow_rivers
                 inflow_nodes = inflow_rivers.copy()
                 inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
                     get_start_point
@@ -531,7 +529,7 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
 
             discharge_grid = discharge_grid * 2.0
 
-            if simulation.sfincs_root_model.has_inflow:
+            if simulation.sfincs_model.has_inflow:
                 simulation.set_inflow_forcing_from_grid(
                     discharge_grid=discharge_grid,
                 )
