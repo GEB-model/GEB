@@ -1581,10 +1581,10 @@ class CropFarmers(AgentBaseClass):
                 ),
                 prestorages=(
                     irrigation_limit_pre_reservoir[
-                        ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
                     ].astype(np.float64),
                     irrigation_limit_pre_channel[
-                        ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
+                        ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
                     ].astype(np.float64),
                     irrigation_limit_pre_groundwater[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
