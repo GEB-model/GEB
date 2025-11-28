@@ -1024,7 +1024,6 @@ class Households(AgentBaseClass):
         Returns:
             merged["damage"].to_numpy(): Numpy array of the damages for each agent.
         """
-
         merged = agent_df.merge(
             buildings_with_damages.rename(columns={"id": "building_id_of_household"}),
             on="building_id_of_household",
@@ -1085,10 +1084,10 @@ class Households(AgentBaseClass):
                 building_multicurve,
             )
             print(
-                f"Damages rp{return_period}: {damages_do_not_adapt[i].sum() / 1e6} million"
+                f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
             )
             print(
-                f"Damages adapt rp{return_period}: {damages_adapt[i].sum() / 1e6} million"
+                f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
             )
         return damages_do_not_adapt, damages_adapt
 
