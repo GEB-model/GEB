@@ -6,20 +6,43 @@ and provides a simpler interface.
 """
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import xarray as xr
-from damagescanner.vector import VectorScanner as VectorScannerDS
-from damagescanner.vector import VectorExposure as VectorExposureDS
-import numpy as np
+from damagescanner.vector import (
+    VectorExposure as VectorExposureDS,
+    VectorScanner as VectorScannerDS,
+)
 from numba import njit, prange
 
 
 @njit(parallel=True, fastmath=True)
-def compute_all_numba(values, coverage, max_arr, curve_x, curve_y, slopes):
+def compute_all_numba(
+    values: np.ndarray,
+    coverage: np.ndarray,
+    max_arr: np.ndarray,
+    curve_x: np.ndarray,
+    curve_y: np.ndarray,
+    slopes: np.ndarray,
+) -> np.ndarray:
+    """Numba-accelerated function to compute damages for multiple objects and multiple curves.
+
+    Args:
+        values: np.ndarray of shape (n_obj,) containing the inundation values for each object.
+        coverage: np.ndarray of shape (n_obj,) containing the coverage area for each object.
+        max_arr: np.ndarray of shape (n_obj,) containing the maximum damage for each object.
+        curve_x: np.ndarray of shape (n_points,) containing the x-coordinates of the damage curves.
+        curve_y: np.ndarray of shape (n_curves, n_points) containing the y-coordinates of the damage curves.
+        slopes: np.ndarray of shape (n_curves, n_points-1) containing the slopes of the damage curves.
+    Returns:
+        out: np.ndarray of shape (n_obj, n_curves) containing the computed damages for each object and curve.
+    """
+    # Preallocate output array
     n_obj = values.size
     n_curves = curve_y.shape[0]
     out = np.empty((n_obj, n_curves))
 
+    # Loop over each object
     for i in prange(n_obj):
         v = values[i]
         cov = coverage[i]
@@ -35,6 +58,7 @@ def compute_all_numba(values, coverage, max_arr, curve_x, curve_y, slopes):
         # interpolate x coordinate offset
         dx = v - curve_x[j]
 
+        # Loop over each curve
         for c in range(n_curves):
             # slope-based linear interpolation
             s = curve_y[c, j] + slopes[c, j] * dx
@@ -49,17 +73,17 @@ def VectorScannerMultiCurves(
     hazard: xr.DataArray,
     multi_curves: dict,
     weighted_average: bool = False,
-):
-    """This function calculates damages for all features using two curves (with and without floodproofing)
+) -> pd.DataFrame:
+    """This function calculates damages for all features using two curves (with and without floodproofing).
 
     Args:
         features: Geopandas dataframe that contains the buildings to calculate damages for.
         hazard: xr.DataArray that contains the flood map for wich to calculate damages.
-        multicurves: Dictionary containing the damage curves.
+        multi_curves: Dictionary containing the damage curves.
         weighted_average: Bool to indicate whether to use weighted inundation averages (preciser but slower).
-    Returns
-        damage_df: Pandas dataframe that contains the calculated damages for each curve in a column."""
-
+    Returns:
+        damage_df: Pandas dataframe that contains the calculated damages for each curve in a column.
+    """
     # get vector exposure, this is returned as a list for each building containing the area in flood plain cell (coverage) and the the inundation height (values).
     features, object_col, hazard_crs, cell_area_m2 = VectorExposureDS(
         hazard_file=hazard,
