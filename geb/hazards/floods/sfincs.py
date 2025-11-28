@@ -515,6 +515,10 @@ class SFINCSRootModel:
 
         rivers_to_burn["manning"] = get_river_manning(rivers_to_burn)
 
+        rivers_to_burn.to_parquet(
+            self.path / "rivers_with_widths_and_depths.geoparquet"
+        )
+
         # Because hydromt-sfincs does a lot of filling default values when data
         # is missing, we need to be extra sure that the required columns are
         # present and contain valid data.
@@ -528,6 +532,10 @@ class SFINCSRootModel:
         rivers_to_burn: gpd.GeoDataFrame = rivers_to_burn[
             rivers_to_burn["width"] > self.estimated_cell_size_m
         ]
+
+        self.logger.info(f"estimated cell size is: {self.estimated_cell_size_m}")
+
+        rivers_to_burn.to_parquet(self.path / "rivers_to_burn.geoparquet")
 
         # if sfincs is run with subgrid, we set up the subgrid, with burned in rivers and mannings
         # roughness within the subgrid. If not, we burn the rivers directly into the main grid,
