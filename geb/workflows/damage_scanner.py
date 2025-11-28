@@ -72,7 +72,6 @@ def VectorScannerMultiCurves(
     features: gpd.GeoDataFrame,
     hazard: xr.DataArray,
     multi_curves: dict,
-    weighted_average: bool = True,
 ) -> pd.DataFrame:
     """This function calculates damages for all features using two curves (with and without floodproofing).
 
@@ -80,10 +79,23 @@ def VectorScannerMultiCurves(
         features: Geopandas dataframe that contains the buildings to calculate damages for.
         hazard: xr.DataArray that contains the flood map with inundation levels in m for which to calculate damages.
         multi_curves: Dictionary containing the damage curves that map inundation depth (meters) to damage ratios.
-        weighted_average: Bool to indicate whether to use weighted inundation averages (preciser but slower).
     Returns:
         damage_df: Pandas dataframe that contains the calculated damages in EUR for each curve in a column.
     """
+    # Convert the damage curves to numpy arrays
+    curve_names = list(multi_curves.keys())
+    curve_x = multi_curves[curve_names[0]].index.values.astype(np.float64)
+    # append large number at the end to avoid out-of-bounds issues
+    curve_x = np.append(curve_x, 1e10)
+    curve_y = np.vstack([multi_curves[name].values for name in curve_names]).astype(
+        np.float64
+    )
+    # duplicate last value to match curve_x length
+    curve_y = np.hstack((curve_y, curve_y[:, -1][:, np.newaxis]))
+
+    # Precalculate the slopes for using as lookup instead of using a numpy interpolator for each building.
+    curve_slopes = np.diff(curve_y) / np.diff(curve_x)
+
     # get vector exposure, this is returned as a list for each building containing the area in flood plain cell (coverage) and the the inundation height (values).
     features, _, _, cell_area_m2 = VectorExposureDS(
         hazard_file=hazard,
@@ -96,48 +108,52 @@ def VectorScannerMultiCurves(
     # Filter to only process buildings that are inundated
     filtered = features[features["values"].str.len() > 0].copy()
 
+    filtered["len_values"] = filtered["values"].apply(len)
+
     # Since each feature contains a list, I now take the sum of the area exposed and the weighed average inundation.
-    vals = filtered["values"].tolist()
-    covs = filtered["coverage"].tolist()
-    filtered["coverage_summed"] = [np.sum(c) for c in covs]
-    if weighted_average:
-        filtered["average_inundation"] = [
-            np.average(a=v, weights=c) for v, c in zip(vals, covs)
-        ]
-    else:
-        filtered["average_inundation"] = [np.mean(v) for v in vals]
-
-    # Convert all to numpy arrays.
-    average_inundation_m_arr = np.stack(
-        filtered["average_inundation"].to_numpy()
-    )  # shape (n_obj, n_cells)
-    coverage_arr = np.stack(filtered["coverage_summed"].to_numpy()) * cell_area_m2
-    max_damage_arr = filtered["maximum_damage"].to_numpy()
-
-    # Convert the damage curves to numpy arrays
-    curve_names = list(multi_curves.keys())
-    curve_x = multi_curves[curve_names[0]].index.values.astype(np.float64)
-    curve_y = np.vstack([multi_curves[name].values for name in curve_names]).astype(
-        np.float64
+    inundation_building_parts = np.concatenate(filtered["values"].to_numpy())
+    coverage_building_parts = (
+        np.concatenate(filtered["coverage"].to_numpy()) * cell_area_m2
     )
-
-    # Precalculate the slopes for using as lookup instead of using a numpy interpolator for each building.
-    curve_slopes = np.diff(curve_y) / np.diff(curve_x)
+    # now create a max damage array that matches the concatenated arrays using the lengths of each feature's values
+    max_damage_arr = np.concatenate(
+        [
+            np.full(len_v, max_dmg)
+            for len_v, max_dmg in zip(
+                filtered["len_values"], filtered["maximum_damage"]
+            )
+        ]
+    )
+    assert (
+        inundation_building_parts.size
+        == coverage_building_parts.size
+        == max_damage_arr.size
+    ), "Concatenated arrays size mismatch."
 
     # Compute all damages
     damage_matrix = compute_all_numba(
-        average_inundation_m_arr.astype(np.float64),
-        coverage_arr.astype(np.float64),
+        inundation_building_parts.astype(np.float64),
+        coverage_building_parts.astype(np.float64),
         max_damage_arr.astype(np.float64),
         curve_x,
         curve_y,
         curve_slopes,
     )
 
-    # Put back into pandas array
-    damage_df = pd.DataFrame(damage_matrix, columns=curve_names, index=filtered.index)
+    # sum up damages per building
+    damage_matrix_final = np.zeros((filtered.shape[0], damage_matrix.shape[1]))
+    start_idx = 0
+    for i, length in enumerate(filtered["len_values"]):
+        end_idx = start_idx + length
+        damage_matrix_final[i, :] = damage_matrix[start_idx:end_idx, :].sum(axis=0)
+        start_idx = end_idx
 
-    return damage_df
+    # Put back into pandas array
+    damage_df_final = pd.DataFrame(
+        damage_matrix_final, columns=curve_names, index=filtered.index
+    )
+
+    return damage_df_final
 
 
 def VectorScanner(
