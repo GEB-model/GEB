@@ -2781,10 +2781,6 @@ class GEBModel(
         build_method.validate_methods(methods, validate_order=validate_order)
         self.files = self.read_or_create_file_library()
 
-        if not continue_:
-            # if not continuing, remove existing progress file
-            self.progress_path.unlink(missing_ok=True)
-
         completed_methods: list[str] = (
             build_method.read_progress(self.progress_path) if continue_ else []
         )
@@ -2843,7 +2839,9 @@ class GEBModel(
         if continue_:
             self.read()
         else:
+            # for new build, remove existing files path and progress file
             self.files_path.unlink(missing_ok=True)
+            self.progress_path.unlink(missing_ok=True)
 
         self.run_methods(
             methods,

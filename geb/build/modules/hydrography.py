@@ -1,6 +1,7 @@
 """Build methods for the hydrography for GEB."""
 
 import os
+from pathlib import Path
 
 import geopandas as gpd
 import networkx as nx
@@ -18,6 +19,7 @@ from shapely.geometry import LineString, Point, shape
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
+from geb.types import ArrayBool, ArrayFloat32, ArrayInt32
 from geb.workflows.raster import rasterize_like, snap_to_grid
 
 
@@ -347,7 +349,12 @@ class Hydrography:
         self.set_geom(subbasins, name="routing/subbasins")
 
     @build_method
-    def setup_hydrography(self) -> None:
+    def setup_hydrography(
+        self,
+        custom_rivers: str | None = None,
+        custom_rivers_width_m_column: str | None = None,
+        custom_rivers_depth_m_column: str | None = None,
+    ) -> None:
         """Sets up the hydrography for the model.
 
         Steps:
@@ -357,7 +364,55 @@ class Hydrography:
             4. Rasterize the river network, and setting up variables to link
                 the low-resolution and high resolution grids.
             5. Calculate river attributes such as river length, river slope, and river width.
+
+        Args:
+            custom_rivers: Optional path to a custom river shapefile. The MERIT rivers will still be
+                used to create the river raster, but the burning of rivers in the DEM will be done
+                based on the custom river shapefile. Must be readable by geopandas.read_file() or geopandas.read_parquet().
+            custom_rivers_width_m_column: The column name in the custom rivers file that contains the river width in meters.
+                must be provided if custom_rivers is provided.
+            custom_rivers_depth_m_column: The column name in the custom rivers file that contains the river depth in meters.
+                Must be provided if custom_rivers is provided.
+
+        Raises:
+            FileNotFoundError: If the custom rivers file is not found.
+            ValueError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not provided when using custom_rivers.
+            KeyError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not found in the custom rivers file.
+            AssertionError: If some large rivers are not represented in the grid.
         """
+        if custom_rivers is not None:
+            custom_rivers: Path = Path(custom_rivers)
+            self.logger.info(f"Using custom rivers from {custom_rivers}")
+            if not custom_rivers.exists():
+                raise FileNotFoundError(f"Custom rivers file {custom_rivers} not found")
+            if custom_rivers.suffix in [".parquet", ".pq", ".geoparquet"]:
+                custom_rivers_gdf = gpd.read_parquet(custom_rivers)
+            else:
+                custom_rivers_gdf = gpd.read_file(custom_rivers)
+            custom_rivers_gdf = custom_rivers_gdf.to_crs("EPSG:4326")
+            if (
+                custom_rivers_width_m_column is None
+                or custom_rivers_depth_m_column is None
+            ):
+                raise ValueError(
+                    "custom_rivers_width_m_column and custom_rivers_depth_m_column must be provided when using custom_rivers"
+                )
+            if custom_rivers_width_m_column not in custom_rivers_gdf.columns:
+                raise KeyError(
+                    f"custom_rivers_width_m_column '{custom_rivers_width_m_column}' not found in custom rivers file"
+                )
+            if custom_rivers_depth_m_column not in custom_rivers_gdf.columns:
+                raise KeyError(
+                    f"custom_rivers_depth_m_column '{custom_rivers_depth_m_column}' not found in custom rivers file"
+                )
+            custom_rivers_gdf = custom_rivers_gdf.rename(
+                columns={
+                    custom_rivers_width_m_column: "width",
+                    custom_rivers_depth_m_column: "depth",
+                }
+            )
+            self.set_geom(custom_rivers_gdf, name="routing/custom_rivers")
+
         original_d8_elevation = self.other["drainage/original_d8_elevation"]
         original_d8_ldd = self.other["drainage/original_d8_flow_directions"]
         original_d8_ldd_data = original_d8_ldd.values
@@ -373,16 +428,16 @@ class Hydrography:
             ],  # this mask is True within study area
         )
 
-        original_upstream_area = self.full_like(
+        upstream_area_high_res = self.full_like(
             original_d8_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        original_upstream_area_data = flow_raster_original.upstream_area(
+        upstream_area_high_res_data = flow_raster_original.upstream_area(
             unit="m2"
         ).astype(np.float32)
-        original_upstream_area_data[original_upstream_area_data == -9999.0] = np.nan
-        original_upstream_area.data = original_upstream_area_data
+        upstream_area_high_res_data[upstream_area_high_res_data == -9999.0] = np.nan
+        upstream_area_high_res.data = upstream_area_high_res_data
         self.set_other(
-            original_upstream_area, name="drainage/original_d8_upstream_area"
+            upstream_area_high_res, name="drainage/original_d8_upstream_area"
         )
 
         elevation_coarsened = original_d8_elevation.coarsen(
@@ -527,8 +582,8 @@ class Hydrography:
 
         # Derive the xy coordinates of the river network. Here the coordinates
         # are the PIXEL coordinates for the coarse drainage network.
-        rivers["hydrography_xy"] = [[]] * len(rivers)
-        rivers["hydrography_upstream_area_m2"] = [[]] * len(rivers)
+        rivers["hydrography_xy"] = [[] for _ in range(len(rivers))]
+        rivers["hydrography_upstream_area_m2"] = [[] for _ in range(len(rivers))]
         xy_per_river_segment = value_indices(river_raster_LR, ignore_value=-1)
         for COMID, (ys, xs) in xy_per_river_segment.items():
             upstream_area = upstream_area_data[ys, xs]
@@ -547,6 +602,69 @@ class Hydrography:
                 upstream_area_sorted.tolist()
             )
 
+        # Derive the xy coordinates of the river network. Here the coordinates
+        # are the PIXEL coordinates for the high-resolution drainage network.
+        rivers["hydrography_high_res_lons_lats"] = [[] for _ in range(len(rivers))]
+        rivers["hydrography_high_res_upstream_area_m2"] = [
+            [] for _ in range(len(rivers))
+        ]
+        xy_per_river_segment = value_indices(river_raster_HD, ignore_value=-1)
+
+        represented_rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
+
+        for river_ID, river in rivers.iterrows():
+            if river_ID not in xy_per_river_segment:
+                if (
+                    river["is_downstream_outflow_subbasin"]
+                    or not river["represented_in_grid"]
+                ):
+                    continue
+                else:
+                    raise AssertionError("River xy not found, but should be found.")
+
+            (ys, xs) = xy_per_river_segment[river_ID]
+            upstream_area: ArrayFloat32 = upstream_area_high_res_data[ys, xs]
+            nan_mask: ArrayBool = np.isnan(upstream_area)
+
+            if nan_mask.all():
+                if (
+                    river["is_downstream_outflow_subbasin"]
+                    or not river["represented_in_grid"]
+                ):
+                    continue
+                else:
+                    raise AssertionError(
+                        "River xy all NaN upstream area, but should have valid values."
+                    )
+
+            non_nan_mask: ArrayBool = ~nan_mask
+            upstream_area = upstream_area[non_nan_mask]
+            ys: ArrayInt32 = ys[non_nan_mask]
+            xs: ArrayInt32 = xs[non_nan_mask]
+
+            assert not np.isnan(upstream_area).any()
+
+            up_to_downstream_ids = np.argsort(upstream_area)
+            upstream_area_sorted = upstream_area[up_to_downstream_ids]
+
+            assert (river_raster_HD[ys, xs] == river_ID).all(), (
+                f"River segment {river_ID} has inconsistent raster values"
+            )
+
+            ys: npt.NDArray[np.int64] = ys[up_to_downstream_ids]
+            xs: npt.NDArray[np.int64] = xs[up_to_downstream_ids]
+
+            lats: ArrayFloat32 = upstream_area_high_res.y.values[ys]
+            lons: ArrayFloat32 = upstream_area_high_res.x.values[xs]
+
+            assert ys.size > 0, "No xy coordinates found for river segment"
+            rivers.at[river_ID, "hydrography_high_res_lons_lats"] = list(
+                zip(lons.tolist(), lats.tolist(), strict=True)
+            )
+            rivers.at[river_ID, "hydrography_high_res_upstream_area_m2"] = (
+                upstream_area_sorted.tolist()
+            )
+
         for river_ID, river in rivers.iterrows():
             if river["represented_in_grid"]:
                 assert len(river["hydrography_xy"]) > 0, (
@@ -559,6 +677,22 @@ class Hydrography:
         )
         COMID_IDs_raster.data = river_raster_LR
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
+
+        basin_ids = self.full_like(
+            outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
+        )
+
+        river_linear_indices = np.where(COMID_IDs_raster.values.ravel() != -1)[0]
+        basin_ids.values = flow_raster.basins(
+            idxs=river_linear_indices,
+            ids=COMID_IDs_raster.values.ravel()[river_linear_indices],
+        )
+        basin_ids = xr.where(flow_raster.mask.reshape(basin_ids.shape), basin_ids, -1)
+        assert (
+            np.unique(basin_ids.values[basin_ids.values != -1])
+            == np.unique(COMID_IDs_raster.values[COMID_IDs_raster.values != -1])
+        ).all()
+        self.set_grid(basin_ids, name="routing/basin_ids")
 
         SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lengths(
             self.new_data_catalog, rivers

@@ -27,10 +27,35 @@ from rasterio.features import rasterize
 from scipy.interpolate import griddata
 from shapely.geometry import Polygon
 
-from geb.types import (
-    TwoDArrayFloat32,
-    TwoDArrayFloat64,
-)
+from geb.types import TwoDArrayBool, TwoDArrayFloat32, TwoDArrayFloat64
+
+
+def decompress_with_mask(
+    array: np.ndarray, mask: TwoDArrayBool, fillvalue: int | float | None = None
+) -> np.ndarray:
+    """Decompress array.
+
+    Args:
+        array: Compressed array.
+        mask: Mask used for compression. True values are masked out.
+        fillvalue: Value to use for masked values. If None, uses NaN for float arrays and 0 for int arrays.
+
+    Returns:
+        array: Decompressed array.
+    """
+    if fillvalue is None:
+        if array.dtype in (np.float32, np.float64):
+            fillvalue = np.nan
+        else:
+            fillvalue = 0
+    outmap = np.full(mask.size, fillvalue, dtype=array.dtype)
+    output_shape = mask.shape
+    if array.ndim == 2:
+        assert array.shape[1] == mask.size - mask.sum()
+        outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
+        output_shape = (array.shape[0], *output_shape)
+    outmap[..., ~mask.ravel()] = array
+    return outmap.reshape(output_shape)
 
 
 @njit(cache=True)
@@ -559,8 +584,38 @@ def bounds_are_within(
     )
 
 
+@overload
 def pad_xy(
-    array_rio: rioxarray.raster_array.RasterArray,
+    da: xr.DataArray,
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+    constant_values: float
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
+    return_slice: Literal[True] = True,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
+
+
+@overload
+def pad_xy(
+    da: xr.DataArray,
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+    constant_values: float
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
+    return_slice: Literal[False] = False,
+) -> xr.DataArray: ...
+
+
+def pad_xy(
+    da: xr.DataArray,
     minx: float,
     miny: float,
     maxx: float,
@@ -579,7 +634,7 @@ def pad_xy(
     imprecision.
 
     Args:
-        array_rio: rio assecor of xarray DataArray
+        da: the DataArray to pad.
         minx: Minimum bound for x coordinate.
         miny: Minimum bound for y coordinate.
         maxx: Maximum bound for x coordinate.
@@ -597,10 +652,12 @@ def pad_xy(
     data.
 
     """
+    array_rio: rioxarray.rioxarray.RioXarrayAccessor = da.rio
+
     left, bottom, right, top = array_rio._internal_bounds()
     resolution_x, resolution_y = array_rio.resolution()
-    y_coord: xarray.DataArray | np.ndarray = array_rio._obj[array_rio.y_dim].values
-    x_coord: xarray.DataArray | np.ndarray = array_rio._obj[array_rio.x_dim].values
+    y_coord: xarray.DataArray | np.ndarray = da[array_rio.y_dim].values
+    x_coord: xarray.DataArray | np.ndarray = da[array_rio.x_dim].values
 
     y_before = y_after = 0
     x_before = x_after = 0
@@ -637,7 +694,7 @@ def pad_xy(
     if constant_values is None:
         constant_values = np.nan if array_rio.nodata is None else array_rio.nodata
 
-    superset = array_rio._obj.pad(
+    superset = da.pad(
         pad_width={
             array_rio.x_dim: (x_before, x_after),
             array_rio.y_dim: (y_before, y_after),
@@ -790,22 +847,24 @@ def resample_like(
     regridder = xarray_regrid.regrid.Regridder(source)
 
     if method == "bilinear":
-        dst: xr.DataArray = regridder.linear(target)
+        dst = regridder.linear(target)  # ty: ignore[invalid-argument-type]
     elif method == "conservative":
         # conservative regridding uses the chunks of the source it not explicitly set
         # here we use the chunks of the source as base, and overwrite it with the
         # chunks of the target where they both exist
-        dst: xr.DataArray = regridder.conservative(
-            target,
+        dst = regridder.conservative(
+            target,  # ty: ignore[invalid-argument-type]
             latitude_coord="y",
             output_chunks={**source.chunksizes, **target.chunksizes},
         )
     elif method == "nearest":
-        dst: xr.DataArray = regridder.nearest(target)
+        dst = regridder.nearest(target)  # ty: ignore[invalid-argument-type]
     else:
         raise ValueError(
             f"Unknown method: {method}, must be 'bilinear', 'nearest', or 'conservative'"
         )
+
+    assert isinstance(dst, xr.DataArray)
 
     if source.dtype == np.float32:
         dst: xr.DataArray = dst.astype(np.float32)

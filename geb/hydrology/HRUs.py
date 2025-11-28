@@ -25,7 +25,7 @@ from geb.types import (
     TwoDArrayInt32,
 )
 from geb.workflows.io import load_grid, open_zarr
-from geb.workflows.raster import compress
+from geb.workflows.raster import compress, decompress_with_mask
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -342,19 +342,7 @@ class Grid(BaseVariables):
         Returns:
             array: Decompressed array.
         """
-        if fillvalue is None:
-            if array.dtype in (np.float32, np.float64):
-                fillvalue = np.nan
-            else:
-                fillvalue = 0
-        outmap = self.full(fillvalue, dtype=array.dtype).reshape(self.mask_flat.size)
-        output_shape = self.mask.shape
-        if array.ndim == 2:
-            assert array.shape[1] == self.mask_flat.size - self.mask_flat.sum()
-            outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
-            output_shape = (array.shape[0], *output_shape)
-        outmap[..., ~self.mask_flat] = array
-        return outmap.reshape(output_shape)
+        return decompress_with_mask(array, self.mask, fillvalue=fillvalue)
 
     def plot(self, array: np.ndarray) -> None:
         """Plot array.
