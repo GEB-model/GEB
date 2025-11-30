@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -484,7 +485,7 @@ class Households(AgentBaseClass):
             + self.var.risk_perc_min
         )
 
-    def load_ensemble_flood_maps(self, date_time) -> xr.DataArray:
+    def load_ensemble_flood_maps(self, date_time: datetime) -> xr.DataArray:
         """Loads the flood maps for all ensemble members for a specific forecast date time.
 
         Args:
@@ -527,9 +528,11 @@ class Households(AgentBaseClass):
 
         return ensemble_flood_maps
 
-    def load_ensemble_damage_maps(self, date_time) -> pd.DataFrame:
+    def load_ensemble_damage_maps(self, date_time: datetime) -> pd.DataFrame:
         """Loads the damage maps for all ensemble members and aggregates them into a single dataframe. Work in standby for now.
 
+        Args:
+            date_time: The forecast date time for which to load the damage maps.
         Returns:
             A dataframe containing the aggregated damage maps for all ensemble members.
         """
@@ -565,8 +568,8 @@ class Households(AgentBaseClass):
         return ensemble_damage_maps
 
     def create_flood_probability_maps(
-        self, date_time, strategy=1, exceedance=False
-    ) -> dict[Tuple[pd.Timestamp, int], xr.DataArray]:
+        self, date_time: datetime, strategy: int = 1, exceedance: bool = False
+    ) -> dict[tuple[datetime, int], xr.DataArray]:
         """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
 
         Args:
@@ -650,7 +653,7 @@ class Households(AgentBaseClass):
         return probability_maps
         # Right now I am not using this for anything, but maybe useful later to replace the file loading
 
-    def create_damage_probability_maps(self, date_time) -> None:
+    def create_damage_probability_maps(self, date_time: datetime) -> None:
         """Creates an object-based (buildings) probability map based on the ensemble of damage maps. Work in standby for now.
 
         Args:
@@ -730,7 +733,11 @@ class Households(AgentBaseClass):
             damage_probability_map.to_parquet(output_path)
 
     def water_level_warning_strategy(
-        self, date_time, prob_threshold=0.6, area_threshold=0.1, strategy_id=1
+        self,
+        date_time: datetime,
+        prob_threshold: float = 0.6,
+        area_threshold: float = 0.1,
+        strategy_id: int = 1,
     ) -> None:
         """Implements the water level warning strategy based on flood probability maps.
 
@@ -935,7 +942,7 @@ class Households(AgentBaseClass):
         self.buildings = buildings
 
     def update_buildings_w_critical_infrastructure(
-        self, critical_infrastructure
+        self, critical_infrastructure: gpd.GeoDataFrame
     ) -> gpd.GeoDataFrame:
         """Update buildings layer with critical infrastructure attributes via spatial intersection.
 
@@ -978,7 +985,7 @@ class Households(AgentBaseClass):
         return buildings
 
     def assign_energy_substations_to_postal_codes(
-        self, substations, postal_codes
+        self, substations: gpd.GeoDataFrame, postal_codes: gpd.GeoDataFrame
     ) -> None:
         """Assign energy substations to postal codes based on spatial proximity. Every postal code gets assigned to the nearest substation.
 
@@ -1009,7 +1016,7 @@ class Households(AgentBaseClass):
         postal_codes_with_substations.to_parquet(path)
 
     def assign_critical_facilities_to_postal_codes(
-        self, critical_facilities, postal_codes
+        self, critical_facilities: gpd.GeoDataFrame, postal_codes: gpd.GeoDataFrame
     ) -> None:
         """Assign critical facilities (vulnerable and emergency) to postal codes based on spatial intersection. Every facility gets assigned to the postal code it is located in.
 
@@ -1050,7 +1057,9 @@ class Households(AgentBaseClass):
         )
         critical_facilities_with_postal_codes.to_parquet(path)
 
-    def critical_infrastructure_warning_strategy(self, date_time, prob_threshold=0.6):
+    def critical_infrastructure_warning_strategy(
+        self, date_time: datetime, prob_threshold: float = 0.6
+    ):
         """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities.
 
         Args:
@@ -1174,7 +1183,14 @@ class Households(AgentBaseClass):
             ]["postcode"].unique()
 
         # Function to keep track of what triggered the warning for each postal code
-        def trigger_label(postcode):
+        def trigger_label(postcode: str) -> str:
+            """Determine the trigger label for a given postcode based on affected postcodes from both strategies.
+
+            Args:
+                postcode: The postcode to evaluate.
+            Returns:
+                A string indicating the trigger type.
+            """
             e = postcode in affected_postcodes_energy
             f = postcode in affected_postcodes_facilities
             if e and f:
@@ -1404,13 +1420,17 @@ class Households(AgentBaseClass):
         Returns:
             float: Lead time in hours.
         """
-        start_time = self.model.config["hazards"]["floods"]["events"][0]["start_time"]
+        flood_event_start_time = self.model.config["hazards"]["floods"]["events"][0][
+            "start_time"
+        ]
         current_time = self.model.current_time
-        lead_time = (start_time - current_time).total_seconds() / 3600
+        lead_time = (flood_event_start_time - current_time).total_seconds() / 3600
         lead_time = max(lead_time, 0)  # Ensure non-negative lead time
         return lead_time
 
-    def household_decision_making(self, date_time, responsive_ratio=0.7) -> None:
+    def household_decision_making(
+        self, date_time: datetime, responsive_ratio: float = 0.7
+    ) -> None:
         """Simulate household emergency response decisions based on warnings and lead time.
 
         Args:
@@ -1790,6 +1810,7 @@ class Households(AgentBaseClass):
             }
 
     def create_damage_interpolators(self) -> None:
+        """This function creates interpolation functions for the damage curves."""
         # create interpolation function for damage curves [interpolation objects cannot be stored in bucket]
         self.buildings_content_curve_interpolator = interpolate.interp1d(
             x=self.buildings_content_curve.index,
@@ -1892,7 +1913,7 @@ class Households(AgentBaseClass):
                 )
         return damages_do_not_adapt, damages_adapt
 
-    def update_households_gdf(self, date_time) -> None:
+    def update_households_gdf(self, date_time: datetime) -> None:
         """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
 
         Args:
@@ -1960,7 +1981,7 @@ class Households(AgentBaseClass):
             / f"households_with_warning_parameters_{date_time.isoformat()}.geoparquet"
         )
 
-    def update_households_gdf(self, date_time) -> None:
+    def update_households_gdf(self, date_time: datetime) -> None:
         """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
 
         Args:
