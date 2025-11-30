@@ -2,12 +2,14 @@
 
 import asyncio
 import datetime
+import json
 import os
 import shutil
 import tempfile
 import threading
 import time
 import warnings
+from collections.abc import Hashable
 from functools import partial
 from pathlib import Path
 from types import TracebackType
@@ -23,6 +25,7 @@ import rasterio
 import requests
 import s3fs
 import xarray as xr
+import yaml
 import zarr
 import zarr.storage
 from dask.diagnostics import ProgressBar
@@ -32,6 +35,8 @@ from tqdm import tqdm
 from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.blosc import BloscShuffle
+
+from geb.types import ArrayDatetime64
 
 
 def load_table(fp: Path | str) -> pd.DataFrame:
@@ -112,17 +117,20 @@ def load_grid(
             filepath, read_only=True
         )
         group: zarr.Group = zarr.open_group(store, mode="r")
-        array: zarr.Array | zarr.Group = group[filepath.stem]
-        assert isinstance(array, zarr.Array)
-        data: np.ndarray = array[:]
+        data_array: zarr.Array | zarr.Group = group[filepath.stem]
+        assert isinstance(data_array, zarr.Array)
+        data = data_array[:]
+        assert isinstance(data, np.ndarray)
         data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
         if return_transform_and_crs:
-            x: zarr.Array | zarr.Group = group["x"]
-            assert isinstance(x, zarr.Array)
-            x: np.ndarray = x[:]
-            y: zarr.Array | zarr.Group = group["y"]
-            assert isinstance(y, zarr.Array)
-            y: np.ndarray = y[:]
+            x_array: zarr.Array | zarr.Group = group["x"]
+            assert isinstance(x_array, zarr.Array)
+            x = x_array[:]
+            assert isinstance(x, np.ndarray)
+            y_array: zarr.Array | zarr.Group = group["y"]
+            assert isinstance(y_array, zarr.Array)
+            y = y_array[:]
+            assert isinstance(y, np.ndarray)
             x_diff: float = np.diff(x[:]).mean().item()
             y_diff: float = np.diff(y[:]).mean().item()
             transform: Affine = Affine(
@@ -133,7 +141,8 @@ def load_grid(
                 e=y_diff,
                 f=y[0] - y_diff / 2,
             )
-            wkt: str = group[filepath.stem].attrs["_CRS"]["wkt"]
+            crs = data_array.attrs["_CRS"]
+            wkt: str = crs["wkt"]  # ty: ignore[invalid-argument-type,non-subscriptable]
             return data, transform, wkt
         else:
             return data
@@ -152,6 +161,61 @@ def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
 
     """
     return gpd.read_parquet(filepath)
+
+
+def load_dict(filepath: Path) -> Any:
+    """Load a dictionary from a JSON or YAML file.
+
+    Args:
+        filepath: Path to the JSON or YAML file.
+
+    Returns:
+        A dictionary containing the data.
+
+    Raises:
+        ValueError: If the file extension is not supported.
+    """
+    suffix: str = filepath.suffix
+    if suffix == ".json":
+        return json.loads(filepath.read_text())
+    elif suffix in (".yml", ".yaml"):
+        return yaml.safe_load(filepath.read_text())
+    else:
+        raise ValueError(
+            f"Unsupported file format: {suffix}. Supported formats are .json, .yml, .yaml"
+        )
+
+
+def _convert_paths_to_strings(obj: Any) -> Any:
+    """Recursively convert Path objects to strings in nested data structures.
+
+    Args:
+        obj: The object to convert.
+
+    Returns:
+        The object with Path objects converted to strings.
+    """
+    if isinstance(obj, Path):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {key: _convert_paths_to_strings(value) for key, value in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return type(obj)(_convert_paths_to_strings(item) for item in obj)
+    else:
+        return obj
+
+
+def to_dict(d: dict, filepath: Path) -> None:
+    """Save a dictionary to a YAML file.
+
+    Args:
+        d: The dictionary to save.
+        filepath: Path to the output YAML file.
+    """
+    # Convert Path objects to strings before saving
+    d_converted = _convert_paths_to_strings(d)
+    with open(filepath, "w") as f:
+        yaml.dump(d_converted, f, default_flow_style=False, sort_keys=False)
 
 
 def calculate_scaling(
@@ -257,8 +321,14 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     ds: xr.Dataset = xr.open_dataset(
         zarr_folder, engine="zarr", chunks={}, consolidated=False, mask_and_scale=False
     )
+    if "spatial_ref" in ds.data_vars:
+        spatial_ref_data = ds["spatial_ref"]
+        ds = ds.drop_vars("spatial_ref")
+        ds = ds.assign_coords(spatial_ref=spatial_ref_data)
     if len(ds.data_vars) > 1:
-        raise ValueError("Only one data variable is supported")
+        raise ValueError(
+            f"Only one data variable is supported, found multiple: {list(ds.data_vars)}"
+        )
 
     da: xr.DataArray = ds[list(ds.data_vars)[0]]
 
@@ -272,7 +342,7 @@ def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
     return da
 
 
-def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
+def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:  # ty: ignore[unresolved-attribute]
     """Convert a CRS object (pyproj CRS, rasterio CRS or EPSG code) to a WKT string.
 
     Args:
@@ -288,7 +358,7 @@ def to_wkt(crs_obj: int | pyproj.CRS | rasterio.crs.CRS) -> str:
         return CRS.from_epsg(crs_obj).to_wkt()
     elif isinstance(crs_obj, CRS):  # Pyproj CRS
         return crs_obj.to_wkt()
-    elif isinstance(crs_obj, rasterio.crs.CRS):  # Rasterio CRS
+    elif isinstance(crs_obj, rasterio.crs.CRS):  # ty: ignore[unresolved-attribute]
         return CRS(crs_obj.to_wkt()).to_wkt()
     else:
         raise TypeError("Unsupported CRS type")
@@ -471,7 +541,7 @@ def to_zarr(
             array_encoding["shards"] = shards
 
         assert isinstance(da.name, str)
-        encoding: dict[str, dict[str, Any]] = {da.name: array_encoding}
+        encoding: dict[Hashable, dict[str, Any]] = {da.name: array_encoding}
         for coord in da.coords:
             encoding[coord] = {"compressors": (compressor,)}
 
@@ -728,15 +798,17 @@ class AsyncGriddedForcingReader:
                 "ignore",
                 message="Numcodecs codecs are not in the Zarr version 3 specification",
             )
-            time_arr = self.ds["time"][:]
+            time_arr = self.ds["time"]
+            assert isinstance(time_arr, zarr.Array)
+            time = time_arr[:]
 
-        self.datetime_index = cftime.num2date(
-            time_arr,
+        datetime_index_unparsed = cftime.num2date(
+            time,
             units=self.ds["time"].attrs.get("units"),
             calendar=self.ds["time"].attrs.get("calendar"),
         )
-        self.datetime_index = pd.to_datetime(
-            [obj.isoformat() for obj in self.datetime_index]
+        self.datetime_index: ArrayDatetime64 = pd.to_datetime(
+            [obj.isoformat() for obj in datetime_index_unparsed]
         ).to_numpy()
         self.time_size = self.datetime_index.size
 
@@ -763,7 +835,8 @@ class AsyncGriddedForcingReader:
         if self.asynchronous:
             # Ensure the shared event loop is running
             self._ensure_shared_loop()
-            self.loop = self._shared_loop
+            self.loop: asyncio.AbstractEventLoop | None = self._shared_loop
+            assert self.loop is not None
 
             # Initialize this instance's async components
             self.async_ready = threading.Event()
@@ -783,14 +856,16 @@ class AsyncGriddedForcingReader:
         # Open the main group store once and reuse it for all reads.
         self.async_group = await zarr.AsyncGroup.open(self.store)
 
-    def load(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
+    def load(self, start_index: int, end_index: int) -> np.ndarray:
         """Safe synchronous load (only used if asynchronous=False).
 
         Returns:
             The requested data slice.
         """
         array = self.ds[self.variable_name]
+        assert isinstance(array, zarr.Array)
         data = array[start_index:end_index]
+        assert isinstance(data, np.ndarray)
         return data
 
     async def load_await(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
@@ -815,7 +890,7 @@ class AsyncGriddedForcingReader:
             )
 
             # Only apply the NaN workaround if the array actually uses NaN as fill value
-            if np.all(np.isnan(data)):
+            if np.any(np.isnan(data)):
                 retries += 1
                 print(
                     f"Warning: Async read returned all NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
@@ -865,6 +940,7 @@ class AsyncGriddedForcingReader:
         if start_index < 0 or end_index > self.time_size:
             raise ValueError(f"Index out of bounds ({start_index}:{end_index})")
 
+        assert isinstance(self.async_lock, asyncio.Lock)
         async with self.async_lock:
             # --- Step 1: Load current data ---
             data: npt.NDArray[Any]
@@ -973,6 +1049,7 @@ class AsyncGriddedForcingReader:
 
         if self.asynchronous:
             coro = self.read_timestep_async(start_index, end_index, n)
+            assert isinstance(self.loop, asyncio.AbstractEventLoop)
             future = asyncio.run_coroutine_threadsafe(coro, self.loop)
             return future.result()
         else:
@@ -1006,14 +1083,22 @@ class AsyncGriddedForcingReader:
         self._release_shared_loop()
 
     @property
-    def x(self) -> npt.NDArray[Any]:
+    def x(self) -> np.ndarray:
         """The x-coordinates of the grid."""
-        return self.ds["x"][:]
+        x_array = self.ds["x"]
+        assert isinstance(x_array, zarr.Array)
+        x = x_array[:]
+        assert isinstance(x, np.ndarray)
+        return x
 
     @property
     def y(self) -> npt.NDArray[Any]:
         """The y-coordinates of the grid."""
-        return self.ds["y"][:]
+        y_array = self.ds["y"]
+        assert isinstance(y_array, zarr.Array)
+        y = y_array[:]
+        assert isinstance(y, np.ndarray)
+        return y
 
 
 class WorkingDirectory:
@@ -1070,11 +1155,14 @@ def fetch_and_save(
     file_path: Path,
     overwrite: bool = False,
     max_retries: int = 3,
-    delay: float | int = 5,
+    delay_seconds: float | int = 5,
+    double_delay: bool = False,
     chunk_size: int = 16384,
     session: requests.Session | None = None,
     params: None | dict[str, Any] = None,
     timeout: float | int = 30,
+    show_progress: bool = True,
+    verbose: bool = True,
 ) -> bool:
     """Fetches data from a URL and saves it to a file, with a retry mechanism.
 
@@ -1087,11 +1175,14 @@ def fetch_and_save(
         file_path: The local path to save the file to.
         overwrite: If True, overwrite the file if it already exists.
         max_retries: The maximum number of times to retry a failed download.
-        delay: The delay in seconds between retries.
+        delay_seconds: The delay in seconds between retries.
+        double_delay: If True, double the delay between retries on each attempt.
         chunk_size: The chunk size for streaming downloads.
         session: An optional requests.Session object to use for HTTP requests.
         params: Optional dictionary of query parameters for HTTP requests.
         timeout: The timeout in seconds for HTTP requests.
+        show_progress: Whether to show a progress bar during download.
+        verbose: Whether to print download status messages. Default is True.
 
     Returns:
         True if the file was successfully downloaded, False otherwise.
@@ -1110,10 +1201,12 @@ def fetch_and_save(
         fs = s3fs.S3FileSystem(anon=True)
         attempts = 0
         temp_file = None
+        current_delay_seconds: int | float = delay_seconds
 
         while attempts < max_retries:
             try:
-                print(f"Downloading {url} to {file_path}")
+                if verbose:
+                    print(f"Downloading {url} to {file_path}")
                 # Create a temporary file
                 temp_file = tempfile.NamedTemporaryFile(delete=False)
                 temp_file.close()
@@ -1127,9 +1220,10 @@ def fetch_and_save(
 
             except Exception as e:
                 # Log the error
-                print(
-                    f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
-                )
+                if verbose:
+                    print(
+                        f"S3 download failed: {e}. Attempt {attempts + 1} of {max_retries}"
+                    )
 
                 # Remove the temporary file if it exists
                 if temp_file is not None and os.path.exists(temp_file.name):
@@ -1138,7 +1232,9 @@ def fetch_and_save(
                 # Increment the attempt counter and wait before retrying
                 attempts += 1
                 if attempts < max_retries:
-                    time.sleep(delay)
+                    time.sleep(current_delay_seconds)
+                    if double_delay:
+                        current_delay_seconds *= 2
 
         # If all attempts fail, raise an exception
         raise RuntimeError(
@@ -1148,10 +1244,12 @@ def fetch_and_save(
     elif url.startswith("http://") or url.startswith("https://"):
         attempts = 0
         temp_file = None
+        current_delay_seconds: int | float = delay_seconds
 
         while attempts < max_retries:
             try:
-                print(f"Downloading {url} to {file_path}")
+                if verbose:
+                    print(f"Downloading {url} to {file_path}")
                 # Attempt to make the request
                 response = session.get(url, stream=True, params=params, timeout=timeout)
                 response.raise_for_status()  # Raises HTTPError for bad status codes
@@ -1160,12 +1258,16 @@ def fetch_and_save(
                 temp_file = tempfile.NamedTemporaryFile(delete=False)
 
                 # Write to the temporary file
-                total_size = int(response.headers.get("content-length", 0))
-                progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
-                for data in response.iter_content(chunk_size=chunk_size):
-                    temp_file.write(data)
-                    progress_bar.update(len(data))
-                progress_bar.close()
+                if show_progress:
+                    total_size = int(response.headers.get("content-length", 0))
+                    progress_bar = tqdm(total=total_size, unit="B", unit_scale=True)
+                    for data in response.iter_content(chunk_size=chunk_size):
+                        temp_file.write(data)
+                        progress_bar.update(len(data))
+                    progress_bar.close()
+                else:
+                    for data in response.iter_content(chunk_size=chunk_size):
+                        temp_file.write(data)
 
                 # Close the temporary file
                 temp_file.close()
@@ -1177,7 +1279,10 @@ def fetch_and_save(
 
             except requests.RequestException as e:
                 # Log the error
-                print(f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}")
+                if verbose:
+                    print(
+                        f"Request failed: {e}. Attempt {attempts + 1} of {max_retries}"
+                    )
 
                 # Remove the temporary file if it exists
                 if temp_file is not None and os.path.exists(temp_file.name):
@@ -1185,7 +1290,10 @@ def fetch_and_save(
 
                 # Increment the attempt counter and wait before retrying
                 attempts += 1
-                time.sleep(delay)
+                if attempts < max_retries:
+                    time.sleep(current_delay_seconds)
+                    if double_delay:
+                        current_delay_seconds *= 2
 
         # If all attempts fail, raise an exception
         raise RuntimeError(

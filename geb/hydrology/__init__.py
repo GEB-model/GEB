@@ -64,7 +64,6 @@ class Hydrology(Data, Module):
             return
 
         self.dynamic_water_bodies = False
-        self.crop_factor_calibration_factor = 1
 
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)
@@ -95,7 +94,7 @@ class Hydrology(Data, Module):
             ).sum()
             + (self.HRU.var.topwater.astype(np.float64) * self.HRU.var.cell_area).sum()
             + self.routing.router.get_total_storage(
-                self.grid.var.discharge_m3_s_substep
+                self.grid.var.discharge_in_rivers_m3_s_substep
             )
             .astype(np.float64)
             .sum()

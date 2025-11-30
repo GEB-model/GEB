@@ -9,6 +9,7 @@ general:
   preprocessing_folder: preprocessing/
   output_folder: output/
   spinup_name: spinup
+  simulation_root: simulation_root
   name: default
   export_inital_on_spinup: true
   simulate_forest: false
@@ -19,11 +20,11 @@ general:
 hazards:
   floods:
     simulate: false
-    forcing_method: headwater_points  # headwater_points or precipitation
+    forcing_method: accumulated_runoff  # headwater_points, accumulated_runoff
     minimum_flood_depth: 0.05
-    resolution: 150
-    nr_subgrid_pixels: 4
-    crs: auto
+    flood_map_output_interval_seconds: null  # interval in seconds to output flood maps. null means no output.
+    grid_size_multiplier: 1  # must be integer. The first DEM is used for the grid. This multiplier increases the grid cell size (i.e., reduces resolution) by this factor.
+    subgrid: false
     force_overwrite: true
     write_figures: true  # whether to generate and save diagnostic figures
     return_periods:
@@ -62,6 +63,7 @@ agent_settings:
     warning_response: false
     water_demand:
       method: default
+    adjust_demand_factor: 1
     expected_utility:
       flood_risk_calculations:
         risk_perception:
@@ -75,17 +77,18 @@ agent_settings:
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
     microcredit:
-      ruleset: base
+      ruleset: no-adaptation
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
-    return_fraction: 0.5172748734767878
+    return_fraction: 0.5
     social_network:
       radius: 5000 # m
       size: 10 # nr of neighbors
     expected_utility:
       insurance:
         duration: 2
+        seut_factor: 1
         personal_insurance: 
           ruleset: no-adaptation
         index_insurance: 
@@ -101,9 +104,16 @@ agent_settings:
         loan_duration: 21
         decision_horizon: 20
         m2_cost: 1
+        return_fraction_surface: 0.75
+        return_fraction_sprinkler: 0.3
+        return_fraction_drip:  0.2
+        irr_eff_surface: 0.60
+        irr_eff_sprinkler: 0.75
+        irr_eff_drip:  0.95
       adaptation_irrigation_expansion:
         ruleset: no-adaptation
       adaptation_well:
+        seut_factor: 1
         loan_duration: 21
         lifespan: 20
         decision_horizon: 20
@@ -135,12 +145,9 @@ agent_settings:
           min: 0.5
   fix_activation_order: true
   reservoir_operators:
-    MinOutflowQ: 0.0
-    NonDamagingOutflowQ: 4.0
-    NormalOutflowQ: 0.1
-    max_reservoir_release_factor: 0.03380636312896216
     ruleset: no-adaptation
     equal_abstraction: false
+    reservoir_M_factor: 0.1
   sensitivity_analysis:
     risk_aversion_factor: 1
     discount_rate_factor: 1
@@ -170,15 +177,12 @@ report:
       single_file: true
 
 parameters:
-  SnowMeltCoef: 0.004
-  arno_beta_add: 0.0
-  lakeAFactor: 1
-  manningsN: 1
-  preferentialFlowConstant: 3.14300925049279
-  ksat_multiplier: 1.0
-  water_demand_multiplier: 1.0
-
-
+  mannings_n_multiplier: 1.0
+  crop_factor_multiplier: 1.0
+  saturated_hydraulic_conductivity_multiplier: 1.0
+  reservoir_release_factor: 0.1
+  water_demand_multiplier_industry: 1.0
+  lake_outflow_multiplier: 1.0
 
 plantFATE:
   spinup_ini_file: data/plantFATE/p_spinup.ini
@@ -187,3 +191,19 @@ plantFATE:
   new_forest: false
   new_forest_filename: null
   n_cells: 'all'
+
+calibration:
+  spinup_time: 1975-01-01
+  start_time: 1978-01-01
+  end_time: 1985-01-01
+  path: calibration
+  gpus: 0
+  scenario: no-adaptation
+  calibration_targets:
+    KGE_discharge: 1
+  DEAP:
+    use_multiprocessing: true
+    ngen: 10
+    mu: 30
+    lambda_: 12
+    select_best: 10

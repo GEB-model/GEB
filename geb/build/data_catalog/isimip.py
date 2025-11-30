@@ -1,5 +1,7 @@
 """ISIMIP CO2 data adapter."""
 
+from __future__ import annotations
+
 from io import StringIO
 from typing import Any
 
@@ -16,7 +18,7 @@ class ISIMIPCO2(Adapter):
         """Initialize the ISIMIP CO2 data adapter."""
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> "ISIMIPCO2":
+    def fetch(self, url: str) -> ISIMIPCO2:
         """Set the URL for the ISIMIP CO2 data source.
 
         Args:

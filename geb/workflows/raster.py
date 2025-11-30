@@ -1,7 +1,10 @@
 """Some raster utility functions that are not included in major raster processing libraries but used in multiple places in GEB."""
 
-from collections.abc import Mapping
-from typing import Any, Literal, Union, overload
+from __future__ import annotations
+
+import math
+from collections.abc import Hashable, Mapping
+from typing import Any, Literal, overload
 
 import dask
 import geopandas as gpd
@@ -12,6 +15,7 @@ import xarray
 import xarray as xr
 import xarray_regrid
 from affine import Affine
+from numba import njit, prange
 from pyresample.geometry import AreaDefinition
 from pyresample.gradient import (
     block_bilinear_interpolator,
@@ -23,10 +27,194 @@ from rasterio.features import rasterize
 from scipy.interpolate import griddata
 from shapely.geometry import Polygon
 
-from geb.typing import (
+from geb.types import (
     TwoDArrayFloat32,
     TwoDArrayFloat64,
 )
+
+
+@njit(cache=True)
+def pixel_to_coord(px: int, py: int, gt: tuple) -> tuple[float, float]:
+    """Converts pixel (x, y) to coordinate (lon, lat) for given geotransformation.
+
+    Uses the upper left corner of the pixel. To use the center, add 0.5 to input pixel.
+
+    Args:
+        px: The pixel x coordinate.
+        py: The pixel y coordinate.
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        array: the coordinate (lon, lat)
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
+    """
+    if gt[2] + gt[4] == 0:
+        lon = px * gt[1] + gt[0]
+        lat = py * gt[5] + gt[3]
+        return lon, lat
+    else:
+        raise ValueError("Cannot convert rotated maps")
+
+
+@njit(cache=True, parallel=True)
+def pixels_to_coords(
+    pixels: np.ndarray, gt: tuple[float, float, float, float, float, float]
+) -> np.ndarray:
+    """Converts pixels (x, y) to coordinates (lon, lat) for given geotransformation.
+
+    Uses the upper left corner of the pixels. To use the centers, add 0.5 to input pixels.
+
+    Args:
+        pixels: The pixels (x, y) that need to be transformed to coordinates (shape: n, 2).
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        The coordinates (lon, lat) with shape (n, 2).
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
+    """
+    assert pixels.shape[1] == 2
+    if gt[2] + gt[4] == 0:
+        coords = np.empty(pixels.shape, dtype=np.float64)
+        for i in prange(coords.shape[0]):  # ty: ignore[not-iterable]
+            coords[i, 0] = pixels[i, 0] * gt[1] + gt[0]
+            coords[i, 1] = pixels[i, 1] * gt[5] + gt[3]
+        return coords
+    else:
+        raise ValueError("Cannot convert rotated maps")
+
+
+@njit(parallel=False)
+def sample_from_map(
+    array: np.ndarray,
+    coords: np.ndarray,
+    gt: tuple[float, float, float, float, float, float],
+) -> np.ndarray:
+    """Sample coordinates from a map. Can handle multiple dimensions.
+
+    Args:
+        array: The map to sample from (2+n dimensions).
+        coords: The coordinates used to sample (shape: m, 2).
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        The values at each coordinate.
+    """
+    assert gt[2] + gt[4] == 0
+    size = coords.shape[0]
+    x_offset = gt[0]
+    y_offset = gt[3]
+    x_step = gt[1]
+    y_step = gt[5]
+    values = np.empty((size,) + array.shape[:-2], dtype=array.dtype)
+    for i in prange(size):  # ty: ignore[not-iterable]
+        values[i] = array[
+            ...,
+            int((coords[i, 1] - y_offset) / y_step),
+            int((coords[i, 0] - x_offset) / x_step),
+        ]
+    return values
+
+
+@njit(
+    parallel=False,
+    cache=True,
+)  # Writing to an array cannot be parallelized as race conditions would occur.
+def write_to_array(
+    array: np.ndarray,
+    values: np.ndarray,
+    coords: np.ndarray,
+    gt: tuple[float, float, float, float, float, float],
+) -> np.ndarray:
+    """Write values using coordinates to a map.
+
+    If multiple coordinates map to a single cell,
+    the values are added. The operation is inplace.
+
+    Args:
+        array: The 2-dimensional array to write to.
+        values: The values to write (shape: n).
+        coords: The coordinates of the values (shape: n, 2).
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        The array with the values added (operation is inplace).
+    """
+    assert values.size == coords.shape[0]
+    assert gt[2] + gt[4] == 0
+    size = values.size
+    x_offset = gt[0]
+    y_offset = gt[3]
+    x_step = gt[1]
+    y_step = gt[5]
+    for i in range(size):
+        array[
+            int((coords[i, 1] - y_offset) / y_step),
+            int((coords[i, 0] - x_offset) / x_step),
+        ] += values[i]
+    return array
+
+
+@njit(cache=True)
+def coord_to_pixel(
+    coord: np.ndarray, gt: tuple[float, float, float, float, float, float]
+) -> tuple[int, int]:
+    """Converts coordinate to pixel (x, y) for given geotransformation.
+
+    Args:
+        coord: The coordinate (lon, lat) that need to be transformed to pixel.
+        gt: The geotransformation. Must be unrotated.
+
+    Returns:
+        A tuple of pixel coordinates (x, y).
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
+    """
+    if gt[2] + gt[4] == 0:
+        px = (coord[0] - gt[0]) / gt[1]
+        py = (coord[1] - gt[3]) / gt[5]
+        return int(px), int(py)
+    else:
+        raise ValueError("Cannot convert rotated maps")
+
+
+@njit(parallel=True)
+def coords_to_pixels(
+    coords: np.ndarray,
+    gt: tuple[float, float, float, float, float, float],
+    dtype: type[np.uint32] = np.uint32,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Converts array of coordinates to array of pixels for given geotransformation.
+
+    Args:
+        coords: The coordinates (lon, lat) that need to be transformed to pixels (shape: n, 2).
+        gt: The geotransformation. Must be unrotated.
+        dtype: The data type of the output pixel arrays.
+
+    Returns:
+        A tuple of two arrays: pixel x coordinates and pixel y coordinates, each of shape (n,).
+
+    Raises:
+        ValueError: If the geotransformation indicates a rotated map.
+    """
+    if gt[2] + gt[4] == 0:
+        size = coords.shape[0]
+        x_offset = gt[0]
+        y_offset = gt[3]
+        x_step = gt[1]
+        y_step = gt[5]
+        pxs = np.empty(size, dtype=dtype)
+        pys = np.empty(size, dtype=dtype)
+        for i in prange(size):  # ty: ignore[not-iterable]
+            pxs[i] = int((coords[i, 0] - x_offset) / x_step)
+            pys[i] = int((coords[i, 1] - y_offset) / y_step)
+        return pxs, pys
+    else:
+        raise ValueError("Cannot convert rotated maps")
 
 
 def compress(array: npt.NDArray[Any], mask: npt.NDArray[np.bool_]) -> npt.NDArray[Any]:
@@ -183,49 +371,70 @@ def full_like(
 
 
 def rasterize_like(
-    gpd: gpd.GeoDataFrame,
-    column: str,
+    gdf: gpd.GeoDataFrame,
     raster: xr.DataArray,
     dtype: type,
     nodata: float | int | bool,
     all_touched: bool = False,
+    column: str | None = None,
+    burn_value: float | int | bool | None = None,
+    name: str | None = "rasterized",
     **kwargs: Any,
 ) -> xr.DataArray:
     """Rasterize a geometry to match the spatial properties of a given raster.
 
     Args:
-        gpd: The geodataframe containing geometries to rasterize
-        column: The column in the GeoDataFrame to use for rasterization values
+        gdf: The geodataframe containing geometries to rasterize
         raster: The reference raster DataArray to match spatial properties
         dtype: The data type of the output rasterized array
         nodata: The nodata value to use in the output array
         all_touched: If True, all pixels touched by geometries will be burned in
+        column: If provided, values from this column will be used for rasterization.
+            Cannot be used together with `burn_value`.
+        burn_value: If provided, this value will be used for all geometries instead of values from a column.
+            Cannot be used together with `column`.
+        name: If provided, the name of the output DataArray. If 'column' is provided and name is not set,
+            the name will be set to the column name.
         **kwargs: Additional keyword arguments to pass to rasterio.features.rasterize
 
     Returns:
         A new DataArray with the rasterized geometry, matching the spatial properties of the input raster.
             The name of the DataArray will be set to the provided column name.
 
+    Raises:
+        ValueError: If both `column` and `burn_value` are provided or if neither is provided.
+
     """
+    if (column is None and burn_value is None) or (
+        column is not None and burn_value is not None
+    ):
+        raise ValueError("Either column or burn_value must be provided, but not both.")
+
+    if name == "rasterized" and column is not None:
+        name: str = column
+
     da: xr.DataArray = full_like(
         data=raster,
         fill_value=nodata,
         nodata=nodata,
         attrs=raster.attrs,
         dtype=dtype,
-        name=column,
+        name=name,
     )
-    geoms: gpd.Geoseries = gpd.geometry
+    geoms: gpd.Geoseries = gdf.geometry
 
-    assert da.rio.crs == gpd.crs, "CRS of raster and GeoDataFrame must match"
+    assert da.rio.crs == gdf.crs, "CRS of raster and GeoDataFrame must match"
 
-    values: list[Any] = gpd[column].tolist()
+    if burn_value is not None:
+        values = [burn_value] * len(gdf)
+    else:
+        values: list[Any] = gdf[column].tolist()
     shapes: list[tuple[Polygon, int | float]] = list(zip(geoms, values, strict=True))
     out = rasterize(
         shapes,
         out_shape=raster.rio.shape,
         fill=nodata,
-        transform=raster.rio.transform(),
+        transform=raster.rio.transform(recalc=True),
         out=da.values,
         all_touched=all_touched,
         **kwargs,
@@ -350,21 +559,57 @@ def bounds_are_within(
     )
 
 
+@overload
 def pad_xy(
-    array_rio: rioxarray.raster_array.RasterArray,
+    da: xr.DataArray,
     minx: float,
     miny: float,
     maxx: float,
     maxy: float,
-    constant_values: Union[
-        float, tuple[int, int], Mapping[Any, tuple[int, int]], None
-    ] = None,
+    constant_values: float
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
+    return_slice: Literal[True] = True,
+) -> tuple[xr.DataArray, dict[str, slice]]: ...
+
+
+@overload
+def pad_xy(
+    da: xr.DataArray,
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+    constant_values: float
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
+    return_slice: Literal[False] = False,
+) -> xr.DataArray: ...
+
+
+def pad_xy(
+    da: xr.DataArray,
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+    constant_values: float
+    | tuple[int, int]
+    | Mapping[Any, tuple[int, int]]
+    | None = None,
     return_slice: bool = False,
-) -> xr.DataArray:
-    """Pad the array to x,y bounds.
+) -> xr.DataArray | tuple[xr.DataArray, dict[str, slice]]:
+    """Pad the array to x,y bounds, while preserving old coordinates exactly.
+
+    Rather than re-calculating the x and y coordinates, this function
+    uses the original coordinates and extends them as needed. This ensures
+    that the original coordinates are preserved without introducing floating point
+    imprecision.
 
     Args:
-        array_rio: rio assecor of xarray DataArray
+        da: the DataArray to pad.
         minx: Minimum bound for x coordinate.
         miny: Minimum bound for y coordinate.
         maxx: Maximum bound for x coordinate.
@@ -382,31 +627,41 @@ def pad_xy(
     data.
 
     """
+    array_rio: rioxarray.rioxarray.RioXarrayAccessor = da.rio
+
     left, bottom, right, top = array_rio._internal_bounds()
     resolution_x, resolution_y = array_rio.resolution()
+    y_coord: xarray.DataArray | np.ndarray = da[array_rio.y_dim].values
+    x_coord: xarray.DataArray | np.ndarray = da[array_rio.x_dim].values
+
     y_before = y_after = 0
     x_before = x_after = 0
-    y_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.y_dim]
-    x_coord: Union[xarray.DataArray, np.ndarray] = array_rio._obj[array_rio.x_dim]
 
+    # Create new coordinates by extending existing ones
     if top - resolution_y < maxy:
-        new_y_coord: np.ndarray = np.arange(bottom, maxy, -resolution_y)[::-1]
+        new_top_coords = np.arange(top - resolution_y, maxy, -resolution_y)[::-1]
+        new_y_coord = np.concatenate([new_top_coords, y_coord])
         y_before = len(new_y_coord) - len(y_coord)
         y_coord = new_y_coord
         top = y_coord[0]
     if bottom + resolution_y > miny:
-        new_y_coord = np.arange(top, miny, resolution_y)
+        new_bottom_coords = np.arange(bottom + resolution_y, miny, resolution_y)
+        new_y_coord = np.concatenate([y_coord, new_bottom_coords])
         y_after = len(new_y_coord) - len(y_coord)
         y_coord = new_y_coord
         bottom = y_coord[-1]
 
     if left - resolution_x > minx:
-        new_x_coord: np.ndarray = np.arange(right, minx, -resolution_x)[::-1]
+        new_left_coords: np.ndarray = np.arange(
+            left - resolution_x, minx, -resolution_x
+        )[::-1]
+        new_x_coord = np.concatenate([new_left_coords, x_coord])
         x_before = len(new_x_coord) - len(x_coord)
         x_coord = new_x_coord
         left = x_coord[0]
     if right + resolution_x < maxx:
-        new_x_coord = np.arange(left, maxx, resolution_x)
+        new_right_coords = np.arange(x_coord[-1] + resolution_x, maxx, resolution_x)
+        new_x_coord = np.concatenate([x_coord, new_right_coords])
         x_after = len(new_x_coord) - len(x_coord)
         x_coord = new_x_coord
         right = x_coord[-1]
@@ -414,7 +669,7 @@ def pad_xy(
     if constant_values is None:
         constant_values = np.nan if array_rio.nodata is None else array_rio.nodata
 
-    superset = array_rio._obj.pad(
+    superset = da.pad(
         pad_width={
             array_rio.x_dim: (x_before, x_after),
             array_rio.y_dim: (y_before, y_after),
@@ -443,21 +698,29 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
 
     Returns:
         A new DataArray with NaN values interpolated along the time dimension.
+
+    Raises:
+        ValueError: If '_FillValue' attribute is missing.
     """
+    if "_FillValue" not in da.attrs:
+        raise ValueError("DataArray must have '_FillValue' attribute")
+
+    nodata = da.attrs["_FillValue"]
 
     def fillna_nearest_2d(
-        arr: TwoDArrayFloat32 | TwoDArrayFloat64, dims: tuple[str, ...]
+        arr: TwoDArrayFloat32 | TwoDArrayFloat64, dims: tuple[str, ...], nodata: float
     ) -> TwoDArrayFloat32 | TwoDArrayFloat64:
         """Fill NaN values in a 2D array using nearest neighbor interpolation.
 
         Args:
             arr: The input 2D array with NaN values.
             dims: The dimensions of the array.
+            nodata: The nodata value to treat as missing.
 
         Returns:
             The array with NaN values filled.
         """
-        mask = np.isnan(arr)
+        mask = np.isnan(arr) if np.isnan(nodata) else arr == nodata
         if not mask.any():
             return arr
 
@@ -484,11 +747,49 @@ def interpolate_na_along_time_dim(da: xr.DataArray) -> xr.DataArray:
         dask="parallelized",  # Enable parallelized computation
         input_core_dims=[["y", "x"]],
         output_core_dims=[["y", "x"]],
-        kwargs={"dims": da.dims},  # Additional arguments for the function
+        kwargs={
+            "dims": da.dims,
+            "nodata": nodata,
+        },  # Additional arguments for the function
         output_dtypes=[da.dtype],
         keep_attrs=True,
     )
     return da
+
+
+def interpolate_na_2d(da: xr.DataArray) -> xr.DataArray:
+    """Interpolate NaN values in a 2D DataArray using nearest neighbor interpolation.
+
+    Args:
+        da: The input DataArray with dimensions ('y', 'x').
+
+    Returns:
+        A new DataArray with NaN values interpolated.
+
+    Raises:
+        ValueError: If '_FillValue' attribute is missing.
+    """
+    if "_FillValue" not in da.attrs:
+        raise ValueError("DataArray must have '_FillValue' attribute")
+
+    nodata = da.attrs["_FillValue"]
+
+    mask = np.isnan(da.values) if np.isnan(nodata) else da.values == nodata
+
+    if not mask.any():
+        return da
+
+    y, x = np.indices(da.values.shape)
+    known_x, known_y = x[~mask], y[~mask]
+    known_v = da.values[~mask]
+    missing_x, missing_y = x[mask], y[mask]
+
+    filled_values = griddata(
+        (known_x, known_y), known_v, (missing_x, missing_y), method="nearest"
+    )
+    da_filled = da.copy()
+    da_filled.values[mask] = filled_values
+    return da_filled
 
 
 def resample_like(
@@ -571,7 +872,7 @@ def get_area_definition(da: xr.DataArray) -> AreaDefinition:
 def _fill_in_coords(
     target_coords: xr.core.coordinates.DataArrayCoordinates,
     source_coords: xr.core.coordinates.DataArrayCoordinates,
-    data_dims: tuple[str, ...],
+    data_dims: tuple[Hashable, ...],
 ) -> list[xr.core.coordinates.DataArrayCoordinates]:
     """Fill in missing coordinates that are also dimensions from source except for 'x' and 'y' which are taken from target.
 
@@ -612,6 +913,7 @@ def resample_chunked(
 
     Raises:
         ValueError: If the method is not 'bilinear' or 'nearest'.
+        ValueError: If the target DataArray is not chunked.
 
     Returns:
         A new DataArray that has been resampled to match the target's grid.
@@ -627,6 +929,9 @@ def resample_chunked(
 
     source_geo: AreaDefinition = get_area_definition(source)
     target_geo: AreaDefinition = get_area_definition(target)
+
+    if target.chunks is None:
+        raise ValueError("Target DataArray must be chunked for resample_chunked")
 
     indices: dask.Array = resample_blocks(
         gradient_resampler_indices_block,
@@ -686,3 +991,75 @@ def calculate_cell_area(
     )
     height_m = distance_1_degree_latitude * abs(affine_transform.e)
     return (width_m * height_m).astype(np.float32)
+
+
+def clip_region(
+    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int
+) -> tuple[xr.DataArray, ...]:
+    """Use the given mask to clip the mask itself and the given data arrays.
+
+    The clipping is done to the bounding box of the True values in the mask. The bounding box
+    is aligned to the given align value. The align value is in the same units as the coordinates
+    of the mask and data arrays.
+
+    Args:
+        mask: The mask to use for clipping. Must be a 2D boolean DataArray with x and y coordinates.
+            True values indicate the area to keep.
+        *data_arrays: The data arrays to clip. Must have the same x and y coordinates as the mask.
+        align: Align the bounding box to a specific grid spacing. For example, when this is set to 1
+            the bounding box will be aligned to whole numbers. If set to 0.5, the bounding box will
+            be aligned to 0.5 intervals.
+
+    Returns:
+        A tuple containing the clipped mask and the clipped data arrays.
+
+    Raises:
+        ValueError: If the data arrays do not have the same shape or coordinates as the mask.
+    """
+    rows, cols = np.where(mask)
+    mincol = cols.min()
+    maxcol = cols.max()
+    minrow = rows.min()
+    maxrow = rows.max()
+
+    minx = mask.x[mincol].item()
+    maxx = mask.x[maxcol].item()
+    miny = mask.y[minrow].item()
+    maxy = mask.y[maxrow].item()
+
+    xres, yres = mask.rio.resolution()
+
+    mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
+    maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
+    minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
+    maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
+
+    assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
+    assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
+    assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
+    assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
+
+    assert mincol_aligned <= mincol
+    assert maxcol_aligned >= maxcol
+    assert minrow_aligned <= minrow
+    assert maxrow_aligned >= maxrow
+
+    clipped_mask = mask.isel(
+        y=slice(minrow_aligned, maxrow_aligned),
+        x=slice(mincol_aligned, maxcol_aligned),
+    )
+    clipped_arrays = []
+    for da in data_arrays:
+        if da.shape != mask.shape:
+            raise ValueError("All data arrays must have the same shape as the mask.")
+        if not np.array_equal(da.x, mask.x) or not np.array_equal(da.y, mask.y):
+            raise ValueError(
+                "All data arrays must have the same coordinates as the mask."
+            )
+        clipped_arrays.append(
+            da.isel(
+                y=slice(minrow_aligned, maxrow_aligned),
+                x=slice(mincol_aligned, maxcol_aligned),
+            )
+        )
+    return clipped_mask, *clipped_arrays

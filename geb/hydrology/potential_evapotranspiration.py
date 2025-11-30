@@ -205,7 +205,7 @@ def get_reference_evapotranspiration(
     wind_10m_m_per_s: np.float32,
     albedo_canopy: np.float32 = np.float32(0.13),
     albedo_water: np.float32 = np.float32(0.05),
-) -> tuple[np.float32, np.float32, np.float32]:
+) -> tuple[np.float32, np.float32, np.float32, np.float32]:
     """Calculate potential evapotranspiration based on Penman-Monteith equation.
 
     Penman-Montheith equation:
@@ -336,7 +336,6 @@ def get_potential_transpiration(
 @njit(cache=True, inline="always")
 def get_potential_bare_soil_evaporation(
     reference_evapotranspiration_grass_m_per_day: np.float32,
-    sublimation_m: np.float32,
 ) -> np.float32:
     """Calculate potential bare soil evaporation.
 
@@ -344,13 +343,12 @@ def get_potential_bare_soil_evaporation(
 
     Args:
         reference_evapotranspiration_grass_m_per_day: Reference evapotranspiration [m]
-        sublimation_m: Sublimation from snow [m]
 
     Returns:
         Potential bare soil evaporation [m]
     """
     return max(
-        np.float32(0.2) * reference_evapotranspiration_grass_m_per_day - sublimation_m,
+        np.float32(0.2) * reference_evapotranspiration_grass_m_per_day,
         np.float32(0.0),
     )
 

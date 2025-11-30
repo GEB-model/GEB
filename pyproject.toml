@@ -19,7 +19,7 @@ authors = [
     {name = "Rafaella Oliveira", email = "r.gouveialoureirooliveira@vu.nl"},
 ]
 dependencies = [
-    "cartopy==0.24.1",
+    "cartopy==0.24.1", # pin until https://github.com/SciTools/cartopy/issues/2577 is fixed
     "cfgrib>=0.9.14",
     "click>=8.1.8",
     "contextily>=1.6.2",
@@ -29,7 +29,6 @@ dependencies = [
     "flopy>=3.8.0",
     "folium>=0.19.6",
     "geopandas>=1.0.1",
-    "honeybees>=1.2.0",
     "hydromt==0.10.1",
     "hydromt-sfincs>=1.2.0",
     "networkx",
@@ -39,7 +38,6 @@ dependencies = [
     "pandas>=2.3.0",
     "permetrics>=2.0.0",
     "pyarrow>=17.0.0",
-    "pyextremes>=2.3.3",
     "pyflwdir>=0.5.9",
     "pyogrio>=0.9.0",
     "pyresample>=1.32.0",
@@ -62,16 +60,21 @@ dependencies = [
     "zarr>=3.1.3",
     "plotly>=6.2.0",
     "kaleido>=1.0.0",
-    "ty>=0.0.1a22",
+    "ty>=0.0.1a25",
     "pystac>=1.14.1",
     "xpystac>=0.4.0",
     "odc-stac>=0.4.0",
     "pystac-client>=0.9.0",
     "ecmwf-api-client>=1.6.5",
     "ruff>=0.14.0",
+    "snakemake>=9.13.4",
+    "pytest-plt>=1.1.1",
+    "pytest-benchmark>=5.2.1",
+    "imageio>=2.37.2",
+    "pyquadkey2>=0.3.2",
     "osmnx>=2.0.6",
 ]
-requires-python = ">=3.12, <3.14"
+requires-python = ">=3.13, <3.14"
 readme = "README.md"
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -119,9 +122,6 @@ plantfate = [
     "pybind11>=2.13.6",
 ]
 
-[tool.ruff]
-target-version = "py313"
-
 [tool.ruff.lint]
 select = [
     "ANN002",
@@ -165,47 +165,22 @@ select = [
     "D416",
     "D417",
     "D419",
-    "F401"
+    "F401",
+    "UP006",
+    "UP007",
+    "UP008",
+    "UP009",
+    "UP010",
+    "UP012",
+    "UP017",
+    "UP022",
+    "UP029",
+    "UP037",
+    "UP044",
+    "UP045",
 ]
 extend-select = ["I"]
 preview = true
-
-[tool.ruff.lint.extend-per-file-ignores]
-"geb/agents/{crop_farmers,decision_module,households}.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D102",
-    "D103",
-]
-"geb/agents/workflows/crop_farmers.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D102",
-    "D103",
-]
-"geb/evaluate/hydrology.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D102",
-    "D103",
-]
-"geb/build/modules/observations.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D103",
-    "D102",
-]
-"geb/{sensitivity,multirun,calibrate}.py" = [
-    "ANN001",
-    "ANN201",
-    "ANN202",
-    "D103",
-    "D102",
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["geb"]
@@ -221,4 +196,8 @@ addopts = "--ignore=.venv"
 
 [tool.ty.environment]
 python-version = "3.13"
-extra-paths = ["./typings"]
+
+[tool.ty.rules]
+possibly-missing-attribute = "ignore"
+unresolved-attribute = "ignore"
+

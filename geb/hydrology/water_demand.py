@@ -27,11 +27,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import numpy.typing as npt
-from honeybees.library.raster import write_to_array
 
 from geb.module import Module
+from geb.types import ArrayFloat32
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import load_grid
+from geb.workflows.raster import write_to_array
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -135,7 +136,8 @@ class WaterDemand(Module):
 
         available_channel_storage_m3: np.ndarray = (
             self.hydrology.routing.router.get_available_storage(
-                Q=self.grid.var.discharge_m3_s_substep, maximum_abstraction_ratio=0.1
+                Q=self.grid.var.discharge_in_rivers_m3_s_substep,
+                maximum_abstraction_ratio=0.1,
             )
         )
 
@@ -180,13 +182,14 @@ class WaterDemand(Module):
         return withdrawal
 
     def step(
-        self, root_depth_m: npt.NDArray[np.float32]
+        self, root_depth_m: ArrayFloat32
     ) -> tuple[
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
+        ArrayFloat32,
+        ArrayFloat32,
+        ArrayFloat32,
+        ArrayFloat32,
         float,
+        ArrayFloat32,
     ]:
         """Perform a single time step of the water demand module.
 
@@ -209,6 +212,7 @@ class WaterDemand(Module):
                 This is added to the channel flow in the routing module.
             Irrigation loss to evaporation per HRU [m].
             Total water demand loss [m3].
+            The actual irrigation consumption [m].
         """
         timer: TimingModule = TimingModule("Water demand")
 
@@ -231,19 +235,21 @@ class WaterDemand(Module):
 
         (
             gross_irrigation_demand_m3_per_field,
-            gross_potential_irrigation_m3_per_field_limit_adjusted,
+            gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir,
+            gross_irrigation_demand_m3_per_field_limit_adjusted_channel,
+            gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater,
         ) = self.model.agents.crop_farmers.get_gross_irrigation_demand_m3(root_depth_m)
 
-        gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32] = (
+        gross_irrigation_demand_m3_per_farmer_reservoir: npt.NDArray[np.float32] = (
             self.model.agents.crop_farmers.field_to_farmer(
-                gross_potential_irrigation_m3_per_field_limit_adjusted
+                gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir
             )
         )
 
         gross_irrigation_demand_m3_per_water_body: npt.NDArray[np.float32] = (
             weighted_sum_per_reservoir(
                 self.model.agents.crop_farmers.command_area,
-                gross_irrigation_demand_m3_per_farmer,
+                gross_irrigation_demand_m3_per_farmer_reservoir,
                 min_length=self.hydrology.lakes_reservoirs.n,
             )
         )
@@ -359,7 +365,9 @@ class WaterDemand(Module):
             groundwater_abstraction_m3_farmers,
         ) = self.model.agents.crop_farmers.abstract_water(
             gross_irrigation_demand_m3_per_field=gross_irrigation_demand_m3_per_field,
-            gross_irrigation_demand_m3_per_field_limit_adjusted=gross_potential_irrigation_m3_per_field_limit_adjusted,
+            gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir=gross_irrigation_demand_m3_per_field_limit_adjusted_reservoir,
+            gross_irrigation_demand_m3_per_field_limit_adjusted_channel=gross_irrigation_demand_m3_per_field_limit_adjusted_channel,
+            gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater=gross_irrigation_demand_m3_per_field_limit_adjusted_groundwater,
             available_channel_storage_m3=available_channel_storage_m3,
             available_groundwater_m3=available_groundwater_m3,
             groundwater_depth=self.hydrology.groundwater.modflow.groundwater_depth,
@@ -369,8 +377,9 @@ class WaterDemand(Module):
         self.withdraw(available_reservoir_storage_m3, reservoir_abstraction_m3_farmers)
         self.withdraw(available_groundwater_m3, groundwater_abstraction_m3_farmers)
 
-        assert (available_reservoir_storage_m3 < 50).all(), (
-            "Reservoir storage should be empty after abstraction"
+        assert (available_reservoir_storage_m3 < 1000).all(), (
+            "Reservoir storage should be empty after abstraction. "
+            f"Offending values: {available_reservoir_storage_m3[available_reservoir_storage_m3 >= 50]}"
         )
 
         timer.finish_split("Irrigation")

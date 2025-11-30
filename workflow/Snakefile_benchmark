@@ -1,0 +1,20 @@
+"""Snakemake workflow for benchmarking GEB model across multiple catchments.
+
+This workflow:
+1. Sets up each catchment with configuration files using geb init
+2. Runs the complete GEB pipeline (build → spinup → run → evaluate)
+"""
+
+configfile: "workflow/config/benchmark.yml"
+
+# Get catchment names from config
+CATCHMENTS = config.get("CATCHMENTS", {})
+CATCHMENT_NAMES = list(CATCHMENTS.keys())
+
+# Target rule - run all catchment evaluations
+rule all:
+    input:
+        expand("benchmarks/{catchment}/output/evaluate/discharge/evaluation_results/evaluation_metrics.xlsx", catchment=CATCHMENT_NAMES)
+
+# Include only benchmark-specific rules (not common.smk to avoid conflicts)
+include: "rules/benchmark.smk"

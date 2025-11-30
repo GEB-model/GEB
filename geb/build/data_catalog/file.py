@@ -3,6 +3,8 @@
 Useful for simple files that only need to be downloaded and stored without additional processing.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 from geb.workflows.io import fetch_and_save
@@ -17,7 +19,7 @@ class File(Adapter):
         """Initialize the File adapter."""
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> "File":
+    def fetch(self, url: str) -> File:
         """Fetch the dataset from the given URL if not already present.
 
         Args:

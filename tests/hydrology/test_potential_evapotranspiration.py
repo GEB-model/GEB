@@ -224,24 +224,9 @@ def test_get_potential_bare_soil_evaporation() -> None:
     reference_evapotranspiration_grass_m = np.float32(5.0)
     bare_soil_evaporation = get_potential_bare_soil_evaporation(
         reference_evapotranspiration_grass_m,
-        sublimation_m=np.float32(0.0),
     )
 
     expected_value = np.float32(1.0)
-    assert np.isclose(bare_soil_evaporation, expected_value, rtol=1e-6)
-
-    bare_soil_evaporation = get_potential_bare_soil_evaporation(
-        reference_evapotranspiration_grass_m,
-        sublimation_m=np.float32(0.5),
-    )
-    expected_value = np.float32(0.5)
-    assert np.isclose(bare_soil_evaporation, expected_value, rtol=1e-6)
-
-    bare_soil_evaporation = get_potential_bare_soil_evaporation(
-        reference_evapotranspiration_grass_m,
-        sublimation_m=np.float32(5.0),
-    )
-    expected_value = np.float32(0.0)
     assert np.isclose(bare_soil_evaporation, expected_value, rtol=1e-6)
 
 

@@ -84,14 +84,14 @@ def test_cli() -> None:
     """Test that all CLI commands are accessible and return help information."""
     runner = CliRunner()
     for cmd in (
+        "init",
+        "build",
+        "set",
+        "exec",
         "spinup",
         "run",
-        "build",
         "alter",
         "update",
-        "calibrate",
-        "sensitivity",
-        "multirun",
         "share",
         "evaluate",
     ):

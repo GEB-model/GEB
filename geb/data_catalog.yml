@@ -1,15 +1,3 @@
-fabdem:
-  crs: 4326
-  data_type: RasterDataset
-  driver: raster
-  meta:
-    category: topography
-    paper_doi: CC BY-NC-SA 4.0
-    paper_ref: Hawker et al. (2022)
-    source_license: CC BY-NC-SA 4.0
-    source_url: https://data.bris.ac.uk/data/dataset/25wfy0f9ukoge2gs7a5mqpq2j7
-    source_version: 1-2
-  path: ../../data_catalogue/topography/fabdem.vrt
 geul_dem:
   data_type: RasterDataset
   driver: raster
@@ -80,9 +68,16 @@ MIRCA-OS_cropping_area_{year}_{resolution}_{crop}_{ir_or_rf}:
     resolution: ['5-arcminute', '30-arcminute']
     crop: ['Barley', 'Cassava', 'Cocoa', 'Coffee', 'Cotton', 'Fodder', 'Groundnuts', 'Maize', 'Millet', 'Oil_palm', 'Others_annual', 'Others_perennial', 'Potatoes', 'Pulses', 'Rapeseed', 'Rice', 'Rye', 'Sorghum', 'Soybeans', 'Sugar_beet', 'Sugar_cane', 'Sunflower', 'Wheat']
     ir_or_rf: [ir, rf]
+global_ocean_mean_dynamic_topography:
+  data_type: RasterDataset
+  driver: raster
+  path: hydrography/global_ocean_mean_dynamic_topography/mdt_hybrid_cnes_cls22_cmems2020_global.nc
+  meta:
+    source_license: https://marine.copernicus.eu/user-corner/service-commitments-and-licence
+    source_url: https://data.marine.copernicus.eu/product/SEALEVEL_GLO_PHY_MDT_008_063/description
 GTSM:
   data_type: Dataset
-  path: GTSM/reanalysis_waterlevel_10min_{}_{}_v1.nc
+  path: GTSM/reanalysis_waterlevel_10min_{}_{}_v3.nc
   meta:
     category: water level
     paper_doi: doi:10.1038/ncomms11969
@@ -93,7 +88,7 @@ GTSM:
     unit: m+MSL
 GTSM_surge:
   data_type: Dataset
-  path: GTSM/reanalysis_surge_10min_{}_{}_v2.nc
+  path: GTSM/reanalysis_surge_10min_{}_{}_v3.nc
   meta:
     category: surge water level
     paper_doi: doi:10.1038/ncomms11969
@@ -284,3 +279,23 @@ GLOBIOM_regions_37:
     source_license: Creative Commons Attribution-NonCommercial 4.0 International
   driver_kwargs:
     sheet_name: Region37
+osm_land_polygons:
+  crs: 4326
+  data_type: GeoDataFrame
+  driver: vector
+  path: osm/land-polygons-split-4326/land_polygons.shp
+  meta:
+    category: landsurface
+    source_author: OpenStreetMap contributors
+    source_url: https://osmdata.openstreetmap.de/data/land-polygons.html
+    source_license: Data Commons Open Database License (ODbL)   
+osm_coastlines:
+  crs: 4326
+  data_type: GeoDataFrame
+  driver: vector
+  path: osm/coastlines-split-4326/lines.shp
+  meta:
+    category: landsurface
+    source_author: OpenStreetMap contributors
+    source_url: https://osmdata.openstreetmap.de/data/coastlines.html
+    source_license: Data Commons Open Database License (ODbL)

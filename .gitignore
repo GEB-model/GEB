@@ -14,6 +14,7 @@ examples/*/*
 !examples/*/build.yml
 !examples/*/model.yml
 !examples/*/update.yml
+.snakemake
 **.code-workspace
 
 #ignore folder

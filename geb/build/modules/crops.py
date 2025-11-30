@@ -3,15 +3,15 @@
 import json
 import os
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import xarray as xr
-from honeybees.library.raster import sample_from_map
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
+from geb.workflows.raster import sample_from_map
 
 from ..workflows.conversions import (
     GLOBIOM_NAME_TO_ISO3,
@@ -121,8 +121,8 @@ class Crops:
     @build_method(depends_on=[])
     def setup_crops_from_source(
         self,
-        source: Union[str, None] = "MIRCA2000",
-        crop_specifier: Union[str, None] = None,
+        source: str | None = "MIRCA2000",
+        crop_specifier: str | None = None,
     ) -> None:
         """Sets up the crops data for the model."""
         self.logger.info("Preparing crops data")
@@ -158,7 +158,7 @@ class Crops:
         crop_prices: str | int | float,
         translate_crop_names: dict | None = None,
         adjust_currency: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Process crop price inputs into model-ready time series or constants.
 
         Args:
@@ -777,8 +777,8 @@ class Crops:
     @build_method(depends_on=["set_time_range"])
     def setup_cultivation_costs(
         self,
-        cultivation_costs: Optional[Union[str, int, float]] = 0,
-        translate_crop_names: Optional[Dict[str, str]] = None,
+        cultivation_costs: str | int | float = 0,
+        translate_crop_names: dict[str, str] | None = None,
         adjust_currency: bool = False,
     ) -> None:
         """Set cultivation costs per crop and region for the model run.
@@ -806,8 +806,8 @@ class Crops:
     )
     def setup_crop_prices(
         self,
-        crop_prices: Optional[Union[str, int, float]] = "FAO_stat",
-        translate_crop_names: Optional[Dict[str, str]] = None,
+        crop_prices: str | int | float = "FAO_stat",
+        translate_crop_names: dict[str, str] | None = None,
         adjust_currency: bool = False,
     ) -> None:
         """Set crop prices per crop and region for the model run.
@@ -878,8 +878,8 @@ class Crops:
                         self.data_catalog.get_source(dataset_name).path
                     )
                     crop_map = crop_map.isel(
-                        band=0,
                         **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
+                        band=0,
                     )
 
                     crop_map = crop_map.fillna(0)
@@ -1012,14 +1012,59 @@ class Crops:
         )
 
         MIRCA_unit_grid = MIRCA_unit_grid.isel(
-            band=0,
             **get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
+            band=0,
         )
 
         crop_calendar = parse_MIRCA2000_crop_calendar(
             self.data_catalog,
             MIRCA_units=np.unique(MIRCA_unit_grid.values),
         )
+
+        def fix_365_in_crop_calendar(
+            crop_calendar: dict[str, list[tuple[float, np.ndarray]]],
+        ) -> None:
+            """Replace any 365 day-of-year values with 364 in the 4th column.
+
+            Scans each (area, arr) pair in every dictionary entry. If a value 365 is
+            found, it asserts that it appears only in column index 3 and then rewrites
+            it to 364. Increments a running count of replacements and raises a
+            ValueError if a 365 is found outside column 3.
+
+            Raises:
+                ValueError: If any 365 is found outside column index 3 (the 4th column).
+
+            Returns:
+                A dictionary of crop calendars where the 365 length crops are now 364 days.
+            """
+            total_replacements = 0
+
+            crop_calendar_adjusted = crop_calendar.copy()
+
+            for key, entries in crop_calendar_adjusted.items():
+                for i, (area, arr) in enumerate(entries):
+                    rows, cols = np.where(arr == 365)
+
+                    if rows.size == 0:
+                        continue  # nothing to change in this array
+
+                    # Safety: all 365s must be in column index 3 (4th column)
+                    if not np.all(cols == 3):
+                        raise ValueError(
+                            f"Found 365 outside column 3 for key={key}, index={i}: "
+                            f"indices={list(zip(rows, cols))}"
+                        )
+
+                    # Do the replacement
+                    arr[rows, 3] = 364
+                    entries[i] = (area, arr)
+                    total_replacements += rows.size
+
+            return crop_calendar_adjusted
+
+        # Replace crop growth time of 365 with 364 as 365 leads to many issues
+        crop_calendar = fix_365_in_crop_calendar(crop_calendar)
+
         if any(value in [None, "", [], {}] for value in crop_calendar.values()):
             missing_mirca_unit = [
                 unit for unit, calendars in crop_calendar.items() if not calendars

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
@@ -12,12 +11,19 @@ import numpy.typing as npt
 import osmnx as ox
 import pandas as pd
 import xarray as xr
+from pyproj import CRS
 from rasterio.features import shapes
+from rasterio.transform import Affine
 from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
-from ..hydrology.landcovers import FOREST
+from geb.types import TwoDArrayBool, TwoDArrayInt
+from geb.workflows.io import load_dict
+
+from ..hydrology.landcovers import (
+    FOREST,
+)
 from ..store import DynamicArray
 from ..workflows.damage_scanner import VectorScanner
 from ..workflows.io import load_array, load_table, open_zarr, to_zarr
@@ -29,7 +35,9 @@ if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
-def from_landuse_raster_to_polygon(mask, transform, crs) -> gpd.GeoDataFrame:
+def from_landuse_raster_to_polygon(
+    mask: TwoDArrayBool | TwoDArrayInt, transform: Affine, crs: str | int | CRS
+) -> gpd.GeoDataFrame:
     """Convert raster data into separate GeoDataFrames for specified land use values.
 
     Args:
@@ -40,6 +48,9 @@ def from_landuse_raster_to_polygon(mask, transform, crs) -> gpd.GeoDataFrame:
     Returns:
         A GeoDataFrame containing polygons for the specified land use values.
     """
+    import pdb
+
+    pdb.set_trace()
     shapes_gen = shapes(mask.astype(np.uint8), mask=mask, transform=transform)
 
     polygons = []
@@ -81,10 +92,7 @@ class Households(AgentBaseClass):
             if "households" in self.model.config["agent_settings"]
             else {}
         )
-        self.decision_module = DecisionModule(
-            model=self.model,
-            agents=self.agents,
-        )
+        self.decision_module = DecisionModule()
 
         if self.config["adapt"]:
             self.load_flood_maps()
@@ -101,6 +109,7 @@ class Households(AgentBaseClass):
 
     @property
     def name(self) -> str:
+        """Return the name of the agent type."""
         return "agents.households"
 
     def load_flood_maps(self) -> None:
@@ -158,28 +167,18 @@ class Households(AgentBaseClass):
 
     def update_building_attributes(self) -> None:
         """Update building attributes based on household data."""
-        # Start by computing occupancy from the var.osm_id and var.osm_way_id arrays
-        osm_id_series = pd.Series(self.var.osm_id.data)
-        osm_way_id_series = pd.Series(self.var.osm_way_id.data)
+        # Start by computing occupancy from the var.building_id array
+        building_id_series = pd.Series(self.var.building_id.data)
 
         # Drop NaNs and convert to string format (matching building ID format)
-        osm_id_counts = osm_id_series.dropna().astype(int).astype(str).value_counts()
-        osm_way_id_counts = (
-            osm_way_id_series.dropna().astype(int).astype(str).value_counts()
-        )
-
+        building_id_counts = building_id_series.dropna().astype(int).value_counts()
         # Initialize occupancy column
         self.buildings["occupancy"] = 0
 
         # Map the counts back to the buildings dataframe
         self.buildings["occupancy"] = (
-            self.buildings["osm_id"]
-            .map(osm_id_counts)
-            .fillna(self.buildings["occupancy"])
-        )
-        self.buildings["occupancy"] = (
-            self.buildings["osm_way_id"]
-            .map(osm_way_id_counts)
+            self.buildings["id"]
+            .map(building_id_counts)
             .fillna(self.buildings["occupancy"])
         )
 
@@ -197,7 +196,7 @@ class Households(AgentBaseClass):
         # convert flood map to polygons
         flood_map_polygons = from_landuse_raster_to_polygon(
             flood_map.values,
-            flood_map.rio.transform(),
+            flood_map.rio.transform(recalc=True),
             flood_map.rio.crs,
         )
 
@@ -213,27 +212,16 @@ class Households(AgentBaseClass):
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
         """Update the floodproofing status of buildings based on adapting households."""
         # Extract and clean OSM IDs from adapting households
-        osm_ids = pd.DataFrame(
-            np.unique(self.var.osm_id.data[household_adapting])
+        building_id = pd.DataFrame(
+            np.unique(self.var.building_id.data[household_adapting])
         ).dropna()
-        osm_ids = osm_ids.astype(int).astype(str)
-        osm_ids["flood_proofed"] = True
-        osm_ids = osm_ids.set_index(0)
-
-        # Extract and clean OSM way IDs from adapting households
-        osm_way_ids = pd.DataFrame(
-            np.unique(self.var.osm_way_id.data[household_adapting])
-        ).dropna()
-        osm_way_ids = osm_way_ids.astype(int).astype(str)
-        osm_way_ids["flood_proofed"] = True
-        osm_way_ids = osm_way_ids.set_index(0)
+        building_id = building_id.astype(int).astype(str)
+        building_id["flood_proofed"] = True
+        building_id = building_id.set_index(0)
 
         # Add/Update the flood_proofed status in buildings based on OSM way IDs
         self.buildings["flood_proofed"] = (
-            self.buildings["osm_way_id"].astype(str).map(osm_way_ids["flood_proofed"])
-        )
-        self.buildings["flood_proofed"] = self.buildings["flood_proofed"].fillna(
-            self.buildings["osm_id"].astype(str).map(osm_ids["flood_proofed"])
+            self.buildings["id"].astype(str).map(building_id["flood_proofed"])
         )
 
         # Replace NaNs with False (i.e., buildings not in the adapting households list)
@@ -278,13 +266,10 @@ class Households(AgentBaseClass):
         )
 
         # load building id household
-        osm_id = load_array(self.model.files["array"]["agents/households/osm_id"])
-        self.var.osm_id = DynamicArray(osm_id, max_n=self.max_n)
-
-        osm_way_id = load_array(
-            self.model.files["array"]["agents/households/osm_way_id"]
+        building_id = load_array(
+            self.model.files["array"]["agents/households/building_id"]
         )
-        self.var.osm_way_id = DynamicArray(osm_way_id, max_n=self.max_n)
+        self.var.building_id = DynamicArray(building_id, max_n=self.max_n)
 
         # update building attributes based on household data
         if self.config["adapt"]:
@@ -1618,8 +1603,11 @@ class Households(AgentBaseClass):
         print(f"N households that adapted: {len(household_adapting)}")
 
     def load_objects(self) -> None:
+        """Load buildings, roads, and rail geometries from model files."""
         # Load buildings
-        self.buildings = gpd.read_parquet(self.model.files["geom"]["assets/buildings"])
+        self.buildings = gpd.read_parquet(
+            self.model.files["geom"]["assets/open_building_map"]
+        )
         self.buildings["object_type"] = (
             "building_unprotected"  # before it was "building_structure"
         )
@@ -1641,35 +1629,34 @@ class Households(AgentBaseClass):
         self.postal_codes = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
 
     def load_max_damage_values(self) -> None:
+        """Load maximum damage values from model files and store them in the model variables."""
         # Load maximum damages
-        with open(
-            self.model.files["dict"][
-                "damage_parameters/flood/buildings/structure/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.var.max_dam_buildings_structure = float(json.load(f)["maximum_damage"])
+        self.var.max_dam_buildings_structure = float(
+            load_dict(
+                self.model.files["dict"][
+                    "damage_parameters/flood/buildings/structure/maximum_damage"
+                ]
+            )["maximum_damage"]
+        )
         self.buildings["maximum_damage_m2"] = self.var.max_dam_buildings_structure
 
-        with open(
+        max_dam_buildings_content = load_dict(
             self.model.files["dict"][
                 "damage_parameters/flood/buildings/content/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            max_dam_buildings_content = json.load(f)
+            ]
+        )
         self.var.max_dam_buildings_content = float(
             max_dam_buildings_content["maximum_damage"]
         )
         self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
-        with open(
-            self.model.files["dict"][
-                "damage_parameters/flood/rail/main/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.var.max_dam_rail = float(json.load(f)["maximum_damage"])
+        self.var.max_dam_rail = float(
+            load_dict(
+                self.model.files["dict"][
+                    "damage_parameters/flood/rail/main/maximum_damage"
+                ]
+            )["maximum_damage"]
+        )
         self.rail["maximum_damage_m"] = self.var.max_dam_rail
 
         max_dam_road_m: dict[str, float] = {}
@@ -1703,35 +1690,37 @@ class Households(AgentBaseClass):
         ]
 
         for road_type, path in road_types:
-            with open(self.model.files["dict"][path], "r") as f:
-                max_damage = json.load(f)
-            max_dam_road_m[road_type] = max_damage["maximum_damage"]
+            max_dam_road_m[road_type] = load_dict(self.model.files["dict"][path])[
+                "maximum_damage"
+            ]
 
         self.roads["maximum_damage_m"] = self.roads["object_type"].map(max_dam_road_m)
 
-        with open(
-            self.model.files["dict"][
-                "damage_parameters/flood/land_use/forest/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.var.max_dam_forest_m2 = float(json.load(f)["maximum_damage"])
+        self.var.max_dam_forest_m2 = float(
+            load_dict(
+                self.model.files["dict"][
+                    "damage_parameters/flood/land_use/forest/maximum_damage"
+                ]
+            )["maximum_damage"]
+        )
 
-        with open(
-            self.model.files["dict"][
-                "damage_parameters/flood/land_use/agriculture/maximum_damage"
-            ],
-            "r",
-        ) as f:
-            self.var.max_dam_agriculture_m2 = float(json.load(f)["maximum_damage"])
+        self.var.max_dam_agriculture_m2 = float(
+            load_dict(
+                self.model.files["dict"][
+                    "damage_parameters/flood/land_use/agriculture/maximum_damage"
+                ]
+            )["maximum_damage"]
+        )
 
     def load_damage_curves(self) -> None:
+        """Load damage curves from model files and store them in the model variables."""
         # Load vulnerability curves [look into these curves, some only max out at 0.5 damage ratio]
         road_curves = []
         road_types = [
             ("residential", "damage_parameters/flood/road/residential/curve"),
             ("unclassified", "damage_parameters/flood/road/unclassified/curve"),
             ("tertiary", "damage_parameters/flood/road/tertiary/curve"),
+            ("tertiary_link", "damage_parameters/flood/road/tertiary_link/curve"),
             ("primary", "damage_parameters/flood/road/primary/curve"),
             ("primary_link", "damage_parameters/flood/road/primary_link/curve"),
             ("secondary", "damage_parameters/flood/road/secondary/curve"),
@@ -1884,12 +1873,13 @@ class Households(AgentBaseClass):
         )
 
     def spinup(self) -> None:
+        """This function runs the spin-up process for the household agents."""
         self.construct_income_distribution()
         self.assign_household_attributes()
         if self.config["warning_response"]:
             self.change_household_locations()  # ideally this should be done in the setup_population when building the model
 
-    def calculate_building_flood_damages(self) -> Tuple[np.ndarray, np.ndarray]:
+    def calculate_building_flood_damages(self) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
         It iterates over the return periods and calculates the damages for each household
@@ -1924,9 +1914,8 @@ class Households(AgentBaseClass):
             )
 
             # Save the damages to the dataframe
-            buildings_with_damages = buildings[["osm_id", "osm_way_id"]]
+            buildings_with_damages = buildings[["id"]]
             buildings_with_damages["damage"] = damage_unprotected
-            # damage_unprotected = damage_unprotected[["osm_id", "osm_way_id", "damage"]]
 
             # Calculate damages to building structure (floodproofed buildings)
             buildings_floodproofed = buildings.copy()
@@ -1945,36 +1934,26 @@ class Households(AgentBaseClass):
             )
 
             # Save the damages to the dataframe
-            buildings_with_damages_floodproofed = buildings[["osm_id", "osm_way_id"]]
+            buildings_with_damages_floodproofed = buildings[["id"]]
             buildings_with_damages_floodproofed["damage"] = damage_flood_proofed
 
             # add damages to agents (unprotected buildings)
             for _, row in buildings_with_damages.iterrows():
                 damage = row["damage"]
-                if row["osm_id"] is not None:
-                    osm_id = int(row["osm_id"])
-                    idx_agents_in_building = np.where(self.var.osm_id == osm_id)[0]
-                    damages_do_not_adapt[i, idx_agents_in_building] = damage
-                else:
-                    osm_way_id = int(row["osm_way_id"])
-                    idx_agents_in_building_way = np.where(
-                        self.var.osm_way_id == osm_way_id
-                    )[0]
-                    damages_do_not_adapt[i, idx_agents_in_building_way] = damage
+                building_id = int(row["id"])
+                idx_agents_in_building = np.where(self.var.building_id == building_id)[
+                    0
+                ]
+                damages_do_not_adapt[i, idx_agents_in_building] = damage
 
             # add damages to agents (flood-proofed buildings)
             for _, row in buildings_with_damages_floodproofed.iterrows():
                 damage = row["damage"]
-                if row["osm_id"] is not None:
-                    osm_id = int(row["osm_id"])
-                    idx_agents_in_building = np.where(self.var.osm_id == osm_id)[0]
-                    damages_adapt[i, idx_agents_in_building] = damage
-                else:
-                    osm_way_id = int(row["osm_way_id"])
-                    idx_agents_in_building_way = np.where(
-                        self.var.osm_way_id == osm_way_id
-                    )[0]
-                    damages_adapt[i, idx_agents_in_building_way] = damage
+                building_id = int(row["id"])
+                idx_agents_in_building = np.where(self.var.building_id == building_id)[
+                    0
+                ]
+                damages_adapt[i, idx_agents_in_building] = damage
 
         return damages_do_not_adapt, damages_adapt
 
@@ -2249,7 +2228,7 @@ class Households(AgentBaseClass):
 
     def water_demand(
         self,
-    ) -> Tuple[
+    ) -> tuple[
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
         npt.NDArray[np.float32],
@@ -2297,7 +2276,7 @@ class Households(AgentBaseClass):
                 self.var.municipal_water_demand_per_capita_m3_baseline
                 * self.var.sizes
                 * water_demand_multiplier_per_household
-            )
+            ) * self.config["adjust_demand_factor"]
         elif self.config["water_demand"]["method"] == "custom_value":
             # Function to set a custom_value for household water demand. All households have the same demand.
             custom_value = self.config["water_demand"]["custom_value"]["value"]
@@ -2316,6 +2295,7 @@ class Households(AgentBaseClass):
         )
 
     def step(self) -> None:
+        """Advance the households by one time step."""
         if (
             self.config["adapt"]
             and self.model.current_time.month == 1
@@ -2329,9 +2309,19 @@ class Households(AgentBaseClass):
         self.report(locals())
 
     @property
-    def n(self):
+    def n(self) -> int:
+        """Number of households in the agent class.
+
+        Returns:
+            Number of households.
+        """
         return self.var.locations.shape[0]
 
     @property
-    def population(self):
+    def population(self) -> int:
+        """Total total number of people in all households.
+
+        Returns:
+            Total population.
+        """
         return self.var.sizes.data.sum()

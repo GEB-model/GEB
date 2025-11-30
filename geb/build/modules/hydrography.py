@@ -1,6 +1,7 @@
 """Build methods for the hydrography for GEB."""
 
 import os
+from pathlib import Path
 
 import geopandas as gpd
 import networkx as nx
@@ -8,15 +9,17 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyflwdir
+import rasterio
 import xarray as xr
 from pyflwdir import FlwdirRaster
 from rasterio.features import rasterize
 from scipy.ndimage import value_indices
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
+from geb.types import ArrayBool, ArrayFloat32, ArrayInt32
 from geb.workflows.raster import rasterize_like, snap_to_grid
 
 
@@ -130,6 +133,7 @@ def get_rivers(
         )
     )
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
+    rivers["is_headwater_catchment"] = rivers["maxup"] == 0
     rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
@@ -175,7 +179,7 @@ def create_river_raster_from_river_lines(
         out_shape=target.shape,
         fill=-1,
         dtype=np.int32,
-        transform=target.rio.transform(),
+        transform=target.rio.transform(recalc=True),
         all_touched=False,  # because this is a line, Bresenham's line algorithm is used, which is perfect here :-)
     )
     return river_raster
@@ -345,7 +349,12 @@ class Hydrography:
         self.set_geom(subbasins, name="routing/subbasins")
 
     @build_method
-    def setup_hydrography(self) -> None:
+    def setup_hydrography(
+        self,
+        custom_rivers: str | None = None,
+        custom_rivers_width_m_column: str | None = None,
+        custom_rivers_depth_m_column: str | None = None,
+    ) -> None:
         """Sets up the hydrography for the model.
 
         Steps:
@@ -355,7 +364,54 @@ class Hydrography:
             4. Rasterize the river network, and setting up variables to link
                 the low-resolution and high resolution grids.
             5. Calculate river attributes such as river length, river slope, and river width.
+
+        Args:
+            custom_rivers: Optional path to a custom river shapefile. The MERIT rivers will still be
+                used to create the river raster, but the burning of rivers in the DEM will be done
+                based on the custom river shapefile. Must be readable by geopandas.read_file() or geopandas.read_parquet().
+            custom_rivers_width_m_column: The column name in the custom rivers file that contains the river width in meters.
+                must be provided if custom_rivers is provided.
+            custom_rivers_depth_m_column: The column name in the custom rivers file that contains the river depth in meters.
+                Must be provided if custom_rivers is provided.
+
+        Raises:
+            FileNotFoundError: If the custom rivers file is not found.
+            ValueError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not provided when using custom_rivers.
+            KeyError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not found in the custom rivers file.
         """
+        if custom_rivers is not None:
+            custom_rivers: Path = Path(custom_rivers)
+            self.logger.info(f"Using custom rivers from {custom_rivers}")
+            if not custom_rivers.exists():
+                raise FileNotFoundError(f"Custom rivers file {custom_rivers} not found")
+            if custom_rivers.suffix in [".parquet", ".pq", ".geoparquet"]:
+                custom_rivers_gdf = gpd.read_parquet(custom_rivers)
+            else:
+                custom_rivers_gdf = gpd.read_file(custom_rivers)
+            custom_rivers_gdf = custom_rivers_gdf.to_crs("EPSG:4326")
+            if (
+                custom_rivers_width_m_column is None
+                or custom_rivers_depth_m_column is None
+            ):
+                raise ValueError(
+                    "custom_rivers_width_m_column and custom_rivers_depth_m_column must be provided when using custom_rivers"
+                )
+            if custom_rivers_width_m_column not in custom_rivers_gdf.columns:
+                raise KeyError(
+                    f"custom_rivers_width_m_column '{custom_rivers_width_m_column}' not found in custom rivers file"
+                )
+            if custom_rivers_depth_m_column not in custom_rivers_gdf.columns:
+                raise KeyError(
+                    f"custom_rivers_depth_m_column '{custom_rivers_depth_m_column}' not found in custom rivers file"
+                )
+            custom_rivers_gdf = custom_rivers_gdf.rename(
+                columns={
+                    custom_rivers_width_m_column: "width",
+                    custom_rivers_depth_m_column: "depth",
+                }
+            )
+            self.set_geom(custom_rivers_gdf, name="routing/custom_rivers")
+
         original_d8_elevation = self.other["drainage/original_d8_elevation"]
         original_d8_ldd = self.other["drainage/original_d8_flow_directions"]
         original_d8_ldd_data = original_d8_ldd.values
@@ -371,16 +427,16 @@ class Hydrography:
             ],  # this mask is True within study area
         )
 
-        original_upstream_area = self.full_like(
+        upstream_area_high_res = self.full_like(
             original_d8_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        original_upstream_area_data = flow_raster_original.upstream_area(
+        upstream_area_high_res_data = flow_raster_original.upstream_area(
             unit="m2"
         ).astype(np.float32)
-        original_upstream_area_data[original_upstream_area_data == -9999.0] = np.nan
-        original_upstream_area.data = original_upstream_area_data
+        upstream_area_high_res_data[upstream_area_high_res_data == -9999.0] = np.nan
+        upstream_area_high_res.data = upstream_area_high_res_data
         self.set_other(
-            original_upstream_area, name="drainage/original_d8_upstream_area"
+            upstream_area_high_res, name="drainage/original_d8_upstream_area"
         )
 
         elevation_coarsened = original_d8_elevation.coarsen(
@@ -411,7 +467,6 @@ class Hydrography:
         slope = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
-        slope.raster.set_nodata(np.nan)
         slope_data = pyflwdir.dem.slope(
             elevation.values,
             nodata=np.nan,
@@ -526,8 +581,8 @@ class Hydrography:
 
         # Derive the xy coordinates of the river network. Here the coordinates
         # are the PIXEL coordinates for the coarse drainage network.
-        rivers["hydrography_xy"] = [[]] * len(rivers)
-        rivers["hydrography_upstream_area_m2"] = [[]] * len(rivers)
+        rivers["hydrography_xy"] = [[] for _ in range(len(rivers))]
+        rivers["hydrography_upstream_area_m2"] = [[] for _ in range(len(rivers))]
         xy_per_river_segment = value_indices(river_raster_LR, ignore_value=-1)
         for COMID, (ys, xs) in xy_per_river_segment.items():
             upstream_area = upstream_area_data[ys, xs]
@@ -546,6 +601,47 @@ class Hydrography:
                 upstream_area_sorted.tolist()
             )
 
+        # Derive the xy coordinates of the river network. Here the coordinates
+        # are the PIXEL coordinates for the high-resolution drainage network.
+        rivers["hydrography_high_res_lons_lats"] = [[] for _ in range(len(rivers))]
+        rivers["hydrography_high_res_upstream_area_m2"] = [
+            [] for _ in range(len(rivers))
+        ]
+        xy_per_river_segment = value_indices(river_raster_HD, ignore_value=-1)
+
+        represented_rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
+        for river_ID in represented_rivers.index:
+            (ys, xs) = xy_per_river_segment[river_ID]
+            upstream_area: ArrayFloat32 = upstream_area_high_res_data[ys, xs]
+            nan_mask: ArrayBool = np.isnan(upstream_area)
+
+            upstream_area = upstream_area[~nan_mask]
+            ys: ArrayInt32 = ys[~nan_mask]
+            xs: ArrayInt32 = xs[~nan_mask]
+
+            assert not np.isnan(upstream_area).any()
+
+            up_to_downstream_ids = np.argsort(upstream_area)
+            upstream_area_sorted = upstream_area[up_to_downstream_ids]
+
+            assert (river_raster_HD[ys, xs] == river_ID).all(), (
+                f"River segment {river_ID} has inconsistent raster values"
+            )
+
+            ys: npt.NDArray[np.int64] = ys[up_to_downstream_ids]
+            xs: npt.NDArray[np.int64] = xs[up_to_downstream_ids]
+
+            lats: ArrayFloat32 = upstream_area_high_res.y.values[ys]
+            lons: ArrayFloat32 = upstream_area_high_res.x.values[xs]
+
+            assert ys.size > 0, "No xy coordinates found for river segment"
+            rivers.at[river_ID, "hydrography_high_res_lons_lats"] = list(
+                zip(lons.tolist(), lats.tolist(), strict=True)
+            )
+            rivers.at[river_ID, "hydrography_high_res_upstream_area_m2"] = (
+                upstream_area_sorted.tolist()
+            )
+
         for river_ID, river in rivers.iterrows():
             if river["represented_in_grid"]:
                 assert len(river["hydrography_xy"]) > 0, (
@@ -558,6 +654,22 @@ class Hydrography:
         )
         COMID_IDs_raster.data = river_raster_LR
         self.set_grid(COMID_IDs_raster, name="routing/river_ids")
+
+        basin_ids = self.full_like(
+            outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
+        )
+
+        river_linear_indices = np.where(COMID_IDs_raster.values.ravel() != -1)[0]
+        basin_ids.values = flow_raster.basins(
+            idxs=river_linear_indices,
+            ids=COMID_IDs_raster.values.ravel()[river_linear_indices],
+        )
+        basin_ids = xr.where(flow_raster.mask.reshape(basin_ids.shape), basin_ids, -1)
+        assert (
+            np.unique(basin_ids.values[basin_ids.values != -1])
+            == np.unique(COMID_IDs_raster.values[COMID_IDs_raster.values != -1])
+        ).all()
+        self.set_grid(basin_ids, name="routing/basin_ids")
 
         SWORD_reach_IDs, SWORD_reach_lengths = get_SWORD_translation_IDs_and_lengths(
             self.new_data_catalog, rivers
@@ -585,6 +697,252 @@ class Hydrography:
         )
         river_width.data = river_width_data
         self.set_grid(river_width, name="routing/river_width")
+
+    @build_method
+    def setup_global_ocean_mean_dynamic_topography(self) -> None:
+        """Sets up the global ocean mean dynamic topography for the model."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_global_ocean_mean_dynamic_topography"
+            )
+            return
+
+        global_ocean_mdt_fn = self.data_catalog.get_source(
+            "global_ocean_mean_dynamic_topography"
+        ).path
+
+        global_ocean_mdt = xr.open_dataset(global_ocean_mdt_fn)
+
+        # get the model bounds and buffer by ~10km
+        model_bounds = self.bounds
+        model_bounds = (
+            model_bounds[0] - 0.083,  # min_lon
+            model_bounds[1] - 0.083,  # min_lat
+            model_bounds[2] + 0.083,  # max_lon
+            model_bounds[3] + 0.083,  # max_lat
+        )
+        min_lon, min_lat, max_lon, max_lat = model_bounds
+
+        # reproject global_ocean_mdt to 0.008333 grid (~1km)
+        global_ocean_mdt = global_ocean_mdt["mdt"]
+        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
+
+        # clip to model bounds
+        global_ocean_mdt = global_ocean_mdt.rio.clip_box(
+            minx=min_lon,
+            miny=min_lat,
+            maxx=max_lon,
+            maxy=max_lat,
+        )
+
+        # write crs
+        global_ocean_mdt = global_ocean_mdt.rio.write_crs("EPSG:4326")
+        # drop unused columns
+        global_ocean_mdt = global_ocean_mdt.squeeze(drop=True)
+        # set datatype to float32 and set fillvalue to np.nan
+        global_ocean_mdt = global_ocean_mdt.astype(np.float32)
+        global_ocean_mdt.encoding["_FillValue"] = np.nan
+        global_ocean_mdt.attrs["_FillValue"] = np.nan
+        # write to model
+        self.set_other(
+            global_ocean_mdt,
+            name="coastal/global_ocean_mean_dynamic_topography",
+        )
+
+    @build_method
+    def setup_low_elevation_coastal_zone_mask(self) -> None:
+        """Sets up the low elevation coastal zone (LECZ) mask for sfincs models."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_low_elevation_coastal_zone_mask"
+            )
+            return
+
+        # load low elevation coastal zone mask
+        low_elevation_coastal_zone = self.other[
+            "landsurface/low_elevation_coastal_zone"
+        ]
+        mask_data = low_elevation_coastal_zone.values.astype(np.uint8)
+
+        # Get transform from raster metadata
+        transform = low_elevation_coastal_zone.rio.transform()
+
+        # Use rasterio.features.shapes() to get polygons for each contiguous region with same value
+        shapes = rasterio.features.shapes(mask_data, mask=None, transform=transform)
+
+        # Build GeoDataFrame from the shapes generator
+        records = [{"geometry": shape(geom), "value": value} for geom, value in shapes]
+
+        gdf = gpd.GeoDataFrame.from_records(records)
+        gdf.set_geometry("geometry", inplace=True)
+        gdf.crs = low_elevation_coastal_zone.rio.crs
+        # Keep only mask == 1
+        gdf = gdf[gdf["value"] == 1]
+
+        # load mask to select coastal areas in model region
+        # intersect the mask with the low elevation coastal zone mask
+        low_elevation_coastal_zone_mask = gpd.overlay(
+            gdf, self.geom["mask"], how="intersection"
+        )
+        # merge all polygons into a single polygon
+        low_elevation_coastal_zone_mask = gpd.GeoDataFrame(
+            geometry=[low_elevation_coastal_zone_mask.union_all()],
+            crs=gdf.crs,
+        )
+        self.set_geom(
+            low_elevation_coastal_zone_mask,
+            name="coastal/low_elevation_coastal_zone_mask",
+        )
+
+    @build_method
+    def setup_coastlines(self) -> None:
+        """Sets up the coastlines for the model."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info("No coastal basins found, skipping setup_coastlines")
+            return
+
+        # load the coastline from the data catalog
+        fp_coastlines = self.data_catalog.get_source("osm_coastlines").path
+        coastlines = gpd.read_file(fp_coastlines)
+
+        # clip the coastline to overlapping with mask
+        coastlines = gpd.overlay(coastlines, self.geom["mask"], how="intersection")
+        # merge all coastlines into a single linestring
+        coastlines = gpd.GeoDataFrame(
+            geometry=[coastlines.union_all()], crs=coastlines.crs
+        )
+
+        # write to model files
+        self.set_geom(coastlines, name="coastal/coastlines")
+
+        # create rectangular box around coastlines
+        if not coastlines.empty:
+            bbox = coastlines.minimum_rotated_rectangle().iloc[0]  # get the Polygon
+            bbox_gdf = gpd.GeoDataFrame(geometry=[bbox], crs=coastlines.crs)
+            bbox_gdf.geometry = bbox_gdf.geometry.buffer(
+                0.04, join_style=2
+            )  # buffer by 0.04 degree
+            self.set_geom(bbox_gdf, name="coastal/coastline_bbox")
+
+    @build_method
+    def setup_osm_land_polygons(
+        self,
+    ) -> None:
+        """Sets up the OSM land polygons for the model."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_osm_land_polygons"
+            )
+            return
+
+        # load the land polygon from the data catalog
+        fp_land_polygons = self.data_catalog.get_source("osm_land_polygons").path
+        land_polygons = gpd.read_file(fp_land_polygons)
+        # select only the land polygons that intersect with the region
+        land_polygons = land_polygons[land_polygons.intersects(self.region.union_all())]
+        # merge all land polygons into a single polygon
+        land_polygons = gpd.GeoDataFrame(
+            geometry=[land_polygons.union_all()], crs=land_polygons.crs
+        )
+
+        # clip and write to model files
+        self.set_geom(land_polygons.clip(self.bounds), name="coastal/land_polygons")
+
+    @build_method(
+        depends_on=["setup_low_elevation_coastal_zone_mask", "setup_coastlines"]
+    )
+    def setup_coastal_sfincs_model_regions(
+        self, minimum_coastal_area_deg2: float = 0.0006449015308288645
+    ) -> None:
+        """Sets up the coastal sfincs model regions."""
+        if not self.geom["routing/subbasins"]["is_coastal_basin"].any():
+            self.logger.info(
+                "No coastal basins found, skipping setup_coastal_sfincs_model_regions"
+            )
+            return
+
+        # load elevation data
+        elevation = self.other["DEM/fabdem"]
+        # load the lecz mask
+        low_elevation_coastal_zone_mask = self.geom[
+            "coastal/low_elevation_coastal_zone_mask"
+        ]
+        # add small buffer to ensure connection of 'islands' with coastlines
+        low_elevation_coastal_zone_mask.geometry = (
+            low_elevation_coastal_zone_mask.geometry.buffer(0.001)
+        )
+        # split the low elevation coastal zone mask into individual polygons of contiguous areas
+        low_elevation_coastal_zone_polygons = low_elevation_coastal_zone_mask.explode(
+            index_parts=False
+        ).reset_index(drop=True)
+
+        # add area column
+        low_elevation_coastal_zone_polygons["area"] = (
+            low_elevation_coastal_zone_polygons.geometry.area
+        )
+
+        # load the coastlines
+        coastlines = self.geom["coastal/coastlines"]
+        sfincs_regions = []
+        low_elevation_coastal_zone_regions = []
+        initial_water_levels = []
+        for (
+            _,
+            low_elevation_coastal_zone_polygon,
+        ) in low_elevation_coastal_zone_polygons.iterrows():
+            # check if the low elevation coastal zone polygon intersects with the coastline
+            if (
+                coastlines.intersects(low_elevation_coastal_zone_polygon.geometry).any()
+                and low_elevation_coastal_zone_polygon["area"]
+                > minimum_coastal_area_deg2  # approx 1 km2 at equator
+            ):
+                # if it does, create a sfincs region
+                # get the minimum elevation within the low elevation coastal zone polygon
+                mask = elevation.rio.clip_box(
+                    *low_elevation_coastal_zone_polygon.geometry.bounds
+                ).where(
+                    elevation.rio.clip(
+                        [low_elevation_coastal_zone_polygon.geometry], drop=False
+                    ).notnull(),
+                    drop=False,
+                )
+                initial_water_levels.append(float(mask.min().values))
+
+                # create a bounding box around the low elevation coastal zone polygon
+                low_elevation_coastal_zone_polygon_gpd = gpd.GeoDataFrame(
+                    geometry=[low_elevation_coastal_zone_polygon.geometry],
+                    crs=low_elevation_coastal_zone_mask.crs,
+                )
+                bbox = low_elevation_coastal_zone_polygon_gpd.minimum_rotated_rectangle().iloc[
+                    0
+                ]
+                # add a small buffer to ensure connection with coastlines
+                bbox = bbox.buffer(0.04, join_style=2)
+
+                sfincs_regions.append(bbox)
+                low_elevation_coastal_zone_regions.append(
+                    low_elevation_coastal_zone_polygon[0]
+                )
+        bbox_gdf = gpd.GeoDataFrame(
+            geometry=sfincs_regions, crs=low_elevation_coastal_zone_mask.crs
+        )
+        low_elevation_coastal_zone_gdf = gpd.GeoDataFrame(
+            geometry=low_elevation_coastal_zone_regions,
+            crs=low_elevation_coastal_zone_mask.crs,
+        )
+
+        # add idx
+        bbox_gdf["idx"] = bbox_gdf.index
+        low_elevation_coastal_zone_gdf["idx"] = low_elevation_coastal_zone_gdf.index
+        low_elevation_coastal_zone_gdf["area"] = (
+            low_elevation_coastal_zone_gdf.geometry.area
+        )
+        low_elevation_coastal_zone_gdf["initial_water_level"] = initial_water_levels
+        self.set_geom(bbox_gdf, name="coastal/model_regions")
+        self.set_geom(
+            low_elevation_coastal_zone_gdf,
+            name="coastal/low_elevation_coastal_zone_mask",
+        )
 
     @build_method
     def setup_waterbodies(
@@ -640,7 +998,7 @@ class Hydrography:
         assert waterbodies["waterbody_type"].dtype == np.int32
 
         water_body_id: xr.DataArray = rasterize_like(
-            gpd=waterbodies,
+            gdf=waterbodies,
             column="waterbody_id",
             raster=self.grid["mask"],
             nodata=-1,
@@ -649,7 +1007,7 @@ class Hydrography:
         )
 
         sub_water_body_id: xr.DataArray = rasterize_like(
-            gpd=waterbodies,
+            gdf=waterbodies,
             column="waterbody_id",
             raster=self.subgrid["mask"],
             nodata=-1,
@@ -697,25 +1055,26 @@ class Hydrography:
 
             assert command_areas_dissolved["waterbody_id"].isin(reservoir_ids).all()
 
-            self.set_grid(
-                self.grid.raster.rasterize(
-                    command_areas,
-                    col_name="waterbody_id",
-                    nodata=-1,
-                    all_touched=True,
-                    dtype=np.int32,
-                ),
-                name="waterbodies/command_area",
+            command_area_raster = rasterize_like(
+                gdf=command_areas,
+                column="waterbody_id",
+                raster=self.grid["mask"],
+                nodata=-1,
+                dtype=np.int32,
+                all_touched=True,
+            )
+            self.set_grid(command_area_raster, name="waterbodies/command_area")
+
+            subcommand_area_raster = rasterize_like(
+                gdf=command_areas,
+                column="waterbody_id",
+                raster=self.subgrid["mask"],
+                nodata=-1,
+                dtype=np.int32,
+                all_touched=True,
             )
             self.set_subgrid(
-                self.subgrid.raster.rasterize(
-                    command_areas,
-                    col_name="waterbody_id",
-                    nodata=-1,
-                    all_touched=True,
-                    dtype=np.int32,
-                ),
-                name="waterbodies/subcommand_areas",
+                subcommand_area_raster, name="waterbodies/subcommand_areas"
             )
 
         else:
@@ -755,22 +1114,6 @@ class Hydrography:
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
         self.set_geom(waterbodies, name="waterbodies/waterbody_data")
-
-    @build_method
-    def setup_coastal_model_regions(self) -> None:
-        """Sets up the coastal model regions for the model.
-
-        This function subdivides the coastal geoms into smaller regions that are used to simulate coastal flooding.
-        """
-        self.logger.info("Setting up coastal model regions")
-        # load river basins and coastline data
-        basins = self.geoms["routing/subbasins"]
-        # get coastal basins
-        coastal_basins = basins[basins["is_coastal_basin"]]
-        coastal_basins.to_file("output/coastal_basins.geojson", driver="GeoJSON")
-
-        # TODO: Implement coastal model region setup
-        pass
 
     def setup_gtsm_water_levels(self, temporal_range: npt.NDArray[np.int32]) -> None:
         """Sets up the GTSM hydrographs for station within the model bounds.
@@ -875,14 +1218,14 @@ class Hydrography:
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM").path.format(
+                f = self.data_catalog.get_source("GTSM_surge").path.format(
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
                 subset = ds.isel(stations=station_idx).drop_vars(
                     ["station_x_coordinate", "station_y_coordinate"]
                 )
-                gtsm_data_region.append(subset.waterlevel.to_pandas())
+                gtsm_data_region.append(subset.surge.to_pandas())
                 print(f"Processed GTSM data for {year}-{month:02d}")
                 ds.close()
         gtsm_data_region_pd = pd.concat(gtsm_data_region, axis=0)

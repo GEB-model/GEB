@@ -9,10 +9,10 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from geb.typing import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
+from geb.store import DynamicArray
+from geb.types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 
 from ..hydrology.lakes_reservoirs import RESERVOIR
-from ..store import DynamicArray
 from .general import AgentBaseClass
 
 if TYPE_CHECKING:
@@ -52,6 +52,10 @@ class ReservoirOperators(AgentBaseClass):
         if self.model.in_spinup:
             self.spinup()
 
+        self.reservoir_release_factor = self.model.config["parameters"][
+            "reservoir_release_factor"
+        ]
+
     @property
     def name(self) -> str:
         """Get the name of the module."""
@@ -73,12 +77,13 @@ class ReservoirOperators(AgentBaseClass):
             water_body_data["waterbody_type"] == RESERVOIR
         ]
 
-        self.var.reservoir_release_factors = DynamicArray(
-            np.full(
-                len(self.var.active_reservoirs),
-                self.model.config["agent_settings"]["reservoir_operators"][
-                    "max_reservoir_release_factor"
-                ],
+        # Based on Shin et al. (2019)
+        # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
+        self.var.reservoir_M_factor: DynamicArray = DynamicArray(
+            np.full_like(
+                self.storage,
+                self.config["reservoir_M_factor"],
+                dtype=np.float64,
             )
         )
 
@@ -511,15 +516,11 @@ class ReservoirOperators(AgentBaseClass):
         Returns:
             The reservoir release for irrigation [m3].
         """
-        # Based on Shin et al. (2019)
-        # https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2018WR023025
-        M: np.float32 = np.float32(0.1)
-
         ratio_long_term_demand_to_inflow: ArrayFloat32 = (
             long_term_monthly_irrigation_demand_m3 / long_term_monthly_inflow_m3
         )  # here the units don't matter as long as they are the same
         irrigation_dominant_reservoirs: ArrayBool = (
-            ratio_long_term_demand_to_inflow > 1.0 - M
+            ratio_long_term_demand_to_inflow > 1.0 - self.var.reservoir_M_factor
         )
 
         provisional_release: ArrayFloat32 = np.full_like(
@@ -542,8 +543,8 @@ class ReservoirOperators(AgentBaseClass):
             long_term_monthly_inflow_m3[irrigation_dominant_reservoirs]
             / n_monthly_substeps
             * (
-                M
-                + (1 - M)
+                self.var.reservoir_M_factor[irrigation_dominant_reservoirs]
+                + (1 - self.var.reservoir_M_factor[irrigation_dominant_reservoirs])
                 * current_irrigation_demand_m3[irrigation_dominant_reservoirs]
                 / (
                     long_term_monthly_irrigation_demand_m3[

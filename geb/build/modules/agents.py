@@ -1,16 +1,13 @@
 """Module containing build methods for the agents for GEB."""
 
-import json
 import math
 from datetime import datetime
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import requests
 import xarray as xr
 from dateutil.relativedelta import relativedelta
-from honeybees.library.raster import pixels_to_coords, sample_from_map
 from tqdm import tqdm
 
 from geb.agents.crop_farmers import (
@@ -18,13 +15,19 @@ from geb.agents.crop_farmers import (
     INDEX_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
     PERSONAL_INSURANCE_ADAPTATION,
+    PR_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
-from geb.typing import ArrayBool
-from geb.workflows.io import fetch_and_save, get_window
-from geb.workflows.raster import clip_with_grid
+from geb.types import ArrayBool, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.workflows.io import get_window
+from geb.workflows.raster import (
+    clip_with_grid,
+    interpolate_na_2d,
+    pixels_to_coords,
+    sample_from_map,
+)
 
 from ..workflows.conversions import (
     AQUASTAT_NAME_TO_ISO3,
@@ -995,28 +998,32 @@ class Agents:
             Finally, the method sets the array data for each column of the `farmers` DataFrame as agents data in the model
             with names of the form 'agents/farmers/{column}'.
         """
-        regions = self.geom["regions"]
-        region_ids = self.region_subgrid["region_ids"]
-        full_region_cultivated_land = self.region_subgrid[
+        regions: gpd.GeoDataFrame = self.geom["regions"]
+        region_ids: TwoDArrayInt32 = self.region_subgrid["region_ids"]
+        full_region_cultivated_land: xr.DataArray = self.region_subgrid[
             "landsurface/full_region_cultivated_land"
         ]
 
-        farms = self.full_like(region_ids, fill_value=-1, nodata=-1)
-        for region_id in regions["region_id"]:
-            self.logger.info(f"Creating farms for region {region_id}")
-            region = region_ids == region_id
+        farms: TwoDArrayInt32 = self.full_like(
+            region_ids, fill_value=-1, nodata=-1, dtype=np.int32
+        )
+        for region_id in tqdm(regions["region_id"]):
+            region: xr.DataArray = region_ids == region_id
             region_clip, bounds = clip_with_grid(region, region)
 
-            cultivated_land_region = full_region_cultivated_land.isel(bounds)
-            cultivated_land_region = xr.where(
-                region_clip, cultivated_land_region, 0, keep_attrs=True
+            cultivated_land_region: xr.DataArray = full_region_cultivated_land.isel(
+                bounds
             )
-            # TODO: Why does nodata value disappear?
-            # self.dict['areamaps/region_id_mapping'][farmers['region_id']]
-            farmer_region_ids = farmers["region_id"]
-            farmers_region = farmers[farmer_region_ids == region_id]
-            farms_region = create_farms(
-                farmers_region, cultivated_land_region, farm_size_key="area_n_cells"
+            cultivated_land_region: xr.DataArray = xr.where(
+                region_clip, x=cultivated_land_region, y=False, keep_attrs=True
+            )
+            cultivated_land_region_values: TwoDArrayBool = cultivated_land_region.values
+
+            farmers_region: pd.DataFrame = farmers[farmers["region_id"] == region_id]
+            farms_region: TwoDArrayInt32 = create_farms(
+                farmers_region,
+                cultivated_land_region_values,
+                farm_size_key="area_n_cells",
             )
             assert (
                 farms_region.min() >= -1
@@ -1024,11 +1031,11 @@ class Agents:
             farms[bounds] = xr.where(
                 region_clip, farms_region, farms.isel(bounds), keep_attrs=True
             )
-            # farms = farms.compute()  # perhaps this helps with memory issues?
+            farms: xr.DataArray = farms.compute()
 
-        farmers = farmers.drop("area_n_cells", axis=1)
+        farmers: pd.DataFrame = farmers.drop("area_n_cells", axis=1)
 
-        cut_farms = np.unique(
+        cut_farms: ArrayInt32 = np.unique(
             xr.where(
                 self.region_subgrid["mask"],
                 farms.copy().values,
@@ -1036,17 +1043,20 @@ class Agents:
                 keep_attrs=True,
             )
         )
-        cut_farm_indices = cut_farms[cut_farms != -1]
+        cut_farm_indices: ArrayInt32 = cut_farms[cut_farms != -1]
 
         assert farms.min() >= -1  # -1 is nodata value, all farms should be positive
-        subgrid_farms = farms.raster.clip_bbox(self.subgrid["mask"].raster.bounds)
+        subgrid_farms: xr.DataArray = farms.sel(
+            x=slice(self.subgrid["mask"].x[0], self.subgrid["mask"].x[-1]),
+            y=slice(self.subgrid["mask"].y[0], self.subgrid["mask"].y[-1]),
+        )
 
-        subgrid_farms_in_study_area = xr.where(
+        subgrid_farms_in_study_area: xr.DataArray = xr.where(
             np.isin(subgrid_farms, cut_farm_indices), -1, subgrid_farms, keep_attrs=True
         )
-        farmers = farmers[~farmers.index.isin(cut_farm_indices)]
+        farmers: pd.DataFrame = farmers[~farmers.index.isin(cut_farm_indices)]
 
-        remap_farmer_ids = np.full(
+        remap_farmer_ids: ArrayInt32 = np.full(
             farmers.index.max() + 2, -1, dtype=np.int32
         )  # +1 because 0 is also a farm, +1 because no farm is -1, set to -1 in next step
         remap_farmer_ids[farmers.index] = np.arange(len(farmers))
@@ -1054,14 +1064,14 @@ class Agents:
             subgrid_farms_in_study_area.values
         ]
 
-        farmers = farmers.reset_index(drop=True)
+        farmers: pd.DataFrame = farmers.reset_index(drop=True)
 
         assert np.setdiff1d(np.unique(subgrid_farms_in_study_area), -1).size == len(
             farmers
         )
         assert farmers.iloc[-1].name == subgrid_farms_in_study_area.max()
 
-        subgrid_farms_in_study_area_ = self.full_like(
+        subgrid_farms_in_study_area_: TwoDArrayInt32 = self.full_like(
             self.subgrid["mask"],
             fill_value=-1,
             nodata=-1,
@@ -1177,16 +1187,25 @@ class Agents:
             cultivated_land_region_total_cells = (
                 ((region_ids == UID) & (cultivated_land)).sum().compute()
             )
-            total_cultivated_land_area_lu = (
-                (((region_ids == UID) & (cultivated_land)) * cell_area).sum().compute()
+
+            # in the later corrections, it is important that the total cultivated land is
+            # quite precise, so we first convert to float64 before summing
+            total_cultivated_land_area_lu: np.float64 = (
+                (((region_ids == UID) & (cultivated_land)) * cell_area)
+                .astype(np.float64)
+                .sum()
+                .compute()
             )
             if (
                 total_cultivated_land_area_lu == 0
             ):  # when no agricultural area, just continue as there will be no farmers. Also avoiding some division by 0 errors.
                 continue
 
-            average_subgrid_area_region = (
+            # in later corrections, it is important that the average subgrid area is quite precise,
+            # so we first convert to float64 before calculating the mean
+            average_subgrid_area_region: np.float64 = (
                 cell_area.where(((region_ids == UID) & (cultivated_land)))
+                .astype(np.float64)
                 .mean()
                 .compute()
             )
@@ -1212,7 +1231,7 @@ class Agents:
                 agricultural_area_db_ha = (
                     region_farm_sizes.loc[
                         region_farm_sizes["Holdings/ agricultural area"]
-                        == "Agricultural area (Ha) "
+                        == "Agricultural area (Ha)"
                     ]
                     .iloc[0]
                     .drop(["Holdings/ agricultural area", "ISO3"])
@@ -1536,15 +1555,15 @@ class Agents:
             geom=self.region.union_all(), columns=["GDLcode", "geometry"]
         )
 
-        fp_buildings = self.files["geom"]["assets/buildings"]
-        buildings = gpd.read_parquet(f"{self.root}/{fp_buildings}")[
-            ["osm_id", "osm_way_id", "geometry"]
-        ]
-        # replace None with -1
-        buildings["osm_id"] = buildings["osm_id"].replace({None: -1}).astype(np.int64)
-        buildings["osm_way_id"] = (
-            buildings["osm_way_id"].replace({None: -1}).astype(np.int64)
-        )
+        buildings = self.new_data_catalog.fetch(
+            "open_building_map",
+            geom=self.region.union_all(),
+            prefix="assets",
+        ).read()
+
+        # write to input folder
+        self.set_geom(buildings, name="assets/open_building_map")
+
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
         buildings["lon"] = centroids.x
@@ -1764,11 +1783,8 @@ class Agents:
                         lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
                         agents_allocated_to_building["coord_Y"] = lat_agents
                         agents_allocated_to_building["coord_X"] = lon_agents
-                        agents_allocated_to_building["osm_id"] = np.array(
-                            buildings_grid_cell["osm_id"]
-                        )[building_id]
-                        agents_allocated_to_building["osm_way_id"] = np.array(
-                            buildings_grid_cell["osm_way_id"]
+                        agents_allocated_to_building["building_id"] = np.array(
+                            buildings_grid_cell["id"]
                         )[building_id]
 
                         allocated_agents = pd.concat(
@@ -1798,11 +1814,8 @@ class Agents:
                         lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
                         agents_allocated_to_building["coord_Y"] = lat_agents
                         agents_allocated_to_building["coord_X"] = lon_agents
-                        agents_allocated_to_building["osm_id"] = np.array(
-                            buildings_grid_cell["osm_id"]
-                        )[building_id]
-                        agents_allocated_to_building["osm_way_id"] = np.array(
-                            buildings_grid_cell["osm_way_id"]
+                        agents_allocated_to_building["building_id"] = np.array(
+                            buildings_grid_cell["id"]
                         )[building_id]
 
                         allocated_agents = pd.concat(
@@ -1833,11 +1846,8 @@ class Agents:
                             ]
                             agents_allocated_to_building["coord_Y"] = lat_agents
                             agents_allocated_to_building["coord_X"] = lon_agents
-                            agents_allocated_to_building["osm_id"] = np.array(
-                                buildings_grid_cell["osm_id"]
-                            )[building_id]
-                            agents_allocated_to_building["osm_way_id"] = np.array(
-                                buildings_grid_cell["osm_way_id"]
+                            agents_allocated_to_building["building_id"] = np.array(
+                                buildings_grid_cell["id"]
                             )[building_id]
 
                             allocated_agents = pd.concat(
@@ -1877,8 +1887,7 @@ class Agents:
                 "education_level",
                 "wealth_index",
                 "rural",
-                "osm_id",
-                "osm_way_id",
+                "building_id",
                 "disp_income",
                 "income_percentile",
                 # "building_id"
@@ -1911,12 +1920,12 @@ class Agents:
                 # only keep households with region
                 household_characteristics[column] = data[households_with_region]
                 # assert that there in no None in arrays
-                if np.sum(household_characteristics[column] == None) > 0:
+                if np.sum(household_characteristics[column] is None) > 0:
                     self.logger.warning(
-                        f"Found {np.sum(household_characteristics[column] == None)} None values in {column} for {GDL_code}"
+                        f"Found {np.sum(household_characteristics[column] is None)} None values in {column} for {GDL_code}"
                     )
                     household_characteristics[column][
-                        household_characteristics[column] == None
+                        household_characteristics[column] is None
                     ] = -1
 
             # ensure that all households have a region assigned
@@ -2449,28 +2458,36 @@ class Agents:
         fraction_sw_irrigation_data = self.new_data_catalog.fetch(
             "global_irrigation_area_surface_water"
         ).read()
+        fraction_sw_irrigation_data.attrs["_FillValue"] = np.nan
 
         fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
-            **get_window(
+            get_window(
                 fraction_sw_irrigation_data.x,
                 fraction_sw_irrigation_data.y,
                 self.bounds,
                 buffer=5,
             ),
-        ).raster.interpolate_na()
+        )
+        fraction_sw_irrigation_data: xr.DataArray = interpolate_na_2d(
+            fraction_sw_irrigation_data
+        )
 
         fraction_gw_irrigation_data = self.new_data_catalog.fetch(
             "global_irrigation_area_groundwater"
         ).read()
+        fraction_gw_irrigation_data.attrs["_FillValue"] = np.nan
 
         fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
-            **get_window(
+            get_window(
                 fraction_gw_irrigation_data.x,
                 fraction_gw_irrigation_data.y,
                 self.bounds,
                 buffer=5,
             ),
-        ).raster.interpolate_na()
+        )
+        fraction_gw_irrigation_data: xr.DataArray = interpolate_na_2d(
+            fraction_gw_irrigation_data
+        )
 
         farmer_locations = get_farm_locations(
             self.subgrid["agents/farmers/farms"], method="centroid"
@@ -2513,6 +2530,7 @@ class Agents:
                         FIELD_EXPANSION_ADAPTATION,
                         PERSONAL_INSURANCE_ADAPTATION,
                         INDEX_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,
@@ -2605,135 +2623,16 @@ class Agents:
             feature_types: The types of features to download from OSM. Available feature types are 'buildings', 'rails' and 'roads'.
             source: The source of the OSM data. Options are 'geofabrik' or 'movisda'. Default is 'geofabrik'.
             use_cache: If True, the data will be cached in the preprocessing directory. Default is True.
-
-        Raises:
-            ValueError: If an unknown source is provided.
-            ValueError: When an unknown feature type is provided.
         """
         if isinstance(feature_types, str):
-            feature_types = [feature_types]
+            feature_types: list[str] = [feature_types]
 
-        OSM_data_dir = self.preprocessing_dir / "osm"
-        OSM_data_dir.mkdir(exist_ok=True, parents=True)
+        all_features: dict[str, gpd.GeoDataFrame] = self.new_data_catalog.fetch(
+            "open_street_map"
+        ).read(
+            self.region.geometry[0],
+            feature_types=feature_types,
+        )
 
-        if source == "geofabrik":
-            index_file = OSM_data_dir / "geofabrik_region_index.geojson"
-            fetch_and_save(
-                "https://download.geofabrik.de/index-v1.json",
-                index_file,
-                overwrite=not use_cache,
-            )
-
-            index = gpd.read_file(index_file)
-            # remove Dach region as all individual regions within dach countries are also in the index
-            index = index[index["id"] != "dach"]
-
-            # find all regions that intersect with the bbox
-            intersecting_regions = index[index.intersects(self.region.geometry[0])]
-
-            def filter_regions(ID: str, parents: list[str]) -> bool:
-                """Filter out regions that are children of other regions in the list.
-
-                Args:
-                    ID: The ID of the region to check.
-                    parents: The list of parent region IDs.
-
-                Returns:
-                    bool: True if the region is not a child of any other region in the list, False otherwise.
-                """
-                return ID not in parents
-
-            intersecting_regions = intersecting_regions[
-                intersecting_regions["id"].apply(
-                    lambda x: filter_regions(x, intersecting_regions["parent"].tolist())
-                )
-            ]
-
-            urls = (
-                intersecting_regions["urls"]
-                .apply(lambda x: json.loads(x)["pbf"])
-                .tolist()
-            )
-
-        elif source == "movisda":
-            minx, miny, maxx, maxy = self.bounds
-
-            urls = []
-            for x in range(int(minx), int(maxx) + 1):
-                # Movisda seems to switch the W and E for the x coordinate
-                EW_code = f"E{-x:03d}" if x < 0 else f"W{x:03d}"
-                for y in range(int(miny), int(maxy) + 1):
-                    NS_code = f"N{y:02d}" if y >= 0 else f"S{-y:02d}"
-                    url = f"https://osm.download.movisda.io/grid/{NS_code}{EW_code}-latest.osm.pbf"
-
-                    # some tiles do not exists because they are in the ocean. Therefore we check if they exist
-                    # before adding the url
-                    response = requests.head(url, allow_redirects=True)
-                    if response.status_code != 404:
-                        urls.append(url)
-
-        else:
-            raise ValueError(f"Unknown source {source}")
-
-        # download all regions
-        all_features = {}
-        for url in tqdm(urls):
-            filepath = OSM_data_dir / url.split("/")[-1]
-            fetch_and_save(url, filepath, overwrite=not use_cache)
-            for feature_type in feature_types:
-                if feature_type not in all_features:
-                    all_features[feature_type] = []
-
-                if feature_type == "buildings":
-                    features = gpd.read_file(
-                        filepath,
-                        mask=self.region,
-                        layer="multipolygons",
-                        use_arrow=True,
-                    )
-                    features = features[features["building"].notna()]
-                elif feature_type == "rails":
-                    features = gpd.read_file(
-                        filepath,
-                        mask=self.region,
-                        layer="lines",
-                        use_arrow=True,
-                    )
-                    features = features[
-                        features["railway"].isin(
-                            ["rail", "tram", "subway", "light_rail", "narrow_gauge"]
-                        )
-                    ]
-                elif feature_type == "roads":
-                    features = gpd.read_file(
-                        filepath,
-                        mask=self.region,
-                        layer="lines",
-                        use_arrow=True,
-                    )
-                    features = features[
-                        features["highway"].isin(
-                            [
-                                "motorway",
-                                "trunk",
-                                "primary",
-                                "secondary",
-                                "tertiary",
-                                "unclassified",
-                                "residential",
-                                "motorway_link",
-                                "trunk_link",
-                                "primary_link",
-                                "secondary_link",
-                                "tertiary_link",
-                            ]
-                        )
-                    ]
-                else:
-                    raise ValueError(f"Unknown feature type {feature_type}")
-
-                all_features[feature_type].append(features)
-
-        for feature_type in feature_types:
-            features = pd.concat(all_features[feature_type], ignore_index=True)
+        for feature_type, features in all_features.items():
             self.set_geom(features, name=f"assets/{feature_type}")

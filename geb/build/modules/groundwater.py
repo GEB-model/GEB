@@ -6,7 +6,12 @@ import xarray as xr
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
-from geb.workflows.raster import convert_nodata, rasterize_like, resample_like
+from geb.workflows.raster import (
+    convert_nodata,
+    interpolate_na_2d,
+    rasterize_like,
+    resample_like,
+)
 
 
 class GroundWater:
@@ -192,12 +197,13 @@ class GroundWater:
 
         why_map_grid: xr.DataArray = rasterize_like(
             why_map,
-            "aquifer_classification",
+            column="aquifer_classification",
             raster=aquifer_top_elevation,
             dtype=np.int16,
             nodata=-1,
             all_touched=False,
-        ).raster.interpolate_na()
+        )
+        why_map_grid: xr.DataArray = interpolate_na_2d(why_map_grid)
 
         self.set_grid(why_map_grid, name="groundwater/why_map")
 
@@ -225,7 +231,7 @@ class GroundWater:
                 "head_upper_layer_globgm"
             ).read()
             head_upper_layer = head_upper_layer.isel(
-                **get_window(
+                get_window(
                     head_upper_layer.x, head_upper_layer.y, self.bounds, buffer=2
                 ),
             )
@@ -244,7 +250,7 @@ class GroundWater:
                 "head_lower_layer_globgm"
             ).read()
             head_lower_layer = head_lower_layer.isel(
-                **get_window(
+                get_window(
                     head_lower_layer.x, head_lower_layer.y, self.bounds, buffer=2
                 ),
             )

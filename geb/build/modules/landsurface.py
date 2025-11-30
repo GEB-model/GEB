@@ -2,8 +2,8 @@
 
 import geopandas as gpd
 import numpy as np
-import pandas as pd
 import xarray as xr
+from pyflwdir.dem import fill_depressions
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
@@ -13,6 +13,7 @@ from geb.workflows.raster import (
     convert_nodata,
     pad_xy,
     rasterize_like,
+    reclassify,
     repeat_grid,
     resample_chunked,
     resample_like,
@@ -50,7 +51,9 @@ class LandSurface:
             mask, fill_value=np.nan, nodata=np.nan, dtype=np.float32
         )
 
-        cell_area.data = calculate_cell_area(mask.rio.transform(), mask.shape)
+        cell_area.data = calculate_cell_area(
+            mask.rio.transform(recalc=True), mask.shape
+        )
         cell_area = cell_area.where(~mask, cell_area.attrs["_FillValue"])
         self.set_grid(cell_area, name="cell_area")
 
@@ -91,8 +94,9 @@ class LandSurface:
             {
                 "name": "fabdem",
                 "zmin": 0.001,
+                "fill_depressions": True,
             },
-            {"name": "gebco"},
+            {"name": "gebco", "zmax": 0.0, "fill_depressions": False},
             {"name": "geul_dem"},
         ],
     ) -> None:
@@ -112,23 +116,30 @@ class LandSurface:
         assert isinstance(DEMs, list)
         # here we use the bounds of all subbasins, which may include downstream
         # subbasins that are not part of the study area
-        bounds = tuple(self.geom["routing/subbasins"].total_bounds)
-
-        fabdem: xr.DataArray = xr.open_dataarray(
-            self.data_catalog.get_source("fabdem").path
+        bounds: tuple[float, float, float, float] = tuple(
+            self.geom["routing/subbasins"].total_bounds
         )
-        fabdem: xr.DataArray = fabdem.isel(
-            band=0,
-            **get_window(
-                fabdem.x,
-                fabdem.y,
-                bounds,
-                buffer=100,
-            ),
-        ).raster.mask_nodata()
+
+        buffer: float = 0.5
+        xmin: float = bounds[0] - buffer
+        ymin: float = bounds[1] - buffer
+        xmax: float = bounds[2] + buffer
+        ymax: float = bounds[3] + buffer
+        fabdem: xr.DataArray = (
+            self.new_data_catalog.fetch(
+                "fabdem",
+                xmin=xmin,
+                xmax=xmax,
+                ymin=ymin,
+                ymax=ymax,
+                prefix="hydrodynamics",
+            )
+            .read(prefix="hydrodynamics")
+            .compute()
+        )
 
         target: xr.DataArray = self.subgrid["mask"]
-        target.raster.set_crs(4326)
+        assert target.rio.crs is not None, "target grid must have a crs"
 
         self.set_subgrid(
             resample_like(fabdem, target, method="bilinear"),
@@ -149,7 +160,7 @@ class LandSurface:
                     DEM_raster = DEM_raster.isel(band=0)
 
                 DEM_raster = DEM_raster.isel(
-                    **get_window(
+                    get_window(
                         DEM_raster.x,
                         DEM_raster.y,
                         tuple(
@@ -164,6 +175,10 @@ class LandSurface:
                 )
 
             DEM_raster = convert_nodata(DEM_raster.astype(np.float32), np.nan)
+
+            if "fill_depressions" in DEM and DEM["fill_depressions"]:
+                DEM_raster.values, d8 = fill_depressions(DEM_raster.values)
+
             self.set_other(
                 DEM_raster,
                 name=f"DEM/{DEM['name']}",
@@ -222,11 +237,6 @@ class LandSurface:
         )
 
         global_countries["geometry"] = global_countries.centroid
-        # Renaming XKO to XKX
-        self.logger.info("Renaming XKO to XKX in global countries")
-        global_countries["ISO3"] = global_countries["ISO3"].replace(
-            {"XKO": "XKX"}
-        )  # XKO is a deprecated code for Kosovo, XKX is the new code
         global_countries = global_countries.set_index("ISO3")
 
         self.set_geom(global_countries, name="global_countries")
@@ -235,9 +245,13 @@ class LandSurface:
             f"Region database must contain unique region IDs ({self.data_catalog[region_database].path})"
         )
 
+        # allow some tolerance, especially for regions that coincide with coastlines, in which
+        # case the region boundaries may be slightly outside the model region due to differences
+        # in coastline representation. This is especially relevant for islands.
         assert bounds_are_within(
             self.region.total_bounds,
             regions.to_crs(self.region.crs).total_bounds,
+            tolerance=0.1,
         )
 
         region_id_mapping = {
@@ -251,18 +265,16 @@ class LandSurface:
             f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
         )
 
-        regions.replace(
-            {"ISO3": {"XKO": "XKX"}}, inplace=True
-        )  # XKO is a deprecated code for Kosovo, XKX is the new code
-
-        self.logger.info(f"Renamed XKO to XKX in regions")
-
         self.set_geom(regions, name="regions")
 
         resolution_x, resolution_y = self.subgrid["mask"].rio.resolution()
 
-        regions_bounds = self.geom["regions"].total_bounds
-        mask_bounds = self.grid["mask"].raster.bounds
+        regions_bounds: tuple[float, float, float, float] = self.geom[
+            "regions"
+        ].total_bounds
+        mask_bounds: tuple[float, float, float, float] = self.grid["mask"].rio.bounds(
+            recalc=True
+        )
 
         # The bounds should be set to a bit larger than the regions to avoid edge effects
         # and also larger than the mask, to ensure that the entire grid is covered.
@@ -273,7 +285,7 @@ class LandSurface:
 
         # TODO: Is there a better way to do this?
         region_mask, region_subgrid_slice = pad_xy(
-            self.subgrid["mask"].rio,
+            self.subgrid["mask"],
             pad_minx,
             pad_miny,
             pad_maxx,
@@ -285,12 +297,15 @@ class LandSurface:
         region_mask = self.set_region_subgrid(region_mask, name="mask")
 
         bounds = self.geom["regions"].total_bounds
-        xmin = bounds[0] - 0.1
-        ymin = bounds[1] - 0.1
-        xmax = bounds[2] + 0.1
-        ymax = bounds[3] + 0.1
-        land_use: xr.DataArray = self.new_data_catalog.fetch(land_cover).read(
-            xmin, ymin, xmax, ymax
+        xmin: float = bounds[0] - 0.1
+        ymin: float = bounds[1] - 0.1
+        xmax: float = bounds[2] + 0.1
+        ymax: float = bounds[3] + 0.1
+
+        land_use: xr.DataArray = (
+            self.new_data_catalog.fetch(land_cover)
+            .read(xmin, ymin, xmax, ymax)
+            .chunk({"x": 1000, "y": 1000})
         )
 
         reprojected_land_use: xr.DataArray = resample_chunked(
@@ -302,44 +317,38 @@ class LandSurface:
             name="landsurface/original_land_use",
         )
 
-        region_ids = reprojected_land_use.raster.rasterize(
-            self.geom["regions"],
-            col_name="region_id",
-            all_touched=True,
-        )
-        region_ids.attrs["_FillValue"] = -1
-
-        region_ids_: xr.DataArray = rasterize_like(
-            gpd=self.geom["regions"],
+        region_ids: xr.DataArray = rasterize_like(
+            gdf=self.geom["regions"],
             column="region_id",
             raster=region_mask,
             dtype=np.int32,
-            nodata=0,
+            nodata=-1,
+            all_touched=True,
         ).compute()
         region_ids: xr.DataArray = self.set_region_subgrid(
             region_ids, name="region_ids"
         )
 
-        full_region_land_use_classes = reprojected_land_use.raster.reclassify(
-            pd.DataFrame.from_dict(
-                {
-                    reprojected_land_use.raster.nodata: 5,  # no data, set to permanent water bodies because ocean
-                    10: 0,  # tree cover
-                    20: 1,  # shrubland
-                    30: 1,  # grassland
-                    40: 1,  # cropland, setting to non-irrigated. Initiated as irrigated based on agents
-                    50: 4,  # built-up
-                    60: 1,  # bare / sparse vegetation
-                    70: 1,  # snow and ice
-                    80: 5,  # permanent water bodies
-                    90: 1,  # herbaceous wetland
-                    95: 5,  # mangroves
-                    100: 1,  # moss and lichen
-                },
-                orient="index",
-                columns=["GEB_land_use_class"],
-            ),
-        )["GEB_land_use_class"].astype(np.int32)
+        full_region_land_use_classes = reclassify(
+            reprojected_land_use,
+            {
+                reprojected_land_use.attrs[
+                    "_FillValue"
+                ]: 5,  # no data, set to permanent water bodies because ocean
+                10: 0,  # tree cover
+                20: 1,  # shrubland
+                30: 1,  # grassland
+                40: 1,  # cropland, setting to non-irrigated. Initiated as irrigated based on agents
+                50: 4,  # built-up
+                60: 1,  # bare / sparse vegetation
+                70: 1,  # snow and ice
+                80: 5,  # permanent water bodies
+                90: 1,  # herbaceous wetland
+                95: 5,  # mangroves
+                100: 1,  # moss and lichen
+            },
+        ).astype(np.int32)
+        full_region_land_use_classes.attrs["_FillValue"] = -1
 
         full_region_land_use_classes = self.set_region_subgrid(
             full_region_land_use_classes,
@@ -426,16 +435,16 @@ class LandSurface:
             .rename({"lat": "y", "lon": "x"})
             .rio.write_crs(4326)
         )
-        forest_kc = forest_kc.isel(
-            **get_window(
+        forest_kc.attrs["_FillValue"] = np.nan
+        forest_kc: xr.DataArray = forest_kc.isel(
+            get_window(
                 forest_kc.x,
                 forest_kc.y,
                 self.bounds,
                 buffer=3,
             ),
-        ).raster.mask_nodata()
-
-        forest_kc = resample_like(forest_kc, target, method="nearest")
+        )
+        forest_kc: xr.DataArray = resample_like(forest_kc, target, method="nearest")
 
         forest_kc.attrs = {
             key: attr
@@ -460,16 +469,16 @@ class LandSurface:
                 .rename({"lat": "y", "lon": "x"})
                 .rio.write_crs(4326)
             )
-            interception_capacity = interception_capacity.isel(
-                **get_window(
+            interception_capacity.attrs["_FillValue"] = np.nan
+            interception_capacity: xr.DataArray = interception_capacity.isel(
+                get_window(
                     interception_capacity.x,
                     interception_capacity.y,
                     self.bounds,
                     buffer=3,
                 ),
-            ).raster.mask_nodata()
-
-            interception_capacity = resample_like(
+            )
+            interception_capacity: xr.DataArray = resample_like(
                 interception_capacity, target, method="nearest"
             )
 
@@ -522,7 +531,7 @@ class LandSurface:
             .rio.write_crs(4326)
         )
         crop_group = crop_group.isel(
-            **get_window(
+            get_window(
                 crop_group.x,
                 crop_group.y,
                 self.bounds,
@@ -532,9 +541,8 @@ class LandSurface:
         crop_group.attrs["_FillValue"] = crop_group.attrs["__FillValue"]
         del crop_group.attrs["__FillValue"]
 
-        crop_group = crop_group.raster.mask_nodata()
-
-        crop_group = crop_group.astype(np.float32)
+        crop_group: xr.DataArray = crop_group.astype(np.float32)
+        crop_group: xr.DataArray = convert_nodata(crop_group, np.nan)
 
         crop_group = resample_like(
             crop_group,

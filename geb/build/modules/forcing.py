@@ -2,28 +2,31 @@
 
 from __future__ import annotations
 
+import re
 import tempfile
 from datetime import date, datetime, timedelta
 from functools import partial
+from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
+import contextily as ctx
+import imageio.v2 as imageio
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
 import xclim.indices as xci
 from dateutil.relativedelta import relativedelta
+from matplotlib.colors import ListedColormap
 from zarr.codecs.numcodecs import FixedScaleOffset
 
 from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
-from geb.workflows.io import get_window
-from geb.workflows.raster import (
-    resample_like,
-)
+from geb.workflows.raster import resample_like
 
 from ...workflows.io import calculate_scaling, to_zarr
 
@@ -237,13 +240,231 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
     )
     cbar.set_label(cbar_label)  # label for colorbar
     fig.suptitle(
-        f"{name} - Ensemble Spatial Distribution (Max over Time)"
+        f"{name} - Ensemble Spatial Distribution (Max over Time)", y=0.99
     )  # Overall title
     spatial_fp: Path = geb_build_model.report_dir / (
         name + "_ensemble_spatial.png"
     )  # File path
     plt.savefig(spatial_fp, dpi=300, bbox_inches="tight")  # Save figure
     plt.close(fig)  # Close figure to free memory
+
+
+def plot_gif(
+    report_dir: Path,
+    geom_mask_boundary: Any,  # The boundary geometry for plotting catchment outline
+    da: xr.DataArray,
+    name: str,
+    interpolation: str = "none",
+    accumulated: bool = False,
+) -> None:
+    """Create a GIF animation of the data over time.
+
+    Args:
+        report_dir: Directory path where output files should be saved.
+        geom_mask_boundary: Geometry boundary for the catchment area overlay.
+        da: The xarray DataArray containing the data to animate. Must have dimensions 'time', 'y', and 'x'.
+        name: The name of the variable being animated, used for titles and filenames.
+        interpolation: The interpolation method to use for displaying the data. Default is 'none'. Interpolation can be set to 'bicubic', etc. for smoother interpolation.
+        accumulated: Whether to plot accumulated precipitation (True) or instantaneous (False). Default is False.
+    """
+    # Use xarray's quantile function to calculate percentiles across the ensemble dimension
+    ensemble_dim = None
+    # Pattern to match YYYYMMDDT000000 format
+    date_pattern = r"(\d{4})(\d{2})(\d{2})T\d{6}"
+    match = re.search(date_pattern, name)
+    if match:
+        year, month, day = match.groups()
+        forecast_date = f"{year}-{month}-{day}"
+    else:
+        forecast_date = ""
+
+    for dim in da.dims:
+        if (
+            "member" in dim.lower()
+            or "ensemble" in dim.lower()
+            or "perturbation" in dim.lower()
+        ):
+            ensemble_dim = dim
+
+    percentiles = [25, 50, 75, 90, 95]  # Define desired percentiles
+    # Convert chosen percentiles to decimals to use xr.quantile
+    percentiles_decimal = [
+        p / 100 for p in percentiles
+    ]  # Convert to 0-1 range for xarray
+
+    # Calculate all percentiles at once with the quantile function over the ensemble dimension
+    ensemble_percentiles_xr = da.quantile(
+        percentiles_decimal, dim=ensemble_dim, keep_attrs=True
+    )
+
+    # Rename the 'quantile' dimension to 'percentile' and assign percentile values
+    ensemble_percentiles_xr = ensemble_percentiles_xr.rename({"quantile": "percentile"})
+    ensemble_percentiles_xr = ensemble_percentiles_xr.assign_coords(
+        percentile=percentiles
+    )
+
+    # Add metadata
+    ensemble_percentiles_xr.attrs.update(
+        {
+            "long_name": f"{name} ensemble percentiles",
+            "description": f"Percentiles ({percentiles}) computed across ensemble members",
+            "source_variable": name,
+            "percentiles": percentiles,
+            "ensemble_members": f"Derived from {da.sizes[ensemble_dim] if ensemble_dim else 1} members",
+            "computation_method": "xarray.quantile across ensemble dimension",
+        }
+    )
+    da_plot = (
+        ensemble_percentiles_xr.copy()
+    )  # make a copy to avoid modifying the original data
+
+    # Convert data to mm/hour if it's precipitation
+    if "pr" in name.lower() and "kg m-2 s-1" in da_plot.attrs.get("units", ""):
+        da_plot = da_plot * 3600  # convert to mm/hour
+        # Handle accumulated precipitation if specified (e.g. colormap, ylabel)
+        if accumulated:
+            da_plot = da_plot.cumsum(dim="time")  # convert to accumulated precipitation
+            ylabel = "mm"  # set y-axis label
+            name += "_accumulated"
+            viridis = cm.get_cmap("viridis")
+            viridis_colors = viridis(
+                np.linspace(0, 1, 25)
+            )  # The more colors, the smoother the gradient but more movement in cbar during animation
+            light_blue = np.array([0.7, 0.9, 1.0, 1.0])  # RGBA: light blue
+            orange_colors = np.array(
+                [
+                    [1.0, 0.8, 0.0, 1.0],  # Yellow-orange
+                    [1.0, 0.6, 0.0, 1.0],  # Orange
+                    [1.0, 0.4, 0.0, 1.0],  # Dark orange
+                    [0.9, 0.3, 0.0, 1.0],  # Red-orange
+                    [0.8, 0.2, 0.0, 1.0],  # Dark red-orange
+                ]
+            )
+            custom_colors = np.vstack(
+                [light_blue.reshape(1, -1), viridis_colors, orange_colors]
+            )
+            custom_cmap = ListedColormap(custom_colors)
+        else:
+            ylabel = "mm/hour"  # set y-axis label
+            viridis = cm.get_cmap("viridis")
+            viridis_colors = viridis(
+                np.linspace(0, 1, 20)
+            )  # The more colors, the smoother the gradient but more movement in cbar during animation
+            light_blue = np.array([0.7, 0.9, 1.0, 1.0])  # RGBA
+            custom_colors = np.vstack([light_blue.reshape(1, -1), viridis_colors])
+            custom_cmap = ListedColormap(custom_colors)
+    else:
+        da_plot = da_plot.copy()  # no conversion
+        ylabel = da_plot.attrs.get("units", "")
+
+    # Settings for the imshow plot
+    vmin = float(da_plot.min())
+    vmax = float(da_plot.max())
+
+    data_extent = [
+        da_plot.x.min().values,
+        da_plot.x.max().values,
+        da_plot.y.min().values,
+        da_plot.y.max().values,
+    ]
+
+    y_coords = da_plot.y.values
+    if y_coords[0] < y_coords[-1]:  # Y is increasing
+        origin = "lower"
+        print("Using origin='lower' - Y coordinates increase")
+    else:  # Y is decreasing
+        origin = "upper"
+        print("Using origin='upper' - Y coordinates decrease")
+
+    # Generating Animation frames
+    frames = []
+    times = da_plot["time"].values
+
+    for i, t in enumerate(times):
+        fig, axes = plt.subplots(
+            1,
+            len(percentiles),
+            figsize=(25, 5),
+            constrained_layout=True,
+            subplot_kw={"projection": ccrs.PlateCarree()},
+        )
+
+        for j, p in enumerate(percentiles):
+            ax = axes[j]
+            im = ax.imshow(
+                da_plot.sel(percentile=p, time=t).values,
+                extent=data_extent,
+                cmap=custom_cmap,
+                vmin=vmin,
+                vmax=vmax,
+                alpha=0.6,
+                origin=origin,
+                aspect="auto",
+                zorder=2,
+                interpolation=interpolation,
+            )
+
+            geom_mask_boundary.boundary.plot(
+                ax=ax,
+                color="black",
+                linewidth=1.5,
+                alpha=0.8,
+                zorder=1,
+                label="Catchment Boundary",
+            )
+
+            try:
+                ctx.add_basemap(
+                    ax,
+                    crs="EPSG:4326",
+                    source=ctx.providers.OpenStreetMap.Mapnik,
+                    zorder=0,
+                )
+
+            except Exception as e:
+                print(f"Warning: Could not add basemap: {e}")
+
+            ax.set_title(f"{p}th percentile", fontsize=14)
+            ax.tick_params(labelsize=12)
+
+            if j == 0:
+                ax.legend(loc="upper left", fontsize=12, framealpha=0.8)
+
+            if j == len(axes) // 2:
+                ax.set_xlabel("Longitude", fontsize=12)
+            else:
+                ax.set_xlabel("")
+
+            if j == 0:
+                ax.set_ylabel("Latitude", fontsize=12)
+            else:
+                ax.set_ylabel("")
+
+        cbar = fig.colorbar(
+            im, ax=axes, orientation="vertical", fraction=0.4, pad=0.01, shrink=0.8
+        )
+        cbar.set_label(f"{ylabel}", fontsize=12)
+
+        if hasattr(t, "astype"):
+            # For numpy datetime64
+            time_str = str(t)[:19].replace("T", " ")  # YYYY-MM-DD HH:MM:SS
+        else:
+            time_str = str(t)
+
+        fig.suptitle(
+            f"Forecast initialization {forecast_date}- {time_str}", fontsize=16, y=1
+        )
+
+        buf = BytesIO()
+        plt.savefig(buf, format="png", dpi=150)
+        plt.close(fig)
+        buf.seek(0)
+        frames.append(imageio.imread(buf))
+        buf.close()
+
+    # Saving GIF
+    gif_fp = report_dir / f"{name}_animation.gif"  # File path for GIF
+    imageio.mimsave(gif_fp, frames, fps=5)
 
 
 def _plot_data(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> None:
@@ -372,6 +593,29 @@ class Forcing:
             time_chunksize=24,
         )
         _plot_data(self, da, name)
+        if "forecasts" in name.lower():
+            # Check if GIF files already exist before creating them
+            gif_fp_regular = self.report_dir / f"{name.replace('/', '_')}_animation.gif"
+            gif_fp_accumulated = (
+                self.report_dir / f"{name.replace('/', '_')}_animation_accumulated.gif"
+            )
+            if not gif_fp_regular.exists():
+                plot_gif(
+                    self.report_dir, self.geom["mask"], da, name, accumulated=False
+                )
+                self.logger.info(f"Creating a GIF animation: {gif_fp_regular.name}")
+            else:
+                self.logger.info(
+                    f"GIF file {gif_fp_regular.name} already exists, skipping regular animation creation"
+                )
+
+            if not gif_fp_accumulated.exists():
+                plot_gif(self.report_dir, self.geom["mask"], da, name, accumulated=True)
+                self.logger.info(f"Creating a GIF animation: {gif_fp_accumulated.name}")
+            else:
+                self.logger.info(
+                    f"GIF file {gif_fp_accumulated.name} already exists, skipping accumulated animation creation"
+                )
         return da
 
     def set_rsds_W_per_m2(
@@ -775,7 +1019,7 @@ class Forcing:
             era5_store.read,
             start_date=self.start_date - relativedelta(years=1),
             end_date=self.end_date,
-            bounds=self.grid["mask"].raster.bounds,
+            bounds=self.grid["mask"].rio.bounds(recalc=True),
         )
 
         pr_hourly: xr.DataArray = era5_loader(variable="tp")
@@ -890,6 +1134,10 @@ class Forcing:
 
         assert np.array_equal(self.other["climate/pr_kg_per_m2_per_s"].x, tasmin_2m_K.x)
         assert np.array_equal(self.other["climate/pr_kg_per_m2_per_s"].y, tasmin_2m_K.y)
+
+        assert calibration_period_start < calibration_period_end, (
+            f"Start date {calibration_period_start} must be earlier than end date {calibration_period_end}."
+        )
 
         if not self.other[
             "climate/pr_kg_per_m2_per_s"
@@ -1062,22 +1310,32 @@ class Forcing:
         Returns:
             elevation data for the forcing grid and the normal grid
         """
-        elevation = xr.open_dataarray(self.data_catalog.get_source("fabdem").path)
-        elevation = elevation.isel(
-            band=0,
-            **get_window(
-                elevation.x, elevation.y, forcing_grid.rio.bounds(), buffer=500
-            ),
+        xmin, ymin, xmax, ymax = forcing_grid.rio.bounds(recalc=True)
+
+        buffer: float = 0.5
+        xmin: float = xmin - buffer
+        ymin: float = ymin - buffer
+        xmax: float = xmax + buffer
+        ymax: float = ymax + buffer
+
+        elevation: xr.DataArray = (
+            self.new_data_catalog.fetch(
+                "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, prefix="forcing"
+            )
+            .read(prefix="forcing")
+            .compute()
         )
-        elevation = elevation.drop_vars("band")
-        elevation = xr.where(elevation == -9999, 0, elevation)
-        elevation.attrs["_FillValue"] = np.nan
-        target = forcing_grid.isel(time=0).drop_vars("time")
 
-        elevation_forcing = resample_like(elevation, target, method="bilinear")
-        elevation_forcing = elevation_forcing.chunk({"x": -1, "y": -1})
+        # FABDEM has nodata values in the ocean, for which we can assume an elevation of 0 m
+        elevation = xr.where(~np.isnan(elevation), elevation, 0, keep_attrs=True)
 
-        elevation_forcing = elevation_forcing.rio.write_crs(4326)
+        target: xr.DataArray = forcing_grid.isel(time=0).drop_vars("time")
+
+        elevation_forcing: xr.DataArray = resample_like(
+            elevation, target, method="bilinear"
+        )
+        elevation_forcing: xr.DataArray = elevation_forcing.chunk({"x": -1, "y": -1})
+        elevation_forcing: xr.DataArray = elevation_forcing.rio.write_crs(4326)
 
         return elevation_forcing
 
@@ -1162,27 +1420,25 @@ class Forcing:
             "v10": 166.128,  # 10 metre v-component of wind
         }
 
+        forecast_issue_dates = pd.date_range(  # Create pandas date range
+            start=forecast_start,  # Start from forecast start date
+            end=forecast_end,  # End at forecast end date
+            freq="24H",  # Daily frequency (24-hour intervals)
+        )
+
+        self.logger.info(f"Processing {forecast_model} ECMWF forecasts...")
+
         ECMWF_forecasts_store = self.new_data_catalog.fetch(
             "ecmwf_forecasts",
             forecast_variables=list(MARS_codes.values()),
             bounds=self.bounds,
             forecast_start=forecast_start,
             forecast_end=forecast_end,
-            forecast_model=forecast_model,  # ECMWF model type (HRES, pf, etc.)
+            forecast_model=forecast_model,  # Use current model type
             forecast_resolution=forecast_resolution,
             forecast_horizon=forecast_horizon,  # Forecast horizon in hours
             forecast_timestep_hours=forecast_timestep_hours,  # Temporal resolution in hours
             n_ensemble_members=n_ensemble_members,  # Number of ensemble members
-        )
-
-        self.logger.info(
-            "Processing ECMWF precipitation forecasts..."
-        )  # Process precipitation data (hourly resolution)
-
-        forecast_issue_dates = pd.date_range(  # Create pandas date range
-            start=forecast_start,  # Start from forecast start date
-            end=forecast_end,  # End at forecast end date
-            freq="24H",  # Daily frequency (24-hour intervals)
         )
 
         for (
@@ -1192,9 +1448,7 @@ class Forcing:
                 "%Y%m%dT%H%M%S"
             )  # Format date for filenames
 
-            self.logger.info(
-                f"Processing forecast issued at {forecast_issue_date}..."
-            )  # Log current forecast being processed
+            self.logger.info(f"Processing forecast issued at {forecast_issue_date}...")
 
             ECMWF_forecast = ECMWF_forecasts_store.read(
                 bounds=self.bounds,
@@ -1203,10 +1457,18 @@ class Forcing:
                 forecast_resolution=forecast_resolution,
                 forecast_horizon=forecast_horizon,
                 forecast_timestep_hours=forecast_timestep_hours,
-                reproject_like=self.other[
-                    "climate/pr_kg_per_m2_per_s"
-                ],  # Reproject to grid of other climate data
-            )
+                reproject_like=self.other["climate/pr_kg_per_m2_per_s"],
+            )  # Reproject to grid of other climate data
+
+            # Create name based on forecast_model for consistent file structure
+            if forecast_model == "both_control_and_probabilistic":
+                base_name = (
+                    f"forecasts/ECMWF/merged_control_ensemble/{forecast_issue_date_str}"
+                )
+            else:
+                base_name = (
+                    f"forecasts/ECMWF/{forecast_model}/{forecast_issue_date_str}"
+                )
 
             # Extract and process hourly precipitation data
             pr = ECMWF_forecast["tp"].rename(
@@ -1217,12 +1479,12 @@ class Forcing:
             )  # Handle negative values (caused by floating-point precision issues) by setting them to zero
             self.set_pr_kg_per_m2_per_s(
                 pr,
-                name=f"forecasts/ECMWF/pr_kg_per_m2_per_s_{forecast_issue_date_str}",  # Use date-specific filename
+                name=f"{base_name}/pr_kg_per_m2_per_s_{forecast_issue_date_str}",  # Use date-specific filename
             )
 
             tas = ECMWF_forecast["t2m"].rename("tas")  # Extract 2-meter temperature
             self.set_tas_2m_K(
-                tas, name=f"forecasts/ECMWF/tas_2m_K_{forecast_issue_date_str}"
+                tas, name=f"{base_name}/tas_2m_K_{forecast_issue_date_str}"
             )
 
             dew_point_tas = ECMWF_forecast["d2m"].rename(
@@ -1230,25 +1492,26 @@ class Forcing:
             )  # Extract dewpoint temperature
             self.set_dewpoint_tas_2m_K(
                 dew_point_tas,
-                name=f"forecasts/ECMWF/dewpoint_tas_2m_K_{forecast_issue_date_str}",
+                name=f"{base_name}/dewpoint_tas_2m_K_{forecast_issue_date_str}",
             )
 
             rsds = ECMWF_forecast["ssrd"].rename("rsds")  # Extract shortwave radiation
             self.set_rsds_W_per_m2(
                 rsds,
-                name=f"forecasts/ECMWF/rsds_W_per_m2_{forecast_issue_date_str}",
+                name=f"{base_name}/rsds_W_per_m2_{forecast_issue_date_str}",
             )
 
             # Process surface longwave (thermal) radiation downwards
             rlds = ECMWF_forecast["strd"].rename("rlds")  # Extract longwave radiation
             self.set_rlds_W_per_m2(
                 rlds,
-                name=f"forecasts/ECMWF/rlds_W_per_m2_{forecast_issue_date_str}",
+                name=f"{base_name}/rlds_W_per_m2_{forecast_issue_date_str}",
             )
 
             pressure = ECMWF_forecast["sp"].rename("ps")  # Extract surface pressure
             self.set_ps_pascal(
-                pressure, name=f"forecasts/ECMWF/ps_pascal_{forecast_issue_date_str}"
+                pressure,
+                name=f"{base_name}/ps_pascal_{forecast_issue_date_str}",
             )
 
             u_wind = ECMWF_forecast["u10"].rename(
@@ -1257,7 +1520,7 @@ class Forcing:
             self.set_wind_10m_m_per_s(
                 u_wind,
                 direction="u",
-                name=f"forecasts/ECMWF/wind_u10m_m_per_s_{forecast_issue_date_str}",
+                name=f"{base_name}/wind_u10m_m_per_s_{forecast_issue_date_str}",
             )
 
             v_wind = ECMWF_forecast["v10"].rename(
@@ -1266,5 +1529,5 @@ class Forcing:
             self.set_wind_10m_m_per_s(
                 v_wind,
                 direction="v",
-                name=f"forecasts/ECMWF/wind_v10m_m_per_s_{forecast_issue_date_str}",
+                name=f"{base_name}/wind_v10m_m_per_s_{forecast_issue_date_str}",
             )

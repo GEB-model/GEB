@@ -1,5 +1,7 @@
 """Adapter for ESA WorldCover datasets using STAC API."""
 
+from __future__ import annotations
+
 from typing import Any
 
 import numpy as np
@@ -20,7 +22,7 @@ class ESAWorldCover(Adapter):
         """Adapter for ESA WorldCover datasets using STAC API."""
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str, *args: Any, **kwargs: Any) -> "ESAWorldCover":
+    def fetch(self, url: str, *args: Any, **kwargs: Any) -> ESAWorldCover:
         """Fetch the ESA WorldCover dataset from the specified STAC URL.
 
         Args:

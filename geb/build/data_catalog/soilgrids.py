@@ -1,5 +1,7 @@
 """SoilGrids data catalog adapter and workflow."""
 
+from __future__ import annotations
+
 from typing import Any
 
 import rioxarray as rxr
@@ -15,7 +17,7 @@ class SoilGrids(Adapter):
         """Initialize the SoilGrids adapter."""
         super().__init__(*args, **kwargs)
 
-    def fetch(self, url: str) -> "SoilGrids":
+    def fetch(self, url: str) -> SoilGrids:
         """Sets the SoilGrids dataset from the specified URL.
 
         Args:

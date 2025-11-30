@@ -5,12 +5,10 @@ Notes:
 """
 
 import inspect
-import json
 import logging
-import math
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -22,6 +20,7 @@ import pandas as pd
 import pyflwdir
 import rasterio
 import xarray as xr
+import yaml
 import zarr
 from affine import Affine
 from hydromt.data_catalog import DataCatalog
@@ -30,7 +29,8 @@ from shapely.geometry import Point
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.workflows.raster import full_like, repeat_grid
+from geb.workflows.io import load_dict, to_dict
+from geb.workflows.raster import clip_region, full_like, repeat_grid
 
 from ..workflows.io import open_zarr, to_zarr
 from .modules import (
@@ -78,30 +78,6 @@ def suppress_logging_warning(logger: logging.Logger) -> Iterator[None]:
         yield
     finally:
         logger.setLevel(current_level)  # Restore the original logging level
-
-
-class PathEncoder(json.JSONEncoder):
-    """Custom JSON encoder to handle Path objects.
-
-    Paths are converted to their string representation in posix format.
-    All files should be posix format to ensure compatibility across different operating systems.
-    """
-
-    def default(self, obj: object) -> Any:
-        """Convert Path objects to strings for JSON serialization.
-
-        Ottherwise, use the default serialization.
-
-        Args:
-            obj: Object to serialize.
-
-        Returns:
-            The serialized object. For Path objects, this is a string.
-        """
-        if isinstance(obj, Path):
-            obj = obj.as_posix()
-            return str(obj)
-        return super().default(obj)
 
 
 def boolean_mask_to_graph(
@@ -179,79 +155,7 @@ def boolean_mask_to_graph(
     return G
 
 
-def clip_region(
-    mask: xr.DataArray, *data_arrays: xr.DataArray, align: float | int
-) -> tuple[xr.DataArray, ...]:
-    """Use the given mask to clip the mask itself and the given data arrays.
-
-    The clipping is done to the bounding box of the True values in the mask. The bounding box
-    is aligned to the given align value. The align value is in the same units as the coordinates
-    of the mask and data arrays.
-
-    Args:
-        mask: The mask to use for clipping. Must be a 2D boolean DataArray with x and y coordinates.
-            True values indicate the area to keep.
-        *data_arrays: The data arrays to clip. Must have the same x and y coordinates as the mask.
-        align: Align the bounding box to a specific grid spacing. For example, when this is set to 1
-            the bounding box will be aligned to whole numbers. If set to 0.5, the bounding box will
-            be aligned to 0.5 intervals.
-
-    Returns:
-        A tuple containing the clipped mask and the clipped data arrays.
-
-    Raises:
-        ValueError: If the data arrays do not have the same shape or coordinates as the mask.
-    """
-    rows, cols = np.where(mask)
-    mincol = cols.min()
-    maxcol = cols.max()
-    minrow = rows.min()
-    maxrow = rows.max()
-
-    minx = mask.x[mincol].item()
-    maxx = mask.x[maxcol].item()
-    miny = mask.y[minrow].item()
-    maxy = mask.y[maxrow].item()
-
-    xres, yres = mask.rio.resolution()
-
-    mincol_aligned = mincol + round(((minx // align * align) - minx) / xres)
-    maxcol_aligned = maxcol + round(((maxx // align * align) + align - maxx) / xres)
-    minrow_aligned = minrow + round(((miny // align * align) + align - miny) / yres)
-    maxrow_aligned = maxrow + round((((maxy // align) * align) - maxy) / yres)
-
-    assert math.isclose(mask.x[mincol_aligned] // align % 1, 0)
-    assert math.isclose(mask.x[maxcol_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[minrow_aligned] // align % 1, 0)
-    assert math.isclose(mask.y[maxrow_aligned] // align % 1, 0)
-
-    assert mincol_aligned <= mincol
-    assert maxcol_aligned >= maxcol
-    assert minrow_aligned <= minrow
-    assert maxrow_aligned >= maxrow
-
-    clipped_mask = mask.isel(
-        y=slice(minrow_aligned, maxrow_aligned),
-        x=slice(mincol_aligned, maxcol_aligned),
-    )
-    clipped_arrays = []
-    for da in data_arrays:
-        if da.shape != mask.shape:
-            raise ValueError("All data arrays must have the same shape as the mask.")
-        if not np.array_equal(da.x, mask.x) or not np.array_equal(da.y, mask.y):
-            raise ValueError(
-                "All data arrays must have the same coordinates as the mask."
-            )
-        clipped_arrays.append(
-            da.isel(
-                y=slice(minrow_aligned, maxrow_aligned),
-                x=slice(mincol_aligned, maxcol_aligned),
-            )
-        )
-    return clipped_mask, *clipped_arrays
-
-
-def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
+def get_river_graph(data_catalog: NewDataCatalog) -> networkx.DiGraph:
     """Create a directed graph for the river network.
 
     Args:
@@ -260,6 +164,8 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
     Returns:
         A directed graph where nodes are COMID values and edges point downstream.
     """
+    print("Loading MERIT basins river network...")
+
     river_network: pd.DataFrame = (
         data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "NextDownID"])
@@ -269,6 +175,8 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
         "The index of the river network is not the COMID column"
     )
 
+    print(f"Processing {len(river_network)} river segments...")
+
     # create a directed graph for the river network
     river_graph: networkx.DiGraph = networkx.DiGraph()
 
@@ -276,6 +184,10 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
     river_network_with_downstream_connection = river_network[
         river_network["NextDownID"] != 0
     ]
+    print(
+        f"Adding {len(river_network_with_downstream_connection)} rivers with downstream connections..."
+    )
+
     river_network_with_downstream_connection = (
         river_network_with_downstream_connection.itertuples(index=True, name=None)
     )
@@ -284,13 +196,20 @@ def get_river_graph(data_catalog: DataCatalog) -> networkx.DiGraph:
     river_network_without_downstream_connection = river_network[
         river_network["NextDownID"] == 0
     ]
+    print(
+        f"Adding {len(river_network_without_downstream_connection)} terminal rivers (outlets)..."
+    )
     river_graph.add_nodes_from(river_network_without_downstream_connection.index)
+
+    print(
+        f"River graph created with {river_graph.number_of_nodes()} nodes and {river_graph.number_of_edges()} edges"
+    )
 
     return river_graph
 
 
 def get_subbasin_id_from_coordinate(
-    data_catalog: DataCatalog, lon: float, lat: float
+    data_catalog: NewDataCatalog, lon: float, lat: float
 ) -> int:
     """Find the subbasin ID for a given coordinate.
 
@@ -317,17 +236,13 @@ def get_subbasin_id_from_coordinate(
         )
         .set_index("COMID")
     )
-    COMID = gpd.read_parquet(
-        data_catalog.get_source("MERIT_Basins_cat").path,
-        bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
-    ).set_index("COMID")
 
     # get only the points where the point is inside the basin
     COMID = COMID[COMID.geometry.contains(Point(lon, lat))]
 
     if len(COMID) == 0:
         raise ValueError(
-            f"The point is not in a basin. Note, that there are some holes in the MERIT basins dataset ({data_catalog.get_source('MERIT_Basins_cat').path}), ensure that the point is in a basin."
+            f"The point is not in a basin. Note, that there are some holes in the MERIT basins dataset ({data_catalog.fetch('merit_basins_catchments').path}), ensure that the point is in a basin."
         )
     assert len(COMID) == 1, "The point is not in a single basin"
     # get the COMID value from the GeoDataFrame
@@ -335,7 +250,7 @@ def get_subbasin_id_from_coordinate(
 
 
 def get_sink_subbasin_id_for_geom(
-    data_catalog: DataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
+    data_catalog: NewDataCatalog, geom: gpd.GeoDataFrame, river_graph: networkx.DiGraph
 ) -> list[int]:
     """Find all sink subbasins that intersect with the given geometry.
 
@@ -353,7 +268,7 @@ def get_sink_subbasin_id_for_geom(
         A list of COMID values for the sink subbasins.
     """
     subbasins = gpd.read_parquet(
-        data_catalog.get_source("MERIT_Basins_cat").path,
+        data_catalog.fetch("merit_basins_catchments").path,
         bbox=tuple([float(c) for c in geom.total_bounds]),
     ).set_index("COMID")
 
@@ -377,6 +292,884 @@ def get_sink_subbasin_id_for_geom(
     ]
 
     return sink_nodes
+
+
+def get_all_downstream_subbasins_in_geom(
+    data_catalog: NewDataCatalog,
+    geom: gpd.GeoDataFrame,
+    logger: logging.Logger,
+) -> list[int]:
+    """Find all downstream subbasins (with NextDownID = 0) that intersect with the given geometry.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        geom: GeoDataFrame containing the geometry to find the downstream subbasins for.
+        logger: Logger for progress tracking.
+
+    Returns:
+        A list of COMID values for all downstream subbasins in the geometry.
+    """
+    logger.info("Finding subbasins that intersect with geometry...")
+
+    # Get all subbasins that intersect with the geometry
+    subbasins = gpd.read_parquet(
+        data_catalog.fetch("merit_basins_catchments").path,
+        bbox=tuple([float(c) for c in geom.total_bounds]),
+    ).set_index("COMID")
+
+    subbasins = subbasins.iloc[
+        subbasins.sindex.query(geom.union_all(), predicate="intersects")
+    ]
+
+    assert len(subbasins) > 0, "The geometry does not intersect with any subbasin."
+
+    logger.info(f"Found {len(subbasins)} subbasins intersecting with geometry")
+    logger.info("Loading river network data...")
+
+    # Get river network data to find downstream basins (NextDownID = 0)
+    river_network: pd.DataFrame = (
+        data_catalog.fetch("merit_basins_rivers")
+        .read(columns=["COMID", "NextDownID", "uparea"])
+        .set_index("COMID")
+    )
+
+    logger.info("Filtering for downstream subbasins (NextDownID = 0)...")
+
+    # Filter for subbasins that are within the geometry and are downstream (NextDownID = 0)
+    intersecting_subbasins = subbasins.index.intersection(river_network.index)
+    downstream_subbasins = river_network.loc[intersecting_subbasins]
+    downstream_subbasins = downstream_subbasins[downstream_subbasins["NextDownID"] == 0]
+
+    logger.info(f"Found {len(downstream_subbasins)} downstream subbasins (outlets)")
+
+    return downstream_subbasins.index.tolist()
+
+
+def get_subbasin_upstream_areas(
+    data_catalog: NewDataCatalog, subbasin_ids: list[int]
+) -> dict[int, float]:
+    """Get upstream areas for a list of subbasins.
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        subbasin_ids: List of COMID values to get upstream areas for.
+
+    Returns:
+        Dictionary mapping COMID to upstream area in km2.
+    """
+    # Use filters to only read the rows we need - much faster than reading all data
+    river_network: pd.DataFrame = (
+        data_catalog.fetch("merit_basins_rivers")
+        .read(columns=["COMID", "uparea"], filters=[("COMID", "in", subbasin_ids)])
+        .set_index("COMID")
+    )
+
+    # Convert to dict for faster lookup and handle missing values
+    upstream_areas = river_network["uparea"].to_dict()
+
+    # Fill in any missing subbasins with 0.0 area
+    for subbasin_id in subbasin_ids:
+        if subbasin_id not in upstream_areas:
+            upstream_areas[subbasin_id] = 0.0
+
+    return upstream_areas
+
+
+def cluster_subbasins_by_area_and_proximity(
+    data_catalog: NewDataCatalog,
+    subbasin_ids: list[int],
+    target_area_km2: float,  # Target cumulative upstream area per cluster in km² (e.g., Danube basin ~817,000 km²; use appropriate value for other basins)
+    area_tolerance: float,
+    logger: logging.Logger,
+) -> list[list[int]]:
+    """Cluster subbasins by following the coastline with performance optimizations.
+
+    This function creates clusters of subbasins that:
+    1. Starts from coastal basins and follow the coastline
+    2. Adds nearby subbasins along the coast
+    3. Uses distance thresholds for cluster growth but allow jumps between clusters (100km threshold)
+    4. Moves to the globally closest unused basin when current cluster is complete
+
+    Args:
+        data_catalog: Data catalog containing the MERIT basins.
+        subbasin_ids: List of downstream COMID values to cluster.
+        target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
+        area_tolerance: Tolerance for target area (0.3 = 30% tolerance).
+        logger: Logger for progress tracking.
+
+    Returns:
+        List of clusters, where each cluster is a list of COMID values.
+    """
+    logger.info(f"Clustering {len(subbasin_ids)} subbasins along the coastline...")
+
+    # Load subbasin geometries and river graph to identify coastal basins
+    subbasins = gpd.read_parquet(
+        data_catalog.fetch("merit_basins_catchments").path,
+        filters=[("COMID", "in", subbasin_ids)],
+    ).set_index("COMID")
+
+    # Get river graph to identify coastal basins
+    river_graph = get_river_graph(data_catalog)
+
+    # Identify coastal basins (no downstream neighbors)
+    coastal_basin_ids = []
+    inland_basin_ids = []
+
+    for subbasin_id in subbasin_ids:
+        if len(list(river_graph.neighbors(subbasin_id))) == 0:
+            coastal_basin_ids.append(subbasin_id)
+        else:
+            inland_basin_ids.append(subbasin_id)
+
+    logger.info(
+        f"Found {len(coastal_basin_ids)} coastal basins and {len(inland_basin_ids)} inland basins"
+    )
+
+    logger.info("Getting upstream areas...")
+    upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasin_ids)
+
+    logger.info("Pre-computing spatial relationships...")
+
+    # Pre-compute centroids for distance calculations (much faster than geometry operations)
+    logger.info("Computing centroids...")
+    centroids = {}
+    centroid_coords = {}  # Store as (x, y) tuples for faster distance calculations
+
+    # Create numpy arrays for vectorized distance calculations
+
+    subbasin_list = list(subbasin_ids)
+    coords_array = np.zeros((len(subbasin_list), 2))
+    subbasin_to_idx = {}
+
+    for i, subbasin_id in enumerate(subbasin_list):
+        centroid = subbasins.loc[subbasin_id].geometry.centroid
+        centroids[subbasin_id] = centroid
+        centroid_coords[subbasin_id] = (centroid.x, centroid.y)
+        coords_array[i] = [centroid.x, centroid.y]
+        subbasin_to_idx[subbasin_id] = i
+
+    # Build spatial index for fast neighbor finding
+    subbasins_sindex = subbasins.sindex
+    subbasin_ids_set = set(subbasin_ids)  # Convert to set for O(1) lookups
+
+    # Lazy adjacency computation - compute touching relationships on-demand and cache
+    logger.info("Setting up lazy adjacency computation...")
+    adjacency_cache = {}
+
+    # Fast distance lookup using numpy
+    def fast_distance(subbasin1: int, subbasin2: int) -> float:
+        """Fast distance calculation using pre-computed arrays.
+
+        Args:
+            subbasin1: COMID of the first subbasin.
+            subbasin2: COMID of the second subbasin.
+
+        Returns:
+            Euclidean distance between the centroids of the two subbasins in degrees.
+        """
+        idx1, idx2 = subbasin_to_idx[subbasin1], subbasin_to_idx[subbasin2]
+        diff = coords_array[idx1] - coords_array[idx2]
+        return np.sqrt(np.sum(diff * diff))
+
+    def find_nearest_basins(
+        center_subbasin: int, candidates: set[int], max_distance: float
+    ) -> list[tuple[int, float]]:
+        """Find all basins within max_distance from center, sorted by distance.
+
+        Args:
+            center_subbasin: COMID of the center subbasin.
+            candidates: Set of candidate COMID values to search.
+            max_distance: Maximum distance (in degrees) to include.
+
+        Returns:
+            List[tuple[int, float]]: A list of tuples (COMID, distance) for candidates
+            within max_distance, sorted by ascending distance.
+        """
+        if not candidates:
+            return []
+
+        center_idx = subbasin_to_idx[center_subbasin]
+        center_coords = coords_array[center_idx]
+
+        # Vectorized distance calculation for all candidates
+        candidate_indices = [subbasin_to_idx[cid] for cid in candidates]
+        candidate_coords = coords_array[candidate_indices]
+
+        # Calculate distances using broadcasting
+        diffs = candidate_coords - center_coords
+        distances = np.sqrt(np.sum(diffs * diffs, axis=1))
+
+        # Filter by distance and sort
+        valid_mask = distances <= max_distance
+        valid_candidates = [
+            list(candidates)[i] for i in range(len(candidates)) if valid_mask[i]
+        ]
+        valid_distances = distances[valid_mask]
+
+        # Sort by distance
+        sorted_indices = np.argsort(valid_distances)
+        return [(valid_candidates[i], valid_distances[i]) for i in sorted_indices]
+
+    def get_adjacent_basins(subbasin_id: int) -> set[int]:
+        """Get adjacent basins for a subbasin, with caching.
+
+        Args:
+            subbasin_id: The COMID of the subbasin to find adjacent basins for.
+
+        Returns:
+            Set of adjacent subbasin COMIDs.
+        """
+        if subbasin_id not in adjacency_cache:
+            adjacent = set()
+            geom = subbasins.loc[subbasin_id].geometry
+            possible_matches_idx = list(subbasins_sindex.intersection(geom.bounds))
+
+            # Only check subbasins that are in our working set
+            for idx in possible_matches_idx:
+                neighbor_id = subbasins.index[idx]
+                if neighbor_id != subbasin_id and neighbor_id in subbasin_ids_set:
+                    if geom.touches(subbasins.loc[neighbor_id].geometry):
+                        adjacent.add(neighbor_id)
+
+            adjacency_cache[subbasin_id] = adjacent
+
+        return adjacency_cache[subbasin_id]
+
+    # Maximum distance threshold for cluster growth (not for starting new clusters)
+    MAX_CLUSTER_GROWTH_DISTANCE_DEGREES = 100.0 / 111.0  # ~100km converted to degrees
+
+    logger.info(
+        f"Using cluster growth distance threshold: {MAX_CLUSTER_GROWTH_DISTANCE_DEGREES:.2f} degrees (~100 km)"
+    )
+    logger.info(
+        "No distance threshold for starting new clusters - allowing large jumps but then forming a new cluster"
+    )
+
+    clusters = []
+    used_subbasins = set()
+    remaining_basins = set(subbasin_ids)
+    last_added_subbasin = None  # Track the last subbasin added to the previous cluster
+
+    min_area_threshold = target_area_km2 * (1 - area_tolerance)
+    max_area_threshold = target_area_km2 * (1 + area_tolerance)
+
+    cluster_number = 1
+    total_subbasins = len(subbasin_ids)
+
+    while remaining_basins:
+        # Calculate and display progress
+        processed_subbasins = total_subbasins - len(remaining_basins)
+        progress_percent = (processed_subbasins / total_subbasins) * 100
+        logger.info(
+            f"Progress: {processed_subbasins}/{total_subbasins} subbasins processed ({progress_percent:.1f}%)"
+        )
+        logger.info(f"Starting cluster {cluster_number}")
+
+        # Find the starting basin for this cluster
+        if cluster_number == 1:
+            # First cluster: prefer coastal basins that haven't been used
+            unused_coastal = [
+                bid for bid in coastal_basin_ids if bid in remaining_basins
+            ]
+            if unused_coastal:
+                start_basin = unused_coastal[0]
+                logger.info(f"  Starting from coastal basin {start_basin}")
+            else:
+                # Fallback: just pick any remaining basin
+                start_basin = next(iter(remaining_basins))
+                logger.info(f"  Starting from arbitrary basin {start_basin}")
+        else:
+            # Subsequent clusters: start from basin closest to last added subbasin (vectorized)
+            if last_added_subbasin is not None:
+                # Use fast vectorized distance calculation
+                min_distance = float("inf")
+                start_basin = None
+
+                for candidate_basin in remaining_basins:
+                    distance = fast_distance(last_added_subbasin, candidate_basin)
+                    if distance < min_distance:
+                        min_distance = distance
+                        start_basin = candidate_basin
+
+                logger.info(
+                    f"  Starting from basin {start_basin} closest to last added basin {last_added_subbasin} (distance: {min_distance:.3f} degrees)"
+                )
+            else:
+                # Fallback: just pick any remaining basin
+                start_basin = next(iter(remaining_basins))
+                logger.info(f"  Starting from arbitrary basin {start_basin}")
+
+        # Initialize cluster
+        current_cluster = [start_basin]
+        current_area = upstream_areas.get(start_basin, 0)
+        used_subbasins.add(start_basin)
+        remaining_basins.remove(start_basin)
+        cluster_last_added = start_basin  # Track last added subbasin for this cluster
+
+        logger.info(f"    Starting area: {current_area:,.0f} km²")
+
+        # Grow cluster along coastline/proximity with distance threshold (optimized)
+        while current_area < min_area_threshold and remaining_basins:
+            # Get all adjacent basins for current cluster (lazy computation)
+            all_adjacent_basins = set()
+            for cluster_basin in current_cluster:
+                adjacent_basins = get_adjacent_basins(cluster_basin)
+                all_adjacent_basins.update(adjacent_basins)
+
+            # Filter adjacent basins that are still available
+            available_adjacent = all_adjacent_basins.intersection(remaining_basins)
+
+            # Start with adjacent basins (distance 0)
+            candidates = [(basin, 0.0) for basin in available_adjacent]
+
+            # Add nearby basins within cluster growth distance threshold using vectorized search
+            non_adjacent_remaining = remaining_basins - all_adjacent_basins
+            if non_adjacent_remaining and current_cluster:
+                # Use the most recently added basin as the search center for efficiency
+                search_center = current_cluster[-1]
+                nearby_basins = find_nearest_basins(
+                    search_center,
+                    non_adjacent_remaining,
+                    MAX_CLUSTER_GROWTH_DISTANCE_DEGREES,
+                )
+                candidates.extend(nearby_basins)
+
+            if not candidates:
+                logger.info(
+                    "    No more candidates within cluster growth distance threshold"
+                )
+                break
+
+            # Sort candidates by distance (adjacent basins first, then by distance)
+            candidates.sort(key=lambda x: x[1])
+
+            # Select best candidate that doesn't exceed area threshold
+            best_candidate = None
+            for candidate_id, distance in candidates:
+                candidate_area = upstream_areas.get(candidate_id, 0)
+                if current_area + candidate_area <= max_area_threshold:
+                    best_candidate = candidate_id
+                    break
+
+            # Early termination if cluster is already at minimum size and no valid candidates
+            if best_candidate is None and current_area >= min_area_threshold:
+                logger.info("    Cluster reached minimum area, stopping growth")
+                break
+
+            # If no candidate fits, and we're still below minimum, take the closest one
+            if (
+                best_candidate is None
+                and current_area < min_area_threshold
+                and candidates
+            ):
+                best_candidate = candidates[0][0]
+
+            if best_candidate is None:
+                logger.info("    No suitable candidates found")
+                break
+
+            # Add the best candidate
+            candidate_area = upstream_areas.get(best_candidate, 0)
+            current_cluster.append(best_candidate)
+            current_area += candidate_area
+            used_subbasins.add(best_candidate)
+            remaining_basins.remove(best_candidate)
+            cluster_last_added = best_candidate  # Update last added subbasin
+
+            # Reduce logging frequency for large clusters (log every 10th addition for performance)
+            if len(current_cluster) <= 10 or len(current_cluster) % 10 == 0:
+                logger.info(
+                    f"    Added basin {best_candidate} (area: {candidate_area:,.0f} km²), total: {current_area:,.0f} km² [{len(current_cluster)} basins]"
+                )
+
+        clusters.append(current_cluster)
+        last_added_subbasin = cluster_last_added  # Set for next cluster starting point
+        final_area = sum(upstream_areas.get(sid, 0) for sid in current_cluster)
+        logger.info(
+            f"  Completed cluster {cluster_number} with {len(current_cluster)} subbasins, total area: {final_area:,.0f} km²"
+        )
+
+        cluster_number += 1
+
+    logger.info(
+        f"Clustering completed! Created {len(clusters)} clusters from {len(subbasin_ids)} subbasins"
+    )
+    for i, cluster in enumerate(clusters):
+        cluster_area = sum(upstream_areas.get(sid, 0) for sid in cluster)
+        coastal_count = sum(1 for sid in cluster if sid in coastal_basin_ids)
+        logger.info(
+            f"  Cluster {i + 1}: {len(cluster)} subbasins ({coastal_count} coastal), {cluster_area:,.0f} km²"
+        )
+
+    return clusters
+
+
+def save_clusters_to_geoparquet(
+    clusters: list[list[int]],
+    data_catalog: NewDataCatalog,
+    output_path: str | Path,
+    cluster_prefix: str = "cluster",
+) -> None:
+    """Save clusters to a geoparquet file with cluster IDs.
+
+    Args:
+        clusters: List of clusters, where each cluster is a list of COMID values.
+        data_catalog: Data catalog containing the MERIT basins.
+        output_path: Path where to save the geoparquet file.
+        cluster_prefix: Prefix for cluster names.
+    """
+    print(f"Saving clusters to geoparquet: {output_path}")
+
+    # Get all subbasin IDs
+    all_subbasin_ids = [sid for cluster in clusters for sid in cluster]
+
+    # Load subbasin geometries
+    subbasins = gpd.read_parquet(
+        data_catalog.fetch("merit_basins_catchments").path,
+        filters=[("COMID", "in", all_subbasin_ids)],
+    ).set_index("COMID")
+
+    # Get upstream areas for display
+    upstream_areas = get_subbasin_upstream_areas(data_catalog, all_subbasin_ids)
+
+    # Create cluster assignments
+    cluster_data = []
+    for cluster_idx, cluster_subbasins in enumerate(clusters):
+        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
+        cluster_area = sum(upstream_areas.get(sid, 0) for sid in cluster_subbasins)
+
+        for subbasin_id in cluster_subbasins:
+            cluster_data.append(
+                {
+                    "COMID": subbasin_id,
+                    "cluster_id": cluster_id,
+                    "cluster_number": cluster_idx,
+                    "cluster_area_km2": cluster_area,
+                    "subbasin_area_km2": upstream_areas.get(subbasin_id, 0),
+                    "geometry": subbasins.loc[subbasin_id].geometry,
+                }
+            )
+
+    # Create GeoDataFrame
+    cluster_gdf = gpd.GeoDataFrame(cluster_data, crs=subbasins.crs)
+
+    # Save to geoparquet
+    cluster_gdf.to_parquet(output_path)
+    print(
+        f"Saved {len(cluster_data)} subbasins in {len(clusters)} clusters to {output_path}"
+    )
+
+
+def create_cluster_visualization_map(
+    clusters: list[list[int]],
+    data_catalog: NewDataCatalog,
+    output_path: str | Path,
+    cluster_prefix: str = "cluster",
+    figsize: tuple[int, int] = (16, 12),
+) -> None:
+    """Create a visualization map of the clusters with satellite background.
+
+    Args:
+        clusters: List of clusters, where each cluster is a list of COMID values.
+        data_catalog: Data catalog containing the MERIT basins.
+        output_path: Path where to save the PNG file.
+        cluster_prefix: Prefix for cluster names.
+        figsize: Figure size in inches (width, height).
+    """
+    import contextily as ctx
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    print(f"Creating visualization map: {output_path}")
+
+    # Get all subbasin IDs
+    all_subbasin_ids = [sid for cluster in clusters for sid in cluster]
+
+    # Load subbasin geometries
+    subbasins = gpd.read_parquet(
+        data_catalog.fetch("merit_basins_catchments").path,
+        filters=[("COMID", "in", all_subbasin_ids)],
+    ).set_index("COMID")
+
+    # Create cluster assignments with colors
+    cluster_data = []
+    colors = plt.cm.Set3(np.linspace(0, 1, len(clusters)))  # Generate distinct colors
+
+    for cluster_idx, cluster_subbasins in enumerate(clusters):
+        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
+        color = colors[cluster_idx]
+
+        for subbasin_id in cluster_subbasins:
+            cluster_data.append(
+                {
+                    "COMID": subbasin_id,
+                    "cluster_id": cluster_id,
+                    "cluster_number": cluster_idx,
+                    "color": color,
+                    "geometry": subbasins.loc[subbasin_id].geometry,
+                }
+            )
+
+    # Create GeoDataFrame
+    cluster_gdf = gpd.GeoDataFrame(cluster_data, crs=subbasins.crs)
+
+    # Convert to Web Mercator for contextily
+    cluster_gdf_mercator = cluster_gdf.to_crs(epsg=3857)
+
+    # Create the plot with dark background
+    fig, ax = plt.subplots(1, 1, figsize=figsize, facecolor="black")
+    ax.set_facecolor("black")
+
+    # Plot each cluster with different colors and better visibility
+    for cluster_idx, (cluster_id, group) in enumerate(
+        cluster_gdf_mercator.groupby("cluster_id")
+    ):
+        group.plot(
+            ax=ax,
+            color=colors[cluster_idx],
+            alpha=0.7,  # More opaque for better visibility
+            edgecolor="white",  # White edges for contrast against dark background
+            linewidth=1.5,  # Thicker lines for better visibility
+            label=f"{cluster_id} ({len(group)} subbasins)",
+        )
+
+        # Add cluster labels at centroids with better visibility
+        centroid = group.geometry.union_all().centroid
+        ax.annotate(
+            f"{cluster_idx}",
+            (centroid.x, centroid.y),
+            fontsize=14,  # Larger font
+            fontweight="bold",
+            ha="center",
+            va="center",
+            color="white",  # White text
+            bbox=dict(
+                boxstyle="round,pad=0.4",
+                facecolor="black",
+                alpha=0.8,
+                edgecolor="white",
+            ),
+        )
+
+    # Add dark satellite/terrain background
+    try:
+        # Try dark satellite imagery first; let contextily choose zoom automatically
+        ctx.add_basemap(
+            ax,
+            crs=cluster_gdf_mercator.crs,  # pass CRS object instead of string
+            source=ctx.providers.CartoDB.DarkMatter,  # Dark background
+            alpha=0.8,  # Slightly transparent to not overpower subbasins
+        )
+        print("Added dark CartoDB background")
+    except Exception as e3:
+        print(f"Could not add any background: {e3}")
+        # Set a dark gray background if all else fails
+        ax.set_facecolor("#2F2F2F")
+
+    # Customize the plot with dark theme
+    ax.set_title(
+        f"GEB Multi-Basin Clusters - {len(clusters)} Clusters",
+        fontsize=18,
+        fontweight="bold",
+        color="white",  # White title text
+        pad=20,
+    )
+    ax.set_xlabel("Longitude", fontsize=14, color="white")
+    ax.set_ylabel("Latitude", fontsize=14, color="white")
+
+    # Add legend with dark styling
+    legend_elements = [
+        Patch(
+            facecolor=colors[i],
+            alpha=0.7,
+            edgecolor="white",
+            linewidth=1.5,
+            label=f"Cluster {i} ({len([sid for cluster in [clusters[i]] for sid in cluster])} subbasins)",
+        )
+        for i in range(len(clusters))
+    ]
+    legend = ax.legend(
+        handles=legend_elements,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1),
+        facecolor="black",  # Dark legend background
+        edgecolor="white",
+        labelcolor="white",  # White legend text
+        fontsize=12,
+    )
+
+    # Style the legend frame
+    legend.get_frame().set_alpha(0.9)
+
+    # Remove axes ticks for cleaner look but keep white color for any remaining elements
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.spines["bottom"].set_color("white")
+    ax.spines["top"].set_color("white")
+    ax.spines["right"].set_color("white")
+    ax.spines["left"].set_color("white")
+
+    # Tight layout to prevent legend cutoff
+    plt.tight_layout()
+
+    # Save the figure with dark theme
+    plt.savefig(
+        output_path, dpi=300, bbox_inches="tight", facecolor="black", edgecolor="white"
+    )
+    plt.close()
+
+    print(f"Saved visualization map to {output_path}")
+
+
+def create_multi_basin_configs(
+    clusters: list[list[int]],
+    working_directory: Path,
+    cluster_prefix: str = "cluster",
+) -> list[Path]:
+    """Create separate config files and directories for each cluster of subbasins.
+
+    Args:
+        clusters: List of clusters, where each cluster is a list of COMID values.
+        working_directory: Working directory for the models (large_scale directory).
+        cluster_prefix: Prefix for cluster directory names.
+
+    Returns:
+        List of paths to created cluster directories.
+    """
+    print(f"Creating configuration files for {len(clusters)} clusters...")
+
+    # Create full build.yml in large_scale directory
+    print("Creating build.yml in large_scale directory...")
+    build_config_path = working_directory / "build.yml"
+    # Read build config from geul example and automatically copy it
+    geul_build_path = (
+        Path(os.environ.get("GEB_PACKAGE_DIR"))
+        / ".."
+        / "examples"
+        / "geul"
+        / "build.yml"
+    )
+
+    print(f"Reading build configuration from: {geul_build_path}")
+
+    # Copy geul build.yml content directly to large_scale build.yml
+    with open(geul_build_path, "r") as src, open(build_config_path, "w") as dst:
+        dst.write(src.read())
+
+    print(f"Created build.yml in {working_directory}")
+
+    # Create model.yml in large_scale directory that inherits from reasonable default
+    print("Creating model.yml in large_scale directory...")
+    model_config_path = working_directory / "model.yml"
+
+    # Define the model configuration content with inheritance from reasonable default
+    model_config_content = """inherits: "{GEB_PACKAGE_DIR}/reasonable_default_config.yml"
+"""
+
+    with open(model_config_path, "w") as f:
+        f.write(model_config_content)
+
+    print(f"Created model.yml in {working_directory}")
+
+    cluster_directories = []
+
+    for i, cluster in enumerate(clusters):
+        print(
+            f"Creating cluster {i + 1}/{len(clusters)}: {cluster_prefix}_{i:03d} ({len(cluster)} subbasins)"
+        )
+
+        # Create cluster directory and base subdirectory
+        cluster_dir = working_directory / f"{cluster_prefix}_{i:03d}"
+        base_dir = cluster_dir / "base"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        cluster_directories.append(cluster_dir)
+
+        # Create build.yml with inheritance in base folder (inherit from large_scale build.yml)
+        build_config_path = base_dir / "build.yml"
+
+        # Create the build configuration dictionary
+        build_config = {"inherits": "../../build.yml"}
+
+        with open(build_config_path, "w") as f:
+            yaml.dump(build_config, f, default_flow_style=False, sort_keys=False)
+        # Create model.yml with inheritance and cluster-specific subbasins in base folder
+        model_config_path = base_dir / "model.yml"
+
+        # Convert all cluster values to regular Python integers
+        cluster_ints = [int(subbasin_id) for subbasin_id in cluster]
+
+        # Create the configuration dictionary
+        model_config = {
+            "inherits": "../../model.yml",
+            "general": {"region": {"subbasin": cluster_ints}},
+        }
+
+        with open(model_config_path, "w") as f:
+            yaml.dump(model_config, f, default_flow_style=False, sort_keys=False)
+
+        print(
+            f"  Created configuration files in {base_dir.relative_to(working_directory)}"
+        )
+
+    print(
+        f"Successfully created {len(clusters)} cluster configurations in {working_directory}"
+    )
+
+    return cluster_directories
+
+
+def save_clusters_as_merged_geometries(
+    clusters: list[list[int]],
+    data_catalog: NewDataCatalog,
+    river_graph: networkx.DiGraph,
+    output_path: str | Path,
+    cluster_prefix: str = "cluster",
+    include_upstream: bool = True,
+) -> None:
+    """Save clusters as merged geometries - one polygon outline per cluster.
+
+    This creates the most compact representation possible: each cluster becomes a single
+    dissolved polygon geometry representing the entire basin area.
+
+    Args:
+        clusters: List of clusters, where each cluster is a list of downstream COMID values.
+        data_catalog: Data catalog containing the MERIT basins.
+        river_graph: River graph for finding upstream subbasins.
+        output_path: Path where to save the geoparquet file.
+        cluster_prefix: Prefix for cluster names.
+        include_upstream: If True, include all upstream subbasins in the merged geometry.
+                         If False, only merge the downstream outlet subbasins.
+    """
+    print(f"Creating merged cluster geometries: {output_path}")
+    print(f"Include upstream basins: {include_upstream}")
+
+    merged_cluster_data = []
+
+    for cluster_idx, downstream_subbasins in enumerate(clusters):
+        cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
+
+        print(f"  Processing cluster {cluster_idx + 1}/{len(clusters)}: {cluster_id}")
+
+        if include_upstream:
+            # Find all upstream subbasins for this cluster
+            cluster_all_subbasins = set()
+            for downstream_subbasin in downstream_subbasins:
+                upstream_subbasins = set(
+                    networkx.ancestors(river_graph, downstream_subbasin)
+                )
+                upstream_subbasins.add(downstream_subbasin)
+                cluster_all_subbasins.update(upstream_subbasins)
+
+            subbasins_to_merge = list(cluster_all_subbasins)
+            total_subbasins = len(subbasins_to_merge)
+            upstream_count = total_subbasins - len(downstream_subbasins)
+
+            print(
+                f"    Merging {total_subbasins:,} subbasins ({len(downstream_subbasins)} outlets + {upstream_count:,} upstream)"
+            )
+        else:
+            # Only merge downstream outlet subbasins
+            subbasins_to_merge = downstream_subbasins
+            total_subbasins = len(subbasins_to_merge)
+            upstream_count = 0
+
+            print(f"    Merging {total_subbasins} outlet subbasins only")
+
+        # Load geometries for subbasins in this cluster
+        cluster_geometries = gpd.read_parquet(
+            data_catalog.fetch("merit_basins_catchments").path,
+            filters=[("COMID", "in", subbasins_to_merge)],
+        ).set_index("COMID")
+
+        # Get upstream areas for statistics
+        upstream_areas = get_subbasin_upstream_areas(data_catalog, subbasins_to_merge)
+        total_area = sum(upstream_areas.get(sid, 0) for sid in subbasins_to_merge)
+
+        # Dissolve/merge all geometries into a single polygon
+        print(
+            f"    Dissolving {len(cluster_geometries)} geometries into single polygon..."
+        )
+
+        # Union all geometries to create a single merged polygon
+        merged_geometry = cluster_geometries.geometry.union_all()
+
+        # Handle potential multipolygon results
+        if hasattr(merged_geometry, "geoms") and len(merged_geometry.geoms) > 1:
+            print(f"    Result is multipolygon with {len(merged_geometry.geoms)} parts")
+
+        # Calculate some useful statistics
+        outlet_areas = [upstream_areas.get(sid, 0) for sid in downstream_subbasins]
+        avg_outlet_area = sum(outlet_areas) / len(outlet_areas) if outlet_areas else 0
+
+        merged_cluster_data.append(
+            {
+                "cluster_id": cluster_id,
+                "cluster_number": cluster_idx,
+                "num_downstream_outlets": len(downstream_subbasins),
+                "num_upstream_subbasins": upstream_count,
+                "num_total_subbasins": total_subbasins,
+                "total_basin_area_km2": total_area,
+                "avg_outlet_area_km2": avg_outlet_area,
+                "downstream_outlet_comids": ",".join(map(str, downstream_subbasins)),
+                "geometry_type": merged_geometry.geom_type,
+                "num_geometry_parts": len(merged_geometry.geoms)
+                if hasattr(merged_geometry, "geoms")
+                else 1,
+                "geometry": merged_geometry,
+            }
+        )
+
+        print(f"    Complete: {total_area:,.0f} km² total area")
+
+    # Create GeoDataFrame with merged geometries
+    print("Creating final GeoDataFrame with merged geometries...")
+    merged_gdf = gpd.GeoDataFrame(merged_cluster_data, crs="EPSG:4326")
+
+    # Save to geoparquet
+    merged_gdf.to_parquet(output_path)
+
+    # Calculate and print summary statistics
+    total_area = merged_gdf["total_basin_area_km2"].sum()
+    total_outlets = merged_gdf["num_downstream_outlets"].sum()
+    total_upstream = merged_gdf["num_upstream_subbasins"].sum()
+    total_subbasins = merged_gdf["num_total_subbasins"].sum()
+
+    multipolygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "MultiPolygon"])
+    polygon_count = len(merged_gdf[merged_gdf["geometry_type"] == "Polygon"])
+
+    print("\nSaved merged cluster geometries:")
+    print(f"  Total clusters: {len(clusters)}")
+    print(f"  Total area covered: {total_area:,.0f} km²")
+    print(
+        f"  Original subbasins merged: {total_subbasins:,} ({total_outlets:,} outlets + {total_upstream:,} upstream)"
+    )
+    print(
+        f"  Geometry types: {polygon_count} polygons, {multipolygon_count} multipolygons"
+    )
+    print(f"  Average area per cluster: {total_area / len(clusters):,.0f} km²")
+
+    # File size benefits
+    original_subbasins = total_subbasins
+    merged_records = len(clusters)
+    size_reduction = original_subbasins / merged_records if merged_records > 0 else 0
+
+    print(
+        f"  Size reduction: {size_reduction:.0f}x smaller ({original_subbasins:,} → {merged_records} records)"
+    )
+    print(f"  File saved to: {output_path}")
+
+    # Show individual cluster info
+    print("\nCluster details:")
+    for _, row in merged_gdf.iterrows():
+        geom_info = f" ({row['geometry_type']}"
+        if row["num_geometry_parts"] > 1:
+            geom_info += f", {row['num_geometry_parts']} parts"
+        geom_info += ")"
+
+        print(
+            f"  {row['cluster_id']}: {row['total_basin_area_km2']:,.0f} km², "
+            f"{row['num_total_subbasins']:,} subbasins merged{geom_info}"
+        )
 
 
 def get_touching_subbasins(
@@ -743,9 +1536,7 @@ class GEBModel(
         self.geom: DelayedReader = DelayedReader(reader=gpd.read_parquet)
         self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
         self.array: DelayedReader = DelayedReader(zarr.load)
-        self.dict: DelayedReader = DelayedReader(
-            reader=lambda x: json.load(open(x, "r"))
-        )
+        self.dict: DelayedReader = DelayedReader(reader=load_dict)
         self.other: DelayedReader = DelayedReader(reader=open_zarr)
 
     @build_method
@@ -799,12 +1590,12 @@ class GEBModel(
                 get_subbasin_id_from_coordinate(self.new_data_catalog, lon, lat)
             ]
         elif "geom" in region:
-            regions = self.data_catalog.get_geodataframe(region["geom"]["source"])
+            regions = self.new_data_catalog.fetch(region["geom"]["source"]).read()
             regions = regions[
                 regions[region["geom"]["column"]] == region["geom"]["key"]
             ]
             sink_subbasin_ids = get_sink_subbasin_id_for_geom(
-                self.data_catalog, regions, river_graph
+                self.new_data_catalog, regions, river_graph
             )
         else:
             raise ValueError(f"Region {region} not understood.")
@@ -915,7 +1706,7 @@ class GEBModel(
             ldd, name="drainage/original_d8_flow_directions"
         )
 
-        self.derive_mask(ldd, ldd.rio.transform(), resolution_arcsec)
+        self.derive_mask(ldd, ldd.rio.transform(recalc=True), resolution_arcsec)
 
         self.create_subgrid(subgrid_factor)
 
@@ -1195,7 +1986,7 @@ class GEBModel(
         self.set_subgrid(submask, name="mask")
 
     @build_method
-    def set_time_range(self, start_date: datetime, end_date: datetime) -> None:
+    def set_time_range(self, start_date: date, end_date: date) -> None:
         """Sets the time range for the build model.
 
         This time range is used to ensure that all datasets with a time dimension
@@ -1208,7 +1999,7 @@ class GEBModel(
         """
         assert start_date < end_date, "Start date must be before end date."
         self.set_dict(
-            {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+            {"start_date": start_date, "end_date": end_date},
             name="model_time_range",
         )
 
@@ -1221,7 +2012,12 @@ class GEBModel(
         Returns:
             The start date of the model.
         """
-        return datetime.fromisoformat(self.dict["model_time_range"]["start_date"])
+        start_date = self.dict["model_time_range"]["start_date"]
+
+        # TODO: This can be removed in 2026
+        if isinstance(start_date, str):
+            start_date = datetime.fromisoformat(start_date)
+        return start_date
 
     @property
     def end_date(self) -> datetime:
@@ -1232,7 +2028,12 @@ class GEBModel(
         Returns:
             The end date of the model.
         """
-        return datetime.fromisoformat(self.dict["model_time_range"]["end_date"])
+        end_date = self.dict["model_time_range"]["end_date"]
+
+        # TODO: This can be removed in 2026
+        if isinstance(end_date, str):
+            end_date = datetime.fromisoformat(end_date)
+        return end_date
 
     @build_method
     def set_ssp(self, ssp: str) -> None:
@@ -1428,7 +2229,7 @@ class GEBModel(
             write: Whether to write the dictionary to disk. If False, the dictionary
                 is only added to the file library, but not written to disk.
         """
-        fp: Path = Path("dict") / (name + ".json")
+        fp: Path = Path("dict") / (name + ".yml")
         fp_with_root: Path = Path(self.root) / fp
         fp_with_root.parent.mkdir(parents=True, exist_ok=True)
         if write:
@@ -1436,8 +2237,7 @@ class GEBModel(
 
             self.files["dict"][name] = fp
 
-            with open(fp_with_root, "w") as f:
-                json.dump(data, f, default=lambda o: o.isoformat(), indent=4)
+            to_dict(data, fp_with_root)
 
         self.dict[name] = fp_with_root
 
@@ -1469,8 +2269,13 @@ class GEBModel(
 
     @property
     def files_path(self) -> Path:
-        """Path to the files.json file that contains the file library."""
-        return Path(self.root, "files.json")
+        """Path to the files.yml file that contains the file library."""
+        return Path(self.root, "files.yml")
+
+    @property
+    def progress_path(self) -> Path:
+        """Path to the progress file that contains the build progress."""
+        return Path(self.root, "progress.txt")
 
     def write_file_library(self) -> None:
         """Writes the file library to disk.
@@ -1488,8 +2293,7 @@ class GEBModel(
             else:
                 file_library[type_name].update(type_files)
 
-        with open(self.files_path, "w") as f:
-            json.dump(file_library, f, indent=4, cls=PathEncoder)
+        to_dict(file_library, self.files_path)
 
     def read_or_create_file_library(self) -> dict:
         """Reads the file library from disk.
@@ -1513,8 +2317,7 @@ class GEBModel(
                 "other": {},
             }
         else:
-            with open(Path(self.files_path), "r") as f:
-                files: dict[str, dict[str, str]] = json.load(f)
+            files = load_dict(self.files_path)
 
             # geoms was renamed to geom in the file library. To upgrade old models,
             # we check if "geoms" is in the files and rename it to "geom"
@@ -1545,19 +2348,44 @@ class GEBModel(
 
     def read_grid(self) -> None:
         """Reads all grid data arrays from disk based on the file library."""
+        # first read and set the mask. This is required.
+        grid_files: dict[str, dict[str, Path]] = self.files["grid"]
+        if len(grid_files) == 0:
+            return
+        mask: xr.DataArray = open_zarr(Path(self.root) / grid_files["mask"])
+        self.set_grid(mask, name="mask", write=False)
+
         for name, fn in self.files["grid"].items():
+            if name == "mask":  # mask already read
+                continue
             data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_grid(data, name=name, write=False)
 
     def read_subgrid(self) -> None:
         """Reads all subgrid data arrays from disk based on the file library."""
+        # first read and set the mask. This is required.
+        subgrid_files: dict[str, dict[str, Path]] = self.files["subgrid"]
+        if len(subgrid_files) == 0:
+            return
+        mask: xr.DataArray = open_zarr(Path(self.root) / subgrid_files["mask"])
+        self.set_subgrid(mask, name="mask", write=False)
         for name, fn in self.files["subgrid"].items():
+            if name == "mask":  # mask already read
+                continue
             data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_subgrid(data, name=name, write=False)
 
     def read_region_subgrid(self) -> None:
         """Reads all region subgrid data arrays from disk based on the file library."""
+        # first read and set the mask. This is required.
+        region_subgrid_files: dict[str, dict[str, Path]] = self.files["region_subgrid"]
+        if len(region_subgrid_files) == 0:
+            return
+        mask: xr.DataArray = open_zarr(Path(self.root) / region_subgrid_files["mask"])
+        self.set_region_subgrid(mask, name="mask", write=False)
         for name, fn in self.files["region_subgrid"].items():
+            if name == "mask":  # mask already read
+                continue
             data: xr.DataArray = open_zarr(Path(self.root) / fn)
             self.set_region_subgrid(data, name=name, write=False)
 
@@ -1923,36 +2751,104 @@ class GEBModel(
                 v: Any = kwargs.get(k, v.default)
                 if len(args) > i:
                     v: Any = args[i]
+
                 params[k] = v
 
         # call the method
         func(*args, **kwargs)
 
-    def run_methods(self, methods: dict[str, Any], validate_order: bool = True) -> None:
+    def run_methods(
+        self,
+        methods: dict[str, Any],
+        validate_order: bool = True,
+        record_progress: bool = False,
+        continue_: bool = False,
+    ) -> None:
         """Run methods in the order specified in the methods dictionary.
 
         Args:
             methods: A dictionary with method names as keys and their parameters as values.
             validate_order: If True, validate the order of methods using the build_method decorator.
+            record_progress: If True, record progress after each method.
+            continue_: Continue previous build if it was interrupted or failed.
+
+        Raises:
+            ValueError: If continuing a build and completed methods are not in the methods to run
+                or if the order is incorrect.
         """
         # then loop over other methods
         # TODO: Allow validate order for custom models
         build_method.validate_methods(methods, validate_order=validate_order)
         self.files = self.read_or_create_file_library()
+
+        completed_methods: list[str] = (
+            build_method.read_progress(self.progress_path) if continue_ else []
+        )
+
+        # check if all completed methods are in the methods to run and if order is correct
+        if continue_:
+            methods_to_run = list(methods.keys())
+            for i, completed_method in enumerate(completed_methods):
+                if completed_method not in methods_to_run:
+                    raise ValueError(
+                        f"Cannot continue build: completed method {completed_method} not in methods to run. Restore the method or start a new build."
+                    )
+                if completed_method != methods_to_run[i]:
+                    raise ValueError(
+                        f"Cannot continue build: completed method {completed_method} is out of order. Restore the method order or start a new build."
+                    )
+
         for method in methods:
+            if method in completed_methods:
+                self.logger.info(f"Skipping already completed method: {method}")
+                continue
+
             kwargs = {} if methods[method] is None else methods[method]
             self.run_method(method, **kwargs)
             self.write_file_library()
 
+            if record_progress:
+                build_method.record_progress(
+                    self.progress_path,
+                    method,
+                )
+
         self.logger.info("Finished!")
 
-    def build(self, region: dict, methods: dict) -> None:
-        """Build the model with the specified region and methods."""
-        methods: dict[str:Any] = methods or {}
-        methods["setup_region"].update(region=region)
-        self.files_path.unlink(missing_ok=True)
+    def build(
+        self, region: dict, methods: dict[str, dict[str, Any] | None], continue_: bool
+    ) -> None:
+        """Build the model with the specified region and methods.
 
-        self.run_methods(methods, validate_order=True and type(self) is GEBModel)
+        Args:
+            region: A dictionary defining the region to build the model for.
+            methods: A dictionary with method names as keys and their parameters as values.
+            continue_: Continue previous build if it was interrupted or failed.
+
+        Raises:
+            ValueError: If "setup_region" is not in methods when building a new model.
+        """
+        methods: dict[str, dict[str, Any] | None] = methods or {}
+        if "setup_region" not in methods:
+            raise ValueError(
+                '"setup_region" must be present in methods when building a new model.'
+            )
+        methods["setup_region"].update(region=region)
+
+        # if not continuing, remove existing files path
+        if continue_:
+            self.read()
+        else:
+            # for new build, remove existing files path and progress file
+            self.files_path.unlink(missing_ok=True)
+            self.progress_path.unlink(missing_ok=True)
+
+        self.run_methods(
+            methods,
+            validate_order=True and type(self) is GEBModel,
+            record_progress=True,
+            continue_=continue_,
+        )
 
     def update(
         self,
@@ -1967,6 +2863,8 @@ class GEBModel(
             ValueError: If "setup_region" is in methods, as this can only be called when
                 building a new model.
         """
+        self.read()
+
         methods = methods or {}
 
         if "setup_region" in methods:

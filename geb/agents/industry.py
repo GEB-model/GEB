@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from geb.typing import ArrayFloat32
+from geb.types import ArrayFloat32
 
 from ..hydrology.landcovers import SEALED
 from .general import AgentBaseClass, downscale_volume
@@ -122,7 +122,7 @@ class Industry(AgentBaseClass):
 
             water_demand = (
                 water_demand
-                * self.model.config["parameters"]["water_demand_multiplier"]
+                * self.model.config["parameters"]["water_demand_multiplier_industry"]
             )
 
             water_consumption = (

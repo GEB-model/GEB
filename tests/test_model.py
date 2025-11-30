@@ -51,7 +51,7 @@ def test_init(clean_working_directory: bool) -> None:
     when attempting to initialize in an existing directory without overwrite.
     """
     if clean_working_directory and working_directory.exists():
-        shutil.rmtree(working_directory)
+        shutil.rmtree(working_directory, ignore_errors=True)
     working_directory.mkdir(parents=True, exist_ok=True)
 
     with WorkingDirectory(working_directory):
@@ -136,38 +136,6 @@ def test_build_dependencies() -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_forcing() -> None:
-    """Test forcing data validation and consistency.
-
-    Verifies that forcing data is properly validated and that
-    different forcing sources produce consistent data shapes.
-    """
-    with WorkingDirectory(working_directory):
-        model: GEBModel = run_model_with_method(
-            method=None,
-            close_after_run=False,
-            **DEFAULT_RUN_ARGS,
-        )
-
-        for name in model.forcing.validators:
-            t_0: datetime = datetime(2010, 1, 1, 0, 0, 0)
-            forcing_0 = model.forcing.load(name, t_0)
-
-            t_1: datetime = datetime(2020, 1, 1, 0, 0, 0)
-            forcing_1 = model.forcing.load(name, t_1)
-
-            if isinstance(forcing_0, (xr.DataArray, np.ndarray)):
-                assert forcing_0.shape == forcing_1.shape, (
-                    f"Shape of forcing data for {name} does not match for times {t_0} and {t_1}."
-                )
-                # non-precipitation forcing basically could never be equal, so we check for inequality
-                if name not in ("pr", "pr_hourly"):
-                    assert not np.array_equal(forcing_0, forcing_1)
-            else:
-                assert forcing_0 != forcing_1
-
-
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_update_with_file() -> None:
     """Test updating model configuration from a file.
 
@@ -176,7 +144,7 @@ def test_update_with_file() -> None:
     """
     with WorkingDirectory(working_directory):
         args = DEFAULT_BUILD_ARGS.copy()
-        args["build_config"] = "update.yml"
+        args["build_config"] = Path("update.yml")
         update_fn(**args)
 
 
@@ -198,20 +166,7 @@ def test_update_with_dict() -> None:
 @pytest.mark.parametrize(
     "method",
     [
-        "setup_forcing",
-        "setup_SPEI",
-        "setup_soil_parameters",
-        "setup_create_farms",
-        "setup_groundwater",
         "setup_hydrography",
-        "setup_assets",
-        "setup_CO2_concentration",
-        "setup_waterbodies",
-        "setup_regions_and_land_use",
-        "setup_farmer_crop_calendar",
-        "setup_discharge_observations",
-        "setup_elevation",
-        "setup_pr_GEV",
     ],
 )
 def test_update_with_method(method: str) -> None:
@@ -243,6 +198,39 @@ def test_spinup() -> None:
         args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["hazards"]["floods"]["simulate"] = True
         run_model_with_method(method="spinup", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_forcing() -> None:
+    """Test forcing data validation and consistency.
+
+    Verifies that forcing data is properly validated and that
+    different forcing sources produce consistent data shapes.
+    """
+    with WorkingDirectory(working_directory):
+        model: GEBModel = run_model_with_method(
+            method=None,
+            close_after_run=False,
+            **DEFAULT_RUN_ARGS,
+        )
+        model.run(initialize_only=True)
+
+        for name, loader in model.forcing._loaders.items():
+            t_0: datetime = datetime(2010, 1, 1, 0, 0, 0)
+            forcing_0 = loader.load(t_0)
+
+            t_1: datetime = datetime(2020, 1, 1, 0, 0, 0)
+            forcing_1 = loader.load(t_1)
+
+            if isinstance(forcing_0, (xr.DataArray, np.ndarray)):
+                assert forcing_0.shape == forcing_1.shape, (
+                    f"Shape of forcing data for {name} does not match for times {t_0} and {t_1}."
+                )
+                # non-precipitation forcing basically could never be equal, so we check for inequality
+                if name != "pr_kg_per_m2_per_s":
+                    assert not np.array_equal(forcing_0, forcing_1)
+            else:
+                assert forcing_0 != forcing_1
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
@@ -525,7 +513,7 @@ def test_multiverse() -> None:
 
             # add member dimension
             forecast_da: xr.DataArray = forecast_da.expand_dims(
-                dim={"member": [0]}, axis=0
+                dim={"member": [0, 1]}, axis=0
             )
 
             forecasts_folder: Path = (
@@ -546,7 +534,7 @@ def test_multiverse() -> None:
                 mode="w",
             )
 
-        mean_discharge_after_forecast: dict[Any, float] = geb.multiverse(
+        mean_discharge_after_forecast: dict[str | int, float] = geb.multiverse(
             return_mean_discharge=True, forecast_issue_datetime=forecast_issue_date
         )
 
@@ -624,7 +612,7 @@ def test_share() -> None:
         share_fn(
             working_directory=Path("."),
             name="test",
-            include_preprocessing=False,
+            include_cache=False,
             include_output=False,
         )
 

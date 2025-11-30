@@ -4,6 +4,7 @@ import os
 import platform
 import shutil
 import subprocess
+import warnings
 from datetime import datetime
 from os.path import isfile, join
 from pathlib import Path
@@ -16,9 +17,12 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 from hydromt_sfincs import SfincsModel, utils
-from pyextremes import EVA
+from matplotlib.cm import viridis  # ty: ignore[unresolved-import]
+from scipy.stats import genpareto, kstest
 from shapely.geometry import LineString, Point
 from tqdm import tqdm
+
+from geb.types import ArrayFloat32, ArrayInt64
 
 
 def export_rivers(
@@ -48,7 +52,11 @@ def import_rivers(model_root: Path, postfix: str = "") -> gpd.GeoDataFrame:
 
 
 def read_flood_depth(
-    model_root: Path, simulation_root: Path, method: str, minimum_flood_depth: float
+    model_root: Path,
+    simulation_root: Path,
+    method: str,
+    minimum_flood_depth: float,
+    end_time: datetime,
 ) -> xr.DataArray:
     """Read the maximum flood depth from the SFINCS model results.
 
@@ -68,12 +76,14 @@ def read_flood_depth(
         minimum_flood_depth: The minimum flood depth to apply during downscaling (in meters).
         method: The method to use for calculating flood depth. Options are 'max' for maximum flood depth
             and 'final' for flood depth at the final time step.
+        end_time: The end time of the simulation.
 
     Returns:
         The maximum flood depth downscaled to subgrid resolution.
 
     Raises:
         ValueError: If an unknown method is provided.
+        KeyError: If the specified end_time is not in the results time dimension.
     """
     # Read SFINCS model, config and results
     model: SfincsModel = SfincsModel(
@@ -81,7 +91,13 @@ def read_flood_depth(
         mode="r",
     )
     model.read_config()
-    model.read_results()
+
+    # For unknown reasons, sometimes reading the results fails the first time
+    # but succeeds the second time. Therefore, we try twice here.
+    try:
+        model.read_results()
+    except OSError:
+        model.read_results()
 
     # to detect whether SFINCS was run with subgrid, we check if the 'sbgfile' key exists in the config
     # to be extra safe, we also check if the value is not None or has has length > 0
@@ -92,12 +108,23 @@ def read_flood_depth(
     ):
         if method == "max":
             # get maximum water surface elevation (with respect to sea level)
-            water_surface_elevation: xr.DataArray = model.results["zsmax"].max(
-                dim="timemax"
-            )
+            water_surface_elevation = model.results["zsmax"].max(dim="timemax")
+            assert isinstance(water_surface_elevation, xr.DataArray)
         elif method == "final":
             # get water surface elevation at the final time step (with respect to sea level)
-            water_surface_elevation: xr.DataArray = model.results["zs"].isel(timemax=-1)
+            all_water_surface_elevation: xr.Dataset | xr.DataArray = model.results["zs"]
+            assert isinstance(all_water_surface_elevation, xr.DataArray)
+            try:
+                water_surface_elevation: xr.DataArray = all_water_surface_elevation.sel(
+                    time=end_time
+                )
+            except KeyError:
+                raise KeyError(
+                    f"The specified end_time {end_time} is not in the results time dimension. \
+                    Consider whether the reporting interval of SFINCS is expected \
+                    to include the end_time."
+                )
+            assert isinstance(water_surface_elevation, xr.DataArray)
         else:
             raise ValueError(f"Unknown method: {method}")
         # read subgrid elevation
@@ -111,21 +138,33 @@ def read_flood_depth(
             hmin=minimum_flood_depth,
             reproj_method="bilinear",  # maybe use "nearest" for coastal
         )
-        flood_depth_m = flood_depth_m.rio.write_crs(model.crs)
+        flood_depth_m: xr.DataArray = flood_depth_m.rio.write_crs(model.crs)
 
     else:
-        surface_elevation = model.grid.get("dep")
         if method == "max":
-            flood_depth_m = model.results["hmax"].max(dim="timemax")
+            flood_depth_m: xr.Dataset | xr.DataArray = model.results["hmax"].max(
+                dim="timemax"
+            )
+            assert isinstance(flood_depth_m, xr.DataArray)
         elif method == "final":
-            flood_depth_m_zs = model.results["zs"].isel(time=-1) - surface_elevation
-            flood_depth_m_zs = flood_depth_m_zs.compute()
-
-            flood_depth_m = model.results["h"].isel(time=-1)
-            flood_depth_m = flood_depth_m.compute()
+            flood_depth_m_all_steps: xr.Dataset | xr.DataArray = model.results["h"]
+            assert isinstance(flood_depth_m_all_steps, xr.DataArray)
+            try:
+                flood_depth_m: xr.DataArray = flood_depth_m_all_steps.sel(time=end_time)
+            except KeyError:
+                raise KeyError(
+                    f"The specified end_time {end_time} is not in the results time dimension. \
+                    Consider whether the reporting interval of SFINCS is expected \
+                    to include the end_time."
+                )
 
         else:
             raise ValueError(f"Unknown method: {method}")
+
+        flood_depth_m: xr.DataArray = xr.where(
+            flood_depth_m >= minimum_flood_depth, flood_depth_m, np.nan, keep_attrs=True
+        )
+        flood_depth_m.attrs["_FillValue"] = np.nan
 
     print(
         f"Maximum flood depth: {float(flood_depth_m.max().values):.2f} m, "
@@ -133,22 +172,22 @@ def read_flood_depth(
     )
     # Create basemap plot
     fig, ax = model.plot_basemap(
-        fn_out=None,
+        fn_out=None,  # ty: ignore[invalid-argument-type]
         variable="",  # No variable to plot, only basemap
         plot_geoms=False,
         zoomlevel=12,
-        figsize=(11, 7),
+        figsize=(11, 7),  # ty: ignore[invalid-argument-type]
     )
 
     # Plot flood depth with colorbar
-    cbar_kwargs = {"shrink": 0.6, "anchor": (0, 0)}
+    cbar_kwargs: dict[str, float | tuple[int, int]] = {"shrink": 0.6, "anchor": (0, 0)}
     flood_depth_m.plot(
         x="x",
         y="y",
         ax=ax,
         vmin=0,
         vmax=float(flood_depth_m.max().values),
-        cmap=plt.cm.viridis,
+        cmap=viridis,
         cbar_kwargs=cbar_kwargs,
     )
 
@@ -279,8 +318,8 @@ def get_end_point(geom: LineString) -> Point:
 
 def create_hourly_hydrograph(
     peak_discharge: float,
-    rising_limb_hours: float | int,
-    recession_limb_hours: float | int,
+    rising_limb_hours: int,
+    recession_limb_hours: int,
 ) -> pd.DataFrame:
     """Create a triangular hydrograph time series.
 
@@ -292,11 +331,11 @@ def create_hourly_hydrograph(
     Returns:
         A pandas DataFrame with the time series of the hydrograph.
     """
-    total_duration_hours = rising_limb_hours + recession_limb_hours
+    total_duration_hours: int | float = rising_limb_hours + recession_limb_hours
     # Create a time array with hourly intervals
-    time_hours = np.arange(0, total_duration_hours + 1)
+    time_hours: ArrayInt64 = np.arange(0, total_duration_hours + 1)
     # Create discharge array for triangular shape
-    discharge = np.zeros_like(time_hours, dtype=float)
+    discharge: ArrayFloat32 = np.zeros_like(time_hours, dtype=np.float32)
     # Rising limb: linear increase to peak
     discharge[: rising_limb_hours + 1] = np.linspace(
         0, peak_discharge, rising_limb_hours + 1
@@ -306,11 +345,13 @@ def create_hourly_hydrograph(
         peak_discharge, 0, recession_limb_hours + 1
     )
     # Create a pandas DataFrame for the time series
-    time_index = pd.date_range(
+    time_index: pd.DatetimeIndex = pd.date_range(
         start="2024-01-01 00:00", periods=len(time_hours), freq="h"
     )
-    hydrograph_df = pd.DataFrame({"time": time_index, "discharge": discharge})
-    hydrograph_df.set_index("time", inplace=True)
+    hydrograph_df: pd.DataFrame = pd.DataFrame(
+        {"time": time_index, "discharge": discharge}
+    )
+    hydrograph_df = hydrograph_df.set_index("time")
     return hydrograph_df
 
 
@@ -325,8 +366,7 @@ def check_docker_running() -> bool | None:
         subprocess.run(
             ["docker", "info"],
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -335,7 +375,10 @@ def check_docker_running() -> bool | None:
 
 
 def run_sfincs_simulation(
-    model_root: Path, simulation_root: Path, gpu: bool | str = "auto"
+    model_root: Path,
+    simulation_root: Path,
+    ncpus: int | str = "auto",
+    gpu: bool | str = "auto",
 ) -> int:
     """Run SFINCS simulation using either Apptainer or Docker.
 
@@ -344,6 +387,7 @@ def run_sfincs_simulation(
         simulation_root: Path to the simulation root directory.
             Some paths in the configuration will be made relative to this path.
             The simulation directory must be a subdirectory of the model root directory.
+        ncpus: Number of CPUs to use. Can be an integer or 'auto' to automatically detect the number of CPUs.
         gpu: Whether to use GPU support. Can be True, False, or 'auto'. In auto mode,
             the presence of an NVIDIA GPU is checked using `nvidia-smi`. Defaults to auto.
 
@@ -363,7 +407,25 @@ def run_sfincs_simulation(
             result: subprocess.CompletedProcess[bytes] = subprocess.run(
                 args=["nvidia-smi"], capture_output=True
             )
-            gpu: bool = result.returncode == 0
+            maybe_gpu: bool = result.returncode == 0
+
+            # if no GPU is found, there is no need to check further, set gpu to False
+            if not maybe_gpu:
+                gpu: bool = False
+            else:
+                # otherwise, check if we are in a SLURM job. We may be on a cluster
+                # where a GPU is physically present, but not allocated to the job
+                # and therefore not available for use.
+                in_SLURM_job: bool = "SLURM_JOB_ID" in os.environ
+                if in_SLURM_job:
+                    # in a SLURM job, if the job has access to the GPU
+                    gpu_ids: str | None = os.getenv(key="CUDA_VISIBLE_DEVICES")
+                    if gpu_ids is not None and len(gpu_ids) > 0:
+                        gpu: bool = True
+                    else:
+                        gpu: bool = False
+                else:
+                    gpu: bool = True
         else:
             gpu: bool = False
 
@@ -386,7 +448,22 @@ def run_sfincs_simulation(
         # to the version string
         if not version.endswith(".sif"):
             version: str = "docker://" + version
+
+        c = (
+            int(
+                os.getenv("SLURM_CPUS_PER_TASK")
+                or os.getenv("SLURM_CPUS_ON_NODE")
+                or os.cpu_count()
+            )
+            if ncpus == "auto"
+            else int(ncpus)
+        )
+        ncpus_str = "0" if c == 1 else f"0-{c - 1}"
+
         cmd: list[str] = [
+            "taskset",
+            "-c",
+            ncpus_str,  # get user defined or automatically detected number of CPUs
             "apptainer",
             "run",
             "-B",  ## Bind mount
@@ -425,54 +502,42 @@ def run_sfincs_simulation(
 
 def _get_xy(
     river: pd.Series,
-    waterbody_ids: npt.NDArray[np.int32],
     up_to_downstream: bool = True,
-) -> tuple[int, int] | None:
+) -> tuple[int, int]:
     """Get the first valid xy coordinate from a river's hydrography_xy list.
 
-    Ignore coordinates that fall within a waterbody (waterbody_ids != -1).
     Starts upstream or downstream based on the up_to_downstream flag.
 
     Args:
         river: Series containing river information, including 'hydrography_xy'.
             This is a list of (x, y) tuples, representing the location of the river
             in the low-resolution hydrological grid.
-        waterbody_ids: 2D array of waterbody IDs, where -1 indicates no waterbody.
-            Also in the low-resolution hydrological grid.
         up_to_downstream: Whether to search from upstream to downstream.
             Defaults to True (starting upstream).
 
     Returns:
-        A tuple (x, y) of the first valid coordinate, or an empty list if none found.
+        A tuple (x, y) of the first valid coordinate.
     """
     xys = river["hydrography_xy"]
-    if not up_to_downstream:
-        xys = reversed(xys)  # Reverse the order if not going downstream
-    for xy in xys:
-        is_waterbody = waterbody_ids[xy[1], xy[0]] != -1
-        if not is_waterbody:
-            return (xy[0], xy[1])
+    if up_to_downstream:
+        idx: int = 0
     else:
-        return None  # If no valid xy found, return None
+        idx: int = -1
+    return (xys[idx][0], xys[idx][1])
 
 
 def get_representative_river_points(
-    river_ID: set, rivers: pd.DataFrame, waterbody_ids: npt.NDArray[np.int32]
-) -> list[tuple[float, float]]:
+    river_ID: set, rivers: pd.DataFrame
+) -> list[tuple[int, int]]:
     """Get representative river points for a given river ID.
 
     If the river is represented in the low-resolution hydrological grid, its
     representative point is used. If not, the function traverses upstream to find
     rivers that are represented in the grid and uses their representative points.
 
-    Moreover, if a point in the river falls within a waterbody (waterbody_ids != -1),
-    it is ignored and the next point in the river's hydrography_xy list is checked until
-    a valid point is found or the list is exhausted in which case an empty list is returned.
-
     Args:
         river_ID: The ID of the river for which to find representative points.
         rivers: DataFrame containing river information, including 'represented_in_grid' and 'hydrography_xy'.
-        waterbody_ids: 2D array of waterbody IDs, where -1 indicates no waterbody.
 
     Returns:
         A list of tuples (x, y) representing the coordinates of the representative points.
@@ -480,7 +545,7 @@ def get_representative_river_points(
     """
     river = rivers.loc[river_ID]
     if river["represented_in_grid"]:
-        xy = _get_xy(river, waterbody_ids, up_to_downstream=True)
+        xy = _get_xy(river, up_to_downstream=True)
         if xy is not None:
             return [xy]
         else:
@@ -504,7 +569,7 @@ def get_representative_river_points(
         representitative_rivers = rivers[rivers.index.isin(representitative_rivers)]
         xys = []
         for river_ID, river in representitative_rivers.iterrows():
-            xy = _get_xy(river, waterbody_ids, up_to_downstream=False)
+            xy = _get_xy(river, up_to_downstream=False)
             if xy is not None:
                 xys.append(xy)
             else:
@@ -637,58 +702,453 @@ def get_discharge_and_river_parameters_by_river(
     return discharge_df, river_parameters
 
 
-def assign_return_periods(
-    rivers: pd.DataFrame,
-    discharge_dataframe: pd.DataFrame,
-    return_periods: list[int],
-    prefix: str = "Q",
-) -> pd.DataFrame:
-    """Assign return periods to rivers based on discharge data.
+# helper functions for new return period distribution fitting
+def fit_gpd_mle(exceedances: np.ndarray) -> tuple[float, float]:
+    """Fit GPD to positive exceedances using Maximum Likelihood Estimation.
+
+    Fits a Generalized Pareto Distribution to exceedances (y = x - u) using
+    scipy's genpareto.fit with location parameter fixed at 0.
 
     Args:
-        rivers: DataFrame containing river information. Here only the index is used.
-        discharge_dataframe: DataFrame containing discharge time series for each river.
-            The column names must match the index of the rivers DataFrame.
-        return_periods: List of return periods to calculate (in years).
-        prefix: Prefix for the return period columns in the output DataFrame. Defaults to "Q".
+        exceedances: Positive exceedance values above threshold (dimensionless).
 
     Returns:
-        DataFrame with return period discharge values added as new columns.
+        Tuple of (sigma, xi) where sigma is the scale parameter and xi is
+        the shape parameter of the fitted GPD.
 
     Raises:
-        ValueError: If discharge values are unrealistically high.
+        ValueError: If fewer than 6 exceedances provided for reliable fit.
+    """
+    y = np.asarray(exceedances, dtype=float)
+    if len(y) < 6:
+        raise ValueError("Too few exceedances for reliable fit")
+    c_hat, loc_hat, scale_hat = genpareto.fit(y, floc=0.0)
+    return float(scale_hat), float(c_hat)  # sigma, xi
+
+
+def gpd_cdf(y: np.ndarray | float, sigma: float, xi: float) -> np.ndarray | float:
+    """GPD CDF for exceedance y>=0 with loc=0.
+
+    Args:
+        y: Exceedance values (y = x - u), must be >= 0 (dimensionless)
+        sigma: Scale parameter (>0) (dimensionless)
+        xi: Shape parameter (can be any real number) (dimensionless)
+
+    Returns:
+        CDF values at y (dimensionless)
+    """
+    y = np.asarray(y, float)
+    if abs(xi) < 1e-12:
+        return 1 - np.exp(-y / sigma)
+    return 1 - (1 + xi * y / sigma) ** (-1.0 / xi)
+
+
+def right_tail_ad_from_uniforms(u_sorted: np.ndarray) -> float:
+    """Right-tail weighted Anderson-Darling statistic for uniform data.
+
+    Computes the right-tail weighted AD statistic:
+    A_R^2 = -n - (1/n) * sum_{i=1}^n (2i-1) * ln(1 - u_{n+1-i})
+    where u_sorted are uniforms in ascending order.
+    This emphasizes misfit in the right tail (large exceedances).
+
+    Args:
+        u_sorted: Uniform random variables sorted in ascending order (dimensionless).
+
+    Returns:
+        Right-tail Anderson-Darling statistic (dimensionless).
+    """
+    u = np.asarray(u_sorted, dtype=float)
+    n = u.size
+    if n < 1:
+        return np.nan
+    i = np.arange(1, n + 1)
+    s_tail = np.sum((2 * i - 1) * np.log(1.0 - u[::-1]))
+    a_r2 = -n - s_tail / n
+    return float(a_r2)
+
+
+def bootstrap_pvalue_for_ad(
+    observed_stat: float,
+    n: int,
+    sigma_hat: float,
+    xi_hat: float,
+    nboot: int = 2000,
+    random_seed: int = 123,
+) -> float:
+    """Parametric bootstrap p-value for right-tail Anderson-Darling statistic.
+
+    Simulates n exceedances from GPD(sigma_hat, xi_hat) nboot times,
+    computes AD statistic on transformed uniforms for each simulation,
+    and returns the proportion of simulated statistics >= observed statistic.
+
+    Args:
+        observed_stat: Observed Anderson-Darling statistic (dimensionless).
+        n: Number of exceedances to simulate (dimensionless).
+        sigma_hat: Fitted GPD scale parameter (dimensionless).
+        xi_hat: Fitted GPD shape parameter (dimensionless).
+        nboot: Number of bootstrap samples (dimensionless).
+        random_seed: Random seed for reproducibility (dimensionless).
+
+    Returns:
+        Bootstrap p-value as proportion of simulated stats >= observed (dimensionless).
+    """
+    rng = np.random.default_rng(random_seed)
+    sim_stats = np.empty(nboot, dtype=float)
+    for k in range(nboot):
+        ysim = genpareto.rvs(c=xi_hat, scale=sigma_hat, size=n, random_state=rng)
+        u_sim = gpd_cdf(ysim, sigma_hat, xi_hat)
+        sim_stats[k] = right_tail_ad_from_uniforms(np.sort(u_sim))
+    pval = np.mean(sim_stats >= observed_stat)
+    return float(pval)
+
+
+def mean_residual_life(data: np.ndarray, u_grid: np.ndarray) -> np.ndarray:
+    """Calculate mean residual life for threshold values.
+
+    Computes the mean excess over threshold u for each threshold in u_grid.
+    This is used for mean residual life plots to assess threshold selection.
+
+    Args:
+        data: Array of observed values (dimensionless).
+        u_grid: Array of threshold values to evaluate (dimensionless).
+
+    Returns:
+        Array of mean residual life values, one for each threshold (dimensionless).
+        Returns NaN for thresholds with no exceedances.
+    """
+    x = np.asarray(data, dtype=float)
+    return np.array(
+        [(x[x > u] - u).mean() if np.sum(x > u) > 0 else np.nan for u in u_grid]
+    )
+
+
+def gpd_return_level(
+    u: float, sigma: float, xi: float, lambda_per_year: float, T: np.ndarray | float
+) -> np.ndarray | float:
+    """Calculate return levels for given return periods using GPD parameters.
+
+    Computes return levels using the Generalized Pareto Distribution fitted above
+    threshold u. For shape parameter xi ≈ 0, uses exponential limit formula.
+
+    Args:
+        u: Threshold value (dimensionless).
+        sigma: GPD scale parameter (>0) (dimensionless).
+        xi: GPD shape parameter (dimensionless).
+        lambda_per_year: Average number of exceedances per year (1/year).
+        T: Return period(s) in years (years).
+
+    Returns:
+        Return level(s) corresponding to the given return period(s) (dimensionless).
+    """
+    T = np.asarray(T, float)
+    LT = lambda_per_year * T
+    if abs(xi) < 1e-8:
+        return u + sigma * np.log(LT)
+    return u + (sigma / xi) * (LT**xi - 1.0)
+
+
+def gpd_pot_ad_auto(
+    series: pd.Series,
+    quantile_start: float = 0.80,
+    quantile_end: float = 0.99,
+    quantile_step: float = 0.01,
+    min_exceed: int = 30,
+    nboot: int = 2000,
+    return_periods: np.ndarray | None = None,
+    mrl_grid_q: np.ndarray | None = None,
+    mrl_top_fraction: float = 0.75,
+    random_seed: int = 123,
+) -> dict:
+    """Automated GPD-POT analysis with threshold selection using Anderson-Darling test.
+
+    Performs automated Generalized Pareto Distribution Peaks-Over-Threshold analysis
+    by scanning multiple threshold candidates and selecting the optimal threshold based
+    on Anderson-Darling goodness-of-fit testing with bootstrap p-values.
+
+    Args:
+        series: Time series data with DatetimeIndex (dimensionless).
+        quantile_start: Starting quantile for threshold scan (dimensionless).
+        quantile_end: Ending quantile for threshold scan (dimensionless).
+        quantile_step: Step size between quantiles (dimensionless).
+        min_exceed: Minimum number of exceedances required for fitting (dimensionless).
+        nboot: Number of bootstrap samples for p-value calculation (dimensionless).
+        return_periods: Array of return periods in years for return level calculation (years).
+        mrl_grid_q: Quantiles for mean residual life plot baseline (dimensionless).
+        mrl_top_fraction: Fraction of top quantiles to use for linear fit in mean residual life plot (dimensionless).
+        random_seed: Random seed for reproducibility (dimensionless).
+
+    Returns:
+        Dictionary containing daily maxima, diagnostics DataFrame, chosen parameters,
+        and return level table.
+
+    Raises:
+        TypeError: If series does not have a DatetimeIndex.
+    """
+    if return_periods is None:
+        return_periods = np.array(
+            [2, 5, 10, 25, 50, 100, 200, 250, 500, 1000, 10000], float
+        )
+
+    if mrl_grid_q is None:
+        mrl_grid_q = np.linspace(0.70, 0.995, 80)
+
+    # ---- Prepare data ----
+    s = series.dropna().sort_index()
+    if not isinstance(s.index, pd.DatetimeIndex):
+        raise TypeError("Series must have a DatetimeIndex.")
+
+    daily_max = s.resample("D").max().dropna()
+    total_days = (daily_max.index.max() - daily_max.index.min()).days + 1
+    years = total_days / 365.25
+
+    # ---- Threshold candidates ----
+    q_grid = np.arange(quantile_start, quantile_end + 1e-9, quantile_step)
+    u_candidates = np.quantile(daily_max.values, q_grid)
+
+    # ---- MRL baseline ----
+    mrl_grid_u = np.quantile(daily_max.values, mrl_grid_q)
+    mrl_vals = mean_residual_life(daily_max.values, mrl_grid_u)
+
+    top_idx = int(len(mrl_vals) * mrl_top_fraction)
+    if np.sum(~np.isnan(mrl_vals[top_idx:])) >= 3:
+        a_lin, b_lin = np.polyfit(mrl_grid_u[top_idx:], mrl_vals[top_idx:], 1)
+    else:
+        a_lin, b_lin = 0.0, 0.0
+
+    diagnostics = []
+
+    # ---- Main scan ----
+    for u in u_candidates:
+        exceed = daily_max[daily_max > u]
+        n_exc = exceed.size
+
+        if n_exc < min_exceed:
+            diagnostics.append(
+                (u, np.nan, np.nan, n_exc, np.nan, np.nan, np.nan, np.nan)
+            )
+            continue
+
+        y = exceed.values - u
+
+        try:
+            sigma, xi = fit_gpd_mle(y)
+        except Exception as e:
+            print(
+                f"Exception in fit_gpd_mle(y) for threshold u={u}: {type(e).__name__}: {e}"
+            )
+            diagnostics.append(
+                (u, np.nan, np.nan, n_exc, np.nan, np.nan, np.nan, np.nan)
+            )
+            continue
+
+        u_vals = gpd_cdf(y, sigma, xi)
+        A_R2 = right_tail_ad_from_uniforms(np.sort(u_vals))
+
+        p_ad = bootstrap_pvalue_for_ad(A_R2, n_exc, sigma, xi, nboot, random_seed)
+
+        ks_p = np.nan
+        if n_exc >= 20:
+            _, ks_p = kstest(y, "genpareto", args=(xi, 0.0, sigma))
+
+        idx = np.argmin(np.abs(mrl_grid_u - u))
+        mrl_err = (
+            np.nan
+            if np.isnan(mrl_vals[idx])
+            else abs(mrl_vals[idx] - (a_lin * mrl_grid_u[idx] + b_lin))
+        )
+
+        diagnostics.append((u, sigma, xi, n_exc, p_ad, ks_p, mrl_err, A_R2))
+
+    # ---- Diagnostics to DataFrame ----
+    diag_df = (
+        pd.DataFrame(
+            diagnostics,
+            columns=["u", "sigma", "xi", "n_exc", "p_ad", "ks_p", "mrl_err", "A_R2"],
+        )
+        .sort_values("u")
+        .reset_index(drop=True)
+    )
+
+    diag_df["xi_step"] = diag_df["xi"].diff().abs().bfill()
+    # ---- Pick threshold = highest AD p-value ----
+    valid = diag_df.dropna(subset=["p_ad"])
+
+    # If no valid thresholds (e.g., too few exceedances / bootstrap failed),
+    # return a safe structure with NaN RLs so upstream code can handle it.
+    if valid.empty:
+        rl_table = pd.DataFrame(
+            {
+                "T_years": return_periods.astype(int),
+                "GPD_POT_RL": np.full(len(return_periods), np.nan),
+            }
+        )
+        chosen = {
+            "u": np.nan,
+            "sigma": np.nan,
+            "xi": np.nan,
+            "p_ad": np.nan,
+            "n_exc": 0,
+            "lambda_per_year": np.nan,
+            "pct": np.nan,
+        }
+        # optional informative print
+        print(
+            "No valid thresholds found in gpd_pot_ad_auto — returning NaN return levels."
+        )
+        return {
+            "daily_max": daily_max,
+            "years": years,
+            "diag_df": diag_df,
+            "chosen": chosen,
+            "rl_table": rl_table,
+        }
+
+    # normal path: pick threshold with largest AD p-value
+    best = valid.loc[valid["p_ad"].idxmax()]
+
+    u_star = float(best["u"])
+    sigma_star = float(best["sigma"])
+    xi_star = float(best["xi"])
+    p_star = float(best["p_ad"])
+    n_star = int(best["n_exc"])
+
+    lambda_per_year = n_star / years
+    pct = (daily_max < u_star).mean() * 100
+
+    # ---- Return levels ----
+    RLs = gpd_return_level(u_star, sigma_star, xi_star, lambda_per_year, return_periods)
+    rl_table = pd.DataFrame({"T_years": return_periods.astype(int), "GPD_POT_RL": RLs})
+    print(
+        "Automatic threshold selection for exceedances done (checked by Anderson-Darling goodness-of-fit parameter test)."
+    )
+    print(
+        f"Chosen threshold corresponds to approximately the {pct:.2f}th percentile of daily maxima of discharge."
+    )
+
+    return {
+        "daily_max": daily_max,
+        "years": years,
+        "diag_df": diag_df,
+        "chosen": {
+            "u": u_star,
+            "sigma": sigma_star,
+            "xi": xi_star,
+            "p_ad": p_star,
+            "n_exc": n_star,
+            "lambda_per_year": lambda_per_year,
+            "pct": pct,
+        },
+        "rl_table": rl_table,
+    }
+
+
+# new distribution function for return period calculations
+# based on https://doi.org/10.1002/2016WR019426
+# automatic threshold selection and gpd distribution
+def assign_return_periods(
+    rivers: gpd.GeoDataFrame,
+    discharge_dataframe: pd.DataFrame,
+    return_periods: list[int | float],
+    prefix: str = "Q",
+    min_exceed: int = 30,
+    nboot: int = 2000,
+) -> gpd.GeoDataFrame:
+    """Assign return periods to rivers using GPD-POT analysis.
+
+    Uses Generalized Pareto Distribution Peaks-Over-Threshold method with:
+        - Daily maxima resampling from input time series
+        - GPD-POT exceedance model fitting above threshold
+        - Anderson-Darling bootstrap p-value threshold selection
+        - Return level estimation for specified return periods
+
+    Args:
+        rivers: GeoDataFrame with river IDs as index that must match columns in discharge_dataframe.
+        discharge_dataframe: Time series DataFrame with datetime index containing discharge data for all rivers (m³/s).
+        return_periods: List of return periods in years to compute return levels for.
+        prefix: Column prefix for output return level columns. Defaults to "Q".
+        min_exceed: Minimum number of exceedances required for reliable GPD fit. Defaults to 30.
+        nboot: Number of bootstrap samples for Anderson-Darling threshold selection. Defaults to 2000.
+
+    Returns:
+        Updated rivers GeoDataFrame with return level columns added (m³/s).
+
+    Raises:
+        TypeError: If discharge series does not have a DatetimeIndex.
+        ValueError: If return periods contain non-positive values.
     """
     assert isinstance(return_periods, list)
-    for i, idx in tqdm(enumerate(rivers.index), total=len(rivers)):
-        discharge = discharge_dataframe[idx]
+    if not all((isinstance(T, (int, float)) and T > 0) for T in return_periods):
+        raise ValueError("All return periods must be positive numbers (years > 0).")
+    return_periods_arr = np.asarray(return_periods, float)
 
+    for idx in tqdm(rivers.index, total=len(rivers), desc="GPD-POT Return Periods"):
+        discharge = discharge_dataframe[idx].dropna()
+
+        # If all values are zero, assign zeros
         if (discharge < 1e-10).all():
-            print(
-                f"Discharge is all (near) zeros, skipping return period calculation, for river {idx}"
-            )
-            discharge_per_return_period = np.zeros_like(return_periods)
-        else:
-            # Fit the model and calculate return periods
-            model = EVA(discharge)
-            model.get_extremes(method="BM", block_size="365.2425D")
-            model.fit_model()
-            discharge_per_return_period = model.get_return_value(
-                return_period=return_periods
-            )[0]  # [1] and [2] are the uncertainty bounds
+            print(f"Discharge all zero for river {idx}, assigning zeros.")
+            for T in return_periods:
+                rivers.loc[idx, f"{prefix}_{T}"] = 0.0
+            continue
 
-            # when only one return period is given, the result is a single value
-            # instead of a list, so convert it to a list for simplicty of
-            # further processing
-            if len(return_periods) == 1:
-                discharge_per_return_period = [discharge_per_return_period]
-        for return_period, discharge_value in zip(
-            return_periods, discharge_per_return_period
-        ):
-            rivers.loc[idx, f"{prefix}_{return_period}"] = discharge_value
-            if (
-                discharge_value > 400_000
-            ):  # Amazon has a maximum recorded discharge of about 340,000 m3/s
-                raise ValueError(
-                    f"Discharge value for return period {return_period} is too high: {discharge_value} m3/s for river {idx}."
+        if not isinstance(discharge.index, pd.DatetimeIndex):
+            raise TypeError(
+                f"Discharge series for river {idx} must have a DatetimeIndex."
+            )
+
+        # Try GPD-POT method
+        try:
+            result = gpd_pot_ad_auto(
+                series=discharge,
+                return_periods=return_periods_arr,
+                min_exceed=min_exceed,
+                nboot=nboot,
+            )
+            print(f"GPD-POT analysis completed for river {idx}.")
+        except Exception as e:
+            # If the threshold-selection routine raises, handle gracefully:
+            # assign NaNs for all requested return periods and continue.
+            warnings.warn(
+                f"GPD-POT analysis raised an exception for river {idx}: {type(e).__name__}: {e}. "
+                "Assigning NaN for return levels.",
+                UserWarning,
+            )
+            rl_values = np.array([np.nan] * len(return_periods_arr))
+        else:
+            # defensive extraction of rl values
+            try:
+                rl_values = (
+                    result.get("rl_table", pd.DataFrame())
+                    .get("GPD_POT_RL", pd.Series([np.nan] * len(return_periods_arr)))
+                    .values
                 )
+            except Exception:
+                rl_values = np.array([np.nan] * len(return_periods_arr))
+
+        # Assign and apply warnings/guards
+        MAX_Q = 400_000
+        for T, rl in zip(return_periods, rl_values):
+            # safe conversion to float - handle NaN / weird objects
+            try:
+                discharge_value = float(rl)
+            except Exception:
+                discharge_value = float("nan")
+
+            # If non-finite, store NaN
+            if not np.isfinite(discharge_value):
+                rivers.loc[idx, f"{prefix}_{T}"] = np.nan
+                continue
+
+            # Cap values to a safe maximum rather than raising on extremely large extrapolations
+            if discharge_value > MAX_Q:
+                warnings.warn(
+                    f"Computed return level for T={T} years for river {idx} ({discharge_value:.3g}) "
+                    f"exceeds maximum cap {MAX_Q}. Capping to {MAX_Q}.",
+                    UserWarning,
+                )
+                discharge_value = float(MAX_Q)
+
+            # Finally assign the (sanitized) value
+            rivers.loc[idx, f"{prefix}_{T}"] = discharge_value
+
     return rivers

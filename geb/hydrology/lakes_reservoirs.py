@@ -345,7 +345,9 @@ class LakesReservoirs(Module):
         )
 
         # set discharge to NaN for all cells that are not part of a water body
-        self.grid.var.discharge_m3_s_substep[self.grid.var.waterBodyID != -1] = np.nan
+        self.grid.var.discharge_in_rivers_m3_s_substep[
+            self.grid.var.waterBodyID != -1
+        ] = np.nan
 
         self.grid.var.waterbody_outflow_points = self.get_outflows(
             self.grid.var.waterBodyID
@@ -394,7 +396,7 @@ class LakesReservoirs(Module):
         self.var.lake_factor = get_lake_factor(
             river_width,
             overflow_coefficient_mu,
-            self.model.config["parameters"]["lakeAFactor"],
+            self.model.config["parameters"]["lake_outflow_multiplier"],
         )
 
         self.var.storage = np.full_like(self.var.capacity, np.nan, dtype=np.float64)

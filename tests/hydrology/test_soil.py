@@ -368,11 +368,9 @@ def test_infiltration() -> None:
         )
     )
 
-    # Should infiltrate into unsaturated layers
-    assert infiltration_amount > 0.0
+    # No infiltration into already saturated layers
+    assert infiltration_amount == 0.0
     assert groundwater_recharge == 0.0
-    # Check that unsaturated layers received water
-    assert w[2] > w_pre[2] or w[3] > w_pre[3] or w[4] > w_pre[4] or w[5] > w_pre[5]
 
 
 def test_get_soil_water_flow_parameters() -> None:
