@@ -26,7 +26,7 @@ from ..hydrology.landcovers import (
     FOREST,
 )
 from ..store import DynamicArray
-from ..workflows.damage_scanner import VectorScanner
+from ..workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.io import load_array, load_table, open_zarr, to_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
@@ -168,18 +168,22 @@ class Households(AgentBaseClass):
 
     def update_building_attributes(self) -> None:
         """Update building attributes based on household data."""
-        # Start by computing occupancy from the var.building_id array
-        building_id_series = pd.Series(self.var.building_id.data)
+        # Start by computing occupancy from the var.building_id_of_household array
+        building_id_of_household_series = pd.Series(
+            self.var.building_id_of_household.data
+        )
 
         # Drop NaNs and convert to string format (matching building ID format)
-        building_id_counts = building_id_series.dropna().astype(int).value_counts()
+        building_id_of_household_counts = (
+            building_id_of_household_series.dropna().astype(int).value_counts()
+        )
         # Initialize occupancy column
         self.buildings["occupancy"] = 0
 
         # Map the counts back to the buildings dataframe
         self.buildings["occupancy"] = (
             self.buildings["id"]
-            .map(building_id_counts)
+            .map(building_id_of_household_counts)
             .fillna(self.buildings["occupancy"])
         )
 
@@ -213,16 +217,18 @@ class Households(AgentBaseClass):
     def update_building_adaptation_status(self, household_adapting: np.ndarray) -> None:
         """Update the floodproofing status of buildings based on adapting households."""
         # Extract and clean OSM IDs from adapting households
-        building_id = pd.DataFrame(
-            np.unique(self.var.building_id.data[household_adapting])
+        building_id_of_household = pd.DataFrame(
+            np.unique(self.var.building_id_of_household.data[household_adapting])
         ).dropna()
-        building_id = building_id.astype(int).astype(str)
-        building_id["flood_proofed"] = True
-        building_id = building_id.set_index(0)
+        building_id_of_household = building_id_of_household.astype(int).astype(str)
+        building_id_of_household["flood_proofed"] = True
+        building_id_of_household = building_id_of_household.set_index(0)
 
         # Add/Update the flood_proofed status in buildings based on OSM way IDs
         self.buildings["flood_proofed"] = (
-            self.buildings["id"].astype(str).map(building_id["flood_proofed"])
+            self.buildings["id"]
+            .astype(str)
+            .map(building_id_of_household["flood_proofed"])
         )
 
         # Replace NaNs with False (i.e., buildings not in the adapting households list)
@@ -267,10 +273,12 @@ class Households(AgentBaseClass):
         )
 
         # load building id household
-        building_id = load_array(
-            self.model.files["array"]["agents/households/building_id"]
+        building_id_of_household = load_array(
+            self.model.files["array"]["agents/households/building_id_of_household"]
         )
-        self.var.building_id = DynamicArray(building_id, max_n=self.max_n)
+        self.var.building_id_of_household = DynamicArray(
+            building_id_of_household, max_n=self.max_n
+        )
 
         # update building attributes based on household data
         if self.config["adapt"]:
@@ -1880,83 +1888,156 @@ class Households(AgentBaseClass):
         if self.config["warning_response"]:
             self.change_household_locations()  # ideally this should be done in the setup_population when building the model
 
-    def calculate_building_flood_damages(self) -> tuple[np.ndarray, np.ndarray]:
+    def assign_damages_to_agents(
+        self, agent_df: pd.DataFrame, buildings_with_damages: pd.DataFrame
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """This function assigns the building damages calculated by the vector scanner to the corresponding households.
+
+        Args:
+            agent_df: Pandas dataframe that contains the open building map building id assigned to each agent.
+            buildings_with_damages: Pandas dataframe constructed by the vector scanner that contains the damages for each building.
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: A tuple containing damage arrays for (unprotected buildings, flood-proofed buildings).
+        """
+        merged = agent_df.merge(
+            buildings_with_damages.rename(columns={"id": "building_id_of_household"}),
+            on="building_id_of_household",
+            how="left",
+        ).fillna(0)
+        damages_do_not_adapt = merged["damages"].to_numpy()
+        damages_adapt = merged["damages_flood_proofed"].to_numpy()
+
+        return damages_do_not_adapt, damages_adapt
+
+    def calculate_building_flood_damages(
+        self, verbose: bool = False
+    ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
         It iterates over the return periods and calculates the damages for each household
         based on the flood maps and the building footprints.
 
+        Args:
+            verbose: Verbosity flag.
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
         """
         damages_do_not_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
         damages_adapt = np.zeros((self.return_periods.size, self.n), np.float32)
+
         buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(
             self.flood_maps[self.return_periods[0]].rio.crs
         )
+
+        # create a pandas data array for assigning damage to the agents:
+        agent_df = pd.DataFrame(
+            {"building_id_of_household": self.var.building_id_of_household}
+        )
+
         # subset building to those exposed to flooding
         buildings = buildings[buildings["flooded"]]
 
         for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
 
-            # Calculate damages to building structure (unprotected buildings)
-            damage_unprotected: pd.Series = VectorScanner(
-                features=buildings.rename(
+            building_multicurve = buildings.copy()
+            multi_curves = {
+                "damages": self.buildings_structure_curve["building_unprotected"],
+                "damages_flood_proofed": self.buildings_structure_curve[
+                    "building_flood_proofed"
+                ],
+            }
+            damage_buildings: pd.Series = VectorScannerMultiCurves(
+                features=building_multicurve.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
                 hazard=flood_map,
-                vulnerability_curves=self.buildings_structure_curve,
-                disable_progress=True,
+                multi_curves=multi_curves,
             )
-            total_damage_structure = damage_unprotected.sum()
-            print(
-                f"damages to building unprotected structure rp{return_period} are: {round(total_damage_structure / 1e6, 2)} M€"
+            building_multicurve = pd.concat(
+                [building_multicurve, damage_buildings], axis=1
+            )[["id", "damages", "damages_flood_proofed"]]
+            # merged["damage"] is aligned with agents
+            damages_do_not_adapt[i], damages_adapt[i] = self.assign_damages_to_agents(
+                agent_df,
+                building_multicurve,
             )
-
-            # Save the damages to the dataframe
-            buildings_with_damages = buildings[["id"]]
-            buildings_with_damages["damage"] = damage_unprotected
-
-            # Calculate damages to building structure (floodproofed buildings)
-            buildings_floodproofed = buildings.copy()
-            buildings_floodproofed["object_type"] = "building_flood_proofed"
-            damage_flood_proofed: pd.Series = VectorScanner(
-                features=buildings_floodproofed.rename(
-                    columns={"maximum_damage_m2": "maximum_damage"}
-                ),
-                hazard=flood_map,
-                vulnerability_curves=self.buildings_structure_curve,
-                disable_progress=True,
-            )
-            total_damage_structure = damage_flood_proofed.sum()
-            print(
-                f"damages to building flood-proofed structure rp{return_period} are: {round(total_damage_structure / 1e6, 2)} M€"
-            )
-
-            # Save the damages to the dataframe
-            buildings_with_damages_floodproofed = buildings[["id"]]
-            buildings_with_damages_floodproofed["damage"] = damage_flood_proofed
-
-            # add damages to agents (unprotected buildings)
-            for _, row in buildings_with_damages.iterrows():
-                damage = row["damage"]
-                building_id = int(row["id"])
-                idx_agents_in_building = np.where(self.var.building_id == building_id)[
-                    0
-                ]
-                damages_do_not_adapt[i, idx_agents_in_building] = damage
-
-            # add damages to agents (flood-proofed buildings)
-            for _, row in buildings_with_damages_floodproofed.iterrows():
-                damage = row["damage"]
-                building_id = int(row["id"])
-                idx_agents_in_building = np.where(self.var.building_id == building_id)[
-                    0
-                ]
-                damages_adapt[i, idx_agents_in_building] = damage
-
+            if verbose:
+                print(
+                    f"Damages rp{return_period}: {round(damages_do_not_adapt[i].sum() / 1e6)} million"
+                )
+                print(
+                    f"Damages adapt rp{return_period}: {round(damages_adapt[i].sum() / 1e6)} million"
+                )
         return damages_do_not_adapt, damages_adapt
+
+    def update_households_gdf(self, date_time) -> None:
+        """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
+
+        Args:
+            date_time: The forecast date time for which to update the households geodataframe.
+        """
+        household_points: gpd.GeoDataFrame = self.var.household_points.copy()
+
+        action_maps_folder: Path = self.model.output_folder / "action_maps"
+        action_maps_folder.mkdir(parents=True, exist_ok=True)
+
+        global_vars = [
+            "warning_reached",
+            "warning_level",
+            "response_probability",
+            "evacuated",
+            "recommended_measures",
+            "warning_trigger",
+            "actions_taken",
+        ]
+
+        # make sure household points and global variables have the same length
+        for global_var in global_vars:
+            global_array = getattr(self.var, global_var)
+            assert len(household_points) == global_array.shape[0], (
+                f"The size of household points and {global_var} do not match"
+            )
+
+        # add columns in the household points geodataframe
+        for name in [
+            "warning_reached",
+            "warning_level",
+            "response_probability",
+            "evacuated",
+        ]:
+            household_points[name] = getattr(self.var, name)
+
+        warning_triggers = self.var.possible_warning_triggers
+        for i, _ in enumerate(warning_triggers):
+            if warning_triggers[i] == "water_levels":
+                household_points["trig_w_levels"] = self.var.warning_trigger[:, i]
+            if warning_triggers[i] == "critical_infrastructure":
+                household_points["trig_crit_infra"] = self.var.warning_trigger[:, i]
+
+        possible_measures_to_recommend = self.var.possible_measures
+        for i, measure in enumerate(possible_measures_to_recommend):
+            if measure == "sandbags":
+                household_points["recom_sandbags"] = self.var.recommended_measures[:, i]
+            if measure == "elevate possessions":
+                household_points["recom_elev_possessions"] = (
+                    self.var.recommended_measures[:, i]
+                )
+            if measure == "evacuate":
+                household_points["recom_evacuate"] = self.var.recommended_measures[:, i]
+
+        possible_actions = self.var.possible_measures
+        for i, action in enumerate(possible_actions):
+            if action == "sandbags":
+                household_points["sandbags"] = self.var.actions_taken[:, i]
+            if action == "elevate possessions":
+                household_points["elevated_possessions"] = self.var.actions_taken[:, i]
+
+        household_points.to_parquet(
+            self.model.output_folder
+            / "action_maps"
+            / f"households_with_warning_parameters_{date_time.isoformat()}.geoparquet"
+        )
 
     def update_households_gdf(self, date_time) -> None:
         """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.

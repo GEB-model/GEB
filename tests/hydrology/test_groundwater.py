@@ -30,7 +30,8 @@ from ..testconfig import output_folder, tmp_folder
 class ModFlowParams(TypedDict):
     """Type definition for ModFlowSimulation parameters."""
 
-    model: Any  # DummyModel in tests, GEBModel in production
+    working_directory: Path
+    modflow_bin_folder: Path
     topography: ArrayFloat32
     gt: tuple[float, float, float, float, float, float]
     specific_storage: ArrayFloat32
@@ -106,57 +107,13 @@ heads = np.full((NLAY, YSIZE, XSIZE), 0, dtype=np.float32)
 for layer in range(NLAY):
     heads[layer] = topography - 2
 
-
-class DummyGrid:
-    """A dummy grid class to simulate the grid structure."""
-
-    def __init__(self) -> None:
-        """Initializes a DummyGrid instance of the GEB grid with required attributes for the MODFLOW simulation to work."""
-        pass
-
-    def decompress(self, array: npt.NDArray[Any]) -> npt.NDArray[Any]:
-        """Decompress an array from 1D to 2D using the basin mask.
-
-        Args:
-            array: The compressed array.
-
-        Returns:
-            The decompressed array.
-        """
-        return decompress(array, basin_mask)
-
-
-class DummyHydrology:
-    """A dummy hydrology class to simulate the hydrology structure."""
-
-    def __init__(self) -> None:
-        """Initializes a DummyHydrology instance of the GEB hydrology with required attributes for the MODFLOW simulation to work."""
-        self.grid = DummyGrid()
-
-
-class DummyModel:
-    """A dummy model class to simulate the MODFLOW model structure."""
-
-    def __init__(self) -> None:
-        """Initializes a DummyModel instance of the GEB model with required attributes for the MODFLOW simulation to work.
-
-        For testing purposes only.
-        """
-        self.simulation_root_spinup = tmp_folder / "modflow"
-        self.hydrology = DummyHydrology()
-
-    @property
-    def bin_folder(self) -> Path:
-        """Gets the folder where MODFLOW binaries are stored.
-
-        Returns:
-            Path to the folder with MODFLOW binaries.
-        """
-        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
-
+GEB_PACKAGE_DIR_str: str | None = os.environ.get("GEB_PACKAGE_DIR")
+if GEB_PACKAGE_DIR_str is None:
+    raise RuntimeError("GEB_PACKAGE_DIR environment variable is not set.")
 
 default_params: ModFlowParams = {
-    "model": DummyModel(),
+    "working_directory": tmp_folder / "modflow",
+    "modflow_bin_folder": Path(GEB_PACKAGE_DIR_str) / "modflow" / "bin",
     "gt": gt,
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),
     "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.8), basin_mask),
