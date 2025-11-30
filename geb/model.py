@@ -348,6 +348,9 @@ class GEBModel(Module, HazardDriver, ABM_Model):
                         print(
                             f"Running flood early warning system for date time {self.current_time.strftime('%d-%m-%Y T%H:%M:%S')}..."
                         )
+                        self.agents.households.create_flood_probability_maps(
+                            date_time=self.current_time, strategy=1, exceedance=True
+                        )
                         self.agents.households.water_level_warning_strategy(
                             date_time=self.current_time
                         )

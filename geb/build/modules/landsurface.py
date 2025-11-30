@@ -93,6 +93,7 @@ class LandSurface:
                 "zmin": 0.001,
             },
             {"name": "gebco"},
+            {"name": "geul_dem"},
         ],
     ) -> None:
         """Sets up the elevation data for the model.
