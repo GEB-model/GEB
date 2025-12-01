@@ -683,11 +683,15 @@ class Hydrography:
         )
 
         river_linear_indices = np.where(COMID_IDs_raster.values.ravel() != -1)[0]
+        ids = COMID_IDs_raster.values.ravel()[river_linear_indices]
+        assert 0 not in ids, (
+            "COMID ID of 0 found in river raster, which would lead to errors in pyflwdir, which uses 0 as nodata value."
+        )
         basin_ids.values = flow_raster.basins(
             idxs=river_linear_indices,
             ids=COMID_IDs_raster.values.ravel()[river_linear_indices],
         )
-        basin_ids = xr.where(flow_raster.mask.reshape(basin_ids.shape), basin_ids, -1)
+        basin_ids = xr.where(basin_ids != 0, basin_ids, -1)
         assert (
             np.unique(basin_ids.values[basin_ids.values != -1])
             == np.unique(COMID_IDs_raster.values[COMID_IDs_raster.values != -1])
