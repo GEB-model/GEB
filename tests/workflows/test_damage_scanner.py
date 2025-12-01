@@ -11,7 +11,7 @@ import xarray as xr
 from pytest import fixture
 from shapely.geometry import Polygon
 
-from geb.workflows.damage_scanner import VectorScanner
+from geb.workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 
 
 @fixture
@@ -91,6 +91,75 @@ def vulnerability_curves() -> pd.DataFrame:
         },
         index=np.array([0, 1, 2]),
     )
+
+
+@pytest.mark.parametrize("clip", [False, True])
+def test_vector_scanner_multicurves(
+    flood_raster: xr.DataArray,
+    buildings: gpd.GeoDataFrame,
+    vulnerability_curves: pd.DataFrame,
+    clip: bool,
+) -> None:
+    """Test the VectorScanner for calculating damages to buildings based on flood hazard.
+
+    This test verifies that the VectorScanner correctly computes damage values for
+    various building features under different flood hazard severities and building
+    types. It checks damage calculations for residential and commercial buildings
+    with different areas, hazard intensities, and clipping scenarios.
+
+    The test includes assertions for expected damage values based on predefined
+    vulnerability curves and hazard data. It covers cases with uniform hazard,
+    mixed hazards, no hazard, and NaN hazard values.
+
+    Args:
+        flood_raster: The flood hazard raster data.
+        buildings: GeoDataFrame containing building geometries and attributes.
+        vulnerability_curves: DataFrame with vulnerability curves for damage calculation.
+        clip: Boolean flag to clip the flood raster to a specific polygon.
+    """
+    if clip:
+        flood_raster = flood_raster.rio.clip(
+            [Polygon([(1, 1), (1, 9), (9, 9), (9, 1)])]
+        )
+
+    vulnerability_curves_multicurves = {
+        "residential": vulnerability_curves["residential"],
+        "commercial": vulnerability_curves["commercial"],
+    }
+
+    damage = VectorScannerMultiCurves(
+        features=buildings,
+        hazard=flood_raster,
+        multi_curves=vulnerability_curves_multicurves,
+    )
+
+    assert math.isclose(
+        damage.loc[0]["residential"], 10.0
+    )  # 1m2, .5 hazard severity, residential, max_damage 100 > 0.1 damage ratio > damage of 10
+    assert math.isclose(
+        damage.loc[1]["residential"], 80.0
+    )  # 4m2, .5 hazard severity, residential, max_damage 200 > 0.1 damage ratio > damage of 80
+    assert math.isclose(
+        damage.loc[2]["commercial"], 240.0
+    )  # 4m2, .5 hazard severity, commercial, max_damage 300 > 0.2 damage ratio > damage of 240
+    assert math.isclose(
+        damage.loc[3]["residential"], 30.0
+    )  # 1m2, 3 hazard severity, residential, max_damage 100 > 0.3 damage ratio (max of curve) > damage of 30
+
+    # 1m2, half 0.5 hazard severity + half 3 hazard severity, residential, max_damage 100
+    # > 0.1 + 0.3 damage ratio (max of curve) > damage of 30
+    assert math.isclose(damage.loc[4]["residential"], 20.0)
+
+    assert math.isclose(
+        damage.loc[5]["residential"], 0.0
+    )  # 1m2, no hazard severity, residential, max_damage 100
+    assert math.isclose(
+        damage.loc[6]["residential"], 0.0
+    )  # 1m2, hazard is nan, residential, max_damage 100
+
+    assert math.isclose(
+        damage.loc[7]["residential"], 10.0
+    )  # 1m2, 0.25 x 0, 0.25 x nan, 0.25 x 0.5, 0.25 x 3 hazard severity, residential, max_damage 100 > damage of 10
 
 
 @pytest.mark.parametrize("clip", [False, True])
