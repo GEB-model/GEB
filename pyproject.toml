@@ -72,6 +72,7 @@ dependencies = [
     "pytest-benchmark>=5.2.1",
     "imageio>=2.37.2",
     "pyquadkey2>=0.3.2",
+    "scikit-image>=0.25.2",
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"
