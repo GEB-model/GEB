@@ -579,7 +579,7 @@ def test_read(geb_model: GEBModel) -> None:
         )
 
         sfincs_model_read: SFINCSRootModel = SFINCSRootModel(
-            geb_model.simulation_root, name=TEST_MODEL_NAME
+            tmp_folder / "SFINCS", name=TEST_MODEL_NAME
         ).read()
 
         # assert that both models have the same attributes
