@@ -92,9 +92,7 @@ def build_sfincs(
     Returns:
         A SFINCS model instance with static grids and configuration written.
     """
-    sfincs_model: SFINCSRootModel = SFINCSRootModel(
-        geb_model.simulation_root, geb_model.files, name
-    )
+    sfincs_model: SFINCSRootModel = SFINCSRootModel(tmp_folder / "SFINCS", name)
     DEM_config: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = (
         geb_model.floods.DEM_config.copy()
     )
@@ -315,7 +313,7 @@ def test_accumulated_runoff(
             )
 
             if simulation.root_model.has_inflow:
-                inflow_rivers: gpd.GeoDataFrame = simulation.sfincs_model.inflow_rivers
+                inflow_rivers: gpd.GeoDataFrame = simulation.root_model.inflow_rivers
                 inflow_nodes = inflow_rivers.copy()
                 inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
                     get_start_point
@@ -581,7 +579,7 @@ def test_read(geb_model: GEBModel) -> None:
         )
 
         sfincs_model_read: SFINCSRootModel = SFINCSRootModel(
-            geb_model.simulation_root, files=geb_model.files, name=TEST_MODEL_NAME
+            geb_model.simulation_root, name=TEST_MODEL_NAME
         ).read()
 
         # assert that both models have the same attributes

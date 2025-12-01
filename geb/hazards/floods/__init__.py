@@ -248,9 +248,7 @@ class Floods(Module):
         Returns:
             The built or read SFINCSRootModel instance.
         """
-        sfincs_model = SFINCSRootModel(
-            self.model.simulation_root, self.model.files, name
-        )
+        sfincs_model = SFINCSRootModel(self.model.simulation_root, name)
         if self.config["force_overwrite"] or not sfincs_model.exists():
             for entry in self.DEM_config:
                 entry["elevtn"] = open_zarr(

@@ -75,9 +75,7 @@ SFINCS_WATER_LEVEL_BOUNDARY = 2
 class SFINCSRootModel:
     """Builds and updates SFINCS model files for flood hazard modeling."""
 
-    def __init__(
-        self, root: Path, files: dict[str, dict[str, Path]], name: str
-    ) -> None:
+    def __init__(self, root: Path, name: str) -> None:
         """Initializes the SFINCSRootModel with a GEBModel and event name.
 
         Sets up the constant parts of the model (grid, mask, rivers, etc.),
@@ -90,7 +88,6 @@ class SFINCSRootModel:
                 Also used to create the path to write the file to disk.
         """
         self._name: str = name
-        self.files: dict[str, dict[str, Path]] = files
         self._root = root
 
     @property
@@ -790,7 +787,6 @@ class SFINCSRootModel:
         return SFINCSSimulation(
             sfincs_root_model_path=self.root,
             sfincs_root_model_name=self.name,
-            files=self.files,
             **kwargs,
         )
 
@@ -1078,7 +1074,6 @@ class SFINCSSimulation:
         self,
         sfincs_root_model_path: Path,
         sfincs_root_model_name: str,
-        files: dict[str, dict[str, Path]],
         simulation_name: str,
         start_time: datetime,
         end_time: datetime,
@@ -1091,7 +1086,6 @@ class SFINCSSimulation:
         Args:
             sfincs_root_model_path: Path to the root SFINCS model directory.
             sfincs_root_model_name: Name of the root SFINCS model.
-            files: A dictionary containing file paths required for the SFINCS model.
             simulation_name: A string representing the name of the simulation.
                 Also used to create the path to write the file to disk.
             start_time: The start time of the simulation as a datetime object.
@@ -1108,7 +1102,7 @@ class SFINCSSimulation:
 
         # Read a new independent instance of the SFINCS model to avoid shared state
         self.root_model: SFINCSRootModel = SFINCSRootModel(
-            root=sfincs_root_model_path, files=files, name=sfincs_root_model_name
+            root=sfincs_root_model_path, name=sfincs_root_model_name
         ).read()
 
         self.cleanup()
