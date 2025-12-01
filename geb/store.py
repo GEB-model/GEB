@@ -437,7 +437,7 @@ class DynamicArray:
 
     def __getattr__(self, name: str) -> Any:
         """
-        Fallback attribute access to the active NumPy array.
+        Get attributes either from the wrapper internals or the active data.
 
         If the attribute is one of the internal attributes, defer to the normal
         attribute lookup. Otherwise, forward the attribute access to the active
