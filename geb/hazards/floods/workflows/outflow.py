@@ -94,7 +94,7 @@ def trace_border_4_connectivity(
     return np.array(path)
 
 
-def detect_ouflow(
+def detect_outflow(
     mask: TwoDArrayBool, row: int, col: int, width_cells: int
 ) -> TwoDArrayBool:
     """Detect outflow points in a binary mask.
@@ -103,7 +103,7 @@ def detect_ouflow(
         mask: 2D boolean array where True indicates presence of water.
         row: Row index of the cell to check for outflow.
         col: Column index of the cell to check for outflow.
-        width_cells: Width of the area outflow in number of cells.
+        width_cells: Width of the outflow in number of cells.
             Must be an odd positive integer.
 
     Returns:

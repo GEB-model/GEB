@@ -49,7 +49,7 @@ from geb.workflows.raster import (
 )
 
 from .workflows import get_river_depth, get_river_manning
-from .workflows.outflow import detect_ouflow
+from .workflows.outflow import detect_outflow
 from .workflows.return_periods import (
     assign_calculation_group,
     get_topological_stream_order,
@@ -499,14 +499,17 @@ class SFINCSRootModel:
                 assert col >= 0 and row >= 0, (
                     "Calculated outflow point is outside of the model grid"
                 )
-                outflow_boundary_width = 500
-                outflow: TwoDArrayBool = detect_ouflow(
+                outflow_boundary_width_m = 500
+                outflow: TwoDArrayBool = detect_outflow(
                     self.mask.values,
                     row=row,
                     col=col,
                     width_cells=(
                         math.ceil(
-                            ((outflow_boundary_width / self.estimated_cell_size_m) - 1)
+                            (
+                                (outflow_boundary_width_m / self.estimated_cell_size_m)
+                                - 1
+                            )
                             / 2
                         )
                         * 2

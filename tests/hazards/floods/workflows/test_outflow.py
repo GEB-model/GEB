@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from geb.hazards.floods.workflows.outflow import detect_ouflow
+from geb.hazards.floods.workflows.outflow import detect_outflow
 from geb.types import TwoDArrayBool
 
 
@@ -29,7 +29,7 @@ def test_detect_outflow_width_1(mask: TwoDArrayBool) -> None:
     row, col = 2, 2
     width_cells = 1
 
-    outflow_mask: TwoDArrayBool = detect_ouflow(mask, row, col, width_cells)
+    outflow_mask: TwoDArrayBool = detect_outflow(mask, row, col, width_cells)
 
     # Expected outflow points (this is just an example; adjust as needed)
     expected_outflow = np.array(
@@ -49,7 +49,7 @@ def test_detect_outflow_width_3(mask: TwoDArrayBool) -> None:
     row, col = 2, 2
     width_cells = 3
 
-    outflow_mask: TwoDArrayBool = detect_ouflow(mask, row, col, width_cells)
+    outflow_mask: TwoDArrayBool = detect_outflow(mask, row, col, width_cells)
 
     expected_outflow = np.array(
         [
@@ -76,7 +76,7 @@ def test_detect_outflow_width_5_difficult_mask() -> None:
         ]
     )
 
-    outflow_mask: TwoDArrayBool = detect_ouflow(mask, row, col, width_cells)
+    outflow_mask: TwoDArrayBool = detect_outflow(mask, row, col, width_cells)
 
     expected_outflow = np.array(
         [
@@ -95,7 +95,7 @@ def test_detect_outflow_invalid_width(mask: TwoDArrayBool) -> None:
     width_cells = 4  # Even number, should raise ValueError
 
     with pytest.raises(ValueError):
-        detect_ouflow(mask, row, col, width_cells)
+        detect_outflow(mask, row, col, width_cells)
 
 
 def test_detect_outflow_too_high_width(mask: TwoDArrayBool) -> None:
@@ -103,7 +103,7 @@ def test_detect_outflow_too_high_width(mask: TwoDArrayBool) -> None:
     row, col = 2, 2
     width_cells = 101  # Wider than the mask
 
-    outflow_mask: TwoDArrayBool = detect_ouflow(mask, row, col, width_cells)
+    outflow_mask: TwoDArrayBool = detect_outflow(mask, row, col, width_cells)
 
     # In this case, the entire mask should be marked as outflow
     expected_outflow = np.array(
@@ -123,7 +123,7 @@ def test_detect_outflow_outside_mask(mask: TwoDArrayBool) -> None:
     width_cells = 3
 
     with pytest.raises(ValueError):
-        detect_ouflow(mask, row, col, width_cells)
+        detect_outflow(mask, row, col, width_cells)
 
 
 def test_detect_outflow_not_on_border() -> None:
@@ -140,4 +140,4 @@ def test_detect_outflow_not_on_border() -> None:
     width_cells = 3
 
     with pytest.raises(ValueError):
-        detect_ouflow(mask, row, col, width_cells)
+        detect_outflow(mask, row, col, width_cells)
