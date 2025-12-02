@@ -974,26 +974,34 @@ class Hydrography:
         calculate_command_areas: None | str = None,
         custom_reservoir_capacity: None | str = None,
     ) -> None:
-        """Sets up the waterbodies for GEB.
+        """Set up waterbodies, reservoirs, and command areas.
 
-        Args:
-            preset_command_areas: The path to the command areas data in the data catalog. If None, command areas can be calculated.
-            calculate_command_areas: Calculate which cell links to which reservoir.
-            custom_reservoir_capacity: The path to the custom reservoir capacity data in the data catalog.
-                If None, the default reservoir capacity is used. The data should be a DataFrame with
-                'waterbody_id' as the index and 'volume_total' as the column for the reservoir capacity.
+        Configure waterbodies and their associated command areas for the model grid.
+        This includes rasterizing lake and reservoir identifiers, optionally
+        assigning command areas from preset data or by deriving them from the river
+        routing network, and updating reservoir storage capacities.
 
         Notes:
-            This method sets up the waterbodies for GEB. It first retrieves the waterbody data from the
-            specified data catalog and sets it as a geometry in the model. It then rasterizes the waterbody data onto the model
-            grid and the subgrid using the `rasterize` method of the `raster` object. The resulting grids are set as attributes
-            of the model with names of the form 'waterbodies/{grid_name}'.
+            If ``preset_command_areas`` is provided, those geometries are used to
+            define reservoir command areas and mapped onto the model grid and
+            subgrid. If no preset command areas are provided but
+            ``calculate_command_areas`` is truth, command areas are derived by
+            propagating reservoir influence along the routing network. If
+            ``custom_reservoir_capacity`` is provided, reservoir volumes are
+            overridden using that table.
 
-            The method also retrieves the reservoir command area data from the data catalog and calculates the area of each
-            command area that falls within the model region. The `waterbody_id` key is used to do the matching between these
-            databases. The relative area of each command area within the model region is calculated and set as a column in
-            the waterbody data. The method sets all lakes with a command area to be reservoirs and updates the waterbody data
-            with any custom reservoir capacity data from the data catalog.
+        Args:
+            preset_command_areas: Identifier of the preset command area data in the
+                data catalog. If None, command areas can be calculated from the
+                routing network instead.
+            calculate_command_areas: Flag or identifier indicating that command areas
+                should be calculated based on the routing network. If false, command
+                areas are not calculated and default to a missing value.
+            custom_reservoir_capacity: Identifier of the custom reservoir capacity
+                data in the data catalog. If None, the default reservoir capacities
+                from the waterbody dataset are used. The table must have
+                ``waterbody_id`` as the index and a ``volume_total`` column defining
+                the reservoir capacity.
         """
         waterbodies: gpd.GeoDataFrame = self.new_data_catalog.fetch("hydrolakes").read(
             bbox=self.bounds,
@@ -1007,9 +1015,7 @@ class Hydrography:
             ],
         )
         # only select waterbodies that intersect with the region
-        waterbodies: gpd.GeoDataFrame = waterbodies[
-            waterbodies.intersects(self.region.union_all())
-        ]
+        waterbodies = waterbodies[waterbodies.intersects(self.region.union_all())]
 
         hydrolakes_to_geb: dict[int, np.int32] = {
             1: np.int32(LAKE),
@@ -1040,8 +1046,8 @@ class Hydrography:
             all_touched=True,
         )
 
-        # self.set_grid(water_body_id, name="waterbodies/water_body_id")
-        # self.set_subgrid(sub_water_body_id, name="waterbodies/sub_water_body_id")
+        self.set_grid(water_body_id, name="waterbodies/water_body_id")
+        self.set_subgrid(sub_water_body_id, name="waterbodies/sub_water_body_id")
 
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
@@ -1062,14 +1068,14 @@ class Hydrography:
             )
 
             # Set lakes with command area to reservoirs and reservoirs without command area to lakes
-            ids_with_command: set = set(preset_command_areas["waterbody_id"])
+            ids_with_command: set[int] = set(preset_command_areas["waterbody_id"])
             waterbodies.loc[
                 waterbodies["waterbody_id"].isin(ids_with_command),
                 "waterbody_type",
             ] = RESERVOIR
 
             # Lastly remove command areas that have no associated water body
-            reservoir_ids: set = set(
+            reservoir_ids: set[int] = set(
                 waterbodies.loc[
                     waterbodies["waterbody_type"] == RESERVOIR, "waterbody_id"
                 ]
@@ -1107,23 +1113,42 @@ class Hydrography:
         else:
             if calculate_command_areas:
 
-                def downstream_chain(start_id, next_seg):
+                def downstream_chain(
+                    start_id: int,
+                    next_seg: dict[int, float],
+                ) -> list[int]:
+                    """Build the downstream segment chain from a starting river segment.
+
+                    Follow the ``downstream_ID`` links from a starting segment along
+                    the main stem of the routing network.
+
+                    Notes:
+                        The traversal stops when a missing downstream segment is
+                        encountered, when a segment is not present in the mapping, or
+                        when a cycle would occur.
+
+                    Args:
+                        start_id: Identifier of the starting river segment.
+                        next_seg: Mapping from segment identifier to its direct
+                            downstream segment.
+
+                    Returns:
+                        Ordered list of downstream segment identifiers, starting from
+                        the first downstream segment of ``start_id``.
                     """
-                    Follow the 'downstream_ID' links from start_id and
-                    return a list of all downstream COMIDs along the main stem.
-                    """
-                    chain = []
-                    current = start_id
-                    seen = set()  # avoid infinite loops in case of cycles
+                    chain: list[int] = []
+                    current: int = start_id
+                    seen: set[int] = set()  # avoid infinite loops in case of cycles
 
                     while True:
                         nxt = next_seg.get(current, np.nan)
                         # stop conditions:
                         if pd.isna(nxt) or nxt not in next_seg or nxt in seen:
                             break
-                        chain.append(nxt)
-                        seen.add(nxt)
-                        current = nxt
+                        nxt_int = int(nxt)
+                        chain.append(nxt_int)
+                        seen.add(nxt_int)
+                        current = nxt_int
 
                     return chain
 
@@ -1167,10 +1192,9 @@ class Hydrography:
 
                 # Loop from up to downstream and set all downstream river values with relevant reservoir id
                 rivers["n_downstream"] = rivers["all_downstream_ids"].str.len()
-                reservoir_segments = (
-                    rivers[has_reservoir].sort_values(
-                        "n_downstream", ascending=False
-                    )  # upstream → downstream
+                reservoir_segments = rivers[has_reservoir].sort_values(
+                    "n_downstream",
+                    ascending=False,  # upstream → downstream
                 )
                 wb_volume = reservoirs.set_index("waterbody_id")["volume_total"]
                 ratio_threshold = 5.0  # old must be 5 times bigger to be kept
@@ -1202,31 +1226,86 @@ class Hydrography:
                         if pd.isna(vol_new):
                             continue
 
-                        # --- 5× rule ---
-                        # If old reservoir is at least 5× bigger → keep old
-                        # Otherwise → overwrite with new
+                        # If old reservoir is at least threshold x bigger → keep old
                         if vol_old >= ratio_threshold * vol_new:
-                            # keep old
                             continue
-                        else:
-                            rivers.at[seg, "waterbody_id_propagated"] = wb_new
+                        rivers.at[seg, "waterbody_id_propagated"] = wb_new
 
                 # map the reservoir ids to whole model cells
                 basin_ids = self.grid["routing/basin_ids"]
                 s_map = rivers["waterbody_id_propagated"]
+
+                mask_nans = ~np.isnan(s_map)
+                only_reservoir_rivers = s_map[
+                    mask_nans
+                ]  # Series: index = COMID, value = wb_id (float)
+
+                from geb.build import get_river_graph
+
+                river_graph = get_river_graph(self.new_data_catalog)
+                river_graph_rev = river_graph.reverse(copy=False)
+                max_upstream_hops = 10
+
+                for wb_id, comid_series in only_reservoir_rivers.groupby(
+                    only_reservoir_rivers
+                ):
+                    # COMIDs that currently have this reservoir id
+                    seed_comids = comid_series.index.to_list()
+
+                    upstream_comids: set[int] = set()
+
+                    for sid in seed_comids:
+                        if sid not in river_graph_rev:
+                            continue
+
+                        # shortest-path distances in the reversed graph
+                        # => distance = number of upstream steps in original graph
+                        lengths = nx.single_source_shortest_path_length(
+                            river_graph_rev,
+                            sid,
+                            cutoff=max_upstream_hops,
+                        )
+
+                        # lengths includes the source itself with distance 0 → skip distance 0
+                        upstream_comids |= {
+                            node for node, dist in lengths.items() if dist > 0
+                        }
+
+                    # Assign this reservoir id to all upstream COMIDs within max_upstream_hops
+                    for cid in upstream_comids:
+                        if cid in rivers.index and pd.isna(
+                            rivers.at[cid, "waterbody_id_propagated"]
+                        ):
+                            rivers.at[cid, "waterbody_id_propagated"] = wb_id
+
+                smap_extended = rivers["waterbody_id_propagated"]
                 flat_ids = basin_ids.values.ravel()
-                mapped_flat = s_map.reindex(flat_ids).to_numpy()
+                mapped_flat = smap_extended.reindex(flat_ids).to_numpy()
                 mapped_flat[np.isnan(mapped_flat)] = -1
-                mapped = mapped_flat.reshape(basin_ids.shape).astype("int32")
-                waterbody_grid = xr.DataArray(
-                    mapped,
-                    coords=basin_ids.coords,
-                    dims=basin_ids.dims,
-                    name="routing/waterbody_id_propagated",
-                    attrs={"_FillValue": -1},
+
+                # Map to grid and subgrid grids
+                mapped_reservoirs_grid = mapped_flat.reshape(basin_ids.shape).astype(
+                    "int32"
+                )
+                mapped_reservoirs_subgrid = mapped_reservoirs_grid.repeat(
+                    self.subgrid_factor, axis=0
+                ).repeat(self.subgrid_factor, axis=1)
+
+                command_areas: xr.DataArray = self.full_like(
+                    self.grid["mask"],
+                    fill_value=-1,
+                    nodata=-1,
+                    dtype=np.int32,
+                )
+                subcommand_areas: xr.DataArray = self.full_like(
+                    self.subgrid["mask"],
+                    fill_value=-1,
+                    nodata=-1,
+                    dtype=np.int32,
                 )
 
-                pass
+                command_areas.data = mapped_reservoirs_grid
+                subcommand_areas.data = mapped_reservoirs_subgrid
             else:
                 command_areas = self.full_like(
                     self.grid["mask"],
@@ -1245,15 +1324,15 @@ class Hydrography:
             self.set_subgrid(subcommand_areas, name="waterbodies/subcommand_areas")
 
         if custom_reservoir_capacity:
-            custom_reservoir_capacity = self.data_catalog.get_dataframe(
+            custom_reservoir_capacity_df = self.data_catalog.get_dataframe(
                 custom_reservoir_capacity
             )
-            custom_reservoir_capacity = custom_reservoir_capacity[
-                custom_reservoir_capacity.index != -1
+            custom_reservoir_capacity_df = custom_reservoir_capacity_df[
+                custom_reservoir_capacity_df.index != -1
             ]
 
             waterbodies.set_index("waterbody_id", inplace=True)
-            waterbodies.update(custom_reservoir_capacity)
+            waterbodies.update(custom_reservoir_capacity_df)
             waterbodies.reset_index(inplace=True)
 
         assert "waterbody_id" in waterbodies.columns, "waterbody_id is required"
@@ -1263,7 +1342,7 @@ class Hydrography:
             "average_discharge is required"
         )
         assert "average_area" in waterbodies.columns, "average_area is required"
-        # self.set_geom(waterbodies, name="waterbodies/waterbody_data")
+        self.set_geom(waterbodies, name="waterbodies/waterbody_data")
 
     def setup_gtsm_water_levels(self, temporal_range: npt.NDArray[np.int32]) -> None:
         """Sets up the GTSM hydrographs for station within the model bounds.
