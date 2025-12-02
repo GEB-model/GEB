@@ -17,6 +17,7 @@ from numba import njit
 from scipy.spatial import KDTree
 
 from geb.types import (
+    Array,
     ArrayFloat32,
     ArrayInt32,
     ThreeDArrayFloat32,
@@ -769,8 +770,8 @@ class HRUs(BaseVariables):
             self.data.farms, land_use_classes, self.data.grid.mask, self.scaling
         )
 
-    def zeros(self, size: int, dtype: type, *args: Any, **kwargs: Any) -> np.ndarray:
-        """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
+    def zeros(self, size: int, dtype: type, *args: Any, **kwargs: Any) -> Array:
+        """Return an array of zeros with given size. Takes any other argument normally used in np.zeros.
 
         Args:
             size: Size of the array to create.
@@ -784,8 +785,12 @@ class HRUs(BaseVariables):
         return np.zeros(size, dtype, *args, **kwargs)
 
     def full_compressed(
-        self, fill_value: int | float, dtype: type, *args: Any, **kwargs: Any
-    ) -> np.ndarray:
+        self,
+        fill_value: int | float | np.integer | np.floating | bool,
+        dtype: type,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Array:
         """Return a full array with size of number of HRUs. Takes any other argument normally used in np.full.
 
         Args:

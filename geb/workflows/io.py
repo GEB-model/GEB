@@ -36,7 +36,13 @@ from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.blosc import BloscShuffle
 
-from geb.types import ArrayDatetime64, ThreeDArray, TwoDArray
+from geb.types import (
+    ArrayDatetime64,
+    ThreeDArray,
+    ThreeDArrayFloat32,
+    TwoDArray,
+    TwoDArrayFloat32,
+)
 
 
 def load_table(fp: Path | str) -> pd.DataFrame:
@@ -121,9 +127,9 @@ def load_grid(
         data_array: zarr.Array | zarr.Group = group[filepath.stem]
         assert isinstance(data_array, zarr.Array)
         data = data_array[:]
-        data: TwoDArray | ThreeDArray = (
-            data.asfloat(np.float32) if data.dtype == np.float64 else data
-        )
+        assert isinstance(data, (TwoDArray, ThreeDArray))
+        if data.dtype == np.float64:
+            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)
         if return_transform_and_crs:
             x_array: zarr.Array | zarr.Group = group["x"]
             assert isinstance(x_array, zarr.Array)

@@ -438,7 +438,7 @@ class Reporter:
     def maybe_report_value(
         self,
         module_name: str,
-        name: str | tuple[str, Any],
+        name: str,
         module: Any,
         local_variables: dict,
         config: dict,
@@ -517,7 +517,7 @@ class Reporter:
 
         # if the value is not None, we check whether the value is valid
         if isinstance(value, list):
-            value = [v.item() for v in value]
+            value = np.array([v.item() for v in value])
             for v in value:
                 assert not np.isnan(value) and not np.isinf(v)
         elif np.isscalar(value):
