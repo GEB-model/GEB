@@ -34,6 +34,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: dist
+          path: dist
       - name: Set up uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
       - uses: astral-sh/attest-action@v0.0.4
