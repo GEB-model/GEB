@@ -17,7 +17,7 @@ from dateutil.relativedelta import relativedelta
 
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.types import ArrayInt64, TwoDArrayInt32
+from geb.types import TwoDArrayInt32
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
 
@@ -583,7 +583,6 @@ class Reporter:
                     "time_array must be a zarr.Array"
                 )
                 time_array = time_array[:]
-                assert isinstance(time_array, ArrayInt64)
                 if (
                     np.isin(self.model.current_time_unix_s, time_array)
                     and value is not None

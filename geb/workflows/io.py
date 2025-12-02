@@ -127,7 +127,6 @@ def load_grid(
         data_array: zarr.Array | zarr.Group = group[filepath.stem]
         assert isinstance(data_array, zarr.Array)
         data = data_array[:]
-        assert isinstance(data, (TwoDArray, ThreeDArray))
         if data.dtype == np.float64:
             data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)
         if return_transform_and_crs:
