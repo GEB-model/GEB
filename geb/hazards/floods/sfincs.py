@@ -59,7 +59,6 @@ from .workflows.utils import (
     create_hourly_hydrograph,
     export_rivers,
     get_discharge_and_river_parameters_by_river,
-    get_end_point,
     get_representative_river_points,
     get_start_point,
     import_rivers,
@@ -333,6 +332,7 @@ class SFINCSRootModel:
             self.setup_river_outflow_boundary()
         else:
             self.rivers["outflow_elevation"] = np.nan
+            self.rivers["outflow_point_xy"] = None
 
         river_representative_points = []
         for ID in self.rivers.index:
@@ -485,12 +485,15 @@ class SFINCSRootModel:
         ]
 
         self.rivers["outflow_elevation"] = np.nan
+        self.rivers["outflow_point_xy"] = None
 
         if not downstream_most_rivers.empty:
             for river_idx, river in downstream_most_rivers.iterrows():
-                most_downstream_point: Point = get_end_point(river.geometry)
+                # the final point is in the next basin, so we take the second to last point
+                # which should be in the current basin
+                outflow_point: Point = Point(river.geometry.coords[-2])
                 col, row = coord_to_pixel(
-                    (most_downstream_point.x, most_downstream_point.y),
+                    (outflow_point.x, outflow_point.y),
                     self.mask.rio.transform().to_gdal(),
                 )
                 assert col >= 0 and row >= 0, (
@@ -513,6 +516,10 @@ class SFINCSRootModel:
 
                 outflow_elevation: float = self.elevation[row, col].item()
                 self.rivers.at[river_idx, "outflow_elevation"] = outflow_elevation
+                self.rivers.at[river_idx, "outflow_point_xy"] = (
+                    outflow_point.x,
+                    outflow_point.y,
+                )
 
                 assert self.sfincs_model.grid_type == "regular"
                 self.mask.values[outflow] = SFINCS_WATER_LEVEL_BOUNDARY
@@ -1239,10 +1246,12 @@ class SFINCSSimulation:
         to set constant water level boundary conditions at the river outflow points.
         """
         outflow_points: gpd.GeoDataFrame = self.root_model.rivers[
-            ~self.root_model.rivers["outflow_elevation"].isna()
-        ]
+            ~self.root_model.rivers["outflow_point_xy"].isna()
+        ].copy()
         if not outflow_points.empty:
-            outflow_points.geometry = outflow_points.geometry.apply(get_end_point)
+            outflow_points["geometry"] = outflow_points["outflow_point_xy"].apply(
+                lambda xy: Point(xy[0], xy[1])
+            )
             outflow_points.index = range(1, len(outflow_points) + 1)
 
             # Create DataFrame with constant water level for each outflow point
