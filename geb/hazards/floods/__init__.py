@@ -25,7 +25,6 @@ from .sfincs import (
     MultipleSFINCSSimulations,
     SFINCSRootModel,
     SFINCSSimulation,
-    set_river_outflow_boundary_condition,
 )
 
 if TYPE_CHECKING:
@@ -249,7 +248,7 @@ class Floods(Module):
         Returns:
             The built or read SFINCSRootModel instance.
         """
-        sfincs_model = SFINCSRootModel(self.model, name)
+        sfincs_model = SFINCSRootModel(self.model.simulation_root, name)
         if self.config["force_overwrite"] or not sfincs_model.exists():
             for entry in self.DEM_config:
                 entry["elevtn"] = open_zarr(
@@ -281,10 +280,10 @@ class Floods(Module):
                 if "parameters"
                 in self.model.config["hydrology"]["routing"]["river_depth"]
                 else {},
-                coastal=coastal,
                 low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
-                setup_outflow=not coastal,
+                coastal=coastal,
+                setup_river_outflow_boundary=not coastal,
                 initial_water_level=initial_water_level,
                 custom_rivers_to_burn=load_geom(
                     self.model.files["geom"]["routing/custom_rivers"]
@@ -411,14 +410,6 @@ class Floods(Module):
             raise ValueError(
                 f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
             )
-
-        # Set up river outflow boundary condition for all simulations
-        set_river_outflow_boundary_condition(
-            sf=simulation.sfincs_model,
-            model_root=sfincs_model.path,
-            simulation_root=simulation.path,
-            write_figures=simulation.write_figures,
-        )
 
         return simulation
 
@@ -687,7 +678,9 @@ class Floods(Module):
                 [100, "Moss and lichen", 100, 0.025],
                 [0, "No data", 0, 0.1],
             ],
-            columns=["esa_worldcover", "description", "landuse", "N"],
+            columns=np.array(
+                ["esa_worldcover", "description", "landuse", "N"], dtype=str
+            ),
         )
 
     @property

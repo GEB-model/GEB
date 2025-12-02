@@ -185,7 +185,7 @@ def write_to_array(
 
 @njit(cache=True)
 def coord_to_pixel(
-    coord: np.ndarray, gt: tuple[float, float, float, float, float, float]
+    coord: tuple[float, float], gt: tuple[float, float, float, float, float, float]
 ) -> tuple[int, int]:
     """Converts coordinate to pixel (x, y) for given geotransformation.
 

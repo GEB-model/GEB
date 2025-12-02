@@ -49,7 +49,7 @@ def compute_all_numba(
     n_curves = curve_y.shape[0]
     out = np.empty((n_obj, n_curves))
 
-    for i in prange(n_obj):
+    for i in prange(n_obj):  # ty: ignore[not-iterable]
         v = values[i]
         cov = coverage[i]
         m = max_damage_arr[i]
