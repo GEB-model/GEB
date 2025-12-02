@@ -5,14 +5,8 @@ on:
     types: [created]
 
 jobs:
-  pypi-publish:
-    name: Publish release to PyPI
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: "release"
-      url: https://pypi.org/project/geb/
-    permissions:
-      id-token: write
     steps:
       - uses: actions/checkout@v4
       - name: Set up uv
@@ -21,6 +15,28 @@ jobs:
         run: uv sync
       - name: Build package
         run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi-publish:
+    name: Publish release to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: "release"
+      url: https://pypi.org/project/geb/
+    permissions:
+      id-token: write
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+      - name: Set up uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      - uses: astral-sh/attest-action@v0.0.4
       - name: Publish package distributions to PyPI
         run: |
           uv publish --trusted-publishing always --publish-url https://upload.pypi.org/legacy/
