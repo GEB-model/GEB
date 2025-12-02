@@ -1197,7 +1197,7 @@ class Hydrography:
                     ascending=False,  # upstream → downstream
                 )
                 wb_volume = reservoirs.set_index("waterbody_id")["volume_total"]
-                ratio_threshold = 5.0  # old must be 5 times bigger to be kept
+                ratio_threshold = 3  # old must be 5 times bigger to be kept
 
                 for comid, row in reservoir_segments.iterrows():
                     wb_new = row["waterbody_id"]
@@ -1244,12 +1244,14 @@ class Hydrography:
 
                 river_graph = get_river_graph(self.new_data_catalog)
                 river_graph_rev = river_graph.reverse(copy=False)
-                max_upstream_hops = 10
+                max_upstream_hops = 30
 
-                for wb_id, comid_series in only_reservoir_rivers.groupby(
-                    only_reservoir_rivers
-                ):
-                    # COMIDs that currently have this reservoir id
+                unique_wb_ids = only_reservoir_rivers.unique()
+                volumes_for_used = wb_volume.reindex(unique_wb_ids)
+                wb_ids_sorted = volumes_for_used.sort_values().index.to_list()
+
+                for wb_id in wb_ids_sorted:
+                    comid_series = only_reservoir_rivers[only_reservoir_rivers == wb_id]
                     seed_comids = comid_series.index.to_list()
 
                     upstream_comids: set[int] = set()
@@ -1258,20 +1260,16 @@ class Hydrography:
                         if sid not in river_graph_rev:
                             continue
 
-                        # shortest-path distances in the reversed graph
-                        # => distance = number of upstream steps in original graph
                         lengths = nx.single_source_shortest_path_length(
                             river_graph_rev,
                             sid,
                             cutoff=max_upstream_hops,
                         )
 
-                        # lengths includes the source itself with distance 0 → skip distance 0
                         upstream_comids |= {
                             node for node, dist in lengths.items() if dist > 0
                         }
 
-                    # Assign this reservoir id to all upstream COMIDs within max_upstream_hops
                     for cid in upstream_comids:
                         if cid in rivers.index and pd.isna(
                             rivers.at[cid, "waterbody_id_propagated"]
