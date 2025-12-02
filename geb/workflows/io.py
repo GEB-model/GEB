@@ -4,7 +4,9 @@ import asyncio
 import datetime
 import json
 import os
+import platform
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -1307,3 +1309,45 @@ def fetch_and_save(
             "Please check the URL, network connectivity, and destination permissions."
         )
     return False
+
+
+def fast_rmtree(path: Path) -> None:
+    """Deletes a directory recursively using only the fastest native OS command.
+
+    - Windows: RD /S /Q
+    - Linux/macOS (POSIX): rm -rf
+    - Raises NotImplementedError for other systems.
+
+    Args:
+        path: The path to the directory to be deleted.
+
+    Raises:
+        FileNotFoundError: If the path does not exist.
+        NotImplementedError: If the operating system is not explicitly supported.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Path does not exist: {path}")
+
+    # Handle files/links separately, as native directory commands expect directories
+    if not path.is_dir():
+        path.unlink()
+        return
+
+    system: str = platform.system()
+
+    if system == "Windows":
+        # Windows command: RD /S /Q
+        # cmd /C is used to execute the built-in RD command and terminate.
+        command = f'cmd /C RD /S /Q "{path}"'
+        # Setting shell=True is required to execute cmd /C
+        subprocess.run(command, shell=True, check=False)
+
+    elif system in ("Linux", "Darwin"):  # 'Darwin' is macOS
+        # POSIX command: rm -rf
+        subprocess.run(["rm", "-rf", str(path)], check=False)
+
+    else:
+        # Raise an error for unsupported systems instead of falling back
+        raise NotImplementedError(
+            f"Optimized fast deletion is not implemented for system: {system}"
+        )
