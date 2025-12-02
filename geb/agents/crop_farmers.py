@@ -2535,7 +2535,7 @@ class CropFarmers(AgentBaseClass):
         year_income_m2 = self.var.yearly_income[:, 0] / self.field_size_per_farmer
 
         group_indices, n_groups = self.create_unique_groups(
-            self.well_status,
+            self.well_irrigated,
         )
         group_mean_cap = np.zeros(n_groups, dtype=float)
         for group_idx in range(n_groups):
@@ -2616,7 +2616,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         group_indices, n_groups = self.create_unique_groups(
-            self.well_status,
+            self.well_irrigated,
         )
 
         years_observed = np.sum(~np.isnan(income_masked), axis=1)
@@ -3140,7 +3140,7 @@ class CropFarmers(AgentBaseClass):
                 columns ``[a, b]`` for ``y = a * exp(b * X)``.
         """
         # Create groups (unchanged)
-        group_indices, n_groups = self.create_unique_groups(self.well_status)
+        group_indices, n_groups = self.create_unique_groups(self.well_irrigated)
         assert (np.any(self.var.yearly_SPEI_probability != 0, axis=1) > 0).all()
 
         masked_yearly_yield_ratio = yearly_yield_ratio
@@ -3241,7 +3241,7 @@ class CropFarmers(AgentBaseClass):
             npt.NDArray[np.floating]: Per-farmer parameters with shape
                 ``(n_farmers, 2)``, columns ``[c, m]`` for ``y = m * X + c``.
         """
-        group_indices, n_groups = self.create_unique_groups(self.well_status)
+        group_indices, n_groups = self.create_unique_groups(self.well_irrigated)
         assert (np.any(self.var.yearly_SPEI_probability != 0, axis=1) > 0).all()
 
         y_all = yearly_yield_ratio
@@ -4482,7 +4482,7 @@ class CropFarmers(AgentBaseClass):
                 self.in_command_area.reshape(-1, 1),
                 self.elev_class.reshape(-1, 1),
                 insurance_differentiator.reshape(-1, 1),
-                self.well_status.reshape(-1, 1),
+                self.well_irrigated.reshape(-1, 1),
             )
         )
 
@@ -5210,36 +5210,25 @@ class CropFarmers(AgentBaseClass):
                 self.var.yearly_income / self.var.yearly_potential_income
             )
 
-            k = 8
-
-            self.in_command_area = (self.command_area >= 0).astype(np.int8)
-
-            edges = np.nanpercentile(
-                self.var.elevation, np.linspace(100 / k, 100 - 100 / k, k - 1)
-            )
-            self.elev_class = np.digitize(self.var.elevation, edges, right=True).astype(
-                np.int8
-            )
-
             # create a unique index for each type of crop calendar that a farmer follows
             crop_calendar_group = np.unique(
                 self.var.crop_calendar[:, :, 0], axis=0, return_inverse=True
             )[1]
 
-            self.insurance_diffentiator = np.int32(
-                self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
-            )  # only personal insurance affects adaptation
-
             self.blank_additional_differentiator = np.zeros(
                 self.var.n, dtype=np.float32
             )
-            self.well_status = np.int32(self.var.adaptations[:, WELL_ADAPTATION] > 0)
+
+            self.region_agents = np.where(
+                self.model.regions["NAME_1"].values[self.var.region_id] == "Victoria",
+                0,
+                1,
+            )  # Vict is 0, NSW is 1
 
             self.var.farmer_base_class[:] = self.create_farmer_classes(
                 crop_calendar_group,
-                self.in_command_area,
-                self.elev_class,
-                self.insurance_diffentiator,
+                self.is_in_command_area,
+                self.region_agents,
             )
             print("Nr of base groups", len(np.unique(self.var.farmer_base_class[:])))
 
