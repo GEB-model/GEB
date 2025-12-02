@@ -107,7 +107,7 @@ def get_farmer_groundwater_depth(
     return groundwater_depth_by_farmer
 
 
-# @njit(cache=True, inline="always")
+@njit(cache=True, inline="always")
 def get_deficit_between_dates(
     cumulative_water_deficit_m3: np.ndarray,
     farmer: int,
@@ -144,11 +144,26 @@ def get_deficit_between_dates(
         )
 
     if deficit < 0:
+        print(
+            "DEBUG DEFICIT<0",
+            "farmer",
+            farmer,
+            "start",
+            start_index,
+            "end",
+            end_index,
+            "c_start",
+            cumulative_water_deficit_m3[farmer, start_index],
+            "c_end",
+            cumulative_water_deficit_m3[farmer, end_index],
+            "c_last",
+            cumulative_water_deficit_m3[farmer, -1],
+        )
         raise ValueError("Deficit must be positive or zero")
     return deficit
 
 
-# @njit(cache=True)
+@njit(cache=True)
 def get_future_deficit(
     farmer: int,
     day_index: int,
@@ -224,7 +239,7 @@ def get_future_deficit(
     return future_water_deficit
 
 
-# @njit(cache=True)
+@njit(cache=True)
 def adjust_irrigation_to_limit(
     farmer: int,
     day_index: int,
@@ -491,7 +506,7 @@ def withdraw_groundwater(
     return irrigation_water_demand_field_m
 
 
-# @njit(cache=True, inline="always")
+@njit(cache=True, inline="always")
 def get_potential_irrigation_consumption_m(
     topwater: npt.NDArray[np.float32],
     root_depth_m: npt.NDArray[np.float32],
@@ -591,7 +606,7 @@ def get_potential_irrigation_consumption_m(
     return potential_irrigation_consumption_m * fraction_irrigated_field
 
 
-# @njit(cache=True)
+@njit(cache=True)
 def get_gross_irrigation_demand_m3(
     day_index: int,
     n: int,
