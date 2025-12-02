@@ -325,7 +325,7 @@ class SFINCSRootModel:
         assert isinstance(mask, xr.DataArray)
 
         resolution: tuple[float, float] = mask.rio.resolution()
-        if abs(abs(resolution[0]) - abs(resolution[1])) > 1e-10:
+        if abs(abs(resolution[0]) - abs(resolution[1])) > 1e-8:
             raise ValueError("DEM resolution must be square pixels")
 
         mask: xr.DataArray = clip_region(

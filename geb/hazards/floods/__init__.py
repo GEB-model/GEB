@@ -480,13 +480,6 @@ class Floods(Module):
             crs=flood_depth.rio.crs,
         )  # save the flood depth to a zarr file
 
-        # filename = (
-        #     self.model.output_folder
-        #     / "flood_maps"
-        #     / "20210714T000000 - 20210716T000000.zarr"
-        # )
-        # flood_depth = open_zarr(filename)
-
         # This check is done to compute damages (using ERA5) only after multiverse is finished
         if self.model.multiverse_name is None:
             print("Multiverse no longer active, now compute flood damages...")

@@ -183,7 +183,6 @@ class GEBModel(Module, HazardDriver):
                     / "other"
                     / "forecasts"
                     / self.config["general"]["forecasts"]["provider"]
-                    / self.forecast_issue_date
                     / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
                 )  # open the forecast data for the variable
                 # these are the forecast members to loop over
@@ -218,18 +217,10 @@ class GEBModel(Module, HazardDriver):
 
         forecast_end_dt = pd.to_datetime(forecast_end_dt).to_pydatetime()
         forecast_end_day = forecast_end_dt.date()
-        if (
-            forecast_end_dt.hour == 0
-            and forecast_end_dt.minute == 0
-            and forecast_end_dt.second == 0
-        ):
-            forecast_end_day -= datetime.timedelta(
-                days=1
-            )  # if forecast ends at midnight, set to previous day, because we need data for the entire day
 
         self.n_timesteps = (
-            forecast_end_day - self.start_time.date()
-        ).days + 1  # set the number of timesteps to the end of the forecast
+            forecast_end_day - self.simulation_start.date()
+        ).days  # set the number of timesteps to the end of the forecast
 
         for member in forecast_members:  # loop over all forecast members
             self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
@@ -341,7 +332,7 @@ class GEBModel(Module, HazardDriver):
                     # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
                         print(
-                            f"Running flood early warning system for date time {self.current_time.strftime('%d-%m-%Y T%H:%M:%S')}..."
+                            f"Running flood early warning system for date time {self.current_time.isoformat()}..."
                         )
                         self.agents.households.create_flood_probability_maps(
                             date_time=self.current_time, strategy=1, exceedance=True
@@ -355,7 +346,7 @@ class GEBModel(Module, HazardDriver):
                         self.agents.households.household_decision_making(
                             date_time=self.current_time
                         )
-                        self.agents.households.update_households_gdf(
+                        self.agents.households.update_households_geodataframe_w_warning_variables(
                             date_time=self.current_time
                         )
 

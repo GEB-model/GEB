@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import pdb
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -50,8 +51,6 @@ def from_landuse_raster_to_polygon(
     Returns:
         A GeoDataFrame containing polygons for the specified land use values.
     """
-    import pdb
-
     pdb.set_trace()
     shapes_gen = shapes(mask.astype(np.uint8), mask=mask, transform=transform)
 
@@ -398,76 +397,44 @@ class Households(AgentBaseClass):
             ),
             crs="EPSG:4326",
         )
-
         self.var.household_points = household_points
+
         print(
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
 
-    def change_household_locations(self) -> None:
-        """This function changes the location of the household points to the centroid of the buildings.
-
-        Also, it associates the household points with their postal codes.
-        This is done to get the correct geometry for the warning function.
-        """
-        # crs: str = self.model.sfincs.crs
-        crs = self.model.config["hazards"]["floods"]["crs"]
-
-        locations = self.var.household_points.copy()
-        locations.to_crs(
-            crs, inplace=True
-        )  # Change to a projected CRS to get a distance in meters
-
-        buildings_centroid = self.buildings_centroid[["geometry"]].copy()
-        buildings_centroid.to_crs(crs, inplace=True)  # Change to the same projected CRS
-
-        # Copy the geometry to a new column otherwise it gets lost in the spatial join
-        buildings_centroid["new_geometry"] = buildings_centroid.geometry
-
-        # Create unique ids for household points and building centroids
-        # This is done to avoid duplicates when doing the spatial join
-        locations["pointid"] = range(locations.shape[0])
-
-        new_locations = gpd.sjoin_nearest(
-            locations,
-            buildings_centroid,
-            how="left",
-            exclusive=True,
-            distance_col="distance",
-        )
-
-        # Sort values by pointid and distance and drop duplicate pointids
-        new_locations = new_locations.sort_values(
-            by=["pointid", "distance"], ascending=True, na_position="last"
-        )
-        new_locations = new_locations.drop_duplicates(subset="pointid", keep="first")
-
-        # Change the geometry of the household points to the geometry of the building centroid
-        new_locations["geometry"] = new_locations["new_geometry"]
-        new_locations.set_geometry("geometry", inplace=True)
-
-        # Drop columns that are not needed
-        new_locations.drop(
-            columns={"index_right", "new_geometry", "distance"}, inplace=True
-        )
+    def assign_households_to_postal_codes(self) -> None:
+        """This function associates the household points with their postal codes to get the correct geometry for the warning function."""
+        households = self.var.household_points.copy()
 
         # Associate households with their postal codes to use it later in the warning function
         postal_codes: gpd.GeoDataFrame = gpd.read_parquet(
             self.model.files["geom"]["postal_codes"]
         )
         postal_codes["postcode"] = postal_codes["postcode"].astype(str)
+        households.to_crs(
+            postal_codes.crs, inplace=True
+        )  # Change to the same CRS as the postal codes
 
-        new_locations = gpd.sjoin(
-            new_locations,
+        households_with_postal_codes = gpd.sjoin(
+            households,
             postal_codes[["postcode", "geometry"]],
             how="left",
             predicate="intersects",
         )
 
         # Drop columns that are not needed
-        new_locations.drop(columns=["index_right"], inplace=True)
+        households_with_postal_codes.drop(columns=["index_right"], inplace=True)
 
-        self.var.household_points = new_locations
+        households_with_postal_codes.to_parquet(
+            self.model.output_folder / "household_points_w_postal_codes.geoparquet"
+        )
+
+        self.var.household_points = households_with_postal_codes
+
+        print(
+            f"{len(households_with_postal_codes[households_with_postal_codes['postcode'].notnull()])} households assigned to {households_with_postal_codes['postcode'].nunique()} postal codes."
+        )
 
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
@@ -498,17 +465,16 @@ class Households(AgentBaseClass):
         flood_forecast_folder = (
             self.model.output_folder
             / "flood_maps"
-            / f"forecast_{date_time.isoformat()}"
+            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
         )
         n_ensemble_members = sum(1 for _ in flood_forecast_folder.glob("member_*"))
-        print(f"Loading flood maps for {n_ensemble_members} ensemble members.")
+        print(f"Loading flood maps for {n_ensemble_members} ensemble members")
 
         # Load all the flood maps in an ensemble per each day
         flood_start_time = self.model.config["hazards"]["floods"]["events"][0][
             "start_time"
         ]
         flood_end_time = self.model.config["hazards"]["floods"]["events"][0]["end_time"]
-        ensemble_flood_maps = []
 
         members = []  # Every time has its own ensemble
         for member in range(
@@ -523,8 +489,7 @@ class Households(AgentBaseClass):
             members.append(open_zarr(file_path))
 
         # Concatenate the members for each time (This stacks the list of dataarrays along a new "member" dimension)
-        members_stacked = xr.concat(members, dim="member")
-        ensemble_flood_maps.append(members_stacked)
+        ensemble_flood_maps = xr.concat(members, dim="member")
 
         return ensemble_flood_maps
 
@@ -541,7 +506,7 @@ class Households(AgentBaseClass):
         damage_forecast_folder = (
             self.model.output_folder
             / "damage_maps"
-            / f"forecast_{date_time.isoformat()}"
+            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
         )
         n_ensemble_members = sum(1 for _ in damage_forecast_folder.glob("member_*"))
         print(f"Loading damage maps for {n_ensemble_members} ensemble members.")
@@ -551,7 +516,7 @@ class Households(AgentBaseClass):
         for member in range(1, n_ensemble_members + 1):
             file_path = (
                 damage_forecast_folder
-                / f"damage_map_buildings_content_{date_time.isoformat()}_member{member}.gpkg"
+                / f"damage_map_buildings_content_{date_time.isoformat().replace(':', '').replace('-', '')}_member{member}.gpkg"
             )
             damage_map = gpd.read_file(file_path)
 
@@ -569,7 +534,7 @@ class Households(AgentBaseClass):
 
     def create_flood_probability_maps(
         self, date_time: datetime, strategy: int = 1, exceedance: bool = False
-    ) -> dict[tuple[datetime, int], xr.DataArray]:
+    ) -> dict[tuple[datetime.datetime, int], xr.DataArray]:
         """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
 
         Args:
@@ -585,20 +550,21 @@ class Households(AgentBaseClass):
         # Load the ensemble of flood maps for that specific date time
         ensemble_flood_maps = self.load_ensemble_flood_maps(date_time=date_time)
         crs = self.model.config["hazards"]["floods"]["crs"]
+        # TODO: need to think on how to load all the flood maps for each date time, instead of for each strategy/and to create flood prob exceedance maps
 
         if exceedance:
             # Create output folder for exceedance probability maps
             prob_folder = (
                 self.model.output_folder
                 / "flood_prob_exceedance_maps"
-                / f"forecast_{date_time.isoformat()}"
+                / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
             )
         else:
             # Create output folder for regular probability maps
             prob_folder = (
                 self.model.output_folder
                 / "flood_prob_maps"
-                / f"forecast_{date_time.isoformat()}"
+                / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
             )
 
         # Define water level ranges based on the chosen strategy (check the arguments for more info)
@@ -639,9 +605,10 @@ class Households(AgentBaseClass):
             file_path = prob_folder / file_name
             file_path.mkdir(parents=True, exist_ok=True)
 
-            # The y axis is flipped when writing to zarr, so fixing it here for now -- need to understand why
+            # The y axis is flipped when writing to zarr, so fixing it here so it can be used for zonal stats later
+            # TODO: need do it in a more elegant way
             if probability.y.values[0] < probability.y.values[-1]:
-                print("flipping y axis")
+                print("flipping y axis so it can be used for zonal stats later")
                 probability = probability.sortby("y", ascending=False)
 
             probability = probability.astype(np.float32)
@@ -664,7 +631,7 @@ class Households(AgentBaseClass):
         damage_prob_maps_folder = (
             self.model.output_folder
             / "damage_prob_maps"
-            / f"forecast_{date_time.isoformat()}"
+            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
         )
         damage_prob_maps_folder.mkdir(parents=True, exist_ok=True)
 
@@ -677,7 +644,7 @@ class Households(AgentBaseClass):
             (5, 45000, 60000),
             (6, 60000, None),
         ]
-        # Later need to create a json dictionary with the right damage ranges
+        # TODO: need to create a json dictionary with the right damage ranges
 
         # Load the ensemble of damage maps
         damage_ensemble = self.load_ensemble_damage_maps(date_time)
@@ -728,7 +695,7 @@ class Households(AgentBaseClass):
 
             output_path = (
                 damage_prob_maps_folder
-                / f"damage_prob_map_range{range_id}_forecast{date_time.isoformat()}.geoparquet"
+                / f"damage_prob_map_range{range_id}_forecast{date_time.isoformat().replace(':', '').replace('-', '')}.geoparquet"
             )
             damage_probability_map.to_parquet(output_path)
 
@@ -764,7 +731,7 @@ class Households(AgentBaseClass):
             prob_map = Path(
                 self.model.output_folder
                 / "prob_maps"
-                / f"forecast_{date_time.isoformat()}"
+                / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
                 / f"prob_map_range{range_id}_strategy{strategy_id}.zarr"
             )
 
@@ -840,7 +807,10 @@ class Households(AgentBaseClass):
         # Save the warning log to a csv file
         warnings_folder = self.model.output_folder / "warning_logs"
         warnings_folder.mkdir(exist_ok=True, parents=True)
-        path = warnings_folder / f"warning_log_water_levels_{date_time.isoformat()}.csv"
+        path = (
+            warnings_folder
+            / f"warning_log_water_levels_{date_time.isoformat().replace(':', '').replace('-', '')}.csv"
+        )
         pd.DataFrame(warning_log).to_csv(path, index=False)
 
     def load_critical_infrastructure(self) -> None:
@@ -993,7 +963,7 @@ class Households(AgentBaseClass):
             substations: GeoDataFrame of energy substations.
             postal_codes: GeoDataFrame of postal codes.
         """
-        # Need to improve this with Thiessen polygons or similar
+        # TODO: need to improve this with Thiessen polygons or similar
         postal_codes_with_substations = gpd.sjoin_nearest(
             postal_codes,
             substations[["fid", "geometry"]],
@@ -1059,7 +1029,7 @@ class Households(AgentBaseClass):
 
     def critical_infrastructure_warning_strategy(
         self, date_time: datetime, prob_threshold: float = 0.6
-    ):
+    ) -> None:
         """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities.
 
         Args:
@@ -1099,7 +1069,7 @@ class Households(AgentBaseClass):
         prob_energy_hit_path = Path(
             self.model.output_folder
             / "prob_maps"
-            / f"forecast_{date_time.isoformat()}"
+            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
             / f"prob_map_range1_strategy{strategy_id}.zarr"
         )
 
@@ -1142,7 +1112,7 @@ class Households(AgentBaseClass):
         prob_critical_facilities_hit_path = Path(
             self.model.output_folder
             / "prob_maps"
-            / f"forecast_{date_time.isoformat()}"
+            / f"forecast_{date_time.isoformat().replace(':', '').replace('-', '')}"
             / f"prob_map_range1_strategy{strategy_id}.zarr"
         )
 
@@ -1257,8 +1227,7 @@ class Households(AgentBaseClass):
         Evacuation warning only sent if evacuate is True and lead_time <= 48h.
 
         Args:
-            target_households: GeoDataFrame of household points targeted by the warning, must
-                contain a 'pointid' column with the household index.
+            target_households: GeoDataFrame of household points targeted by the warning.
             measures: Set of recommended protective measures to communicate (strings).
             evacuate: Whether evacuation should be advised for this warning.
             trigger: Identifier of the trigger that initiated the warning.
@@ -1381,9 +1350,7 @@ class Households(AgentBaseClass):
         possible_warning_triggers = self.var.possible_warning_triggers
 
         n_warned_households = 0
-        for _, row in selected_households.iterrows():
-            household_id = row["pointid"]
-
+        for household_id in selected_households.index:
             # Skip already evacuated
             if self.var.evacuated[household_id] == 1:
                 continue
@@ -1462,7 +1429,7 @@ class Households(AgentBaseClass):
         actions_log = []
 
         # For every eligible household, do the recommended measures in the communicated warning
-        for household_id, _ in eligible_households.iterrows():
+        for household_id in eligible_households.index:
             # For measure in recommended measures, change it to true in the actions_taken array
             self.var.actions_taken[household_id] = self.var.recommended_measures[
                 household_id
@@ -1493,7 +1460,10 @@ class Households(AgentBaseClass):
         # Save actions log
         actions_log_folder = self.model.output_folder / "actions_logs"
         actions_log_folder.mkdir(exist_ok=True, parents=True)
-        path = actions_log_folder / f"actions_log_{date_time.isoformat()}.csv"
+        path = (
+            actions_log_folder
+            / f"actions_log_{date_time.isoformat().replace(':', '').replace('-', '')}.csv"
+        )
         pd.DataFrame(actions_log).to_csv(path, index=False)
 
     def decide_household_strategy(self) -> None:
@@ -1575,7 +1545,8 @@ class Households(AgentBaseClass):
         self.rail = gpd.read_parquet(self.model.files["geom"]["assets/rails"])
         self.rail["object_type"] = "rail"
 
-        # Load postal codes -- maybe need to move it to another function? (not really an object)
+        # Load postal codes --
+        # TODO: maybe move it to another function? (not really an object)
         self.postal_codes = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
 
     def load_max_damage_values(self) -> None:
@@ -1722,7 +1693,7 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "building_unprotected"}
         )
 
-        # Need to adjust the vulnerability curves
+        # TODO: Need to adjust the vulnerability curves
         # create another column (curve) in the buildings structure curve for
         # protected buildings with sandbags
         self.buildings_structure_curve["building_with_sandbags"] = (
@@ -1760,7 +1731,7 @@ class Households(AgentBaseClass):
             self.buildings_content_curve["building_unprotected"] * 0.7
         )
 
-        # need to adjust the vulnerability curves
+        # TODO: need to adjust the vulnerability curves
         # create another column (curve) in the buildings content curve for
         # protected buildings with sandbags
         self.buildings_content_curve["building_with_sandbags"] = (
@@ -1797,7 +1768,7 @@ class Households(AgentBaseClass):
             columns={"damage_ratio": "rail"}
         )
 
-    def load_wlranges_and_measures(self):
+    def load_wlranges_and_measures(self) -> None:
         """Loads the water level ranges and appropriate measures, and the implementation times for measures."""
         with open(self.model.files["dict"]["measures/implementation_times"], "r") as f:
             self.var.implementation_times = json.load(f)
@@ -1827,8 +1798,8 @@ class Households(AgentBaseClass):
         """This function runs the spin-up process for the household agents."""
         self.construct_income_distribution()
         self.assign_household_attributes()
-        if self.config["warning_response"]:
-            self.change_household_locations()  # ideally this should be done in the setup_population when building the model
+        if self.model.config["agent_settings"]["households"]["warning_response"]:
+            self.assign_households_to_postal_codes()
 
     def assign_damages_to_agents(
         self, agent_df: pd.DataFrame, buildings_with_damages: pd.DataFrame
@@ -1913,7 +1884,9 @@ class Households(AgentBaseClass):
                 )
         return damages_do_not_adapt, damages_adapt
 
-    def update_households_gdf(self, date_time: datetime) -> None:
+    def update_households_geodataframe_w_warning_variables(
+        self, date_time: datetime
+    ) -> None:
         """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
 
         Args:
@@ -1978,75 +1951,7 @@ class Households(AgentBaseClass):
         household_points.to_parquet(
             self.model.output_folder
             / "action_maps"
-            / f"households_with_warning_parameters_{date_time.isoformat()}.geoparquet"
-        )
-
-    def update_households_gdf(self, date_time: datetime) -> None:
-        """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
-
-        Args:
-            date_time: The forecast date time for which to update the households geodataframe.
-        """
-        household_points: gpd.GeoDataFrame = self.var.household_points.copy()
-
-        action_maps_folder: Path = self.model.output_folder / "action_maps"
-        action_maps_folder.mkdir(parents=True, exist_ok=True)
-
-        global_vars = [
-            "warning_reached",
-            "warning_level",
-            "response_probability",
-            "evacuated",
-            "recommended_measures",
-            "warning_trigger",
-            "actions_taken",
-        ]
-
-        # make sure household points and global variables have the same length
-        for global_var in global_vars:
-            global_array = getattr(self.var, global_var)
-            assert len(household_points) == global_array.shape[0], (
-                f"The size of household points and {global_var} do not match"
-            )
-
-        # add columns in the household points geodataframe
-        for name in [
-            "warning_reached",
-            "warning_level",
-            "response_probability",
-            "evacuated",
-        ]:
-            household_points[name] = getattr(self.var, name)
-
-        warning_triggers = self.var.possible_warning_triggers
-        for i, _ in enumerate(warning_triggers):
-            if warning_triggers[i] == "water_levels":
-                household_points["trig_w_levels"] = self.var.warning_trigger[:, i]
-            if warning_triggers[i] == "critical_infrastructure":
-                household_points["trig_crit_infra"] = self.var.warning_trigger[:, i]
-
-        possible_measures_to_recommend = self.var.possible_measures
-        for i, measure in enumerate(possible_measures_to_recommend):
-            if measure == "sandbags":
-                household_points["recom_sandbags"] = self.var.recommended_measures[:, i]
-            if measure == "elevate possessions":
-                household_points["recom_elev_possessions"] = (
-                    self.var.recommended_measures[:, i]
-                )
-            if measure == "evacuate":
-                household_points["recom_evacuate"] = self.var.recommended_measures[:, i]
-
-        possible_actions = self.var.possible_measures
-        for i, action in enumerate(possible_actions):
-            if action == "sandbags":
-                household_points["sandbags"] = self.var.actions_taken[:, i]
-            if action == "elevate possessions":
-                household_points["elevated_possessions"] = self.var.actions_taken[:, i]
-
-        household_points.to_parquet(
-            self.model.output_folder
-            / "action_maps"
-            / f"households_with_warning_parameters_{date_time.isoformat()}.geoparquet"
+            / f"households_with_warning_parameters_{date_time.isoformat().replace(':', '').replace('-', '')}.geoparquet"
         )
 
     def flood(self, flood_depth: xr.DataArray) -> float:
@@ -2099,7 +2004,7 @@ class Households(AgentBaseClass):
             buildings.loc[
                 buildings["elevated_possessions"] & buildings["sandbags"], "object_type"
             ] = "building_all_forecast_based"
-            # Need to move the update of the actions takens by households to outside the flood function
+            # TODO: need to move the update of the actions takens by households to outside the flood function
 
             # Save the buildings with actions taken
             buildings.to_parquet(

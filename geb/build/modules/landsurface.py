@@ -6,7 +6,7 @@ import xarray as xr
 from pyflwdir.dem import fill_depressions
 
 from geb.build.methods import build_method
-from geb.workflows.io import get_window
+from geb.workflows.io import get_window, open_zarr
 from geb.workflows.raster import (
     bounds_are_within,
     calculate_cell_area,
@@ -97,7 +97,6 @@ class LandSurface:
                 "fill_depressions": True,
             },
             {"name": "gebco", "zmax": 0.0, "fill_depressions": False},
-            {"name": "geul_dem"},
         ],
     ) -> None:
         """Sets up the elevation data for the model.
@@ -153,9 +152,14 @@ class LandSurface:
                 if DEM["name"] == "gebco":
                     DEM_raster = self.new_data_catalog.fetch("gebco").read()
                 else:
-                    DEM_raster = xr.open_dataarray(
-                        self.data_catalog.get_source(DEM["name"]).path,
-                    )
+                    if DEM["name"] == "geul_dem":
+                        DEM_raster = open_zarr(
+                            self.data_catalog.get_source(DEM["name"]).path
+                        )
+                    else:
+                        DEM_raster = xr.open_dataarray(
+                            self.data_catalog.get_source(DEM["name"]).path,
+                        )
                 if "bands" in DEM_raster.dims:
                     DEM_raster = DEM_raster.isel(band=0)
 
@@ -174,7 +178,9 @@ class LandSurface:
                     ),
                 )
 
-            DEM_raster = convert_nodata(DEM_raster.astype(np.float32), np.nan)
+            DEM_raster = convert_nodata(
+                DEM_raster.astype(np.float32, keep_attrs=True), np.nan
+            )
 
             if "fill_depressions" in DEM and DEM["fill_depressions"]:
                 DEM_raster.values, d8 = fill_depressions(DEM_raster.values)
