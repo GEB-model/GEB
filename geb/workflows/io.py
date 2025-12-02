@@ -828,8 +828,17 @@ class AsyncGriddedForcingReader:
         if self.asynchronous:
             self.loop: asyncio.AbstractEventLoop | None = self._get_loop()
             assert self.loop is not None
+
+            # Initialize lock in the shared loop
+            async def _init_lock() -> asyncio.Lock:
+                return asyncio.Lock()
+
+            self.async_lock = asyncio.run_coroutine_threadsafe(
+                _init_lock(), self.loop
+            ).result()
         else:
             self.loop = None
+            self.async_lock = None
 
     def load(self, start_index: int, end_index: int) -> np.ndarray:
         """Safe synchronous load (only used if asynchronous=False).
@@ -868,15 +877,15 @@ class AsyncGriddedForcingReader:
             if np.isnan(data).any():
                 retries += 1
                 print(
-                    f"Warning: Async read returned all NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
+                    f"Warning: Async read returned NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
                 )
                 await asyncio.sleep(delay=0.1)  # brief pause before retrying
             else:
                 return data
 
-        # If still all NaN after retries, raise an error
+        # If still NaN after retries, raise an error
         raise RuntimeError(
-            f"Failed to load data for {self.variable_name} after {max_retries} retries due to all NaN values."
+            f"Failed to load data for {self.variable_name} after {max_retries} retries due to NaN values."
         )
 
     async def preload_next(
@@ -915,50 +924,52 @@ class AsyncGriddedForcingReader:
         if start_index < 0 or end_index > self.time_size:
             raise ValueError(f"Index out of bounds ({start_index}:{end_index})")
 
-        data: npt.NDArray[Any] | None = None
+        assert self.async_lock is not None
+        async with self.async_lock:
+            data: npt.NDArray[Any] | None = None
 
-        # Cache hit
-        if (
-            self.current_data is not None
-            and start_index == self.current_start_index
-            and end_index == self.current_end_index
-        ):
-            data = self.current_data
+            # Cache hit
+            if (
+                self.current_data is not None
+                and start_index == self.current_start_index
+                and end_index == self.current_end_index
+            ):
+                data = self.current_data
 
-        # Check Preload
-        elif (
-            self.preloaded_data_future is not None
-            and self.current_start_index + n == start_index
-        ):
-            try:
-                data = await self.preloaded_data_future
-            except Exception:
-                pass
+            # Check Preload
+            elif (
+                self.preloaded_data_future is not None
+                and self.current_start_index + n == start_index
+            ):
+                try:
+                    data = await self.preloaded_data_future
+                except Exception:
+                    pass
 
-        # Load if needed
-        if data is None:
-            if self.preloaded_data_future and not self.preloaded_data_future.done():
-                self.preloaded_data_future.cancel()
-            data = await self.load_await(start_index, end_index)
+            # Load if needed
+            if data is None:
+                if self.preloaded_data_future and not self.preloaded_data_future.done():
+                    self.preloaded_data_future.cancel()
+                data = await self.load_await(start_index, end_index)
 
-        # Consistency check
-        if data.shape[0] != (end_index - start_index):
-            raise IOError(
-                "Async read returned incomplete data; possible disk contention"
+            # Consistency check
+            if data.shape[0] != (end_index - start_index):
+                raise IOError(
+                    "Async read returned incomplete data; possible disk contention"
+                )
+
+            # Update Cache
+            self.current_start_index = start_index
+            self.current_end_index = end_index
+            self.current_data = data
+
+            # Schedule next preload
+            assert self.loop is not None
+            self.preloaded_data_future = self.loop.create_task(
+                self.preload_next(start_index, end_index, n)
             )
 
-        # Update Cache (avoid copy for performance)
-        self.current_start_index = start_index
-        self.current_end_index = end_index
-        self.current_data = data
-
-        # Schedule next preload
-        assert self.loop is not None
-        self.preloaded_data_future = self.loop.create_task(
-            self.preload_next(start_index, end_index, n)
-        )
-
-        return data
+            return data
 
     def get_index(self, date: datetime.datetime, n: int) -> int:
         """Get the time index for a given datetime.
