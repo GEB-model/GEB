@@ -56,7 +56,7 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
                 "evaluate_discharge",
                 "water_circle",
                 "evaluate_hydrodynamics",
-                # "evaluate_forecasts",
+                "evaluate_forecasts",
                 "plot_discharge_floods",
             ]
         else:
