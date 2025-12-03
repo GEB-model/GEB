@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import pdb
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -51,7 +50,6 @@ def from_landuse_raster_to_polygon(
     Returns:
         A GeoDataFrame containing polygons for the specified land use values.
     """
-    pdb.set_trace()
     shapes_gen = shapes(mask.astype(np.uint8), mask=mask, transform=transform)
 
     polygons = []
@@ -452,7 +450,7 @@ class Households(AgentBaseClass):
             + self.var.risk_perc_min
         )
 
-    def load_ensemble_flood_maps(self, date_time: datetime) -> xr.DataArray:
+    def load_ensemble_flood_maps(self, date_time: datetime.datetime) -> xr.DataArray:
         """Loads the flood maps for all ensemble members for a specific forecast date time.
 
         Args:
@@ -493,7 +491,7 @@ class Households(AgentBaseClass):
 
         return ensemble_flood_maps
 
-    def load_ensemble_damage_maps(self, date_time: datetime) -> pd.DataFrame:
+    def load_ensemble_damage_maps(self, date_time: datetime.datetime) -> pd.DataFrame:
         """Loads the damage maps for all ensemble members and aggregates them into a single dataframe. Work in standby for now.
 
         Args:
@@ -533,7 +531,7 @@ class Households(AgentBaseClass):
         return ensemble_damage_maps
 
     def create_flood_probability_maps(
-        self, date_time: datetime, strategy: int = 1, exceedance: bool = False
+        self, date_time: datetime.datetime, strategy: int = 1, exceedance: bool = False
     ) -> dict[tuple[datetime.datetime, int], xr.DataArray]:
         """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
 
@@ -578,12 +576,14 @@ class Households(AgentBaseClass):
                 for key, value in self.var.wlranges_and_measures.items():
                     ranges.append((key, value["min"], value["max"]))
         elif strategy == 2:
-            # Water level range for energy substations (based on critical hit > 30 cm of flood) -- need to make it not hard coded
+            # Water level range for energy substations (based on critical hit > 30 cm of flood)
+            # TODO: need to make it not hard coded
             ranges = [(1, 0.3, None)]
 
         else:
             # Water level range for vulnerable and emergency facilities (flooded or not)
-            ranges = [(1, 0.1, None)]
+            # TODO: need to make it not hard coded
+            ranges = [(1, 0.05, None)]
 
         probability_maps = {}
         # Loop over water level ranges to calculate probability maps
@@ -620,7 +620,7 @@ class Households(AgentBaseClass):
         return probability_maps
         # Right now I am not using this for anything, but maybe useful later to replace the file loading
 
-    def create_damage_probability_maps(self, date_time: datetime) -> None:
+    def create_damage_probability_maps(self, date_time: datetime.datetime) -> None:
         """Creates an object-based (buildings) probability map based on the ensemble of damage maps. Work in standby for now.
 
         Args:
@@ -701,7 +701,7 @@ class Households(AgentBaseClass):
 
     def water_level_warning_strategy(
         self,
-        date_time: datetime,
+        date_time: datetime.datetime,
         prob_threshold: float = 0.6,
         area_threshold: float = 0.1,
         strategy_id: int = 1,
@@ -917,7 +917,6 @@ class Households(AgentBaseClass):
         """Update buildings layer with critical infrastructure attributes via spatial intersection.
 
         Args:
-            buildings: GeoDataFrame of buildings to be updated.
             critical_infrastructure: Iterable of GeoDataFrames representing different sets of
                 critical infrastructure (e.g., vulnerable facilities, emergency facilities).
 
@@ -925,6 +924,7 @@ class Households(AgentBaseClass):
             Copy of buildings with updated attributes from critical infrastructure data where spatial intersections occurred.
         """
         buildings = self.buildings.copy()
+        # TODO: check if this function is needed with the new OBM data
 
         # Spatial join: find which facility features intersect which buildings
         joined = gpd.sjoin(
@@ -1028,7 +1028,7 @@ class Households(AgentBaseClass):
         critical_facilities_with_postal_codes.to_parquet(path)
 
     def critical_infrastructure_warning_strategy(
-        self, date_time: datetime, prob_threshold: float = 0.6
+        self, date_time: datetime.datetime, prob_threshold: float = 0.6
     ) -> None:
         """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities.
 
@@ -1396,7 +1396,7 @@ class Households(AgentBaseClass):
         return lead_time
 
     def household_decision_making(
-        self, date_time: datetime, responsive_ratio: float = 0.7
+        self, date_time: datetime.datetime, responsive_ratio: float = 0.7
     ) -> None:
         """Simulate household emergency response decisions based on warnings and lead time.
 
@@ -1885,7 +1885,7 @@ class Households(AgentBaseClass):
         return damages_do_not_adapt, damages_adapt
 
     def update_households_geodataframe_w_warning_variables(
-        self, date_time: datetime
+        self, date_time: datetime.datetime
     ) -> None:
         """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
 
