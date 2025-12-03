@@ -152,7 +152,7 @@ class LandSurface:
                 if DEM["name"] == "gebco":
                     DEM_raster = self.new_data_catalog.fetch("gebco").read()
                 else:
-                    DEM_raster = xr.open_dataarray(
+                    DEM_raster = xr.open_zarr(
                         self.data_catalog.get_source(DEM["name"]).path,
                     )
                 if "bands" in DEM_raster.dims:

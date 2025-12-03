@@ -756,7 +756,6 @@ class Hydrology:
             )
             plt.show()
             plt.close()
-            # plt.close()
 
         plot_validation_map()
 

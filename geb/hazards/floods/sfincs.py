@@ -287,10 +287,8 @@ class SFINCSRootModel:
         sf: SfincsModel = SfincsModel(root=str(self.path), mode="w+", write_gis=True)
         self.sfincs_model = sf
         mask_ds = DEMs[0]["elevtn"]
-        # print(f"this is the mask_ds file: {mask_ds}")
         assert isinstance(mask_ds, xr.Dataset)
         mask: xr.DataArray = mask_ds["elevtn"]
-        # print(f"this is the first mask file: {mask}")
         self.region: gpd.GeoDataFrame = region.to_crs(mask.rio.crs)
         self.region.to_parquet(self.path / "region.geoparquet")
         del region
@@ -316,25 +314,14 @@ class SFINCSRootModel:
             all_touched=True,
         ).astype(bool)
         assert isinstance(mask, xr.DataArray)
-        # print(f"this is the region burned file: {region_burned}")
 
         resolution: tuple[float, float] = mask.rio.resolution()
         if abs(abs(resolution[0]) - abs(resolution[1])) > 1e-8:
-            print(resolution[0])
-            print(resolution[1])
-            print(abs(abs(resolution[0]) - abs(resolution[1])))
             raise ValueError("DEM resolution must be square pixels")
 
-        print("abs res:")
-        print(abs(resolution[0]))
-        print("grid size multiplier:")
-        print(grid_size_multiplier)
         mask: xr.DataArray = clip_region(
             region_burned, align=abs(resolution[0]) * grid_size_multiplier
         )[0]
-        print(f"this is the second mask file {mask}")
-        print(mask.y)
-        print(mask.rio.crs)
 
         # if y axis is descending (usually for geographical grids), flip it
         if mask.y[-1] < mask.y[0]:
@@ -533,7 +520,7 @@ class SFINCSRootModel:
             rivers_to_burn["width"] > self.estimated_cell_size_m
         ]
 
-        self.logger.info(f"estimated cell size is: {self.estimated_cell_size_m}")
+        self.logger.info(f"Estimated cell size is: {self.estimated_cell_size_m}")
 
         rivers_to_burn.to_parquet(self.path / "rivers_to_burn.geoparquet")
 
