@@ -16,6 +16,7 @@ examples/*/*
 !examples/*/update.yml
 .snakemake
 **.code-workspace
+libmf6.so
 
 #ignore folder
 model

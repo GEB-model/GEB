@@ -2815,6 +2815,8 @@ class GEBModel(
 
         self.logger.info("Finished!")
 
+        build_method.log_time_taken()
+
     def build(
         self, region: dict, methods: dict[str, dict[str, Any] | None], continue_: bool
     ) -> None:

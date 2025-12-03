@@ -1146,7 +1146,7 @@ wheels = [
 
 [[package]]
 name = "geb"
-version = "1.0.0b6"
+version = "1.0.0b7"
 source = { editable = "." }
 dependencies = [
     { name = "cartopy" },
@@ -1294,7 +1294,7 @@ requires-dist = [
     { name = "xclim", specifier = ">=0.56.0" },
     { name = "xmipy", specifier = ">=1.5.0" },
     { name = "xpystac", specifier = ">=0.4.0" },
-    { name = "zarr", specifier = ">=3.1.3" },
+    { name = "zarr", specifier = ">=3.1.5" },
 ]
 provides-extras = ["fairstream", "display", "plantfate"]
 

@@ -92,7 +92,7 @@ def build_sfincs(
     Returns:
         A SFINCS model instance with static grids and configuration written.
     """
-    sfincs_model: SFINCSRootModel = SFINCSRootModel(geb_model, name)
+    sfincs_model: SFINCSRootModel = SFINCSRootModel(tmp_folder / "SFINCS", name)
     DEM_config: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = (
         geb_model.floods.DEM_config.copy()
     )
@@ -125,13 +125,14 @@ def build_sfincs(
         if "parameters"
         in geb_model.floods.model.config["hydrology"]["routing"]["river_depth"]
         else {},
-        setup_outflow=False,
+        setup_river_outflow_boundary=False,
         custom_rivers_to_burn=load_geom(
             geb_model.files["geom"]["routing/custom_rivers"]
         )
         if "routing/custom_rivers" in geb_model.files["geom"]
         else None,
     )
+    geb_model.close()
 
     if subgrid:
         assert (sfincs_model.path / "sfincs_subgrid.nc").exists()
@@ -292,7 +293,7 @@ def test_accumulated_runoff(
         total_discharge_volume_across_models: float = 0.0
         for sfincs_model in sfincs_models:
             simulation: SFINCSSimulation = sfincs_model.create_simulation(
-                f"accumulated_runoff_forcing_{sfincs_model.name}",
+                simulation_name=f"accumulated_runoff_forcing_{sfincs_model.name}",
                 start_time=start_time,
                 end_time=end_time,
                 spinup_seconds=0,
@@ -311,10 +312,8 @@ def test_accumulated_runoff(
                 cell_area=cell_area,
             )
 
-            if simulation.sfincs_root_model.has_inflow:
-                inflow_rivers: gpd.GeoDataFrame = (
-                    simulation.sfincs_root_model.inflow_rivers
-                )
+            if simulation.root_model.has_inflow:
+                inflow_rivers: gpd.GeoDataFrame = simulation.root_model.inflow_rivers
                 inflow_nodes = inflow_rivers.copy()
                 inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
                     get_start_point
@@ -439,7 +438,7 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         )
 
         simulation = sfincs_model.create_simulation(
-            "nodes_forcing_test",
+            simulation_name="nodes_forcing_test",
             start_time=start_time,
             end_time=end_time,
             flood_map_output_interval_seconds=(end_time - start_time).total_seconds(),
@@ -502,7 +501,7 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
 
         for sfincs_model in sfincs_models:
             simulation: SFINCSSimulation = sfincs_model.create_simulation(
-                f"grid_forcing_test_{sfincs_model.name}",
+                simulation_name=f"grid_forcing_test_{sfincs_model.name}",
                 start_time=start_time,
                 end_time=end_time,
                 write_figures=True,
@@ -531,7 +530,7 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
 
             discharge_grid = discharge_grid * 2.0
 
-            if simulation.sfincs_root_model.has_inflow:
+            if simulation.root_model.has_inflow:
                 simulation.set_inflow_forcing_from_grid(
                     discharge_grid=discharge_grid,
                 )
@@ -580,7 +579,7 @@ def test_read(geb_model: GEBModel) -> None:
         )
 
         sfincs_model_read: SFINCSRootModel = SFINCSRootModel(
-            geb_model, TEST_MODEL_NAME
+            tmp_folder / "SFINCS", name=TEST_MODEL_NAME
         ).read()
 
         # assert that both models have the same attributes
