@@ -1545,9 +1545,12 @@ class Households(AgentBaseClass):
         self.rail = gpd.read_parquet(self.model.files["geom"]["assets/rails"])
         self.rail["object_type"] = "rail"
 
-        # Load postal codes --
-        # TODO: maybe move it to another function? (not really an object)
-        self.postal_codes = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
+        if self.model.config["general"]["forecasts"]["use"]:
+            # Load postal codes --
+            # TODO: maybe move it to another function? (not really an object)
+            self.postal_codes = gpd.read_parquet(
+                self.model.files["geom"]["postal_codes"]
+            )
 
     def load_max_damage_values(self) -> None:
         """Load maximum damage values from model files and store them in the model variables."""
