@@ -25,7 +25,6 @@ from .sfincs import (
     MultipleSFINCSSimulations,
     SFINCSRootModel,
     SFINCSSimulation,
-    set_river_outflow_boundary_condition,
 )
 
 if TYPE_CHECKING:
@@ -249,7 +248,7 @@ class Floods(Module):
         Returns:
             The built or read SFINCSRootModel instance.
         """
-        sfincs_model = SFINCSRootModel(self.model, name)
+        sfincs_model = SFINCSRootModel(self.model.simulation_root, name)
         if self.config["force_overwrite"] or not sfincs_model.exists():
             for entry in self.DEM_config:
                 entry["elevtn"] = open_zarr(
@@ -281,11 +280,16 @@ class Floods(Module):
                 if "parameters"
                 in self.model.config["hydrology"]["routing"]["river_depth"]
                 else {},
-                coastal=coastal,
                 low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
                 coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
-                setup_outflow=not coastal,
+                coastal=coastal,
+                setup_river_outflow_boundary=not coastal,
                 initial_water_level=initial_water_level,
+                custom_rivers_to_burn=load_geom(
+                    self.model.files["geom"]["routing/custom_rivers"]
+                )
+                if "routing/custom_rivers" in self.model.files["geom"]
+                else None,
             )
         else:
             sfincs_model.read()
@@ -326,6 +330,9 @@ class Floods(Module):
             start_time=start_time,
             end_time=end_time,
             write_figures=self.config["write_figures"],
+            flood_map_output_interval_seconds=self.config[
+                "flood_map_output_interval_seconds"
+            ],
         )
 
         routing_substeps: int = self.var.discharge_per_timestep[0].shape[0]
@@ -384,11 +391,14 @@ class Floods(Module):
             river_ids: TwoDArrayInt32 = self.hydrology.grid.load(
                 self.model.files["grid"]["routing/river_ids"], compress=False
             )
+            basin_ids: TwoDArrayInt32 = self.hydrology.grid.load(
+                self.model.files["grid"]["routing/basin_ids"], compress=False
+            )
             simulation.set_accumulated_runoff_forcing(
                 runoff_m=forcing_grid,
                 river_network=self.model.hydrology.routing.river_network,
-                mask=~self.model.hydrology.grid.mask,
                 river_ids=river_ids,
+                basin_ids=basin_ids,
                 upstream_area=self.model.hydrology.grid.decompress(
                     self.model.hydrology.grid.var.upstream_area
                 ),
@@ -400,14 +410,6 @@ class Floods(Module):
             raise ValueError(
                 f"Unknown forcing method {self.config['forcing_method']}. Supported are 'headwater_points' and 'accumulated_runoff'."
             )
-
-        # Set up river outflow boundary condition for all simulations
-        set_river_outflow_boundary_condition(
-            sf=simulation.sfincs_model,
-            model_root=sfincs_model.path,
-            simulation_root=simulation.path,
-            write_figures=simulation.write_figures,
-        )
 
         return simulation
 
@@ -469,7 +471,10 @@ class Floods(Module):
             crs=flood_depth.rio.crs,
         )  # save the flood depth to a zarr file
 
-        self.model.agents.households.flood(flood_depth=flood_depth)
+        # This check is done to compute damages (using ERA5) only after multiverse is finished
+        if self.model.multiverse_name is None:
+            print("Multiverse no longer active, now compute flood damages...")
+            self.model.agents.households.flood(flood_depth=flood_depth)
 
     def get_return_period_maps(self, coastal_only: bool = False) -> None:
         """
@@ -676,7 +681,9 @@ class Floods(Module):
                 [100, "Moss and lichen", 100, 0.025],
                 [0, "No data", 0, 0.1],
             ],
-            columns=["esa_worldcover", "description", "landuse", "N"],
+            columns=np.array(
+                ["esa_worldcover", "description", "landuse", "N"], dtype=str
+            ),
         )
 
     @property

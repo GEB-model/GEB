@@ -18,7 +18,7 @@ from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
 from geb.types import TwoDArrayFloat64, TwoDArrayInt32
-from geb.workflows.io import WorkingDirectory, load_geom, open_zarr
+from geb.workflows.io import WorkingDirectory, load_geom, load_grid, open_zarr
 from geb.workflows.raster import rasterize_like
 
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -92,7 +92,7 @@ def build_sfincs(
     Returns:
         A SFINCS model instance with static grids and configuration written.
     """
-    sfincs_model: SFINCSRootModel = SFINCSRootModel(geb_model, name)
+    sfincs_model: SFINCSRootModel = SFINCSRootModel(tmp_folder / "SFINCS", name)
     DEM_config: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = (
         geb_model.floods.DEM_config.copy()
     )
@@ -125,8 +125,14 @@ def build_sfincs(
         if "parameters"
         in geb_model.floods.model.config["hydrology"]["routing"]["river_depth"]
         else {},
-        setup_outflow=False,
+        setup_river_outflow_boundary=False,
+        custom_rivers_to_burn=load_geom(
+            geb_model.files["geom"]["routing/custom_rivers"]
+        )
+        if "routing/custom_rivers" in geb_model.files["geom"]
+        else None,
     )
+    geb_model.close()
 
     if subgrid:
         assert (sfincs_model.path / "sfincs_subgrid.nc").exists()
@@ -272,6 +278,9 @@ def test_accumulated_runoff(
         river_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load(
             geb_model.files["grid"]["routing/river_ids"], compress=False
         )
+        basin_ids: TwoDArrayInt32 = geb_model.hydrology.grid.load(
+            geb_model.files["grid"]["routing/basin_ids"], compress=False
+        )
         upstream_area = geb_model.hydrology.grid.load(
             geb_model.files["grid"]["routing/upstream_area"], compress=False
         )
@@ -282,29 +291,29 @@ def test_accumulated_runoff(
 
         total_flood_volume_across_models: float = 0.0
         total_discharge_volume_across_models: float = 0.0
-        total_discarded_generated_discharge_across_models: float = 0.0
         for sfincs_model in sfincs_models:
             simulation: SFINCSSimulation = sfincs_model.create_simulation(
-                f"accumulated_runoff_forcing_{sfincs_model.name}",
+                simulation_name=f"accumulated_runoff_forcing_{sfincs_model.name}",
                 start_time=start_time,
                 end_time=end_time,
                 spinup_seconds=0,
                 write_figures=True,
+                flood_map_output_interval_seconds=(
+                    end_time - start_time
+                ).total_seconds(),
             )
 
             simulation.set_accumulated_runoff_forcing(
                 runoff_m=runoff_m,
                 river_network=geb_model.hydrology.routing.river_network,
-                mask=~geb_model.hydrology.grid.mask,
                 river_ids=river_ids,
+                basin_ids=basin_ids,
                 upstream_area=upstream_area,
                 cell_area=cell_area,
             )
 
-            if simulation.sfincs_root_model.has_inflow:
-                inflow_rivers: gpd.GeoDataFrame = (
-                    simulation.sfincs_root_model.inflow_rivers
-                )
+            if simulation.root_model.has_inflow:
+                inflow_rivers: gpd.GeoDataFrame = simulation.root_model.inflow_rivers
                 inflow_nodes = inflow_rivers.copy()
                 inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
                     get_start_point
@@ -345,6 +354,9 @@ def test_accumulated_runoff(
             flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.00)
             total_flood_volume = simulation.get_flood_volume(flood_depth)
 
+            basin_id_grid = load_grid(geb_model.files["grid"]["routing/basin_ids"])
+
+            valid_cells = np.isin(basin_id_grid, sfincs_model.rivers.index)
             region = sfincs_model.region.to_crs(runoff_m.rio.crs)
             region_mask = rasterize_like(
                 region,
@@ -357,33 +369,29 @@ def test_accumulated_runoff(
 
             total_runoff_volume: float = (
                 runoff_rate_m_per_hr
-                * (region_mask * cell_area).sum().item()
+                * np.nansum((valid_cells * cell_area))
                 * ((end_time - start_time).total_seconds() / 3600.0)
             )
 
             # Use tracked volumes from the simulation
-            non_discarded_runoff_volume: float = simulation.total_discharge_volume_m3
-            discarded_discharge: float = (
-                simulation.discarded_accumulated_generated_discharge_m3
-            )
+            total_discharge_volume_m3: float = simulation.total_discharge_volume_m3
 
             # compare to total discharge volume
             assert math.isclose(
                 total_flood_volume,
-                non_discarded_runoff_volume,
+                total_discharge_volume_m3,
                 abs_tol=0,
                 rel_tol=0.01,
             )
 
             assert math.isclose(
                 total_flood_volume,
-                total_runoff_volume + discharge_m3 - discarded_discharge,
+                total_runoff_volume + discharge_m3,
                 abs_tol=0,
-                rel_tol=0.2,
+                rel_tol=0.02,
             )
 
             total_flood_volume_across_models += total_flood_volume
-            total_discarded_generated_discharge_across_models += discarded_discharge
             total_discharge_volume_across_models += discharge_m3
 
             simulation.cleanup()
@@ -397,8 +405,7 @@ def test_accumulated_runoff(
             )
 
             assert math.isclose(
-                total_flood_volume_across_models
-                + total_discarded_generated_discharge_across_models,
+                total_flood_volume_across_models,
                 total_runoff_volume + total_discharge_volume_across_models,
                 abs_tol=0,
                 rel_tol=0.05,
@@ -431,9 +438,10 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         )
 
         simulation = sfincs_model.create_simulation(
-            "nodes_forcing_test",
+            simulation_name="nodes_forcing_test",
             start_time=start_time,
             end_time=end_time,
+            flood_map_output_interval_seconds=(end_time - start_time).total_seconds(),
         )
 
         nodes, timeseries = create_discharge_timeseries(
@@ -493,10 +501,13 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
 
         for sfincs_model in sfincs_models:
             simulation: SFINCSSimulation = sfincs_model.create_simulation(
-                f"grid_forcing_test_{sfincs_model.name}",
+                simulation_name=f"grid_forcing_test_{sfincs_model.name}",
                 start_time=start_time,
                 end_time=end_time,
                 write_figures=True,
+                flood_map_output_interval_seconds=(
+                    end_time - start_time
+                ).total_seconds(),
             )
 
             discharge_grid: xr.DataArray = xr.DataArray(
@@ -519,7 +530,7 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
 
             discharge_grid = discharge_grid * 2.0
 
-            if simulation.sfincs_root_model.has_inflow:
+            if simulation.root_model.has_inflow:
                 simulation.set_inflow_forcing_from_grid(
                     discharge_grid=discharge_grid,
                 )
@@ -568,7 +579,7 @@ def test_read(geb_model: GEBModel) -> None:
         )
 
         sfincs_model_read: SFINCSRootModel = SFINCSRootModel(
-            geb_model, TEST_MODEL_NAME
+            tmp_folder / "SFINCS", name=TEST_MODEL_NAME
         ).read()
 
         # assert that both models have the same attributes

@@ -4,7 +4,7 @@ geul_dem:
   crs: 28992
   meta:
     category: topography
-  path: project_data/geul/Geul_Filled_DEM_EPSG28992.tif
+  path: project_data/geul/geul_dem.zarr
 MIRCA2000_crop_data:
   data_type: DataFrame
   driver: excel

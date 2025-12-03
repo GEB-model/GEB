@@ -15,6 +15,7 @@ from geb.agents.crop_farmers import (
     INDEX_INSURANCE_ADAPTATION,
     IRRIGATION_EFFICIENCY_ADAPTATION,
     PERSONAL_INSURANCE_ADAPTATION,
+    PR_INSURANCE_ADAPTATION,
     SURFACE_IRRIGATION_EQUIPMENT,
     WELL_ADAPTATION,
 )
@@ -1772,19 +1773,19 @@ class Agents:
                         )
                         agents_in_grid_cell = upsampled_agents_in_cell
 
-                        building_id = np.random.choice(
+                        building_idx = np.random.choice(
                             np.arange(n_buildings_in_cell),
                             n_buildings_in_cell,
                             replace=False,
                         )
                         agents_allocated_to_building = agents_in_grid_cell
-                        lat_agents = np.array(buildings_grid_cell["lat"])[building_id]
-                        lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
+                        lat_agents = np.array(buildings_grid_cell["lat"])[building_idx]
+                        lon_agents = np.array(buildings_grid_cell["lon"])[building_idx]
                         agents_allocated_to_building["coord_Y"] = lat_agents
                         agents_allocated_to_building["coord_X"] = lon_agents
-                        agents_allocated_to_building["building_id"] = np.array(
-                            buildings_grid_cell["id"]
-                        )[building_id]
+                        agents_allocated_to_building["building_id_of_household"] = (
+                            np.array(buildings_grid_cell["id"])[building_idx]
+                        )
 
                         allocated_agents = pd.concat(
                             [allocated_agents, agents_allocated_to_building]
@@ -1801,7 +1802,7 @@ class Agents:
                             n_buildings_in_cell,
                             replace=False,
                         )
-                        building_id = np.random.choice(
+                        building_idx = np.random.choice(
                             np.arange(n_buildings_in_cell),
                             n_buildings_in_cell,
                             replace=False,
@@ -1809,13 +1810,13 @@ class Agents:
                         agents_allocated_to_building = agents_in_grid_cell.iloc[
                             households_to_put_in_building
                         ]
-                        lat_agents = np.array(buildings_grid_cell["lat"])[building_id]
-                        lon_agents = np.array(buildings_grid_cell["lon"])[building_id]
+                        lat_agents = np.array(buildings_grid_cell["lat"])[building_idx]
+                        lon_agents = np.array(buildings_grid_cell["lon"])[building_idx]
                         agents_allocated_to_building["coord_Y"] = lat_agents
                         agents_allocated_to_building["coord_X"] = lon_agents
-                        agents_allocated_to_building["building_id"] = np.array(
-                            buildings_grid_cell["id"]
-                        )[building_id]
+                        agents_allocated_to_building["building_id_of_household"] = (
+                            np.array(buildings_grid_cell["id"])[building_idx]
+                        )
 
                         allocated_agents = pd.concat(
                             [allocated_agents, agents_allocated_to_building]
@@ -1829,7 +1830,7 @@ class Agents:
                             households_to_put_in_building,
                         )
                         if len(indices_to_allocate) > 0:
-                            building_id = np.random.choice(
+                            building_idx = np.random.choice(
                                 np.arange(n_buildings_in_cell),
                                 len(indices_to_allocate),
                                 replace=True,
@@ -1838,16 +1839,16 @@ class Agents:
                                 indices_to_allocate
                             ]
                             lat_agents = np.array(buildings_grid_cell["lat"])[
-                                building_id
+                                building_idx
                             ]
                             lon_agents = np.array(buildings_grid_cell["lon"])[
-                                building_id
+                                building_idx
                             ]
                             agents_allocated_to_building["coord_Y"] = lat_agents
                             agents_allocated_to_building["coord_X"] = lon_agents
-                            agents_allocated_to_building["building_id"] = np.array(
-                                buildings_grid_cell["id"]
-                            )[building_id]
+                            agents_allocated_to_building["building_id_of_household"] = (
+                                np.array(buildings_grid_cell["id"])[building_idx]
+                            )
 
                             allocated_agents = pd.concat(
                                 [allocated_agents, agents_allocated_to_building]
@@ -1886,10 +1887,9 @@ class Agents:
                 "education_level",
                 "wealth_index",
                 "rural",
-                "building_id",
+                "building_id_of_household",
                 "disp_income",
                 "income_percentile",
-                # "building_id"
             ):
                 household_characteristics[column] = np.array(allocated_agents[column])
 
@@ -2529,6 +2529,7 @@ class Agents:
                         FIELD_EXPANSION_ADAPTATION,
                         PERSONAL_INSURANCE_ADAPTATION,
                         INDEX_INSURANCE_ADAPTATION,
+                        PR_INSURANCE_ADAPTATION,
                     ]
                 )
                 + 1,

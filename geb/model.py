@@ -76,12 +76,6 @@ class GEBModel(Module, HazardDriver):
         self.files = copy.deepcopy(
             files
         )  # make a deep copy to avoid issues when the model is initialized multiple times
-        if "geoms" in self.files:
-            # geoms was renamed to geom in the file library. To upgrade old models,
-            # we check if "geoms" is in the files and rename it to "geom"
-            # this line can be removed in august 2026 (also in geb/build/__init__.py)
-            self.files["geom"] = self.files.pop("geoms")  # upgrade old models
-
         for data in self.files.values():
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
@@ -267,7 +261,6 @@ class GEBModel(Module, HazardDriver):
                 loader.unset_forecast()  # unset forecast mode
 
         self.multiverse_name: None = None  # reset the multiverse name
-
         if return_mean_discharge:
             return mean_discharge  # return the mean discharge for each member
         else:
@@ -679,7 +672,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path("simulation_root") / self.run_name
+        folder = Path(self.config["general"]["simulation_root"]) / self.run_name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -690,7 +683,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path("simulation_root") / "spinup"
+        folder = Path(self.config["general"]["simulation_root"]) / "spinup"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 

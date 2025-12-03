@@ -30,6 +30,7 @@ import numpy as np
 import numpy.typing as npt
 
 from geb.module import Module
+from geb.types import ArrayFloat32
 from geb.workflows import balance_check
 from geb.workflows.io import load_grid
 
@@ -197,10 +198,10 @@ def get_river_width(
 
 
 def get_lake_factor(
-    river_width: npt.NDArray[np.float32],
+    river_width: ArrayFloat32,
     overflow_coefficient_mu: np.float32,
     lake_a_factor: np.float32,
-) -> npt.NDArray[np.float32]:
+) -> ArrayFloat32:
     """A lake-constant factor that is used in the equations for lake outflow.
 
     Pre-calculated to save computation time.
