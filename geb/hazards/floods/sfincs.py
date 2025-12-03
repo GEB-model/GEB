@@ -810,7 +810,8 @@ class SFINCSRootModel:
 
         Args:
             return_period: The return period for which to create the coastal simulation.
-
+            locations: A GeoDataFrame containing the locations of GTSM forcing stations.
+            offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
         Returns:
             An instance of SFINCSSimulation configured with coastal water level forcing.
         """
@@ -868,6 +869,8 @@ class SFINCSRootModel:
 
         Args:
             return_period: The return period for which to create simulations.
+            locations: A GeoDataFrame containing the locations of GTSM forcing stations.
+            offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
             coastal: Whether to create a coastal simulation.
             coastal_only: Whether to only include coastal subbasins in the model.
 
