@@ -3,7 +3,6 @@
 import copy
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import dict, list
 
 import numpy as np
 import xarray as xr
