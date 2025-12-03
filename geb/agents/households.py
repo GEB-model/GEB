@@ -351,28 +351,22 @@ class Households(AgentBaseClass):
 
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
-
         # update timer
         self.var.years_since_last_flood.data += 1
 
-        # # generate random flood (not based on actual modeled flood data, replace this later with events)
-        # if np.random.random() < 0.1:
-        #     print("Flood event!")
-        #     self.var.years_since_last_flood.data = 0
-
         # Find the flood event that corresponds to the current time (in the model)
         for event in self.flood_events:
-            start = event["start_time"]
-            end = event["end_time"]
+            start: datetime = event["start_time"]
+            end: datetime = event["end_time"]
 
             if self.model.current_time == end + timedelta(days=10):
                 # Open the flood map
                 flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
-                zarr_path: Path = (
+                flood_map_path: Path = (
                     self.model.output_folder / "flood_maps" / flood_map_name
                 )
 
-                flood_map: xr.DataArray = open_zarr(zarr_path)
+                flood_map: xr.DataArray = open_zarr(flood_map_path)
 
                 print("opened right flood map")
                 print(flood_map)
