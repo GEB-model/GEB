@@ -2,6 +2,7 @@
 
 import base64
 import os
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -1384,8 +1385,6 @@ class Hydrology:
             Returns:
                 Tuple containing (forecast_init, member, event_start, event_end, event_name)
 
-            Raises:
-                ValueError: If the filename does not match the expected format.
             """
             # Remove .zarr extension
             name_without_ext = filename.replace(".zarr", "")
@@ -1414,10 +1413,12 @@ class Hydrology:
                 event_name = f"{event_start} - {event_end}"
 
             else:
-                # Raise error for files that don't match expected format
-                raise ValueError(
-                    f"Filename '{filename}' does not match expected format for flood map."
+                # Warn and skip file
+                warnings.warn(
+                    f"Skipping file '{filename}': does not match expected flood map format.",
+                    RuntimeWarning,
                 )
+                return None
 
             return forecast_init, member, event_start, event_end, event_name
 
@@ -1439,10 +1440,8 @@ class Hydrology:
             Raises:
                 ValueError: If the observation file is not in .zarr format.
             """
-            # Step 1: Open needed datasets
             flood_map = open_zarr(flood_map_path)
             obs = open_zarr(observation)
-            print("obs CRS", obs.rio.crs)
             sim = flood_map.rio.reproject_match(obs)
             rivers = gpd.read_parquet(
                 Path("simulation_root")
@@ -1459,10 +1458,7 @@ class Hydrology:
                 / "region.geoparquet"
             ).to_crs(obs.rio.crs)
 
-            # Step 2: Clip out rivers from observations and simulations
-            crs_wgs84 = CRS.from_epsg(4326)
             crs_mercator = CRS.from_epsg(3857)
-            # rivers.set_crs(crs_wgs84, inplace=True)
             gdf_mercator = rivers.to_crs(crs_mercator)
             gdf_mercator["geometry"] = gdf_mercator.buffer(gdf_mercator["width"] / 2)
 
@@ -1488,10 +1484,10 @@ class Hydrology:
             )
             obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
 
-            # Step 3: Clip out region from observations
+            # Clip out region from observations
             obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
 
-            # Step 4: Optionally clip using extra validation region from config yml
+            # Optionally clip using extra validation region from config yml
             extra_validation_path = self.config["floods"].get(
                 "extra_validation_region", None
             )
@@ -1512,8 +1508,9 @@ class Hydrology:
                 sim_extra_clipped = sim_no_rivers
                 clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
 
-            # Step 5: Mask water depth values
-            hmin = 0.0
+            # Mask water depth values
+            hmin: float = self.config["floods"]["minimum_flood_depth"]
+
             sim_extra_clipped = sim_extra_clipped.raster.reproject_like(obs_region)
             simulation_final = sim_extra_clipped > hmin
             observation_final = obs_region > 0
@@ -1524,7 +1521,7 @@ class Hydrology:
             xmin, ymin, xmax, ymax = observation_final.rio.bounds()
             flood_extent = [xmin, xmax, ymin, ymax]
 
-            # Step 6: Calculate performance metrics
+            # Calculate performance metrics
             # Compute the arrays first to get concrete values
             sim_final_computed = simulation_final.compute()
             obs_final_computed = observation_final.compute()
@@ -1546,7 +1543,7 @@ class Hydrology:
             pixel_size = x_res  # meters
             flooded_area_km2 = flooded_pixels * (pixel_size * pixel_size) / 1_000_000
 
-            # Step 7: Save results to file and plot the results
+            # Save results to file and plot the results
             elevation_data = open_zarr(self.model.files["other"]["DEM/fabdem"])
             elevation_data = elevation_data.rio.reproject_match(obs)
 
@@ -2048,7 +2045,6 @@ class Hydrology:
                 flood_maps_folder = self.model.output_folder / "flood_maps"
 
             # check if run file exists, if not, raise an error
-
             if not flood_maps_folder.exists():
                 raise FileNotFoundError(
                     "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
@@ -2070,9 +2066,13 @@ class Hydrology:
             # Filter flood_map_files for the current event only
             flood_map_files = []
             for flood_map_path in all_flood_map_files:
-                forecast_init, member, event_start, event_end, parsed_event_name = (
-                    parse_flood_forecast_initialisation(flood_map_path.name)
-                )
+                parsed = parse_flood_forecast_initialisation(flood_map_path.name)
+
+                # Skip files that do not match the expected format
+                if parsed is None:
+                    continue
+
+                file_forecast_init, _, _, _, parsed_event_name = parsed
                 # Check if file matches current event
                 if parsed_event_name == event_name:
                     flood_map_files.append(flood_map_path)
@@ -2135,10 +2135,22 @@ class Hydrology:
                     forecast_folder.mkdir(parents=True, exist_ok=True)
 
                     matching_flood_maps = []
+                    # for flood_map_path in flood_map_files:
+                    #     file_forecast_init, _, _, _, parsed_event_name = (
+                    #         parse_flood_forecast_initialisation(flood_map_path.name)
+                    #     )
+
                     for flood_map_path in flood_map_files:
-                        file_forecast_init, _, _, _, parsed_event_name = (
-                            parse_flood_forecast_initialisation(flood_map_path.name)
+                        parsed = parse_flood_forecast_initialisation(
+                            flood_map_path.name
                         )
+
+                        # Skip files that do not match the expected format
+                        if parsed is None:
+                            continue
+
+                        file_forecast_init, _, _, _, parsed_event_name = parsed
+
                         # Only include files that match current forecast init and event
                         if (
                             file_forecast_init == forecast_init
