@@ -2021,6 +2021,15 @@ class Hydrology:
                 f"Forecast performance spread plot saved as: {output_folder / plot_filename}"
             )
 
+        def find_exact_observation_file(
+            event_name: str, files: list[Path]
+        ) -> Path | None:
+            """Find the corresponding observation file for every event. They are matched based on their names. Ensure the starting and ending data are the same for the simulation and observation file."""
+            for f in files:
+                if f.stem == event_name:
+                    return f
+            return None
+
         self.config = self.model.config["hazards"]
 
         eval_hydrodynamics_folders = Path(self.output_folder_evaluate) / "hydrodynamics"
@@ -2050,12 +2059,25 @@ class Hydrology:
                     "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
                 )
 
+            # Extract the observation files, find the match with the flood event
+            obs_raw = self.config["floods"]["observation_files"]
+            if isinstance(obs_raw, str):
+                observation_files = [Path(obs_raw)]
+            else:
+                observation_files = [Path(p) for p in obs_raw]
+            obs_file: Path = find_exact_observation_file(event_name, observation_files)
+
             # check if observation file exists, if not, raise an error
-            if not Path(self.config["floods"]["event_observation_file"]).exists():
+            if obs_file is None:
+                print(
+                    f"No observation file for this event: '{event_name}'. Skipping event."
+                )
+                continue
+            if not obs_file.exists():
                 raise FileNotFoundError(
                     f"Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
                 )
-            if Path(self.config["floods"]["event_observation_file"]).suffix != ".zarr":
+            if obs_file.suffix != ".zarr":
                 raise ValueError(
                     f"Flood observation file is not in the correct format. Please provide a .zarr file."
                 )
@@ -2090,7 +2112,7 @@ class Hydrology:
                     Path(self.model.output_folder) / "flood_maps" / flood_map_name
                 )
                 calculate_performance_metrics(
-                    observation=self.config["floods"]["event_observation_file"],
+                    observation=str(obs_file),
                     flood_map_path=flood_map_path,
                     visualization_type="OSM",
                     output_folder=event_folder,
@@ -2135,11 +2157,6 @@ class Hydrology:
                     forecast_folder.mkdir(parents=True, exist_ok=True)
 
                     matching_flood_maps = []
-                    # for flood_map_path in flood_map_files:
-                    #     file_forecast_init, _, _, _, parsed_event_name = (
-                    #         parse_flood_forecast_initialisation(flood_map_path.name)
-                    #     )
-
                     for flood_map_path in flood_map_files:
                         parsed = parse_flood_forecast_initialisation(
                             flood_map_path.name
@@ -2168,7 +2185,7 @@ class Hydrology:
                         print(f"   Evaluating: {flood_map_path.name}")
 
                         metrics = calculate_performance_metrics(
-                            observation=self.config["floods"]["event_observation_file"],
+                            observation=str(obs_file),
                             flood_map_path=flood_map_path,
                             visualization_type="OSM",
                             output_folder=forecast_folder,
