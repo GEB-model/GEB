@@ -964,7 +964,8 @@ class LandSurface(Module):
             crop_map=self.HRU.var.crop_map,
             actual_irrigation_consumption_m=actual_irrigation_consumption_m,
             capillar_rise_m=capillar_rise_m,
-            saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s,
+            saturated_hydraulic_conductivity_m_per_s=self.HRU.var.saturated_hydraulic_conductivity_m_per_s
+            * 0.35,
             lambda_pore_size_distribution=self.HRU.var.lambda_pore_size_distribution,
             bubbing_pressure_cm=self.HRU.var.bubbling_pressure_cm,
             frost_index=self.HRU.var.frost_index,

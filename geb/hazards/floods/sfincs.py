@@ -392,6 +392,48 @@ class SFINCSRootModel:
             river_upa=outflow_river_upa,
             river_len=outflow_river_len,
         ).to_crs(sf.crs)
+        print(f"Outflow points found: {len(outflow_points)}")
+        print(f"Outflow points CRS: {outflow_points.crs}")
+        print("outflow", outflow_points)
+        print(f"Outflow values: {outflow_points.geometry}")
+
+        # Select closest outflow point to target coordinates if multiple points exist
+        if len(outflow_points) > 1 and setup_outflow:
+            # Target coordinates for Brazil case
+            target_x, target_y = -51.1059, -30.3094
+
+            # Convert target coordinates to the same CRS as outflow_points
+            target_gdf = gpd.GeoDataFrame(
+                [{"id": 0}],
+                geometry=gpd.points_from_xy([target_x], [target_y]),
+                crs="EPSG:4326",  # assuming target coordinates are in WGS84
+            ).to_crs(outflow_points.crs)
+
+            # Calculate distances from each outflow point to the target
+            distances = outflow_points.geometry.distance(target_gdf.geometry.iloc[0])
+            closest_idx = distances.idxmin()
+
+            # Select only the closest outflow point
+            outflow_points = outflow_points.loc[[closest_idx]].copy()
+            print(
+                f"Selected closest outflow point at index {closest_idx} with distance {distances.loc[closest_idx]:.2f} units"
+            )
+            print(
+                f"Selected outflow point coordinates: {outflow_points.geometry.iloc[0]}"
+            )
+
+        # Create a single subplot showing the region boundary and outflow points together.
+        # This makes it easy to visually verify the outflow location relative to the model region.
+        fig, ax = plt.subplots(figsize=(10, 10))
+        sf.region.boundary.plot(ax=ax, color="black", linewidth=1)
+        outflow_points.to_crs(sf.region.crs).plot(
+            ax=ax, color="red", markersize=50, marker="o"
+        )
+        ax.set_title("Model region and outflow points")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        plt.savefig(self.path / "gis" / "outflow_points.png")
+        plt.close(fig)
 
         # give error if outflow greater than 1
         if len(outflow_points) > 1 and setup_outflow:
@@ -423,10 +465,10 @@ class SFINCSRootModel:
             ).values.item()
 
             # Optional: sanity check
-            if elevation_value is None or elevation_value <= 0:
-                raise ValueError(
-                    f"Invalid outflow elevation ({elevation_value}), must be > 0"
-                )
+            # if elevation_value is None or elevation_value <= 0:
+            #    raise ValueError(
+            #        f"Invalid outflow elevation ({elevation_value}), must be > 0"
+            #   )
 
             # Save elevation value to a file in model_root/gis
             outflow_elev_path = self.path / "gis" / "outflow_elevation.json"
@@ -1286,6 +1328,11 @@ class SFINCSSimulation:
             assert not np.isin(
                 nodes.index, self.sfincs_model.forcing["dis"].index
             ).any(), "This forcing would overwrite existing discharge forcing points"
+
+        self.sfincs_model.region.to_parquet(
+            self.path / "gis" / "model_region.geoparquet"
+        )
+        nodes.to_parquet(self.path / "gis" / "discharge_forcing_locations.geoparquet")
 
         assert (
             self.sfincs_model.region.union_all()

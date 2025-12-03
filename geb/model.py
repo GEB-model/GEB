@@ -171,20 +171,20 @@ class GEBModel(Module, HazardDriver):
                 Any, float
             ] = {}  # dictionary to store mean discharge for each member
 
-        # load all zarr files for all forecast variables for the given issue date
+        # load all zarr files for precipitation forecast data only for the given issue date
         forecast_members: list[str] | None = None
         forecast_end_dt: datetime.datetime | None = None
         forecast_data: dict[str, xr.DataArray] = {}
         for loader_name, loader in self.forcing.loaders.items():
-            if loader.supports_forecast:
-                # open one forecast to see the number of members
+            if loader.supports_forecast and "pr" in loader_name:
+                # open one forecast to see the number of members (only for precipitation)
                 forecast_data[loader_name] = open_zarr(
                     self.input_folder
                     / "other"
                     / "forecasts"
                     / self.config["general"]["forecasts"]["provider"]
                     / self.config["general"]["forecasts"]["processing"]
-                    / str(forecast_issue_datetime)
+                    / forecast_issue_datetime.strftime("%Y%m%dT%H%M%S")
                     / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
                 )  # open the forecast data for the variable
                 # these are the forecast members to loop over
@@ -228,7 +228,7 @@ class GEBModel(Module, HazardDriver):
             self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
 
             for loader_name, loader in self.forcing.loaders.items():
-                if loader.supports_forecast:
+                if loader.supports_forecast and "pr" in loader_name:
                     loader.set_forecast(
                         forecast_issue_datetime=forecast_issue_datetime,
                         da=forecast_data[loader_name].sel(member=member),
@@ -262,8 +262,8 @@ class GEBModel(Module, HazardDriver):
         )  # restore the initial state of the multiverse
 
         # after all forecast members have been processed, restore the original forcing data
-        for loader in self.forcing.loaders.values():
-            if loader.supports_forecast:
+        for loader_name, loader in self.forcing.loaders.items():
+            if loader.supports_forecast and loader_name == "pr":
                 loader.unset_forecast()  # unset forecast mode
 
         self.multiverse_name: None = None  # reset the multiverse name
@@ -288,55 +288,79 @@ class GEBModel(Module, HazardDriver):
             is None  # only start multiverse if not already in one
             and self.current_time.date()
         ):
-            forecast_files: list[Path] = list(
-                (
-                    self.input_folder
-                    / "other"
-                    / "forecasts"
-                    / self.config["general"]["forecasts"]["provider"]
-                ).glob("*.zarr")
-            )  # get all forecast files in the input folder
+            # Discover all available forecast initialization directories
+            forecast_base_path = (
+                self.input_folder
+                / "other"
+                / "forecasts"
+                / self.config["general"]["forecasts"]["provider"]
+                / self.config["general"]["forecasts"]["processing"]
+            )
+
+            forecast_dirs: list[Path] = [
+                d
+                for d in forecast_base_path.iterdir()
+                if d.is_dir()
+                and d.name.startswith("2024")  # assuming forecasts start with year 2024
+            ]  # get all forecast initialization directories
             forecast_issue_dates: list[
-                datetime.date
+                datetime.datetime
             ] = []  # list to store forecast issue dates
-            for f in forecast_files:
-                datetime_str = f.stem.split("_")[
-                    -1
-                ]  # extract the datetime string from the filename
-                if (
-                    datetime_str.replace("T", "").replace(":", "").isdigit()
-                ):  # Check if datetime string contains only digits, T, and colons (valid format)
-                    dt = datetime.datetime.strptime(
-                        datetime_str, "%Y%m%dT%H%M%S"
-                    )  # convert the string to a datetime object
-                    forecast_issue_dates.append(dt)  # append the date to the list
-                else:
+
+            for forecast_dir in forecast_dirs:
+                try:
+                    if (
+                        len(forecast_dir.name) == 15 and forecast_dir.name[8] == "T"
+                    ):  # YYYYMMDDTHHMMSS format
+                        dt = datetime.datetime.strptime(
+                            forecast_dir.name, "%Y%m%dT%H%M%S"
+                        )
+
+                        # Check if this forecast directory contains precipitation data
+                        pr_files = list(forecast_dir.glob("**/pr_*.zarr"))
+                        if (
+                            pr_files
+                        ):  # Only include forecasts that have precipitation data
+                            forecast_issue_dates.append(dt)
+                except ValueError:
                     print(
-                        f"Warning: Forecast file {f.name} does not have a valid datetime format. Expected format: 'YYYYMMDDTHHMMSS'. Skipping this file."
+                        f"Warning: Forecast directory {forecast_dir.name} does not have a valid datetime format. Expected format: 'forecast_YYYYMMDDTHHMMSS'. Skipping this directory."
                     )  # print a warning if the format is invalid
 
             forecast_issue_dates = list(
                 set(forecast_issue_dates)
             )  # only keep unique dates
-
             for dt in forecast_issue_dates:
                 if (
-                    dt == self.current_time
-                ):  # change to include hours (for when we move to hourly)
-                    forecast_datetime = datetime.datetime.combine(
-                        dt, datetime.time(0)
-                    )  # Convert date back to datetime for the multiverse method
+                    dt.date() == self.current_time.date()
+                ):  # Check if forecast was issued for the current date
+                    print(
+                        f"Found forecast issued at {dt.strftime('%Y-%m-%d %H:%M:%S')} for current time {self.current_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
 
                     self.multiverse(
-                        forecast_issue_datetime=forecast_datetime,
+                        forecast_issue_datetime=dt,
                         return_mean_discharge=True,
                     )  # run the multiverse for the current timestep
 
+                    # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
-                        self.agents.households.water_level_warning_strategy()
-                        # self.get_critical_infrastructure()
-                        # self.critical_infrastructure_warning_strategy()
-                        self.agents.households.household_decision_making()
+                        print(
+                            f"Running flood early warning system for date time {self.current_time.strftime('%d-%m-%Y T%H:%M:%S')}..."
+                        )
+                        self.agents.households.water_level_warning_strategy(
+                            date_time=self.current_time
+                        )
+                        # TODO: Enable when infrastructure warnings are ready
+                        # self.agents.households.critical_infrastructure_warning_strategy(
+                        #     date_time=self.current_time
+                        # )
+                        self.agents.households.household_decision_making(
+                            date_time=self.current_time
+                        )
+                        self.agents.households.update_households_gdf(
+                            date_time=self.current_time
+                        )
 
         t0 = time()
         self.agents.step()

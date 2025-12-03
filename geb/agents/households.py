@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,7 +25,7 @@ from ..hydrology.landcovers import (
 )
 from ..store import DynamicArray
 from ..workflows.damage_scanner import VectorScanner
-from ..workflows.io import load_array, load_table, open_zarr
+from ..workflows.io import load_array, load_table, open_zarr, to_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 
@@ -93,6 +94,9 @@ class Households(AgentBaseClass):
         self.load_objects()
         self.load_max_damage_values()
         self.load_damage_curves()
+        if self.model.config["agent_settings"]["households"]["warning_response"]:
+            # self.load_critical_infrastructure()
+            self.load_wlranges_and_measures()
 
         if self.model.in_spinup:
             self.spinup()
@@ -279,9 +283,45 @@ class Households(AgentBaseClass):
         # initiate array for adaptation status [0=not adapted, 1=dryfloodproofing implemented]
         self.var.adapted = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
 
-        # initiate array for warning range [0=not reached, 1=reached]
+        # initiate array for warning state [0 = not warned, 1 = warned]
         self.var.warning_reached = DynamicArray(
             np.zeros(self.n, np.int32), max_n=self.max_n
+        )
+
+        # initiate array for warning level [0 = no warning, 1 = measures, 2 = evacuate]
+        self.var.warning_level = DynamicArray(
+            np.zeros(self.n, np.int32), max_n=self.max_n
+        )
+
+        # initiate array for storing the trigger of the warning
+        self.var.possible_warning_triggers = ["critical_infrastructure", "water_levels"]
+        self.var.warning_trigger = DynamicArray(
+            np.zeros((self.n, len(self.var.possible_warning_triggers)), dtype=bool)
+        )
+
+        # initiate array for response probability (between 0 and 1)
+        # using a fixed seed for reproducibility
+        rng = np.random.default_rng(42)
+        self.var.response_probability = DynamicArray(
+            rng.random(self.n), max_n=self.max_n
+        )
+
+        # initiate array for evacuation status [0=not evacuated, 1=evacuated]
+        self.var.evacuated = DynamicArray(np.zeros(self.n, np.int32), max_n=self.max_n)
+
+        # initiate array for storing the recommended measures received with the warnings
+        self.var.possible_measures_to_recommend = [
+            "elevate possessions",
+            "evacuate",
+        ]
+        self.var.recommended_measures = DynamicArray(
+            np.zeros((self.n, len(self.var.possible_measures_to_recommend)), dtype=bool)
+        )
+
+        # initiate array for storing the actions taken by the household
+        self.var.possible_actions = ["elevate possessions", "evacuate"]
+        self.var.actions_taken = DynamicArray(
+            np.zeros((self.n, len(self.var.possible_actions)), dtype=bool)
         )
 
         # initiate array with risk perception [dummy data for now]
@@ -343,6 +383,119 @@ class Households(AgentBaseClass):
             f"Household attributes assigned for {self.n} households with {self.population} people."
         )
 
+    def _load_postal_codes_clipped(self) -> gpd.GeoDataFrame:
+        """Load postal codes efficiently clipped to model region.
+
+        This method loads the postal codes dataset and clips it to the model region
+        to optimize memory usage and performance when the postal codes dataset
+        is much larger than the catchment area.
+
+        Returns:
+            gpd.GeoDataFrame: Postal codes clipped to model region.
+        """
+        # Load full postal codes dataset
+        postal_codes: gpd.GeoDataFrame = gpd.read_parquet(
+            self.model.files["geom"]["postal_codes"]
+        )
+
+        # Get model region bounds for clipping
+        if hasattr(self.model, "regions") and self.model.regions is not None:
+            # Use model regions if available
+            model_bounds = self.model.regions.total_bounds
+            # Create bounding box geometry
+            from shapely.geometry import box
+
+            bbox = box(
+                model_bounds[0], model_bounds[1], model_bounds[2], model_bounds[3]
+            )
+            bbox_gdf = gpd.GeoDataFrame(
+                [1], geometry=[bbox], crs=self.model.regions.crs
+            )
+
+            # Ensure same CRS for intersection
+            postal_codes = postal_codes.to_crs(bbox_gdf.crs)
+
+            # Clip postal codes to model region with buffer for edge cases
+            buffer_distance = (
+                0.1  # degrees buffer to ensure no missing postcodes at edges
+            )
+            bbox_buffered = bbox_gdf.buffer(buffer_distance)
+            postal_codes_clipped = postal_codes[
+                postal_codes.intersects(bbox_buffered.geometry.iloc[0])
+            ].copy()
+
+            print(
+                f"Postal codes clipped from {len(postal_codes)} to {len(postal_codes_clipped)} records"
+            )
+            return postal_codes_clipped
+        else:
+            # Fallback: return full dataset if no region bounds available
+            print("No model region bounds available, loading full postal codes dataset")
+            return postal_codes
+
+    def change_household_locations(self) -> None:
+        """Change the location of the household points to the centroid of the buildings.
+
+        Also, it associates the household points with their postal codes.
+        This is done to get the correct geometry for the warning function.
+        """
+        # crs: str = self.model.sfincs.crs
+        crs = self.model.config["hazards"]["floods"]["crs"]
+
+        locations = self.var.household_points.copy()
+        locations.to_crs(
+            crs, inplace=True
+        )  # Change to a projected CRS to get a distance in meters
+
+        buildings_centroid = self.buildings_centroid[["geometry"]].copy()
+        buildings_centroid.to_crs(crs, inplace=True)  # Change to the same projected CRS
+
+        # Copy the geometry to a new column otherwise it gets lost in the spatial join
+        buildings_centroid["new_geometry"] = buildings_centroid.geometry
+
+        # Create unique ids for household points and building centroids
+        # This is done to avoid duplicates when doing the spatial join
+        locations["pointid"] = range(locations.shape[0])
+
+        new_locations = gpd.sjoin_nearest(
+            locations,
+            buildings_centroid,
+            how="left",
+            exclusive=True,
+            distance_col="distance",
+        )
+
+        # Sort values by pointid and distance and drop duplicate pointids
+        new_locations = new_locations.sort_values(
+            by=["pointid", "distance"], ascending=True, na_position="last"
+        )
+        new_locations = new_locations.drop_duplicates(subset="pointid", keep="first")
+
+        # Change the geometry of the household points to the geometry of the building centroid
+        new_locations["geometry"] = new_locations["new_geometry"]
+        new_locations.set_geometry("geometry", inplace=True)
+
+        # Drop columns that are not needed
+        new_locations.drop(
+            columns={"index_right", "new_geometry", "distance"}, inplace=True
+        )
+
+        # Associate households with their postal codes to use it later in the warning function
+        postal_codes: gpd.GeoDataFrame = self._load_postal_codes_clipped()
+        postal_codes["postcode"] = postal_codes["CD_SETOR"].astype(str)
+
+        new_locations = gpd.sjoin(
+            new_locations,
+            postal_codes[["postcode", "geometry"]],
+            how="left",
+            predicate="intersects",
+        )
+
+        # Drop columns that are not needed
+        new_locations.drop(columns=["index_right"], inplace=True)
+
+        self.var.household_points = new_locations
+
     def update_risk_perceptions(self) -> None:
         """Update the risk perceptions of households based on the latest flood data."""
         # update timer
@@ -359,30 +512,52 @@ class Households(AgentBaseClass):
             + self.var.risk_perc_min
         )
 
-    def load_ensemble_flood_maps(self):
+    def load_ensemble_flood_maps(self, date_time) -> xr.DataArray:
+        """Loads the flood maps for all ensemble members for a specific forecast date time.
+
+        Args:
+            date_time: The forecast date time for which to load the flood maps.
+        Returns:
+            An xarray containing the flood maps for all ensemble members.
+
+        Raises:
+            FileNotFoundError: If no flood maps are found for the specified date time.
+            FileExistsError: If multiple flood maps are found for the specified date time.
+        """
         # Load all the flood maps in an ensemble per each day
-        days = self.model.config["general"]["forecasts"]["days"]
-        ensemble_per_day = []
+        flood_start_time = self.model.config["hazards"]["floods"]["events"][0][
+            "start_time"
+        ]
+        flood_end_time = self.model.config["hazards"]["floods"]["events"][0]["end_time"]
+        ensemble_per_time = []
 
-        for day in days:
-            members = []  # Every day has its own ensemble -- CHANGE IT LATER TO THE ACTUAL NUMBER OF MEMBERS
-            for member in range(1, 4):
-                file_path = (
-                    self.model.output_folder
-                    / "flood_maps"
-                    / "ensemble"
-                    / f"{day.strftime('%Y-%m-%d')}_member{member}.zarr"
-                )  # Think later about which date info should be in the file: start time or forecast days?
+        members = []  # Every time has its own ensemble
+        for member in range(1, 50 + 1):  # Define the number of members here
+            member_folder = (
+                self.model.output_folder
+                / "flood_maps"
+                / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
+                / f"member_{member}"
+            )
 
-                members.append(
-                    xr.open_dataarray(file_path, engine="zarr")
-                )  # Do I want to use this later?
+            # Dynamically find the zarr file in the member folder
+            zarr_files = list(member_folder.glob("*.zarr"))
+            if not zarr_files:
+                raise FileNotFoundError(f"No zarr files found in {member_folder}")
+            elif len(zarr_files) > 1:
+                raise FileExistsError(
+                    f"Multiple zarr files found in {member_folder}: {[f.name for f in zarr_files]}"
+                )
 
-            # Concatenate the members for each day (This stacks the list of dataarrays along a new "member" dimension)
-            members_stacked = xr.concat(members, dim="member")
-            ensemble_per_day.append(members_stacked)
+            flood_map_path = zarr_files[0]
 
-        ensemble_flood_maps = xr.concat(ensemble_per_day, dim="day")
+            members.append(xr.open_dataarray(flood_map_path, engine="zarr"))
+
+        # Concatenate the members for each time (This stacks the list of dataarrays along a new "member" dimension)
+        members_stacked = xr.concat(members, dim="member")
+        ensemble_per_time.append(members_stacked)
+
+        ensemble_flood_maps = xr.concat(ensemble_per_time, dim="time")
 
         return ensemble_flood_maps
 
@@ -413,53 +588,145 @@ class Households(AgentBaseClass):
 
         return ensemble_damage_maps
 
-    def create_flood_probability_maps(self):
-        # Create a probability map based on the ensemble of flood maps based on the strategy (ideally)
-        ensemble_flood_maps = self.load_ensemble_flood_maps()
+    def create_flood_probability_maps(
+        self, date_time, strategy=1
+    ) -> dict[tuple[pd.Timestamp, int], xr.DataArray]:
+        """Creates flood probability maps based on the ensemble of flood maps for different warning strategies.
 
-        days = self.model.config["general"]["forecasts"]["days"]
+        Args:
+            date_time: The forecast date time for which to create the probability maps.
+            strategy: Identifier of the warning strategy (1 for water level ranges with measures,
+                2 for energy substations, 3 for vulnerable/emergency facilities).
+
+        Returns:
+            Dict[Tuple[datetime, int], xr.DataArray]: Dictionary mapping (date_time, range_id) tuples
+                to probability maps (xarray DataArray) for that forecast day and water level range.
+        """
+        # Load the ensemble of flood maps for that specific date time
+        ensemble_flood_maps = self.load_ensemble_flood_maps(date_time=date_time)
         crs = self.model.config["hazards"]["floods"]["crs"]
-        strategy = self.model.config["general"]["forecasts"]["strategy"]
 
-        prob_folder = os.path.join(self.model.output_folder, "prob_maps")
-        os.makedirs(prob_folder, exist_ok=True)
+        # Create output folder for probability maps
+        prob_folder = (
+            self.model.output_folder
+            / "prob_maps"
+            / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
+        )
+        prob_folder.mkdir(exist_ok=True, parents=True)
 
+        # Define water level ranges based on the chosen strategy
         if strategy == 1:
-            # Water level ranges for strategy 1 (based on suitable measures and possible impacts)
-            ranges = [
-                (1, 0.1, 1.0),
-                (2, 1.0, 2.0),
-                (3, 2.0, None),
-            ]  # NEED TO CREATE A PARQUET FILE WITH THE RIGHT RANGES
+            # Water level ranges associated to specific measures (based on "impact" scale)
+            ranges = []
+            for key, value in self.var.wlranges_and_measures.items():
+                ranges.append((key, value["min"], value["max"]))
 
         elif strategy == 2:
-            # Water level ranges for strategy 2 (based on critical infrastructure)
+            # Water level range for energy substations (based on critical hit) -- need to make it nor hard coded
             ranges = [(1, 0.3, None)]
+
+        else:
+            # Water level range for vulnerable and emergency facilities (flooded or not)
+            ranges = [(1, 0.1, None)]
 
         probability_maps = {}
 
-        for i, day in enumerate(days):
-            for range_id, min, max in ranges:
-                daily_ensemble = ensemble_flood_maps.isel(day=i)
-                if max is not None:
-                    condition = (daily_ensemble >= min) & (daily_ensemble <= max)
-                else:
-                    condition = daily_ensemble >= min
-                probability = condition.sum(dim="member") / condition.sizes["member"]
+        # Loop over water level ranges to calculate probability maps
+        for range_id, min, max in ranges:
+            daily_ensemble = ensemble_flood_maps
+            if max is not None:
+                condition = (daily_ensemble >= min) & (daily_ensemble <= max)
+            else:
+                condition = daily_ensemble >= min
+            probability = condition.sum(dim="member") / condition.sizes["member"]
 
-                file_name = f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}_strategy{strategy}.tif"
-                file_path = self.model.output_folder / "prob_maps" / file_name
-                # NEED TO CREATE A FOLDER FOR THOSE WHO WILL RUN THIS BUT DO NOT HAVE A FOLDER
+            # Save probability map as a zarr file
+            file_name = f"prob_map_range{range_id}_strategy{strategy}.zarr"
+            file_path = prob_folder / file_name
+            file_path.mkdir(parents=True, exist_ok=True)
 
-                # SOMETHING IS WRONG WHEN WRITING THE TIFF FILE, THE Y AXIS IS FLIPPED, IDWK WHY, so doing this to fix it for now
-                if probability.y.values[0] < probability.y.values[-1]:
-                    print("flipping y axis")
-                    probability = probability.sortby("y", ascending=False)
+            # The y axis is flipped when writing to zarr, so fixing it here for now
+            if probability.y.values[0] < probability.y.values[-1]:
+                print("flipping y axis")
+                probability = probability.sortby("y", ascending=False)
 
-                probability = probability.rio.write_crs(crs)
-                probability.rio.to_raster(file_path, driver="GTiff")
+            probability = probability.astype(np.float32)
+            probability = probability.rio.write_nodata(np.nan)
+            probability = probability.isel(time=0)  # select the first time step
+            probability = to_zarr(da=probability, path=file_path, crs=crs)
 
-                probability_maps[(day, range_id)] = probability
+            probability_maps[(date_time, range_id)] = probability
+
+        return probability_maps
+
+    def create_flood_exceedance_probability_maps(
+        self, date_time, strategy=1
+    ) -> dict[tuple[pd.Timestamp, int], xr.DataArray]:
+        """Creates flood exceedance probability maps based on the ensemble of flood maps for different warning strategies.
+
+        Args:
+            date_time: The forecast date time for which to create the probability maps.
+            strategy: Identifier of the warning strategy (1 for water level ranges with measures,
+                2 for energy substations, 3 for vulnerable/emergency facilities).
+
+        Returns:
+            Dict[Tuple[datetime, int], xr.DataArray]: Dictionary mapping (date_time, range_id) tuples
+                to probability maps (xarray DataArray) for that forecast day and water level range.
+        """
+        # Load the ensemble of flood maps for that specific date time
+        ensemble_flood_maps = self.load_ensemble_flood_maps(date_time=date_time)
+        crs = self.model.config["hazards"]["floods"]["crs"]
+
+        # Create output folder for probability maps
+        prob_folder = (
+            self.model.output_folder
+            / "prob_exceedance_maps"
+            / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
+        )
+        prob_folder.mkdir(exist_ok=True, parents=True)
+
+        # Define water level ranges based on the chosen strategy
+        if strategy == 1:
+            # Water level ranges associated to specific measures (based on "impact" scale)
+            ranges = []
+            for key, value in self.var.wlranges_and_measures.items():
+                ranges.append((key, value["min"], None))
+
+        elif strategy == 2:
+            # Water level range for energy substations (based on critical hit) -- need to make it nor hard coded
+            ranges = [(1, 0.3, None)]
+
+        else:
+            # Water level range for vulnerable and emergency facilities (flooded or not)
+            ranges = [(1, 0.1, None)]
+
+        probability_maps = {}
+
+        # Loop over water level ranges to calculate probability maps
+        for range_id, min, max in ranges:
+            daily_ensemble = ensemble_flood_maps
+            if max is not None:
+                condition = (daily_ensemble >= min) & (daily_ensemble <= max)
+            else:
+                condition = daily_ensemble >= min
+            probability = condition.sum(dim="member") / condition.sizes["member"]
+
+            # Save probability map as a zarr file
+            file_name = f"prob_exceedance_map_range{range_id}_strategy{strategy}.zarr"
+            file_path = prob_folder / file_name
+            file_path.mkdir(parents=True, exist_ok=True)
+
+            # The y axis is flipped when writing to zarr, so fixing it here for now
+            if probability.y.values[0] < probability.y.values[-1]:
+                print("flipping y axis")
+                probability = probability.sortby("y", ascending=False)
+
+            probability = probability.astype(np.float32)
+            probability = probability.rio.write_nodata(np.nan)
+            probability = probability.isel(time=0)  # select the first time step
+            probability = to_zarr(da=probability, path=file_path, crs=crs)
+
+            probability_maps[(date_time, range_id)] = probability
 
         return probability_maps
 
@@ -532,78 +799,167 @@ class Households(AgentBaseClass):
 
             damage_probability_map.to_file(output_path)
 
-    def warning_strategy_1(self, prob_threshold=0.6) -> None:
-        # I probably should use the probability_maps as argument for this function instead of getting it inside the function
-        # ideally add an option to choose the warning strategy
+    def water_level_warning_strategy(
+        self, date_time, prob_threshold=0.6, area_threshold=0.1, strategy_id=1
+    ) -> None:
+        """Implements the water level warning strategy based on flood probability maps.
 
-        days = self.model.config["general"]["forecasts"]["days"]
-        range_ids = [1, 2, 3]
-        warnings_log = []
+        Args:
+            date_time: The forecast date time for which to implement the warning strategy.
+            prob_threshold: The probability threshold above which a warning is issued.
+            area_threshold: The area threshold (percentage of area) above which a warning is issued.
+            strategy_id: Identifier of the warning strategy (1 for water level ranges with measures).
+        """
+        # Get the range ids and initialize the warning_log
+        range_ids = list(self.var.wlranges_and_measures.keys())
+        warning_log = []
 
         # Create probability maps
-        self.create_flood_probability_maps()
+        self.create_flood_probability_maps(strategy=strategy_id, date_time=date_time)
 
         # Load households and postal codes
         households = self.var.household_points.copy()
-        PC4 = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
+        postal_codes = self._load_postal_codes_clipped()
+        # Postal codes are now efficiently clipped to model region
 
-        for day in days:
-            for range_id in range_ids:
-                # Build path to probability map (is there a way of doing it with array instead of raster?)
-                tif_path = Path(
-                    self.model.output_folder
-                    / "prob_maps"
-                    / f"prob_map_range{range_id}_forecast{day.strftime('%Y-%m-%d')}.tif"
-                )
+        for range_id in range_ids:
+            # prob_map = Path(
+            #     self.model.output_folder
+            #     / "prob_maps"
+            #     / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
+            #     / f"prob_map_range{range_id}_strategy{strategy_id}.tif"
+            # )
 
-                prob_map = rasterio.open(tif_path)
-                prob_array = prob_map.read(1)
-                affine = prob_map.transform
+            # with rasterio.open(prob_map) as src:
+            #     prob_map = src.read(1)
+            #     affine = src.transform
 
-                # Run zonal stats using rasterstats
-                stats = zonal_stats(
-                    PC4, prob_array, affine=affine, stats="max", nodata=np.nan
-                )
+            # # Get the pixel values for each postal code
+            # stats = zonal_stats(
+            #     postal_codes,
+            #     prob_map,
+            #     affine=affine,
+            #     raster_out=True,
+            #     all_touched=True,
+            #     nodata=np.nan,
+            # )
 
-                # Iterate through each postal code and check the max probability
-                for i, prob_value in enumerate(stats):
-                    max_prob = prob_value["max"]
-                    pc4_code = PC4.iloc[i]["postcode"]
+            # Build path to probability map
+            prob_map = Path(
+                self.model.output_folder
+                / "prob_maps"
+                / f"forecast_{date_time.strftime('%Y%m%dT%H%M%S')}"
+                / f"prob_map_range{range_id}_strategy{strategy_id}.zarr"
+            )
 
-                    if max_prob >= prob_threshold:
-                        print(
-                            f"Warning issued to postal code {pc4_code} on {day} for range {range_id}"
-                        )
+            # Open the probability map
+            prob_map = open_zarr(prob_map)
+            affine = prob_map.rio.transform()
+            prob_map = np.asarray(prob_map.values)
 
-                        # Filter the affected households based on the postal code
-                        affected_households = households[
-                            households["postcode"] == pc4_code
-                        ]
+            # Get the pixel values for each postal code
+            stats = zonal_stats(
+                postal_codes,
+                prob_map,
+                affine=affine,
+                raster_out=True,
+                all_touched=True,
+                nodata=np.nan,
+            )
 
-                        # Communicate the warning to the target households
-                        # This function should return the number of households that were warned
-                        n_warned_households = self.warning_communication(
-                            target_households=affected_households
-                        )
+            # Iterate through each postal code and check how many pixels exceed the threshold
+            for i, postalcode in enumerate(stats):
+                pixel_values = postalcode["mini_raster_array"]
+                postal_code = postal_codes.iloc[i]["postcode"]
 
-                        warnings_log.append(
-                            {
-                                "day": day,
-                                "postcode": pc4_code,
-                                "range": range_id,
-                                "n_affected_households": len(affected_households),
-                                "n_warned_households": n_warned_households,
-                                "max_probability": max_prob,
-                            }
-                        )
+                # Only get the values that are within the postal code
+                postalcode_pixels = pixel_values[~pixel_values.mask]
 
-        # Save the warnings log to a csv file
-        path = os.path.join(self.model.output_folder, "warnings_log.csv")
-        pd.DataFrame(warnings_log).to_csv(path, index=False)
+                # Calculate the number of pixels with flood prob above the threshold
+                n_above = np.sum(postalcode_pixels >= prob_threshold)
+
+                # Calculate the total number of pixels within the postal code
+                n_total = len(postalcode_pixels)
+
+                if n_total == 0:
+                    print(f"No valid pixels found for postal code {postal_code}")
+                    continue
+                else:
+                    percentage = n_above / n_total
+
+                if percentage >= area_threshold:
+                    print(
+                        f"Warning issued to postal code {postal_code} on {date_time.strftime('%d-%m-%Y T%H:%M:%S')} for range {range_id}: {percentage:.0%} of pixels > {prob_threshold}"
+                    )
+
+                    # Filter the affected households based on the postal code
+                    affected_households = households[
+                        households["postcode"] == postal_code
+                    ]
+
+                    # Get the measures and evacuation flag from the json dictionary to use in the warning communication function
+                    measures = self.var.wlranges_and_measures[range_id]["measure"]
+                    evacuate = self.var.wlranges_and_measures[range_id]["evacuate"]
+
+                    # Communicate the warning to the target households
+                    # This function should return the number of households that were warned
+                    n_warned_households = self.warning_communication(
+                        target_households=affected_households,
+                        measures=measures,
+                        evacuate=evacuate,
+                        trigger="water_levels",
+                    )
+
+                    warning_log.append(
+                        {
+                            "date_time": date_time.strftime("%Y%m%d T%H%M%S"),
+                            "postcode": postal_code,
+                            "range": range_id,
+                            "n_affected_households": len(affected_households),
+                            "n_warned_households": n_warned_households,
+                            "percentage_above_threshold": f"{percentage:.2f}",
+                        }
+                    )
+
+        # Save the warning log to a csv file
+        warnings_folder = self.model.output_folder / "warning_logs"
+        warnings_folder.mkdir(exist_ok=True, parents=True)
+        path = (
+            warnings_folder
+            / f"warning_log_water_levels_{date_time.strftime('%Y%m%dT%H%M%S')}.csv"
+        )
+        pd.DataFrame(warning_log).to_csv(path, index=False)
 
     def infrastructure_warning_strategy(self, prob_threshold=0.6) -> None:
+        """Infrastructure warning strategy based on critical infrastructure flooding.
+
+        Args:
+            prob_threshold: Probability threshold for issuing warnings (0-1).
+
+        Note:
+            Currently disabled for development - will be enabled later.
+            This function will issue warnings when critical infrastructure
+            (energy substations) have flood probability above threshold.
+        """
+        # TODO: Enable infrastructure warnings when ready
+        print("Infrastructure warning strategy is currently disabled for development.")
+        print("This functionality will be enabled in a future update.")
+        return
+
+    def critical_infrastructure_warning_strategy(
+        self, date_time, prob_threshold=0.6
+    ) -> None:
+        """Alternative name for infrastructure_warning_strategy to match model.py calls.
+
+        Args:
+            date_time: The forecast date time (currently unused but required by model.py).
+            prob_threshold: Probability threshold for issuing warnings (0-1).
+        """
+        return self.infrastructure_warning_strategy(prob_threshold=prob_threshold)
+
+        # ===== INFRASTRUCTURE WARNING CODE (DISABLED FOR NOW) =====
         # Load postal codes and substations
-        PC4 = gpd.read_parquet(self.model.files["geom"]["postal_codes"])
+        PC4 = self._load_postal_codes_clipped()
         substations = gpd.read_parquet(
             self.model.files["geom"]["assets/energy_substations"]
         )
@@ -682,49 +1038,391 @@ class Households(AgentBaseClass):
             path = os.path.join(self.model.output_folder, "warning_log_energy.csv")
             pd.DataFrame(warning_log).to_csv(path, index=False)
 
-    def warning_communication(self, target_households: gpd.GeoDataFrame) -> int:
-        """Communicates the warning to households based on the communication efficiency.
+    def warning_communication(
+        self,
+        target_households: gpd.GeoDataFrame,
+        measures: set[str],
+        evacuate: bool,
+        trigger: str,
+        communication_efficiency: float = 0.78,
+        lt_threshold_evacuation: int = 48,
+    ) -> int:
+        """Send warnings to a subset of target households according to communication_efficiency.
 
-        changes risk perception --> to be moved to the update risk perception function;
-        and return the number of households that were warned.
+        Makes sure to send a single message and allows only upward escalation:
+        none (0) -> measures (1) -> evacuate (2)
+        Evacuation warning only sent if evacuate is True and lead_time <= 48h.
 
         Args:
-            target_households: The households that are targeted to receive the warning.
+            target_households: GeoDataFrame of household points targeted by the warning, must
+                contain a 'pointid' column with the household index.
+            measures: Set of recommended protective measures to communicate (strings).
+            evacuate: Whether evacuation should be advised for this warning.
+            trigger: Identifier of the trigger that initiated the warning.
+            communication_efficiency: Fraction (0-1) of targeted households that can be reached.
+            lt_threshold_evacuation: Lead time threshold (hours) below which evacuation warnings
+                are allowed.
 
         Returns:
-            The number of households that received the warning.
+            int: Number of households that were successfully warned.
         """
-        print("Communicating the warning...")
-        # Define the % of households reached by the warning
-        warning_range = 0.35
+        print("Running the warning communication for households...")
 
-        # Total number of target households
-        n_target_households = len(target_households)
-
-        # If no target households, return 0 warned households
-        if n_target_households == 0:
-            return 0
-
-        # Get random indices to change the warning state
-        n_warned_households = int(n_target_households * warning_range)
-        indices = np.random.choice(
-            n_target_households, n_warned_households, replace=False
+        # DEBUG: Print detailed information about target_households structure
+        print("\n" + "=" * 80)
+        print("DEBUG: target_households GeoDataFrame structure")
+        print("=" * 80)
+        print(f"Shape: {target_households.shape}")
+        print(f"Columns: {target_households.columns.tolist()}")
+        print(f"Data types:\n{target_households.dtypes}")
+        print(f"CRS: {target_households.crs}")
+        print(f"Index type: {type(target_households.index)}")
+        print(f"Index name: {target_households.index.name}")
+        print(
+            f"First 5 indices: {target_households.index[:5].tolist() if len(target_households) > 0 else 'Empty'}"
         )
 
-        # Get the pointids of the households that should get the warning
-        household_id = target_households.iloc[indices]["pointid"]
+        if len(target_households) > 0:
+            print("\nFirst 3 rows of data:")
+            print(target_households.head(3).to_string())
 
-        # Change warning reached attribute to 1 (received a warning)
-        self.var.warning_reached[household_id] = 1
+            print("\nGeometry sample (first 3):")
+            for i, geom in enumerate(target_households.geometry.head(3)):
+                print(f"  {i}: {geom}")
 
-        # Increase risk perception of households who received the warning
-        self.var.risk_perception[household_id] *= 10
+            # Check for specific columns that might be important
+            important_cols = ["postcode", "pointid", "building_id"]
+            for col in important_cols:
+                if col in target_households.columns:
+                    unique_vals = target_households[col].nunique()
+                    sample_vals = target_households[col].head(5).tolist()
+                    print(
+                        f"\nColumn '{col}': {unique_vals} unique values, samples: {sample_vals}"
+                    )
 
-        print(f"Warning targeted to reach {n_target_households} households.")
-        print(f"Warning supposed to reach {n_warned_households} households.")
-        print(f"Warning reached {len(household_id)} households.")
+        print("=" * 80)
+        print("")
+
+        # Get the number of target households
+        n_target_households = len(target_households)
+        if n_target_households == 0:
+            print("No target households to warn.")
+            return 0
+
+        # Calculate individual communication efficiency probabilities based on socio-economic factors
+        warning_weights = self.calculate_communication_efficiency_probability(
+            target_households
+        )
+
+        print(f"Communication efficiency statistics:")
+        print(f"  Mean: {warning_weights.mean():.3f}")
+        print(f"  Std:  {warning_weights.std():.3f}")
+        print(f"  Min:  {warning_weights.min():.3f}")
+        print(f"  Max:  {warning_weights.max():.3f}")
+
+        # Select exactly communication_efficiency fraction of households using socio-economic weights
+        n_total = len(target_households)
+        n_to_select = int(communication_efficiency * n_total)
+
+        if n_to_select >= n_total:
+            # If we need to select all or more than available, select all
+            selected_households = target_households
+        elif n_to_select == 0:
+            # If we need to select none, return empty
+            selected_households = target_households.iloc[:0]
+        else:
+            # Use weighted random sampling to select exactly n_to_select households
+            np.random.seed(42)  # Fixed seed for reproducibility
+            chosen_indices = np.random.choice(
+                target_households.index,
+                size=n_to_select,
+                replace=False,
+                p=warning_weights,
+            )
+            selected_households = target_households.loc[chosen_indices]
+
+        n_feasible_warnings = len(selected_households)
+        if n_feasible_warnings == 0:
+            print(
+                "Based on the communication efficiency, no warning will reach households."
+            )
+            return 0
+
+        print(
+            f"Socio-economic efficiency resulted in {n_feasible_warnings} out of {n_target_households} households receiving warning"
+        )
+
+        # Get lead time in hours
+        lead_time = self.compute_lead_time()
+        print(f"Lead time for warning: {lead_time:.0f} hours")
+
+        # Helper function to pick the measures to recommend based on lead time
+        def pick_recommendations(
+            available_measures: set[str], evacuate: bool, lead_time: float
+        ) -> list[str]:
+            """
+            Decide which recommendations to include in the warning based on the lead time available.
+
+            Args:
+                available_measures (set[str]): Set of possible in-place measures to recommend.
+                evacuate (bool): Whether evacuation is requested.
+                lead_time (float): Lead time available in hours.
+
+            Returns:
+                chosen (list[str]): List of measures to recommend.
+            """
+            # Get implementation times for measures
+            implementation_times = self.var.implementation_times
+
+            # Filter out empty strings and invalid measures
+            valid_measures = {
+                measure
+                for measure in available_measures
+                if measure and measure.strip() and measure in implementation_times
+            }
+
+            # Sort the valid measures by their implementation times and alphabetically
+            sorted_inplace_measures_per_time = sorted(
+                valid_measures,
+                key=lambda measure: (implementation_times[measure], measure),
+            )
+
+            # Get evacuation time
+            evac_time = implementation_times["evacuate"]
+
+            # Non-evacuation case
+            # If all measures fit in the lead time, return all
+            if not evacuate:
+                total = sum(
+                    implementation_times[measure]
+                    for measure in sorted_inplace_measures_per_time
+                )
+                if lead_time >= total:
+                    return sorted_inplace_measures_per_time
+
+                else:
+                    # If not, pick as many measures as possible within the lead time
+                    chosen_measures = []
+                    used_time = 0
+                    for measure in sorted_inplace_measures_per_time:
+                        imp_time = implementation_times[measure]
+                        if used_time + imp_time <= lead_time:
+                            chosen_measures.append(measure)
+                            used_time += imp_time
+                    return chosen_measures
+            else:
+                # Evacuation case
+                # If there is no time for evacuation, nothing to recommend
+                if evac_time > lead_time:
+                    return []
+                else:
+                    # If there is time for evacuation, check if any in-place measures fit as well
+                    chosen_measures = ["evacuate"]
+                    used_time = evac_time
+                    for measure in sorted_inplace_measures_per_time:
+                        imp_time = implementation_times[measure]
+                        if used_time + imp_time <= lead_time:
+                            chosen_measures.append(measure)
+                            used_time += imp_time
+
+                    return chosen_measures
+
+        # Pick the measures to recommend based on lead time
+        # Convert measures list to set and ensure they are valid
+        measures_set = set(measures) if isinstance(measures, list) else {measures}
+        recommended_measures = pick_recommendations(measures_set, evacuate, lead_time)
+
+        # Policy check for evacuation (only recommend it if lead time <= threshold)
+        evac_feasible = "evacuate" in recommended_measures
+        evac_policy = lead_time <= lt_threshold_evacuation
+        if evac_feasible and not evac_policy:
+            recommended_measures.remove("evacuate")
+            evac_feasible = False
+
+        # Determine the desired level of warning (0 = no warning, 1 = measures, 2 = evacuate)
+        desired_level = 2 if evac_feasible else (1 if recommended_measures else 0)
+
+        if desired_level == 0:
+            return 0
+
+        # Get possible measures and triggers (this is a list of all possible measures, not the recommended measures given by the warning strategies)
+        # Used only to make sure the indices are correct when updating the arrays (self.var.recommended_measures, self.var.warning_trigger)
+        possible_measures_to_recommend = self.var.possible_measures_to_recommend
+        possible_warning_triggers = self.var.possible_warning_triggers
+
+        n_warned_households = 0
+        for _, row in selected_households.iterrows():
+            household_id = row["pointid"]
+
+            # Skip already evacuated
+            if self.var.evacuated[household_id] == 1:
+                continue
+
+            # Get current warning level
+            current_level = int(self.var.warning_level[household_id])
+
+            # Only send a warning if the desired level is higher than current level
+            if desired_level > current_level:
+                # For every measure in the recommended measures, get the corresponding index and set the right column to True to store it
+                for measure in recommended_measures:
+                    measure_idx = possible_measures_to_recommend.index(measure)
+                    self.var.recommended_measures[household_id, measure_idx] = True
+            else:
+                continue
+
+            # Mark warning level and reached status
+            self.var.warning_level[household_id] = desired_level
+            self.var.warning_reached[household_id] = 1
+
+            # Mark the trigger
+            trigger_idx = possible_warning_triggers.index(trigger)
+            self.var.warning_trigger[household_id, trigger_idx] = True
+            n_warned_households += 1
+
+        print(f"Warning targeted to reach {n_target_households} households")
+        print(f"Warning reached {n_warned_households} households")
 
         return n_warned_households
+
+    def calculate_communication_efficiency_probability(
+        self,
+        target_households: gpd.GeoDataFrame,
+    ) -> pd.Series:
+        """
+        Calculate communication efficiency probability based on education level and income.
+
+        Higher education and income lead to better access to communication channels
+        and faster response to warnings.
+
+        Args:
+            target_households: GeoDataFrame with household data including education and income.
+            base_efficiency: Base probability for communication efficiency (0-1).
+            use_socioeconomic_factors: Whether to use socio-economic factors or fallback to random.
+
+        Returns:
+            Series with communication efficiency probabilities for each household.
+
+        Raises:
+            KeyError: If required columns are missing from target_households.
+        """
+        # 1. Check required columns
+        required_columns = ["Education", "Income"]
+        missing_columns = [
+            col for col in required_columns if col not in target_households.columns
+        ]
+        if missing_columns:
+            raise KeyError(
+                f"Missing required columns in target_households: {missing_columns}"
+            )
+
+        # 2. Weights based on the regression of the WRP survey data
+        # (https://documents1.worldbank.org/curated/en/099259309032538041/pdf/IDU-c6f56dc5-a0cb-4375-ac15-a91f1c202b09.pdf )
+        w_edu = {
+            1: 1.0,  # less than primary
+            2: 1.1765,  # complete primary
+            3: 1.3530,  # incomplete secondary
+            4: 1.5295,  # complete secondary / tertiary
+            5: 1.7060,  # higher
+        }
+
+        w_income = {
+            1: 1.0,  # lowest income
+            2: 1.041,
+            3: 1.082,
+            4: 1.123,
+            5: 1.164,  # highest income
+        }
+
+        # 3. Compute total weight per agent
+        target_households["weight"] = target_households["Education"].map(
+            w_edu
+        ) + target_households["Income"].map(w_income)
+
+        weights = target_households["weight"].to_numpy()
+        weights = weights / weights.sum()  # normalize for sampling
+
+        return weights
+
+    def compute_lead_time(self) -> float:
+        """Compute lead time in hours based on forecast start time and current model time.
+
+        Returns:
+            float: Lead time in hours.
+        """
+        start_time = self.model.config["hazards"]["floods"]["events"][0]["start_time"]
+        current_time = self.model.current_time
+        lead_time = (start_time - current_time).total_seconds() / 3600
+        lead_time = max(lead_time, 0)  # Ensure non-negative lead time
+        return lead_time
+
+    def household_decision_making(self, date_time, responsive_ratio=0.7) -> None:
+        """Simulate household emergency response decisions based on warnings and lead time.
+
+        Args:
+            date_time: The forecast date time for which to run the decision-making.
+            responsive_ratio: Threshold for household responsiveness (0-1). Households with
+                response_probability below this value are considered responsive and will
+                act on warnings.
+        """
+        print("Running emergency response decision-making for households...")
+
+        # Get lead time in hours
+        lead_time = self.compute_lead_time()
+
+        # Filter households that did not evacuate, were warned and are responsive
+        not_evacuated_ids = self.var.evacuated == 0
+        warned_ids = self.var.warning_reached == 1
+        responsive_ids = self.var.response_probability < responsive_ratio
+
+        # Combine the filters and apply it to household_points
+        eligible_ids = np.asarray(warned_ids & not_evacuated_ids & responsive_ids)
+        eligible_households = self.var.household_points.loc[eligible_ids]
+
+        # Get the list of possible actions for eligible households
+        # (this is a list of all possible actions, not the recommended actions given by the warning strategies)
+        possible_actions = self.var.possible_actions
+        evac_idx = possible_actions.index("evacuate")
+
+        # Initialize an empty list to log actions taken
+        actions_log = []
+
+        # For every eligible household, do the recommended measures in the communicated warning
+        for household_id, _ in eligible_households.iterrows():
+            # For measure in recommended measures, change it to true in the actions_taken array
+            self.var.actions_taken[household_id] = self.var.recommended_measures[
+                household_id
+            ].copy()
+
+            # If evacuation is among the actions taken, mark household as evacuated
+            if self.var.actions_taken[household_id, evac_idx]:
+                self.var.evacuated[household_id] = 1
+
+            # Log the actions taken
+            actions = []
+            for i, action in enumerate(possible_actions):
+                if self.var.actions_taken[household_id, i]:
+                    actions.append(action)
+
+            actions_log.append(
+                {
+                    "lead_time": lead_time,
+                    "date_time": date_time.strftime("%Y%m%d T%H%M%S"),
+                    "postal_code": self.var.household_points.loc[
+                        household_id, "postcode"
+                    ],
+                    "household_id": household_id,
+                    "actions": actions,
+                }
+            )
+
+        # Save actions log
+        actions_log_folder = self.model.output_folder / "actions_logs"
+        actions_log_folder.mkdir(exist_ok=True, parents=True)
+        path = (
+            actions_log_folder
+            / f"actions_log_{date_time.strftime('%Y%m%dT%H%M%S')}.csv"
+        )
+        pd.DataFrame(actions_log).to_csv(path, index=False)
 
     def decide_household_strategy(self) -> None:
         """This function calculates the utility of adapting to flood risk for each household and decides whether to adapt or not."""
@@ -1004,6 +1702,8 @@ class Households(AgentBaseClass):
     def spinup(self) -> None:
         self.construct_income_distribution()
         self.assign_household_attributes()
+        if self.config["warning_response"]:
+            self.change_household_locations()
 
     def calculate_building_flood_damages(self) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
@@ -1082,6 +1782,77 @@ class Households(AgentBaseClass):
                 damages_adapt[i, idx_agents_in_building] = damage
 
         return damages_do_not_adapt, damages_adapt
+
+    def update_households_gdf(self, date_time) -> None:
+        """This function merges the global variables related to warnings to the households geodataframe for visualization purposes.
+
+        Args:
+            date_time: The forecast date time for which to update the households geodataframe.
+        """
+        household_points: gpd.GeoDataFrame = self.var.household_points.copy()
+        global_vars = [
+            "warning_reached",
+            "warning_level",
+            "response_probability",
+            "evacuated",
+            "recommended_measures",
+            "warning_trigger",
+            "actions_taken",
+        ]
+
+        # make sure household points and global variables have the same length
+        for global_var in global_vars:
+            global_array = getattr(self.var, global_var)
+            assert len(household_points) == global_array.shape[0], (
+                f"The size of household points and {global_var} do not match"
+            )
+
+        # add columns in the household points geodataframe
+        for name in [
+            "warning_reached",
+            "warning_level",
+            "response_probability",
+            "evacuated",
+        ]:
+            household_points[name] = getattr(self.var, name)
+
+        warning_triggers = self.var.possible_warning_triggers
+        for i, _ in enumerate(warning_triggers):
+            if warning_triggers[i] == "water_levels":
+                household_points["trig_w_levels"] = self.var.warning_trigger[:, i]
+            if warning_triggers[i] == "critical_infrastructure":
+                household_points["trig_crit_infra"] = self.var.warning_trigger[:, i]
+
+        possible_measures_to_recommend = self.var.possible_measures_to_recommend
+        for i, measure in enumerate(possible_measures_to_recommend):
+            if measure == "elevate possessions":
+                household_points["recom_elev_possessions"] = (
+                    self.var.recommended_measures[:, i]
+                )
+            if measure == "evacuate":
+                household_points["recom_evacuate"] = self.var.recommended_measures[:, i]
+
+        possible_actions = self.var.possible_actions
+        for i, action in enumerate(possible_actions):
+            if action == "elevate possessions":
+                household_points["elevated_possessions"] = self.var.actions_taken[:, i]
+
+        household_points.to_parquet(
+            self.model.output_folder
+            / "action_maps"
+            / f"households_with_warning_parameters_{date_time.strftime('%Y%m%dT%H%M%S')}.geoparquet"
+        )
+
+    def load_wlranges_and_measures(self):
+        with open(self.model.files["dict"]["measures/implementation_times"], "r") as f:
+            self.var.implementation_times = json.load(f)
+
+        with open(self.model.files["dict"]["measures/wl_ranges"], "r") as f:
+            wlranges_and_measures = json.load(f)
+            # convert the keys (range ids) to integers and store them in a new dictionary
+            self.var.wlranges_and_measures = {
+                int(key): value for key, value in wlranges_and_measures.items()
+            }
 
     def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
