@@ -504,9 +504,7 @@ class LakesReservoirs(Module):
             An array containing the outflow point for each water body.
         """
         # calculate biggest outlet = biggest accumulation of ldd network
-        upstream_area_n_cells = self.hydrology.routing.river_network.upstream_area(
-            unit="cell"
-        )[~self.grid.mask]
+        upstream_area_n_cells = self.hydrology.routing.grid.var.upstream_area_n_cells
         upstream_area_within_waterbodies = np.zeros_like(
             upstream_area_n_cells,
             shape=waterBodyID.max() + 2,
