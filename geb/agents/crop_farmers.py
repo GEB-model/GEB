@@ -1267,21 +1267,6 @@ class CropFarmers(AgentBaseClass):
         assert np.diff(elevation[activation_order]).max() <= 0
         return activation_order
 
-    @property
-    def command_area(self) -> np.ndarray:
-        """Which command area a farmer is in, derived from field indices and reservoir areas."""
-        return farmer_command_area(
-            self.var.n,
-            self.var.field_indices,
-            self.var.field_indices_by_farmer.data,
-            self.HRU.var.reservoir_command_areas,
-        )
-
-    @property
-    def is_in_command_area(self) -> np.ndarray:
-        """Whether a farmer is in anu command area."""
-        return self.command_area != -1
-
     def save_pr(self, pr_kg_per_m2_per_s: npt.NDArray[np.floating]) -> None:
         """Aggregate and store daily precipitation per farmer.
 
@@ -1360,10 +1345,6 @@ class CropFarmers(AgentBaseClass):
                 * (1 - discount_factor)
                 + water_deficit_day_m3_per_farmer * discount_factor
             )
-        elif day_index == 365:
-            self.var.cumulative_water_deficit_m3[:, 365] = (
-                self.var.cumulative_water_deficit_m3[:, 364]
-            )
         else:
             self.var.cumulative_water_deficit_m3[:, day_index] = (
                 self.var.cumulative_water_deficit_m3[:, day_index - 1]
@@ -1383,10 +1364,14 @@ class CropFarmers(AgentBaseClass):
             # if this is the last day of the year, but not a leap year, the virtual
             # 366th day of the year is the same as the 365th day of the year
             # this avoids complications with the leap year
-            if day_index == 364 and not calendar.isleap(self.model.current_time.year):
+            if day_index == 364:
                 self.var.cumulative_water_deficit_m3[:, 365] = (
                     self.var.cumulative_water_deficit_m3[:, 364]
                 )
+            # elif day_index == 365:
+            #     self.var.cumulative_water_deficit_m3[:, 365] = (
+            #         self.var.cumulative_water_deficit_m3[:, 364]
+            #     )
 
     def get_gross_irrigation_demand_m3(
         self,
@@ -1631,6 +1616,21 @@ class CropFarmers(AgentBaseClass):
         total_hours = 365 * 5
         yearly_irrigation_total = hourly_irrigation_maximum * total_hours
         return yearly_irrigation_total
+
+    @property
+    def command_area(self) -> np.ndarray:
+        """Which command area a farmer is in, derived from field indices and reservoir areas."""
+        return farmer_command_area(
+            self.var.n,
+            self.var.field_indices,
+            self.var.field_indices_by_farmer.data,
+            self.HRU.var.reservoir_command_areas,
+        )
+
+    @property
+    def is_in_command_area(self) -> np.ndarray:
+        """Whether a farmer is in anu command area."""
+        return self.command_area != -1
 
     @property
     def surface_irrigated(self) -> np.ndarray:
