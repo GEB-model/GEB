@@ -227,7 +227,7 @@ def to_dict(d: dict, filepath: Path) -> None:
 
 
 def calculate_scaling(
-    da: xr.DataArray,
+    da: xr.DataArray | np.ndarray,
     min_value: float,
     max_value: float,
     precision: float,
