@@ -17,7 +17,6 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, overload
 
-import cftime
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
@@ -794,14 +793,22 @@ class AsyncGriddedForcingReader:
             time_arr = self.ds["time"]
             assert isinstance(time_arr, zarr.Array)
             time = time_arr[:]
+            assert isinstance(time, np.ndarray)
 
-        datetime_index_unparsed = cftime.num2date(
-            time,
-            units=self.ds["time"].attrs.get("units"),
-            calendar=self.ds["time"].attrs.get("calendar"),
-        )
+        assert self.ds["time"].attrs.get("calendar") == "proleptic_gregorian"
+
+        time_unit = self.ds["time"].attrs.get("units")
+        assert isinstance(time_unit, str)
+        time_unit, origin = time_unit.split(" since ")
+        pandas_time_unit: str = {
+            "seconds": "s",
+            "minutes": "m",
+            "hours": "h",
+            "days": "D",
+        }[time_unit]
+
         self.datetime_index: ArrayDatetime64 = pd.to_datetime(
-            [obj.isoformat() for obj in datetime_index_unparsed]
+            time, unit=pandas_time_unit, origin=origin
         ).to_numpy()
         self.time_size = self.datetime_index.size
 
