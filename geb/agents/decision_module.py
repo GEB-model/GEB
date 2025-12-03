@@ -417,24 +417,29 @@ class DecisionModule:
 
         return EU_adapt
 
-    def calcEU_adapt_drought(self, **kwargs: dict):
+    def calcEU_adapt_drought(self, **kwargs: dict) -> np.ndarray:
+        """This function calculates the time discounted subjective utility of not undertaking any action.
+
+        Returns:
+            EU_do_nothing_array: array containing the time discounted subjective utility of doing nothing for each agent.
+        """
         assert kwargs["adapted"].dtype == bool
         return self.calcEU_adapt_drought_numba(**kwargs)
 
     def calcEU_adapt_flood(
         self,
-        geom_id,
+        geom_id: int | str,
         n_agents: int,
         wealth: np.ndarray,
         income: np.ndarray,
-        expendature_cap,
+        expendature_cap: float,
         amenity_value: np.ndarray,
-        amenity_weight,
+        amenity_weight: float | int,
         risk_perception: np.ndarray,
         expected_damages_adapt: np.ndarray,
         adaptation_costs: np.ndarray,
-        time_adapted,
-        loan_duration,
+        time_adapted: np.ndarray,
+        loan_duration: int,
         p_floods: np.ndarray,
         T: np.ndarray,
         r: float,
@@ -542,12 +547,12 @@ class DecisionModule:
 
     def calcEU_do_nothing_flood(
         self,
-        geom_id,
+        geom_id: str | int,
         n_agents: int,
         wealth: np.ndarray,
         income: np.ndarray,
         amenity_value: np.ndarray,
-        amenity_weight,
+        amenity_weight: np.ndarray,
         risk_perception: np.ndarray,
         expected_damages: np.ndarray,
         adapted: np.ndarray,

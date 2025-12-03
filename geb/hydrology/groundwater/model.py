@@ -754,10 +754,10 @@ class ModFlowSimulation:
         self.hash = hashlib.md5(
             json.dumps(hashable_dict, sort_keys=True).encode()
         ).digest()
-        if not self.hash_file.exists():
-            prev_hash = None
-        else:
+        if self.hash_file.exists():
             prev_hash = bytes.fromhex(self.hash_file.read_text())
+        else:
+            prev_hash = None
 
         if prev_hash == self.hash and not self.never_load_from_disk:
             return True

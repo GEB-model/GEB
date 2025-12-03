@@ -471,7 +471,10 @@ class Floods(Module):
             crs=flood_depth.rio.crs,
         )  # save the flood depth to a zarr file
 
-        self.model.agents.households.flood(flood_depth=flood_depth)
+        # This check is done to compute damages (using ERA5) only after multiverse is finished
+        if self.model.multiverse_name is None:
+            print("Multiverse no longer active, now compute flood damages...")
+            self.model.agents.households.flood(flood_depth=flood_depth)
 
     def get_return_period_maps(self, coastal_only: bool = False) -> None:
         """
