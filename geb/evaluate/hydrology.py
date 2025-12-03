@@ -2024,7 +2024,21 @@ class Hydrology:
         def find_exact_observation_file(
             event_name: str, files: list[Path]
         ) -> Path | None:
-            """Find the corresponding observation file for every event. They are matched based on their names. Ensure the starting and ending data are the same for the simulation and observation file."""
+            """Find the matching observation file for a flood event.
+
+            The observation files must be named exactly using the event's
+            start and end times (e.g., `20210712T090000 - 20210720T090000.zarr`).
+            Matching is done by comparing the filename stem (without extension)
+            to the event_name.
+
+            Args:
+                event_name: The event identifier in the format
+                    "YYYYMMDDTHHMMSS - YYYYMMDDTHHMMSS".
+                files: List of file paths to available observation files.
+
+            Returns:
+                Path | None: The matching observation file if found, otherwise None.
+            """
             for f in files:
                 if f.stem == event_name:
                     return f
