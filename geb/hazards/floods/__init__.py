@@ -479,7 +479,7 @@ class Floods(Module):
 
         self.model.agents.households.flood(flood_depth=flood_depth)
 
-    def get_return_period_maps(self, coastal_only: bool = False) -> None:
+    def get_return_period_maps(self, coastal_only: bool = True) -> None:
         """
         Generates flood maps for specified return periods using the SFINCS model.
 
@@ -529,13 +529,29 @@ class Floods(Module):
             model_domain = gpd.GeoDataFrame(
                 geometry=[model_domain], crs=low_elevation_coastal_zone_mask.crs
             )
-            model_name = "coastal_and_inland_region"
+            model_name = "coastal_region"
+
+            # load location and offset for coastal water level forcing
+            locations = (
+                load_geom(self.model.files["geom"]["gtsm/stations_coast_rp"])
+                .rename(columns={"station_id": "stations"})
+                .set_index("stations")
+            )
+
+            offset = xr.open_dataarray(
+                self.model.files["other"][
+                    "coastal/global_ocean_mean_dynamic_topography"
+                ]
+            ).rio.write_crs("EPSG:4326")
+
         else:
             model_domain = subbasins
             coastal_boundary_exclude_mask = None
             low_elevation_coastal_zone_mask = None
             initial_water_level = None
             model_name = "inland_region"
+            locations = gpd.GeoDataFrame()
+            offset = xr.DataArray()
 
         sfincs_root_model: SFINCSRootModel = self.build(
             name=model_name,
@@ -547,11 +563,12 @@ class Floods(Module):
             initial_water_level=initial_water_level,
         )
 
-        sfincs_root_model.estimate_discharge_for_return_periods(
-            discharge=self.discharge_spinup_ds,
-            rivers=self.model.hydrology.routing.rivers,
-            return_periods=self.config["return_periods"],
-        )
+        if not coastal_only:
+            sfincs_root_model.estimate_discharge_for_return_periods(
+                discharge=self.discharge_spinup_ds,
+                rivers=self.model.hydrology.routing.rivers,
+                return_periods=self.config["return_periods"],
+            )
 
         for return_period in self.config["return_periods"]:
             print(
@@ -560,7 +577,11 @@ class Floods(Module):
 
             simulation: MultipleSFINCSSimulations = (
                 sfincs_root_model.create_simulation_for_return_period(
-                    return_period, coastal=coastal, coastal_only=coastal_only
+                    return_period,
+                    coastal=coastal,
+                    coastal_only=coastal_only,
+                    locations=locations,
+                    offset=offset,
                 )
             )
             simulation.run(
