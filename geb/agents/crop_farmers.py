@@ -460,6 +460,41 @@ class CropFarmers(AgentBaseClass):
             pixels_to_coords(pixels + 0.5, self.HRU.gt), max_n=self.var.max_n
         )
 
+        self.var.cumulative_water_deficit_m3 = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            extra_dims=(366,),
+            extra_dims_names=("day",),
+            dtype=np.float32,
+            fill_value=0,
+        )
+        self.var.cumulative_water_deficit_current_day = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=0,
+        )
+
+        self.var.cumulative_pr_mm = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            extra_dims=(366,),
+            extra_dims_names=("day",),
+            dtype=np.float32,
+            fill_value=0,
+        )
+
+        self.var.field_indices_by_farmer = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            extra_dims=(2,),
+            dtype=np.int32,
+            fill_value=-1,
+            extra_dims_names=("index",),
+        )
+
+        self.update_field_indices()
+
         self.set_social_network()
 
         self.var.risk_aversion = DynamicArray(
@@ -765,7 +800,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Set irrigation efficiency data
-        irrigation_mask = self.is_irrigated
+        irrigation_mask = self.irrigated
         self.var.irr_eff_surface = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["adaptation_sprinkler"]["irr_eff_surface"]
@@ -1078,41 +1113,6 @@ class CropFarmers(AgentBaseClass):
             ]["decisions"]["decision_horizon"],
         )
 
-        self.var.cumulative_water_deficit_m3 = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            extra_dims=(366,),
-            extra_dims_names=("day",),
-            dtype=np.float32,
-            fill_value=0,
-        )
-        self.var.cumulative_water_deficit_current_day = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            dtype=np.float32,
-            fill_value=0,
-        )
-
-        self.var.cumulative_pr_mm = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            extra_dims=(366,),
-            extra_dims_names=("day",),
-            dtype=np.float32,
-            fill_value=0,
-        )
-
-        self.var.field_indices_by_farmer = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            extra_dims=(2,),
-            dtype=np.int32,
-            fill_value=-1,
-            extra_dims_names=("index",),
-        )
-
-        self.update_field_indices()
-
     @staticmethod
     @njit(cache=True)
     def update_field_indices_numba(
@@ -1345,6 +1345,11 @@ class CropFarmers(AgentBaseClass):
                 * (1 - discount_factor)
                 + water_deficit_day_m3_per_farmer * discount_factor
             )
+        # leap years can cause issues when determining the future water deficit
+        # to prevent this day index 365 is always set the same as day index 364
+        # when we are in a leap year, the day is passed, otherwise it will only have 1 in 4 year data
+        elif day_index == 365:
+            pass
         else:
             self.var.cumulative_water_deficit_m3[:, day_index] = (
                 self.var.cumulative_water_deficit_m3[:, day_index - 1]
@@ -1355,23 +1360,14 @@ class CropFarmers(AgentBaseClass):
                     - self.var.cumulative_water_deficit_previous_day
                 )
             )
-            # print(self.var.cumulative_water_deficit_m3[:, day_index])
-            # print(self.var.cumulative_water_deficit_m3[:, day_index - 1])
             assert (
                 self.var.cumulative_water_deficit_m3[:, day_index]
                 >= self.var.cumulative_water_deficit_m3[:, day_index - 1]
             ).all()
-            # if this is the last day of the year, but not a leap year, the virtual
-            # 366th day of the year is the same as the 365th day of the year
-            # this avoids complications with the leap year
             if day_index == 364:
                 self.var.cumulative_water_deficit_m3[:, 365] = (
                     self.var.cumulative_water_deficit_m3[:, 364]
                 )
-            # elif day_index == 365:
-            #     self.var.cumulative_water_deficit_m3[:, 365] = (
-            #         self.var.cumulative_water_deficit_m3[:, 364]
-            #     )
 
     def get_gross_irrigation_demand_m3(
         self,
@@ -1629,23 +1625,23 @@ class CropFarmers(AgentBaseClass):
 
     @property
     def is_in_command_area(self) -> np.ndarray:
-        """Whether a farmer is in anu command area."""
+        """Whether a farmer is in any command area."""
         return self.command_area != -1
+
+    @property
+    def surface_irrigating_mdb(self) -> np.ndarray:
+        """Only farmers that both have access to reservoir and surface irrigation"""
+        return self.is_in_command_area & self.surface_irrigated
+
+    @property
+    def channel_irrigating_mdb(self) -> np.ndarray:
+        """Only farmers that both have access to reservoir and surface irrigation"""
+        return self.surface_irrigated & ~self.surface_irrigating_mdb
 
     @property
     def surface_irrigated(self) -> np.ndarray:
         """Boolean mask of farmers that have surface-irrigation equipment."""
         return self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0
-
-    @property
-    def reservoir_channel_irrigated(self) -> np.ndarray:
-        """Per-farmer indicator (int8) of reservoir/channel irrigation.
-
-        Combines reservoir access and any yearly channel abstraction.
-        """
-        return (self.command_area >= 0).astype(np.int8) | np.int8(
-            self.var.yearly_abstraction_m3_by_farmer[:, CHANNEL_IRRIGATION, 0] > 0
-        )
 
     @property
     def well_irrigated(self) -> np.ndarray:
@@ -1655,7 +1651,7 @@ class CropFarmers(AgentBaseClass):
     @property
     def irrigated(self) -> np.ndarray:
         """Boolean mask of farmers that are irrigated (surface or well)."""
-        return self.surface_irrigated | self.well_irrigated  # | is the OR operator
+        return self.surface_irrigated | self.well_irrigated
 
     @property
     def currently_irrigated_fields(self) -> np.ndarray:
@@ -1763,7 +1759,7 @@ class CropFarmers(AgentBaseClass):
             field_indices_by_farmer=self.var.field_indices_by_farmer.data,
             field_indices=self.var.field_indices,
             irrigation_efficiency=self.var.irrigation_efficiency.data,
-            surface_irrigated=self.surface_irrigated.data,
+            channel_irrigated=self.channel_irrigating_mdb.data,
             well_irrigated=self.well_irrigated.data,
             cell_area=self.model.hydrology.HRU.var.cell_area,
             HRU_to_grid=self.HRU.var.HRU_to_grid,
@@ -1773,7 +1769,9 @@ class CropFarmers(AgentBaseClass):
             available_groundwater_m3=available_groundwater_m3,
             available_reservoir_storage_m3=available_reservoir_storage_m3,
             groundwater_depth=groundwater_depth,
-            command_area_by_farmer=self.command_area,
+            command_area_by_farmer=np.where(
+                self.surface_irrigating_mdb, self.command_area, -1
+            ),
             return_fraction=self.var.return_fraction.data,
             well_depth=self.var.well_depth.data,
             remaining_irrigation_limit_m3_reservoir=self.var.remaining_irrigation_limit_m3_reservoir.data,
@@ -4198,8 +4196,8 @@ class CropFarmers(AgentBaseClass):
         )  # Convert from m³/year to m³/s
 
         # Create boolean masks for different types of water sources
-        mask_channel = self.surface_irrigated.copy()
-        mask_reservoir = self.is_in_command_area.copy()
+        mask_channel = self.channel_irrigating_mdb.copy()
+        mask_reservoir = self.surface_irrigating_mdb.copy()
         mask_groundwater = self.well_irrigated.copy()
 
         # Compute power required for groundwater extraction per agent (kW)
@@ -5112,13 +5110,6 @@ class CropFarmers(AgentBaseClass):
             self.var.field_indices,
             self.HRU.var.cell_area,
         )
-
-    @property
-    def is_irrigated(self) -> npt.NDArray[np.bool_]:
-        """Return a boolean mask of farmers who have any irrigation adaptation."""
-        return (
-            self.var.adaptations[:, [SURFACE_IRRIGATION_EQUIPMENT, WELL_ADAPTATION]] > 0
-        ).any(axis=1)
 
     @property
     def irrigated_fields(self) -> npt.NDArray[np.bool_]:

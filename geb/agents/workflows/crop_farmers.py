@@ -809,7 +809,7 @@ def abstract_water(
     field_indices_by_farmer: npt.NDArray[np.int32],
     field_indices: npt.NDArray[np.int32],
     irrigation_efficiency: npt.NDArray[np.float32],
-    surface_irrigated: npt.NDArray[np.bool_],
+    channel_irrigated: npt.NDArray[np.bool_],
     well_irrigated: npt.NDArray[np.bool_],
     cell_area: npt.NDArray[np.float32],
     HRU_to_grid: npt.NDArray[np.int32],
@@ -847,7 +847,7 @@ def abstract_water(
         field_indices_by_farmer: Start/stop indices into ``field_indices`` per farmer.
         field_indices: Flat array of HRU indices for all fields (ordered by farmer).
         irrigation_efficiency: Per-farmer irrigation efficiency.
-        surface_irrigated: Whether farmer can access surface-water sources.
+        channel_irrigated: Whether farmer can access channel-water sources.
         well_irrigated: Whether farmer has a functioning well.
         cell_area: HRU areas.
         HRU_to_grid: Map from HRU to grid cell.
@@ -911,7 +911,7 @@ def abstract_water(
         command_area_farmer = command_area_by_farmer[farmer]
         return_fraction_farmer = return_fraction[farmer]
 
-        if surface_irrigated[farmer]:
+        if channel_irrigated[farmer]:
             maximum_abstraction_channel_m3_farmer = (
                 maximum_abstraction_channel_m3_by_farmer[farmer]
             )
@@ -920,17 +920,15 @@ def abstract_water(
                 * potential_irrigation_consumption_m3_farmer
                 / potential_irrigation_consumption_m3_farmer.sum()
             )
-            if command_area_farmer == -1:  # -1 means no command area
-                pass
-            else:
-                maximum_abstraction_reservoir_m3_farmer = (
-                    maximum_abstraction_reservoir_m3_by_farmer[farmer]
-                )
-                maximum_abstraction_reservoir_m3_by_field = (
-                    maximum_abstraction_reservoir_m3_farmer
-                    * potential_irrigation_consumption_m3_farmer
-                    / potential_irrigation_consumption_m3_farmer.sum()
-                )
+        if command_area_farmer != -1:  # -1 means no command area
+            maximum_abstraction_reservoir_m3_farmer = (
+                maximum_abstraction_reservoir_m3_by_farmer[farmer]
+            )
+            maximum_abstraction_reservoir_m3_by_field = (
+                maximum_abstraction_reservoir_m3_farmer
+                * potential_irrigation_consumption_m3_farmer
+                / potential_irrigation_consumption_m3_farmer.sum()
+            )
 
         if well_irrigated[farmer]:
             maximum_abstraction_groundwater_m3_farmer = (
@@ -951,27 +949,28 @@ def abstract_water(
                     gross_irrigation_demand_m3_per_field[field] / cell_area[field]
                 )
                 assert 1 >= irrigation_water_demand_field_m >= 0
-                if surface_irrigated[farmer]:
-                    # command areas
-                    if command_area_farmer != -1:  # -1 means no command area
-                        irrigation_water_demand_field_m = withdraw_reservoir(
-                            command_area=command_area_farmer,
-                            field=field,
-                            farmer=farmer,
-                            reservoir_abstraction_m3=reservoir_abstraction_m3,
-                            available_reservoir_storage_m3=available_reservoir_storage_m3,
-                            irrigation_water_demand_field_m=irrigation_water_demand_field_m,
-                            water_withdrawal_m=water_withdrawal_m,
-                            remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_reservoir,
-                            reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
-                            maximum_abstraction_reservoir_m3_field=maximum_abstraction_reservoir_m3_by_field[
-                                field_index
-                            ],
-                            cell_area=cell_area,
-                        )
-                        assert water_withdrawal_m[field] >= 0
-                        assert irrigation_water_demand_field_m >= 0
 
+                # command areas
+                if command_area_farmer != -1:  # -1 means no command area
+                    irrigation_water_demand_field_m = withdraw_reservoir(
+                        command_area=command_area_farmer,
+                        field=field,
+                        farmer=farmer,
+                        reservoir_abstraction_m3=reservoir_abstraction_m3,
+                        available_reservoir_storage_m3=available_reservoir_storage_m3,
+                        irrigation_water_demand_field_m=irrigation_water_demand_field_m,
+                        water_withdrawal_m=water_withdrawal_m,
+                        remaining_irrigation_limit_m3=remaining_irrigation_limit_m3_reservoir,
+                        reservoir_abstraction_m3_by_farmer=reservoir_abstraction_m3_by_farmer,
+                        maximum_abstraction_reservoir_m3_field=maximum_abstraction_reservoir_m3_by_field[
+                            field_index
+                        ],
+                        cell_area=cell_area,
+                    )
+                    assert water_withdrawal_m[field] >= 0
+                    assert irrigation_water_demand_field_m >= 0
+
+                if channel_irrigated[farmer]:
                     irrigation_water_demand_field_m = withdraw_channel(
                         available_channel_storage_m3=available_channel_storage_m3,
                         grid_cell=grid_cell_nearest,
@@ -987,8 +986,8 @@ def abstract_water(
                         ],
                         minimum_channel_storage_m3=100.0,
                     )
-                    assert water_withdrawal_m[field] >= 0
-                    assert irrigation_water_demand_field_m >= 0
+                assert water_withdrawal_m[field] >= 0
+                assert irrigation_water_demand_field_m >= 0
 
                 if well_irrigated[farmer]:
                     irrigation_water_demand_field_m = withdraw_groundwater(
