@@ -17,6 +17,7 @@ from numba import njit
 from scipy.spatial import KDTree
 
 from geb.types import (
+    Array,
     ArrayFloat32,
     ArrayInt32,
     ThreeDArrayFloat32,
@@ -25,7 +26,7 @@ from geb.types import (
     TwoDArrayInt32,
 )
 from geb.workflows.io import load_grid, open_zarr
-from geb.workflows.raster import compress
+from geb.workflows.raster import compress, decompress_with_mask
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -342,19 +343,7 @@ class Grid(BaseVariables):
         Returns:
             array: Decompressed array.
         """
-        if fillvalue is None:
-            if array.dtype in (np.float32, np.float64):
-                fillvalue = np.nan
-            else:
-                fillvalue = 0
-        outmap = self.full(fillvalue, dtype=array.dtype).reshape(self.mask_flat.size)
-        output_shape = self.mask.shape
-        if array.ndim == 2:
-            assert array.shape[1] == self.mask_flat.size - self.mask_flat.sum()
-            outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
-            output_shape = (array.shape[0], *output_shape)
-        outmap[..., ~self.mask_flat] = array
-        return outmap.reshape(output_shape)
+        return decompress_with_mask(array, self.mask, fillvalue=fillvalue)
 
     def plot(self, array: np.ndarray) -> None:
         """Plot array.
@@ -781,8 +770,8 @@ class HRUs(BaseVariables):
             self.data.farms, land_use_classes, self.data.grid.mask, self.scaling
         )
 
-    def zeros(self, size: int, dtype: type, *args: Any, **kwargs: Any) -> np.ndarray:
-        """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
+    def zeros(self, size: int, dtype: type, *args: Any, **kwargs: Any) -> Array:
+        """Return an array of zeros with given size. Takes any other argument normally used in np.zeros.
 
         Args:
             size: Size of the array to create.
@@ -796,8 +785,12 @@ class HRUs(BaseVariables):
         return np.zeros(size, dtype, *args, **kwargs)
 
     def full_compressed(
-        self, fill_value: int | float, dtype: type, *args: Any, **kwargs: Any
-    ) -> np.ndarray:
+        self,
+        fill_value: int | float | np.integer | np.floating | bool,
+        dtype: type,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Array:
         """Return a full array with size of number of HRUs. Takes any other argument normally used in np.full.
 
         Args:

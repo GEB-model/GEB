@@ -378,6 +378,7 @@ class Hydrography:
             FileNotFoundError: If the custom rivers file is not found.
             ValueError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not provided when using custom_rivers.
             KeyError: If custom_rivers_width_m_column or custom_rivers_depth_m_column is not found in the custom rivers file.
+            AssertionError: If some large rivers are not represented in the grid.
         """
         if custom_rivers is not None:
             custom_rivers: Path = Path(custom_rivers)
@@ -610,14 +611,36 @@ class Hydrography:
         xy_per_river_segment = value_indices(river_raster_HD, ignore_value=-1)
 
         represented_rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
-        for river_ID in represented_rivers.index:
+
+        for river_ID, river in rivers.iterrows():
+            if river_ID not in xy_per_river_segment:
+                if (
+                    river["is_downstream_outflow_subbasin"]
+                    or not river["represented_in_grid"]
+                ):
+                    continue
+                else:
+                    raise AssertionError("River xy not found, but should be found.")
+
             (ys, xs) = xy_per_river_segment[river_ID]
             upstream_area: ArrayFloat32 = upstream_area_high_res_data[ys, xs]
             nan_mask: ArrayBool = np.isnan(upstream_area)
 
-            upstream_area = upstream_area[~nan_mask]
-            ys: ArrayInt32 = ys[~nan_mask]
-            xs: ArrayInt32 = xs[~nan_mask]
+            if nan_mask.all():
+                if (
+                    river["is_downstream_outflow_subbasin"]
+                    or not river["represented_in_grid"]
+                ):
+                    continue
+                else:
+                    raise AssertionError(
+                        "River xy all NaN upstream area, but should have valid values."
+                    )
+
+            non_nan_mask: ArrayBool = ~nan_mask
+            upstream_area = upstream_area[non_nan_mask]
+            ys: ArrayInt32 = ys[non_nan_mask]
+            xs: ArrayInt32 = xs[non_nan_mask]
 
             assert not np.isnan(upstream_area).any()
 
@@ -660,11 +683,15 @@ class Hydrography:
         )
 
         river_linear_indices = np.where(COMID_IDs_raster.values.ravel() != -1)[0]
+        ids = COMID_IDs_raster.values.ravel()[river_linear_indices]
+        assert 0 not in ids, (
+            "COMID ID of 0 found in river raster, which would lead to errors in pyflwdir, which uses 0 as nodata value."
+        )
         basin_ids.values = flow_raster.basins(
             idxs=river_linear_indices,
             ids=COMID_IDs_raster.values.ravel()[river_linear_indices],
         )
-        basin_ids = xr.where(flow_raster.mask.reshape(basin_ids.shape), basin_ids, -1)
+        basin_ids = xr.where(basin_ids != 0, basin_ids, -1)
         assert (
             np.unique(basin_ids.values[basin_ids.values != -1])
             == np.unique(COMID_IDs_raster.values[COMID_IDs_raster.values != -1])

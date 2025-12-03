@@ -37,6 +37,7 @@ import numpy.typing as npt
 from numba import njit
 from pyproj import CRS, Transformer
 from xmipy import XmiWrapper
+from xmipy.errors import InputError
 
 from geb.types import (
     ArrayFloat32,
@@ -45,9 +46,10 @@ from geb.types import (
     TwoDArrayFloat64,
 )
 from geb.workflows.io import WorkingDirectory
+from geb.workflows.raster import decompress_with_mask
 
 if TYPE_CHECKING:
-    from geb.model import GEBModel
+    pass
 
 MODFLOW_VERSION: str = "6.6.3"
 
@@ -230,7 +232,8 @@ class ModFlowSimulation:
 
     def __init__(
         self,
-        model: GEBModel,
+        working_directory: Path,
+        modflow_bin_folder: Path,
         topography: npt.NDArray[np.float32],
         gt: tuple[float, float, float, float, float, float],
         specific_storage: npt.NDArray[np.float32],
@@ -247,7 +250,8 @@ class ModFlowSimulation:
         """Initialize the MODFLOW model.
 
         Args:
-            model: The GEB model instance.
+            working_directory: The working directory for the MODFLOW model.
+            modflow_bin_folder: The folder containing the MODFLOW binaries.
             topography: The topography or surface elevation of the model grid (m).
             gt: The geotransform of the model grid (GDAL-style).
             specific_storage: The specific storage of the model grid (m-1).
@@ -263,13 +267,12 @@ class ModFlowSimulation:
                 will be loaded from disk if it exists and the input parameters have not changed.
         """
         self.name = "MODEL"  # MODFLOW requires the name to be uppercase
-        self.model = model
         self.heads_update_callback = heads_update_callback
         self.basin_mask = basin_mask
         self.nlay = hydraulic_conductivity.shape[0]
         assert self.basin_mask.dtype == bool
         self.n_active_cells = self.basin_mask.size - self.basin_mask.sum()
-        self.working_directory = model.simulation_root_spinup / "modflow_model"
+        self.working_directory = working_directory
         os.makedirs(self.working_directory, exist_ok=True)
         self.verbose = verbose
         self.never_load_from_disk = never_load_from_disk
@@ -284,8 +287,9 @@ class ModFlowSimulation:
         self.hydraulic_conductivity_drainage = hydraulic_conductivity[0]
 
         arguments = dict(locals())
+        arguments.pop("working_directory")
+        arguments.pop("modflow_bin_folder")
         arguments.pop("self")
-        arguments.pop("model")
         arguments.pop("heads_update_callback")  # not hashable and not needed
         arguments.pop(
             "heads"
@@ -317,7 +321,7 @@ class ModFlowSimulation:
         elif self.verbose:
             print("Loading MODFLOW model from disk")
 
-        self.load_bmi(heads)
+        self.load_bmi(heads, modflow_bin_folder)
 
     def create_vertices(
         self,
@@ -521,18 +525,14 @@ class ModFlowSimulation:
             top={
                 "filename": "top.bin",
                 "factor": 1.0,
-                "data": self.model.hydrology.grid.decompress(
-                    self.layer_boundary_elevation[0]
-                ).tolist(),
+                "data": self.decompress(self.layer_boundary_elevation[0]).tolist(),
                 "iprn": 1,
                 "binary": True,
             },
             botm={
                 "filename": "botm.bin",
                 "factor": 1.0,
-                "data": self.model.hydrology.grid.decompress(
-                    self.layer_boundary_elevation[1:]
-                ).tolist(),
+                "data": self.decompress(self.layer_boundary_elevation[1:]).tolist(),
                 "iprn": 1,
                 "binary": True,
             },
@@ -546,9 +546,7 @@ class ModFlowSimulation:
         )
 
         # Node property flow
-        k: TwoDArrayFloat32 = self.model.hydrology.grid.decompress(
-            hydraulic_conductivity
-        )
+        k: TwoDArrayFloat32 = self.decompress(hydraulic_conductivity)
 
         # Initial conditions
         flopy.mf6.ModflowGwfic(
@@ -583,12 +581,8 @@ class ModFlowSimulation:
             },
         )
 
-        specific_storage: TwoDArrayFloat32 = self.model.hydrology.grid.decompress(
-            specific_storage
-        )
-        specific_yield: TwoDArrayFloat32 = self.model.hydrology.grid.decompress(
-            specific_yield
-        )
+        specific_storage: TwoDArrayFloat32 = self.decompress(specific_storage)
+        specific_yield: TwoDArrayFloat32 = self.decompress(specific_yield)
 
         # Storage
         # Somehow modeltime is not available when loading_package is set to False (the default) and what it should be.
@@ -760,10 +754,10 @@ class ModFlowSimulation:
         self.hash = hashlib.md5(
             json.dumps(hashable_dict, sort_keys=True).encode()
         ).digest()
-        if not self.hash_file.exists():
-            prev_hash = None
-        else:
+        if self.hash_file.exists():
             prev_hash = bytes.fromhex(self.hash_file.read_text())
+        else:
+            prev_hash = None
 
         if prev_hash == self.hash and not self.never_load_from_disk:
             return True
@@ -782,11 +776,14 @@ class ModFlowSimulation:
         with open("mfsim.stdout") as f:
             return f.readlines()
 
-    def load_bmi(self, heads: npt.NDArray[np.float64]) -> None:
+    def load_bmi(
+        self, heads: npt.NDArray[np.float64], modflow_bin_folder: Path
+    ) -> None:
         """Load the Basic Model Interface.
 
         Args:
             heads: The initial heads of the model grid, in m.
+            modflow_bin_folder: The folder containing the MODFLOW binaries.
 
         Raises:
             FileNotFoundError: If the config file is not found on disk.
@@ -806,9 +803,7 @@ class ModFlowSimulation:
             # XmiWrapper requires the real path (no symlinks etc.)
             # include the version in the folder name to allow updating the version
             # so that the user will automatically get the new version
-            library_folder: Path = (
-                self.model.bin_folder / "modflow" / MODFLOW_VERSION
-            ).resolve()
+            library_folder: Path = (modflow_bin_folder / MODFLOW_VERSION).resolve()
             library_path: Path = library_folder / libary_name
 
             if not library_path.exists():
@@ -1203,9 +1198,15 @@ class ModFlowSimulation:
 
         This method should be called at the end of the model run to ensure that all
         resources are properly released.
+
+        If the model has already been finalized or was never
+        initialised, this method will silently pass.
         """
         print("Finalizing MODFLOW model")
-        self.mf6.finalize()
+        try:
+            self.mf6.finalize()
+        except InputError:
+            pass
         print("MODFLOW model finalized")
 
     def restore(self, heads: TwoDArrayFloat64) -> None:
@@ -1215,3 +1216,20 @@ class ModFlowSimulation:
             heads: The heads to set, in m.
         """
         self.heads = heads
+
+    def decompress(
+        self,
+        array: TwoDArrayFloat32,
+    ) -> TwoDArrayFloat32:
+        """Decompress a compressed array using the model's grid.
+
+        Args:
+            array: The compressed array to decompress.
+
+        Returns:
+            The decompressed array.
+        """
+        return decompress_with_mask(
+            array,
+            self.basin_mask,
+        )

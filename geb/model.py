@@ -76,12 +76,6 @@ class GEBModel(Module, HazardDriver):
         self.files = copy.deepcopy(
             files
         )  # make a deep copy to avoid issues when the model is initialized multiple times
-        if "geoms" in self.files:
-            # geoms was renamed to geom in the file library. To upgrade old models,
-            # we check if "geoms" is in the files and rename it to "geom"
-            # this line can be removed in august 2026 (also in geb/build/__init__.py)
-            self.files["geom"] = self.files.pop("geoms")  # upgrade old models
-
         for data in self.files.values():
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
@@ -183,7 +177,6 @@ class GEBModel(Module, HazardDriver):
                     / "other"
                     / "forecasts"
                     / self.config["general"]["forecasts"]["provider"]
-                    / self.forecast_issue_date
                     / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
                 )  # open the forecast data for the variable
                 # these are the forecast members to loop over
@@ -266,7 +259,6 @@ class GEBModel(Module, HazardDriver):
                 loader.unset_forecast()  # unset forecast mode
 
         self.multiverse_name: None = None  # reset the multiverse name
-
         if return_mean_discharge:
             return mean_discharge  # return the mean discharge for each member
         else:
@@ -331,11 +323,26 @@ class GEBModel(Module, HazardDriver):
                         return_mean_discharge=True,
                     )  # run the multiverse for the current timestep
 
+                    # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
-                        self.agents.households.water_level_warning_strategy()
-                        # self.get_critical_infrastructure()
-                        # self.critical_infrastructure_warning_strategy()
-                        self.agents.households.household_decision_making()
+                        print(
+                            f"Running flood early warning system for date time {self.current_time.isoformat()}..."
+                        )
+                        self.agents.households.create_flood_probability_maps(
+                            date_time=self.current_time, strategy=1, exceedance=True
+                        )
+                        self.agents.households.water_level_warning_strategy(
+                            date_time=self.current_time
+                        )
+                        self.agents.households.critical_infrastructure_warning_strategy(
+                            date_time=self.current_time
+                        )
+                        self.agents.households.household_decision_making(
+                            date_time=self.current_time
+                        )
+                        self.agents.households.update_households_geodataframe_w_warning_variables(
+                            date_time=self.current_time
+                        )
 
         t0 = time()
         self.agents.step()

@@ -4,7 +4,9 @@ import asyncio
 import datetime
 import json
 import os
+import platform
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -36,7 +38,13 @@ from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.blosc import BloscShuffle
 
-from geb.types import ArrayDatetime64
+from geb.types import (
+    ArrayDatetime64,
+    ThreeDArray,
+    ThreeDArrayFloat32,
+    TwoDArray,
+    TwoDArrayFloat32,
+)
 
 
 def load_table(fp: Path | str) -> pd.DataFrame:
@@ -87,7 +95,7 @@ def load_grid(
 
 def load_grid(
     filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
-) -> np.ndarray | tuple[np.ndarray, Affine, str]:
+) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
     """Load a raster grid from a .tif or .zarr file.
 
     Args:
@@ -104,14 +112,15 @@ def load_grid(
     if filepath.suffix == ".tif":
         warnings.warn("tif files are now deprecated. Consider rebuilding the model.")
         with rasterio.open(filepath) as src:
-            data: np.ndarray = src.read(layer)
-            data: np.ndarray = (
+            data: TwoDArray | ThreeDArray = src.read(layer)
+            data: TwoDArray | ThreeDArray = (
                 data.astype(np.float32) if data.dtype == np.float64 else data
             )
             if return_transform_and_crs:
                 return data, src.transform, src.crs
             else:
                 return data
+
     elif filepath.suffix == ".zarr":
         store: zarr.storage.LocalStore = zarr.storage.LocalStore(
             filepath, read_only=True
@@ -120,8 +129,8 @@ def load_grid(
         data_array: zarr.Array | zarr.Group = group[filepath.stem]
         assert isinstance(data_array, zarr.Array)
         data = data_array[:]
-        assert isinstance(data, np.ndarray)
-        data: np.ndarray = data.astype(np.float32) if data.dtype == np.float64 else data
+        if data.dtype == np.float64:
+            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)
         if return_transform_and_crs:
             x_array: zarr.Array | zarr.Group = group["x"]
             assert isinstance(x_array, zarr.Array)
@@ -427,7 +436,7 @@ def check_buffer_size(
 
 def to_zarr(
     da: xr.DataArray,
-    path: str | Path | zarr.storage.LocalStore,
+    path: str | Path,
     crs: int | pyproj.CRS,
     x_chunksize: int = 350,
     y_chunksize: int = 350,
@@ -715,57 +724,41 @@ def get_window(
 class AsyncGriddedForcingReader:
     """Thread-safe asynchronous Zarr forcing reader with preload caching.
 
-    This reader uses a single reusable AsyncGroup for all async reads, with a
-    workaround for occasional Zarr async loading issues that return NaN on first read.
+    This reader uses the Zarr async API for efficient reads, with a workaround
+    for occasional Zarr async loading issues.
 
-    All instances of this class share a single event loop running in a background thread,
-    which is more efficient than creating separate loops for each reader.
-
-    TODO: Perhaps this is a bug in zarr, or in our implementation, but in any case this
-    class retries reads that return all NaN values (assuming the variable uses NaN
-    as fill value) up to a maximum number of retries. Should be investigated in the future
-    but for now this workaround allows reliable async reading.
+    All instances of this class share a single event loop running in a background thread.
     """
 
     # Class-level shared event loop and thread
     _shared_loop: asyncio.AbstractEventLoop | None = None
     _shared_thread: threading.Thread | None = None
-    _shared_loop_lock = threading.Lock()
-    _loop_ready = threading.Event()
-    _loop_refcount = 0
+    _init_lock = threading.Lock()
 
     @classmethod
-    def _ensure_shared_loop(cls) -> None:
-        """Ensure the shared event loop is running and increment reference count."""
-        with cls._shared_loop_lock:
-            if cls._shared_loop is None or not cls._shared_loop.is_running():
-                cls._loop_ready.clear()
-                cls._shared_loop = asyncio.new_event_loop()
-                cls._shared_thread = threading.Thread(
-                    target=cls._run_shared_loop, daemon=True, name="AsyncZarrLoop"
-                )
-                cls._shared_thread.start()
-                cls._loop_ready.wait()
-            cls._loop_refcount += 1
+    def _get_loop(cls) -> asyncio.AbstractEventLoop:
+        """Get or create the shared event loop.
 
-    @classmethod
-    def _release_shared_loop(cls) -> None:
-        """Decrement reference count and stop loop if no longer needed."""
-        with cls._shared_loop_lock:
-            cls._loop_refcount -= 1
-            if cls._loop_refcount <= 0 and cls._shared_loop is not None:
-                cls._shared_loop.call_soon_threadsafe(cls._shared_loop.stop)
-                if cls._shared_thread is not None:
-                    cls._shared_thread.join(timeout=5)
-                cls._shared_loop = None
-                cls._shared_thread = None
-                cls._loop_refcount = 0
+        Returns:
+            The shared event loop.
+        """
+        if cls._shared_loop is None:
+            with cls._init_lock:
+                if cls._shared_loop is None:
+                    cls._shared_loop = asyncio.new_event_loop()
+                    cls._shared_thread = threading.Thread(
+                        target=cls._run_shared_loop,
+                        daemon=True,
+                        name="AsyncZarrLoop",
+                    )
+                    cls._shared_thread.start()
+        return cls._shared_loop
 
     @classmethod
     def _run_shared_loop(cls) -> None:
         """Run the shared event loop in a background thread."""
+        assert cls._shared_loop is not None
         asyncio.set_event_loop(cls._shared_loop)
-        cls._loop_ready.set()
         cls._shared_loop.run_forever()
 
     def __init__(
@@ -813,8 +806,8 @@ class AsyncGriddedForcingReader:
         self.time_size = self.datetime_index.size
 
         # Check if the variable uses NaN as fill value for the retry workaround
-        variable_array = self.ds[self.variable_name]
-        fill_value = variable_array.fill_value
+        self.array = self.ds[self.variable_name]
+        fill_value = self.array.fill_value
         # The fill value is NaN if it's a float type and is NaN, or explicitly None for some types
         has_nan_fill = isinstance(fill_value, (float, np.floating)) and np.isnan(
             fill_value
@@ -833,28 +826,19 @@ class AsyncGriddedForcingReader:
 
         # Async event loop setup
         if self.asynchronous:
-            # Ensure the shared event loop is running
-            self._ensure_shared_loop()
-            self.loop: asyncio.AbstractEventLoop | None = self._shared_loop
+            self.loop: asyncio.AbstractEventLoop | None = self._get_loop()
             assert self.loop is not None
 
-            # Initialize this instance's async components
-            self.async_ready = threading.Event()
-            future = asyncio.run_coroutine_threadsafe(
-                self._initialize_async_components(), self.loop
-            )
-            future.result()  # Wait for initialization to complete
-            self.async_ready.set()
+            # Initialize lock in the shared loop
+            async def _init_lock() -> asyncio.Lock:
+                return asyncio.Lock()
+
+            self.async_lock = asyncio.run_coroutine_threadsafe(
+                _init_lock(), self.loop
+            ).result()
         else:
             self.loop = None
             self.async_lock = None
-            self.async_group = None
-
-    async def _initialize_async_components(self) -> None:
-        """Initialize async lock and reusable async Zarr group for this instance."""
-        self.async_lock = asyncio.Lock()
-        # Open the main group store once and reuse it for all reads.
-        self.async_group = await zarr.AsyncGroup.open(self.store)
 
     def load(self, start_index: int, end_index: int) -> np.ndarray:
         """Safe synchronous load (only used if asynchronous=False).
@@ -881,27 +865,27 @@ class AsyncGriddedForcingReader:
             RuntimeError: If data loading fails after maximum retries.
         """
         # Select the variable array from the pre-opened async group.
-        arr = await self.async_group.getitem(self.variable_name)
+        arr: zarr.AsyncArray[Any] = self.array.async_array
         max_retries = 100
         retries = 0
         while retries < max_retries:
-            data = await arr.get_orthogonal_selection(
+            data = await arr.getitem(
                 (slice(start_index, end_index), slice(None), slice(None))
             )
 
             # Only apply the NaN workaround if the array actually uses NaN as fill value
-            if np.any(np.isnan(data)):
+            if np.isnan(data).any():
                 retries += 1
                 print(
-                    f"Warning: Async read returned all NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
+                    f"Warning: Async read returned NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
                 )
                 await asyncio.sleep(delay=0.1)  # brief pause before retrying
             else:
                 return data
 
-        # If still all NaN after retries, raise an error
+        # If still NaN after retries, raise an error
         raise RuntimeError(
-            f"Failed to load data for {self.variable_name} after {max_retries} retries due to all NaN values."
+            f"Failed to load data for {self.variable_name} after {max_retries} retries due to NaN values."
         )
 
     async def preload_next(
@@ -940,10 +924,9 @@ class AsyncGriddedForcingReader:
         if start_index < 0 or end_index > self.time_size:
             raise ValueError(f"Index out of bounds ({start_index}:{end_index})")
 
-        assert isinstance(self.async_lock, asyncio.Lock)
+        assert self.async_lock is not None
         async with self.async_lock:
-            # --- Step 1: Load current data ---
-            data: npt.NDArray[Any]
+            data: npt.NDArray[Any] | None = None
 
             # Cache hit
             if (
@@ -953,44 +936,35 @@ class AsyncGriddedForcingReader:
             ):
                 data = self.current_data
 
-            # Preload hit
+            # Check Preload
             elif (
                 self.preloaded_data_future is not None
                 and self.current_start_index + n == start_index
             ):
                 try:
-                    preloaded = await self.preloaded_data_future
-                    data = (
-                        preloaded
-                        if preloaded is not None
-                        else await self.load_await(start_index, end_index)
-                    )
-                except asyncio.CancelledError:
-                    data = await self.load_await(start_index, end_index)
+                    data = await self.preloaded_data_future
                 except Exception:
-                    data = await self.load_await(start_index, end_index)
+                    pass
 
-            # Cache miss
-            else:
+            # Load if needed
+            if data is None:
                 if self.preloaded_data_future and not self.preloaded_data_future.done():
                     self.preloaded_data_future.cancel()
                 data = await self.load_await(start_index, end_index)
 
-            # --- Step 2: Consistency check ---
+            # Consistency check
             if data.shape[0] != (end_index - start_index):
                 raise IOError(
                     "Async read returned incomplete data; possible disk contention"
                 )
 
-            # --- Step 3: Update cache and return data ---
-            # Copy the data to protect the cache from external mutations.
+            # Update Cache
             self.current_start_index = start_index
             self.current_end_index = end_index
-            self.current_data = data.copy()
+            self.current_data = data
 
-            # --- Step 4: Start preloading next timestep in the background ---
-            # This task will run after the current data is returned and will
-            # acquire the lock for its own read operation.
+            # Schedule next preload
+            assert self.loop is not None
             self.preloaded_data_future = self.loop.create_task(
                 self.preload_next(start_index, end_index, n)
             )
@@ -1056,7 +1030,7 @@ class AsyncGriddedForcingReader:
             return self.load(start_index, end_index)
 
     def close(self) -> None:
-        """Clean up this instance's async resources and release the shared loop reference."""
+        """Clean up this instance's async resources."""
         if not self.asynchronous:
             return
 
@@ -1069,18 +1043,11 @@ class AsyncGriddedForcingReader:
                 except asyncio.CancelledError:
                     pass
 
-            # Close the async group if it exists
-            if hasattr(self, "async_group") and self.async_group is not None:
-                await self.async_group.aclose()
-
         if self.loop and self.loop.is_running():
             try:
                 asyncio.run_coroutine_threadsafe(cleanup(), self.loop).result(timeout=5)
             except Exception:
                 pass
-
-        # Release the shared event loop reference
-        self._release_shared_loop()
 
     @property
     def x(self) -> np.ndarray:
@@ -1116,7 +1083,6 @@ class WorkingDirectory:
             new_path: The path to the directory to change into.
         """
         self._new_path = new_path
-        self._original_path = None  # To store the original path
 
     def __enter__(self) -> "WorkingDirectory":
         """Enters the context, changing the current working directory.
@@ -1301,3 +1267,45 @@ def fetch_and_save(
             "Please check the URL, network connectivity, and destination permissions."
         )
     return False
+
+
+def fast_rmtree(path: Path) -> None:
+    """Deletes a directory recursively using only the fastest native OS command.
+
+    - Windows: RD /S /Q
+    - Linux/macOS (POSIX): rm -rf
+    - Raises NotImplementedError for other systems.
+
+    Args:
+        path: The path to the directory to be deleted.
+
+    Raises:
+        FileNotFoundError: If the path does not exist.
+        NotImplementedError: If the operating system is not explicitly supported.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"Path does not exist: {path}")
+
+    # Handle files/links separately, as native directory commands expect directories
+    if not path.is_dir():
+        path.unlink()
+        return
+
+    system: str = platform.system()
+
+    if system == "Windows":
+        # Windows command: RD /S /Q
+        # cmd /C is used to execute the built-in RD command and terminate.
+        command = f'cmd /C RD /S /Q "{path}"'
+        # Setting shell=True is required to execute cmd /C
+        subprocess.run(command, shell=True, check=False)
+
+    elif system in ("Linux", "Darwin"):  # 'Darwin' is macOS
+        # POSIX command: rm -rf
+        subprocess.run(["rm", "-rf", str(path)], check=False)
+
+    else:
+        # Raise an error for unsupported systems instead of falling back
+        raise NotImplementedError(
+            f"Optimized fast deletion is not implemented for system: {system}"
+        )

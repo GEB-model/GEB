@@ -14,6 +14,7 @@ from typing import (
     Any,
     Callable,
     Iterator,
+    Literal,
 )
 
 import geopandas as gpd
@@ -250,6 +251,7 @@ class DynamicArray:
         """
         return np.asarray(self._data[: self.n], dtype=dtype)
 
+    @property
     def __array_interface__(self) -> dict[str, Any]:
         """
         Expose the array interface of the entire underlying data (up to max_n).
@@ -257,12 +259,12 @@ class DynamicArray:
         Returns:
             The __array_interface__ mapping from the underlying NumPy array.
         """
-        return self._data.__array_interface__()
+        return self._data.__array_interface__
 
     def __array_ufunc__(
         self,
-        ufunc: Callable,
-        method: str,
+        ufunc: np.ufunc,
+        method: Literal["__call__", "reduce", "reduceat", "accumulate", "outer", "at"],
         *inputs: tuple[Any],
         **kwargs: dict[str, Any],
     ) -> Any:
@@ -368,6 +370,7 @@ class DynamicArray:
             data = self.data.__getitem__(key)
 
             new_extra_dims_names: list = []
+            assert self.extra_dims_names is not None
             for i, slicer in enumerate(key[1:]):
                 if isinstance(slicer, (slice, list)):
                     new_extra_dims_names.append(self.extra_dims_names[i])
@@ -434,7 +437,7 @@ class DynamicArray:
 
     def __getattr__(self, name: str) -> Any:
         """
-        Fallback attribute access to the active NumPy array.
+        Get attributes either from the wrapper internals or the active data.
 
         If the attribute is one of the internal attributes, defer to the normal
         attribute lookup. Otherwise, forward the attribute access to the active
@@ -767,7 +770,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__", inplace=True)
 
-    def _compare(self, value: Any, operation: str) -> DynamicArray:
+    def _compare(self, value: object, operation: str) -> DynamicArray:
         """
         Helper for comparison operations.
 
@@ -784,7 +787,7 @@ class DynamicArray:
             )
         return self.__class__(getattr(self.data, operation)(value))
 
-    def __eq__(self, value: Any) -> DynamicArray:
+    def __eq__(self, value: object) -> DynamicArray:
         """Equality comparison.
 
         Args:
@@ -795,7 +798,7 @@ class DynamicArray:
         """
         return self._compare(value, "__eq__")
 
-    def __ne__(self, value: Any) -> DynamicArray:
+    def __ne__(self, value: object) -> DynamicArray:
         """Inequality comparison.
 
         Args:

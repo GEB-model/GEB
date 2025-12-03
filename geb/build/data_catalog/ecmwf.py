@@ -104,6 +104,7 @@ class ECMWFForecasts(Adapter):
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
+        n_ensemble_members: int,
     ) -> ECMWFForecasts:
         """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
@@ -129,6 +130,7 @@ class ECMWFForecasts(Adapter):
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
+            n_ensemble_members: The number of ensemble members to download.
 
         Returns:
             The ECMWFForecasts instance.
@@ -273,7 +275,7 @@ class ECMWFForecasts(Adapter):
                     model_type == "probabilistic_forecast"
                 ):  # check if ensemble forecasts are requested
                     mars_request["number"] = (
-                        "1/to/50"  # Add ensemble member numbers to request
+                        f"1/to/{n_ensemble_members}"  # Add ensemble member numbers to request
                     )
 
                 print(

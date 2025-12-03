@@ -140,7 +140,8 @@ class GroundWater(Module):
     def initalize_modflow_model(self) -> None:
         """Initialize the ModFlow groundwater simulation model."""
         self.modflow = ModFlowSimulation(
-            self.model,
+            working_directory=self.model.simulation_root_spinup / "modflow_model",
+            modflow_bin_folder=self.model.bin_folder / "modflow",
             topography=self.grid.var.elevation,
             gt=self.model.hydrology.grid.gt,
             specific_storage=np.zeros_like(self.grid.var.specific_yield),

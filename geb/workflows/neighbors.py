@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numba as nb
 import numpy as np
+
+from geb.types import TwoDArrayUint32, TwoDArrayUint64
 
 from . import geohash
 
@@ -44,13 +48,13 @@ def find_neighbors_numba(
     n_neighbor: int,
     radius: float | int,
     bits: int,
-    dtype: type,
+    dtype: np.uint32 | np.uint64,
     minx: float | int,
     maxx: float | int,
     miny: float | int,
     maxy: float | int,
     grid: str,
-) -> np.ndarray:
+) -> TwoDArrayUint32 | TwoDArrayUint64:
     """Find neighbors for agents using geohash-based spatial indexing.
 
     This is a numba-compiled function that efficiently finds neighboring agents
@@ -81,7 +85,7 @@ def find_neighbors_numba(
     # TODO: Fix the issue with set type inference in numba. This is only important for
     # n_neighbor > 20. The current implementation is not efficient for n_neighbor > 20.
     nanvalue = np.iinfo(dtype).max  # use the maximum value of uint as nanvalue
-    neighbors = np.full(
+    neighbors: TwoDArrayUint32 | TwoDArrayUint64 = np.full(
         (map_search_source_to_target.size, n_neighbor), nanvalue, dtype=dtype
     )
     n_unique_hashcodes = search_target_unique_hashcodes.size
@@ -138,7 +142,9 @@ def find_neighbors_numba(
         search_counts[:, 2] = np.cumsum(search_counts[:, 1])
 
         n_neighbors = search_counts[:, 1].sum() - 1  # exclude self (not a neighbor)
-        agent_neighbors = np.full(n_neighbor, nanvalue, dtype=dtype)
+        agent_neighbors: np.ndarray[tuple[int], Any] = np.full(
+            n_neighbor, nanvalue, dtype=dtype
+        )
         if n_neighbors > n_neighbor:
             # To understand the algorithm need to realize that you choose a random value
             # from a range that is smaller than the full range, and then after each value, you extend
