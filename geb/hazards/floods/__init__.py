@@ -228,6 +228,7 @@ class Floods(Module):
         name: str,
         region: gpd.GeoDataFrame | None = None,
         coastal: bool = False,
+        coastal_only: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         initial_water_level: float = 0.0,
@@ -258,10 +259,15 @@ class Floods(Module):
 
             if region is None:
                 region = load_geom(self.model.files["geom"]["routing/subbasins"])
+
+            rivers = self.model.hydrology.routing.rivers
+            if coastal_only:
+                rivers = rivers[rivers.intersects(region.union_all())]
+
             sfincs_model.build(
                 region=region,
                 DEMs=self.DEM_config,
-                rivers=self.model.hydrology.routing.rivers,
+                rivers=rivers,
                 discharge=self.discharge_spinup_ds,
                 river_width_alpha=self.model.hydrology.grid.decompress(
                     self.model.var.river_width_alpha
@@ -544,6 +550,7 @@ class Floods(Module):
             name=model_name,
             region=model_domain,
             coastal=coastal,
+            coastal_only=coastal_only,
             coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
             low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
             initial_water_level=initial_water_level,
@@ -562,7 +569,7 @@ class Floods(Module):
 
             simulation: MultipleSFINCSSimulations = (
                 sfincs_root_model.create_simulation_for_return_period(
-                    return_period, coastal=coastal
+                    return_period, coastal=coastal, coastal_only=coastal_only
                 )
             )
             simulation.run(

@@ -906,7 +906,7 @@ class SFINCSRootModel:
         return simulation
 
     def create_simulation_for_return_period(
-        self, return_period: int, coastal: bool = False
+        self, return_period: int, coastal: bool = False, coastal_only: bool = False
     ) -> MultipleSFINCSSimulations:
         """Creates multiple SFINCS simulations for a specified return period.
 
@@ -917,6 +917,7 @@ class SFINCSRootModel:
         Args:
             return_period: The return period for which to create simulations.
             coastal: Whether to create a coastal simulation.
+            coastal_only: Whether to only include coastal subbasins in the model.
 
         Returns:
             An instance of MultipleSFINCSSimulations containing the created simulations.
@@ -928,12 +929,6 @@ class SFINCSRootModel:
                 if the discharge DataFrame columns cannot be converted to integers,
                 or if the discharge hydrographs contain NaN values.
         """
-        rivers: gpd.GeoDataFrame = import_rivers(self.path, postfix="_return_periods")
-        assert (~rivers["is_downstream_outflow_subbasin"]).all()
-
-        rivers["topological_stream_order"] = get_topological_stream_order(rivers)
-        rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
-
         working_dir: Path = self.path / "working_dir"
         working_dir_return_period: Path = working_dir / f"rp_{return_period}"
 
@@ -944,6 +939,14 @@ class SFINCSRootModel:
         if coastal:
             simulation: SFINCSSimulation = self.create_coastal_simulation(return_period)
             simulations.append(simulation)
+        if coastal_only:
+            return MultipleSFINCSSimulations(simulations=simulations)
+
+        rivers: gpd.GeoDataFrame = import_rivers(self.path, postfix="_return_periods")
+        assert (~rivers["is_downstream_outflow_subbasin"]).all()
+
+        rivers["topological_stream_order"] = get_topological_stream_order(rivers)
+        rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
 
         # create river inflow simulations
         for group, group_rivers in tqdm(rivers.groupby("calculation_group")):
