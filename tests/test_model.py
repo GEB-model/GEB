@@ -136,12 +136,12 @@ def test_init_coastal(clean_working_directory: bool) -> None:
         assert Path("build.yml").exists()
         assert Path("update.yml").exists()
 
-        assert pytest.raises(
-            FileExistsError,
-            init_fn,
-            **args,
-            overwrite=False,
-        )  # should raise an error if the folder already exists
+        # should raise an error if the folder already exists
+        with pytest.raises(FileExistsError):
+            init_fn(
+                **args,
+                overwrite=False,
+            )
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
