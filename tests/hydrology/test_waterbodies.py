@@ -15,6 +15,7 @@ from geb.hydrology.lakes_reservoirs import (
     get_lake_storage_from_height_above_bottom,
     get_river_width,
 )
+from geb.types import ArrayFloat32
 
 from ..testconfig import output_folder
 
@@ -25,8 +26,8 @@ def test_get_lake_height_from_bottom() -> None:
     Verifies that lake height is correctly calculated as storage divided by area,
     and that the inverse function produces consistent results.
     """
-    lake_area = np.array([100])
-    lake_storage = np.linspace(0, 1000, 100)
+    lake_area = np.array([100]).astype(np.float32)
+    lake_storage = np.linspace(0, 1000, 100).astype(np.float32)
 
     lake_height = get_lake_height_from_bottom(
         lake_storage=lake_storage, lake_area=lake_area
@@ -52,9 +53,9 @@ def test_get_lake_storage_from_height_above_bottom() -> None:
     and that the inverse function produces consistent results.
     """
     lake_area = np.array([100])
-    lake_height = np.linspace(0, 10, 100)
+    lake_height = np.linspace(0, 10, 100).astype(np.float32)
 
-    lake_storage = get_lake_storage_from_height_above_bottom(
+    lake_storage: ArrayFloat32 = get_lake_storage_from_height_above_bottom(
         lake_height=lake_height, lake_area=lake_area
     )
 

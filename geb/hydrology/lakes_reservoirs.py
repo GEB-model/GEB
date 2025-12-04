@@ -23,19 +23,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
-import numpy.typing as npt
 
 from geb.module import Module
-from geb.types import ArrayFloat32
+from geb.types import Array, ArrayBool, ArrayFloat32, ArrayInt32
 from geb.workflows import balance_check
-from geb.workflows.io import load_grid
+from geb.workflows.io import read_grid
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
+
 OFF: int = 0
 LAKE: int = 1
 RESERVOIR: int = 2
@@ -50,9 +50,9 @@ if SHAPE == "rectangular":
     overflow_coefficient_mu: np.float32 = np.float32(0.577)
 
     def estimate_lake_outflow(
-        lake_factor: npt.NDArray[np.float32],
-        height_above_outflow: npt.NDArray[np.float32],
-    ) -> npt.NDArray[np.float32]:
+        lake_factor: ArrayFloat32,
+        height_above_outflow: ArrayFloat32,
+    ) -> ArrayFloat32:
         """Estimates the outflow from a lake given its height above the outflow for a rectangular shape.
 
         References:
@@ -68,8 +68,8 @@ if SHAPE == "rectangular":
         return lake_factor * height_above_outflow**1.5
 
     def outflow_to_height_above_outflow(
-        lake_factor: npt.NDArray[np.float32], outflow: npt.NDArray[np.float32]
-    ) -> npt.NDArray[np.float32]:
+        lake_factor: ArrayFloat32, outflow: ArrayFloat32
+    ) -> ArrayFloat32:
         """Inverse function of estimate_lake_outflow for a rectangular shape.
 
         Args:
@@ -85,9 +85,9 @@ elif SHAPE == "parabola":
     overflow_coefficient_mu: np.float32 = np.float32(0.612)
 
     def estimate_lake_outflow(
-        lake_factor: npt.NDArray[np.float32],
-        height_above_outflow: npt.NDArray[np.float32],
-    ) -> npt.NDArray[np.float32]:
+        lake_factor: ArrayFloat32,
+        height_above_outflow: ArrayFloat32,
+    ) -> ArrayFloat32:
         """Estimates the outflow from a lake given its height above the outflow for a parabolic shape.
 
         References:
@@ -103,8 +103,8 @@ elif SHAPE == "parabola":
         return lake_factor * height_above_outflow**2
 
     def outflow_to_height_above_outflow(
-        lake_factor: npt.NDArray[np.float32], outflow: npt.NDArray[np.float32]
-    ) -> npt.NDArray[np.float32]:
+        lake_factor: ArrayFloat32, outflow: ArrayFloat32
+    ) -> ArrayFloat32:
         """Inverse function of estimate_lake_outflow for a parabolic shape.
 
         References:
@@ -124,8 +124,8 @@ else:
 
 
 def get_lake_height_from_bottom(
-    lake_storage: npt.NDArray[np.float32], lake_area: npt.NDArray[np.float32]
-) -> npt.NDArray[np.float32]:
+    lake_storage: ArrayFloat32, lake_area: ArrayFloat32
+) -> ArrayFloat32:
     """Calculate the height of a lake above the bottom given its storage and area.
 
     Assumes a box-shaped lake. Could be extended in the future to account for different lake shapes.
@@ -142,8 +142,8 @@ def get_lake_height_from_bottom(
 
 
 def get_lake_storage_from_height_above_bottom(
-    lake_height: npt.NDArray[np.float32], lake_area: npt.NDArray[np.float32]
-) -> npt.NDArray[np.float32]:
+    lake_height: ArrayFloat32, lake_area: ArrayFloat32
+) -> ArrayFloat32:
     """Calculate the storage of a lake given its height above the bottom and area.
 
     Args:
@@ -157,10 +157,10 @@ def get_lake_storage_from_height_above_bottom(
 
 
 def get_lake_height_above_outflow(
-    lake_storage: npt.NDArray[np.float32],
-    lake_area: npt.NDArray[np.float32],
-    outflow_height: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    lake_storage: ArrayFloat32,
+    lake_area: ArrayFloat32,
+    outflow_height: ArrayFloat32,
+) -> ArrayFloat32:
     """Calculate the height of a lake above the outflow given its storage, area, and outflow height.
 
     Assumes a box-shaped lake. Could be extended in the future to account for different lake shapes.
@@ -182,8 +182,8 @@ def get_lake_height_above_outflow(
 
 
 def get_river_width(
-    average_discharge: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    average_discharge: ArrayFloat32,
+) -> ArrayFloat32:
     """Estimate river width at lake outflow from average discharge using an empirical relationship.
 
     TODO: Check if this can be improved using river width data from the hydrological model.
@@ -220,18 +220,18 @@ def get_lake_factor(
     return (
         lake_a_factor
         * overflow_coefficient_mu
-        * (2 / 3)
+        * np.float32((2 / 3))
         * river_width
-        * (2 * GRAVITY) ** 0.5
+        * np.float32((2 * GRAVITY) ** 0.5)
     )
 
 
 def estimate_outflow_height(
-    lake_capacity: npt.NDArray[np.float32],
-    lake_factor: npt.NDArray[np.float32],
-    lake_area: npt.NDArray[np.float32],
-    avg_outflow: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    lake_capacity: ArrayFloat32,
+    lake_factor: ArrayFloat32,
+    lake_area: ArrayFloat32,
+    avg_outflow: ArrayFloat32,
+) -> ArrayFloat32:
     """Estimate the outflow height of a lake given its capacity, lake factor, area, and average outflow.
 
     Args:
@@ -253,11 +253,11 @@ def estimate_outflow_height(
 
 def get_lake_outflow(
     dt: float,
-    storage: npt.NDArray[np.float32],
-    lake_factor: npt.NDArray[np.float32],
-    lake_area: npt.NDArray[np.float32],
-    outflow_height: npt.NDArray[np.float32],
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    storage: ArrayFloat32,
+    lake_factor: ArrayFloat32,
+    lake_area: ArrayFloat32,
+    outflow_height: ArrayFloat32,
+) -> tuple[ArrayFloat32, ArrayFloat32]:
     """Calculate outflow and storage for a lake using the Modified Puls method.
 
     Args:
@@ -426,8 +426,8 @@ class LakesReservoirs(Module):
         ).all()
 
     def map_water_bodies_IDs(
-        self, waterBodyID_unmapped: npt.NDArray[np.int32]
-    ) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.int32]]:
+        self, waterBodyID_unmapped: ArrayInt32
+    ) -> tuple[ArrayInt32, ArrayInt32]:
         """Maps the water body IDs to a continuous range of IDs starting from 0.
 
         If there are no water bodies, it returns an array of -1.
@@ -457,8 +457,8 @@ class LakesReservoirs(Module):
 
     def load_water_body_data(
         self,
-        waterbody_mapping: npt.NDArray[np.int32],
-        waterbody_original_ids: npt.NDArray[np.int32],
+        waterbody_mapping: ArrayInt32,
+        waterbody_original_ids: ArrayInt32,
     ) -> gpd.GeoDataFrame:
         """Loads water body data from a Parquet file and sets the index to the mapped water body IDs.
 
@@ -491,7 +491,7 @@ class LakesReservoirs(Module):
         water_body_data = water_body_data.set_index("waterbody_id")
         return water_body_data
 
-    def get_outflows(self, waterBodyID: npt.NDArray[np.int32]) -> npt.NDArray[np.int32]:
+    def get_outflows(self, waterBodyID: ArrayInt32) -> ArrayInt32:
         """Identifies the outflow points for each water body.
 
         Finds the cell with the highest upstream area in each water body as the outflow point.
@@ -504,9 +504,7 @@ class LakesReservoirs(Module):
             An array containing the outflow point for each water body.
         """
         # calculate biggest outlet = biggest accumulation of ldd network
-        upstream_area_n_cells = self.hydrology.routing.river_network.upstream_area(
-            unit="cell"
-        )[~self.grid.mask]
+        upstream_area_n_cells = self.hydrology.routing.grid.var.upstream_area_n_cells
         upstream_area_within_waterbodies = np.zeros_like(
             upstream_area_n_cells,
             shape=waterBodyID.max() + 2,
@@ -525,7 +523,7 @@ class LakesReservoirs(Module):
         # has mulitple occurences in the same lake, this seems to happen
         # especially for very small lakes with a small drainage area.
         # In such cases, we take the outflow cell with the lowest elevation.
-        outflow_elevation = load_grid(
+        outflow_elevation = read_grid(
             self.model.files["grid"]["routing/outflow_elevation"]
         )
         outflow_elevation = self.grid.compress(outflow_elevation)
@@ -552,7 +550,7 @@ class LakesReservoirs(Module):
             # especially for very small lakes with a small drainage area.
             # In such cases, we take the outflow cell with the lowest elevation.
             outflow_elevation = self.grid.compress(
-                load_grid(self.model.files["grid"]["routing/outflow_elevation"])
+                read_grid(self.model.files["grid"]["routing/outflow_elevation"])
             )
 
             for duplicate_outflow_point in duplicate_outflow_points:
@@ -587,9 +585,7 @@ class LakesReservoirs(Module):
 
         return waterbody_outflow_points
 
-    def routing_lakes(
-        self, routing_step_length_seconds: int | float
-    ) -> npt.NDArray[np.float32]:
+    def routing_lakes(self, routing_step_length_seconds: int | float) -> ArrayFloat32:
         """Lake routine to calculate lake outflow.
 
         Args:
@@ -619,7 +615,7 @@ class LakesReservoirs(Module):
 
     def routing_reservoirs(
         self, n_routing_substeps: int, current_substep: int
-    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    ) -> tuple[ArrayFloat32, ArrayFloat32]:
         """Routine to update reservoir volumes and calculate reservoir outflow.
 
         Args:
@@ -647,7 +643,7 @@ class LakesReservoirs(Module):
         current_substep: int,
         n_routing_substeps: int,
         routing_step_length_seconds: int,
-    ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
+    ) -> tuple[ArrayFloat32, ArrayFloat32]:
         """Routes lakes and reservoirs for a single routing substep.
 
         Importantly, the outflow is not removed from the storage here. This is
@@ -703,7 +699,7 @@ class LakesReservoirs(Module):
         return outflow_to_drainage_network_m3, command_area_release_m3
 
     @property
-    def is_reservoir(self) -> npt.NDArray[np.bool_]:
+    def is_reservoir(self) -> ArrayBool:
         """Returns a boolean array indicating which water bodies are reservoirs.
 
         Returns:
@@ -712,7 +708,7 @@ class LakesReservoirs(Module):
         return self.var.water_body_type == RESERVOIR
 
     @property
-    def is_lake(self) -> npt.NDArray[np.bool_]:
+    def is_lake(self) -> ArrayBool:
         """Returns a boolean array indicating which water bodies are lakes.
 
         Returns:
@@ -721,7 +717,7 @@ class LakesReservoirs(Module):
         return self.var.water_body_type == LAKE
 
     @property
-    def reservoir_storage(self) -> npt.NDArray[np.float32]:
+    def reservoir_storage(self) -> ArrayFloat32:
         """Gets the storage of each reservoir in the model.
 
         Returns:
@@ -730,12 +726,12 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_reservoir]
 
     @reservoir_storage.setter
-    def reservoir_storage(self, value: npt.NDArray[np.float32]) -> None:
+    def reservoir_storage(self, value: ArrayFloat32) -> None:
         """Sets the storage of each reservoir in the model."""
         self.var.storage[self.is_reservoir] = value
 
     @property
-    def reservoir_capacity(self) -> npt.NDArray[np.float32]:
+    def reservoir_capacity(self) -> ArrayFloat32:
         """Gets the capacity of each reservoir in the model.
 
         Returns:
@@ -744,7 +740,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_reservoir]
 
     @reservoir_capacity.setter
-    def reservoir_capacity(self, value: npt.NDArray[np.float32]) -> None:
+    def reservoir_capacity(self, value: ArrayFloat32) -> None:
         """Sets the capacity of each reservoir in the model.
 
         Args:
@@ -753,7 +749,7 @@ class LakesReservoirs(Module):
         self.var.capacity[self.is_reservoir] = value
 
     @property
-    def lake_storage(self) -> npt.NDArray[np.float32]:
+    def lake_storage(self) -> ArrayFloat32:
         """Gets the storage of each lake in the model.
 
         Returns:
@@ -762,12 +758,12 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_lake]
 
     @lake_storage.setter
-    def lake_storage(self, value: npt.NDArray[np.float32]) -> None:
+    def lake_storage(self, value: ArrayFloat32) -> None:
         """Sets the storage of each lake in the model."""
         self.var.storage[self.is_lake] = value
 
     @property
-    def lake_capacity(self) -> npt.NDArray[np.float32]:
+    def lake_capacity(self) -> ArrayFloat32:
         """Gets the capacity of each lake in the model.
 
         Returns:
@@ -776,12 +772,12 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_lake]
 
     @lake_capacity.setter
-    def lake_capacity(self, value: npt.NDArray[np.float32]) -> None:
+    def lake_capacity(self, value: ArrayFloat32) -> None:
         """Sets the capacity of each lake in the model."""
         self.var.capacity[self.is_lake] = value
 
     @property
-    def reservoir_fill_percentage(self) -> npt.NDArray[np.float32]:
+    def reservoir_fill_percentage(self) -> ArrayFloat32:
         """Returns the fill percentage of each reservoir in the model.
 
         Returns:
@@ -798,7 +794,7 @@ class LakesReservoirs(Module):
         """
         return self.var.capacity.size
 
-    def decompress(self, array: npt.NDArray[Any]) -> npt.NDArray[Any]:
+    def decompress(self, array: Array) -> Array:
         """Placeholder decompression function.
 
         Other modules expect a decompress function to be present. However, since

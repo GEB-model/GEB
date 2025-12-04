@@ -26,7 +26,7 @@ from geb.build import GEBModel as GEBModelBuild
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory, load_dict, write_dict
+from geb.workflows.io import WorkingDirectory, read_dict, write_dict
 from geb.workflows.methods import multi_level_merge
 
 PROFILING_DEFAULT: bool = False
@@ -344,13 +344,13 @@ def run_model_with_method(
         # TODO: This can be removed in 2026
         if not Path("input/files.yml").exists() and Path("input/files.json").exists():
             # convert input/files.json to input/files.yml
-            json_files: dict[str, Any] = load_dict(
+            json_files: dict[str, Any] = read_dict(
                 Path("input/files.json"),
             )
             write_dict(json_files, Path("input/files.yml"))
 
         files: dict[str, Any] = parse_config(
-            load_dict(Path("input/files.yml"))
+            read_dict(Path("input/files.yml"))
             if "files" not in config["general"]
             else config["general"]["files"]
         )
@@ -967,14 +967,14 @@ def alter_fn(
             and (original_input_path / "files.json").exists()
         ):
             # convert input/files.json to input/files.yml
-            json_files: dict[str, Any] = load_dict(
+            json_files: dict[str, Any] = read_dict(
                 (original_input_path / "files.json"),
             )
             write_dict(json_files, original_input_path / "files.yml")
             # remove the original json file
             (original_input_path / "files.json").unlink()
 
-        original_files = load_dict(original_input_path / "files.yml")
+        original_files = read_dict(original_input_path / "files.yml")
 
         for file_class, files in original_files.items():
             for file_name, file_path in files.items():
