@@ -26,7 +26,7 @@ from geb.build import GEBModel as GEBModelBuild
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory, load_dict, to_dict
+from geb.workflows.io import WorkingDirectory, load_dict, write_dict
 from geb.workflows.methods import multi_level_merge
 
 PROFILING_DEFAULT: bool = False
@@ -347,7 +347,7 @@ def run_model_with_method(
             json_files: dict[str, Any] = load_dict(
                 Path("input/files.json"),
             )
-            to_dict(json_files, Path("input/files.yml"))
+            write_dict(json_files, Path("input/files.yml"))
 
         files: dict[str, Any] = parse_config(
             load_dict(Path("input/files.yml"))
@@ -970,7 +970,7 @@ def alter_fn(
             json_files: dict[str, Any] = load_dict(
                 (original_input_path / "files.json"),
             )
-            to_dict(json_files, original_input_path / "files.yml")
+            write_dict(json_files, original_input_path / "files.yml")
             # remove the original json file
             (original_input_path / "files.json").unlink()
 

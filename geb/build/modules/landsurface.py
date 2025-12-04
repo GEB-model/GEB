@@ -6,7 +6,7 @@ import xarray as xr
 from pyflwdir.dem import fill_depressions
 
 from geb.build.methods import build_method
-from geb.workflows.io import get_window, open_zarr
+from geb.workflows.io import get_window, read_zarr
 from geb.workflows.raster import (
     bounds_are_within,
     calculate_cell_area,
@@ -153,7 +153,7 @@ class LandSurface:
                     DEM_raster = self.new_data_catalog.fetch("gebco").read()
                 else:
                     if DEM["name"] == "geul_dem":
-                        DEM_raster = open_zarr(
+                        DEM_raster = read_zarr(
                             self.data_catalog.get_source(DEM["name"]).path
                         )
                     else:

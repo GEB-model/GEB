@@ -19,7 +19,7 @@ from geb.types import ArrayFloat32, TwoDArrayInt32
 from geb.workflows.io import load_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
-from ...workflows.io import load_dict, open_zarr, to_zarr
+from ...workflows.io import load_dict, read_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .sfincs import (
     MultipleSFINCSSimulations,
@@ -253,7 +253,7 @@ class Floods(Module):
         sfincs_model = SFINCSRootModel(self.model.simulation_root, name)
         if self.config["force_overwrite"] or not sfincs_model.exists():
             for entry in self.DEM_config:
-                entry["elevtn"] = open_zarr(
+                entry["elevtn"] = read_zarr(
                     self.model.files["other"][entry["path"]]
                 ).to_dataset(name="elevtn")
 
@@ -645,7 +645,7 @@ class Floods(Module):
         Raises:
             ValueError: If there is not enough data available for reliable spinup.
         """
-        da: xr.DataArray = open_zarr(
+        da: xr.DataArray = read_zarr(
             self.model.output_folder
             / "report"
             / "spinup"
@@ -684,7 +684,7 @@ class Floods(Module):
         Returns:
             An xarray DataArray containing the land cover classification.
         """
-        return open_zarr(self.model.files["other"]["landcover/classification"])
+        return read_zarr(self.model.files["other"]["landcover/classification"])
 
     @property
     def land_cover_mannings_rougness_classification(self) -> pd.DataFrame:

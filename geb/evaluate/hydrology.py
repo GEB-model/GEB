@@ -24,7 +24,7 @@ from rasterio.crs import CRS
 from rasterio.features import geometry_mask
 from tqdm import tqdm
 
-from geb.workflows.io import open_zarr, to_zarr
+from geb.workflows.io import read_zarr, to_zarr
 
 
 def calculate_hit_rate(model: xr.DataArray, observations: xr.DataArray) -> float:
@@ -122,7 +122,7 @@ class Hydrology:
                 f"Discharge file for run '{run_name}' does not exist in the report directory. Did you run the model?"
             )
         # load the discharge simulation
-        GEB_discharge = open_zarr(
+        GEB_discharge = read_zarr(
             self.model.output_folder
             / "report"
             / run_name
@@ -251,7 +251,7 @@ class Hydrology:
                 eval_result_folder.joinpath("evaluation_metrics.xlsx")
             )
             return
-        GEB_discharge = open_zarr(
+        GEB_discharge = read_zarr(
             self.model.output_folder
             / "report"
             / run_name
@@ -1444,8 +1444,8 @@ class Hydrology:
                 ValueError: If the observation file is not in .zarr format.
             """
             # Step 1: Open needed datasets
-            flood_map = open_zarr(flood_map_path)
-            obs = open_zarr(observation)
+            flood_map = read_zarr(flood_map_path)
+            obs = read_zarr(observation)
             print("obs CRS", obs.rio.crs)
             sim = flood_map.rio.reproject_match(obs)
             rivers = gpd.read_parquet(
@@ -1552,7 +1552,7 @@ class Hydrology:
             flooded_area_km2 = flooded_pixels * (pixel_size * pixel_size) / 1_000_000
 
             # Step 7: Save results to file and plot the results
-            elevation_data = open_zarr(self.model.files["other"]["DEM/fabdem"])
+            elevation_data = read_zarr(self.model.files["other"]["DEM/fabdem"])
             elevation_data = elevation_data.rio.reproject_match(obs)
 
             elevation_array = (

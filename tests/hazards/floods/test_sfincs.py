@@ -18,7 +18,7 @@ from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
 from geb.types import TwoDArrayFloat64, TwoDArrayInt32
-from geb.workflows.io import WorkingDirectory, load_geom, load_grid, open_zarr
+from geb.workflows.io import WorkingDirectory, load_geom, load_grid, read_zarr
 from geb.workflows.raster import rasterize_like
 
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -98,7 +98,7 @@ def build_sfincs(
     )
     for entry in DEM_config:
         if "elevtn" not in entry:
-            entry["elevtn"] = open_zarr(
+            entry["elevtn"] = read_zarr(
                 geb_model.model.files["other"][entry["path"]]
             ).to_dataset(name="elevtn")
 
@@ -236,7 +236,7 @@ def test_accumulated_runoff(
         if not geographic:
             geb_model.floods.DEM_config
 
-            dem: xr.DataArray = open_zarr(
+            dem: xr.DataArray = read_zarr(
                 geb_model.model.files["other"][geb_model.floods.DEM_config[0]["path"]]
             )
 
