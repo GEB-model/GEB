@@ -1544,26 +1544,31 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
-    def get_buildings_per_GDL_region(self) -> None:
+    def get_buildings_per_GDL_region(
+        self, GDL_regions: gpd.GeoDataFrame
+    ) -> dict[str, gpd.GeoDataFrame]:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid.
 
+        Args:
+            GDL_regions: A GeoDataFrame containing GDL regions within the model domain.
         Returns:
             A dictionary with GDLcode as keys and GeoDataFrames of buildings with grid indices as values.
         """
         output = {}
-        GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
-            geom=self.region.union_all(), columns=["GDLcode", "geometry"]
-        )
 
         buildings = self.new_data_catalog.fetch(
             "open_building_map",
-            geom=self.region.union_all(),
+            geom=GDL_regions.union_all(),
             prefix="assets",
         ).read()
 
         # write to input folder
-        self.set_geom(buildings, name="assets/open_building_map")
-
+        if "assets/open_building_map" not in self.files["geom"]:
+            self.set_geom(buildings, name="assets/open_building_map")
+        else:
+            self.logger.info(
+                "Buildings already present for geom, skipping writing to geom"
+            )
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
         buildings["lon"] = centroids.x
@@ -1609,13 +1614,27 @@ class Agents:
         Raises:
             ValueError: If any household could not be allocated to a building.
         """
-        # setup buildings in region for household allocation
-        all_buildings_model_region = self.get_buildings_per_GDL_region()
-
         # load GDL region within model domain
         GDL_regions = self.new_data_catalog.fetch("GDL_regions_v4").read(
             geom=self.region.union_all(), columns=["GDLcode", "iso_code", "geometry"]
         )
+
+        # setup buildings in region for household allocation
+        all_buildings_model_region = self.get_buildings_per_GDL_region(GDL_regions)
+        residential_buildings_model_region = {}
+
+        # iterate over GDL regions and filter buildings to residential
+        for GDL_code in all_buildings_model_region:
+            buildings = all_buildings_model_region[GDL_code]
+            # filter to residential buildings
+            # check if occupancy column contains RES or UNK string (unknown occupancy assumed residential)
+            buildings = buildings[
+                buildings["occupancy"].str.contains("RES|UNK", na=False)
+            ]
+
+            residential_buildings_model_region[GDL_code] = buildings.reset_index(
+                drop=True
+            )
 
         # create list of attibutes to include (and include name to store to)
         rename = {
@@ -1669,7 +1688,7 @@ class Agents:
             # construct national income distribution
 
             # load building database with grid idx
-            buildings = all_buildings_model_region[GDL_code]
+            buildings = residential_buildings_model_region[GDL_code]
 
             GLOPOP_S_region, GLOPOP_GRID_region = load_GLOPOP_S(
                 self.data_catalog, GDL_code
