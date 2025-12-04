@@ -307,7 +307,8 @@ def test_wells() -> None:
 
 
 def visualize_modflow_results(
-    sim: ModFlowSimulation, axes: npt.NDArray[plt.Axes]
+    sim: ModFlowSimulation,
+    axes: tuple[plt.Axes, plt.Axes, plt.Axes, plt.Axes, plt.Axes],
 ) -> None:
     """This function is used to visualize the current state of a ModFlowSimulation.
 
