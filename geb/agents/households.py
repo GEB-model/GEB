@@ -442,62 +442,71 @@ class Households(AgentBaseClass):
         """Update the risk perceptions of households based on the latest flood data."""
         # update timer
         self.var.years_since_last_flood.data += 1
+        print("UPDATING FLOOD RISK PERCPETION")
+        # Here we update flood risk perception based on actual floods that have happened and whether a household was flooded (yes/no)
+        if self.config["adapt_to_actual_floods"]:
+            print("ADAPT TO ACTUAL FLOODS")
+            # Find the flood event that corresponds to the current time (in the model)
+            for event in self.flood_events:
+                print(self.flood_events)
+                end: datetime = event["end_time"]
 
-        # Find the flood event that corresponds to the current time (in the model)
-        for event in self.flood_events:
-            start: datetime = event["start_time"]
-            end: datetime = event["end_time"]
+                if self.model.current_time == end + timedelta(days=14):
+                    print("opening flood map")
+                    # Open the flood map
+                    flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
+                    flood_map_path: Path = (
+                        self.model.output_folder / "flood_maps" / flood_map_name
+                    )
 
-            if self.model.current_time == end + timedelta(days=10):
-                # Open the flood map
-                flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
-                flood_map_path: Path = (
-                    self.model.output_folder / "flood_maps" / flood_map_name
-                )
+                    flood_map: xr.DataArray = open_zarr(flood_map_path)
 
-                flood_map: xr.DataArray = open_zarr(flood_map_path)
+                    # Get the locations of the household locations and reproject to flood map
+                    households_proj = self.var.household_points.to_crs(
+                        flood_map.rio.crs
+                    )
 
-                print("opened right flood map")
-                print(flood_map)
-                print("crs is:")
-                print(flood_map.rio.crs)
+                    xs = households_proj.geometry.x.values
+                    ys = households_proj.geometry.y.values
 
-                # Get the locations of the household locations and reproject to flood map
-                households_proj = self.var.household_points.to_crs(flood_map.rio.crs)
+                    # Interpolate flood depths at household locations
+                    depths = flood_map.interp(x=("points", xs), y=("points", ys)).values
+                    depths = np.nan_to_num(
+                        depths, nan=0.0
+                    )  # replace NaNs outside the raster with 0
 
-                xs = households_proj.geometry.x.values
-                ys = households_proj.geometry.y.values
+                    print(depths)
+                    print(f"Min flood depth: {np.min(depths):.3f} m")
+                    print(f"Max flood depth: {np.max(depths):.3f} m")
+                    print(f"Mean flood depth: {np.mean(depths):.3f} m")
 
-                # Interpolate flood depths at household locations
-                depths = flood_map.interp(x=("points", xs), y=("points", ys)).values
-                depths = np.nan_to_num(
-                    depths, nan=0.0
-                )  # replace NaNs outside the raster with 0
+                    # Identify flooded households (more than 5cm of water)
+                    flooded = depths > 0.05  #
 
-                print(depths)
-                print(f"Min flood depth: {np.min(depths):.3f} m")
-                print(f"Max flood depth: {np.max(depths):.3f} m")
-                print(f"Mean flood depth: {np.mean(depths):.3f} m")
+                    # Print some statistics to check if the flooded households are identified correctly
+                    print(flooded)
+                    n_total = len(flooded)
+                    n_true = np.sum(flooded)
+                    n_false = n_total - n_true
+                    print(f"Total households: {n_total}")
+                    print(f"Flooded (True): {n_true} ({100 * n_true / n_total:.2f}%)")
+                    print(
+                        f"Not flooded (False): {n_false} ({100 * n_false / n_total:.2f}%)"
+                    )
 
-                # Identify flooded households (more than 5cm of water)
-                flooded = depths > 0.05  #
+                    # Reset years_since_last_flood to 0 for flooded households
+                    self.var.years_since_last_flood.data[flooded] = 0
 
-                # Print some statistics to check if the flooded households are identified correctly
-                print(flooded)
-                n_total = len(flooded)
-                n_true = np.sum(flooded)
-                n_false = n_total - n_true
-                print(f"Total households: {n_total}")
-                print(f"Flooded (True): {n_true} ({100 * n_true / n_total:.2f}%)")
-                print(
-                    f"Not flooded (False): {n_false} ({100 * n_false / n_total:.2f}%)"
-                )
+                    print(self.var.household_points)
+                    print(self.var.locations.data)
 
-                # Reset years_since_last_flood to 0 for flooded households
-                self.var.years_since_last_flood.data[flooded] = 0
-
-                print(self.var.household_points)
-                print(self.var.locations.data)
+        else:
+            print("ENDED UP IN ELSE STATEMENT, NOT GOOD")
+            if (
+                np.random.random() < 0.1
+            ):  # generate random flood (not based on actual modeled flood data)
+                print("Flood event!")
+                self.var.years_since_last_flood.data = 0
 
         self.var.risk_perception.data = (
             self.var.risk_perc_max
@@ -2150,15 +2159,17 @@ class Households(AgentBaseClass):
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         else:
+            print(buildings)
             buildings["object_type"] = "building_unprotected"
-            buildings.loc[buildings["protect_building"], "object_type"] = (
-                "building_protected"
-            )
+            # buildings.loc[buildings["protect_building"], "object_type"] = (
+            #     "building_protected"
+            # )
 
             buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-            buildings_centroid["object_type"] = buildings_centroid[
-                "protect_building"
-            ].apply(lambda x: "building_protected" if x else "building_unprotected")
+            buildings_centroid["object_type"] = "building_unprotected"
+            # buildings_centroid["object_type"] = buildings_centroid[
+            #     "protect_building"
+            # ].apply(lambda x: "building_protected" if x else "building_unprotected")
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         # Create the folder to save damage maps if it doesn't exist
@@ -2342,27 +2353,44 @@ class Households(AgentBaseClass):
     def step(self) -> None:
         """Advance the households by one time step."""
         if self.config["adapt"]:
-            self.flood_events = self.model.config["hazards"]["floods"]["events"]
-            current_time = self.model.current_time
+            if self.config["adapt_to_actual_floods"]:
+                self.flood_events = self.model.config["hazards"]["floods"]["events"]
+                current_time = self.model.current_time
 
-            flood_trigger = any(
-                current_time
-                == (
-                    e["end_time"] + timedelta(days=10)
-                    if isinstance(e["end_time"], datetime)
-                    else datetime.strptime(e["end_time"], "%Y-%m-%d %H:%M:%S")
-                    + timedelta(days=10)
+                # Check if a flood has recently happened by comparing the current time to the end of flood + 14 days
+                # (assumption that people wait around 2 weeks before adapting)
+                flood_trigger = any(
+                    current_time
+                    == (
+                        e["end_time"] + timedelta(days=14)
+                        if isinstance(e["end_time"], datetime)
+                        else datetime.strptime(e["end_time"], "%Y-%m-%d %H:%M:%S")
+                        + timedelta(days=14)
+                    )
+                    for e in self.flood_events
                 )
-                for e in self.flood_events
-            )
 
-            if (
-                self.model.current_time.month == 1 and self.model.current_time.day == 1
-            ) or flood_trigger:
-                if "flooded" not in self.buildings.columns:
-                    self.update_building_attributes()
-                print(f"Thinking about adapting at {current_time}...")
-                self.decide_household_strategy()
+                # Households adapt on first day of the year or 2 weeks after flood happened
+                if (
+                    self.model.current_time.month == 1
+                    and self.model.current_time.day == 1
+                ) or flood_trigger:
+                    if "flooded" not in self.buildings.columns:
+                        self.update_building_attributes()
+                    print(f"Thinking about adapting at {current_time}...")
+                    self.decide_household_strategy()
+
+            else:  # Household don't respond to actual floods, but make decision on the first day of the year. Decisions are based on random floods
+                if (
+                    self.config["adapt"]
+                    and self.model.current_time.month == 1
+                    and self.model.current_time.day == 1
+                ):
+                    if "flooded" not in self.buildings.columns:
+                        self.update_building_attributes()
+                    print("Thinking about adapting...")
+                    self.decide_household_strategy()
+
         self.report(locals())
 
     @property

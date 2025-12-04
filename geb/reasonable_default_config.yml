@@ -61,6 +61,7 @@ agent_settings:
     price_frequency: yearly
   households:
     adapt: false
+    adapt_to_actual_floods: false
     warning_response: false
     water_demand:
       method: default
