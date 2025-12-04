@@ -187,6 +187,20 @@ def test_update_with_method(method: str) -> None:
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+def test_profile_model_start() -> None:
+    """Test model profiling at start."""
+    with WorkingDirectory(working_directory):
+        args: dict[str, Any] = DEFAULT_RUN_ARGS.copy()
+        args["config"] = parse_config(CONFIG_DEFAULT)
+        args["config"]["hazards"]["floods"]["simulate"] = True
+        args["profiling"] = True
+        args["method_args"] = {
+            "initialize_only": True,
+        }
+        run_model_with_method(method="spinup", **args)
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 def test_spinup() -> None:
     """Test model spinup phase.
 

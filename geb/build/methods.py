@@ -5,6 +5,7 @@ import inspect
 import logging
 from logging import Logger
 from pathlib import Path
+from time import time
 from typing import Any, Callable
 
 import matplotlib.pyplot as plt
@@ -19,6 +20,7 @@ class _build_method:
     def __init__(self, logger: logging.Logger) -> None:
         self.logger = logger
         self.tree = nx.DiGraph()
+        self.time_taken: dict[str, float] = {}
 
     def __call__(
         self,
@@ -31,8 +33,17 @@ class _build_method:
                 self.logger.info(f"Running {func.__name__}")
                 for key, value in kwargs.items():
                     self.logger.debug(f"{func.__name__}.{key}: {value}")
+
+                start_time: float = time()
                 value: Any = func(*args, **kwargs)
-                self.logger.info(f"Completed {func.__name__}")
+                end_time: float = time()
+
+                elapsed_time: float = end_time - start_time
+
+                self.time_taken[func.__name__] = elapsed_time
+                self.logger.info(
+                    f"Completed {func.__name__} in {elapsed_time:.2f} seconds"
+                )
                 return value
 
             self.add_tree_node(func)
@@ -247,6 +258,11 @@ class _build_method:
         with open(progress_path, "r") as f:
             completed_methods = f.read().splitlines()
         return completed_methods
+
+    def log_time_taken(self) -> None:
+        """Log the time taken for each method in the dependency tree."""
+        for method, time_taken in self.time_taken.items():
+            self.logger.info(f"Method {method} took {time_taken:.2f} seconds.")
 
     @property
     def methods(self) -> list[str]:

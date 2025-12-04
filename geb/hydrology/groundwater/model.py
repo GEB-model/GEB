@@ -37,6 +37,7 @@ import numpy.typing as npt
 from numba import njit
 from pyproj import CRS, Transformer
 from xmipy import XmiWrapper
+from xmipy.errors import InputError
 
 from geb.types import (
     ArrayFloat32,
@@ -753,10 +754,10 @@ class ModFlowSimulation:
         self.hash = hashlib.md5(
             json.dumps(hashable_dict, sort_keys=True).encode()
         ).digest()
-        if not self.hash_file.exists():
-            prev_hash = None
-        else:
+        if self.hash_file.exists():
             prev_hash = bytes.fromhex(self.hash_file.read_text())
+        else:
+            prev_hash = None
 
         if prev_hash == self.hash and not self.never_load_from_disk:
             return True
@@ -1197,9 +1198,15 @@ class ModFlowSimulation:
 
         This method should be called at the end of the model run to ensure that all
         resources are properly released.
+
+        If the model has already been finalized or was never
+        initialised, this method will silently pass.
         """
         print("Finalizing MODFLOW model")
-        self.mf6.finalize()
+        try:
+            self.mf6.finalize()
+        except InputError:
+            pass
         print("MODFLOW model finalized")
 
     def restore(self, heads: TwoDArrayFloat64) -> None:

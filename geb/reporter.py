@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime
 import re
-import shutil
 from operator import attrgetter
 from typing import TYPE_CHECKING, Any
 
@@ -17,9 +16,12 @@ from dateutil.relativedelta import relativedelta
 
 from geb.module import Module
 from geb.store import DynamicArray
-from geb.types import ArrayInt64, TwoDArrayInt32
+from geb.types import TwoDArrayInt32
+from geb.workflows.io import fast_rmtree
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
+
+ZARR_TIME_CHUNK_SIZE = 100
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -181,8 +183,8 @@ class Reporter:
             self.hydrology = model.hydrology
         self.report_folder = self.model.output_folder / "report" / self.model.run_name
         # optionally clean report model at start of run
-        if clean:
-            shutil.rmtree(self.report_folder, ignore_errors=True)
+        if clean and self.report_folder.exists():
+            fast_rmtree(self.report_folder)
         self.report_folder.mkdir(parents=True, exist_ok=True)
 
         self.variables = {}
@@ -356,7 +358,7 @@ class Reporter:
                         raster.lon.size,
                     ),
                     chunks=(
-                        1,
+                        min(ZARR_TIME_CHUNK_SIZE, time.size),
                         raster.lat.size,
                         raster.lon.size,
                     ),
@@ -384,6 +386,8 @@ class Reporter:
                         "_CRS": {"wkt": crs},
                     }
                 )
+                config["_buffers"] = []
+                config["_store"] = zarr_store
                 return zarr_store
 
         elif config["type"] == "agents":
@@ -427,6 +431,8 @@ class Reporter:
 
                 config["_file"] = zarr_group
                 config["_time_index"] = time
+                config["_buffers"] = []
+                config["_store"] = store
 
                 return store
 
@@ -438,7 +444,7 @@ class Reporter:
     def maybe_report_value(
         self,
         module_name: str,
-        name: str | tuple[str, Any],
+        name: str,
         module: Any,
         local_variables: dict,
         config: dict,
@@ -517,7 +523,7 @@ class Reporter:
 
         # if the value is not None, we check whether the value is valid
         if isinstance(value, list):
-            value = [v.item() for v in value]
+            value = np.array([v.item() for v in value])
             for v in value:
                 assert not np.isnan(value) and not np.isinf(v)
         elif np.isscalar(value):
@@ -582,7 +588,7 @@ class Reporter:
                 assert isinstance(time_array, zarr.Array), (
                     "time_array must be a zarr.Array"
                 )
-                time_array: ArrayInt64 = time_array[:]
+                time_array = time_array[:]
                 if (
                     np.isin(self.model.current_time_unix_s, time_array)
                     and value is not None
@@ -597,13 +603,13 @@ class Reporter:
                         assert isinstance(data_array, zarr.Array), (
                             f"{name} must be a zarr.Array"
                         )
+                        # Write data to zarr array
                         data_array[time_index_start:time_index_end, ...] = value
                     else:
-                        data_array = zarr_group[name]
-                        assert isinstance(data_array, zarr.Array), (
-                            f"{name} must be a zarr.Array"
-                        )
-                        data_array[time_index, ...] = value
+                        # Batch write
+                        config["_buffers"].append((time_index, value))
+                        if len(config["_buffers"]) == ZARR_TIME_CHUNK_SIZE:
+                            self._flush_buffer_grid_hru(config, name)
                 return None
             else:
                 function, *args = config["function"].split(",")
@@ -654,7 +660,7 @@ class Reporter:
                         raise ValueError(f"Unknown varname type {config['varname']}")
 
                     try:
-                        idx: int = linear_mapping[py, px]
+                        idx = linear_mapping[py, px]
                     except IndexError:
                         raise IndexError(
                             f"Coordinate ({px}, {py}) is outside the model domain, which has shape {linear_mapping.shape}."
@@ -695,13 +701,16 @@ class Reporter:
                     # zarr file has not been created yet
                     if isinstance(value, (float, int)):
                         shape = (ds["time"].size,)
-                        chunks = (1,)
+                        chunks = (min(ZARR_TIME_CHUNK_SIZE, ds["time"].size),)
                         compressor = None
                         dtype = type(value)
                         array_dimensions = ["time"]
                     else:
                         shape = (ds["time"].size, value.size)
-                        chunks = (1, value.size)
+                        chunks = (
+                            min(ZARR_TIME_CHUNK_SIZE, ds["time"].size),
+                            value.size,
+                        )
                         compressor = zarr.codecs.BloscCodec(
                             cname="zlib",
                             clevel=9,
@@ -745,7 +754,10 @@ class Reporter:
                         if value.dtype in (float, np.float32, np.float64)
                         else -1,
                     )
-                ds[name][index] = value
+                # Batch write
+                config["_buffers"].append((index, value))
+                if len(config["_buffers"]) == ZARR_TIME_CHUNK_SIZE:
+                    self._flush_buffer_agents(config, name)
                 return None
             else:
                 function, *args = config["function"].split(",")
@@ -784,8 +796,44 @@ class Reporter:
         else:
             self.variables[module_name][name].append((self.model.current_time, value))
 
+    def _flush_buffer_grid_hru(self, config: dict, name: str) -> None:
+        """Flush the buffer for grid/HRU variables.
+
+        Args:
+            config: The configuration dictionary for the variable.
+            name: The name of the variable.
+        """
+        buffer = config["_buffers"]
+        zarr_group = zarr.open_group(config["_store"])
+        time_indices = np.array([t for t, v in buffer])
+        values = np.stack([v for t, v in buffer])
+        zarr_group[name][time_indices] = values
+        config["_buffers"] = []
+
+    def _flush_buffer_agents(self, config: dict, name: str) -> None:
+        """Flush the buffer for agents variables.
+
+        Args:
+            config: The configuration dictionary for the variable.
+            name: The name of the variable.
+        """
+        buffer = config["_buffers"]
+        zarr_group = zarr.open_group(config["_store"])
+        time_indices = np.array([t for t, v in buffer])
+        values = np.stack([v for t, v in buffer])
+        zarr_group[name][time_indices] = values
+        config["_buffers"] = []
+
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
+        # Flush any remaining buffers
+        for module_name, configs in self.model.config["report"].items():
+            for name, config in configs.items():
+                if "_buffers" in config and config["_buffers"]:
+                    if config["type"] in ("grid", "HRU"):
+                        self._flush_buffer_grid_hru(config, name)
+                    elif config["type"] == "agents":
+                        self._flush_buffer_agents(config, name)
         for module_name, variables in self.variables.items():
             for name, values in variables.items():
                 if self.model.config["report"][module_name][name][
