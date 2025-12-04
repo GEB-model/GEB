@@ -2291,12 +2291,12 @@ class Hydrology:
                         "n_warned_households": household_points[
                             household_points["warning_level"] >= 1
                         ].shape[0],
-                        "households_hits": hits,
-                        "households_misses": misses,
-                        "households_false_alarms": false_alarms,
-                        "hit_rate": f"{HR:.2f}",
-                        "false_alarm_rate": f"{FAR:.2f}",
-                        "critical_success_index": f"{CSI:.2f}",
+                        "n_households_hits": hits,
+                        "n_households_misses": misses,
+                        "n_households_false_alarms": false_alarms,
+                        "HR": f"{HR:.2f}",
+                        "FAR": f"{FAR:.2f}",
+                        "CSI": f"{CSI:.2f}",
                     }
                 )
 
