@@ -92,6 +92,8 @@ def test_init_coastal(clean_working_directory: bool) -> None:
     Creates a new model directory from the 'geul' example, verifies that
     all required configuration files are created, and tests error handling
     when attempting to initialize in an existing directory without overwrite.
+
+    Only the coastal-specific build steps are included in the build configuration.
     """
     if clean_working_directory and working_directory_coastal.exists():
         shutil.rmtree(working_directory_coastal, ignore_errors=True)
