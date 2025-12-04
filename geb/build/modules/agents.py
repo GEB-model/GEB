@@ -1621,7 +1621,7 @@ class Agents:
         all_buildings_model_region = self.get_buildings_per_GDL_region(GDL_regions)
         residential_buildings_model_region = {}
 
-        # iterate over GLD regions and filter buildings to residential
+        # iterate over GDL regions and filter buildings to residential
         for GDL_code in all_buildings_model_region:
             buildings = all_buildings_model_region[GDL_code]
             # filter to residential buildings
