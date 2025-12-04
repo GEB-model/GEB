@@ -94,10 +94,13 @@ def trace_border_4_connectivity(
     return np.array(path)
 
 
-def detect_outflow(
+def create_outflow_in_mask(
     mask: TwoDArrayBool, row: int, col: int, width_cells: int
 ) -> TwoDArrayBool:
-    """Detect outflow points in a binary mask.
+    """Create the outflow in the binary mask.
+
+    The outflow is centered on the specified cell and extends
+    outward along the border of the flood mask.
 
     Args:
         mask: 2D boolean array where True indicates presence of water.
