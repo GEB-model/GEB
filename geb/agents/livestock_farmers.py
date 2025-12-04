@@ -51,7 +51,9 @@ class LiveStockFarmers(AgentBaseClass):
             if "town_managers" in self.model.config["agent_settings"]
             else {}
         )
-
+        self.hydrological_year_start = self.model.config["general"][
+            "hydrological_year_start"
+        ]
         if self.model.in_spinup:
             self.spinup()
 
@@ -144,8 +146,8 @@ class LiveStockFarmers(AgentBaseClass):
             - The current efficiency as a float.
         """
         if (
-            np.datetime64(self.model.current_time, "ns")
-            in self.model.livestock_water_consumption_ds.time
+            self.model.current_time.day == 1
+            and self.model.current_time.month == self.hydrological_year_start
         ):
             water_demand, efficiency = self.update_water_demand()
             self.var.current_water_demand = water_demand

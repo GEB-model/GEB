@@ -48,7 +48,9 @@ class ReservoirOperators(AgentBaseClass):
         )
         self.environmental_flow_requirement = 0.0
         self.water_conveyance_efficiency = 1.0
-
+        self.hydrological_year_start = self.model.config["general"][
+            "hydrological_year_start"
+        ]
         if self.model.in_spinup:
             self.spinup()
 
@@ -198,7 +200,7 @@ class ReservoirOperators(AgentBaseClass):
     ) -> npt.NDArray[np.float32]:
         """Get the maximum abstraction from reservoirs for each farmer.
 
-        If the configuration is set to equal abstraction, the maxmimum abstraction
+        If the configuration is set to equal abstraction, the maximum abstraction
         per farmer is calculated based on the irrigation demand of the farmers.
 
         Args:
@@ -642,7 +644,10 @@ class ReservoirOperators(AgentBaseClass):
         # operational year should start after the end of the rainy season
         # this could also maybe be determined based on the start of the irrigation season
         # thus crop calendars
-        if self.model.current_time.day == 1 and self.model.current_time.month == 10:
+        if (
+            self.model.current_time.day == 1
+            and self.model.current_time.month == self.hydrological_year_start
+        ):
             # in the second year, we want to discard the default data that was estimated
             # from external sources
             if self.var.hydrological_year_counter == 1:

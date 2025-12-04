@@ -5,6 +5,7 @@ general:
   end_time: 2020-01-01
   # start of the spinup time (YYYY-MM-DD).
   spinup_time: 2000-01-01
+  hydrological_year_start: 1
   input_folder: input/
   preprocessing_folder: preprocessing/
   output_folder: output/

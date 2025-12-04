@@ -46,7 +46,9 @@ class Market(AgentBaseClass):
             if "market" in self.model.config["agent_settings"]
             else {}
         )
-
+        self.hydrological_year_start = self.model.config["general"][
+            "hydrological_year_start"
+        ]
         if self.model.in_spinup:
             self.spinup()
 
@@ -285,7 +287,7 @@ class Market(AgentBaseClass):
                 not self.model.in_spinup
                 and (self.model.current_time.year - self.model.run_start.year) % 5 == 0
                 and (
-                    self.model.current_time.month == 1
+                    self.model.current_time.month == self.hydrological_year_start
                     and self.model.current_time.day == 1
                 )
                 and (self.model.current_time.year - self.model.run_start.year) >= 5

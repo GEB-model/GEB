@@ -205,6 +205,10 @@ class CropFarmers(AgentBaseClass):
         self.redundancy = reduncancy
         self.decision_module = DecisionModule()
 
+        self.hydrological_year_start = self.model.config["general"][
+            "hydrological_year_start"
+        ]
+
         self.inflation_rate = load_economic_data(
             self.model.files["dict"]["socioeconomics/inflation_rates"]
         )
@@ -309,6 +313,10 @@ class CropFarmers(AgentBaseClass):
 
         if self.model.in_spinup:
             self.spinup()
+
+        if self.base_efficiency:
+            assert isinstance(self.base_efficiency, float)
+            self.var.irrigation_efficiency[:] = self.base_efficiency
 
         self.adjust_cultivation_costs()
 
@@ -1531,67 +1539,36 @@ class CropFarmers(AgentBaseClass):
             additional_water_allocation_m3 / self.HRU.var.cell_area
         )  # daily water demand in m
 
-        groundwater_mask = self.well_irrigated
-        surface_water_mask = self.surface_irrigated
+        surface_water_mask = self.surface_irrigating_mdb
 
-        vic_irrigating_farmers_gw = (aus_region_agents == 0) & groundwater_mask
-        nsw_irrigating_farmers_gw = (aus_region_agents == 1) & groundwater_mask
         vic_irrigating_farmers_sw = (aus_region_agents == 0) & surface_water_mask
         nsw_irrigating_farmers_sw = (aus_region_agents == 1) & surface_water_mask
 
-        total_field_size_vic_gw = self.field_size_per_farmer[
-            vic_irrigating_farmers_gw
-        ].sum()
-        total_field_size_nsw_gw = self.field_size_per_farmer[
-            nsw_irrigating_farmers_gw
-        ].sum()
-        total_field_size_vic_sw = self.field_size_per_farmer[
+        total_yearly_water_deficit = self.var.cumulative_water_deficit_m3[:, -1]
+
+        total_deficit_vic_sw = total_yearly_water_deficit[
             vic_irrigating_farmers_sw
         ].sum()
-        total_field_size_nsw_sw = self.field_size_per_farmer[
+        total_deficit_nsw_sw = total_yearly_water_deficit[
             nsw_irrigating_farmers_sw
         ].sum()
 
-        field_size_fraction_vic_gw = (
-            self.field_size_per_farmer[vic_irrigating_farmers_gw]
-            / total_field_size_vic_gw
+        deficit_fraction_vic_sw = (
+            total_yearly_water_deficit[vic_irrigating_farmers_sw] / total_deficit_vic_sw
         )
-        field_size_fraction_nsw_gw = (
-            self.field_size_per_farmer[nsw_irrigating_farmers_gw]
-            / total_field_size_nsw_gw
-        )
-        field_size_fraction_vic_sw = (
-            self.field_size_per_farmer[vic_irrigating_farmers_sw]
-            / total_field_size_vic_sw
-        )
-        field_size_fraction_nsw_sw = (
-            self.field_size_per_farmer[nsw_irrigating_farmers_sw]
-            / total_field_size_nsw_sw
+        deficit_fraction_nsw_sw = (
+            total_yearly_water_deficit[nsw_irrigating_farmers_sw] / total_deficit_nsw_sw
         )
 
         allocation_farmers_m3 = np.zeros_like(
             self.var.remaining_irrigation_limit_m3_channel, dtype=np.float32
         )
 
-        allocation_farmers_m3[vic_irrigating_farmers_gw] = (
-            crop_allocation_vic * field_size_fraction_vic_gw
-        ) * (
-            (np.count_nonzero(groundwater_mask) * 2)
-            / np.count_nonzero(surface_water_mask)
-        )
-
-        allocation_farmers_m3[nsw_irrigating_farmers_gw] = (
-            crop_allocation_nsw * field_size_fraction_nsw_gw
-        ) * (
-            (np.count_nonzero(groundwater_mask) * 2)
-            / np.count_nonzero(surface_water_mask)
-        )
-
         allocation_farmers_m3[vic_irrigating_farmers_sw] = (
-            crop_allocation_vic * field_size_fraction_vic_sw
+            crop_allocation_vic * deficit_fraction_vic_sw
         )
         allocation_farmers_m3[nsw_irrigating_farmers_sw] = (
-            crop_allocation_nsw * field_size_fraction_nsw_sw
+            crop_allocation_nsw * deficit_fraction_nsw_sw
         )
 
         return allocation_farmers_m3
@@ -1656,7 +1633,7 @@ class CropFarmers(AgentBaseClass):
     @property
     def currently_irrigated_fields(self) -> np.ndarray:
         """Boolean mask of fields currently irrigated (and with a valid crop)."""
-        return self.farmer_to_field(self.is_irrigated, False) & (
+        return self.farmer_to_field(self.irrigated, False) & (
             self.HRU.var.crop_map != -1
         )
 
@@ -3063,7 +3040,7 @@ class CropFarmers(AgentBaseClass):
         Computes the annual SPEI probability via the generalized extreme value (GEV)
         distribution, shifts historical arrays, and resets cumulative seasonal SPEI.
         """
-        assert self.model.current_time.month == 1
+        assert self.model.current_time.month == self.hydrological_year_start
 
         # calculate the SPEI probability using GEV parameters
         SPEI_probability = genextreme.sf(
@@ -3088,7 +3065,7 @@ class CropFarmers(AgentBaseClass):
 
     def save_yearly_pr(self) -> None:
         """Save and reset yearly precipitation totals per farmer."""
-        assert self.model.current_time.month == 1
+        assert self.model.current_time.month == self.hydrological_year_start
 
         shift_and_update(
             self.var.yearly_pr, self.var.cumulative_pr_during_growing_season
@@ -5115,7 +5092,7 @@ class CropFarmers(AgentBaseClass):
     def irrigated_fields(self) -> npt.NDArray[np.bool_]:
         """Return a boolean mask of fields that are irrigated."""
         irrigated_fields = np.take(
-            self.is_irrigated,
+            self.irrigated,
             self.HRU.var.land_owners,
         )
         irrigated_fields[self.HRU.var.land_owners == -1] = False
@@ -5184,19 +5161,23 @@ class CropFarmers(AgentBaseClass):
         timer.finish_split("water abstraction calculation")
 
         ## yearly actions
-        if self.model.current_time.month == 1 and self.model.current_time.day == 1:
-            self.var.remaining_irrigation_limit_m3_reservoir[:] = (
-                self.var.irrigation_limit_m3[:]
-            )
-            self.var.remaining_irrigation_limit_m3_channel[:] = (
-                self.irrigation_limit_reservoir_mdb[:]
-            )
-            self.var.remaining_irrigation_limit_m3_groundwater[:] = (
-                self.var.irrigation_limit_m3[:]
-            )
+        if (
+            self.model.current_time.month == self.hydrological_year_start
+            and self.model.current_time.day == 1
+        ):
             if self.model.current_time.year > self.model.spinup_start.year:
                 # reset the irrigation limit, but only if a full year has passed already. Otherwise
                 # the cumulative water deficit is not year completed.
+                self.var.remaining_irrigation_limit_m3_reservoir[:] = (
+                    self.irrigation_limit_reservoir_mdb[:]
+                )
+                self.var.remaining_irrigation_limit_m3_channel[:] = (
+                    self.var.irrigation_limit_m3[:]
+                )
+                self.var.remaining_irrigation_limit_m3_groundwater[:] = (
+                    self.var.irrigation_limit_m3[:]
+                )
+
                 self.save_yearly_spei()
                 self.save_yearly_pr()
 
@@ -5222,7 +5203,8 @@ class CropFarmers(AgentBaseClass):
 
             self.var.farmer_base_class[:] = self.create_farmer_classes(
                 crop_calendar_group,
-                self.is_in_command_area,
+                self.surface_irrigating_mdb,
+                (self.channel_irrigating_mdb | self.well_irrigated).data,
                 self.region_agents,
             )
             print("Nr of base groups", len(np.unique(self.var.farmer_base_class[:])))
