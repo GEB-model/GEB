@@ -9,7 +9,7 @@ import yaml
 from pathlib import Path
 
 # Get configuration with defaults
-CLUSTER_PREFIX = config.get("CLUSTER_PREFIX", "WE")
+CLUSTER_PREFIX = config.get("CLUSTER_PREFIX", "Europe")
 LARGE_SCALE_DIR = config.get("LARGE_SCALE_DIR", "../models/large_scale")
 EVALUATION_METHODS = config.get("EVALUATION_METHODS", "plot_discharge,evaluate_discharge")
 

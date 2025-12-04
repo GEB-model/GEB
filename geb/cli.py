@@ -1502,6 +1502,8 @@ def init_multiple_fn(
     geometry_bounds: str,
     target_area_km2: float,
     cluster_prefix: str,
+    skip_merged_geometries: bool = False,
+    skip_visualization: bool = False,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -1514,6 +1516,8 @@ def init_multiple_fn(
         geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select subbasins.
         target_area_km2: Target cumulative upstream area per cluster (default: Danube basin ~817,000 km2).
         cluster_prefix: Prefix for cluster directory names.
+        skip_merged_geometries: If True, skip creating dissolved basin polygon file (much faster).
+        skip_visualization: If True, skip creating visualization map (faster).
 
     Raises:
         FileNotFoundError: If the example folder does not exist.
@@ -1543,8 +1547,15 @@ def init_multiple_fn(
     # Create the models/large_scale directory structure
     models_dir = Path.cwd().parent / "models"
     large_scale_dir = models_dir / "large_scale"
-    if not large_scale_dir.exists():
-        large_scale_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clean the large_scale directory to start fresh
+    if large_scale_dir.exists():
+        logger.info(f"Removing existing large_scale directory: {large_scale_dir}")
+        shutil.rmtree(large_scale_dir)
+
+    # Create fresh directory
+    large_scale_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Created fresh large_scale directory: {large_scale_dir}")
 
     # create river
     logger.info("Starting multiple model initialization")
@@ -1606,11 +1617,11 @@ def init_multiple_fn(
     )
 
     # save geoparquet and maps to default location
-    save_geoparquet = large_scale_dir / f"{cluster_prefix}_clusters.geoparquet"
+    save_geoparquet = large_scale_dir / f"{cluster_prefix}_outlets.geoparquet"
     save_map = large_scale_dir / f"{cluster_prefix}_clusters_map.png"
 
-    logger.info(f"Saving clusters to geoparquet: {save_geoparquet}")
-    # Save clusters to geoparquet (always create)
+    logger.info(f"Saving outlet basins to geoparquet: {save_geoparquet}")
+    # Save outlet-only clusters to geoparquet (simplified geometries)
     save_clusters_to_geoparquet(
         clusters=clusters,
         data_catalog=data_catalog_instance,
@@ -1618,26 +1629,37 @@ def init_multiple_fn(
         cluster_prefix=cluster_prefix,
     )
 
-    # Save clusters as merged geometries (complete basins as single polygons)
-    merged_basins_path = large_scale_dir / f"{cluster_prefix}_clusters.geoparquet"
+    # Save complete basins as merged geometries (full upstream basins as single polygons)
+    # This is slow for large datasets, so allow skipping
+    if not skip_merged_geometries:
+        merged_basins_path = (
+            large_scale_dir / f"{cluster_prefix}_complete_basins.geoparquet"
+        )
+        logger.info(
+            f"Saving complete basins as merged geometries: {merged_basins_path}"
+        )
+        save_clusters_as_merged_geometries(
+            clusters=clusters,
+            data_catalog=data_catalog_instance,
+            river_graph=river_graph,
+            output_path=merged_basins_path,
+            cluster_prefix=cluster_prefix,
+        )
+    else:
+        logger.info("Skipping merged geometries (--skip-merged-geometries flag set)")
 
-    logger.info(f"Saving complete basins as merged geometries: {merged_basins_path}")
-    save_clusters_as_merged_geometries(
-        clusters=clusters,
-        data_catalog=data_catalog_instance,
-        river_graph=river_graph,
-        output_path=merged_basins_path,
-        cluster_prefix=cluster_prefix,
-    )
-
-    logger.info(f"Creating visualization map: {save_map}")
-    # Create visualization map (always create)
-    create_cluster_visualization_map(
-        clusters=clusters,
-        data_catalog=data_catalog_instance,
-        output_path=save_map,
-        cluster_prefix=cluster_prefix,
-    )
+    # Create visualization map (optional)
+    if not skip_visualization:
+        logger.info(f"Creating visualization map: {save_map}")
+        create_cluster_visualization_map(
+            clusters=clusters,
+            data_catalog=data_catalog_instance,
+            river_graph=river_graph,
+            output_path=save_map,
+            cluster_prefix=cluster_prefix,
+        )
+    else:
+        logger.info("Skipping visualization map (--skip-visualization flag set)")
 
     logger.info(
         f"Successfully created {len(cluster_directories)} model configurations:"
@@ -1681,6 +1703,18 @@ def init_multiple_fn(
     default="cluster",
     help="Prefix for cluster directory names. Defaults to 'cluster'.",
 )
+@click.option(
+    "--skip-merged-geometries",
+    is_flag=True,
+    default=False,
+    help="Skip creating merged geometry file (faster, but no dissolved basin polygons).",
+)
+@click.option(
+    "--skip-visualization",
+    is_flag=True,
+    default=False,
+    help="Skip creating visualization map (faster).",
+)
 @working_directory_option
 def init_multiple(
     config: str,
@@ -1691,6 +1725,8 @@ def init_multiple(
     geometry_bounds: str,
     target_area_km2: float,
     cluster_prefix: str,
+    skip_merged_geometries: bool,
+    skip_visualization: bool,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.
 
@@ -1712,6 +1748,8 @@ def init_multiple(
         geometry_bounds: Bounding box as "xmin,ymin,xmax,ymax" to select sub-basins
         target_area_km2: Target cumulative upstream area per cluster
         cluster_prefix: Prefix used for created cluster directory names and output files.
+        skip_merged_geometries: If True, skip creating dissolved basin polygon file (faster).
+        skip_visualization: If True, skip creating visualization map (faster).
         overwrite: If True, existing cluster directories and files will be overwritten.
 
     """
@@ -1724,6 +1762,8 @@ def init_multiple(
         geometry_bounds=geometry_bounds,
         target_area_km2=target_area_km2,
         cluster_prefix=cluster_prefix,
+        skip_merged_geometries=skip_merged_geometries,
+        skip_visualization=skip_visualization,
     )
 
 
