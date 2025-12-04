@@ -9,14 +9,22 @@ from collections import deque
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterator,
+    Literal,
+)
 
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import yaml
+from numpy.typing import NDArray
 
-from geb.workflows.io import load_geom
+from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -243,6 +251,7 @@ class DynamicArray:
         """
         return np.asarray(self._data[: self.n], dtype=dtype)
 
+    @property
     def __array_interface__(self) -> dict[str, Any]:
         """
         Expose the array interface of the entire underlying data (up to max_n).
@@ -250,12 +259,12 @@ class DynamicArray:
         Returns:
             The __array_interface__ mapping from the underlying NumPy array.
         """
-        return self._data.__array_interface__()
+        return self._data.__array_interface__
 
     def __array_ufunc__(
         self,
-        ufunc: Callable,
-        method: str,
+        ufunc: np.ufunc,
+        method: Literal["__call__", "reduce", "reduceat", "accumulate", "outer", "at"],
         *inputs: tuple[Any],
         **kwargs: dict[str, Any],
     ) -> Any:
@@ -317,7 +326,11 @@ class DynamicArray:
             func, modified_types, modified_args, kwargs
         )
 
-    def __setitem__(self, key: int | slice, value: Any) -> None:
+    def __setitem__(
+        self,
+        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
+        value: Any,
+    ) -> None:
         """
         Set item(s) in the active portion of the array.
 
@@ -327,7 +340,10 @@ class DynamicArray:
         """
         self.data.__setitem__(key, value)
 
-    def __getitem__(self, key: int | slice) -> DynamicArray | np.ndarray:
+    def __getitem__(
+        self,
+        key: int | slice | ... | NDArray[np.integer] | NDArray[np.bool_],
+    ) -> DynamicArray | np.ndarray:
         """
         Retrieve item(s) or a sliced DynamicArray.
 
@@ -354,6 +370,7 @@ class DynamicArray:
             data = self.data.__getitem__(key)
 
             new_extra_dims_names: list = []
+            assert self.extra_dims_names is not None
             for i, slicer in enumerate(key[1:]):
                 if isinstance(slicer, (slice, list)):
                     new_extra_dims_names.append(self.extra_dims_names[i])
@@ -420,7 +437,7 @@ class DynamicArray:
 
     def __getattr__(self, name: str) -> Any:
         """
-        Fallback attribute access to the active NumPy array.
+        Get attributes either from the wrapper internals or the active data.
 
         If the attribute is one of the internal attributes, defer to the normal
         attribute lookup. Otherwise, forward the attribute access to the active
@@ -753,7 +770,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__", inplace=True)
 
-    def _compare(self, value: Any, operation: str) -> DynamicArray:
+    def _compare(self, value: object, operation: str) -> DynamicArray:
         """
         Helper for comparison operations.
 
@@ -770,7 +787,7 @@ class DynamicArray:
             )
         return self.__class__(getattr(self.data, operation)(value))
 
-    def __eq__(self, value: Any) -> DynamicArray:
+    def __eq__(self, value: object) -> DynamicArray:
         """Equality comparison.
 
         Args:
@@ -781,7 +798,7 @@ class DynamicArray:
         """
         return self._compare(value, "__eq__")
 
-    def __ne__(self, value: Any) -> DynamicArray:
+    def __ne__(self, value: object) -> DynamicArray:
         """Inequality comparison.
 
         Args:
@@ -1036,15 +1053,9 @@ class Bucket:
                     compression="gzip",
                     compression_level=9,
                 )
-            elif isinstance(value, (list, dict, float, int)):
-                with open((path / name).with_suffix(".json"), "w") as f:
-                    json.dump(value, f)
-            elif isinstance(value, str):
-                with open((path / name).with_suffix(".txt"), "w") as f:
-                    f.write(value)
-            elif isinstance(value, datetime):
-                with open((path / name).with_suffix(".datetime"), "w") as f:
-                    f.write(value.isoformat())
+            elif isinstance(value, (list, dict, float, int, str, datetime)):
+                with open((path / name).with_suffix(".yml"), "w") as f:
+                    yaml.safe_dump(value, f, default_flow_style=False)
             elif isinstance(value, np.ndarray):
                 if value.ndim == 0:
                     raise ValueError(
@@ -1096,7 +1107,7 @@ class Bucket:
                 setattr(
                     self,
                     filename.stem,
-                    load_geom(filename),
+                    read_geom(filename),
                 )
             elif filename.suffix == ".parquet":
                 setattr(
@@ -1104,9 +1115,14 @@ class Bucket:
                     filename.stem,
                     pd.read_parquet(filename),
                 )
+            elif filename.suffix == ".yml":
+                with open(filename, "r") as f:
+                    setattr(self, filename.stem, yaml.safe_load(f))
+            # TODO: Can be removed in 2026
             elif filename.suffix == ".txt":
                 with open(filename, "r") as f:
                     setattr(self, filename.stem, f.read())
+            # TODO: Can be removed in 2026
             elif filename.suffix == ".datetime":
                 with open(filename, "r") as f:
                     setattr(
@@ -1114,6 +1130,7 @@ class Bucket:
                         filename.stem,
                         datetime.fromisoformat(f.read()),
                     )
+            # TODO: Can be removed in 2026
             elif filename.suffix == ".json":
                 with open(filename, "r") as f:
                     setattr(self, filename.stem, json.load(f))
@@ -1186,7 +1203,7 @@ class Store:
             self.model.logger.debug(f"Saving {name}")
             bucket.save(path / name)
 
-    def load(self, path: None | Path = None) -> None:
+    def load(self, path: None | Path = None, omit: None | str = None) -> None:
         """Load the store data from disk into the model.
 
         If no path is provided, it defaults to the store path of the model.
@@ -1195,6 +1212,7 @@ class Store:
             path: A Path object representing the directory to load the model data from. Defaults to None.
                 In this case, a default path is used. In most cases this should not be changed, but can
                 be useful for special cases such as forecasting and testing.
+            omit: An optional string. If provided, any bucket whose name contains this string will be skipped during loading.
         """
         if path is None:
             path = self.path
@@ -1202,6 +1220,9 @@ class Store:
         for bucket_folder in path.iterdir():
             # Mac OS X creates a .DS_Store file in directories, which we ignore
             if bucket_folder.name == ".DS_Store":
+                continue
+            elif omit is not None and omit in bucket_folder.name:
+                self.model.logger.info(f"Skipping loading of bucket {bucket_folder}")
                 continue
             bucket = Bucket().load(bucket_folder)
 

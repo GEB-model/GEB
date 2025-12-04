@@ -16,7 +16,8 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import KDTree
 
-from geb.typing import (
+from geb.types import (
+    Array,
     ArrayFloat32,
     ArrayInt32,
     ThreeDArrayFloat32,
@@ -24,8 +25,8 @@ from geb.typing import (
     TwoDArrayFloat32,
     TwoDArrayInt32,
 )
-from geb.workflows.io import load_grid, open_zarr
-from geb.workflows.raster import compress
+from geb.workflows.io import read_grid, read_zarr
+from geb.workflows.raster import compress, decompress_with_mask
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -250,7 +251,7 @@ class Grid(BaseVariables):
         self.var = self.model.store.create_bucket("hydrology.grid.var")
 
         self.scaling = 1
-        mask, self.transform, self.crs = load_grid(
+        mask, self.transform, self.crs = read_grid(
             self.model.files["grid"]["mask"],
             return_transform_and_crs=True,
         )
@@ -276,7 +277,7 @@ class Grid(BaseVariables):
         assert math.isclose(self.transform.a, -self.transform.e)
         self.cell_size = self.transform.a
 
-        self.cell_area_uncompressed = load_grid(self.model.files["grid"]["cell_area"])
+        self.cell_area_uncompressed = read_grid(self.model.files["grid"]["cell_area"])
 
         self.mask_flat = self.mask.ravel()
         self.compressed_size = self.mask_flat.size - self.mask_flat.sum()
@@ -342,19 +343,7 @@ class Grid(BaseVariables):
         Returns:
             array: Decompressed array.
         """
-        if fillvalue is None:
-            if array.dtype in (np.float32, np.float64):
-                fillvalue = np.nan
-            else:
-                fillvalue = 0
-        outmap = self.full(fillvalue, dtype=array.dtype).reshape(self.mask_flat.size)
-        output_shape = self.mask.shape
-        if array.ndim == 2:
-            assert array.shape[1] == self.mask_flat.size - self.mask_flat.sum()
-            outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
-            output_shape = (array.shape[0], *output_shape)
-        outmap[..., ~self.mask_flat] = array
-        return outmap.reshape(output_shape)
+        return decompress_with_mask(array, self.mask, fillvalue=fillvalue)
 
     def plot(self, array: np.ndarray) -> None:
         """Plot array.
@@ -391,7 +380,7 @@ class Grid(BaseVariables):
         Returns:
             array: Loaded array.
         """
-        data = load_grid(filepath, layer=layer)
+        data = read_grid(filepath, layer=layer)
         if compress:
             data = self.data.grid.compress(data)
         return data
@@ -478,32 +467,32 @@ class Grid(BaseVariables):
     @property
     def gev_c(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of SPEI for grid."""
-        return open_zarr(self.model.files["other"]["climate/gev_c"])
+        return read_zarr(self.model.files["other"]["climate/gev_c"])
 
     @property
     def gev_loc(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of SPEI for grid."""
-        return open_zarr(self.model.files["other"]["climate/gev_loc"])
+        return read_zarr(self.model.files["other"]["climate/gev_loc"])
 
     @property
     def gev_scale(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of SPEI for grid."""
-        return open_zarr(self.model.files["other"]["climate/gev_scale"])
+        return read_zarr(self.model.files["other"]["climate/gev_scale"])
 
     @property
     def pr_gev_c(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of rainfall distribution for grid."""
-        return load_grid(self.model.files["grid"]["climate/pr_gev_c"])
+        return read_grid(self.model.files["other"]["climate/pr_gev_c"])
 
     @property
     def pr_gev_loc(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of rainfall distribution for grid."""
-        return load_grid(self.model.files["grid"]["climate/pr_gev_loc"])
+        return read_grid(self.model.files["other"]["climate/pr_gev_loc"])
 
     @property
     def pr_gev_scale(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of rainfall distribution for grid."""
-        return load_grid(self.model.files["grid"]["climate/pr_gev_scale"])
+        return read_grid(self.model.files["other"]["climate/pr_gev_scale"])
 
 
 class HRUs(BaseVariables):
@@ -526,7 +515,7 @@ class HRUs(BaseVariables):
         self.data: Data = data
         self.model: GEBModel = model
 
-        subgrid_mask = load_grid(self.model.files["subgrid"]["mask"])
+        subgrid_mask = read_grid(self.model.files["subgrid"]["mask"])
         submask_height, submask_width = subgrid_mask.shape
 
         self.scaling = submask_height // self.data.grid.shape[0]
@@ -582,7 +571,7 @@ class HRUs(BaseVariables):
             self.var.linear_mapping,
         ) = self.create_HRUs()
 
-        upstream_area = load_grid(self.model.files["grid"]["routing/upstream_area"])
+        upstream_area = read_grid(self.model.files["grid"]["routing/upstream_area"])
 
         self.var.nearest_river_grid_cell = determine_nearest_river_cell(
             upstream_area,
@@ -774,15 +763,15 @@ class HRUs(BaseVariables):
             grid_to_HRU: Array of size of the compressed grid cells. Each value maps to the index of the first unit of the next cell.
             linear_mapping: The index of the HRU to the subcell.
         """
-        land_use_classes = load_grid(
+        land_use_classes = read_grid(
             self.model.files["subgrid"]["landsurface/land_use_classes"]
         )
         return self.create_HRUs_numba(
             self.data.farms, land_use_classes, self.data.grid.mask, self.scaling
         )
 
-    def zeros(self, size: int, dtype: type, *args: Any, **kwargs: Any) -> np.ndarray:
-        """Return an array (CuPy or Numpy) of zeros with given size. Takes any other argument normally used in np.zeros.
+    def zeros(self, size: int, dtype: type, *args: Any, **kwargs: Any) -> Array:
+        """Return an array of zeros with given size. Takes any other argument normally used in np.zeros.
 
         Args:
             size: Size of the array to create.
@@ -796,8 +785,12 @@ class HRUs(BaseVariables):
         return np.zeros(size, dtype, *args, **kwargs)
 
     def full_compressed(
-        self, fill_value: int | float, dtype: type, *args: Any, **kwargs: Any
-    ) -> np.ndarray:
+        self,
+        fill_value: int | float | np.integer | np.floating | bool,
+        dtype: type,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Array:
         """Return a full array with size of number of HRUs. Takes any other argument normally used in np.full.
 
         Args:
@@ -1015,7 +1008,7 @@ class Data:
         """
         self.model = model
 
-        self.farms = load_grid(self.model.files["subgrid"]["agents/farmers/farms"])
+        self.farms = read_grid(self.model.files["subgrid"]["agents/farmers/farms"])
 
         self.grid = Grid(self, model)
         self.HRU = HRUs(self, model)
@@ -1103,7 +1096,7 @@ class Data:
             raise NotImplementedError
         return output_data
 
-    def to_grid(self, *, HRU_data: npt.NDArray | float, fn: str) -> npt.NDArray | float:
+    def to_grid(self, *, HRU_data: np.ndarray, fn: str) -> np.ndarray:
         """Function to convert from HRUs to grid.
 
         Args:
@@ -1118,35 +1111,30 @@ class Data:
         """
         assert fn is not None
         assert not isinstance(HRU_data, list)
-        if isinstance(
-            HRU_data, float
-        ):  # check if data is simple float. Otherwise should be numpy array.
-            outdata = HRU_data
-        else:
-            assert isinstance(HRU_data, np.ndarray)
-            if HRU_data.ndim == 1:
-                outdata = to_grid(
-                    HRU_data,
+        assert isinstance(HRU_data, np.ndarray)
+        if HRU_data.ndim == 1:
+            outdata = to_grid(
+                HRU_data,
+                self.HRU.var.grid_to_HRU,
+                self.HRU.var.land_use_ratio,
+                fn,
+            )
+        elif HRU_data.ndim == 2:
+            # Create output array with shape (first_dim, grid_size)
+            output_data = np.zeros(
+                (HRU_data.shape[0], self.HRU.var.grid_to_HRU.size),
+                dtype=HRU_data.dtype,
+            )
+            for i in range(HRU_data.shape[0]):
+                output_data[i] = to_grid(
+                    HRU_data[i],
                     self.HRU.var.grid_to_HRU,
                     self.HRU.var.land_use_ratio,
                     fn,
                 )
-            elif HRU_data.ndim == 2:
-                # Create output array with shape (first_dim, grid_size)
-                output_data = np.zeros(
-                    (HRU_data.shape[0], self.HRU.var.grid_to_HRU.size),
-                    dtype=HRU_data.dtype,
-                )
-                for i in range(HRU_data.shape[0]):
-                    output_data[i] = to_grid(
-                        HRU_data[i],
-                        self.HRU.var.grid_to_HRU,
-                        self.HRU.var.land_use_ratio,
-                        fn,
-                    )
-                outdata = output_data
-            else:
-                raise NotImplementedError("Only 1D and 2D arrays are supported")
+            outdata = output_data
+        else:
+            raise NotImplementedError("Only 1D and 2D arrays are supported")
 
         return outdata
 
@@ -1259,7 +1247,6 @@ class Data:
         self.HRU.var.cropGroupNumber = self.split_HRU_data(
             self.HRU.var.cropGroupNumber, HRU
         )
-        self.HRU.var.capriseindex = self.split_HRU_data(self.HRU.var.capriseindex, HRU)
         self.HRU.var.actual_bare_soil_evaporation = self.split_HRU_data(
             self.HRU.var.actual_bare_soil_evaporation, HRU
         )

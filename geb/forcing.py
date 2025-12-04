@@ -11,7 +11,7 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 
-from geb.workflows.io import load_grid
+from geb.workflows.io import read_grid
 
 from .module import Module
 from .workflows.io import AsyncGriddedForcingReader
@@ -179,8 +179,7 @@ class ForcingLoader(ABC):
         self.n: int = n
         self.variable: str = variable
         self.reader: AsyncGriddedForcingReader = AsyncGriddedForcingReader(
-            model.files["other"][f"climate/{variable}"],
-            variable,
+            model.files["other"][f"climate/{variable}"], variable, asynchronous=True
         )
 
         self.indices, self.weights = generate_bilinear_interpolation_weights(
@@ -240,7 +239,7 @@ class ForcingLoader(ABC):
         # check if we are in forecasting mode, and if the end of the timestep is after the
         # start of the forecast
         if (
-            self.in_forecast_mode
+            self.forecast_issue_datetime is not None
             and dt + self.model.timestep_length >= self.forecast_issue_datetime
         ):
             # find how many substeps to load from the normal data source
@@ -296,15 +295,22 @@ class ForcingLoader(ABC):
             forecast_issue_datetime: The datetime when the forecast starts.
             da: The xarray DataArray containing the forecast data.
         """
-        self.in_forecast_mode: bool = True
         self.forecast_issue_datetime: datetime = forecast_issue_datetime
         self.ds_forecast: xr.DataArray = da
 
     def unset_forecast(self) -> None:
         """Unset forecast mode."""
-        self.in_forecast_mode: bool = False
         self.ds_forecast: None = None
         self.forecast_issue_datetime: None = None
+
+    @property
+    def in_forecast_mode(self) -> bool:
+        """Indicates whether the loader is in forecast mode.
+
+        Returns:
+            True if in forecast mode, False otherwise.
+        """
+        return self.forecast_issue_datetime is not None
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
         """Interpolate data to the model grid using bilinear interpolation.
@@ -751,7 +757,7 @@ class Forcing(Module):
             model: The GEB model instance.
         """
         self.model = model
-        self.forcing_DEM = load_grid(model.files["other"]["climate/elevation_forcing"])
+        self.forcing_DEM = read_grid(model.files["other"]["climate/elevation_forcing"])
 
         # Initialize all forcing loaders upfront
         self._initialize_loaders()

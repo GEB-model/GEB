@@ -3,9 +3,10 @@
 import geopandas as gpd
 import numpy as np
 import xarray as xr
+from pyflwdir.dem import fill_depressions
 
 from geb.build.methods import build_method
-from geb.workflows.io import get_window
+from geb.workflows.io import get_window, read_zarr
 from geb.workflows.raster import (
     bounds_are_within,
     calculate_cell_area,
@@ -93,8 +94,9 @@ class LandSurface:
             {
                 "name": "fabdem",
                 "zmin": 0.001,
+                "fill_depressions": True,
             },
-            {"name": "gebco"},
+            {"name": "gebco", "zmax": 0.0, "fill_depressions": False},
         ],
     ) -> None:
         """Sets up the elevation data for the model.
@@ -122,9 +124,18 @@ class LandSurface:
         ymin: float = bounds[1] - buffer
         xmax: float = bounds[2] + buffer
         ymax: float = bounds[3] + buffer
-        fabdem: xr.DataArray = self.new_data_catalog.fetch(
-            "fabdem", xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax, prefix="hydrodynamics"
-        ).read(prefix="hydrodynamics")
+        fabdem: xr.DataArray = (
+            self.new_data_catalog.fetch(
+                "fabdem",
+                xmin=xmin,
+                xmax=xmax,
+                ymin=ymin,
+                ymax=ymax,
+                prefix="hydrodynamics",
+            )
+            .read(prefix="hydrodynamics")
+            .compute()
+        )
 
         target: xr.DataArray = self.subgrid["mask"]
         assert target.rio.crs is not None, "target grid must have a crs"
@@ -141,14 +152,19 @@ class LandSurface:
                 if DEM["name"] == "gebco":
                     DEM_raster = self.new_data_catalog.fetch("gebco").read()
                 else:
-                    DEM_raster = xr.open_dataarray(
-                        self.data_catalog.get_source(DEM["name"]).path,
-                    )
+                    if DEM["name"] == "geul_dem":
+                        DEM_raster = read_zarr(
+                            self.data_catalog.get_source(DEM["name"]).path
+                        )
+                    else:
+                        DEM_raster = xr.open_dataarray(
+                            self.data_catalog.get_source(DEM["name"]).path,
+                        )
                 if "bands" in DEM_raster.dims:
                     DEM_raster = DEM_raster.isel(band=0)
 
                 DEM_raster = DEM_raster.isel(
-                    **get_window(
+                    get_window(
                         DEM_raster.x,
                         DEM_raster.y,
                         tuple(
@@ -162,7 +178,13 @@ class LandSurface:
                     ),
                 )
 
-            DEM_raster = convert_nodata(DEM_raster.astype(np.float32), np.nan)
+            DEM_raster = convert_nodata(
+                DEM_raster.astype(np.float32, keep_attrs=True), np.nan
+            )
+
+            if "fill_depressions" in DEM and DEM["fill_depressions"]:
+                DEM_raster.values, d8 = fill_depressions(DEM_raster.values)
+
             self.set_other(
                 DEM_raster,
                 name=f"DEM/{DEM['name']}",
@@ -221,11 +243,6 @@ class LandSurface:
         )
 
         global_countries["geometry"] = global_countries.centroid
-        # Renaming XKO to XKX
-        self.logger.info("Renaming XKO to XKX in global countries")
-        global_countries["ISO3"] = global_countries["ISO3"].replace(
-            {"XKO": "XKX"}
-        )  # XKO is a deprecated code for Kosovo, XKX is the new code
         global_countries = global_countries.set_index("ISO3")
 
         self.set_geom(global_countries, name="global_countries")
@@ -234,9 +251,13 @@ class LandSurface:
             f"Region database must contain unique region IDs ({self.data_catalog[region_database].path})"
         )
 
+        # allow some tolerance, especially for regions that coincide with coastlines, in which
+        # case the region boundaries may be slightly outside the model region due to differences
+        # in coastline representation. This is especially relevant for islands.
         assert bounds_are_within(
             self.region.total_bounds,
             regions.to_crs(self.region.crs).total_bounds,
+            tolerance=0.1,
         )
 
         region_id_mapping = {
@@ -249,12 +270,6 @@ class LandSurface:
         assert "ISO3" in regions.columns, (
             f"Region database must contain ISO3 column ({self.data_catalog[region_database].path})"
         )
-
-        regions.replace(
-            {"ISO3": {"XKO": "XKX"}}, inplace=True
-        )  # XKO is a deprecated code for Kosovo, XKX is the new code
-
-        self.logger.info(f"Renamed XKO to XKX in regions")
 
         self.set_geom(regions, name="regions")
 
@@ -276,7 +291,7 @@ class LandSurface:
 
         # TODO: Is there a better way to do this?
         region_mask, region_subgrid_slice = pad_xy(
-            self.subgrid["mask"].rio,
+            self.subgrid["mask"],
             pad_minx,
             pad_miny,
             pad_maxx,
@@ -309,7 +324,7 @@ class LandSurface:
         )
 
         region_ids: xr.DataArray = rasterize_like(
-            gpd=self.geom["regions"],
+            gdf=self.geom["regions"],
             column="region_id",
             raster=region_mask,
             dtype=np.int32,
@@ -428,7 +443,7 @@ class LandSurface:
         )
         forest_kc.attrs["_FillValue"] = np.nan
         forest_kc: xr.DataArray = forest_kc.isel(
-            **get_window(
+            get_window(
                 forest_kc.x,
                 forest_kc.y,
                 self.bounds,
@@ -462,7 +477,7 @@ class LandSurface:
             )
             interception_capacity.attrs["_FillValue"] = np.nan
             interception_capacity: xr.DataArray = interception_capacity.isel(
-                **get_window(
+                get_window(
                     interception_capacity.x,
                     interception_capacity.y,
                     self.bounds,
@@ -522,7 +537,7 @@ class LandSurface:
             .rio.write_crs(4326)
         )
         crop_group = crop_group.isel(
-            **get_window(
+            get_window(
                 crop_group.x,
                 crop_group.y,
                 self.bounds,

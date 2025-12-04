@@ -3,7 +3,6 @@
 import cProfile
 import functools
 import importlib
-import json
 import logging
 import os
 import platform
@@ -27,7 +26,7 @@ from geb.build import GEBModel as GEBModelBuild
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory
+from geb.workflows.io import WorkingDirectory, read_dict, write_dict
 from geb.workflows.methods import multi_level_merge
 
 PROFILING_DEFAULT: bool = False
@@ -37,14 +36,16 @@ WORKING_DIRECTORY_DEFAULT: Path = Path(".")
 CONFIG_DEFAULT: Path = Path("model.yml")
 UPDATE_DEFAULT: Path = Path("update.yml")
 BUILD_DEFAULT: Path = Path("build.yml")
-DATA_CATALOG_DEFAULT: Path = (
-    Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"
-)
+GEB_PACKAGE_DIR_str: str | None = os.environ.get("GEB_PACKAGE_DIR", default=None)
+if not GEB_PACKAGE_DIR_str:
+    raise EnvironmentError("GEB_PACKAGE_DIR environment variable is not set.")
+GEB_PACKAGE_DIR: Path = Path(GEB_PACKAGE_DIR_str)
+DATA_CATALOG_DEFAULT: Path = GEB_PACKAGE_DIR / "data_catalog.yml"
 DATA_PROVIDER_DEFAULT: str = os.environ.get("GEB_DATA_PROVIDER", "default")
 DATA_ROOT_DEFAULT: Path = Path(
     os.environ.get(
         "GEB_DATA_ROOT",
-        Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / ".." / "data_catalog",
+        GEB_PACKAGE_DIR / ".." / ".." / "data_catalog",
     )
 )
 ALTER_FROM_MODEL_DEFAULT: Path = Path("../base")
@@ -301,7 +302,7 @@ def click_run_options() -> Any:
 
 def run_model_with_method(
     method: str | None,
-    config: dict | str = CONFIG_DEFAULT,
+    config: dict | str | Path = CONFIG_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     timing: bool = TIMING_DEFAULT,
     profiling: bool = PROFILING_DEFAULT,
@@ -340,23 +341,25 @@ def run_model_with_method(
     with WorkingDirectory(working_directory):
         config: dict[str, Any] = parse_config(config)
 
+        # TODO: This can be removed in 2026
+        if not Path("input/files.yml").exists() and Path("input/files.json").exists():
+            # convert input/files.json to input/files.yml
+            json_files: dict[str, Any] = read_dict(
+                Path("input/files.json"),
+            )
+            write_dict(json_files, Path("input/files.yml"))
+
         files: dict[str, Any] = parse_config(
-            "input/files.json"
+            read_dict(Path("input/files.yml"))
             if "files" not in config["general"]
             else config["general"]["files"]
         )
-
-        model_params = {
-            "config": config,
-            "files": files,
-            "timing": timing,
-        }
 
         if profiling:
             profile = cProfile.Profile()
             profile.enable()
 
-        geb = GEBModel(**model_params)
+        geb = GEBModel(config=config, files=files, timing=timing)
         if method is not None:
             getattr(geb, method)(**method_args)
         if close_after_run:
@@ -377,46 +380,43 @@ def run_model_with_method(
 
 @cli.command()
 @click_run_options()
-def run(*args: Any, **kwargs: Any) -> None:
+def run(**kwargs: Any) -> None:
     """Run model.
 
     Can be run after model spinup.
 
     Args:
-        *args: Positional arguments to pass to the run function.
         **kwargs: Keyword arguments to pass to the run function.
 
     """
-    run_model_with_method(method="run", *args, **kwargs)
+    run_model_with_method(method="run", **kwargs)
 
 
 @cli.command()
 @click_run_options()
-def spinup(*args: Any, **kwargs: Any) -> None:
+def spinup(**kwargs: Any) -> None:
     """Run model spinup.
 
     Can be run after model build.
 
     Args:
-        *args: Positional arguments to pass to the spinup function.
         **kwargs: Keyword arguments to pass to the spinup function.
 
     """
-    run_model_with_method(method="spinup", *args, **kwargs)
+    run_model_with_method(method="spinup", **kwargs)
 
 
 @cli.command()
 @click.argument("method", required=True)
 @click_run_options()
-def exec(method: str, *args: Any, **kwargs: Any) -> None:
+def exec(method: str, **kwargs: Any) -> None:
     """Execute a specific method on the model.
 
     Args:
         method: Method to run on the model.
-        *args: Positional arguments to pass to the method.
         **kwargs: Keyword arguments to pass to the method.
     """
-    run_model_with_method(method=method, *args, **kwargs)
+    run_model_with_method(method=method, **kwargs)
 
 
 def click_build_options(
@@ -578,7 +578,7 @@ def get_builder(
     arguments = {
         "root": input_folder,
         "data_catalog": data_catalog,
-        "logger": create_logger("build.log"),
+        "logger": create_logger(Path("build.log")),
         "data_provider": data_provider,
     }
 
@@ -594,6 +594,7 @@ def init_fn(
     working_directory: str | Path,
     from_example: str,
     basin_id: str | None = None,
+    ISO3: str | None = None,
     overwrite: bool = False,
 ) -> None:
     """Create a new model.
@@ -604,15 +605,20 @@ def init_fn(
         update_config: Path to the model update configuration file to create.
         working_directory: Working directory for the model.
         from_example: Name of the example to use as a base for the model.
-        basin_id:Basin ID(s) to use for the model. Can be a comma-separated list of integers.
+        basin_id: Basin ID(s) to use for the model. Can be a comma-separated list of integers.
             If not set, the basin ID is taken from the config file.
+        ISO3: ISO3 country code to use for the model. Cannot be used together with --basin-id.
         overwrite: If True, overwrite existing config and build config files. Defaults to False.
 
     Raises:
         FileExistsError: If the config or build config file already exists and overwrite is False.
         FileNotFoundError: If the example folder does not exist.
+        ValueError: If both basin_id and ISO3 are set.
 
     """
+    if basin_id is not None and ISO3 is not None:
+        raise ValueError("Cannot use --basin-id and --ISO3 together.")
+
     config: Path = Path(config)
     build_config: Path = Path(build_config)
     update_config: Path = Path(update_config)
@@ -637,9 +643,7 @@ def init_fn(
                 f"Update config file {update_config} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
-        example_folder: Path = (
-            Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / "examples" / from_example
-        )
+        example_folder: Path = GEB_PACKAGE_DIR / ".." / "examples" / from_example
         if not example_folder.exists():
             raise FileNotFoundError(
                 f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
@@ -660,6 +664,15 @@ def init_fn(
                 basin_ids: int = int(basin_id)
 
             config_dict["general"]["region"]["subbasin"] = basin_ids
+        elif ISO3 is not None:
+            del config_dict["general"]["region"]["subbasin"]
+            config_dict["general"]["region"] = {
+                "geom": {
+                    "source": "GADM_level1",
+                    "key": ISO3,
+                    "column": "GID_0",
+                }
+            }
 
         with open(config, "w") as f:
             # do not sort keys, to keep the order of the config file
@@ -694,7 +707,14 @@ def init_fn(
     "--basin-id",
     default=None,
     type=str,
-    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file.",
+    help="Basin ID(s) to use for the model. Comma-separated list of integers. If not set, the basin ID is taken from the config file. Cannot be used together with --ISO3.",
+)
+@click.option(
+    "--ISO3",
+    "ISO3",
+    default=None,
+    type=str,
+    help="ISO3 country code to use for the model. Cannot be used together with --basin-id.",
 )
 @click.option(
     "--overwrite",
@@ -829,6 +849,7 @@ def build_fn(
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     data_provider: str = DATA_PROVIDER_DEFAULT,
     data_root: Path = DATA_ROOT_DEFAULT,
+    continue_: bool = False,
 ) -> None:
     """Build model.
 
@@ -839,7 +860,7 @@ def build_fn(
         working_directory: Working directory for the model.
         data_provider: Data variant to use from data catalog (see hydroMT documentation).
         data_root: Root folder where the data is located. If None, the data catalog is not modified.
-
+        continue_: Continue previous build if it was interrupted or failed.
     """
     with WorkingDirectory(working_directory):
         build_config = parse_config(build_config)
@@ -858,11 +879,20 @@ def build_fn(
         model.build(
             methods=methods,
             region=parse_config(config)["general"]["region"],
+            continue_=continue_,
         )
 
 
 @cli.command()
 @click_build_options()
+@click.option(
+    "--continue",
+    "-c",
+    "continue_",
+    is_flag=True,
+    default=False,
+    help="Continue previous build if it was interrupted or failed.",
+)
 def build(*args: Any, **kwargs: Any) -> None:
     """Build model with configuration file.
 
@@ -931,19 +961,31 @@ def alter_fn(
 
         original_input_path: Path = from_model / input_folder
 
-        with open(original_input_path / "files.json", "r") as f:
-            original_files = json.load(f)
+        # TODO: This can be removed in 2026
+        if (
+            not (original_input_path / "files.yml").exists()
+            and (original_input_path / "files.json").exists()
+        ):
+            # convert input/files.json to input/files.yml
+            json_files: dict[str, Any] = read_dict(
+                (original_input_path / "files.json"),
+            )
+            write_dict(json_files, original_input_path / "files.yml")
+            # remove the original json file
+            (original_input_path / "files.json").unlink()
 
-            for file_class, files in original_files.items():
-                for file_name, file_path in files.items():
-                    if not file_path.startswith("/"):
-                        original_files[file_class][file_name] = str(
-                            Path("..") / original_input_path / file_path
-                        )
+        original_files = read_dict(original_input_path / "files.yml")
+
+        for file_class, files in original_files.items():
+            for file_name, file_path in files.items():
+                if not file_path.startswith("/"):
+                    original_files[file_class][file_name] = str(
+                        Path("..") / original_input_path / file_path
+                    )
 
         input_folder.mkdir(parents=True, exist_ok=True)
-        with open(input_folder / "files.json", "w") as f:
-            json.dump(original_files, f, indent=4)
+        with open(input_folder / "files.yml", "w") as f:
+            yaml.dump(original_files, f, default_flow_style=False)
 
         build_config = parse_config(build_config)
         model = get_builder(
@@ -958,8 +1000,6 @@ def alter_fn(
             for method, args in build_config.items()
             if not method.startswith("_")
         }
-
-        model.read()
 
         model.update(
             methods=methods,
@@ -1088,8 +1128,6 @@ def update_fn(
             data_root,
         )
 
-        model.read()
-
         model.update(methods=methods)
 
 
@@ -1112,7 +1150,7 @@ def update(*args: Any, **kwargs: Any) -> None:
 @click_run_options()
 @click.option(
     "--methods",
-    default="plot_discharge,evaluate_discharge",
+    default="plot_discharge,evaluate_discharge,evaluate_hydrodynamics,evaluate_forecasts",
     help="Comma-seperated list of methods to evaluate. Currently supported methods: 'water-circle', 'evaluate-discharge' and 'plot-discharge'. Default is 'plot_discharge,evaluate_discharge'.",
 )
 @click.option("--spinup-name", default="spinup", help="Name of the evaluation run.")
@@ -1191,7 +1229,7 @@ def evaluate(
 def share_fn(
     working_directory: Path,
     name: str,
-    include_preprocessing: bool,
+    include_cache: bool,
     include_output: bool,
 ) -> None:
     """Share model."""
@@ -1199,8 +1237,8 @@ def share_fn(
         # create a zip file called model.zip with the folders input, and model files
         # in the working directory
         folders: list = ["input"]
-        if include_preprocessing:
-            folders.append("preprocessing")
+        if include_cache:
+            folders.append("cache")
         if include_output:
             folders.append("output")
         files: list = [CONFIG_DEFAULT, BUILD_DEFAULT]
@@ -1273,10 +1311,10 @@ def share_fn(
     help="Name used for the zip file.",
 )
 @click.option(
-    "--include-preprocessing",
+    "--include-cache",
     is_flag=True,
     default=False,
-    help="Include preprocessing files in the zip file.",
+    help="Include cache files in the zip file.",
 )
 @click.option(
     "--include-output",
@@ -1382,7 +1420,7 @@ def workflow(
         snakemake_args: Additional arguments to pass to snakemake.
     """
     # Get GEB package directory for workflow files
-    geb_dir = Path(os.environ.get("GEB_PACKAGE_DIR")).parent
+    geb_dir: Path = GEB_PACKAGE_DIR.parent
 
     with WorkingDirectory(working_directory):
         # Build snakemake command
@@ -1567,9 +1605,7 @@ def init_multiple_fn(
                 )
 
     # Verify example folder exists
-    example_folder: Path = (
-        Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / "examples" / from_example
-    )
+    example_folder: Path = GEB_PACKAGE_DIR / ".." / "examples" / from_example
     if not example_folder.exists():
         raise FileNotFoundError(
             f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"

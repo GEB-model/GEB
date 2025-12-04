@@ -1,5 +1,7 @@
 """Test suite for household decision making module."""
 
+from typing import Any
+
 import numpy as np
 from pytest import fixture
 
@@ -9,8 +11,12 @@ from geb.agents.decision_module import (
 
 
 @fixture
-def decision_template() -> None:
-    """This function creates a decision template for the decision module."""
+def decision_template() -> dict[str, Any]:
+    """This function creates a decision template for the decision module.
+
+    Returns:
+        A dictionary containing the parameters for the decision module.
+    """
     geom_id = "<GeoID>"
     n_agents = 100
     return_periods = np.array([10, 50])
@@ -62,7 +68,7 @@ def test_expenditure_cap(decision_template: dict) -> None:
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
     """
-    decision_module = DecisionModule(model=None, agents=None)
+    decision_module = DecisionModule()
 
     # quick basic test
     EU_do_not_adapt = decision_module.calcEU_do_nothing_flood(**decision_template)
@@ -101,7 +107,7 @@ def test_risk_perception(decision_template: dict) -> None:
         decision_template: A dictionary containing the parameters for the decision module.
 
     """
-    decision_module = DecisionModule(model=None, agents=None)
+    decision_module = DecisionModule()
     decision_template["expendature_cap"] = 10  # ensure all can adapt
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 0.01)
     EU_do_nothing_low_risk_perception = decision_module.calcEU_do_nothing_flood(
@@ -123,7 +129,7 @@ def test_damages(decision_template: dict) -> None:
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
     """
-    decision_module = DecisionModule(model=None, agents=None)
+    decision_module = DecisionModule()
 
     # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
@@ -152,7 +158,7 @@ def test_time_adapted(decision_template: dict) -> None:
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
     """
-    decision_module = DecisionModule(model=None, agents=None)
+    decision_module = DecisionModule()
     # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
@@ -186,7 +192,7 @@ def test_loan_duration(decision_template: dict) -> None:
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
     """
-    decision_module = DecisionModule(model=None, agents=None)
+    decision_module = DecisionModule()
     # make sure all can adapt and behave rationally and set time discounting to zero
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
@@ -211,7 +217,7 @@ def test_time_discounting(decision_template: dict) -> None:
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
     """
-    decision_module = DecisionModule(model=None, agents=None)
+    decision_module = DecisionModule()
     # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)
@@ -235,7 +241,7 @@ def test_decision_horizon(decision_template: dict) -> None:
     Args:
         decision_template: A dictionary containing the parameters for the decision module.
     """
-    decision_module = DecisionModule(model=None, agents=None)
+    decision_module = DecisionModule()
     # make sure all can adapt and behave rationally
     decision_template["expendature_cap"] = 10
     decision_template["risk_perception"] = np.full(decision_template["n_agents"], 1)

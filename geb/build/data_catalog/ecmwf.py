@@ -104,12 +104,13 @@ class ECMWFForecasts(Adapter):
         forecast_resolution: str,
         forecast_horizon: int,
         forecast_timestep_hours: int,
+        n_ensemble_members: int,
     ) -> ECMWFForecasts:
         """Download ECMWF forecasts using the ECMWF web API: https://github.com/ecmwf/ecmwf-api-client.
 
         This function downloads ECMWF forecast data for a specified variable and time period
-        from the MARS archive using the ECMWF API. It handles the download and processing of both
-        deterministic (cf) and ensemble (pf) forecasts returning them as an xarray DataArray.
+        from the MARS archive using the ECMWF API. It handles the download and processing of deterministic (control forecast, cf)
+        and ensemble (probabilistic forecast, pf) forecasts, returning them as an xarray DataArray.
 
         This function requires the ECMWF_API_KEY, ECMWF_API_URL and ECMWF_API_EMAIL to be set in the environment variables.
         You can do this by adding it to your .env file. For detailed instructions, see GEB documentation.
@@ -125,10 +126,11 @@ class ECMWFForecasts(Adapter):
             bounds: The bounding box in the format (min_lon, min_lat, max_lon, max_lat).
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
-            forecast_model: The ECMWF forecast model to use ("probabilistic_forecast" or "control_forecast").
+            forecast_model: The ECMWF forecast model to use ("probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic").
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
+            n_ensemble_members: The number of ensemble members to download.
 
         Returns:
             The ECMWFForecasts instance.
@@ -136,6 +138,7 @@ class ECMWFForecasts(Adapter):
         Raises:
             ImportError: If ECMWF_API_KEY, ECMWF_API_URL or ECMWF_API_EMAIL is not found in environment variables.
             ValueError: If forecast dates are before 2010-01-01.
+            ValueError: If the forecast model is not supported.
             APIException: If there is an error accessing the ECMWF MARS service.
         """
         assert url is None, "URL parameter is not used for ECMWF data adapter."
@@ -168,7 +171,6 @@ class ECMWFForecasts(Adapter):
         forecast_date_list = pd.date_range(
             forecast_start, forecast_end, freq="24H"
         )  # Generate list of forecast dates at 24-hour intervals
-
         earliest_allowed_date = date(2010, 1, 1)  # Set earliest allowed forecast date
         for forecast_date in forecast_date_list:  # Loop through all forecast dates
             if (
@@ -178,106 +180,122 @@ class ECMWFForecasts(Adapter):
                     f"Forecast date {forecast_date.date()} is before 2010-01-01. "
                     "For historical data before 2010, please use hindcast data instead."
                 )
-
-        for (
-            forecast_date
-        ) in forecast_date_list:  # Loop through each forecast date to download
-            print(forecast_date)  # Print the current forecast date being processed
-
-            # Process MARS request parameters
-            mars_class: str = "od"  # operational data class
-            mars_expver: str = "1"  # operational version number
-            mars_levtype: str = "sfc"  # surface level data type
-            mars_param: str = "/".join(
-                str(var) for var in forecast_variables
-            )  # Join parameter codes with "/" separator
-
-            if forecast_timestep_hours == 1:  # Check if hourly timestep is requested
-                mars_step: str = generate_forecast_steps(
-                    forecast_date
-                )  # Generate forecast steps based on date using helper function
-            elif (
-                forecast_timestep_hours >= 6
-            ):  # Check if 6+ hourly timestep is requested
-                mars_step: str = f"0/to/{forecast_horizon}/BY/{forecast_timestep_hours}"  # Create step string for multi-hour intervals
-            else:
-                raise ValueError(
-                    f"Forecast timestep {forecast_timestep_hours} is not supported. Please use 1 or >=6."
-                )
-
-            mars_stream: str = "enfo"  # Ensemble forecast stream
-            mars_time: str = forecast_date.strftime(
-                "%H"
-            )  # Extract hour from forecast date for initialization time
-            mars_type: str = (
-                "pf" if forecast_model == "probabilistic_forecast" else "cf"
-            )  # Set forecast type: perturbed forecasts (pf) or control forecast (cf)
-            mars_grid: str = str(
-                forecast_resolution
-            )  # Convert spatial resolution to string
-            mars_area: str = (
-                bounds_str  # Set bounding box area in North/West/South/East format
+        # Determine which model types to download based on YAML configuration
+        if forecast_model == "both_control_and_probabilistic":
+            model_types_to_download = ["control_forecast", "probabilistic_forecast"]
+        elif forecast_model in ["control_forecast", "probabilistic_forecast"]:
+            model_types_to_download = [forecast_model]
+        else:
+            raise ValueError(
+                f"Unsupported forecast_model: '{forecast_model}'. "
+                "Must be 'control_forecast', 'probabilistic_forecast', or 'both_control_and_probabilistic'."
             )
 
-            # retrieve steps from mars
-            mars_request: dict[
-                str, Any
-            ] = {  # Build MARS request dictionary with all parameters
-                "class": mars_class,
-                "date": forecast_date.strftime("%Y-%m-%d"),
-                "expver": mars_expver,
-                "levtype": mars_levtype,
-                "param": mars_param,
-                "step": mars_step,
-                "stream": mars_stream,
-                "time": mars_time,
-                "type": mars_type,
-                "grid": mars_grid,
-                "area": mars_area,
-            }
-
-            output_filename = format_path(
-                self.path,
-                forecast_date=format_date(forecast_date),
-                forecast_model=forecast_model,
-                forecast_resolution=forecast_resolution.replace("/", "-"),
-                forecast_horizon=forecast_horizon,
-                forecast_timestep_hours=forecast_timestep_hours,
-            )
-
-            if output_filename.exists():
+        for model_type in model_types_to_download:
+            print(f"Processing {model_type} downloads...")
+            for (
+                forecast_date
+            ) in forecast_date_list:  # Loop through each forecast date to download
                 print(
-                    f"Forecast file {output_filename} already exists, skipping download."
-                )
-                continue  # Skip download if file already exists
+                    f"Downloading {model_type} for {forecast_date}"
+                )  # Print the current forecast date being processed
 
-            output_filename.parent.mkdir(parents=True, exist_ok=True)
+                # Process MARS request parameters
+                mars_class: str = "od"  # operational data class
+                mars_expver: str = "1"  # operational version number
+                mars_levtype: str = "sfc"  # surface level data type
+                mars_param: str = "/".join(
+                    str(var) for var in forecast_variables
+                )  # Join parameter codes with "/" separator
 
-            if (
-                forecast_model == "probabilistic_forecast"
-            ):  # check if ensemble forecasts are requested
-                mars_request["number"] = (
-                    "1/to/3"  # Add ensemble member numbers to request
-                )
-
-            print(
-                f"Requesting data from ECMWF MARS server.. {mars_request}"
-            )  # Log the MARS request parameters
-
-            try:
-                server.execute(  # Execute the MARS request to download data
-                    mars_request,
-                    output_filename,
-                )  # start the download
-            except ecmwfapi.api.APIException as e:
-                if "has no access to services/mars" in str(e):
-                    raise ValueError(
-                        "\033[91mAccess denied to ECMWF MARS service. To get access, please visit https://confluence.ecmwf.int/display/WEBAPI/Access+MARS, "
-                        "register for an account if you don't have one, and request access to the MARS archive, usually through your country representative (see website). "
-                        "Once approved, ensure your API key, URL, and email are set in your .env file as ECMWF_API_KEY, ECMWF_API_URL, and ECMWF_API_EMAIL.\033[0m"
-                    ) from e
+                if (
+                    forecast_timestep_hours == 1
+                ):  # Check if hourly timestep is requested
+                    mars_step: str = generate_forecast_steps(
+                        forecast_date
+                    )  # Generate forecast steps based on date using helper function
+                elif (
+                    forecast_timestep_hours >= 6
+                ):  # Check if 6+ hourly timestep is requested
+                    mars_step: str = f"0/to/{forecast_horizon}/BY/{forecast_timestep_hours}"  # Create step string for multi-hour intervals
                 else:
-                    raise  # Re-raise other API exceptions
+                    raise ValueError(
+                        f"Forecast timestep {forecast_timestep_hours} is not supported. Please use 1 or >=6."
+                    )
+
+                mars_stream: str = "enfo"  # Ensemble forecast stream
+                mars_time: str = forecast_date.strftime(
+                    "%H"
+                )  # Extract hour from forecast date for initialization time
+                mars_type: str = (
+                    "pf" if model_type == "probabilistic_forecast" else "cf"
+                )  # Set forecast type: perturbed forecasts (pf) or control forecast (cf)
+                mars_grid: str = str(
+                    forecast_resolution
+                )  # Convert spatial resolution to string
+                mars_area: str = (
+                    bounds_str  # Set bounding box area in North/West/South/East format
+                )
+
+                # retrieve steps from mars
+                mars_request: dict[
+                    str, Any
+                ] = {  # Build MARS request dictionary with all parameters
+                    "class": mars_class,
+                    "date": forecast_date.strftime("%Y-%m-%d"),
+                    "expver": mars_expver,
+                    "levtype": mars_levtype,
+                    "param": mars_param,
+                    "step": mars_step,
+                    "stream": mars_stream,
+                    "time": mars_time,
+                    "type": mars_type,
+                    "grid": mars_grid,
+                    "area": mars_area,
+                }
+
+                output_filename = format_path(
+                    self.path,
+                    forecast_date=format_date(forecast_date),
+                    forecast_model=model_type,
+                    forecast_resolution=forecast_resolution.replace("/", "-"),
+                    forecast_horizon=forecast_horizon,
+                    forecast_timestep_hours=forecast_timestep_hours,
+                )
+
+                if output_filename.exists():
+                    print(
+                        f"Forecast file {output_filename} already exists, skipping download."
+                    )
+                    continue  # Skip download if file already exists
+
+                output_filename.parent.mkdir(parents=True, exist_ok=True)
+
+                if (
+                    model_type == "probabilistic_forecast"
+                ):  # check if ensemble forecasts are requested
+                    mars_request["number"] = (
+                        f"1/to/{n_ensemble_members}"  # Add ensemble member numbers to request
+                    )
+
+                print(
+                    f"Requesting data from ECMWF MARS server.. {mars_request}"
+                )  # Log the MARS request parameters
+
+                try:
+                    server.execute(  # Execute the MARS request to download data
+                        mars_request,
+                        output_filename,
+                    )  # start the download
+                except ecmwfapi.api.APIException as e:
+                    if "has no access to services/mars" in str(e):
+                        raise ValueError(
+                            "\033[91mAccess denied to ECMWF MARS service. To get access, please visit https://confluence.ecmwf.int/display/WEBAPI/Access+MARS, "
+                            "register for an account if you don't have one, and request access to the MARS archive, usually through your country representative (see website). "
+                            "Once approved, ensure your API key, URL, and email are set in your .env file as ECMWF_API_KEY, ECMWF_API_URL, and ECMWF_API_EMAIL.\033[0m"
+                        ) from e
+                    else:
+                        raise  # Re-raise other API exceptions
 
         return self
 
@@ -300,7 +318,7 @@ class ECMWFForecasts(Adapter):
             bounds: The bounding box in the format (min_lon, min_lat, max_lon,
                     max_lat).
             forecast_issue_date: The forecast initialization time.
-            forecast_model: The ECMWF forecast model used ("probabilistic_forecast" or "control_forecast").
+            forecast_model: The ECMWF forecast model from build.yml config ("probabilistic_forecast", "control_forecast" or "both_control_and_probabilistic").
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
@@ -309,44 +327,121 @@ class ECMWFForecasts(Adapter):
 
         Returns:
             da: processed ECMWF forecast data as an xarray Dataset.
+
+        Raises:
+            ValueError: If forecast initialization dates or time dimensions don't match between control and ensemble.
         """
-        filename = format_path(
-            self.path,
-            forecast_date=format_date(forecast_issue_date),
-            forecast_model=forecast_model,
-            forecast_resolution=forecast_resolution.replace("/", "-"),
-            forecast_horizon=forecast_horizon,
-            forecast_timestep_hours=forecast_timestep_hours,
-        )
 
-        print(
-            f"Processing forecast file: {filename.name}"
-        )  # Log the filename being processed
+        def _load_forecast_file(model_type: str) -> xr.Dataset:
+            """Load a single forecast dataset for the specified model type.
 
-        ds: xr.Dataset = xr.open_dataset(  # Open GRIB file as xarray Dataset
-            filename,
-            engine="cfgrib",  # Use cfgrib engine for GRIB files
-        ).rename(
-            {"latitude": "y", "longitude": "x", "number": "member"}
-        )  # Rename dimensions to standard names
+            Args:
+                model_type: Either 'control_forecast' or 'probabilistic_forecast'.
 
-        # experimental! add control forecast if available
-        # ctrl_file = (
-        #     variable_folder / f"CTRL_{forecast_issue_date.strftime('%Y%m%dT%H%M%S')}.grb"
-        # )
-        # if ctrl_file.exists():
-        #     ctrl_da: xr.Dataset = xr.open_dataset(
-        #         ctrl_file,
-        #         engine="cfgrib",
-        #     ).rename(
-        #         {"latitude": "y", "longitude": "x", "number": "member"}
-        #     )  # Rename dimensions to standard names
+            Returns:
+                Loaded and renamed forecast dataset.
 
-        #     da = xr.concat(
-        #         [da, ctrl_da], dim="member"
-        #     )  # add control forecast as an extra member
-        #     # name 0 coordinate as 51
-        #     da = da.assign_coords(member=da.member.where(da.member != 0, 51))
+            Raises:
+                FileNotFoundError: If the forecast file doesn't exist.
+            """
+            filename = format_path(
+                self.path,
+                forecast_date=format_date(forecast_issue_date),
+                forecast_model=model_type,
+                forecast_resolution=forecast_resolution.replace("/", "-"),
+                forecast_horizon=forecast_horizon,
+                forecast_timestep_hours=forecast_timestep_hours,
+            )
+
+            if not filename.exists():
+                raise FileNotFoundError(f"Forecast file not found: {filename}")
+
+            print(
+                f"Processing forecast file: {filename.name}"
+            )  # Log the filename being processed
+
+            return xr.open_dataset(  # Open GRIB file as xarray Dataset
+                filename,
+                engine="cfgrib",  # Use cfgrib engine for GRIB files
+            ).rename(
+                {"latitude": "y", "longitude": "x", "number": "member"}
+            )  # Rename dimensions to standard names
+
+        def _validate_forecast_compatibility(
+            control_ds: xr.Dataset, ensemble_ds: xr.Dataset
+        ) -> None:
+            """Validate that control and ensemble forecasts are compatible for merging.
+
+            Args:
+                control_ds: Control forecast dataset.
+                ensemble_ds: Ensemble forecast dataset.
+
+            Raises:
+                ValueError: If forecasts have incompatible dimensions or initialization times.
+            """
+            # Check initialization times match
+            if not np.array_equal(control_ds.time.values, ensemble_ds.time.values):
+                raise ValueError(
+                    "Control and ensemble forecasts have different initialization times. "
+                    f"Control: {control_ds.time.values[0]}, Ensemble: {ensemble_ds.time.values[0]}"
+                )
+
+            # Check forecast steps match
+            if not np.array_equal(control_ds.step.values, ensemble_ds.step.values):
+                raise ValueError(
+                    "Control and ensemble forecasts have different forecast steps. "
+                    f"Control steps: {len(control_ds.step)}, Ensemble steps: {len(ensemble_ds.step)}"
+                )
+
+            # Check spatial dimensions match
+            if not (
+                np.allclose(control_ds.x.values, ensemble_ds.x.values)
+                and np.allclose(control_ds.y.values, ensemble_ds.y.values)
+            ):
+                raise ValueError(
+                    "Control and ensemble forecasts have different spatial coordinates"
+                )
+
+            # Check variables match
+            control_vars = set(control_ds.data_vars)
+            ensemble_vars = set(ensemble_ds.data_vars)
+            if control_vars != ensemble_vars:
+                raise ValueError(
+                    f"Control and ensemble forecasts have different variables. "
+                    f"Control: {control_vars}, Ensemble: {ensemble_vars}"
+                )
+
+        # Load forecast datasets based on YAML forecast_model parameter
+        if forecast_model == "both_control_and_probabilistic":
+            # Load both_control_and_probabilistic control and ensemble forecasts for combination
+            control_ds = _load_forecast_file("control_forecast")
+            ensemble_ds = _load_forecast_file("probabilistic_forecast")
+            # Validate compatibility before merging
+            _validate_forecast_compatibility(control_ds, ensemble_ds)
+
+            # Assign member number 0 to control forecast (ECMWF convention)
+            control_ds = control_ds.expand_dims(dim={"member": [0]})
+            # Ensure ensemble members start from 1 (adjust if they start from 0)
+            if ensemble_ds.member.min().item() == 0:
+                ensemble_ds = ensemble_ds.assign_coords(member=ensemble_ds.member + 1)
+            # Combine control and ensemble forecasts
+            ds = xr.concat([control_ds, ensemble_ds], dim="member")
+            print(
+                f"Combined control and ensemble forecasts: {len(ds.member)} total members"
+            )
+        elif forecast_model in ["control_forecast", "probabilistic_forecast"]:
+            # Load single forecast type without combining
+            ds = _load_forecast_file(forecast_model)
+
+            # Add member dimension to control forecast if not present for consistency
+            if forecast_model == "control_forecast" and "member" not in ds.dims:
+                ds = ds.expand_dims(dim={"member": [0]})
+
+        else:
+            raise ValueError(
+                f"Unsupported forecast_model: '{forecast_model}'. "
+                "Must be 'control_forecast', 'probabilistic_forecast', or 'both_control_and_probabilistic'."
+            )
 
         # ensure all the timesteps are hourly
         if not (

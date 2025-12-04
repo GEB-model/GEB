@@ -6,7 +6,7 @@ from typing import Any
 
 import rioxarray as rxr
 
-from geb.workflows.io import fetch_and_save, to_zarr
+from geb.workflows.io import fetch_and_save, write_zarr
 
 from .base import Adapter
 
@@ -69,7 +69,7 @@ class GEBCO(Adapter):
             }
 
             print("Saving merged DataArray to zarr...")
-            to_zarr(da, self.path, crs=da.rio.crs)
+            write_zarr(da, self.path, crs=da.rio.crs)
 
             print("Cleaning up temporary files...")
             download_path.unlink()  # remove zip file

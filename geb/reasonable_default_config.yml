@@ -9,6 +9,7 @@ general:
   preprocessing_folder: preprocessing/
   output_folder: output/
   spinup_name: spinup
+  simulation_root: simulation_root
   name: default
   export_inital_on_spinup: true
   simulate_forest: false
@@ -19,12 +20,13 @@ general:
 hazards:
   floods:
     simulate: false
-    forcing_method: accumulated_runoff  # headwater_points, runoff, accumulated_runoff
+    forcing_method: accumulated_runoff  # headwater_points, accumulated_runoff
     minimum_flood_depth: 0.05
-    resolution: 150
-    nr_subgrid_pixels: 4
-    crs: auto
+    flood_map_output_interval_seconds: null  # interval in seconds to output flood maps. null means no output.
+    grid_size_multiplier: 1  # must be integer. The first DEM is used for the grid. This multiplier increases the grid cell size (i.e., reduces resolution) by this factor.
+    subgrid: false
     force_overwrite: true
+    coastal_only: false
     write_figures: true  # whether to generate and save diagnostic figures
     return_periods:
       - 2
@@ -62,6 +64,7 @@ agent_settings:
     warning_response: false
     water_demand:
       method: default
+    adjust_demand_factor: 1
     expected_utility:
       flood_risk_calculations:
         risk_perception:
@@ -75,7 +78,7 @@ agent_settings:
     farmers_going_out_of_business: false
     cultivation_cost_fraction: 0.1
     microcredit:
-      ruleset: base
+      ruleset: no-adaptation
       interest_rate: 0.2
       loan_duration: 2
       loss_threshold: 25
@@ -86,6 +89,7 @@ agent_settings:
     expected_utility:
       insurance:
         duration: 2
+        seut_factor: 1
         personal_insurance: 
           ruleset: no-adaptation
         index_insurance: 
@@ -101,9 +105,16 @@ agent_settings:
         loan_duration: 21
         decision_horizon: 20
         m2_cost: 1
+        return_fraction_surface: 0.75
+        return_fraction_sprinkler: 0.3
+        return_fraction_drip:  0.2
+        irr_eff_surface: 0.60
+        irr_eff_sprinkler: 0.75
+        irr_eff_drip:  0.95
       adaptation_irrigation_expansion:
         ruleset: no-adaptation
       adaptation_well:
+        seut_factor: 1
         loan_duration: 21
         lifespan: 20
         decision_horizon: 20
@@ -181,3 +192,19 @@ plantFATE:
   new_forest: false
   new_forest_filename: null
   n_cells: 'all'
+
+calibration:
+  spinup_time: 1975-01-01
+  start_time: 1978-01-01
+  end_time: 1985-01-01
+  path: calibration
+  gpus: 0
+  scenario: no-adaptation
+  calibration_targets:
+    KGE_discharge: 1
+  DEAP:
+    use_multiprocessing: true
+    ngen: 10
+    mu: 30
+    lambda_: 12
+    select_best: 10

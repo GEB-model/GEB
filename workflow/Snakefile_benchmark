@@ -14,7 +14,7 @@ CATCHMENT_NAMES = list(CATCHMENTS.keys())
 # Target rule - run all catchment evaluations
 rule all:
     input:
-        expand("benchmarks/{catchment}/evaluation.yml", catchment=CATCHMENT_NAMES)
+        expand("benchmarks/{catchment}/output/evaluate/discharge/evaluation_results/evaluation_metrics.xlsx", catchment=CATCHMENT_NAMES)
 
 # Include only benchmark-specific rules (not common.smk to avoid conflicts)
 include: "rules/benchmark.smk"

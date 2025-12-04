@@ -11,9 +11,10 @@ import pandas as pd
 import pyflwdir
 import pyflwdir.core
 from numba import njit
+from pyflwdir import core, core_d8, core_ldd
 
 from geb.module import Module
-from geb.typing import (
+from geb.types import (
     ArrayBool,
     ArrayFloat32,
     ArrayFloat64,
@@ -26,10 +27,97 @@ from geb.typing import (
     TwoDArrayUint8,
 )
 from geb.workflows import balance_check
-from geb.workflows.io import load_geom
+from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
+
+# Wrap pyflwdir core functions with @njit(cache=True) to enable Numba caching.
+# This significantly speeds up model initialization by caching the compiled versions
+# of these frequently-called functions. The original functions are already JIT-compiled
+# but don't have caching enabled.
+
+_upstream_matrix_orig = core.upstream_matrix
+_idxs_seq_orig = core.idxs_seq
+_from_array_ldd_orig = core_ldd.from_array
+_check_values_d8_orig = core_d8.check_values
+
+
+@njit(cache=True)
+def wrap_upstream_matrix(
+    idxs_ds: ArrayInt32, mv: np.int64 = core._mv
+) -> TwoDArrayInt32:
+    """Returns a 2D array with upstream cell indices for each cell.
+
+    The shape of the array is (idxs_ds.size, max number of upstream cells per cell).
+
+    Args:
+        idxs_ds: Linear index of next downstream cell.
+        mv: Missing value, default is -1.
+
+    Returns:
+        2D array with upstream cell indices for each cell.
+    """
+    return _upstream_matrix_orig(idxs_ds, mv=mv)
+
+
+@njit(cache=True)
+def wrap_idxs_seq(
+    idxs_ds: ArrayInt32, idxs_pit: ArrayInt32, mv: np.int64 = core._mv
+) -> ArrayInt32:
+    """Returns indices ordered from down- to upstream.
+
+    Args:
+        idxs_ds: Linear index of next downstream cell.
+        idxs_pit: Linear index of pit cells.
+        mv: Missing value, default is -1.
+
+    Returns:
+        Linear indices of valid cells ordered from down- to upstream.
+    """
+    return _idxs_seq_orig(idxs_ds, idxs_pit, mv=mv)
+
+
+@njit(cache=True)
+def wrap_from_array_ldd(
+    flwdir: TwoDArrayUint8, _mv: np.uint8 = core_ldd._mv, dtype: type = np.intp
+) -> tuple[ArrayInt32, ArrayInt32, int]:
+    """Convert 2D LDD data to 1D next downstream indices.
+
+    Args:
+        flwdir: 2D array with LDD data.
+        _mv: Missing value in LDD data.
+        dtype: Data type of the output indices.
+
+    Returns:
+        Tuple containing:
+            - Linear index of next downstream cell.
+            - Linear index of pit cells.
+            - Number of valid cells.
+    """
+    return _from_array_ldd_orig(flwdir, _mv=_mv, dtype=dtype)
+
+
+@njit(cache=True)
+def wrap_check_values_d8(
+    flwdir: TwoDArrayUint8, _all: ArrayUint8 = core_d8._all
+) -> bool:
+    """Check if values in D8 flow direction array are valid.
+
+    Args:
+        flwdir: 2D array with D8 flow direction data.
+        _all: Array with all valid D8 values.
+
+    Returns:
+        True if all values are valid, False otherwise.
+    """
+    return _check_values_d8_orig(flwdir, _all=_all)
+
+
+core.upstream_matrix = wrap_upstream_matrix
+core.idxs_seq = wrap_idxs_seq
+core_ldd.from_array = wrap_from_array_ldd
+core_d8.check_values = wrap_check_values_d8
 
 
 def get_river_width(
@@ -749,7 +837,7 @@ class Accuflux(Router):
         """
         Qold += sideflow_m3 / dt
 
-        evaporation_m3_s: ArrayFloat32 = evaporation_m3 / dt
+        evaporation_m3_s: ArrayFloat32 = evaporation_m3 / np.float32(dt)
         actual_evaporation_m3_s: ArrayFloat32 = np.minimum(evaporation_m3_s, Qold)
         actual_evaporation_m3: ArrayFloat32 = actual_evaporation_m3_s * dt
         actual_evaporation_m3[waterbody_id != -1] = 0.0
@@ -922,9 +1010,6 @@ class Routing(Module):
             self.model.files["grid"]["routing/ldd"],
         )
 
-        if self.model.in_spinup:
-            self.spinup()
-
         mask: TwoDArrayBool = ~self.grid.mask
 
         ldd_uncompressed: TwoDArrayUint8 = np.full_like(mask, 255, dtype=self.ldd.dtype)
@@ -942,6 +1027,9 @@ class Routing(Module):
             self.model.files["grid"]["routing/river_ids"],
         )
 
+        if self.model.in_spinup:
+            self.spinup()
+
     def load_rivers(self, grid_linear_mapping: TwoDArrayInt32) -> gpd.GeoDataFrame:
         """Load the river network geometries.
 
@@ -951,7 +1039,7 @@ class Routing(Module):
         Returns:
             A GeoDataFrame containing the river network geometries.
         """
-        rivers: gpd.GeoDataFrame = load_geom(self.model.files["geom"]["routing/rivers"])
+        rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
         rivers["hydrography_linear"] = rivers["hydrography_xy"].apply(
             lambda xys: np.array(
                 [grid_linear_mapping[xy[1], xy[0]] for xy in xys], dtype=np.int32
@@ -1012,6 +1100,15 @@ class Routing(Module):
         self.grid.var.upstream_area = self.grid.load(
             self.model.files["grid"]["routing/upstream_area"]
         )
+        if "routing/upstream_area_n_cells" in self.model.files["grid"]:
+            self.grid.var.upstream_area_n_cells = self.grid.load(
+                self.model.files["grid"]["routing/upstream_area_n_cells"]
+            )
+        else:
+            # TODO: Remove this in feb 2026
+            self.grid.var.upstream_area_n_cells = self.river_network.upstream_area(
+                unit="cell"
+            )[~self.grid.mask]
 
         # kinematic wave parameter: 0.6 is for broad sheet flow
         self.var.river_beta = 0.6  # TODO: Make this a parameter
@@ -1139,10 +1236,10 @@ class Routing(Module):
         total_runoff_m: ArrayFloat32,
         channel_abstraction_m3: ArrayFloat32,
         return_flow: ArrayFloat32,
-        reference_evapotranspiration_water_m: ArrayFloat32,
+        reference_evapotranspiration_water_m: TwoDArrayFloat32,
     ) -> tuple[
-        np.float32,
-        np.float32,
+        np.float64,
+        np.float64,
     ]:
         """Perform a daily routing step with multiple substeps.
 
@@ -1345,7 +1442,7 @@ class Routing(Module):
                 self.grid.var.discharge_in_rivers_m3_s_substep,
                 rivers=self.rivers,
                 waterbody_ids=self.grid.var.waterBodyID,
-                outflow_per_waterbody_m3_s=outflow_per_waterbody_m3 / 3600,
+                outflow_per_waterbody_m3_s=outflow_per_waterbody_m3 / np.float32(3600),
             )
 
             self.grid.var.discharge_m3_s_per_substep[hour, :] = (

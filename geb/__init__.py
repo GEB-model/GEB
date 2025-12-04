@@ -1,6 +1,6 @@
 """GEB simulates the environment, the individual behaviour of people, households and organizations - including their interactions - at small and large scale."""
 
-__version__ = "1.0.0b6"
+__version__ = "1.0.0b8"
 
 import faulthandler
 import os
@@ -112,7 +112,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     config.THREADING_LAYER = "tbb"
 
     # test import
-    from numba.np.ufunc import tbbpool  # noqa: F401
+    from numba.np.ufunc import tbbpool  # noqa: F401 # ty: ignore[unresolved-import]
     from numba.np.ufunc.parallel import _check_tbb_version_compatible
 
     _check_tbb_version_compatible()
@@ -121,7 +121,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
     def test_threading_layer() -> npt.NDArray[np.int32]:
         array = np.zeros(10, dtype=np.int32)
         """Test function to check if TBB is loaded correctly."""
-        for i in prange(10):
+        for i in prange(10):  # ty: ignore[not-iterable]
             array[i] = i
         return array
 
