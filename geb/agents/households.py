@@ -28,7 +28,7 @@ from ..hydrology.landcovers import (
 )
 from ..store import DynamicArray
 from ..workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
-from ..workflows.io import read_array, read_table, read_zarr, to_zarr
+from ..workflows.io import read_array, read_table, read_zarr, write_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 
@@ -613,7 +613,7 @@ class Households(AgentBaseClass):
 
             probability = probability.astype(np.float32)
             probability = probability.rio.write_nodata(np.nan)
-            probability = to_zarr(da=probability, path=file_path, crs=crs)
+            probability = write_zarr(da=probability, path=file_path, crs=crs)
 
             probability_maps[(date_time, range_id)] = probability
 

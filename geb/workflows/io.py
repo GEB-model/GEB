@@ -17,7 +17,6 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, overload
 
-import cftime
 import geopandas as gpd
 import numpy as np
 import numpy.typing as npt
@@ -187,6 +186,21 @@ def read_geom(filepath: str | Path) -> gpd.GeoDataFrame:
     return gpd.read_parquet(filepath)
 
 
+def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
+    """Save a GeoDataFrame to a parquet file.
+
+    brotli is a bit slower but gives better compression,
+    gzip is faster to read. Higher compression levels
+    generally don't make it slower to read, therefore
+    we use the highest compression level for gzip
+
+    Args:
+        gdf: The GeoDataFrame to save.
+        filepath: Path to the output parquet file.
+    """
+    gdf.to_parquet(filepath, engine="pyarrow", compression="gzip", compression_level=9)
+
+
 def read_dict(filepath: Path) -> Any:
     """Load a dictionary from a JSON or YAML file.
 
@@ -243,7 +257,7 @@ def write_dict(d: dict, filepath: Path) -> None:
 
 
 def calculate_scaling(
-    da: xr.DataArray,
+    da: xr.DataArray | np.ndarray,
     min_value: float,
     max_value: float,
     precision: float,
@@ -449,7 +463,7 @@ def check_buffer_size(
         )
 
 
-def to_zarr(
+def write_zarr(
     da: xr.DataArray,
     path: str | Path,
     crs: int | pyproj.CRS,
@@ -809,14 +823,22 @@ class AsyncGriddedForcingReader:
             time_arr = self.ds["time"]
             assert isinstance(time_arr, zarr.Array)
             time = time_arr[:]
+            assert isinstance(time, np.ndarray)
 
-        datetime_index_unparsed = cftime.num2date(
-            time,
-            units=self.ds["time"].attrs.get("units"),
-            calendar=self.ds["time"].attrs.get("calendar"),
-        )
+        assert self.ds["time"].attrs.get("calendar") == "proleptic_gregorian"
+
+        time_unit = self.ds["time"].attrs.get("units")
+        assert isinstance(time_unit, str)
+        time_unit, origin = time_unit.split(" since ")
+        pandas_time_unit: str = {
+            "seconds": "s",
+            "minutes": "m",
+            "hours": "h",
+            "days": "D",
+        }[time_unit]
+
         self.datetime_index: ArrayDatetime64 = pd.to_datetime(
-            [obj.isoformat() for obj in datetime_index_unparsed]
+            time, unit=pandas_time_unit, origin=origin
         ).to_numpy()
         self.time_size = self.datetime_index.size
 
