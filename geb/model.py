@@ -520,7 +520,7 @@ class GEBModel(Module, HazardDriver):
         self.reporter.finalize()
 
     def update_household_attributes(self) -> None:
-        """Initiate the model only to setup household adaptation attributes after an updated build.
+        """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build.
 
         This function is only included for development purposes.
         """
