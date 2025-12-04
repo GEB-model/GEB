@@ -31,7 +31,7 @@ import numpy as np
 from geb.module import Module
 from geb.types import Array, ArrayBool, ArrayFloat32, ArrayInt32
 from geb.workflows import balance_check
-from geb.workflows.io import load_grid
+from geb.workflows.io import read_grid
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -523,7 +523,7 @@ class LakesReservoirs(Module):
         # has mulitple occurences in the same lake, this seems to happen
         # especially for very small lakes with a small drainage area.
         # In such cases, we take the outflow cell with the lowest elevation.
-        outflow_elevation = load_grid(
+        outflow_elevation = read_grid(
             self.model.files["grid"]["routing/outflow_elevation"]
         )
         outflow_elevation = self.grid.compress(outflow_elevation)
@@ -550,7 +550,7 @@ class LakesReservoirs(Module):
             # especially for very small lakes with a small drainage area.
             # In such cases, we take the outflow cell with the lowest elevation.
             outflow_elevation = self.grid.compress(
-                load_grid(self.model.files["grid"]["routing/outflow_elevation"])
+                read_grid(self.model.files["grid"]["routing/outflow_elevation"])
             )
 
             for duplicate_outflow_point in duplicate_outflow_points:

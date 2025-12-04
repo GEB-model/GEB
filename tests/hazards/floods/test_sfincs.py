@@ -18,7 +18,7 @@ from geb.hazards.floods.sfincs import SFINCSRootModel, SFINCSSimulation
 from geb.hazards.floods.workflows.utils import get_start_point
 from geb.model import GEBModel
 from geb.types import TwoDArrayFloat64, TwoDArrayInt32
-from geb.workflows.io import WorkingDirectory, load_geom, load_grid, open_zarr
+from geb.workflows.io import WorkingDirectory, read_geom, read_grid, read_zarr
 from geb.workflows.raster import rasterize_like
 
 from ...testconfig import IN_GITHUB_ACTIONS, tmp_folder
@@ -98,7 +98,7 @@ def build_sfincs(
     )
     for entry in DEM_config:
         if "elevtn" not in entry:
-            entry["elevtn"] = open_zarr(
+            entry["elevtn"] = read_zarr(
                 geb_model.model.files["other"][entry["path"]]
             ).to_dataset(name="elevtn")
 
@@ -126,7 +126,7 @@ def build_sfincs(
         in geb_model.floods.model.config["hydrology"]["routing"]["river_depth"]
         else {},
         setup_river_outflow_boundary=False,
-        custom_rivers_to_burn=load_geom(
+        custom_rivers_to_burn=read_geom(
             geb_model.files["geom"]["routing/custom_rivers"]
         )
         if "routing/custom_rivers" in geb_model.files["geom"]
@@ -236,7 +236,7 @@ def test_accumulated_runoff(
         if not geographic:
             geb_model.floods.DEM_config
 
-            dem: xr.DataArray = open_zarr(
+            dem: xr.DataArray = read_zarr(
                 geb_model.model.files["other"][geb_model.floods.DEM_config[0]["path"]]
             )
 
@@ -244,7 +244,7 @@ def test_accumulated_runoff(
                 dst_crs=dem.rio.estimate_utm_crs(),
             ).to_dataset(name="elevtn")
 
-        subbasins = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
+        subbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
         rivers = geb_model.hydrology.routing.rivers
         sfincs_models = create_sfincs_models(geb_model, subbasins, rivers, split)
 
@@ -354,7 +354,7 @@ def test_accumulated_runoff(
             flood_depth = simulation.read_final_flood_depth(minimum_flood_depth=0.00)
             total_flood_volume = simulation.get_flood_volume(flood_depth)
 
-            basin_id_grid = load_grid(geb_model.files["grid"]["routing/basin_ids"])
+            basin_id_grid = read_grid(geb_model.files["grid"]["routing/basin_ids"])
 
             valid_cells = np.isin(basin_id_grid, sfincs_model.rivers.index)
             region = sfincs_model.region.to_crs(runoff_m.rio.crs)
@@ -428,7 +428,7 @@ def test_discharge_from_nodes(geb_model: GEBModel, use_gpu: bool) -> None:
         start_time: datetime = datetime(2000, 1, 1, 0)
         end_time: datetime = datetime(2000, 1, 8, 0)
 
-        region = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
+        region = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
         sfincs_model = build_sfincs(
             geb_model,
             subgrid=False,
@@ -490,7 +490,7 @@ def test_discharge_grid_forcing(geb_model: GEBModel, split: bool) -> None:
         start_time: datetime = datetime(2000, 1, 1, 0)
         end_time: datetime = datetime(2000, 1, 8, 0)
 
-        subbasins = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
+        subbasins = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
         rivers = geb_model.hydrology.routing.rivers
         sfincs_models = create_sfincs_models(geb_model, subbasins, rivers, split)
 
@@ -569,7 +569,7 @@ def test_read(geb_model: GEBModel) -> None:
         geb_model: A GEB model instance with SFINCS configured.
     """
     with WorkingDirectory(working_directory):
-        region = load_geom(geb_model.model.files["geom"]["routing/subbasins"])
+        region = read_geom(geb_model.model.files["geom"]["routing/subbasins"])
         sfincs_model_build = build_sfincs(
             geb_model,
             subgrid=False,

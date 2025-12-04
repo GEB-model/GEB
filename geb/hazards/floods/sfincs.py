@@ -40,7 +40,7 @@ from geb.types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
-from geb.workflows.io import load_geom, write_geom, write_zarr
+from geb.workflows.io import read_geom, write_geom, write_zarr
 from geb.workflows.raster import (
     calculate_cell_area,
     clip_region,
@@ -131,8 +131,8 @@ class SFINCSRootModel:
             raise FileNotFoundError(f"SFINCS model not found in {self.path}")
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
         self.sfincs_model.read()
-        self.rivers: gpd.GeoDataFrame = load_geom(self.path / "rivers.geoparquet")
-        self.region: gpd.GeoDataFrame = load_geom(self.path / "region.geoparquet")
+        self.rivers: gpd.GeoDataFrame = read_geom(self.path / "rivers.geoparquet")
+        self.region: gpd.GeoDataFrame = read_geom(self.path / "region.geoparquet")
         return self
 
     def build(

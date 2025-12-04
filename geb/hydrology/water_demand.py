@@ -31,7 +31,7 @@ import numpy.typing as npt
 from geb.module import Module
 from geb.types import ArrayFloat32
 from geb.workflows import TimingModule, balance_check
-from geb.workflows.io import load_grid
+from geb.workflows.io import read_grid
 from geb.workflows.raster import write_to_array
 
 if TYPE_CHECKING:
@@ -102,7 +102,7 @@ class WaterDemand(Module):
         This method initializes the reservoir command areas for the HRU grid.
         """
         reservoir_command_areas = self.HRU.convert_subgrid_to_HRU(
-            load_grid(self.model.files["subgrid"]["waterbodies/subcommand_areas"]),
+            read_grid(self.model.files["subgrid"]["waterbodies/subcommand_areas"]),
             method="last",
         )
 

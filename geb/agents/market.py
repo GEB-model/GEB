@@ -10,7 +10,7 @@ import statsmodels.api as sm
 from numpy.linalg import LinAlgError
 
 from geb.types import TwoDArrayFloat32
-from geb.workflows.io import load_dict
+from geb.workflows.io import read_dict
 
 from ..data import load_regional_crop_data_from_dict
 from ..store import DynamicArray
@@ -122,7 +122,7 @@ class Market(AgentBaseClass):
             extra_dims_names=["params"],
         )
 
-        inflation = load_dict(
+        inflation = read_dict(
             self.model.files["dict"]["socioeconomics/inflation_rates"]
         )
         inflation["time"] = [int(time) for time in inflation["time"]]

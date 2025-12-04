@@ -27,7 +27,7 @@ from geb.types import (
     TwoDArrayUint8,
 )
 from geb.workflows import balance_check
-from geb.workflows.io import load_geom
+from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -1039,7 +1039,7 @@ class Routing(Module):
         Returns:
             A GeoDataFrame containing the river network geometries.
         """
-        rivers: gpd.GeoDataFrame = load_geom(self.model.files["geom"]["routing/rivers"])
+        rivers: gpd.GeoDataFrame = read_geom(self.model.files["geom"]["routing/rivers"])
         rivers["hydrography_linear"] = rivers["hydrography_xy"].apply(
             lambda xys: np.array(
                 [grid_linear_mapping[xy[1], xy[0]] for xy in xys], dtype=np.int32

@@ -25,7 +25,7 @@ import xarray as xr
 from rioxarray import merge
 from tqdm import tqdm
 
-from geb.workflows.io import fetch_and_save, open_zarr, write_zarr
+from geb.workflows.io import fetch_and_save, read_zarr, write_zarr
 from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
@@ -685,5 +685,5 @@ class Fabdem(Adapter):
             xarray DataArray with FABDEM data.
         """
         filepath: Path = self.get_filepath(prefix)
-        da: xr.DataArray = open_zarr(filepath)
+        da: xr.DataArray = read_zarr(filepath)
         return da
