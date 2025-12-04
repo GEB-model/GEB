@@ -25,7 +25,7 @@ from geb.types import (
     TwoDArrayFloat32,
     TwoDArrayInt32,
 )
-from geb.workflows.io import load_grid, open_zarr
+from geb.workflows.io import load_grid, read_zarr
 from geb.workflows.raster import compress, decompress_with_mask
 
 if TYPE_CHECKING:
@@ -467,17 +467,17 @@ class Grid(BaseVariables):
     @property
     def gev_c(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of SPEI for grid."""
-        return open_zarr(self.model.files["other"]["climate/gev_c"])
+        return read_zarr(self.model.files["other"]["climate/gev_c"])
 
     @property
     def gev_loc(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) location parameter of SPEI for grid."""
-        return open_zarr(self.model.files["other"]["climate/gev_loc"])
+        return read_zarr(self.model.files["other"]["climate/gev_loc"])
 
     @property
     def gev_scale(self) -> xr.DataArray:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of SPEI for grid."""
-        return open_zarr(self.model.files["other"]["climate/gev_scale"])
+        return read_zarr(self.model.files["other"]["climate/gev_scale"])
 
     @property
     def pr_gev_c(self) -> xr.DataArray:

@@ -23,7 +23,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
-from geb.workflows.io import load_dict, load_geom, open_zarr
+from geb.workflows.io import load_dict, load_geom, read_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
@@ -172,7 +172,7 @@ class GEBModel(Module, HazardDriver):
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 # open one forecast to see the number of members
-                forecast_data[loader_name] = open_zarr(
+                forecast_data[loader_name] = read_zarr(
                     self.input_folder
                     / "other"
                     / "forecasts"

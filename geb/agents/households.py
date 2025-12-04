@@ -28,7 +28,7 @@ from ..hydrology.landcovers import (
 )
 from ..store import DynamicArray
 from ..workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
-from ..workflows.io import load_array, load_table, open_zarr, to_zarr
+from ..workflows.io import load_array, load_table, read_zarr, to_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 
@@ -122,7 +122,7 @@ class Households(AgentBaseClass):
             file_path = (
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
             )
-            flood_maps[return_period] = open_zarr(file_path)
+            flood_maps[return_period] = read_zarr(file_path)
         self.flood_maps = flood_maps
 
     def construct_income_distribution(self) -> None:
@@ -484,7 +484,7 @@ class Households(AgentBaseClass):
                 / f"{flood_start_time.strftime(format='%Y%m%dT%H%M%S')} - {flood_end_time.strftime(format='%Y%m%dT%H%M%S')}.zarr"
             )
 
-            members.append(open_zarr(file_path))
+            members.append(read_zarr(file_path))
 
         # Concatenate the members for each time (This stacks the list of dataarrays along a new "member" dimension)
         ensemble_flood_maps = xr.concat(members, dim="member")
@@ -736,7 +736,7 @@ class Households(AgentBaseClass):
             )
 
             # Open the probability map
-            prob_map = open_zarr(prob_map)
+            prob_map = read_zarr(prob_map)
             affine = prob_map.rio.transform()
             prob_map = np.asarray(prob_map.values)
 
@@ -1074,7 +1074,7 @@ class Households(AgentBaseClass):
         )
 
         # Open the probability map
-        prob_map = open_zarr(prob_energy_hit_path)
+        prob_map = read_zarr(prob_energy_hit_path)
         affine = prob_map.rio.transform()
         prob_array = np.asarray(prob_map.values)
 
@@ -1117,7 +1117,7 @@ class Households(AgentBaseClass):
         )
 
         # Open the probability map
-        prob_map = open_zarr(prob_critical_facilities_hit_path)
+        prob_map = read_zarr(prob_critical_facilities_hit_path)
         affine = prob_map.rio.transform()
         prob_array = np.asarray(prob_map.values)
 

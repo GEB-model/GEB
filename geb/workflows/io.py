@@ -214,7 +214,7 @@ def _convert_paths_to_strings(obj: Any) -> Any:
         return obj
 
 
-def to_dict(d: dict, filepath: Path) -> None:
+def write_dict(d: dict, filepath: Path) -> None:
     """Save a dictionary to a YAML file.
 
     Args:
@@ -302,7 +302,7 @@ def calculate_scaling(
     return scaling_factor, in_dtype, out_dtype
 
 
-def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
+def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     """Open a zarr file as an xarray DataArray.
 
     If the data is a boolean type and does not have a _FillValue attribute,
@@ -582,7 +582,7 @@ def to_zarr(
             shutil.rmtree(path)
         shutil.move(tmp_zarr, folder)
 
-    da_disk: xr.DataArray = open_zarr(path)
+    da_disk: xr.DataArray = read_zarr(path)
 
     # perform some asserts to check if the data was written and read correctly
     assert da.dtype == da_disk.dtype, "dtype mismatch"

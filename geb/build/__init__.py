@@ -29,10 +29,10 @@ from shapely.geometry import Point
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.workflows.io import load_dict, to_dict
+from geb.workflows.io import load_dict, write_dict
 from geb.workflows.raster import clip_region, full_like, repeat_grid
 
-from ..workflows.io import open_zarr, to_zarr
+from ..workflows.io import read_zarr, to_zarr
 from .modules import (
     Agents,
     Crops,
@@ -1537,7 +1537,7 @@ class GEBModel(
         self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
         self.array: DelayedReader = DelayedReader(zarr.load)
         self.dict: DelayedReader = DelayedReader(reader=load_dict)
-        self.other: DelayedReader = DelayedReader(reader=open_zarr)
+        self.other: DelayedReader = DelayedReader(reader=read_zarr)
 
     @build_method
     def setup_region(
@@ -2237,7 +2237,7 @@ class GEBModel(
 
             self.files["dict"][name] = fp
 
-            to_dict(data, fp_with_root)
+            write_dict(data, fp_with_root)
 
         self.dict[name] = fp_with_root
 
@@ -2293,7 +2293,7 @@ class GEBModel(
             else:
                 file_library[type_name].update(type_files)
 
-        to_dict(file_library, self.files_path)
+        write_dict(file_library, self.files_path)
 
     def read_or_create_file_library(self) -> dict:
         """Reads the file library from disk.
@@ -2352,13 +2352,13 @@ class GEBModel(
         grid_files: dict[str, dict[str, Path]] = self.files["grid"]
         if len(grid_files) == 0:
             return
-        mask: xr.DataArray = open_zarr(Path(self.root) / grid_files["mask"])
+        mask: xr.DataArray = read_zarr(Path(self.root) / grid_files["mask"])
         self.set_grid(mask, name="mask", write=False)
 
         for name, fn in self.files["grid"].items():
             if name == "mask":  # mask already read
                 continue
-            data: xr.DataArray = open_zarr(Path(self.root) / fn)
+            data: xr.DataArray = read_zarr(Path(self.root) / fn)
             self.set_grid(data, name=name, write=False)
 
     def read_subgrid(self) -> None:
@@ -2367,12 +2367,12 @@ class GEBModel(
         subgrid_files: dict[str, dict[str, Path]] = self.files["subgrid"]
         if len(subgrid_files) == 0:
             return
-        mask: xr.DataArray = open_zarr(Path(self.root) / subgrid_files["mask"])
+        mask: xr.DataArray = read_zarr(Path(self.root) / subgrid_files["mask"])
         self.set_subgrid(mask, name="mask", write=False)
         for name, fn in self.files["subgrid"].items():
             if name == "mask":  # mask already read
                 continue
-            data: xr.DataArray = open_zarr(Path(self.root) / fn)
+            data: xr.DataArray = read_zarr(Path(self.root) / fn)
             self.set_subgrid(data, name=name, write=False)
 
     def read_region_subgrid(self) -> None:
@@ -2381,12 +2381,12 @@ class GEBModel(
         region_subgrid_files: dict[str, dict[str, Path]] = self.files["region_subgrid"]
         if len(region_subgrid_files) == 0:
             return
-        mask: xr.DataArray = open_zarr(Path(self.root) / region_subgrid_files["mask"])
+        mask: xr.DataArray = read_zarr(Path(self.root) / region_subgrid_files["mask"])
         self.set_region_subgrid(mask, name="mask", write=False)
         for name, fn in self.files["region_subgrid"].items():
             if name == "mask":  # mask already read
                 continue
-            data: xr.DataArray = open_zarr(Path(self.root) / fn)
+            data: xr.DataArray = read_zarr(Path(self.root) / fn)
             self.set_region_subgrid(data, name=name, write=False)
 
     def read_other(self) -> None:
