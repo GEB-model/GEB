@@ -39,7 +39,7 @@ from geb.types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
-from geb.workflows.io import load_geom
+from geb.workflows.io import load_geom, write_geom, write_zarr
 from geb.workflows.raster import (
     calculate_cell_area,
     clip_region,
@@ -478,7 +478,22 @@ class SFINCSRootModel:
     def setup_river_outflow_boundary(
         self,
     ) -> None:
-        """Sets up river outflow boundary condition for the SFINCS model."""
+        """Sets up river outflow boundary condition for the SFINCS model.
+
+        Raises:
+            ValueError: if the calculated outflow point is not a single point.
+            ValueError: if the calculated outflow point is outside of the model grid.
+        """
+
+        def export_diagnostics() -> None:
+            write_zarr(
+                self.mask,
+                self.path / "debug_outflow_mask.zarr",
+                crs=self.mask.rio.crs,
+            )
+            write_geom(self.rivers, self.path / "debug_rivers.geoparquet")
+            write_geom(self.region, self.path / "debug_region.geoparquet")
+
         downstream_most_rivers: gpd.GeoDataFrame = self.rivers.loc[
             self.rivers["is_downstream_outflow_subbasin"]
             | (self.rivers["downstream_ID"] == 0)
@@ -489,9 +504,16 @@ class SFINCSRootModel:
 
         if not downstream_most_rivers.empty:
             for river_idx, river in downstream_most_rivers.iterrows():
-                # the final point is in the next basin, so we take the second to last point
-                # which should be in the current basin
-                outflow_point: Point = Point(river.geometry.coords[-2])
+                # outflow point is the intersection of the river geometry with the region boundary
+                outflow_point = river.geometry.intersection(
+                    self.region.union_all().boundary
+                )
+                if not isinstance(outflow_point, Point):
+                    export_diagnostics()
+                    raise ValueError(
+                        "Calculated outflow point is not a single point. Please check the river geometries and region boundary."
+                    )
+
                 col, row = coord_to_pixel(
                     (outflow_point.x, outflow_point.y),
                     self.mask.rio.transform().to_gdal(),
@@ -500,22 +522,29 @@ class SFINCSRootModel:
                     "Calculated outflow point is outside of the model grid"
                 )
                 outflow_boundary_width_m = 500
-                outflow: TwoDArrayBool = detect_outflow(
-                    self.mask.values,
-                    row=row,
-                    col=col,
-                    width_cells=(
-                        math.ceil(
-                            (
-                                (outflow_boundary_width_m / self.estimated_cell_size_m)
-                                - 1
+                try:
+                    outflow: TwoDArrayBool = detect_outflow(
+                        self.mask.values,
+                        row=row,
+                        col=col,
+                        width_cells=(
+                            math.ceil(
+                                (
+                                    (
+                                        outflow_boundary_width_m
+                                        / self.estimated_cell_size_m
+                                    )
+                                    - 1
+                                )
+                                / 2
                             )
-                            / 2
-                        )
-                        * 2
-                        + 1
-                    ),
-                )
+                            * 2
+                            + 1
+                        ),
+                    )
+                except ValueError:
+                    export_diagnostics()
+                    raise
 
                 outflow_elevation: float = self.elevation[row, col].item()
                 self.rivers.at[river_idx, "outflow_elevation"] = outflow_elevation

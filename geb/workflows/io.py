@@ -171,6 +171,21 @@ def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
     return gpd.read_parquet(filepath)
 
 
+def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
+    """Save a GeoDataFrame to a parquet file.
+
+    brotli is a bit slower but gives better compression,
+    gzip is faster to read. Higher compression levels
+    generally don't make it slower to read, therefore
+    we use the highest compression level for gzip
+
+    Args:
+        gdf: The GeoDataFrame to save.
+        filepath: Path to the output parquet file.
+    """
+    gdf.to_parquet(filepath, engine="pyarrow", compression="gzip", compression_level=9)
+
+
 def load_dict(filepath: Path) -> Any:
     """Load a dictionary from a JSON or YAML file.
 
@@ -433,7 +448,7 @@ def check_buffer_size(
         )
 
 
-def to_zarr(
+def write_zarr(
     da: xr.DataArray,
     path: str | Path,
     crs: int | pyproj.CRS,

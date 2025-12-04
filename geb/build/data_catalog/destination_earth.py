@@ -90,9 +90,9 @@ class DestinationEarth(Adapter):
         buffer: float = 0.5
         buffered_bounds: tuple[float, float, float, float] = (
             bounds[0] - buffer,
-            bounds[1] + buffer,
+            bounds[1] - buffer,
             bounds[2] + buffer,
-            bounds[3] - buffer,
+            bounds[3] + buffer,
         )
 
         # Check if region crosses the meridian (longitude=0)

@@ -29,10 +29,10 @@ from shapely.geometry import Point
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.workflows.io import load_dict, to_dict
+from geb.workflows.io import load_dict, to_dict, write_geom
 from geb.workflows.raster import clip_region, full_like, repeat_grid
 
-from ..workflows.io import open_zarr, to_zarr
+from ..workflows.io import open_zarr, write_zarr
 from .modules import (
     Agents,
     Crops,
@@ -2257,13 +2257,7 @@ class GEBModel(
             self.logger.info(f"Writing file {fp}")
             self.files["geom"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            # brotli is a bit slower but gives better compression,
-            # gzip is faster to read. Higher compression levels
-            # generally don't make it slower to read, therefore
-            # we use the highest compression level for gzip
-            geom.to_parquet(
-                fp_with_root, engine="pyarrow", compression="gzip", compression_level=9
-            )
+            write_geom(geom, fp_with_root)
 
         self.geom[name] = fp_with_root
 
@@ -2439,8 +2433,8 @@ class GEBModel(
                 Defaults to XY_CHUNKSIZE.
             time_chunksize: The chunk size in the time dimension for writing to zarr.
                 Defaults to 1.
-            *args: Additional arguments to pass to to_zarr.
-            **kwargs: Additional keyword arguments to pass to to_zarr.
+            *args: Additional arguments to pass to write_zarr.
+            **kwargs: Additional keyword arguments to pass to write_zarr.
 
         Returns:
             The data array that was set. If write=True, this is the data array read from
@@ -2456,7 +2450,7 @@ class GEBModel(
 
             fp_with_root: Path = Path(self.root, fp)
 
-            da: xr.DataArray = to_zarr(
+            da: xr.DataArray = write_zarr(
                 da,
                 fp_with_root,
                 x_chunksize=x_chunksize,
@@ -2524,7 +2518,7 @@ class GEBModel(
         if write:
             fn = Path(grid_name) / (name + ".zarr")
             self.logger.info(f"Writing file {fn}")
-            data = to_zarr(
+            data = write_zarr(
                 data,
                 path=self.root / fn,
                 x_chunksize=x_chunksize,
