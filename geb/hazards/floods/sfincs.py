@@ -28,6 +28,7 @@ from hydromt_sfincs.workflows import burn_river_rect
 from pyflwdir import FlwdirRaster
 from pyflwdir.dem import fill_depressions
 from scipy.ndimage import value_indices
+from shapely import line_locate_point
 from shapely.geometry import Point
 from tqdm import tqdm
 
@@ -39,7 +40,7 @@ from geb.types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
-from geb.workflows.io import load_geom
+from geb.workflows.io import read_geom, write_geom, write_zarr
 from geb.workflows.raster import (
     calculate_cell_area,
     clip_region,
@@ -49,7 +50,7 @@ from geb.workflows.raster import (
 )
 
 from .workflows import get_river_depth, get_river_manning
-from .workflows.outflow import detect_outflow
+from .workflows.outflow import create_outflow_in_mask
 from .workflows.return_periods import (
     assign_calculation_group,
     get_topological_stream_order,
@@ -130,8 +131,8 @@ class SFINCSRootModel:
             raise FileNotFoundError(f"SFINCS model not found in {self.path}")
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
         self.sfincs_model.read()
-        self.rivers: gpd.GeoDataFrame = load_geom(self.path / "rivers.geoparquet")
-        self.region: gpd.GeoDataFrame = load_geom(self.path / "region.geoparquet")
+        self.rivers: gpd.GeoDataFrame = read_geom(self.path / "rivers.geoparquet")
+        self.region: gpd.GeoDataFrame = read_geom(self.path / "region.geoparquet")
         return self
 
     def build(
@@ -478,7 +479,24 @@ class SFINCSRootModel:
     def setup_river_outflow_boundary(
         self,
     ) -> None:
-        """Sets up river outflow boundary condition for the SFINCS model."""
+        """Sets up river outflow boundary condition for the SFINCS model.
+
+        Raises:
+            ValueError: if the calculated outflow point is not a single point.
+            ValueError: if the calculated outflow point is outside of the model grid.
+        """
+
+        def export_diagnostics() -> None:
+            write_zarr(
+                self.mask,
+                self.path / "debug_outflow_mask.zarr",
+                crs=self.mask.rio.crs,
+            )
+            self.rivers.to_file(self.path / "debug_rivers.geojson", driver="GeoJSON")
+            self.region.to_file(self.path / "debug_region.geojson", driver="GeoJSON")
+            write_geom(self.rivers, self.path / "debug_rivers.geoparquet")
+            write_geom(self.region, self.path / "debug_region.geoparquet")
+
         downstream_most_rivers: gpd.GeoDataFrame = self.rivers.loc[
             self.rivers["is_downstream_outflow_subbasin"]
             | (self.rivers["downstream_ID"] == 0)
@@ -489,35 +507,72 @@ class SFINCSRootModel:
 
         if not downstream_most_rivers.empty:
             for river_idx, river in downstream_most_rivers.iterrows():
-                # the final point is in the next basin, so we take the second to last point
-                # which should be in the current basin
-                outflow_point: Point = Point(river.geometry.coords[-2])
-                col, row = coord_to_pixel(
+                # outflow point is the intersection of the river geometry with the region boundary
+                # this will be used as the central point of the outflow boundary condition
+                outflow_point = river.geometry.intersection(
+                    self.region.union_all().boundary
+                )
+                if not isinstance(outflow_point, Point):
+                    export_diagnostics()
+                    raise ValueError(
+                        "Calculated outflow point is not a single point. Please check the river geometries and region boundary."
+                    )
+
+                outflow_col, outflow_row = coord_to_pixel(
                     (outflow_point.x, outflow_point.y),
                     self.mask.rio.transform().to_gdal(),
                 )
-                assert col >= 0 and row >= 0, (
+                # due to floating point precision, the intersection point
+                # may be just outside the model grid. We therefore check if the
+                # point is outside the grid, and if so, move it 1 m upstream along the river
+                if not self.mask.values[outflow_row, outflow_col]:
+                    # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
+                    outflow_point = river.geometry.interpolate(
+                        line_locate_point(river.geometry, outflow_point) - 0.000008983
+                        if self.is_geographic
+                        else 1.0
+                    )
+                    outflow_col, outflow_row = coord_to_pixel(
+                        (outflow_point.x, outflow_point.y),
+                        self.mask.rio.transform().to_gdal(),
+                    )
+                    # if still outside the grid, raise error
+                    if not self.mask.values[outflow_row, outflow_col]:
+                        export_diagnostics()
+                        raise ValueError(
+                            "Calculated outflow point is outside of the model grid. Please check the river geometries and region boundary."
+                        )
+                assert outflow_col >= 0 and outflow_row >= 0, (
                     "Calculated outflow point is outside of the model grid"
                 )
                 outflow_boundary_width_m = 500
-                outflow: TwoDArrayBool = detect_outflow(
-                    self.mask.values,
-                    row=row,
-                    col=col,
-                    width_cells=(
-                        math.ceil(
-                            (
-                                (outflow_boundary_width_m / self.estimated_cell_size_m)
-                                - 1
+                try:
+                    outflow_mask: TwoDArrayBool = create_outflow_in_mask(
+                        self.mask.values,
+                        row=outflow_row,
+                        col=outflow_col,
+                        width_cells=(
+                            math.ceil(
+                                (
+                                    (
+                                        outflow_boundary_width_m
+                                        / self.estimated_cell_size_m
+                                    )
+                                    - 1
+                                )
+                                / 2
                             )
-                            / 2
-                        )
-                        * 2
-                        + 1
-                    ),
-                )
+                            * 2
+                            + 1
+                        ),
+                    )
+                except ValueError:
+                    export_diagnostics()
+                    raise
 
-                outflow_elevation: float = self.elevation[row, col].item()
+                outflow_elevation: float = self.elevation[
+                    outflow_row, outflow_col
+                ].item()
                 self.rivers.at[river_idx, "outflow_elevation"] = outflow_elevation
                 self.rivers.at[river_idx, "outflow_point_xy"] = (
                     outflow_point.x,
@@ -525,7 +580,7 @@ class SFINCSRootModel:
                 )
 
                 assert self.sfincs_model.grid_type == "regular"
-                self.mask.values[outflow] = SFINCS_WATER_LEVEL_BOUNDARY
+                self.mask.values[outflow_mask] = SFINCS_WATER_LEVEL_BOUNDARY
 
     def get_flood_plain(self, maximum_hand: float = 30.0) -> gpd.GeoDataFrame:
         """Returns the flood plain grid of the SFINCS model.
@@ -800,7 +855,9 @@ class SFINCSRootModel:
             **kwargs,
         )
 
-    def create_coastal_simulation(self, return_period: int) -> SFINCSSimulation:
+    def create_coastal_simulation(
+        self, return_period: int, locations: gpd.GeoDataFrame, offset: xr.DataArray
+    ) -> SFINCSSimulation:
         """
         Creates a SFINCS simulation with coastal water level forcing for a specified return period.
 
@@ -808,7 +865,8 @@ class SFINCSRootModel:
 
         Args:
             return_period: The return period for which to create the coastal simulation.
-
+            locations: A GeoDataFrame containing the locations of GTSM forcing stations.
+            offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
         Returns:
             An instance of SFINCSSimulation configured with coastal water level forcing.
         """
@@ -820,25 +878,21 @@ class SFINCSRootModel:
             index_col=0,
         )
 
-        locations: gpd.GeoDataFrame = (  # ty: ignore[invalid-assignment]
-            load_geom(self.model.files["geom"]["gtsm/stations_coast_rp"])
-            .rename(columns={"station_id": "stations"})
-            .set_index("stations")
-        )
-
         # convert index to int
-        locations.index = locations.index.astype(int)
+        # make a copy to avoid overwriting the original locations
+        locations_copy = locations.copy()
+        locations_copy.index = locations_copy.index.astype(int)
 
         timeseries.index = pd.to_datetime(timeseries.index, format="%Y-%m-%d %H:%M:%S")
         # convert columns to int
         timeseries.columns = timeseries.columns.astype(int)
 
         # Align timeseries columns with locations index
-        timeseries = timeseries.loc[:, locations.index]
+        timeseries = timeseries.loc[:, locations_copy.index]
 
         # now convert to incrementing integers starting from 0
         timeseries.columns = range(len(timeseries.columns))
-        locations.index = range(len(locations.index))
+        locations_copy.index = range(len(locations_copy.index))
 
         timeseries = timeseries.iloc[250:-250]  # trim the first and last 250 rows
 
@@ -848,18 +902,19 @@ class SFINCSRootModel:
             end_time=timeseries.index[-1],
         )
 
-        offset = xr.open_dataarray(
-            self.model.files["other"]["coastal/global_ocean_mean_dynamic_topography"]
-        ).rio.write_crs("EPSG:4326")
-
         # set coastal forcing model
         simulation.set_coastal_waterlevel_forcing(
-            timeseries=timeseries, locations=locations, offset=offset
+            timeseries=timeseries, locations=locations_copy, offset=offset
         )
         return simulation
 
     def create_simulation_for_return_period(
-        self, return_period: int, coastal: bool = False
+        self,
+        return_period: int,
+        locations: gpd.GeoDataFrame,
+        offset: xr.DataArray,
+        coastal: bool = False,
+        coastal_only: bool = False,
     ) -> MultipleSFINCSSimulations:
         """Creates multiple SFINCS simulations for a specified return period.
 
@@ -869,7 +924,10 @@ class SFINCSRootModel:
 
         Args:
             return_period: The return period for which to create simulations.
+            locations: A GeoDataFrame containing the locations of GTSM forcing stations.
+            offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
             coastal: Whether to create a coastal simulation.
+            coastal_only: Whether to only include coastal subbasins in the model.
 
         Returns:
             An instance of MultipleSFINCSSimulations containing the created simulations.
@@ -881,12 +939,6 @@ class SFINCSRootModel:
                 if the discharge DataFrame columns cannot be converted to integers,
                 or if the discharge hydrographs contain NaN values.
         """
-        rivers: gpd.GeoDataFrame = import_rivers(self.path, postfix="_return_periods")
-        assert (~rivers["is_downstream_outflow_subbasin"]).all()
-
-        rivers["topological_stream_order"] = get_topological_stream_order(rivers)
-        rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
-
         working_dir: Path = self.path / "working_dir"
         working_dir_return_period: Path = working_dir / f"rp_{return_period}"
 
@@ -895,8 +947,18 @@ class SFINCSRootModel:
 
         # create coastal simulation
         if coastal:
-            simulation: SFINCSSimulation = self.create_coastal_simulation(return_period)
+            simulation: SFINCSSimulation = self.create_coastal_simulation(
+                return_period, locations, offset
+            )
             simulations.append(simulation)
+        if coastal_only:
+            return MultipleSFINCSSimulations(simulations=simulations)
+
+        rivers: gpd.GeoDataFrame = import_rivers(self.path, postfix="_return_periods")
+        assert (~rivers["is_downstream_outflow_subbasin"]).all()
+
+        rivers["topological_stream_order"] = get_topological_stream_order(rivers)
+        rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
 
         # create river inflow simulations
         for group, group_rivers in tqdm(rivers.groupby("calculation_group")):

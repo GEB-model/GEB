@@ -506,6 +506,15 @@ class Hydrography:
         upstream_area.data = upstream_area_data
         self.set_grid(upstream_area, name="routing/upstream_area")
 
+        upstream_area_n_cells: xr.DataArray = self.full_like(
+            outflow_elevation, fill_value=-1, nodata=-1, dtype=np.int32
+        )
+        upstream_area_n_cells_data: npt.NDArray[np.int32] = flow_raster.upstream_area(
+            unit="cell"
+        ).astype(np.int32)
+        upstream_area_n_cells.data = upstream_area_n_cells_data
+        self.set_grid(upstream_area_n_cells, name="routing/upstream_area_n_cells")
+
         # river length
         river_length: xr.DataArray = self.full_like(
             outflow_elevation, fill_value=np.nan, nodata=np.nan, dtype=np.float32

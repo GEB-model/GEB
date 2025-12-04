@@ -24,7 +24,7 @@ import pandas as pd
 import yaml
 from numpy.typing import NDArray
 
-from geb.workflows.io import load_geom
+from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -1107,7 +1107,7 @@ class Bucket:
                 setattr(
                     self,
                     filename.stem,
-                    load_geom(filename),
+                    read_geom(filename),
                 )
             elif filename.suffix == ".parquet":
                 setattr(

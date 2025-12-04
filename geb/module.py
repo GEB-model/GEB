@@ -44,7 +44,7 @@ class Module(ABC):
         pass
 
     @abstractmethod
-    def step(self) -> None:
+    def step(self, *args: Any, **kwargs: Any) -> Any:
         """Perform a single time step of the module. This method should be overridden by subclasses."""
         pass
 

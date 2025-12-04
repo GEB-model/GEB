@@ -31,7 +31,7 @@ from requests.auth import HTTPBasicAuth
 from rioxarray import merge
 from tqdm import tqdm
 
-from geb.workflows.io import to_zarr
+from geb.workflows.io import write_zarr
 from geb.workflows.raster import convert_nodata
 
 from .base import Adapter
@@ -519,7 +519,7 @@ class MeritHydro(Adapter):
         da: xr.DataArray = da.sel(x=slice(xmin, xmax), y=slice(ymax, ymin))
         da: xr.DataArray = convert_nodata(da, target_nodata)
 
-        to_zarr(da, self.path, crs=da.rio.crs)
+        write_zarr(da, self.path, crs=da.rio.crs)
 
         # Clean up individual tile files and missing markers
         for result in results:
