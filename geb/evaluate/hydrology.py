@@ -2060,11 +2060,16 @@ class Hydrology:
                 )
 
             # check if observation file exists, if not, raise an error
-            if not Path(self.config["floods"]["event_observation_file"]).exists():
+            if not Path(
+                self.config["floods"]["event_observation_files"]["raster"]
+            ).exists():
                 raise FileNotFoundError(
                     f"Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
                 )
-            if Path(self.config["floods"]["event_observation_file"]).suffix != ".zarr":
+            if (
+                Path(self.config["floods"]["event_observation_files"]["raster"]).suffix
+                != ".zarr"
+            ):
                 raise ValueError(
                     f"Flood observation file is not in the correct format. Please provide a .zarr file."
                 )
@@ -2095,7 +2100,9 @@ class Hydrology:
                     Path(self.model.output_folder) / "flood_maps" / flood_map_name
                 )
                 calculate_performance_metrics(
-                    observation=self.config["floods"]["event_observation_file"],
+                    observation=self.config["floods"]["event_observation_file"][
+                        "raster"
+                    ],
                     flood_map_path=flood_map_path,
                     visualization_type="OSM",
                     output_folder=event_folder,
@@ -2161,7 +2168,9 @@ class Hydrology:
                         print(f"   Evaluating: {flood_map_path.name}")
 
                         metrics = calculate_performance_metrics(
-                            observation=self.config["floods"]["event_observation_file"],
+                            observation=self.config["floods"][
+                                "event_observation_files"
+                            ]["raster"],
                             flood_map_path=flood_map_path,
                             visualization_type="OSM",
                             output_folder=forecast_folder,
@@ -2200,3 +2209,102 @@ class Hydrology:
             print(f"Completed processing event: {event_name}\n")
 
         print("Flood map performance metrics calculated for all events.")
+
+    def evaluate_warnings(self, *args: Any, **kwargs: Any) -> None:
+        """Calculate performance metrics for warnings with respect to households.
+
+        This method evaluates the number of warned households issued by the model with the households that should/should not have been warned.
+        It calculates various performance metrics (hit rate, false alarms ratio, critical success index) and generates visualizations
+        to illustrate the comparison. household_points: Path to the household points dataframe that contains the column with warning levels (geoparquet format).
+        """
+        obs_flood_extent = gpd.read_parquet(
+            self.model.config["hazards"]["floods"]["event_observation_files"]["vector"]
+        )
+        households_folder: Path = self.model.output_folder / "action_maps"
+
+        def calculate_warning_performance_metrics(
+            obs_flood_extent: gpd.GeoDataFrame, households_folder: Path
+        ) -> None:
+            """Calculate performance metrics for warnings with respect to households.
+
+            Args:
+                obs_flood_extent: GeoDataFrame containing the observed flood extent.
+                households_folder: Path to the folder containing household points GeoParquet files with the warning parameters. Must contain column of warning_level.
+            """
+            files = sorted(
+                households_folder.glob(
+                    "households_with_warning_parameters_*.geoparquet"
+                )
+            )
+
+            performance_log = []
+            for file in files:
+                initialization_date_str = file.stem.split("_")[-1]
+                household_points = gpd.read_parquet(file)
+                # need to change it to the general households file
+
+                print(
+                    f"Evaluating warnings for forecast initialization on: {initialization_date_str}"
+                )
+
+                household_flood_check = household_points.sjoin(
+                    obs_flood_extent, predicate="within", how="left"
+                )
+
+                household_flood_check["flooded"] = False
+                household_flood_check["flooded"] = household_flood_check[
+                    "index_right"
+                ].notna()
+                household_flood_check = household_flood_check.drop(
+                    columns=["index_right", "fid", "DN", "wdp"],
+                    errors="ignore",
+                )
+
+                flooded = household_flood_check[household_flood_check["flooded"]]
+                print("Number of flooded households:", len(flooded))
+
+                hits = flooded[flooded["warning_level"] >= 1].shape[0]
+                print(f"Number of households correctly warned:: {hits}")
+
+                misses = flooded[flooded["warning_level"] < 1].shape[0]
+                print(f"Number of households missed: {misses}")
+
+                not_flooded = household_flood_check[~household_flood_check["flooded"]]
+                false_alarms = not_flooded[not_flooded["warning_level"] >= 1].shape[0]
+                print(
+                    "Number of households warned in vain (false alarms):", false_alarms
+                )
+
+                HR = hits / (hits + misses)
+                print(f"Overall Hit Rate: {HR:.0%}")
+
+                FAR = false_alarms / (hits + false_alarms)
+                print(f"False Alarm Rate: {FAR:.0%}")
+
+                CSI = hits / (hits + misses + false_alarms)
+                print(f"Critical Success Index: {CSI:.0%}")
+
+                performance_log.append(
+                    {
+                        "date_time": initialization_date_str,
+                        "n_flooded_households": len(flooded),
+                        "n_warned_households": household_points[
+                            household_points["warning_level"] >= 1
+                        ].shape[0],
+                        "households_hits": hits,
+                        "households_misses": misses,
+                        "households_false_alarms": false_alarms,
+                        "hit_rate": f"{HR:.2f}",
+                        "false_alarm_rate": f"{FAR:.2f}",
+                        "critical_success_index": f"{CSI:.2f}",
+                    }
+                )
+
+            # Save the performance log to a csv file
+            performance_folder = self.output_folder_evaluate / "warnings"
+            performance_folder.mkdir(parents=True, exist_ok=True)
+
+            path = performance_folder / f"warnings_performance.csv"
+            pd.DataFrame(performance_log).to_csv(path, index=False)
+
+        calculate_warning_performance_metrics(obs_flood_extent, households_folder)
