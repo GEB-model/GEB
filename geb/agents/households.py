@@ -166,7 +166,7 @@ class Households(AgentBaseClass):
 
     def update_building_attributes(self) -> None:
         """Update building attributes based on household data."""
-        # Start by computing occupancy from the var.building_id_of_household array
+        # Start by computing n occupants from the var.building_id_of_household array
         building_id_of_household_series = pd.Series(
             self.var.building_id_of_household.data
         )
@@ -175,14 +175,14 @@ class Households(AgentBaseClass):
         building_id_of_household_counts = (
             building_id_of_household_series.dropna().astype(int).value_counts()
         )
-        # Initialize occupancy column
-        self.buildings["occupancy"] = 0
+        # Initialize occupants column
+        self.buildings["n_occupants"] = 0
 
         # Map the counts back to the buildings dataframe
-        self.buildings["occupancy"] = (
+        self.buildings["n_occupants"] = (
             self.buildings["id"]
             .map(building_id_of_household_counts)
-            .fillna(self.buildings["occupancy"])
+            .fillna(self.buildings["n_occupants"])
         )
 
         # Initialize dry floodproofing status
@@ -1852,6 +1852,9 @@ class Households(AgentBaseClass):
 
         # subset building to those exposed to flooding
         buildings = buildings[buildings["flooded"]]
+
+        # only calculate damages for buildings with more than 0 occupant
+        buildings = buildings[buildings["n_occupants"] > 0]
 
         for i, return_period in enumerate(self.return_periods):
             flood_map: xr.DataArray = self.flood_maps[return_period]
