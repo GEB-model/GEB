@@ -1826,7 +1826,7 @@ class Households(AgentBaseClass):
         return damages_do_not_adapt, damages_adapt
 
     def calculate_building_flood_damages(
-        self, verbose: bool = False
+        self, verbose: bool = True, export_building_damages: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
         """This function calculates the flood damages for the households in the model.
 
@@ -1835,6 +1835,7 @@ class Households(AgentBaseClass):
 
         Args:
             verbose: Verbosity flag.
+            export_building_damages: Whether to export the building damages to parquet files.
         Returns:
             Tuple[np.ndarray, np.ndarray]: A tuple containing the damage arrays for unprotected and protected buildings.
         """
@@ -1875,7 +1876,19 @@ class Households(AgentBaseClass):
             )
             building_multicurve = pd.concat(
                 [building_multicurve, damage_buildings], axis=1
-            )[["id", "damages", "damages_flood_proofed"]]
+            )
+
+            if export_building_damages:
+                fn_for_export = self.model.output_folder / "building_damages"
+                fn_for_export.mkdir(parents=True, exist_ok=True)
+                building_multicurve.to_parquet(
+                    self.model.output_folder
+                    / "building_damages"
+                    / f"building_damages_rp{return_period}_{self.model.current_time.year}.parquet"
+                )
+            building_multicurve = building_multicurve[
+                ["id", "damages", "damages_flood_proofed"]
+            ]
             # merged["damage"] is aligned with agents
             damages_do_not_adapt[i], damages_adapt[i] = self.assign_damages_to_agents(
                 agent_df,
