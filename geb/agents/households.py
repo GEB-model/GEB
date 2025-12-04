@@ -2037,7 +2037,15 @@ class Households(AgentBaseClass):
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         else:
+            household_points["protect_building"] = False
+
+            buildings: gpd.GeoDataFrame = gpd.sjoin_nearest(
+                buildings, household_points, how="left", exclusive=True
+            )
+
             buildings["object_type"] = "building_unprotected"
+
+            # Right now there is no condition to make the households protect their buildings outside of the warning response
             buildings.loc[buildings["protect_building"], "object_type"] = (
                 "building_protected"
             )
