@@ -519,13 +519,17 @@ class GEBModel(Module, HazardDriver):
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
-    def update_household_attributes(self) -> None:
-        """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build.
+    def refresh_agent_attributes(self, agent_type: str = "households") -> None:
+        """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build or adding/ renaming of agent variables.
 
         This function is only included for development purposes.
+
+        Args:
+            agent_type: Type of agent to refresh attributes for. If "all", all agents are refreshed. Examples: "households", "crop_farmers", etc.
+
         """
         # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
-        current_time = self.run_start - datetime.timedelta(days=1)
+        current_time = self.spinup_start
         end_time_exclusive = self.run_start
 
         timestep_length = datetime.timedelta(days=1)
@@ -534,31 +538,32 @@ class GEBModel(Module, HazardDriver):
         n_timesteps = int(n_timesteps)
         assert n_timesteps > 0, "End time is before or identical to start time"
 
-        # set adaptation to false
-        self.config["agent_settings"]["households"]["adapt"] = False
-
-        # turn off any reporting for the ABM
-        self.config["report"] = {}
-
+        # create var bucket
         self.var = self.store.create_bucket("var")
 
+        # initialize the model
         self._initialize(
             create_reporter=True,
             current_time=current_time,
             n_timesteps=n_timesteps,
             timestep_length=datetime.timedelta(days=1),
+            load_data_from_store=False,
             clean_report_folder=False,
             in_spinup=True,
         )
 
-        self.step_to_end()
-
-        print("Spinup finished, saving household attributes at end of spinup...")
+        # save initial household attributes
+        print("Initialization finished, saving household attributes ...")
         path: Path = self.store.path
         for name, bucket in self.store.buckets.items():
-            if "households" in name:
-                self.logger.debug(f"Saving {name}")
-                bucket.save(path / name)
+            if agent_type == "all":
+                if "agents" in name:
+                    self.logger.debug(f"Saving {name}")
+                    bucket.save(path / name)
+            else:
+                if agent_type in name:
+                    self.logger.debug(f"Saving {name}")
+                    bucket.save(path / name)
 
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
