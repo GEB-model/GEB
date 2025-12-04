@@ -21,14 +21,14 @@ from scipy import interpolate
 from shapely.geometry import shape
 
 from geb.types import TwoDArrayBool, TwoDArrayInt
-from geb.workflows.io import load_dict
+from geb.workflows.io import read_dict
 
 from ..hydrology.landcovers import (
     FOREST,
 )
 from ..store import DynamicArray
 from ..workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
-from ..workflows.io import load_array, load_table, read_zarr, to_zarr
+from ..workflows.io import read_array, read_table, read_zarr, to_zarr
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 
@@ -128,7 +128,7 @@ class Households(AgentBaseClass):
     def construct_income_distribution(self) -> None:
         """Construct a lognormal income distribution for the region."""
         # These values only work for a single country now. Should come from subnational datasets.
-        distribution_parameters = load_table(
+        distribution_parameters = read_table(
             self.model.files["table"]["income/distribution_parameters"]
         )
         country = self.model.regions["ISO3"].values[0]
@@ -147,18 +147,18 @@ class Households(AgentBaseClass):
     def assign_household_wealth_and_income(self) -> None:
         """Assign household wealth and income attributes based on GLOPOP-S and OECD data."""
         # initiate array with wealth indices
-        wealth_index = load_array(
+        wealth_index = read_array(
             self.model.files["array"]["agents/households/wealth_index"]
         )
         self.var.wealth_index = DynamicArray(wealth_index, max_n=self.max_n)
 
-        income_percentiles = load_array(
+        income_percentiles = read_array(
             self.model.files["array"]["agents/households/income_percentile"]
         )
         self.var.income_percentile = DynamicArray(income_percentiles, max_n=self.max_n)
 
         # assign household disposable income based on income percentile households
-        income = load_array(self.model.files["array"]["agents/households/disp_income"])
+        income = read_array(self.model.files["array"]["agents/households/disp_income"])
         self.var.income = DynamicArray(income, max_n=self.max_n)
 
         # assign wealth based on income (dummy data, there are ratios available in literature)
@@ -239,19 +239,19 @@ class Households(AgentBaseClass):
         Here we assign additional attributes (dummy data) to the households that are used in the decision module.
         """
         # load household locations
-        locations = load_array(self.model.files["array"]["agents/households/location"])
+        locations = read_array(self.model.files["array"]["agents/households/location"])
         self.max_n = int(locations.shape[0] * (1 + self.reduncancy) + 1)
         self.var.locations = DynamicArray(locations, max_n=self.max_n)
 
-        self.var.region_id = load_array(
+        self.var.region_id = read_array(
             self.model.files["array"]["agents/households/region_id"]
         )
 
         # load household sizes
-        sizes = load_array(self.model.files["array"]["agents/households/size"])
+        sizes = read_array(self.model.files["array"]["agents/households/size"])
         self.var.sizes = DynamicArray(sizes, max_n=self.max_n)
 
-        self.var.municipal_water_demand_per_capita_m3_baseline = load_array(
+        self.var.municipal_water_demand_per_capita_m3_baseline = read_array(
             self.model.files["array"][
                 "agents/households/municipal_water_demand_per_capita_m3_baseline"
             ]
@@ -263,7 +263,7 @@ class Households(AgentBaseClass):
         )
 
         self.var.municipal_water_withdrawal_m3_per_capita_per_day_multiplier = (
-            load_table(
+            read_table(
                 self.model.files["table"][
                     "municipal_water_withdrawal_m3_per_capita_per_day_multiplier"
                 ]
@@ -271,7 +271,7 @@ class Households(AgentBaseClass):
         )
 
         # load building id household
-        building_id_of_household = load_array(
+        building_id_of_household = read_array(
             self.model.files["array"]["agents/households/building_id_of_household"]
         )
         self.var.building_id_of_household = DynamicArray(
@@ -283,13 +283,13 @@ class Households(AgentBaseClass):
             self.update_building_attributes()
 
         # load age household head
-        age_household_head = load_array(
+        age_household_head = read_array(
             self.model.files["array"]["agents/households/age_household_head"]
         )
         self.var.age_household_head = DynamicArray(age_household_head, max_n=self.max_n)
 
         # load education level household head
-        education_level = load_array(
+        education_level = read_array(
             self.model.files["array"]["agents/households/education_level"]
         )
         self.var.education_level = DynamicArray(education_level, max_n=self.max_n)
@@ -1556,7 +1556,7 @@ class Households(AgentBaseClass):
         """Load maximum damage values from model files and store them in the model variables."""
         # Load maximum damages
         self.var.max_dam_buildings_structure = float(
-            load_dict(
+            read_dict(
                 self.model.files["dict"][
                     "damage_parameters/flood/buildings/structure/maximum_damage"
                 ]
@@ -1564,7 +1564,7 @@ class Households(AgentBaseClass):
         )
         self.buildings["maximum_damage_m2"] = self.var.max_dam_buildings_structure
 
-        max_dam_buildings_content = load_dict(
+        max_dam_buildings_content = read_dict(
             self.model.files["dict"][
                 "damage_parameters/flood/buildings/content/maximum_damage"
             ]
@@ -1575,7 +1575,7 @@ class Households(AgentBaseClass):
         self.buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         self.var.max_dam_rail = float(
-            load_dict(
+            read_dict(
                 self.model.files["dict"][
                     "damage_parameters/flood/rail/main/maximum_damage"
                 ]
@@ -1614,14 +1614,14 @@ class Households(AgentBaseClass):
         ]
 
         for road_type, path in road_types:
-            max_dam_road_m[road_type] = load_dict(self.model.files["dict"][path])[
+            max_dam_road_m[road_type] = read_dict(self.model.files["dict"][path])[
                 "maximum_damage"
             ]
 
         self.roads["maximum_damage_m"] = self.roads["object_type"].map(max_dam_road_m)
 
         self.var.max_dam_forest_m2 = float(
-            load_dict(
+            read_dict(
                 self.model.files["dict"][
                     "damage_parameters/flood/land_use/forest/maximum_damage"
                 ]
@@ -1629,7 +1629,7 @@ class Households(AgentBaseClass):
         )
 
         self.var.max_dam_agriculture_m2 = float(
-            load_dict(
+            read_dict(
                 self.model.files["dict"][
                     "damage_parameters/flood/land_use/agriculture/maximum_damage"
                 ]

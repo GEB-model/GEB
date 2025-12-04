@@ -23,7 +23,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
-from geb.workflows.io import load_dict, load_geom, read_zarr
+from geb.workflows.io import read_dict, read_geom, read_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
@@ -80,7 +80,7 @@ class GEBModel(Module, HazardDriver):
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
 
-        self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
+        self.mask = read_geom(self.files["geom"]["mask"])  # load the model mask
 
         self.store = Store(self)
 
@@ -394,7 +394,7 @@ class GEBModel(Module, HazardDriver):
         self.n_timesteps = n_timesteps
         self.current_timestep = 0
 
-        self.regions: gpd.GeoDataFrame = load_geom(self.files["geom"]["regions"])
+        self.regions: gpd.GeoDataFrame = read_geom(self.files["geom"]["regions"])
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
@@ -625,7 +625,7 @@ class GEBModel(Module, HazardDriver):
         )
 
         # ugly switch to determine whether model has coastal basins
-        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         if subbasins["is_coastal_basin"].any():
             generate_storm_surge_hydrographs(self)
 
@@ -857,7 +857,7 @@ class GEBModel(Module, HazardDriver):
             ValueError: If the spinup start date is before the model build start date.
             ValueError: If the run end date is after the model build end date.
         """
-        model_build_time_range: dict[str, str] = load_dict(
+        model_build_time_range: dict[str, str] = read_dict(
             self.files["dict"]["model_time_range"]
         )
 
