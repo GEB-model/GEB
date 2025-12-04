@@ -525,7 +525,7 @@ class GEBModel(Module, HazardDriver):
         This function is only included for development purposes.
 
         Args:
-            agent_type: Type of agent to refresh attributes for. If "all", all agents are refreshed. Examples: "households", "crop_farmers", etc.
+            agent_type: Type of agent to refresh attributes for. Examples: "households", "crop_farmers", etc.
 
         """
         # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
@@ -553,17 +553,12 @@ class GEBModel(Module, HazardDriver):
         )
 
         # save initial household attributes
-        print("Initialization finished, saving household attributes ...")
+        print(f"Refreshing household attributes for {agent_type}...")
         path: Path = self.store.path
-        for name, bucket in self.store.buckets.items():
-            if agent_type == "all":
-                if "agents" in name:
-                    self.logger.debug(f"Saving {name}")
-                    bucket.save(path / name)
-            else:
-                if agent_type in name:
-                    self.logger.debug(f"Saving {name}")
-                    bucket.save(path / name)
+        name = getattr(self.agents, agent_type).name
+        self.logger.debug(f"Saving {name}.var")
+        bucket = self.store.buckets[f"{name}.var"]
+        bucket.save(path / name)
 
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
