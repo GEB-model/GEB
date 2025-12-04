@@ -399,7 +399,7 @@ class SFINCSRootModel:
             rivers_to_burn["width"] > self.estimated_cell_size_m
         ]
 
-        self.logger.info(f"Estimated cell size is: {self.estimated_cell_size_m}")
+        print(f"Estimated cell size is: {self.estimated_cell_size_m}")
 
         rivers_to_burn.to_parquet(self.path / "rivers_to_burn.geoparquet")
 

@@ -123,9 +123,7 @@ class Households(AgentBaseClass):
         flood_maps = {}
         for return_period in self.return_periods:
             file_path = (
-                self.model.output_folder
-                / "flood_maps"
-                / f"riverine_{return_period:04d}.zarr"
+                self.model.output_folder / "flood_maps" / f"{return_period}.zarr"
                 # / f"riverine{return_period}.zarr"
             )
             flood_maps[return_period] = open_zarr(file_path)
