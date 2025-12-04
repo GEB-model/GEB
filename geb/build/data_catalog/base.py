@@ -11,7 +11,7 @@ import pandas as pd
 import xarray as xr
 
 from geb.workflows.geometry import read_parquet_with_geom
-from geb.workflows.io import open_zarr
+from geb.workflows.io import read_zarr
 
 
 class Adapter:
@@ -140,7 +140,7 @@ class Adapter:
 
         """
         if self.path.suffix == ".zarr":
-            return open_zarr(self.path)
+            return read_zarr(self.path)
         elif self.path.suffix == ".nc":
             return xr.open_dataarray(self.path, **kwargs)
         elif self.path.suffix in (".tif", ".asc"):

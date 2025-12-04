@@ -16,10 +16,10 @@ from shapely.geometry.point import Point
 
 from geb.module import Module
 from geb.types import ArrayFloat32, TwoDArrayInt32
-from geb.workflows.io import load_geom
+from geb.workflows.io import read_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
-from ...workflows.io import load_dict, open_zarr, to_zarr
+from ...workflows.io import read_dict, read_zarr, to_zarr
 from ...workflows.raster import reclassify
 from .sfincs import (
     MultipleSFINCSSimulations,
@@ -160,7 +160,7 @@ class Floods(Module):
             else {}
         )
 
-        self.DEM_config: list[dict[str, Any]] = load_dict(
+        self.DEM_config: list[dict[str, Any]] = read_dict(
             self.model.files["dict"]["hydrodynamics/DEM_config"]
         )
 
@@ -205,7 +205,7 @@ class Floods(Module):
         Returns:
             The EPSG code for the UTM zone of the centroid of the region.
         """
-        region: gpd.GeoDataFrame = load_geom(region_file)
+        region: gpd.GeoDataFrame = read_geom(region_file)
 
         # Calculate the central longitude of the dataset
         centroid: Point = region.union_all().centroid
@@ -227,6 +227,7 @@ class Floods(Module):
         name: str,
         region: gpd.GeoDataFrame | None = None,
         coastal: bool = False,
+        coastal_only: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         initial_water_level: float = 0.0,
@@ -241,6 +242,7 @@ class Floods(Module):
             name: Name of the SFINCS model (used for the model root directory).
             region: The region to build the SFINCS model for. If None, the entire model region is used.
             coastal: Whether to only include coastal areas in the model.
+            coastal_only: Whether to only include the low elevation coastal zone in the model.
             low_elevation_coastal_zone_mask: A GeoDataFrame defining the low elevation coastal zone to set as active cells.
             coastal_boundary_exclude_mask: GeoDataFrame defining the areas to exclude from the coastal model boundary cells.
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
@@ -251,16 +253,21 @@ class Floods(Module):
         sfincs_model = SFINCSRootModel(self.model.simulation_root, name)
         if self.config["force_overwrite"] or not sfincs_model.exists():
             for entry in self.DEM_config:
-                entry["elevtn"] = open_zarr(
+                entry["elevtn"] = read_zarr(
                     self.model.files["other"][entry["path"]]
                 ).to_dataset(name="elevtn")
 
             if region is None:
-                region = load_geom(self.model.files["geom"]["routing/subbasins"])
+                region = read_geom(self.model.files["geom"]["routing/subbasins"])
+
+            rivers = self.model.hydrology.routing.rivers
+            if coastal_only:
+                rivers = rivers[rivers.intersects(region.union_all())]
+
             sfincs_model.build(
                 region=region,
                 DEMs=self.DEM_config,
-                rivers=self.model.hydrology.routing.rivers,
+                rivers=rivers,
                 discharge=self.discharge_spinup_ds,
                 river_width_alpha=self.model.hydrology.grid.decompress(
                     self.model.var.river_width_alpha
@@ -285,7 +292,7 @@ class Floods(Module):
                 coastal=coastal,
                 setup_river_outflow_boundary=not coastal,
                 initial_water_level=initial_water_level,
-                custom_rivers_to_burn=load_geom(
+                custom_rivers_to_burn=read_geom(
                     self.model.files["geom"]["routing/custom_rivers"]
                 )
                 if "routing/custom_rivers" in self.model.files["geom"]
@@ -426,7 +433,7 @@ class Floods(Module):
             start_time: The start time of the flood event.
             end_time: The end time of the flood event.
         """
-        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         rivers = self.model.hydrology.routing.rivers
 
         river_graph = create_river_graph(rivers, subbasins)
@@ -476,25 +483,23 @@ class Floods(Module):
             print("Multiverse no longer active, now compute flood damages...")
             self.model.agents.households.flood(flood_depth=flood_depth)
 
-    def get_return_period_maps(self, coastal_only: bool = False) -> None:
-        """
-        Generates flood maps for specified return periods using the SFINCS model.
-
-        Args:
-            coastal_only: Whether to only consider coastal subbasins for the flood maps.
-        """
+    def get_return_period_maps(self) -> None:
+        """Generates flood maps for specified return periods using the SFINCS model."""
         # close the zarr store
         if hasattr(self.model, "reporter"):
             self.model.reporter.variables["discharge_daily"].close()
 
+        # load model settings
+        coastal_only = self.config["coastal_only"]
+
         # load the subbasin geometry for the model domain
-        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         coastal = subbasins["is_coastal_basin"].any()
 
         # if coastal load files
         if coastal:
             # Load mask of lower elevation coastal zones to activate cells for the different sfincs model regions
-            low_elevation_coastal_zone_mask = load_geom(
+            low_elevation_coastal_zone_mask = read_geom(
                 self.model.files["geom"]["coastal/low_elevation_coastal_zone_mask"]
             )
 
@@ -509,7 +514,7 @@ class Floods(Module):
             )
 
             # load osm land polygons to exclude from coastal boundary cells
-            coastal_boundary_exclude_mask = load_geom(
+            coastal_boundary_exclude_mask = read_geom(
                 self.model.files["geom"]["coastal/land_polygons"],
             )
 
@@ -526,28 +531,46 @@ class Floods(Module):
             model_domain = gpd.GeoDataFrame(
                 geometry=[model_domain], crs=low_elevation_coastal_zone_mask.crs
             )
-            model_name = "coastal_and_inland_region"
+            model_name = "coastal_region"
+
+            # load location and offset for coastal water level forcing
+            locations = (
+                read_geom(self.model.files["geom"]["gtsm/stations_coast_rp"])
+                .rename(columns={"station_id": "stations"})
+                .set_index("stations")
+            )
+
+            offset = xr.open_dataarray(
+                self.model.files["other"][
+                    "coastal/global_ocean_mean_dynamic_topography"
+                ]
+            ).rio.write_crs("EPSG:4326")
+
         else:
             model_domain = subbasins
             coastal_boundary_exclude_mask = None
             low_elevation_coastal_zone_mask = None
             initial_water_level = None
             model_name = "inland_region"
+            locations = gpd.GeoDataFrame()
+            offset = xr.DataArray()
 
         sfincs_root_model: SFINCSRootModel = self.build(
             name=model_name,
             region=model_domain,
             coastal=coastal,
+            coastal_only=coastal_only,
             coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
             low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
             initial_water_level=initial_water_level,
         )
 
-        sfincs_root_model.estimate_discharge_for_return_periods(
-            discharge=self.discharge_spinup_ds,
-            rivers=self.model.hydrology.routing.rivers,
-            return_periods=self.config["return_periods"],
-        )
+        if not coastal_only:
+            sfincs_root_model.estimate_discharge_for_return_periods(
+                discharge=self.discharge_spinup_ds,
+                rivers=self.model.hydrology.routing.rivers,
+                return_periods=self.config["return_periods"],
+            )
 
         for return_period in self.config["return_periods"]:
             print(
@@ -556,7 +579,11 @@ class Floods(Module):
 
             simulation: MultipleSFINCSSimulations = (
                 sfincs_root_model.create_simulation_for_return_period(
-                    return_period, coastal=coastal
+                    return_period,
+                    coastal=coastal,
+                    coastal_only=coastal_only,
+                    locations=locations,
+                    offset=offset,
                 )
             )
             simulation.run(
@@ -618,7 +645,7 @@ class Floods(Module):
         Raises:
             ValueError: If there is not enough data available for reliable spinup.
         """
-        da: xr.DataArray = open_zarr(
+        da: xr.DataArray = read_zarr(
             self.model.output_folder
             / "report"
             / "spinup"
@@ -657,7 +684,7 @@ class Floods(Module):
         Returns:
             An xarray DataArray containing the land cover classification.
         """
-        return open_zarr(self.model.files["other"]["landcover/classification"])
+        return read_zarr(self.model.files["other"]["landcover/classification"])
 
     @property
     def land_cover_mannings_rougness_classification(self) -> pd.DataFrame:

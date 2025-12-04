@@ -14,7 +14,7 @@ from numba import njit
 from scipy.stats import genextreme
 
 from geb.workflows import TimingModule
-from geb.workflows.io import load_grid
+from geb.workflows.io import read_grid
 from geb.workflows.neighbors import find_neighbors
 from geb.workflows.raster import pixels_to_coords, sample_from_map
 
@@ -26,7 +26,7 @@ from ..data import (
 from ..hydrology.landcovers import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
 from ..store import DynamicArray
 from ..workflows import balance_check
-from ..workflows.io import load_array
+from ..workflows.io import read_array
 from .decision_module import DecisionModule
 from .general import AgentBaseClass
 from .workflows.crop_farmers import (
@@ -349,10 +349,10 @@ class CropFarmers(AgentBaseClass):
         ]["adaptation_well"]["lifespan"]
 
         # load map of all subdistricts
-        self.var.subdistrict_map = load_grid(
+        self.var.subdistrict_map = read_grid(
             self.model.files["region_subgrid"]["region_ids"]
         )
-        region_mask = load_grid(self.model.files["region_subgrid"]["mask"])
+        region_mask = read_grid(self.model.files["region_subgrid"]["mask"])
         self.HRU_regions_map = np.zeros_like(self.HRU.mask, dtype=np.int8)
         self.HRU_regions_map[~self.HRU.mask] = self.var.subdistrict_map[
             region_mask == 0
@@ -423,14 +423,14 @@ class CropFarmers(AgentBaseClass):
         self.var.risk_aversion = DynamicArray(
             n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=np.nan
         )
-        self.var.risk_aversion[:] = load_array(
+        self.var.risk_aversion[:] = read_array(
             self.model.files["array"]["agents/farmers/risk_aversion"]
         )
 
         self.var.discount_rate = DynamicArray(
             n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=np.nan
         )
-        self.var.discount_rate[:] = load_array(
+        self.var.discount_rate[:] = read_array(
             self.model.files["array"]["agents/farmers/discount_rate"]
         )
 
@@ -438,20 +438,20 @@ class CropFarmers(AgentBaseClass):
             n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=np.nan
         )
 
-        self.var.intention_factor[:] = load_array(
+        self.var.intention_factor[:] = read_array(
             self.model.files["array"]["agents/farmers/intention_factor"]
         )
 
         self.var.interest_rate = DynamicArray(
             n=self.var.n, max_n=self.var.max_n, dtype=np.float32, fill_value=0.05
         )
-        self.var.interest_rate[:] = load_array(
+        self.var.interest_rate[:] = read_array(
             self.model.files["array"]["agents/farmers/interest_rate"]
         )
 
         # Load the region_code of each farmer.
         self.var.region_id = DynamicArray(
-            input_array=load_array(
+            input_array=read_array(
                 self.model.files["array"]["agents/farmers/region_id"]
             ),
             max_n=self.var.max_n,
@@ -467,7 +467,7 @@ class CropFarmers(AgentBaseClass):
             dtype=np.int32,
             fill_value=-1,
         )  # first dimension is the farmers, second is the rotation, third is the crop, planting and growing length
-        self.var.crop_calendar[:] = load_array(
+        self.var.crop_calendar[:] = read_array(
             self.model.files["array"]["agents/farmers/crop_calendar"]
         )
         # assert self.var.crop_calendar[:, :, 0].max() < len(self.var.crop_ids)
@@ -478,7 +478,7 @@ class CropFarmers(AgentBaseClass):
             dtype=np.int32,
             fill_value=0,
         )
-        self.var.crop_calendar_rotation_years[:] = load_array(
+        self.var.crop_calendar_rotation_years[:] = read_array(
             self.model.files["array"]["agents/farmers/crop_calendar_rotation_years"]
         )
 
@@ -495,7 +495,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         self.var.adaptations = DynamicArray(
-            load_array(self.model.files["array"]["agents/farmers/adaptations"]),
+            read_array(self.model.files["array"]["agents/farmers/adaptations"]),
             max_n=self.var.max_n,
             extra_dims_names=("adaptation_type",),
         )
@@ -709,7 +709,7 @@ class CropFarmers(AgentBaseClass):
         self.var.household_size = DynamicArray(
             n=self.var.n, max_n=self.var.max_n, dtype=np.int32, fill_value=-1
         )
-        self.var.household_size[:] = load_array(
+        self.var.household_size[:] = read_array(
             self.model.files["array"]["agents/farmers/household_size"]
         )
 
@@ -888,7 +888,7 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,
         )
 
-        why_map: np.ndarray = load_grid(self.model.files["grid"]["groundwater/why_map"])
+        why_map: np.ndarray = read_grid(self.model.files["grid"]["groundwater/why_map"])
 
         self.var.why_class[:] = sample_from_map(
             why_map, self.var.locations.data, self.grid.gt
@@ -1163,21 +1163,6 @@ class CropFarmers(AgentBaseClass):
         assert np.diff(elevation[activation_order]).max() <= 0
         return activation_order
 
-    @property
-    def command_area(self) -> np.ndarray:
-        """Which command area a farmer is in, derived from field indices and reservoir areas."""
-        return farmer_command_area(
-            self.var.n,
-            self.var.field_indices,
-            self.var.field_indices_by_farmer.data,
-            self.HRU.var.reservoir_command_areas,
-        )
-
-    @property
-    def is_in_command_area(self) -> np.ndarray:
-        """Whether a farmer is in anu command area."""
-        return self.command_area != -1
-
     def save_pr(self, pr_kg_per_m2_per_s: npt.NDArray[np.floating]) -> None:
         """Aggregate and store daily precipitation per farmer.
 
@@ -1279,10 +1264,14 @@ class CropFarmers(AgentBaseClass):
             # if this is the last day of the year, but not a leap year, the virtual
             # 366th day of the year is the same as the 365th day of the year
             # this avoids complications with the leap year
-            if day_index == 364 and not calendar.isleap(self.model.current_time.year):
+            if day_index == 364:
                 self.var.cumulative_water_deficit_m3[:, 365] = (
                     self.var.cumulative_water_deficit_m3[:, 364]
                 )
+            # elif day_index == 365:
+            #     self.var.cumulative_water_deficit_m3[:, 365] = (
+            #         self.var.cumulative_water_deficit_m3[:, 364]
+            #     )
 
     def get_gross_irrigation_demand_m3(
         self,
@@ -1367,6 +1356,21 @@ class CropFarmers(AgentBaseClass):
         total_hours = 365 * 5
         yearly_irrigation_total = hourly_irrigation_maximum * total_hours
         return yearly_irrigation_total
+
+    @property
+    def command_area(self) -> np.ndarray:
+        """Which command area a farmer is in, derived from field indices and reservoir areas."""
+        return farmer_command_area(
+            self.var.n,
+            self.var.field_indices,
+            self.var.field_indices_by_farmer.data,
+            self.HRU.var.reservoir_command_areas,
+        )
+
+    @property
+    def is_in_command_area(self) -> np.ndarray:
+        """Whether a farmer is in anu command area."""
+        return self.command_area != -1
 
     @property
     def surface_irrigated(self) -> np.ndarray:
@@ -5626,7 +5630,7 @@ class CropFarmers(AgentBaseClass):
             DynamicArray: Mean elevation per farmer (meters), sized to ``max_n``.
         """
         # get elevation per farmer
-        elevation_subgrid = load_grid(
+        elevation_subgrid = read_grid(
             self.model.files["subgrid"]["landsurface/elevation"],
         )
         elevation_subgrid = np.nan_to_num(elevation_subgrid, copy=False, nan=0.0)

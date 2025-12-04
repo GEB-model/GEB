@@ -28,11 +28,12 @@ from geb.cli import (
 )
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory, open_zarr
+from geb.workflows.io import WorkingDirectory, read_zarr, write_dict
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
 working_directory: Path = tmp_folder / "model"
+working_directory_coastal: Path = tmp_folder / "model_coastal"
 
 DEFAULT_BUILD_ARGS: dict[str, Any] = {}
 DEFAULT_RUN_ARGS: dict[str, Any] = {}
@@ -72,20 +73,90 @@ def test_init(clean_working_directory: bool) -> None:
         assert Path("build.yml").exists()
         assert Path("update.yml").exists()
 
-        assert pytest.raises(
-            FileExistsError,
-            init_fn,
-            **args,
-            overwrite=False,
-        )  # should raise an error if the folder already exists
+        # should raise an error if the folder already exists
+        with pytest.raises(FileExistsError):
+            init_fn(
+                **args,
+                overwrite=False,
+            )
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
-def test_build() -> None:
+@pytest.mark.parametrize(
+    "clean_working_directory",
+    [False, True],
+)
+def test_init_coastal(clean_working_directory: bool) -> None:
+    """Test model initialization of a coastal model from example configuration.
+
+    Creates a new model directory from the 'geul' example, verifies that
+    all required configuration files are created, and tests error handling
+    when attempting to initialize in an existing directory without overwrite.
+
+    Only the coastal-specific build steps are included in the build configuration.
+    """
+    if clean_working_directory and working_directory_coastal.exists():
+        shutil.rmtree(working_directory_coastal, ignore_errors=True)
+    working_directory_coastal.mkdir(parents=True, exist_ok=True)
+
+    with WorkingDirectory(working_directory_coastal):
+        args: dict[str, Any] = {
+            "config": "model.yml",
+            "build_config": "build.yml",
+            "update_config": "update.yml",
+            "working_directory": ".",
+            "from_example": "geul",
+            "basin_id": "23010758",
+        }
+        init_fn(
+            **args,
+            overwrite=True,
+        )
+
+        build_config = parse_config("build.yml")
+        build_config = {
+            key: value
+            for key, value in build_config.items()
+            if key
+            in (
+                "setup_region",
+                "setup_hydrography",
+                "setup_elevation",
+                "setup_global_ocean_mean_dynamic_topography",
+                "setup_low_elevation_coastal_zone_mask",
+                "setup_coastlines",
+                "setup_osm_land_polygons",
+                "setup_coastal_sfincs_model_regions",
+                "setup_gtsm_station_data",
+            )
+        }
+        write_dict(build_config, Path("build.yml"))
+
+        assert Path("model.yml").exists()
+        assert Path("build.yml").exists()
+        assert Path("update.yml").exists()
+
+        # should raise an error if the folder already exists
+        with pytest.raises(FileExistsError):
+            init_fn(
+                **args,
+                overwrite=False,
+            )
+
+
+@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
+@pytest.mark.parametrize(
+    "working_directory",
+    [working_directory, working_directory_coastal],
+)
+def test_build(working_directory: Path) -> None:
     """Test the model build process with default arguments.
 
     Runs the build function with default build arguments to ensure
     the model can be properly built from configuration files.
+
+    Args:
+        working_directory: The working directory where the model is built.
     """
     with WorkingDirectory(working_directory):
         build_fn(**DEFAULT_BUILD_ARGS)
@@ -515,7 +586,7 @@ def test_multiverse() -> None:
         for forecast_variable, loader in geb.forcing.loaders.items():
             if not loader.supports_forecast:
                 continue
-            da: xr.DataArray = open_zarr(
+            da: xr.DataArray = read_zarr(
                 geb.files["other"][f"climate/{forecast_variable}"]
             ).drop_encoding()
             forecast_da: xr.DataArray = da.sel(

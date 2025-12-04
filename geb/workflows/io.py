@@ -47,7 +47,7 @@ from geb.types import (
 )
 
 
-def load_table(fp: Path | str) -> pd.DataFrame:
+def read_table(fp: Path) -> pd.DataFrame:
     """Load a parquet file as a pandas DataFrame.
 
     Args:
@@ -59,7 +59,22 @@ def load_table(fp: Path | str) -> pd.DataFrame:
     return pd.read_parquet(fp, engine="pyarrow")
 
 
-def load_array(fp: Path) -> np.ndarray:
+def write_table(df: pd.DataFrame, fp: Path) -> None:
+    """Save a pandas DataFrame to a parquet file.
+
+    brotli is a bit slower but gives better compression,
+    gzip is faster to read. Higher compression levels
+    generally don't make it slower to read, therefore
+    we use the highest compression level for gzip
+
+    Args:
+        df: The pandas DataFrame to save.
+        fp: The path to the output parquet file.
+    """
+    df.to_parquet(fp, engine="pyarrow", compression="gzip", compression_level=9)
+
+
+def read_array(fp: Path) -> np.ndarray:
     """Load a numpy array from a .npz or .zarr file.
 
     Args:
@@ -82,18 +97,18 @@ def load_array(fp: Path) -> np.ndarray:
 
 
 @overload
-def load_grid(
+def read_grid(
     filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
 ) -> np.ndarray: ...
 
 
 @overload
-def load_grid(
+def read_grid(
     filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = True
 ) -> tuple[np.ndarray, Affine, str]: ...
 
 
-def load_grid(
+def read_grid(
     filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
 ) -> TwoDArray | ThreeDArray | tuple[TwoDArray | ThreeDArray, Affine, str]:
     """Load a raster grid from a .tif or .zarr file.
@@ -159,7 +174,7 @@ def load_grid(
         raise ValueError("File format not supported.")
 
 
-def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
+def read_geom(filepath: str | Path) -> gpd.GeoDataFrame:
     """Load a geometry for the GEB model from disk.
 
     Args:
@@ -172,7 +187,7 @@ def load_geom(filepath: str | Path) -> gpd.GeoDataFrame:
     return gpd.read_parquet(filepath)
 
 
-def load_dict(filepath: Path) -> Any:
+def read_dict(filepath: Path) -> Any:
     """Load a dictionary from a JSON or YAML file.
 
     Args:
@@ -214,7 +229,7 @@ def _convert_paths_to_strings(obj: Any) -> Any:
         return obj
 
 
-def to_dict(d: dict, filepath: Path) -> None:
+def write_dict(d: dict, filepath: Path) -> None:
     """Save a dictionary to a YAML file.
 
     Args:
@@ -302,7 +317,7 @@ def calculate_scaling(
     return scaling_factor, in_dtype, out_dtype
 
 
-def open_zarr(zarr_folder: Path | str) -> xr.DataArray:
+def read_zarr(zarr_folder: Path | str) -> xr.DataArray:
     """Open a zarr file as an xarray DataArray.
 
     If the data is a boolean type and does not have a _FillValue attribute,
@@ -582,7 +597,7 @@ def to_zarr(
             shutil.rmtree(path)
         shutil.move(tmp_zarr, folder)
 
-    da_disk: xr.DataArray = open_zarr(path)
+    da_disk: xr.DataArray = read_zarr(path)
 
     # perform some asserts to check if the data was written and read correctly
     assert da.dtype == da_disk.dtype, "dtype mismatch"

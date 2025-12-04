@@ -15,7 +15,7 @@ import pandas as pd
 import xarray
 
 # from matplotlib_scalebar.scalebar import ScaleBar
-from geb.workflows.io import open_zarr
+from geb.workflows.io import read_zarr
 
 
 class MeteorologicalForecasts:
@@ -122,14 +122,14 @@ class MeteorologicalForecasts:
                 )
 
                 # ERA5
-                era5_ds = open_zarr(era5_path)
+                era5_ds = read_zarr(era5_path)
                 era5_mm_per_h: xarray.DataArray = (
                     era5_ds * 3600
                 )  # Convert from m/s to mm/h
                 era5_max_mm_per_h: xarray.DataArray = era5_mm_per_h.max(dim=["y", "x"])
 
                 # Load ensemble data (including control)
-                ens_ds = open_zarr(init_folder / pr_files[0].name)
+                ens_ds = read_zarr(init_folder / pr_files[0].name)
                 ens_time = ens_ds["time"].values
                 ens_mm_per_h: xarray.DataArray = (
                     ens_ds * 3600
