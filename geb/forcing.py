@@ -11,7 +11,7 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 
-from geb.workflows.io import load_grid
+from geb.workflows.io import read_grid
 
 from .module import Module
 from .workflows.io import AsyncGriddedForcingReader
@@ -757,7 +757,7 @@ class Forcing(Module):
             model: The GEB model instance.
         """
         self.model = model
-        self.forcing_DEM = load_grid(model.files["other"]["climate/elevation_forcing"])
+        self.forcing_DEM = read_grid(model.files["other"]["climate/elevation_forcing"])
 
         # Initialize all forcing loaders upfront
         self._initialize_loaders()

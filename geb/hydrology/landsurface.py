@@ -11,7 +11,7 @@ from numba import njit, prange  # noqa: F401
 from geb.module import Module
 from geb.types import ArrayFloat32, ArrayInt32, TwoDArrayBool, TwoDArrayFloat32
 from geb.workflows import balance_check
-from geb.workflows.io import load_grid
+from geb.workflows.io import read_grid
 
 from .evapotranspiration import (
     calculate_bare_soil_evaporation,
@@ -610,7 +610,7 @@ class LandSurface(Module):
         # Soil properties
         self.HRU.var.soil_layer_height: TwoDArrayFloat32 = (
             self.HRU.convert_subgrid_to_HRU(
-                load_grid(
+                read_grid(
                     self.model.files["subgrid"]["soil/soil_layer_height"],
                     layer=None,
                 ),
@@ -619,28 +619,28 @@ class LandSurface(Module):
         )
 
         soil_organic_carbon: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            load_grid(
+            read_grid(
                 self.model.files["subgrid"]["soil/soil_organic_carbon"],
                 layer=None,
             ),
             method="mean",
         )
         bulk_density: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            load_grid(
+            read_grid(
                 self.model.files["subgrid"]["soil/bulk_density"],
                 layer=None,
             ),
             method="mean",
         )
         self.HRU.var.silt: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            load_grid(
+            read_grid(
                 self.model.files["subgrid"]["soil/silt"],
                 layer=None,
             ),
             method="mean",
         )
         self.HRU.var.clay: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            load_grid(
+            read_grid(
                 self.model.files["subgrid"]["soil/clay"],
                 layer=None,
             ),
