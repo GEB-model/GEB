@@ -1544,7 +1544,9 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
-    def get_buildings_per_GDL_region(self, GDL_regions: gpd.GeoDataFrame) -> dict[str, gpd.GeoDataFrame]:
+    def get_buildings_per_GDL_region(
+        self, GDL_regions: gpd.GeoDataFrame
+    ) -> dict[str, gpd.GeoDataFrame]:
         """Gets buildings per GDL region within the model domain and assigns grid indices from GLOPOP-S grid.
 
         Args:
