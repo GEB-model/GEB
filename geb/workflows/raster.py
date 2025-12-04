@@ -26,8 +26,19 @@ from pyresample.resampler import resample_blocks
 from rasterio.features import rasterize
 from scipy.interpolate import griddata
 from shapely.geometry import Polygon
+from xarray.core.types import T_Array
 
-from geb.types import TwoDArrayBool, TwoDArrayFloat32, TwoDArrayFloat64
+from geb.types import (
+    Array,
+    ArrayBool,
+    T_ThreeDArray,
+    T_TwoDArray,
+    ThreeDArray,
+    TwoDArray,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
+    TwoDArrayFloat64,
+)
 
 
 def decompress_with_mask(
@@ -242,7 +253,15 @@ def coords_to_pixels(
         raise ValueError("Cannot convert rotated maps")
 
 
-def compress(array: npt.NDArray[Any], mask: npt.NDArray[np.bool_]) -> npt.NDArray[Any]:
+@overload
+def compress(array: T_ThreeDArray, mask: ArrayBool) -> T_TwoDArray: ...
+
+
+@overload
+def compress(array: T_TwoDArray, mask: ArrayBool) -> T_Array: ...
+
+
+def compress(array: ThreeDArray | TwoDArray, mask: ArrayBool) -> TwoDArray | Array:
     """Compress an array by applying a mask.
 
     Args:

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 
+from geb.types import ThreeDArrayFloat32
 from geb.workflows.io import read_grid
 
 from .module import Module
@@ -219,7 +220,7 @@ class ForcingLoader(ABC):
         """
         return self._supports_forecast
 
-    def load(self, dt: datetime) -> npt.NDArray[Any]:
+    def load(self, dt: datetime) -> ThreeDArrayFloat32:
         """Load and validate forcing data for a given time.
 
         If in forecast mode and the time is after the forecast issue date,
@@ -830,7 +831,13 @@ class Forcing(Module):
             )
         return self._loaders[name]
 
-    def load(self, name: str, dt: datetime | None = None) -> npt.NDArray[Any] | float:
+    @overload
+    def load(self, name: Literal["CO2_ppm"], dt: datetime | None = None) -> float: ...
+
+    @overload
+    def load(self, name: str, dt: datetime | None = None) -> ThreeDArrayFloat32: ...
+
+    def load(self, name: str, dt: datetime | None = None) -> ThreeDArrayFloat32 | float:
         """Load forcing data for a given name and time.
 
         Args:
