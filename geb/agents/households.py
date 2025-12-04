@@ -1207,7 +1207,7 @@ class Households(AgentBaseClass):
         path = (
             self.model.output_folder
             / "warning_logs"
-            / f"warning_log_critical_infrastructure_{date_time.isoformat()}.csv"
+            / f"warning_log_critical_infrastructure_{date_time.isoformat().replace(':', '').replace('-', '')}.csv"
         )
         pd.DataFrame(warning_log).to_csv(path, index=False)
 
