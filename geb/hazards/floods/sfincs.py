@@ -852,7 +852,9 @@ class SFINCSRootModel:
             **kwargs,
         )
 
-    def create_coastal_simulation(self, return_period: int) -> SFINCSSimulation:
+    def create_coastal_simulation(
+        self, return_period: int, locations: gpd.GeoDataFrame, offset: xr.DataArray
+    ) -> SFINCSSimulation:
         """
         Creates a SFINCS simulation with coastal water level forcing for a specified return period.
 
@@ -860,7 +862,8 @@ class SFINCSRootModel:
 
         Args:
             return_period: The return period for which to create the coastal simulation.
-
+            locations: A GeoDataFrame containing the locations of GTSM forcing stations.
+            offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
         Returns:
             An instance of SFINCSSimulation configured with coastal water level forcing.
         """
@@ -872,25 +875,21 @@ class SFINCSRootModel:
             index_col=0,
         )
 
-        locations: gpd.GeoDataFrame = (  # ty: ignore[invalid-assignment]
-            load_geom(self.model.files["geom"]["gtsm/stations_coast_rp"])
-            .rename(columns={"station_id": "stations"})
-            .set_index("stations")
-        )
-
         # convert index to int
-        locations.index = locations.index.astype(int)
+        # make a copy to avoid overwriting the original locations
+        locations_copy = locations.copy()
+        locations_copy.index = locations_copy.index.astype(int)
 
         timeseries.index = pd.to_datetime(timeseries.index, format="%Y-%m-%d %H:%M:%S")
         # convert columns to int
         timeseries.columns = timeseries.columns.astype(int)
 
         # Align timeseries columns with locations index
-        timeseries = timeseries.loc[:, locations.index]
+        timeseries = timeseries.loc[:, locations_copy.index]
 
         # now convert to incrementing integers starting from 0
         timeseries.columns = range(len(timeseries.columns))
-        locations.index = range(len(locations.index))
+        locations_copy.index = range(len(locations_copy.index))
 
         timeseries = timeseries.iloc[250:-250]  # trim the first and last 250 rows
 
@@ -900,18 +899,19 @@ class SFINCSRootModel:
             end_time=timeseries.index[-1],
         )
 
-        offset = xr.open_dataarray(
-            self.model.files["other"]["coastal/global_ocean_mean_dynamic_topography"]
-        ).rio.write_crs("EPSG:4326")
-
         # set coastal forcing model
         simulation.set_coastal_waterlevel_forcing(
-            timeseries=timeseries, locations=locations, offset=offset
+            timeseries=timeseries, locations=locations_copy, offset=offset
         )
         return simulation
 
     def create_simulation_for_return_period(
-        self, return_period: int, coastal: bool = False
+        self,
+        return_period: int,
+        locations: gpd.GeoDataFrame,
+        offset: xr.DataArray,
+        coastal: bool = False,
+        coastal_only: bool = False,
     ) -> MultipleSFINCSSimulations:
         """Creates multiple SFINCS simulations for a specified return period.
 
@@ -921,7 +921,10 @@ class SFINCSRootModel:
 
         Args:
             return_period: The return period for which to create simulations.
+            locations: A GeoDataFrame containing the locations of GTSM forcing stations.
+            offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
             coastal: Whether to create a coastal simulation.
+            coastal_only: Whether to only include coastal subbasins in the model.
 
         Returns:
             An instance of MultipleSFINCSSimulations containing the created simulations.
@@ -933,12 +936,6 @@ class SFINCSRootModel:
                 if the discharge DataFrame columns cannot be converted to integers,
                 or if the discharge hydrographs contain NaN values.
         """
-        rivers: gpd.GeoDataFrame = import_rivers(self.path, postfix="_return_periods")
-        assert (~rivers["is_downstream_outflow_subbasin"]).all()
-
-        rivers["topological_stream_order"] = get_topological_stream_order(rivers)
-        rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
-
         working_dir: Path = self.path / "working_dir"
         working_dir_return_period: Path = working_dir / f"rp_{return_period}"
 
@@ -947,8 +944,18 @@ class SFINCSRootModel:
 
         # create coastal simulation
         if coastal:
-            simulation: SFINCSSimulation = self.create_coastal_simulation(return_period)
+            simulation: SFINCSSimulation = self.create_coastal_simulation(
+                return_period, locations, offset
+            )
             simulations.append(simulation)
+        if coastal_only:
+            return MultipleSFINCSSimulations(simulations=simulations)
+
+        rivers: gpd.GeoDataFrame = import_rivers(self.path, postfix="_return_periods")
+        assert (~rivers["is_downstream_outflow_subbasin"]).all()
+
+        rivers["topological_stream_order"] = get_topological_stream_order(rivers)
+        rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
 
         # create river inflow simulations
         for group, group_rivers in tqdm(rivers.groupby("calculation_group")):
