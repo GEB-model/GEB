@@ -519,6 +519,44 @@ class GEBModel(Module, HazardDriver):
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
+    def update_household_adaptation_attributes(self) -> None:
+        """Initiate the model only to setup household adaptation attributes after spinup."""
+        # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
+        current_time = self.run_start - datetime.timedelta(days=1)
+        end_time_exclusive = self.run_start
+
+        timestep_length = datetime.timedelta(days=1)
+        n_timesteps = (end_time_exclusive - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
+        assert n_timesteps > 0, "End time is before or identical to start time"
+
+        # set adaptation to true
+        self.config["agent_settings"]["households"]["adapt"] = True
+
+        # turn off any reporting for the ABM
+        self.config["report"] = {}
+
+        self.var = self.store.create_bucket("var")
+
+        self._initialize(
+            create_reporter=True,
+            current_time=current_time,
+            n_timesteps=n_timesteps,
+            timestep_length=datetime.timedelta(days=1),
+            clean_report_folder=False,
+            in_spinup=True,
+        )
+
+        self.step_to_end()
+
+        print("Spinup finished, saving adaptation attributes at end of spinup...")
+        path: Path = self.store.path
+        for name, bucket in self.store.buckets.items():
+            if "households" in name:
+                self.logger.debug(f"Saving {name}")
+                bucket.save(path / name)
+
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
 
