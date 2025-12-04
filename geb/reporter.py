@@ -826,6 +826,12 @@ class Reporter:
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
+        # If no data has been collected, we return
+        if self.model.config["report"] is None:
+            self.model.logger.warning(
+                "No report configuration found. No data to report."
+            )
+            return None
         # Flush any remaining buffers
         for module_name, configs in self.model.config["report"].items():
             for name, config in configs.items():
