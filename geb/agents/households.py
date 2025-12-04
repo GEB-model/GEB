@@ -442,17 +442,14 @@ class Households(AgentBaseClass):
         """Update the risk perceptions of households based on the latest flood data."""
         # update timer
         self.var.years_since_last_flood.data += 1
-        print("UPDATING FLOOD RISK PERCPETION")
         # Here we update flood risk perception based on actual floods that have happened and whether a household was flooded (yes/no)
         if self.config["adapt_to_actual_floods"]:
-            print("ADAPT TO ACTUAL FLOODS")
             # Find the flood event that corresponds to the current time (in the model)
             for event in self.flood_events:
                 print(self.flood_events)
                 end: datetime = event["end_time"]
 
                 if self.model.current_time == end + timedelta(days=14):
-                    print("opening flood map")
                     # Open the flood map
                     flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
                     flood_map_path: Path = (
@@ -501,7 +498,6 @@ class Households(AgentBaseClass):
                     print(self.var.locations.data)
 
         else:
-            print("ENDED UP IN ELSE STATEMENT, NOT GOOD")
             if (
                 np.random.random() < 0.1
             ):  # generate random flood (not based on actual modeled flood data)
