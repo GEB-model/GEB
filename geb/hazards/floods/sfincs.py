@@ -28,6 +28,7 @@ from hydromt_sfincs.workflows import burn_river_rect
 from pyflwdir import FlwdirRaster
 from pyflwdir.dem import fill_depressions
 from scipy.ndimage import value_indices
+from shapely import line_locate_point
 from shapely.geometry import Point
 from tqdm import tqdm
 
@@ -491,6 +492,8 @@ class SFINCSRootModel:
                 self.path / "debug_outflow_mask.zarr",
                 crs=self.mask.rio.crs,
             )
+            self.rivers.to_file(self.path / "debug_rivers.geojson", driver="GeoJSON")
+            self.region.to_file(self.path / "debug_region.geojson", driver="GeoJSON")
             write_geom(self.rivers, self.path / "debug_rivers.geoparquet")
             write_geom(self.region, self.path / "debug_region.geoparquet")
 
@@ -518,6 +521,26 @@ class SFINCSRootModel:
                     (outflow_point.x, outflow_point.y),
                     self.mask.rio.transform().to_gdal(),
                 )
+                # due to floating point precision, the intersection point
+                # may be just outside the model grid. We therefore check if the
+                # point is outside the grid, and if so, move it 1 m upstream along the river
+                if not self.mask.values[row, col]:
+                    # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
+                    outflow_point = river.geometry.interpolate(
+                        line_locate_point(river.geometry, outflow_point) - 0.000008983
+                        if self.is_geographic
+                        else 1.0
+                    )
+                    col, row = coord_to_pixel(
+                        (outflow_point.x, outflow_point.y),
+                        self.mask.rio.transform().to_gdal(),
+                    )
+                    # if still outside the grid, raise error
+                    if not self.mask.values[row, col]:
+                        export_diagnostics()
+                        raise ValueError(
+                            "Calculated outflow point is outside of the model grid. Please check the river geometries and region boundary."
+                        )
                 assert col >= 0 and row >= 0, (
                     "Calculated outflow point is outside of the model grid"
                 )

@@ -123,7 +123,16 @@ def detect_outflow(
     # Check if the cell is on the border of the flood mask
     rows, cols = mask.shape
     is_border = False
-    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+    for dr, dc in [
+        (-1, 0),
+        (1, 0),
+        (0, -1),
+        (0, 1),
+        (-1, -1),
+        (-1, 1),
+        (1, -1),
+        (1, 1),
+    ]:
         nr, nc = row + dr, col + dc
         if not (0 <= nr < rows and 0 <= nc < cols) or not mask[nr, nc]:
             is_border = True
