@@ -32,6 +32,11 @@ from geb.workflows.io import load_geom
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
 
+# Wrap pyflwdir core functions with @njit(cache=True) to enable Numba caching.
+# This significantly speeds up model initialization by caching the compiled versions
+# of these frequently-called functions. The original functions are already JIT-compiled
+# but don't have caching enabled.
+
 _upstream_matrix_orig = core.upstream_matrix
 _idxs_seq_orig = core.idxs_seq
 _from_array_ldd_orig = core_ldd.from_array
@@ -40,7 +45,7 @@ _check_values_d8_orig = core_d8.check_values
 
 @njit(cache=True)
 def wrap_upstream_matrix(
-    idxs_ds: TwoDArrayUint8, mv: np.int64 = core._mv
+    idxs_ds: ArrayInt32, mv: np.int64 = core._mv
 ) -> TwoDArrayInt32:
     """Returns a 2D array with upstream cell indices for each cell.
 
@@ -58,7 +63,7 @@ def wrap_upstream_matrix(
 
 @njit(cache=True)
 def wrap_idxs_seq(
-    idxs_ds: TwoDArrayUint8, idxs_pit: ArrayInt32, mv: np.int64 = core._mv
+    idxs_ds: ArrayInt32, idxs_pit: ArrayInt32, mv: np.int64 = core._mv
 ) -> ArrayInt32:
     """Returns indices ordered from down- to upstream.
 
@@ -832,7 +837,7 @@ class Accuflux(Router):
         """
         Qold += sideflow_m3 / dt
 
-        evaporation_m3_s: ArrayFloat32 = evaporation_m3 / dt
+        evaporation_m3_s: ArrayFloat32 = evaporation_m3 / np.float32(dt)
         actual_evaporation_m3_s: ArrayFloat32 = np.minimum(evaporation_m3_s, Qold)
         actual_evaporation_m3: ArrayFloat32 = actual_evaporation_m3_s * dt
         actual_evaporation_m3[waterbody_id != -1] = 0.0
@@ -1233,8 +1238,8 @@ class Routing(Module):
         return_flow: ArrayFloat32,
         reference_evapotranspiration_water_m: TwoDArrayFloat32,
     ) -> tuple[
-        np.float32,
-        np.float32,
+        np.float64,
+        np.float64,
     ]:
         """Perform a daily routing step with multiple substeps.
 
@@ -1437,7 +1442,7 @@ class Routing(Module):
                 self.grid.var.discharge_in_rivers_m3_s_substep,
                 rivers=self.rivers,
                 waterbody_ids=self.grid.var.waterBodyID,
-                outflow_per_waterbody_m3_s=outflow_per_waterbody_m3 / 3600,
+                outflow_per_waterbody_m3_s=outflow_per_waterbody_m3 / np.float32(3600),
             )
 
             self.grid.var.discharge_m3_s_per_substep[hour, :] = (
