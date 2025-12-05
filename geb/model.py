@@ -222,7 +222,7 @@ class GEBModel(Module, HazardDriver):
             self.multiverse_name: str = f"forecast_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}/member_{member}"  # set the multiverse name to the member name
 
             for loader_name, loader in self.forcing.loaders.items():
-                if loader.supports_forecast and "pr" in loader_name:
+                if loader.supports_forecast:
                     loader.set_forecast(
                         forecast_issue_datetime=forecast_issue_datetime,
                         da=forecast_data[loader_name].sel(member=member),
@@ -257,7 +257,7 @@ class GEBModel(Module, HazardDriver):
 
         # after all forecast members have been processed, restore the original forcing data
         for loader_name, loader in self.forcing.loaders.items():
-            if loader.supports_forecast and loader_name == "pr":
+            if loader.supports_forecast:
                 loader.unset_forecast()  # unset forecast mode
 
         self.multiverse_name: None = None  # reset the multiverse name
@@ -301,22 +301,19 @@ class GEBModel(Module, HazardDriver):
             ] = []  # list to store forecast issue dates
 
             for forecast_dir in forecast_dirs:
-                try:
-                    if (
-                        len(forecast_dir.name) == 15 and forecast_dir.name[8] == "T"
-                    ):  # YYYYMMDDTHHMMSS format
-                        dt = datetime.datetime.strptime(
-                            forecast_dir.name, "%Y%m%dT%H%M%S"
-                        )
+                if (
+                    len(forecast_dir.name) == 15 and forecast_dir.name[8] == "T"
+                ):  # YYYYMMDDTHHMMSS format
+                    dt = datetime.datetime.strptime(forecast_dir.name, "%Y%m%dT%H%M%S")
 
-                        # Check if this forecast directory contains precipitation data
-                        pr_files = list(forecast_dir.glob("**/pr_*.zarr"))
-                        if (
-                            pr_files
-                        ):  # Only include forecasts that have precipitation data
-                            forecast_issue_dates.append(dt)
-                except ValueError:
-                    print(
+                    # Check if this forecast directory contains precipitation data
+                    forecast_files = list(forecast_dir.glob("**/.zarr"))
+                    if (
+                        forecast_files
+                    ):  # Only include forecasts that have precipitation data
+                        forecast_issue_dates.append(dt)
+                else:
+                    raise ValueError(
                         f"Warning: Forecast directory {forecast_dir.name} does not have a valid datetime format. Expected format: 'forecast_YYYYMMDDTHHMMSS'. Skipping this directory."
                     )  # print a warning if the format is invalid
 
@@ -614,10 +611,10 @@ class GEBModel(Module, HazardDriver):
                 f"Spinup start time does not match the stored time range. Stored: {self.var._spinup_start}, Configured: {self.spinup_start}"
             )
 
-        if self.var._run_start != self.run_start:
-            raise ValueError(
-                f"Run start time does not match the stored time range. Stored: {self.var._run_start}, Configured: {self.run_start}"
-            )
+        # if self.var._run_start != self.run_start:
+        #    raise ValueError(
+        #        f"Run start time does not match the stored time range. Stored: {self.var._run_start}, Configured: {self.run_start}"
+        #    )
 
     def estimate_return_periods(self) -> None:
         """Estimate flood maps for different return periods."""

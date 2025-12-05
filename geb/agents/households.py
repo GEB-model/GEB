@@ -100,6 +100,7 @@ class Households(AgentBaseClass):
         self.load_max_damage_values()
         self.load_damage_curves()
         if self.model.config["agent_settings"]["households"]["warning_response"]:
+            # TODO: Temporarily disabled - missing infrastructure data
             # self.load_critical_infrastructure()
             self.load_wlranges_and_measures()
 
@@ -857,7 +858,16 @@ class Households(AgentBaseClass):
         pd.DataFrame(warning_log).to_csv(path, index=False)
 
     def load_critical_infrastructure(self) -> None:
-        """Load critical infrastructure elements (vulnerable and emergency facilities, energy substations) and assign them to postal codes."""
+        """Load critical infrastructure elements (vulnerable and emergency facilities, energy substations) and assign them to postal codes.
+
+        NOTE: This function is currently disabled due to missing infrastructure data.
+        TODO: Re-enable when infrastructure data becomes available.
+        """
+        # TODO: Temporarily disabled - missing infrastructure data
+        print(
+            "WARNING: load_critical_infrastructure is temporarily disabled (missing data)"
+        )
+        return
         # Load postal codes
         postal_codes = self.postal_codes.copy()
 
@@ -1075,10 +1085,18 @@ class Households(AgentBaseClass):
     ) -> None:
         """This function implements an evacuation warning strategy based on critical infrastructure elements, such as energy substations, vulnerable and emergency facilities.
 
+        NOTE: This function is currently disabled due to missing infrastructure data.
+        TODO: Re-enable when infrastructure data becomes available.
+
         Args:
             date_time: The forecast date time for which to implement the warning strategy.
             prob_threshold: The probability threshold above which a warning is issued.
         """
+        # TODO: Temporarily disabled - missing infrastructure data
+        print(
+            f"WARNING: critical_infrastructure_warning_strategy is temporarily disabled (missing data) for {date_time.isoformat()}"
+        )
+        return
         # Get the household points, needed to issue warnings
         households = self.var.household_points.copy()
 
@@ -2318,13 +2336,13 @@ class Households(AgentBaseClass):
 
         else:
             buildings["object_type"] = "building_unprotected"
-            buildings.loc[buildings["protect_building"], "object_type"] = (
+            buildings.loc[buildings["flood_proofed"], "object_type"] = (
                 "building_protected"
             )
 
             buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
             buildings_centroid["object_type"] = buildings_centroid[
-                "protect_building"
+                "flood_proofed"
             ].apply(lambda x: "building_protected" if x else "building_unprotected")
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 

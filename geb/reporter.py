@@ -21,7 +21,7 @@ from geb.workflows.io import fast_rmtree
 from geb.workflows.methods import multi_level_merge
 from geb.workflows.raster import coord_to_pixel
 
-ZARR_TIME_CHUNK_SIZE = 100
+ZARR_TIME_CHUNK_SIZE = 5
 
 if TYPE_CHECKING:
     from geb.model import GEBModel

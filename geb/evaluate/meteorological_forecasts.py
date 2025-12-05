@@ -87,7 +87,7 @@ class MeteorologicalForecasts:
         moment_of_flooding: pd.Timestamp | None = None
 
         # Check for optional moment_of_flooding setting
-        if "moment_of_flooding" in flood_events[0]:
+        if flood_events and "moment_of_flooding" in flood_events[0]:
             moment_of_flooding = pd.to_datetime(
                 str(flood_events[0]["moment_of_flooding"])
             )
@@ -183,11 +183,19 @@ class MeteorologicalForecasts:
 
                 # Apply cumulative sum if requested
                 if plot_type == "cumulative":
-                    # For cumulative: first take spatial maximum, then cumulative sum over time
-                    era5_processed: xarray.DataArray = era5_clipped.cumsum(dim="time")
-                    
-                    # For ensemble data: first take spatial maximum, then cumulative sum
-                    ens_processed: xarray.DataArray = ens_max_mm_per_h.cumsum(dim="time")
+                    # For cumulative: first cumulative sum, then spatial maximum (same as spatial plot)
+                    era5_cumulative_spatial = era5_mm_per_h.sel(
+                        time=slice(ens_time[0], ens_time[-1])
+                    ).cumsum(dim="time")
+                    era5_processed: xarray.DataArray = era5_cumulative_spatial.max(
+                        dim=["y", "x"]
+                    )
+
+                    # For ensemble data: first cumulative sum, then spatial maximum
+                    ens_cumulative_spatial = ens_mm_per_h.cumsum(dim="time")
+                    ens_processed: xarray.DataArray = ens_cumulative_spatial.max(
+                        dim=["y", "x"]
+                    )
                 else:
                     era5_processed: xarray.DataArray = era5_clipped
                     ens_processed: xarray.DataArray = ens_max_mm_per_h
@@ -211,8 +219,8 @@ class MeteorologicalForecasts:
                 """Format the time axis for the plots."""
                 ax.set_xlim(x_start, x_end)
                 ax.set_xticks(x_ticks)
-                ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m %H:%M"))
-                ax.tick_params(axis="x", rotation=90)
+                ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m-%Y"))
+                ax.tick_params(axis="x", rotation=45)
                 ax.grid(True)
 
             def plot_rainfall_data(
@@ -227,6 +235,8 @@ class MeteorologicalForecasts:
                 moment_of_flooding: pd.Timestamp | None = None,
                 x_start: pd.Timestamp = pd.Timestamp("2024-04-26 00:00"),
                 x_end: pd.Timestamp = pd.Timestamp("2024-05-12 00:00"),
+                spatial_ax: plt.Axes | None = None,
+                spatial_data: dict | None = None,
             ) -> None:
                 """Plot precipitation data (intensity or cumulative) for a single subplot.
 
@@ -242,12 +252,21 @@ class MeteorologicalForecasts:
                     show_legend: Whether to show the legend on this subplot.
                     x_start: Start time for x-axis.
                     x_end: End time for x-axis.
+                    spatial_ax: Optional matplotlib axes object for spatial plot.
+                    spatial_data: Optional dictionary with spatial data for plotting.
                 """
                 # Parse initialization time string to readable format
                 init_datetime: pd.Timestamp = pd.to_datetime(
                     init_time_str, format="%Y%m%dT%H%M%S"
                 )
                 init_time_readable: str = init_datetime.strftime("%d %B %Y, %H:%M UTC")
+
+                # Calculate lead time in days if moment of flooding is available
+                if moment_of_flooding is not None:
+                    lead_time_days: float = (
+                        moment_of_flooding - init_datetime
+                    ).total_seconds() / (24 * 3600)
+
                 # Plot ERA5 and control
                 ax.plot(
                     control_time,
@@ -292,24 +311,84 @@ class MeteorologicalForecasts:
 
                 # Set title and formatting
                 ax.set_title(
-                    f"Forecast Initialization: {init_time_readable}", fontsize=18
+                    f"{lead_time_days:.1f} day lead time\n(Initialized: {init_time_readable})",
+                    fontsize=18,
                 )
 
-                # if plot_type == "cumulative":
-                # ax.set_yticks(
-                #    range(0, 3001, 250)
-                # )  # Adjusted for cumulative mm values
+                if plot_type == "cumulative":
+                    ax.set_yticks(
+                        range(0, 801, 100)
+                    )  # Adjusted for cumulative mm values
                 # else:
                 #    ax.set_yticks(range(0, 62, 5))  # For intensity mm/h values
 
                 # Use static x-axis bounds
                 x_ticks: list[pd.Timestamp] = pd.date_range(
-                    start=x_start, end=x_end, freq="12h"
+                    start=x_start, end=x_end, freq="24h"
                 )
                 format_time_axis(ax, x_start, x_end, x_ticks)
 
                 if show_legend:
-                    ax.legend(fontsize=12, loc="upper right")
+                    ax.legend(fontsize=14, loc="upper right")
+
+                # Create spatial plot if requested and data is provided
+                if (
+                    spatial_ax is not None
+                    and spatial_data is not None
+                    and plot_type == "cumulative"
+                ):
+                    # Load region boundary for spatial plot
+                    region = gpd.read_parquet(
+                        Path(self.model.input_folder / "geom" / "mask.geoparquet")
+                    )
+
+                    # Use ensemble cumulative data for spatial plot
+                    data_to_plot = spatial_data["ensemble_cumulative"]
+
+                    # Create the spatial plot
+                    im = data_to_plot.plot(
+                        ax=spatial_ax,
+                        cmap="viridis",
+                        add_colorbar=False,
+                        alpha=0.45,
+                        zorder=1,
+                    )
+
+                    # Add region boundary
+                    region.boundary.plot(
+                        ax=spatial_ax, color="black", linestyle="-", linewidth=2
+                    )
+                    target_crs = region.crs
+                    ctx.add_basemap(
+                        spatial_ax,
+                        crs=target_crs,
+                        source="OpenStreetMap.Mapnik",
+                        zoom=12,
+                        zorder=0,
+                    )
+
+                    # Format the spatial plot
+                    init_datetime = pd.to_datetime(
+                        init_time_str, format="%Y%m%dT%H%M%S"
+                    )
+                    init_readable = init_datetime.strftime("%d %B %Y, %H:%M")
+
+                    # Calculate lead time for spatial plot
+                    if moment_of_flooding is not None:
+                        spatial_lead_time_days: float = (
+                            moment_of_flooding - init_datetime
+                        ).total_seconds() / (24 * 3600)
+
+                    spatial_ax.set_title(
+                        f"Ensemble Spatial Mean Cumulative Rainfall\n{spatial_lead_time_days:.1f} day lead time\n(Initialized: {init_readable})",
+                        fontsize=16,
+                    )
+                    spatial_ax.set_xlabel("Longitude", fontsize=14)
+                    spatial_ax.set_ylabel("Latitude", fontsize=14)
+
+                    # Add colorbar
+                    cbar = plt.colorbar(im, ax=spatial_ax, shrink=0.8)
+                    cbar.set_label("Rainfall [mm]", fontsize=16)
 
             # Main evaluation logic
             forecast_initialisations: list[str] = sorted(
@@ -321,16 +400,58 @@ class MeteorologicalForecasts:
 
             num_forecasts: int = len(forecast_initialisations)
 
-            # Calculate grid dimensions - 2 columns, enough rows for all forecasts
-            num_cols: int = 2
-            num_rows: int = (
-                num_forecasts + num_cols - 1
-            ) // num_cols  # Ceiling division
+            # Calculate grid dimensions - for cumulative plots: 2 columns (timeline + ensemble spatial), for intensity: 2 columns
+            if plot_type == "cumulative":
+                num_cols: int = 2  # Timeline grid: 2 columns
+                timeline_rows: int = (
+                    num_forecasts + num_cols - 1
+                ) // num_cols  # Standard 2x2 grid for timelines
+                num_rows: int = timeline_rows + 1  # Add one extra row for spatial plots
+                fig_width = 20
+            else:
+                num_cols: int = 2  # Just timelines
+                num_rows: int = (
+                    num_forecasts + num_cols - 1
+                ) // num_cols  # Standard grid calculation
+                fig_width = 20
 
-            # Create subplots in 2-column grid
-            fig, axes = plt.subplots(
-                num_rows, num_cols, figsize=(20, 4 * num_rows), sharex=True, sharey=True
-            )
+            # Create subplots
+            if plot_type == "cumulative":
+                # Create figure and subplots normally, then adjust spacing
+                fig, axes = plt.subplots(
+                    num_rows, num_cols, figsize=(fig_width, 6 * num_rows)
+                )
+                if num_rows == 1:
+                    axes = axes.reshape(1, -1)
+                elif num_cols == 1:
+                    axes = axes.reshape(-1, 1)
+
+                # Add extra spacing between timeline plots and spatial plots
+                if num_rows > 1:  # Only if we have both timeline and spatial plots
+                    timeline_rows = (num_forecasts + num_cols - 1) // num_cols
+                    extra_gap = 3  # Extra gap between timeline and spatial plots
+
+                    # Move spatial plots down to create extra gap
+                    for col in range(num_cols):
+                        if timeline_rows < num_rows:  # If spatial plots exist
+                            spatial_ax = axes[-1, col]  # Bottom row (spatial plots)
+                            pos = spatial_ax.get_position()
+                            spatial_ax.set_position(
+                                [
+                                    pos.x0,
+                                    pos.y0 - extra_gap,  # Move down
+                                    pos.width,
+                                    pos.height,
+                                ]
+                            )
+            else:
+                fig, axes = plt.subplots(
+                    num_rows,
+                    num_cols,
+                    figsize=(fig_width, 4 * num_rows),
+                    sharex=True,
+                    sharey=True,
+                )
             plt.rcParams.update(
                 {
                     #'font.family': 'Times New Roman',
@@ -350,10 +471,6 @@ class MeteorologicalForecasts:
                     f"Processing forecast initialisation: {init_time}"
                 )  # Log the iteration of forecasts
 
-                # Calculate subplot position
-                row_idx: int = idx // num_cols
-                col_idx: int = idx % num_cols
-
                 init_folder: Path = forecast_base_path / init_time
 
                 # Load data for this initialisation
@@ -361,18 +478,58 @@ class MeteorologicalForecasts:
                     init_folder, plot_type=plot_type
                 )
 
-                show_legend_flag: bool = row_idx == 0 and col_idx == 1
-                # Get the correct axis
-                if num_rows == 1:
-                    current_ax: plt.Axes = axes[col_idx] if num_cols > 1 else axes
-                else:
-                    current_ax: plt.Axes = (
-                        axes[row_idx, col_idx] if num_cols > 1 else axes[row_idx]
-                    )
+                # Load spatial data for cumulative plots
+                spatial_data = None
+                if plot_type == "cumulative":
+                    # Load full spatial data for ensemble cumulative plots
+                    zarr_files = list(init_folder.glob("*.zarr"))
+                    pr_files = [f for f in zarr_files if "pr" in f.name.lower()]
 
-                # Plot data
+                    if pr_files:
+                        # Ensemble spatial data
+                        ens_ds = open_zarr(init_folder / pr_files[0].name)
+                        ens_mm_per_h_spatial = ens_ds * 3600  # Convert to mm/h
+
+                        # Calculate spatial cumulative rainfall (excluding control member 0)
+                        ensemble_members = ens_mm_per_h_spatial.isel(
+                            member=slice(1, None)
+                        )
+                        # Cumulative over time per gridcel, then final timestep, then max over members
+                        ensemble_cumulative = (
+                            ensemble_members.cumsum(dim="time")
+                            .isel(time=-1)
+                            .mean(dim="member")
+                        )
+
+                        spatial_data = {"ensemble_cumulative": ensemble_cumulative}
+
+                if plot_type == "cumulative":
+                    # For cumulative: 2x2 grid for timeline plots, spatial plots in extra row
+                    row_idx = idx // 2
+                    col_idx = idx % 2
+                    timeline_ax = axes[row_idx, col_idx]
+                    ensemble_spatial_ax = None
+                    show_legend_flag = (
+                        row_idx == 0 and col_idx == 1
+                    )  # Top-right subplot
+
+                    # Spatial plots only for first and last forecast (in bottom row)
+                    if idx == 0:  # First forecast
+                        ensemble_spatial_ax = axes[-1, 0]  # Bottom left
+                    elif idx == num_forecasts - 1:  # Last forecast
+                        ensemble_spatial_ax = axes[-1, 1]  # Bottom right
+                else:
+                    # For intensity: original 2-column layout
+                    row_idx = idx // 2
+                    col_idx = idx % 2
+                    timeline_ax = (
+                        axes[row_idx, col_idx] if num_rows > 1 else axes[col_idx]
+                    )
+                    ensemble_spatial_ax = None
+                    show_legend_flag = row_idx == 0 and col_idx == 1
+                # Plot timeline data
                 plot_rainfall_data(
-                    ax=current_ax,
+                    ax=timeline_ax,
                     era5_data=era5_data,
                     control_data=control_data,
                     ensemble_data=ensemble_data,
@@ -380,7 +537,9 @@ class MeteorologicalForecasts:
                     init_time_str=init_time,
                     moment_of_flooding=moment_of_flooding,
                     plot_type=plot_type,
-                    show_legend=show_legend_flag,  # Only show legend on first right subplot
+                    show_legend=show_legend_flag,
+                    spatial_ax=ensemble_spatial_ax,
+                    spatial_data=spatial_data,
                 )
 
             # Hide unused subplots if odd number of forecasts
@@ -389,43 +548,136 @@ class MeteorologicalForecasts:
                     idx: int = row * num_cols + col
 
                     # Get current axis using same logic as above
-                    if num_rows == 1:
-                        current_ax: plt.Axes = axes[col] if num_cols > 1 else axes
+                    if plot_type == "cumulative":
+                        # For cumulative plots: 2x2 grid for timelines, spatial plots in last row
+                        timeline_rows = (num_forecasts + num_cols - 1) // num_cols
+                        if row < timeline_rows:
+                            # Timeline plots in 2x2 grid
+                            current_ax: plt.Axes = axes[row, col]
+                        elif row == timeline_rows:
+                            # Spatial plots in last row (only first two positions)
+                            if col < 2:
+                                current_ax: plt.Axes = axes[row, col]
+                            else:
+                                continue  # Skip extra columns in spatial row
+                        else:
+                            continue  # Skip if indices are out of bounds
                     else:
-                        current_ax: plt.Axes = (
-                            axes[row, col] if num_cols > 1 else axes[row]
-                        )
+                        # For intensity plots: handle different axis configurations
+                        if num_rows == 1 and num_cols == 1:
+                            current_ax: plt.Axes = axes
+                        elif num_rows == 1:
+                            current_ax: plt.Axes = axes[col]
+                        elif num_cols == 1:
+                            current_ax: plt.Axes = axes[row]
+                        else:
+                            current_ax: plt.Axes = axes[row, col]
 
-                    if idx >= num_forecasts:
-                        # Hide unused subplot
-                        current_ax.set_visible(False)
+                    if plot_type == "cumulative":
+                        # For cumulative plots: handle 2x2 timeline grid + spatial row
+                        timeline_rows = (num_forecasts + num_cols - 1) // num_cols
+                        timeline_idx = row * num_cols + col
+
+                        if row < timeline_rows:
+                            # Timeline plots in 2x2 grid
+                            if timeline_idx >= num_forecasts:
+                                # Hide unused timeline subplot
+                                current_ax.set_visible(False)
+                            else:
+                                # Show x-axis labels only on bottom timeline row
+                                is_bottom_timeline_row = row == timeline_rows - 1
+                                subplot_below_is_empty = (
+                                    row + 1
+                                ) * num_cols + col >= num_forecasts
+
+                                if is_bottom_timeline_row or subplot_below_is_empty:
+                                    current_ax.tick_params(labelbottom=True)
+                                    # Don't add individual x-axis labels - will use central label
+
+                                # Show y-axis labels and label only on left middle subplot
+                                if col == 0:
+                                    current_ax.tick_params(labelleft=True)
+                                    # Don't add individual y-axis labels - will use central label
+                        elif row == timeline_rows:
+                            # Spatial plots row
+                            if col < 2:  # Only first two columns can have spatial plots
+                                # Show labels for spatial plots
+                                current_ax.tick_params(labelbottom=True, labelleft=True)
                     else:
-                        # Show x-axis labels on bottom row OR if the subplot below is empty
-                        subplot_below_is_empty: bool = (
-                            row + 1
-                        ) * num_cols + col >= num_forecasts
-                        is_bottom_row: bool = row == num_rows - 1
+                        # Original logic for intensity plots
+                        if idx >= num_forecasts:
+                            # Hide unused subplot
+                            current_ax.set_visible(False)
+                        else:
+                            # Show x-axis labels on bottom row OR if the subplot below is empty
+                            subplot_below_is_empty: bool = (
+                                row + 1
+                            ) * num_cols + col >= num_forecasts
+                            is_bottom_row: bool = row == num_rows - 1
 
-                        if is_bottom_row or subplot_below_is_empty:
-                            current_ax.tick_params(labelbottom=True)
+                            if is_bottom_row or subplot_below_is_empty:
+                                current_ax.tick_params(labelbottom=True)
 
-                        # Show y-axis labels on leftmost column
-                        if col == 0:
-                            current_ax.tick_params(labelleft=True)
+                            # Show y-axis labels on leftmost column
+                            if col == 0:
+                                current_ax.tick_params(labelleft=True)
             # Final plot formatting
             if plot_type == "cumulative":
                 plot_title: str = "ERA5 vs ECMWF Control & Probabilistic Cumulative Precipitation Forecasts"
                 output_filename: str = "ERA5_vs_ECMWF_Control_&_Probabilistic_Cumulative_Precipitation_Forecasts.png"
-                ylabel: str = "Cumulative Rainfall [mm]"
+
+                # Add central axis labels for timeline plots only
+                timeline_rows = (num_forecasts + num_cols - 1) // num_cols
+
+                # Calculate position for timeline plots (excluding spatial row)
+                timeline_height = timeline_rows * 6  # Each timeline row is 6 units high
+                total_height = num_rows * 6  # Total figure height units
+                spatial_height = 6  # Spatial row height
+
+                # Position labels for timeline plots
+                timeline_center_x = 0.5  # Center horizontally
+                timeline_center_y = (
+                    spatial_height + timeline_height / 2
+                ) / total_height  # Center of timeline area vertically
+
+                # Y-position for x-axis label: at bottom of timeline area (above spatial row)
+                timeline_bottom_y = spatial_height / total_height
+
+                fig.text(
+                    timeline_center_x,
+                    timeline_bottom_y - 0.03,
+                    "Date (UTC)",
+                    ha="center",
+                    va="top",
+                    fontsize=16,
+                    fontweight="bold",
+                )
+                fig.text(
+                    0.02,
+                    timeline_center_y,
+                    "Cumulative Rainfall [mm]",
+                    va="center",
+                    rotation="vertical",
+                    fontsize=16,
+                    fontweight="bold",
+                )
+
             else:
                 plot_title: str = "ERA5 vs ECMWF Control & Probabilistic Maximum Intensity Precipitation Forecasts"
                 output_filename: str = "ERA5_vs_ECMWF_Control_&_Probabilistic_Precipitation_Forecasts_Maximum_Intensity.png"
                 ylabel: str = "Rainfall intensity [mm/h]"
-            fig.suptitle(plot_title, fontsize=22, y=0.95)
-            fig.text(0.5, 0.02, "Date (UTC)", ha="center", fontsize=18)
-            fig.text(0.02, 0.5, ylabel, va="center", rotation="vertical", fontsize=18)
+                # Set global axis labels for intensity plots (original behavior)
+                fig.text(0.5, 0.02, "Date (UTC)", ha="center", fontsize=18)
+                fig.text(
+                    0.02, 0.5, ylabel, va="center", rotation="vertical", fontsize=18
+                )
 
-            plt.tight_layout(rect=[0.03, 0.03, 0.97, 0.95])
+            fig.suptitle(plot_title, fontsize=22, y=0.95)
+
+            if plot_type == "cumulative":
+                plt.tight_layout(rect=[0.03, 0.03, 0.97, 0.95])
+            else:
+                plt.tight_layout(rect=[0.03, 0.03, 0.97, 0.95])
 
             # Save plot
             plt.savefig(
@@ -1565,7 +1817,8 @@ class MeteorologicalForecasts:
         evaluate_precipitation_forecasts(
             plot_type="cumulative", moment_of_flooding=moment_of_flooding
         )
+
         # Call the rainfall warning analysis
-        issue_rainfall_warning(
-            processing_forecasts, moment_of_flooding=moment_of_flooding
-        )
+        # issue_rainfall_warning(
+        #    processing_forecasts, moment_of_flooding=moment_of_flooding
+        # )
