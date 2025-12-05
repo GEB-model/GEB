@@ -165,7 +165,8 @@ def read_grid(
                 f=y[0] - y_diff / 2,
             )
             crs = data_array.attrs["_CRS"]
-            wkt: str = crs["wkt"]  # ty: ignore[invalid-argument-type,non-subscriptable]
+            assert isinstance(crs, dict)
+            wkt: str = crs["wkt"]
             return data, transform, wkt
         else:
             return data

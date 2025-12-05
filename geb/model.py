@@ -777,8 +777,16 @@ class GEBModel(Module, HazardDriver):
 
         Returns:
             Path to the folder containing GEB binaries.
+
+        Raises:
+            EnvironmentError: If the GEB_PACKAGE_DIR environment variable is not set.
         """
-        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
+        GEB_PACKAGE_DIR_str = os.environ.get("GEB_PACKAGE_DIR")
+        if GEB_PACKAGE_DIR_str is None:
+            raise EnvironmentError(
+                "GEB_PACKAGE_DIR environment variable is not set. Please set it to the GEB package directory."
+            )
+        return Path(GEB_PACKAGE_DIR_str) / "bin"
 
     @property
     def diagnostics_folder(self) -> Path:

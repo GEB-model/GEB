@@ -1,9 +1,10 @@
 """Workflow helpers used in the GEB."""
 
 from time import time
-from typing import Iterable
 
 import numpy as np
+
+from geb.types import ArrayFloat
 
 
 class TimingModule:
@@ -57,10 +58,10 @@ class TimingModule:
 def balance_check(
     name: str,
     how: str = "cellwise",
-    influxes: Iterable = [],
-    outfluxes: Iterable = [],
-    prestorages: Iterable = [],
-    poststorages: Iterable = [],
+    influxes: list[ArrayFloat] | ArrayFloat = [],
+    outfluxes: list[ArrayFloat] | ArrayFloat = [],
+    prestorages: list[ArrayFloat] | ArrayFloat = [],
+    poststorages: list[ArrayFloat] | ArrayFloat = [],
     tolerance: float = 1e-10,
     error_identifiers: dict = {},
     raise_on_error: bool = False,
@@ -104,10 +105,10 @@ def balance_check(
         poststorages = [poststorages]
 
     if how == "cellwise":
-        inflow: np.ndarray = np.add.reduce(influxes)
-        outflow: np.ndarray = np.add.reduce(outfluxes)
-        prestorage: np.ndarray = np.add.reduce(prestorages)
-        poststorage: np.ndarray = np.add.reduce(poststorages)
+        inflow = np.add.reduce(influxes)
+        outflow = np.add.reduce(outfluxes)
+        prestorage = np.add.reduce(prestorages)
+        poststorage = np.add.reduce(poststorages)
 
         balance = inflow - outflow + prestorage - poststorage
 
