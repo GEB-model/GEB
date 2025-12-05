@@ -2,6 +2,7 @@
 
 import base64
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -1357,7 +1358,14 @@ class Hydrology:
         return water_circle
 
     def evaluate_hydrodynamics(
-        self, run_name: str = "default", *args: Any, **kwargs: Any
+        self,
+        run_name: str = "default",
+        forecast_range: tuple[str, str] | None = (
+            "20240426T000000",
+            "20240502T000000",
+        ),
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         """Evaluate hydrodynamic model performance against flood observations.
 
@@ -1367,65 +1375,19 @@ class Hydrology:
 
         Args:
             run_name: Name of the simulation run to evaluate.
+            forecast_range: Optional tuple of (start_date, end_date) strings in format
+                'YYYYMMDDTHHMMSS' to limit evaluation to specific forecast initialization
+                range. If None, all available forecasts are evaluated.
             *args: Additional positional arguments (ignored).
             **kwargs: Additional keyword arguments (ignored).
 
         Raises:
-            FileNotFoundError: If the flood map folder does not exist in the output directory.
-            ValueError: If the flood observation file is not in .zarr format.
-        """
+            FileNotFoundError: If the flood map folder, observation file, or forecast zarr files
+                do not exist in the expected locations.
+            FileExistsError: If multiple zarr files are found in a single forecast member folder.
+            ValueError: If the forecast_range format is invalid (not 'YYYYMMDDTHHMMSS').
+        """  # Main function for the performance metrics
 
-        def parse_flood_forecast_initialisation(
-            filename: str,
-        ) -> tuple[str, str, str, str, str]:
-            """Parse flood map filename to extract components.
-
-            Expected format: YYYYMMDDTHHMMSS - MEMBER - EVENT_START - EVENT_END.zarr
-
-            Args:
-                filename: Name of the flood map file.
-
-            Returns:
-                Tuple containing (forecast_init, member, event_start, event_end, event_name)
-
-            Raises:
-                ValueError: If the filename does not match the expected format.
-            """
-            # Remove .zarr extension
-            name_without_ext = filename.replace(".zarr", "")
-
-            # Split by ' - ' to get components
-            parts = name_without_ext.split(" - ")
-
-            if len(parts) >= 4:
-                # Handle case with forecasts included
-                forecast_init = parts[0]  # First 17 characters: YYYYMMDDTHHMMSS
-                member = parts[1]  # Member number
-                event_start = parts[2]  # Event start time
-                event_end = parts[3]  # Event end time
-
-                # Create event name from start and end times
-                event_name = f"{event_start} - {event_end}"
-
-            elif len(parts) == 2:
-                # Handle case with no forecasts included
-                forecast_init = None
-                member = None
-                event_start = parts[0]  # Event start time
-                event_end = parts[1]  # Event end time
-
-                # Create event name from start and end times
-                event_name = f"{event_start} - {event_end}"
-
-            else:
-                # Raise error for files that don't match expected format
-                raise ValueError(
-                    f"Filename '{filename}' does not match expected format for flood map."
-                )
-
-            return forecast_init, member, event_start, event_end, event_name
-
-        # Main function for the performance metrics
         def calculate_performance_metrics(
             observation: Path | str,
             flood_map_path: Path | str,
@@ -1452,18 +1414,16 @@ class Hydrology:
                 Path("simulation_root")
                 / run_name
                 / "SFINCS"
-                / "run"
-                / "segments.geoparquet"
+                / "group_0"
+                / "rivers.geoparquet"
             )
-            region = gpd.read_file(
-                Path("simulation_root")
-                / run_name
-                / "SFINCS"
-                / "run"
-                / "gis"
-                / "region.geojson"
-            ).to_crs(obs.rio.crs)
-
+            region_path = Path(self.model.input_folder / "geom" / "mask.geoparquet")
+            print(f"DEBUG: Loading region from absolute path: {region_path.absolute()}")
+            print(f"DEBUG: Model input folder: {self.model.input_folder}")
+            print(f"DEBUG: Region file exists: {region_path.exists()}")
+            region = gpd.read_parquet(region_path).to_crs(obs.rio.crs)
+            print(f"DEBUG: Region bounds: {region.total_bounds}")
+            print(f"DEBUG: Region CRS: {region.crs}")
             # Step 2: Clip out rivers from observations and simulations
             crs_wgs84 = CRS.from_epsg(4326)
             crs_mercator = CRS.from_epsg(3857)
@@ -1493,8 +1453,44 @@ class Hydrology:
             )
             obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
 
-            # Step 3: Clip out region from observations
+            # Step 3: Clip out region from observations and simulations
             obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
+            sim_region = sim_no_rivers.rio.clip(region.geometry.values, region.crs)
+
+            # DEBUG: Create figure showing clipped obs and sim data
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+            # Plot observed flood map (clipped)
+            obs_binary = (obs_region > 0).astype(int)
+            obs_binary.plot(
+                ax=ax1,
+                cmap="Blues",
+                add_colorbar=True,
+                cbar_kwargs={"label": "Flooded (0=No, 1=Yes)"},
+            )
+            region.boundary.plot(ax=ax1, color="red", linewidth=2)
+            ax1.set_title("Observed Flood Extent (Clipped to Region)")
+            ax1.set_xlabel("Longitude")
+            ax1.set_ylabel("Latitude")
+
+            # Plot simulated flood map (clipped)
+            sim_binary = (sim_region > 0.15).astype(int)
+            sim_binary.plot(
+                ax=ax2,
+                cmap="Oranges",
+                add_colorbar=True,
+                cbar_kwargs={"label": "Flooded (0=No, 1=Yes)"},
+            )
+            region.boundary.plot(ax=ax2, color="red", linewidth=2)
+            ax2.set_title("Simulated Flood Extent (Clipped to Region, >15cm)")
+            ax2.set_xlabel("Longitude")
+            ax2.set_ylabel("Latitude")
+
+            plt.tight_layout()
+            debug_plot_path = output_folder / "debug_clipped_flood_maps.png"
+            plt.savefig(debug_plot_path, dpi=300, bbox_inches="tight")
+            plt.close()
+            print(f"DEBUG: Saved clipped flood maps comparison to: {debug_plot_path}")
 
             # Step 4: Optionally clip using extra validation region from config yml
             extra_validation_path = self.config["floods"].get(
@@ -1506,16 +1502,16 @@ class Hydrology:
                 extra_clip_region = extra_clip_region.to_crs(region.crs)
                 extra_clip_region_buffer = extra_clip_region.buffer(160)
 
-                sim_extra_clipped = sim_no_rivers.rio.clip(
+                sim_extra_clipped = sim_region.rio.clip(
                     extra_clip_region_buffer.geometry.values,
                     extra_clip_region_buffer.crs,
                 )
-                clipped_out = (sim_no_rivers > 0.15) & (sim_extra_clipped.isnull())
-                clipped_out_raster = sim_no_rivers.where(clipped_out)
+                clipped_out = (sim_region > 0.15) & (sim_extra_clipped.isnull())
+                clipped_out_raster = sim_region.where(clipped_out)
             else:
                 # If no extra validation region, skip clipping
-                sim_extra_clipped = sim_no_rivers
-                clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
+                sim_extra_clipped = sim_region
+                clipped_out_raster = xr.full_like(sim_region, np.nan)
 
             # Step 5: Mask water depth values
             hmin = 0.15
@@ -1921,6 +1917,27 @@ class Hydrology:
                 label="Ensemble Mean",
             )
 
+            # Plot control forecast (member 0) with dotted line
+            member_0_data = performance_df[performance_df["member"] == 0]
+            if not member_0_data.empty:
+                member_0_grouped = (
+                    member_0_data.groupby("forecast_init")[metric].mean().reset_index()
+                )
+                member_0_grouped["forecast_init_dt"] = pd.to_datetime(
+                    member_0_grouped["forecast_init"], format="%Y%m%dT%H%M%S"
+                )
+                member_0_grouped = member_0_grouped.sort_values("forecast_init_dt")
+                ax.plot(
+                    member_0_grouped["forecast_init_dt"],
+                    member_0_grouped[metric],
+                    color="grey",
+                    linewidth=2.5,
+                    linestyle="--",
+                    marker="o",
+                    markersize=7,
+                    label="Control Forecast",
+                )
+
             ax.set_title("Hit Rate (%)", fontweight="bold")
             ax.set_ylabel("Hit Rate (%)")
             ax.grid(True, alpha=0.3)
@@ -1949,6 +1966,27 @@ class Hydrology:
                 markersize=6,
                 label="Ensemble Mean",
             )
+
+            # Plot control forecast (member 0) with dotted line
+            member_0_data = performance_df[performance_df["member"] == 0]
+            if not member_0_data.empty:
+                member_0_grouped = (
+                    member_0_data.groupby("forecast_init")[metric].mean().reset_index()
+                )
+                member_0_grouped["forecast_init_dt"] = pd.to_datetime(
+                    member_0_grouped["forecast_init"], format="%Y%m%dT%H%M%S"
+                )
+                member_0_grouped = member_0_grouped.sort_values("forecast_init_dt")
+                ax.plot(
+                    member_0_grouped["forecast_init_dt"],
+                    member_0_grouped[metric],
+                    color="grey",
+                    linewidth=2.5,
+                    linestyle="--",
+                    marker="s",
+                    markersize=7,
+                    label="Control Forecast",
+                )
 
             ax.set_title("False Alarm Rate (%)", fontweight="bold")
             ax.set_ylabel("False Alarm Rate (%)")
@@ -1979,6 +2017,27 @@ class Hydrology:
                 label="Ensemble Mean",
             )
 
+            # Plot control forecast (member 0) with dotted line
+            member_0_data = performance_df[performance_df["member"] == 0]
+            if not member_0_data.empty:
+                member_0_grouped = (
+                    member_0_data.groupby("forecast_init")[metric].mean().reset_index()
+                )
+                member_0_grouped["forecast_init_dt"] = pd.to_datetime(
+                    member_0_grouped["forecast_init"], format="%Y%m%dT%H%M%S"
+                )
+                member_0_grouped = member_0_grouped.sort_values("forecast_init_dt")
+                ax.plot(
+                    member_0_grouped["forecast_init_dt"],
+                    member_0_grouped[metric],
+                    color="grey",
+                    linewidth=2.5,
+                    linestyle="--",
+                    marker="^",
+                    markersize=7,
+                    label="Control Forecast",
+                )
+
             ax.set_title("Critical Success Index (%)", fontweight="bold")
             ax.set_ylabel("CSI (%)")
             ax.grid(True, alpha=0.3)
@@ -2008,6 +2067,27 @@ class Hydrology:
                 label="Ensemble Mean",
             )
 
+            # Plot control forecast (member 0) with dotted line
+            member_0_data = performance_df[performance_df["member"] == 0]
+            if not member_0_data.empty:
+                member_0_grouped = (
+                    member_0_data.groupby("forecast_init")[metric].mean().reset_index()
+                )
+                member_0_grouped["forecast_init_dt"] = pd.to_datetime(
+                    member_0_grouped["forecast_init"], format="%Y%m%dT%H%M%S"
+                )
+                member_0_grouped = member_0_grouped.sort_values("forecast_init_dt")
+                ax.plot(
+                    member_0_grouped["forecast_init_dt"],
+                    member_0_grouped[metric],
+                    color="grey",
+                    linewidth=2.5,
+                    linestyle="--",
+                    marker="d",
+                    markersize=7,
+                    label="Control Forecast",
+                )
+
             ax.set_title("Flooded Area (km²)", fontweight="bold")
             ax.set_ylabel("Area (km²)")
             ax.grid(True, alpha=0.3)
@@ -2035,66 +2115,39 @@ class Hydrology:
 
         eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
 
-        # Calculate performance metrics for every event in config file
+        # Calculate performance metrics for every event in the config file
         for event in self.config["floods"]["events"]:
             event_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}"
             print(f"event: {event_name}")
 
+            flood_maps_folder = self.model.output_folder / "flood_maps"
+
             # Create event-specific folder
-            if self.model.config["general"]["forecasts"]["use"]:
-                event_folder = eval_hydrodynamics_folders / "forecasts" / event_name
-                event_folder.mkdir(parents=True, exist_ok=True)
-                flood_maps_folder = (
-                    self.model.output_folder / "flood_maps" / "forecasts"
-                )
-            else:
+            if not self.model.config["general"]["forecasts"]["use"]:
                 event_folder = eval_hydrodynamics_folders / event_name
                 event_folder.mkdir(parents=True, exist_ok=True)
-                flood_maps_folder = self.model.output_folder / "flood_maps"
 
-            # check if run file exists, if not, raise an error
-
+            # check if flood map folder exists
             if not flood_maps_folder.exists():
                 raise FileNotFoundError(
                     "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
                 )
 
-            # check if observation file exists, if not, raise an error
+            # check if observation file exists
             if not Path(self.config["floods"]["event_observation_file"]).exists():
                 raise FileNotFoundError(
-                    f"Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
-                )
-            if Path(self.config["floods"]["event_observation_file"]).suffix != ".zarr":
-                raise ValueError(
-                    f"Flood observation file is not in the correct format. Please provide a .zarr file."
+                    "Flood observation file is not found in the given path in the model.yml. "
+                    "Please check the path in the config file."
                 )
 
-            # Find all flood maps corresponding to the event
-            all_flood_map_files = list(flood_maps_folder.glob("*.zarr"))
-
-            # Filter flood_map_files for the current event only
-            flood_map_files = []
-            for flood_map_path in all_flood_map_files:
-                forecast_init, member, event_start, event_end, parsed_event_name = (
-                    parse_flood_forecast_initialisation(flood_map_path.name)
-                )
-                # Check if file matches current event
-                if parsed_event_name == event_name:
-                    flood_map_files.append(flood_map_path)
-
-            print(
-                f"Found {len(flood_map_files)} flood map files for event {event_name}"
-            )
-
-            if len(flood_map_files) == 1:
+            if not self.model.config["general"]["forecasts"]["use"]:
                 print(
-                    "Only one flood map found, assuming no forecasts were included in the simulation."
+                    "Forecasts use is set to false in the config, so no forecasts are included in the evaluation."
                 )
-                flood_map_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
-                flood_map_path = (
-                    Path(self.model.output_folder) / "flood_maps" / flood_map_name
-                )
-                calculate_performance_metrics(
+                flood_map_name = event_name + ".zarr"
+                flood_map_path = flood_maps_folder / flood_map_name
+
+                metrics = calculate_performance_metrics(
                     observation=self.config["floods"]["event_observation_file"],
                     flood_map_path=flood_map_path,
                     visualization_type="OSM",
@@ -2102,77 +2155,102 @@ class Hydrology:
                 )
                 print(f"Successfully evaluated: {flood_map_path.name}")
 
-            elif len(flood_map_files) == 0:
-                raise FileNotFoundError(
-                    "No flood map files found for this event. Did you run the hydrodynamic model?"
-                )
-
             else:
-                print(
-                    f"Multiple flood maps found ({len(flood_map_files)}), processing each."
-                )
-                unique_forecast_inits = set()
-                performance_metrics_list = []
+                print("Evaluating flood forecasts...")
 
-                # Identify unique forecast initializations
-                for flood_map_name in flood_map_files:
-                    # Parse the flood map filename to extract components
-                    print(f"flood_map_name: {flood_map_name}")
-                    forecast_init, member, event_start, event_end, parsed_event_name = (
-                        parse_flood_forecast_initialisation(flood_map_name.name)
-                    )
-                    unique_forecast_inits.add(forecast_init)
+                forecast_folders = sorted(flood_maps_folder.glob("forecast_*"))
+                initialization_dates = [
+                    f.name.split("_", 1)[1] for f in forecast_folders
+                ]
 
-                # Convert to sorted list for consistent processing order
-                unique_forecast_inits_list = sorted(
-                    [init for init in unique_forecast_inits if init is not None]
-                )
-                print(
-                    f"Found {len(unique_forecast_inits_list)} unique forecast initializations: {unique_forecast_inits_list}"
-                )
+                # Filter initialization dates by forecast_range if provided
+                if forecast_range is not None:
+                    start_date, end_date = forecast_range
+                    # Validate forecast_range format
+                    try:
+                        datetime.strptime(start_date, "%Y%m%dT%H%M%S")
+                        datetime.strptime(end_date, "%Y%m%dT%H%M%S")
+                    except ValueError as e:
+                        raise ValueError(
+                            f"Invalid forecast_range format. Expected 'YYYYMMDDTHHMMSS', got: {e}"
+                        ) from e
 
-                # Process each unique forecast initialization
-                for forecast_init in unique_forecast_inits_list:
-                    print(f"Processing forecast initialization: {forecast_init}")
+                    # Filter dates within range
+                    filtered_dates = [
+                        date
+                        for date in initialization_dates
+                        if start_date <= date <= end_date
+                    ]
 
-                    # Create forecast initialization folder
-                    forecast_folder = event_folder / forecast_init
-                    forecast_folder.mkdir(parents=True, exist_ok=True)
+                    if not filtered_dates:
+                        print(f"No forecasts found in range {start_date} to {end_date}")
+                        print(f"Available forecast dates: {initialization_dates}")
+                        continue
 
-                    matching_flood_maps = []
-                    for flood_map_path in flood_map_files:
-                        file_forecast_init, _, _, _, parsed_event_name = (
-                            parse_flood_forecast_initialisation(flood_map_path.name)
-                        )
-                        # Only include files that match current forecast init and event
-                        if (
-                            file_forecast_init == forecast_init
-                            and parsed_event_name == event_name
-                        ):
-                            matching_flood_maps.append(flood_map_path)
-
+                    initialization_dates = filtered_dates
                     print(
-                        f"Found {len(matching_flood_maps)} flood maps for forecast initialization {forecast_init}"
+                        f"Filtered to {len(initialization_dates)} forecasts in range {start_date} to {end_date}"
                     )
-                    # Evaluate each matching flood map
-                    forecast_metrics_list = []
 
-                    for flood_map_path in matching_flood_maps:
-                        print(f"   Evaluating: {flood_map_path.name}")
+                # get number of members from the first forecast folder (limit to member_1 to member_51)
+                first_forecast_folder = (
+                    flood_maps_folder / f"forecast_{initialization_dates[0]}"
+                )
+                if not first_forecast_folder.exists():
+                    raise FileNotFoundError(
+                        f"First forecast folder does not exist: {first_forecast_folder}"
+                    )
+
+                n_ensemble_members = min(
+                    50, sum(1 for _ in first_forecast_folder.glob("member_*"))
+                )
+
+                forecast_metrics_list = []
+                performance_metrics_list = []
+                for init_date_str in initialization_dates:
+                    print(f" Processing forecast initialization: {init_date_str}")
+                    for member in range(0, n_ensemble_members + 1):
+                        member_folder = (
+                            flood_maps_folder
+                            / f"forecast_{init_date_str}"
+                            / f"member_{member}"
+                        )
+
+                        # Dynamically find the zarr file in the member folder
+                        zarr_files = list(member_folder.glob("*.zarr"))
+                        if not zarr_files:
+                            raise FileNotFoundError(
+                                f"No zarr files found in {member_folder}"
+                            )
+                        elif len(zarr_files) > 1:
+                            raise FileExistsError(
+                                f"Multiple zarr files found in {member_folder}: {[f.name for f in zarr_files]}"
+                            )
+
+                        flood_map_path = zarr_files[0]
+                        # Create event name from the zarr filename for consistency
+                        forecast_event_name = (
+                            flood_map_path.stem
+                        )  # removes .zarr extension
+
+                        event_folder = (
+                            eval_hydrodynamics_folders
+                            / "forecasts"
+                            / f"forecast_{init_date_str}"
+                            / f"member_{member}"
+                        )
+                        event_folder.mkdir(parents=True, exist_ok=True)
 
                         metrics = calculate_performance_metrics(
                             observation=self.config["floods"]["event_observation_file"],
                             flood_map_path=flood_map_path,
                             visualization_type="OSM",
-                            output_folder=forecast_folder,
+                            output_folder=event_folder,
                         )
                         print("   Flood map evaluation complete.")
-                        # Add metadata to metrics
-                        forecast_init_parsed, member, _, _, _ = (
-                            parse_flood_forecast_initialisation(flood_map_path.name)
-                        )
+
                         metrics_with_metadata = {
-                            "forecast_init": forecast_init_parsed,
+                            "forecast_init": init_date_str,
                             "member": member,
                             "filename": flood_map_path.name,
                             **metrics,
@@ -2187,11 +2265,11 @@ class Hydrology:
 
                     # Create forecast performance plots
                     create_forecast_performance_plots(
-                        performance_df, event_name, event_folder
+                        performance_df, forecast_event_name, event_folder
                     )
 
                     # Save detailed performance metrics
-                    detailed_filename = f"{event_name.replace(':', '_')}_detailed_performance_metrics.csv"
+                    detailed_filename = f"{forecast_event_name.replace(' - ', '_')}_detailed_performance_metrics.csv"
                     performance_df.to_csv(event_folder / detailed_filename, index=False)
                     print(
                         f"Detailed performance metrics saved as: {event_folder / detailed_filename}"
