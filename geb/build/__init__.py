@@ -483,13 +483,110 @@ def get_adjacent_basins(
     return adjacent
 
 
+def calculate_bbox_efficiency(
+    outlet_ids: list[int],
+    subbasin_to_idx: dict[int, int],
+    coords_array: npt.NDArray[np.float64],
+    upstream_areas: dict[int, float],
+    river_graph: networkx.DiGraph,
+    all_subbasin_coords: dict[int, tuple[float, float]],
+    all_subbasin_areas: dict[int, float] | None = None,
+) -> float:
+    """Calculate the bounding box efficiency of a cluster for ERA5 data download optimization.
+
+    This measures how efficiently the cluster's FULL WATERSHED fills its bounding box rectangle,
+    considering only LAND AREA (not ocean/sea areas between coastal basins).
+
+    Since ERA5 climate data is downloaded using the min/max lat/lon bounds of ALL subbasins
+    (not just outlets), we need to consider the entire upstream watershed extent.
+
+    Efficiency = (Total upstream area of cluster) / (Total land area within bbox)
+
+    This land-only calculation prevents coastal clusters with ocean gaps (e.g., archipelagos,
+    fjords, bays) from being unfairly penalized.
+
+    Args:
+        outlet_ids: List of outlet basin COMID values in the cluster.
+        subbasin_to_idx: Mapping from COMID to row index in coords_array (for outlets only).
+        coords_array: Nx2 array with centroid coordinates [lon, lat] for outlets.
+        upstream_areas: Dictionary mapping COMID to upstream area in km2.
+        river_graph: River graph for finding all upstream subbasins.
+        all_subbasin_coords: Dictionary mapping ALL subbasin COMIDs to (lon, lat) tuples.
+        all_subbasin_areas: Dictionary mapping ALL subbasin COMIDs to their areas in km2.
+            If None, falls back to rectangular bbox area (old behavior).
+
+    Returns:
+        Efficiency ratio between 0.0 and 1.0 (higher is better for data download efficiency).
+    """
+    # Get ALL subbasins in this cluster (outlets + all upstream)
+    all_cluster_subbasins = set()
+    for outlet_id in outlet_ids:
+        # Get all upstream basins for this outlet
+        upstream = set(networkx.ancestors(river_graph, outlet_id))
+        upstream.add(outlet_id)  # Include the outlet itself
+        all_cluster_subbasins.update(upstream)
+
+    # Get coordinates for ALL subbasins in the watershed
+    cluster_lons = []
+    cluster_lats = []
+    for subbasin_id in all_cluster_subbasins:
+        if subbasin_id in all_subbasin_coords:
+            lon, lat = all_subbasin_coords[subbasin_id]
+            cluster_lons.append(lon)
+            cluster_lats.append(lat)
+
+    if len(cluster_lons) == 0:
+        return 1.0  # Edge case: no coordinates found
+
+    # Calculate bounding box from ALL subbasin centroids
+    lon_min, lon_max = min(cluster_lons), max(cluster_lons)
+    lat_min, lat_max = min(cluster_lats), max(cluster_lats)
+
+    # Calculate total upstream area of all outlets in cluster
+    cluster_total_area_km2 = sum(upstream_areas.get(oid, 0.0) for oid in outlet_ids)
+
+    # Calculate efficiency based on LAND AREA within bbox (not rectangular area)
+    if all_subbasin_areas is not None:
+        # NEW: Use sum of all subbasin areas within the bbox (land-only)
+        # This excludes ocean/sea areas between coastal basins
+        bbox_land_area_km2 = sum(
+            all_subbasin_areas.get(subbasin_id, 0.0)
+            for subbasin_id in all_cluster_subbasins
+        )
+
+        # Handle edge case: no valid area data
+        if bbox_land_area_km2 < 1.0:
+            return 1.0
+
+        # Calculate efficiency ratio using land-only area
+        efficiency = min(1.0, cluster_total_area_km2 / bbox_land_area_km2)
+    else:
+        # FALLBACK: Use rectangular bbox area (old behavior, includes ocean)
+        # This is kept for backward compatibility if area data is not provided
+        lat_span_km = (lat_max - lat_min) * 111.0
+        mean_lat = (lat_min + lat_max) / 2.0
+        lon_span_km = (lon_max - lon_min) * (
+            111.320 * abs(np.cos(np.deg2rad(mean_lat)))
+        )
+        bbox_area_km2 = lat_span_km * lon_span_km
+
+        # Handle edge case: very small bbox
+        if bbox_area_km2 < 1.0:
+            return 1.0
+
+        efficiency = min(1.0, cluster_total_area_km2 / bbox_area_km2)
+
+    return efficiency
+
+
 def cluster_subbasins_following_coastline(
     data_catalog: NewDataCatalog,
     subbasin_ids: list[int],
     target_area_km2: float,
     logger: logging.Logger,
+    river_graph: networkx.DiGraph,
     max_distance_km: float = 100.0,  # Maximum distance in km for cluster growth
-    cluster_max_span_km: float = 750.0,  # Upper limit for cluster spatial span (km)
+    min_bbox_efficiency: float = 0.35,  # Minimum bounding box efficiency (0-1) for ERA5 download optimization
 ) -> list[list[int]]:
     """Cluster outlet basins by adding entire upstream watersheds of nearby outlets.
 
@@ -499,14 +596,18 @@ def cluster_subbasins_following_coastline(
     3. Adding that outlet's entire upstream watershed to the cluster
     4. Repeating until target area is reached, then starting a new cluster
 
+    The clustering uses bounding box efficiency to prevent thin/diagonal clusters that would
+    waste bandwidth when downloading ERA5 climate data (which uses rectangular bounding boxes).
+
     Args:
         data_catalog: Data catalog containing the MERIT basins.
         subbasin_ids: List of outlet basin COMID values (NextDownID=0) to cluster.
         target_area_km2: Target cumulative upstream area per cluster (e.g., 800,000 km²).
         logger: Logger for progress tracking.
-        max_distance_km: Maximum distance in km for adding outlets to a cluster (default: 500km).
-        cluster_max_span_km: Upper limit (km) for the longitudinal OR latitudinal span of a cluster. If adding an outlet would increase
-            either the lon or lat span beyond this limit, cluster growth stops and a new cluster is started.
+        river_graph: River graph for finding upstream subbasins to calculate true bbox efficiency.
+        max_distance_km: Maximum distance in km for adding outlets to a cluster (default: 100km).
+        min_bbox_efficiency: Minimum ratio of cluster_area/bbox_area (default: 0.25 = 25%).
+            Higher values create more compact clusters. Lower values allow more elongated shapes.
 
     Returns:
         List of clusters, where each cluster is a list of outlet basin COMID values.
@@ -516,7 +617,9 @@ def cluster_subbasins_following_coastline(
     )
     logger.info(f"Target area per cluster: {target_area_km2:,.0f} km²")
     logger.info(f"Maximum cluster growth distance: {max_distance_km:.0f} km")
-    logger.info(f"Maximum cluster span: {cluster_max_span_km:.0f} km (lon or lat)")
+    logger.info(
+        f"Minimum bounding box efficiency: {min_bbox_efficiency:.1%} (for ERA5 download optimization)"
+    )
 
     # Load outlet basin geometries
     subbasins = gpd.read_parquet(
@@ -536,6 +639,47 @@ def cluster_subbasins_following_coastline(
         centroid = subbasins.loc[outlet_id].geometry.centroid
         coords_array[i] = [centroid.x, centroid.y]
         subbasin_to_idx[outlet_id] = i
+
+    # Pre-load ALL subbasin coordinates for bbox efficiency calculation
+    # We need this because ERA5 downloads cover the full watershed extent
+    logger.info("Pre-loading ALL subbasin coordinates for bbox efficiency checks...")
+
+    # Get all upstream subbasins for all outlets
+    all_upstream_subbasins = set()
+    for outlet_id in subbasin_ids:
+        upstream = set(networkx.ancestors(river_graph, outlet_id))
+        upstream.add(outlet_id)
+        all_upstream_subbasins.update(upstream)
+
+    logger.info(
+        f"Loading centroids for {len(all_upstream_subbasins)} total subbasins (outlets + upstream)..."
+    )
+
+    # Load all subbasin geometries with area data for land-only bbox efficiency
+    all_subbasins = gpd.read_parquet(
+        data_catalog.fetch("merit_basins_catchments").path,
+        filters=[("COMID", "in", list(all_upstream_subbasins))],
+        columns=[
+            "COMID",
+            "geometry",
+            "unitarea",
+        ],  # Add unitarea for land-only calculation
+    ).set_index("COMID")
+
+    # Create coordinate dictionary and area dictionary for ALL subbasins
+    all_subbasin_coords = {}
+    all_subbasin_areas = {}
+    for subbasin_id in all_upstream_subbasins:
+        if subbasin_id in all_subbasins.index:
+            centroid = all_subbasins.loc[subbasin_id].geometry.centroid
+            all_subbasin_coords[subbasin_id] = (centroid.x, centroid.y)
+            # unitarea is in km2 in MERIT Basins dataset
+            all_subbasin_areas[subbasin_id] = all_subbasins.loc[subbasin_id].unitarea
+
+    logger.info(
+        f"Loaded coordinates and areas for {len(all_subbasin_coords)} subbasins"
+    )
+    logger.info("Using LAND-ONLY area for bbox efficiency (excludes ocean/sea gaps)")
 
     # Pre-compute distance matrix for fast lookups
     if len(subbasin_ids) < 1000:
@@ -618,61 +762,29 @@ def cluster_subbasins_following_coastline(
 
         # Step 2: Grow cluster by adding nearest outlets until target area reached
         while current_area < target_area_km2 and remaining_outlets:
-            # First, check if current cluster already exceeds span limit using Haversine distance
-            cluster_indices = np.array(
-                [subbasin_to_idx[oid] for oid in current_cluster]
-            )
-            current_coords = coords_array[cluster_indices]
-            current_lons = current_coords[:, 0]
-            current_lats = current_coords[:, 1]
-
-            # Calculate maximum great circle distance in current cluster
-            lon_min, lon_max = float(current_lons.min()), float(current_lons.max())
-            lat_min, lat_max = float(current_lats.min()), float(current_lats.max())
-
-            # Check corners of bounding box using Haversine formula
-            corners = [
-                (lat_min, lon_min),
-                (lat_min, lon_max),
-                (lat_max, lon_min),
-                (lat_max, lon_max),
-            ]
-
-            current_max_span_km = 0.0
-            for i in range(len(corners)):
-                for j in range(i + 1, len(corners)):
-                    lat1, lon1 = corners[i]
-                    lat2, lon2 = corners[j]
-
-                    # Haversine formula
-                    lat1_rad = np.deg2rad(lat1)
-                    lat2_rad = np.deg2rad(lat2)
-                    dlat = np.deg2rad(lat2 - lat1)
-                    dlon = np.deg2rad(lon2 - lon1)
-
-                    a = (
-                        np.sin(dlat / 2) ** 2
-                        + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon / 2) ** 2
-                    )
-                    c = 2 * np.arcsin(np.sqrt(a))
-                    distance_km = 6371.0 * c
-
-                    current_max_span_km = max(current_max_span_km, distance_km)
-
-            # Also calculate approximate lat/lon spans for logging
-            current_lat_span_km = (lat_max - lat_min) * 111.0
-            lat_for_lon_calc = (lat_min + lat_max) / 2  # Use mean latitude
-            current_lon_span_km = (lon_max - lon_min) * (
-                111.320 * abs(np.cos(np.deg2rad(lat_for_lon_calc)))
+            # Check if current cluster already has poor bounding box efficiency
+            current_efficiency = calculate_bbox_efficiency(
+                current_cluster,
+                subbasin_to_idx,
+                coords_array,
+                upstream_areas,
+                river_graph,
+                all_subbasin_coords,
+                all_subbasin_areas,
             )
 
-            if current_max_span_km > cluster_max_span_km:
+            if current_efficiency < min_bbox_efficiency:
                 logger.info(
-                    f"  Current cluster span exceeded limit (max diagonal: {current_max_span_km:.0f} km, lon≈{current_lon_span_km:.0f} km, lat≈{current_lat_span_km:.0f} km > limit: {cluster_max_span_km:.0f} km), stopping cluster"
+                    f"  Current cluster bbox efficiency too low ({current_efficiency:.1%} < {min_bbox_efficiency:.1%}), stopping cluster"
                 )
                 break
 
             # Find nearest remaining outlet to ANY outlet in current cluster using vectorized ops
+            # Get current cluster indices for distance calculations
+            cluster_indices = np.array(
+                [subbasin_to_idx[oid] for oid in current_cluster]
+            )
+
             # Convert to lists for indexing
             remaining_list = list(remaining_outlets)
             remaining_indices = np.array(
@@ -713,61 +825,22 @@ def cluster_subbasins_following_coastline(
                 )
                 break
 
-            # NEW: check spatial span if we add this outlet (lon/lat span in km)
-            # Compute candidate coordinates
-            candidate_idx = subbasin_to_idx[nearest_outlet]
-            # Build array of indices including the candidate
-            all_indices = np.append(cluster_indices, candidate_idx)
-            all_coords = coords_array[all_indices]
-            lons = all_coords[:, 0]
-            lats = all_coords[:, 1]
-
-            lon_min, lon_max = float(lons.min()), float(lons.max())
-            lat_min, lat_max = float(lats.min()), float(lats.max())
-
-            # Calculate the actual maximum distance using Haversine formula
-            # This is more accurate than simple degree-to-km conversion, especially at high latitudes
-            # Check the four corners of the bounding box to find maximum distance
-            corners = [
-                (lat_min, lon_min),
-                (lat_min, lon_max),
-                (lat_max, lon_min),
-                (lat_max, lon_max),
-            ]
-
-            max_span_km = 0.0
-            for i in range(len(corners)):
-                for j in range(i + 1, len(corners)):
-                    # Haversine formula for great circle distance
-                    lat1, lon1 = corners[i]
-                    lat2, lon2 = corners[j]
-
-                    # Convert to radians
-                    lat1_rad = np.deg2rad(lat1)
-                    lat2_rad = np.deg2rad(lat2)
-                    dlat = np.deg2rad(lat2 - lat1)
-                    dlon = np.deg2rad(lon2 - lon1)
-
-                    # Haversine formula
-                    a = (
-                        np.sin(dlat / 2) ** 2
-                        + np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(dlon / 2) ** 2
-                    )
-                    c = 2 * np.arcsin(np.sqrt(a))
-                    distance_km = 6371.0 * c  # Earth's radius in km
-
-                    max_span_km = max(max_span_km, distance_km)
-
-            # Also calculate simple lat/lon spans for logging
-            lat_span_km = (lat_max - lat_min) * 111.0
-            lat_for_lon_calc = (lat_min + lat_max) / 2  # Use mean latitude
-            lon_span_km = (lon_max - lon_min) * (
-                111.320 * abs(np.cos(np.deg2rad(lat_for_lon_calc)))
+            # Check bounding box efficiency if we add this outlet
+            # This prevents thin/diagonal clusters that waste ERA5 download bandwidth
+            all_outlets_with_candidate = current_cluster + [nearest_outlet]
+            candidate_efficiency = calculate_bbox_efficiency(
+                all_outlets_with_candidate,
+                subbasin_to_idx,
+                coords_array,
+                upstream_areas,
+                river_graph,
+                all_subbasin_coords,
+                all_subbasin_areas,
             )
 
-            if max_span_km > cluster_max_span_km:
+            if candidate_efficiency < min_bbox_efficiency:
                 logger.info(
-                    f"  Adding outlet {nearest_outlet} would exceed cluster span (max diagonal: {max_span_km:.0f} km, lon≈{lon_span_km:.0f} km, lat≈{lat_span_km:.0f} km > limit: {cluster_max_span_km:.0f} km), stopping cluster"
+                    f"  Adding outlet {nearest_outlet} would reduce bbox efficiency to {candidate_efficiency:.1%} (< {min_bbox_efficiency:.1%}), stopping cluster"
                 )
                 break
 
@@ -795,74 +868,41 @@ def cluster_subbasins_following_coastline(
         f"\nClustering complete! Created {len(clusters)} clusters in {total_time:.1f}s ({total_time / 60:.1f} min)"
     )
 
-    # Post-processing: Check for unclustered basins (e.g., inland endorheic basins)
-    # and assign them to the nearest cluster
-    all_clustered_outlets = set()
-    for cluster in clusters:
-        all_clustered_outlets.update(cluster)
+    # Post-processing configuration
+    MERGE_DISTANCE_KM = 100.0
+    LARGE_INLAND_THRESHOLD_KM2 = 100000.0  # Don't auto-merge very large inland clusters
+    SMALL_CLUSTER_THRESHOLD_KM2 = 0.6 * target_area_km2  # Proportional to target area
 
-    unclustered_outlets = set(subbasin_ids) - all_clustered_outlets
+    logger.info("\n=== POST-PROCESSING ===")
+    logger.info(f"Merge distance: {MERGE_DISTANCE_KM:.0f} km")
+    logger.info(f"Large inland threshold: {LARGE_INLAND_THRESHOLD_KM2:,.0f} km²")
+    logger.info(
+        f"Small cluster threshold: {SMALL_CLUSTER_THRESHOLD_KM2:,.0f} km² ({SMALL_CLUSTER_THRESHOLD_KM2 / target_area_km2:.0%} of target)"
+    )
 
-    if unclustered_outlets:
-        logger.info(
-            f"\nFound {len(unclustered_outlets)} unclustered outlet basins (likely inland/endorheic basins)"
-        )
-        logger.info("Assigning unclustered basins to nearest clusters...")
-
-        # For each unclustered outlet, find the nearest cluster and add it
-        for unclustered_outlet in unclustered_outlets:
-            unclustered_idx = subbasin_to_idx[unclustered_outlet]
-            unclustered_coords = coords_array[unclustered_idx]
-
-            # Find nearest cluster by calculating distance to all outlets in each cluster
-            min_distance = float("inf")
-            nearest_cluster_idx = 0
-
-            for cluster_idx, cluster in enumerate(clusters):
-                cluster_indices = np.array([subbasin_to_idx[oid] for oid in cluster])
-                cluster_coords = coords_array[cluster_indices]
-
-                # Calculate distances to all outlets in this cluster
-                diffs = cluster_coords - unclustered_coords
-                distances = np.sqrt(np.sum(diffs * diffs, axis=1))
-                min_dist_to_cluster = float(distances.min())
-
-                if min_dist_to_cluster < min_distance:
-                    min_distance = min_dist_to_cluster
-                    nearest_cluster_idx = cluster_idx
-
-            # Add unclustered outlet to nearest cluster
-            clusters[nearest_cluster_idx].append(unclustered_outlet)
-            logger.info(
-                f"  Assigned outlet {unclustered_outlet} to cluster {nearest_cluster_idx} (distance: {min_distance:.3f}°, area: {upstream_areas.get(unclustered_outlet, 0.0):,.0f} km²)"
-            )
-
-        logger.info(
-            f"Successfully assigned all {len(unclustered_outlets)} unclustered basins to nearest clusters"
-        )
-
-    # Post-processing 2: Merge inland clusters with nearby clusters (coastal or inland)
-    logger.info("\nChecking for inland clusters to merge with nearby clusters...")
-
-    # Load river network to check which outlets are coastal (NextDownID = 0 and actually coastal)
+    # Load river network for coastal/inland classification
     river_network = (
         data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "NextDownID"], filters=[("COMID", "in", subbasin_ids)])
         .set_index("COMID")
     )
 
+    # Post-processing 1: Merge inland clusters with nearby clusters (reordered - do this first)
+    logger.info("\n[1/3] Checking for inland clusters to merge with nearby clusters...")
+
+    # Post-processing 1: Merge inland clusters with nearby clusters (reordered - do this first)
+    logger.info("\n[1/3] Checking for inland clusters to merge with nearby clusters...")
+
     # Identify which clusters are coastal vs inland
     coastal_clusters = []
     inland_clusters = []
 
     for cluster_idx, cluster in enumerate(clusters):
-        # A cluster is coastal if it has at least one outlet with NextDownID = 0
         is_coastal = any(
             river_network.loc[outlet_id, "NextDownID"] == 0
             for outlet_id in cluster
             if outlet_id in river_network.index
         )
-
         if is_coastal:
             coastal_clusters.append(cluster_idx)
         else:
@@ -873,18 +913,28 @@ def cluster_subbasins_following_coastline(
     )
 
     if inland_clusters:
-        logger.info(
-            "  Attempting to merge inland clusters with nearby clusters (coastal or inland)..."
-        )
+        # Calculate cluster areas to check against large inland threshold
+        cluster_areas = {}
+        for cluster_idx, cluster in enumerate(clusters):
+            cluster_area = sum(
+                upstream_areas.get(outlet_id, 0.0) for outlet_id in cluster
+            )
+            cluster_areas[cluster_idx] = cluster_area
 
-        # For each inland cluster, find nearest cluster (any type) within 100km
-        MERGE_DISTANCE_KM = 100.0
         MERGE_DISTANCE_DEGREES = MERGE_DISTANCE_KM / 111.0
-
         clusters_to_remove = set()
 
         for inland_idx in inland_clusters:
             inland_cluster = clusters[inland_idx]
+            inland_area = cluster_areas[inland_idx]
+
+            # Check if inland cluster is too large to merge
+            if inland_area > LARGE_INLAND_THRESHOLD_KM2:
+                logger.info(
+                    f"    Keeping large inland cluster {inland_idx} separate "
+                    f"(area: {inland_area:,.0f} km² > {LARGE_INLAND_THRESHOLD_KM2:,.0f} km² threshold)"
+                )
+                continue
 
             # Get coordinates of inland cluster outlets
             inland_indices = np.array([subbasin_to_idx[oid] for oid in inland_cluster])
@@ -895,7 +945,6 @@ def cluster_subbasins_following_coastline(
             nearest_cluster_idx = None
 
             for other_idx, other_cluster in enumerate(clusters):
-                # Skip itself and already-removed clusters
                 if other_idx == inland_idx or other_idx in clusters_to_remove:
                     continue
 
@@ -904,7 +953,7 @@ def cluster_subbasins_following_coastline(
                 )
                 other_coords = coords_array[other_indices]
 
-                # Calculate minimum distance between any inland outlet and any other cluster outlet
+                # Calculate minimum distance
                 diffs = inland_coords[:, np.newaxis, :] - other_coords[np.newaxis, :, :]
                 distances = np.sqrt(np.sum(diffs**2, axis=2))
                 min_dist = float(distances.min())
@@ -913,30 +962,81 @@ def cluster_subbasins_following_coastline(
                     min_distance = min_dist
                     nearest_cluster_idx = other_idx
 
-            # If within merge distance, merge the clusters
+            # If within merge distance, check if merge would create inefficient cluster
             if (
                 min_distance <= MERGE_DISTANCE_DEGREES
                 and nearest_cluster_idx is not None
             ):
-                # Determine if nearest cluster is coastal or inland for logging
-                is_nearest_coastal = nearest_cluster_idx in coastal_clusters
-                cluster_type = "coastal" if is_nearest_coastal else "inland"
+                # Check if merging would exceed target area limit (allow 20% overage for flexibility)
+                target_area = cluster_areas[nearest_cluster_idx]
+                merged_area = target_area + inland_area
+                max_allowed_area = target_area_km2 * 1.2  # 20% overage allowed
 
-                logger.info(
-                    f"    Merging inland cluster {inland_idx} into {cluster_type} cluster {nearest_cluster_idx} "
-                    f"(distance: {min_distance * 111.0:.1f} km, {len(inland_cluster)} outlets)"
+                # Calculate relative increase in cluster area
+                relative_increase = (
+                    inland_area / target_area if target_area > 0 else float("inf")
                 )
 
-                # Add all outlets from inland cluster to nearest cluster
-                clusters[nearest_cluster_idx].extend(inland_cluster)
-                clusters_to_remove.add(inland_idx)
+                # If relative increase is <5%, always merge (marginal impact)
+                if relative_increase < 0.05:
+                    is_nearest_coastal = nearest_cluster_idx in coastal_clusters
+                    cluster_type = "coastal" if is_nearest_coastal else "inland"
+
+                    logger.info(
+                        f"    Merging inland cluster {inland_idx} (area: {inland_area:,.0f} km²) into {cluster_type} cluster {nearest_cluster_idx} "
+                        f"(distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km², relative increase: {relative_increase:.1%} < 5% threshold)"
+                    )
+
+                    clusters[nearest_cluster_idx].extend(inland_cluster)
+                    cluster_areas[nearest_cluster_idx] = merged_area
+                    clusters_to_remove.add(inland_idx)
+                    continue
+
+                # Otherwise, check if merging would reduce bounding box efficiency too much
+                target_cluster = clusters[nearest_cluster_idx]
+                merged_outlets = inland_cluster + target_cluster
+                merged_efficiency = calculate_bbox_efficiency(
+                    merged_outlets,
+                    subbasin_to_idx,
+                    coords_array,
+                    upstream_areas,
+                    river_graph,
+                    all_subbasin_coords,
+                    all_subbasin_areas,
+                )
+
+                # Check both area and bbox efficiency limits
+                if merged_area > max_allowed_area:
+                    logger.info(
+                        f"    Cannot merge inland cluster {inland_idx} (area: {inland_area:,.0f} km²) into cluster {nearest_cluster_idx} "
+                        f"(merged area {merged_area:,.0f} km² would exceed limit: {max_allowed_area:,.0f} km²)"
+                    )
+                elif merged_efficiency < min_bbox_efficiency:
+                    logger.info(
+                        f"    Cannot merge inland cluster {inland_idx} into cluster {nearest_cluster_idx} "
+                        f"(merged bbox efficiency {merged_efficiency:.1%} would be below limit: {min_bbox_efficiency:.1%})"
+                    )
+                else:
+                    is_nearest_coastal = nearest_cluster_idx in coastal_clusters
+                    cluster_type = "coastal" if is_nearest_coastal else "inland"
+
+                    logger.info(
+                        f"    Merging inland cluster {inland_idx} (area: {inland_area:,.0f} km²) into {cluster_type} cluster {nearest_cluster_idx} "
+                        f"(distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km², efficiency: {merged_efficiency:.1%})"
+                    )
+
+                    clusters[nearest_cluster_idx].extend(inland_cluster)
+                    cluster_areas[nearest_cluster_idx] = (
+                        merged_area  # Update area tracking
+                    )
+                    clusters_to_remove.add(inland_idx)
             else:
                 logger.info(
                     f"    Keeping inland cluster {inland_idx} separate "
-                    f"(nearest cluster is {min_distance * 111.0:.1f} km away, > {MERGE_DISTANCE_KM} km limit)"
+                    f"(area: {inland_area:,.0f} km², nearest cluster {min_distance * 111.0:.1f} km away, > {MERGE_DISTANCE_KM:.0f} km limit)"
                 )
 
-        # Remove merged inland clusters and renumber
+        # Remove merged inland clusters
         if clusters_to_remove:
             logger.info(
                 f"  Removing {len(clusters_to_remove)} merged inland clusters..."
@@ -946,36 +1046,51 @@ def cluster_subbasins_following_coastline(
                 for idx, cluster in enumerate(clusters)
                 if idx not in clusters_to_remove
             ]
-            logger.info(
-                f"  Final cluster count after inland merging: {len(clusters)} clusters"
-            )
+            logger.info(f"  Cluster count after inland merging: {len(clusters)}")
+    else:
+        logger.info("  No inland clusters found")
 
-    # Post-processing 3: Merge small coastal clusters (<20,000 km²) with nearby clusters
+    # Post-processing 2: Merge small coastal clusters (reordered - do this second)
     logger.info(
-        "\nChecking for small coastal clusters to merge with nearby clusters..."
+        "\n[2/3] Checking for small coastal clusters to merge with nearby clusters..."
     )
 
-    SMALL_CLUSTER_THRESHOLD_KM2 = 20000.0
-    MERGE_DISTANCE_KM = 100.0
-    MERGE_DISTANCE_DEGREES = MERGE_DISTANCE_KM / 111.0
+    # Post-processing 2: Merge small coastal clusters (reordered - do this second)
+    logger.info(
+        "\n[2/3] Checking for small coastal clusters to merge with nearby clusters..."
+    )
 
-    # Calculate area for each cluster
-    cluster_areas = {}
-    small_coastal_clusters = []
+    # Recalculate coastal/inland classification (cluster indices changed after inland merging)
+    coastal_clusters_fresh = []
+    inland_clusters_fresh = []
 
     for cluster_idx, cluster in enumerate(clusters):
-        # Calculate total upstream area for this cluster
-        cluster_area = sum(upstream_areas.get(outlet_id, 0.0) for outlet_id in cluster)
-        cluster_areas[cluster_idx] = cluster_area
-
-        # Check if this is a small coastal cluster
         is_coastal = any(
             river_network.loc[outlet_id, "NextDownID"] == 0
             for outlet_id in cluster
             if outlet_id in river_network.index
         )
+        if is_coastal:
+            coastal_clusters_fresh.append(cluster_idx)
+        else:
+            inland_clusters_fresh.append(cluster_idx)
 
-        if is_coastal and cluster_area < SMALL_CLUSTER_THRESHOLD_KM2:
+    logger.info(
+        f"  After inland merging: {len(coastal_clusters_fresh)} coastal, {len(inland_clusters_fresh)} inland clusters"
+    )
+
+    # Calculate cluster areas
+    cluster_areas = {}
+    small_coastal_clusters = []
+
+    for cluster_idx, cluster in enumerate(clusters):
+        cluster_area = sum(upstream_areas.get(outlet_id, 0.0) for outlet_id in cluster)
+        cluster_areas[cluster_idx] = cluster_area
+
+        if (
+            cluster_idx in coastal_clusters_fresh
+            and cluster_area < SMALL_CLUSTER_THRESHOLD_KM2
+        ):
             small_coastal_clusters.append(cluster_idx)
 
     logger.info(
@@ -983,21 +1098,18 @@ def cluster_subbasins_following_coastline(
     )
 
     if small_coastal_clusters:
-        logger.info(
-            "  Attempting to merge small coastal clusters with nearby clusters..."
-        )
-
+        MERGE_DISTANCE_DEGREES = MERGE_DISTANCE_KM / 111.0
         clusters_to_remove = set()
 
         for small_idx in small_coastal_clusters:
             small_cluster = clusters[small_idx]
             small_area = cluster_areas[small_idx]
 
-            # Get coordinates of small cluster outlets
+            # Get coordinates
             small_indices = np.array([subbasin_to_idx[oid] for oid in small_cluster])
             small_coords = coords_array[small_indices]
 
-            # Find nearest cluster (excluding itself and already-removed clusters)
+            # Find nearest cluster
             min_distance = float("inf")
             nearest_cluster_idx = None
 
@@ -1010,7 +1122,6 @@ def cluster_subbasins_following_coastline(
                 )
                 other_coords = coords_array[other_indices]
 
-                # Calculate minimum distance between any small cluster outlet and any other cluster outlet
                 diffs = small_coords[:, np.newaxis, :] - other_coords[np.newaxis, :, :]
                 distances = np.sqrt(np.sum(diffs**2, axis=2))
                 min_dist = float(distances.min())
@@ -1019,25 +1130,70 @@ def cluster_subbasins_following_coastline(
                     min_distance = min_dist
                     nearest_cluster_idx = other_idx
 
-            # If within merge distance, merge the clusters
+            # Merge if within distance and won't create too large cluster
             if (
                 min_distance <= MERGE_DISTANCE_DEGREES
                 and nearest_cluster_idx is not None
             ):
-                logger.info(
-                    f"    Merging small coastal cluster {small_idx} (area: {small_area:,.0f} km², {len(small_cluster)} outlets) "
-                    f"into cluster {nearest_cluster_idx} (distance: {min_distance * 111.0:.1f} km)"
+                # Check if merging would exceed target area limit (allow 20% overage for flexibility)
+                target_area = cluster_areas[nearest_cluster_idx]
+                merged_area = target_area + small_area
+                max_allowed_area = target_area_km2 * 1.2  # 20% overage allowed
+
+                # Calculate relative increase in cluster area
+                relative_increase = (
+                    small_area / target_area if target_area > 0 else float("inf")
                 )
 
-                # Add all outlets from small cluster to nearest cluster
-                clusters[nearest_cluster_idx].extend(small_cluster)
-                # Update the area of the receiving cluster
-                cluster_areas[nearest_cluster_idx] += small_area
-                clusters_to_remove.add(small_idx)
+                # If relative increase is <5%, always merge (marginal impact)
+                if relative_increase < 0.05:
+                    logger.info(
+                        f"    Merging small coastal cluster {small_idx} (area: {small_area:,.0f} km²) "
+                        f"into cluster {nearest_cluster_idx} (distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km², relative increase: {relative_increase:.1%} < 5% threshold)"
+                    )
+                    clusters[nearest_cluster_idx].extend(small_cluster)
+                    cluster_areas[nearest_cluster_idx] = merged_area
+                    clusters_to_remove.add(small_idx)
+                    continue
+
+                # Otherwise, check if merging would reduce bounding box efficiency too much
+                target_cluster = clusters[nearest_cluster_idx]
+                merged_outlets = small_cluster + target_cluster
+                merged_efficiency = calculate_bbox_efficiency(
+                    merged_outlets,
+                    subbasin_to_idx,
+                    coords_array,
+                    upstream_areas,
+                    river_graph,
+                    all_subbasin_coords,
+                    all_subbasin_areas,
+                )
+
+                # Check both area and bbox efficiency limits
+                if merged_area > max_allowed_area:
+                    logger.info(
+                        f"    Cannot merge small coastal cluster {small_idx} (area: {small_area:,.0f} km²) into cluster {nearest_cluster_idx} "
+                        f"(merged area {merged_area:,.0f} km² would exceed limit: {max_allowed_area:,.0f} km²)"
+                    )
+                elif merged_efficiency < min_bbox_efficiency:
+                    logger.info(
+                        f"    Cannot merge small coastal cluster {small_idx} into cluster {nearest_cluster_idx} "
+                        f"(merged bbox efficiency {merged_efficiency:.1%} would be below limit: {min_bbox_efficiency:.1%})"
+                    )
+                else:
+                    logger.info(
+                        f"    Merging small coastal cluster {small_idx} (area: {small_area:,.0f} km²) "
+                        f"into cluster {nearest_cluster_idx} (distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km², efficiency: {merged_efficiency:.1%})"
+                    )
+                    clusters[nearest_cluster_idx].extend(small_cluster)
+                    cluster_areas[nearest_cluster_idx] = (
+                        merged_area  # Update area tracking
+                    )
+                    clusters_to_remove.add(small_idx)
             else:
                 logger.info(
                     f"    Keeping small coastal cluster {small_idx} (area: {small_area:,.0f} km²) separate "
-                    f"(nearest cluster is {min_distance * 111.0:.1f} km away, > {MERGE_DISTANCE_KM} km limit)"
+                    f"(nearest cluster {min_distance * 111.0:.1f} km away, > {MERGE_DISTANCE_KM:.0f} km)"
                 )
 
         # Remove merged small coastal clusters
@@ -1050,9 +1206,58 @@ def cluster_subbasins_following_coastline(
                 for idx, cluster in enumerate(clusters)
                 if idx not in clusters_to_remove
             ]
+            logger.info(f"  Cluster count after small coastal merging: {len(clusters)}")
+    else:
+        logger.info("  No small coastal clusters found")
+
+    # Post-processing 3: Assign any remaining unclustered basins (reordered - do this last)
+    logger.info("\n[3/3] Checking for unclustered outlet basins...")
+
+    # Post-processing 3: Assign any remaining unclustered basins (reordered - do this last)
+    logger.info("\n[3/3] Checking for unclustered outlet basins...")
+
+    all_clustered_outlets = set()
+    for cluster in clusters:
+        all_clustered_outlets.update(cluster)
+
+    unclustered_outlets = set(subbasin_ids) - all_clustered_outlets
+
+    if unclustered_outlets:
+        logger.info(f"  Found {len(unclustered_outlets)} unclustered outlet basins")
+
+        for unclustered_outlet in unclustered_outlets:
+            unclustered_idx = subbasin_to_idx[unclustered_outlet]
+            unclustered_coords = coords_array[unclustered_idx]
+
+            # Find nearest cluster
+            min_distance = float("inf")
+            nearest_cluster_idx = 0
+
+            for cluster_idx, cluster in enumerate(clusters):
+                cluster_indices = np.array([subbasin_to_idx[oid] for oid in cluster])
+                cluster_coords = coords_array[cluster_indices]
+
+                diffs = cluster_coords - unclustered_coords
+                distances = np.sqrt(np.sum(diffs * diffs, axis=1))
+                min_dist_to_cluster = float(distances.min())
+
+                if min_dist_to_cluster < min_distance:
+                    min_distance = min_dist_to_cluster
+                    nearest_cluster_idx = cluster_idx
+
+            clusters[nearest_cluster_idx].append(unclustered_outlet)
             logger.info(
-                f"  Final cluster count after small coastal merging: {len(clusters)} clusters"
+                f"    Assigned outlet {unclustered_outlet} to cluster {nearest_cluster_idx} "
+                f"(distance: {min_distance * 111.0:.1f} km, area: {upstream_areas.get(unclustered_outlet, 0.0):,.0f} km²)"
             )
+
+        logger.info(
+            f"  Successfully assigned all {len(unclustered_outlets)} unclustered basins"
+        )
+    else:
+        logger.info("  No unclustered basins found - all outlets assigned")
+
+    logger.info(f"\n=== FINAL RESULT: {len(clusters)} clusters ===")
 
     return clusters
 
@@ -1236,9 +1441,35 @@ def create_cluster_visualization_map(
         # Get geometries for this cluster
         cluster_geometries = all_geometries.loc[subbasins_to_merge]
 
-        # Dissolve into single geometry
-        merged_geometry = unary_union(cluster_geometries.geometry.values)
-        merged_geometry = merged_geometry.buffer(0)  # Remove internal boundaries
+        # Optimized dissolving for large clusters: use chunked unary_union
+        if len(subbasins_to_merge) > 10000:
+            print(f"    Large cluster detected - using chunked dissolving...")
+            # Process in chunks of 5000 geometries
+            chunk_size = 5000
+            geometries = cluster_geometries.geometry.values
+            chunks = [
+                geometries[i : i + chunk_size]
+                for i in range(0, len(geometries), chunk_size)
+            ]
+
+            # First pass: dissolve each chunk
+            print(f"    Dissolving {len(chunks)} chunks...")
+            chunk_unions = []
+            for i, chunk in enumerate(chunks):
+                if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
+                    print(f"      Chunk {i + 1}/{len(chunks)}...")
+                chunk_union = unary_union(chunk)
+                chunk_unions.append(chunk_union)
+
+            # Second pass: dissolve the chunk results
+            print(f"    Merging {len(chunk_unions)} chunk results...")
+            merged_geometry = unary_union(chunk_unions)
+        else:
+            # Small cluster: direct dissolve
+            merged_geometry = unary_union(cluster_geometries.geometry.values)
+
+        # Clean up internal boundaries
+        merged_geometry = merged_geometry.buffer(0)
 
         # Simplify for cleaner visualization
         merged_geometry = merged_geometry.simplify(0.01, preserve_topology=True)
@@ -1642,8 +1873,34 @@ def save_clusters_as_merged_geometries(
         # Extract geometries for this cluster from pre-loaded data
         cluster_geometries = all_geometries.loc[subbasins_to_merge]
 
-        # Dissolve: Union all geometries + buffer(0) to remove internal boundaries
-        merged_geometry = unary_union(cluster_geometries.geometry.values)
+        # Optimized dissolving for large clusters: use chunked unary_union
+        if len(subbasins_to_merge) > 10000:
+            print(f"    Large cluster detected - using chunked dissolving...")
+            # Process in chunks of 5000 geometries
+            chunk_size = 5000
+            geometries = cluster_geometries.geometry.values
+            chunks = [
+                geometries[i : i + chunk_size]
+                for i in range(0, len(geometries), chunk_size)
+            ]
+
+            # First pass: dissolve each chunk
+            print(f"    Dissolving {len(chunks)} chunks...")
+            chunk_unions = []
+            for i, chunk in enumerate(chunks):
+                if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
+                    print(f"      Chunk {i + 1}/{len(chunks)}...")
+                chunk_union = unary_union(chunk)
+                chunk_unions.append(chunk_union)
+
+            # Second pass: dissolve the chunk results
+            print(f"    Merging {len(chunk_unions)} chunk results...")
+            merged_geometry = unary_union(chunk_unions)
+        else:
+            # Small cluster: direct dissolve
+            merged_geometry = unary_union(cluster_geometries.geometry.values)
+
+        # Clean up internal boundaries
         merged_geometry = merged_geometry.buffer(0)
 
         # Apply post-dissolve simplification

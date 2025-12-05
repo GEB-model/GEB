@@ -1504,6 +1504,7 @@ def init_multiple_fn(
     cluster_prefix: str,
     skip_merged_geometries: bool = False,
     skip_visualization: bool = False,
+    min_bbox_efficiency: float = 0.35,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -1518,6 +1519,7 @@ def init_multiple_fn(
         cluster_prefix: Prefix for cluster directory names.
         skip_merged_geometries: If True, skip creating dissolved basin polygon file (much faster).
         skip_visualization: If True, skip creating visualization map (faster).
+        min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters.
 
     Raises:
         FileNotFoundError: If the example folder does not exist.
@@ -1592,6 +1594,8 @@ def init_multiple_fn(
         downstream_subbasins,
         target_area_km2=target_area_km2,
         logger=logger,
+        river_graph=river_graph,
+        min_bbox_efficiency=min_bbox_efficiency,
     )
 
     logger.info(f"Created {len(clusters)} clusters")
@@ -1715,6 +1719,12 @@ def init_multiple_fn(
     default=False,
     help="Skip creating visualization map (faster).",
 )
+@click.option(
+    "--min-bbox-efficiency",
+    default=0.35,
+    type=float,
+    help="Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters (less strict). Default: 0.35 (allows ~2.86:1 aspect ratio). Use 0.25-0.30 for more elongated clusters.",
+)
 @working_directory_option
 def init_multiple(
     config: str,
@@ -1727,6 +1737,7 @@ def init_multiple(
     cluster_prefix: str,
     skip_merged_geometries: bool,
     skip_visualization: bool,
+    min_bbox_efficiency: float,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.
 
@@ -1750,6 +1761,7 @@ def init_multiple(
         cluster_prefix: Prefix used for created cluster directory names and output files.
         skip_merged_geometries: If True, skip creating dissolved basin polygon file (faster).
         skip_visualization: If True, skip creating visualization map (faster).
+        min_bbox_efficiency: Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters and fewer total clusters.
         overwrite: If True, existing cluster directories and files will be overwritten.
 
     """
@@ -1764,6 +1776,7 @@ def init_multiple(
         cluster_prefix=cluster_prefix,
         skip_merged_geometries=skip_merged_geometries,
         skip_visualization=skip_visualization,
+        min_bbox_efficiency=min_bbox_efficiency,
     )
 
 
