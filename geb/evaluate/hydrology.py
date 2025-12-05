@@ -1418,12 +1418,7 @@ class Hydrology:
                 / "rivers.geoparquet"
             )
             region_path = Path(self.model.input_folder / "geom" / "mask.geoparquet")
-            print(f"DEBUG: Loading region from absolute path: {region_path.absolute()}")
-            print(f"DEBUG: Model input folder: {self.model.input_folder}")
-            print(f"DEBUG: Region file exists: {region_path.exists()}")
             region = gpd.read_parquet(region_path).to_crs(obs.rio.crs)
-            print(f"DEBUG: Region bounds: {region.total_bounds}")
-            print(f"DEBUG: Region CRS: {region.crs}")
             # Step 2: Clip out rivers from observations and simulations
             crs_wgs84 = CRS.from_epsg(4326)
             crs_mercator = CRS.from_epsg(3857)
@@ -1456,41 +1451,6 @@ class Hydrology:
             # Step 3: Clip out region from observations and simulations
             obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
             sim_region = sim_no_rivers.rio.clip(region.geometry.values, region.crs)
-
-            # DEBUG: Create figure showing clipped obs and sim data
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-
-            # Plot observed flood map (clipped)
-            obs_binary = (obs_region > 0).astype(int)
-            obs_binary.plot(
-                ax=ax1,
-                cmap="Blues",
-                add_colorbar=True,
-                cbar_kwargs={"label": "Flooded (0=No, 1=Yes)"},
-            )
-            region.boundary.plot(ax=ax1, color="red", linewidth=2)
-            ax1.set_title("Observed Flood Extent (Clipped to Region)")
-            ax1.set_xlabel("Longitude")
-            ax1.set_ylabel("Latitude")
-
-            # Plot simulated flood map (clipped)
-            sim_binary = (sim_region > 0.15).astype(int)
-            sim_binary.plot(
-                ax=ax2,
-                cmap="Oranges",
-                add_colorbar=True,
-                cbar_kwargs={"label": "Flooded (0=No, 1=Yes)"},
-            )
-            region.boundary.plot(ax=ax2, color="red", linewidth=2)
-            ax2.set_title("Simulated Flood Extent (Clipped to Region, >15cm)")
-            ax2.set_xlabel("Longitude")
-            ax2.set_ylabel("Latitude")
-
-            plt.tight_layout()
-            debug_plot_path = output_folder / "debug_clipped_flood_maps.png"
-            plt.savefig(debug_plot_path, dpi=300, bbox_inches="tight")
-            plt.close()
-            print(f"DEBUG: Saved clipped flood maps comparison to: {debug_plot_path}")
 
             # Step 4: Optionally clip using extra validation region from config yml
             extra_validation_path = self.config["floods"].get(
