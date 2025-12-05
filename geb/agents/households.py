@@ -2135,14 +2135,14 @@ class Households(AgentBaseClass):
                 vulnerability_curves=self.buildings_structure_curve,
                 disable_progress=True,
             )
-            total_damage_structure = damage_unprotected.sum()
+            total_damage_structure = damage_buildings.sum()
             print(
                 f"damages to building unprotected structure rp{return_period} are: {round(total_damage_structure / 1e6, 2)} M€"
             )
 
             # Save the damages to the dataframe
             buildings_with_damages = buildings[["id"]]
-            buildings_with_damages["damage"] = damage_unprotected
+            buildings_with_damages["damage"] = damage_buildings
 
             # Calculate damages to building structure (floodproofed buildings)
             buildings_floodproofed = buildings.copy()
@@ -2335,16 +2335,26 @@ class Households(AgentBaseClass):
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         else:
-            buildings["object_type"] = "building_unprotected"
-            buildings.loc[buildings["flood_proofed"], "object_type"] = (
-                "building_protected"
-            )
+            # Check if adaptation is enabled in the configuration
+            if self.config["adapt"]:
+                # Adaptation is enabled: use flood_proofed status for building protection
+                buildings["object_type"] = "building_unprotected"
+                buildings.loc[buildings["flood_proofed"], "object_type"] = (
+                    "building_protected"
+                )
 
-            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
-            buildings_centroid["object_type"] = buildings_centroid[
-                "flood_proofed"
-            ].apply(lambda x: "building_protected" if x else "building_unprotected")
-            buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
+                buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+                buildings_centroid["object_type"] = buildings_centroid[
+                    "flood_proofed"
+                ].apply(lambda x: "building_protected" if x else "building_unprotected")
+                buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
+            else:
+                # Adaptation is disabled: all buildings are unprotected
+                buildings["object_type"] = "building_unprotected"
+                
+                buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+                buildings_centroid["object_type"] = "building_unprotected"
+                buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         # Create the folder to save damage maps if it doesn't exist
         damage_folder: Path = self.model.output_folder / "damage_maps"
