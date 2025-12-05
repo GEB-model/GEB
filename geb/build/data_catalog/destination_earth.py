@@ -88,22 +88,28 @@ class DestinationEarth(Adapter):
         da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
 
         buffer: float = 0.5
+        buffered_bounds: tuple[float, float, float, float] = (
+            bounds[0] - buffer,
+            bounds[1] - buffer,
+            bounds[2] + buffer,
+            bounds[3] + buffer,
+        )
 
         # Check if region crosses the meridian (longitude=0)
         # use a slightly larger slice. The resolution is 0.1 degrees, so buffer degrees is a bit more than that (to be sure)
-        if bounds[0] < 0 and bounds[2] > 0:
+        if buffered_bounds[0] < 0 and buffered_bounds[2] > 0:
             # Need to handle the split across the meridian
             # Get western hemisphere part (longitude < 0)
             west_da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-                x=slice(((bounds[0] - buffer) + 360) % 360, 360),
+                y=slice(buffered_bounds[3], buffered_bounds[1]),
+                x=slice(((buffered_bounds[0]) + 360) % 360, 360),
             )
             # Get eastern hemisphere part (longitude > 0)
             east_da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
-                x=slice(0, ((bounds[2] + buffer) + 360) % 360),
+                y=slice(buffered_bounds[3], buffered_bounds[1]),
+                x=slice(0, ((buffered_bounds[2]) + 360) % 360),
             )
             # Combine the two parts
             da: xr.DataArray = xr.concat([west_da, east_da], dim="x")
@@ -111,15 +117,19 @@ class DestinationEarth(Adapter):
             # Regular case - doesn't cross meridian
             da: xr.DataArray = da.sel(
                 time=slice(start_date, end_date),
-                y=slice(bounds[3] + buffer, bounds[1] - buffer),
+                y=slice(buffered_bounds[3], buffered_bounds[1]),
                 x=slice(
-                    ((bounds[0] - buffer) + 360) % 360,
-                    ((bounds[2] + buffer) + 360) % 360,
+                    ((buffered_bounds[0]) + 360) % 360,
+                    ((buffered_bounds[2]) + 360) % 360,
                 ),
             )
 
         # Reorder x to be between -180 and 180 degrees
         da: xr.DataArray = da.assign_coords(x=((da.x + 180) % 360 - 180))
+
+        assert da.x.size > 0 and da.y.size > 0, (
+            "No data found for the specified bounds."
+        )
 
         da.attrs["_FillValue"] = da.attrs["GRIB_missingValue"]
         da: xr.DataArray = convert_nodata(da, np.nan)

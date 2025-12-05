@@ -5,22 +5,28 @@ from __future__ import annotations
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import xarray as xr
-import zarr.storage
 from affine import Affine
 from numba import njit
+from numpy.typing import DTypeLike
 from scipy.spatial import KDTree
+from xarray.core.types import T_Array
 
 from geb.types import (
     Array,
     ArrayFloat32,
     ArrayInt32,
+    T_Array,
+    T_ThreeDArray,
+    T_TwoDArray,
+    ThreeDArray,
     ThreeDArrayFloat32,
+    TwoDArray,
     TwoDArrayBool,
     TwoDArrayFloat32,
     TwoDArrayInt32,
@@ -30,6 +36,9 @@ from geb.workflows.raster import compress, decompress_with_mask
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
+
+DType = TypeVar("DType", bound=DTypeLike)
+T_OneorTwoDArray = TypeVar("T_OneorTwoDArray", bound=Array | TwoDArray)
 
 
 def determine_nearest_river_cell(
@@ -86,22 +95,22 @@ def load_water_demand_xr(filepath: str | Path) -> xr.Dataset:
         An xarray Dataset containing the water demand data.
     """
     return xr.open_dataset(
-        zarr.storage.LocalStore(
-            filepath,
-            read_only=True,
-        ),
+        filepath,
         engine="zarr",
         consolidated=False,
     )
 
 
+T_ArrayFloat32 = TypeVar("T_ArrayFloat32", bound=ArrayFloat32)
+
+
 @njit(cache=True)
 def to_grid(
-    data: npt.NDArray[np.generic],
-    grid_to_HRU: npt.NDArray[np.int32],
-    land_use_ratio: npt.NDArray[np.float32],
+    data: T_ArrayFloat32,
+    grid_to_HRU: ArrayInt32,
+    land_use_ratio: ArrayFloat32,
     fn: str = "weightedmean",
-) -> npt.NDArray[np.generic]:
+) -> T_ArrayFloat32:
     """Numba helper function to convert from HRU to grid.
 
     Args:
@@ -214,22 +223,6 @@ class BaseVariables:
         """
         return self.mask.shape
 
-    def plot(self, data: npt.NDArray[np.generic], ax: plt.Axes | None = None) -> None:
-        """Create a simple plot for data.
-
-        Args:
-            data: Array to plot.
-            ax: Optional matplotlib axis object. If given, data will be plotted on given axes.
-        """
-        import matplotlib.pyplot as plt
-
-        data = self.decompress(data)
-        if ax:
-            ax.imshow(data)
-        else:
-            plt.imshow(data)
-            plt.show()
-
 
 class Grid(BaseVariables):
     """This class is to store data in the 'normal' grid cells. This class works with compressed and uncompressed arrays. On initialization of the class, the mask of the study area is read from disk. This is the shape of any uncompressed array. Many values in this array, however, fall outside the stuy area as they are masked. Therefore, the array can be compressed by saving only the non-masked values.
@@ -320,7 +313,13 @@ class Grid(BaseVariables):
         """
         return np.full(self.compressed_size, *args, **kwargs)
 
-    def compress(self, array: npt.NDArray[np.generic]) -> npt.NDArray[np.generic]:
+    @overload
+    def compress(self, array: T_TwoDArray) -> T_Array: ...
+
+    @overload
+    def compress(self, array: T_ThreeDArray) -> T_TwoDArray: ...
+
+    def compress(self, array: T_TwoDArray | T_ThreeDArray) -> T_TwoDArray | T_Array:
         """Compress array.
 
         Args:
@@ -367,9 +366,27 @@ class Grid(BaseVariables):
         """
         self.plot(self.decompress(array, fillvalue=fillvalue))
 
+    @overload
+    def load(self, filepath: Path, compress: bool = True, layer: int = 1) -> Array: ...
+
+    @overload
+    def load(
+        self, filepath: Path, compress: bool = True, layer: None = None
+    ) -> TwoDArray: ...
+
+    @overload
+    def load(
+        self, filepath: Path, compress: bool = False, layer: int = 1
+    ) -> TwoDArray: ...
+
+    @overload
+    def load(
+        self, filepath: Path, compress: bool = False, layer: None = None
+    ) -> ThreeDArray: ...
+
     def load(
         self, filepath: Path, compress: bool = True, layer: int | None = 1
-    ) -> npt.NDArray[np.generic]:
+    ) -> TwoDArray | ThreeDArray:
         """Load array from disk.
 
         Args:
@@ -380,48 +397,49 @@ class Grid(BaseVariables):
         Returns:
             array: Loaded array.
         """
-        data = read_grid(filepath, layer=layer)
+        data = read_grid(filepath, layer=layer, return_transform_and_crs=False)
+        assert isinstance(data, np.ndarray) and data.ndim in (2, 3)
         if compress:
             data = self.data.grid.compress(data)
         return data
 
     @property
-    def pr_kg_per_m2_per_s(self) -> ArrayFloat32:
+    def pr_kg_per_m2_per_s(self) -> TwoDArrayFloat32:
         """Get precipitation rate for grid in kg/m²/s."""
         return self.compress(self.model.forcing.load("pr_kg_per_m2_per_s"))
 
     @property
-    def ps_pascal(self) -> ArrayFloat32:
+    def ps_pascal(self) -> TwoDArrayFloat32:
         """Get surface pressure for grid in Pa."""
         return self.compress(self.model.forcing.load("ps_pascal"))
 
     @property
-    def rlds_W_per_m2(self) -> ArrayFloat32:
+    def rlds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward longwave radiation for grid in W/m²."""
         return self.compress(self.model.forcing.load("rlds_W_per_m2"))
 
     @property
-    def rsds_W_per_m2(self) -> ArrayFloat32:
+    def rsds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward shortwave radiation for grid in W/m²."""
         return self.compress(self.model.forcing.load("rsds_W_per_m2"))
 
     @property
-    def tas_2m_K(self) -> ArrayFloat32:
+    def tas_2m_K(self) -> TwoDArrayFloat32:
         """Get air temperature at 2m for grid in K."""
         return self.compress(self.model.forcing.load("tas_2m_K"))
 
     @property
-    def dewpoint_tas_2m_K(self) -> ArrayFloat32:
+    def dewpoint_tas_2m_K(self) -> TwoDArrayFloat32:
         """Get dewpoint temperature at 2m for grid in K."""
         return self.compress(self.model.forcing.load("dewpoint_tas_2m_K"))
 
     @property
-    def wind_u10m_m_per_s(self) -> ArrayFloat32:
+    def wind_u10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get u-component of wind at 10m for grid in m/s."""
         return self.compress(self.model.forcing.load("wind_u10m_m_per_s"))
 
     @property
-    def wind_v10m_m_per_s(self) -> ArrayFloat32:
+    def wind_v10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get v-component of wind at 10m for grid in m/s."""
         return self.compress(self.model.forcing.load("wind_v10m_m_per_s"))
 
@@ -459,7 +477,7 @@ class Grid(BaseVariables):
             ):
                 spei_time: datetime = current_time.replace(day=1)
 
-        spei: ThreeDArrayFloat32 = self.model.forcing.load("SPEI", dt=spei_time)
+        spei: ThreeDArrayFloat32 = self.model.forcing.load(name="SPEI", dt=spei_time)
         assert spei.ndim == 3 and spei.shape[0] == 1
         spei: TwoDArrayFloat32 = spei[0]
         return spei
@@ -480,17 +498,17 @@ class Grid(BaseVariables):
         return read_zarr(self.model.files["other"]["climate/gev_scale"])
 
     @property
-    def pr_gev_c(self) -> xr.DataArray:
+    def pr_gev_c(self) -> TwoDArrayFloat32:
         """Get GEV (Generalized Extreme Value distribution) shape parameter of rainfall distribution for grid."""
         return read_grid(self.model.files["other"]["climate/pr_gev_c"])
 
     @property
-    def pr_gev_loc(self) -> xr.DataArray:
+    def pr_gev_loc(self) -> TwoDArrayFloat32:
         """Get GEV (Generalized Extreme Value distribution) location parameter of rainfall distribution for grid."""
         return read_grid(self.model.files["other"]["climate/pr_gev_loc"])
 
     @property
-    def pr_gev_scale(self) -> xr.DataArray:
+    def pr_gev_scale(self) -> TwoDArrayFloat32:
         """Get GEV (Generalized Extreme Value distribution) scale parameter of rainfall distribution for grid."""
         return read_grid(self.model.files["other"]["climate/pr_gev_scale"])
 
@@ -947,51 +965,51 @@ class HRUs(BaseVariables):
             plt.show()
 
     @property
-    def pr_kg_per_m2_per_s(self) -> npt.NDArray[np.float32]:
+    def pr_kg_per_m2_per_s(self) -> TwoDArrayFloat32:
         """Get precipitation rate for HRUs in kg/m²/s."""
-        pr_kg_per_m2_per_s: npt.NDArray[np.float32] = self.data.grid.pr_kg_per_m2_per_s
+        pr_kg_per_m2_per_s: TwoDArrayFloat32 = self.data.grid.pr_kg_per_m2_per_s
         return self.data.to_HRU(data=pr_kg_per_m2_per_s, fn=None)
 
     @property
-    def ps_pascal(self) -> npt.NDArray[np.float32]:
+    def ps_pascal(self) -> TwoDArrayFloat32:
         """Get surface pressure for HRUs in Pa."""
-        ps_pascal: npt.NDArray[np.float32] = self.data.grid.ps_pascal
+        ps_pascal: TwoDArrayFloat32 = self.data.grid.ps_pascal
         return self.data.to_HRU(data=ps_pascal, fn=None)
 
     @property
-    def rlds_W_per_m2(self) -> npt.NDArray[np.float32]:
+    def rlds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward longwave radiation for HRUs in W/m²."""
-        rlds_W_per_m2: npt.NDArray[np.float32] = self.data.grid.rlds_W_per_m2
+        rlds_W_per_m2: TwoDArrayFloat32 = self.data.grid.rlds_W_per_m2
         return self.data.to_HRU(data=rlds_W_per_m2, fn=None)
 
     @property
-    def rsds_W_per_m2(self) -> npt.NDArray[np.float32]:
+    def rsds_W_per_m2(self) -> TwoDArrayFloat32:
         """Get downward shortwave radiation for HRUs in W/m²."""
-        rsds_W_per_m2: npt.NDArray[np.float32] = self.data.grid.rsds_W_per_m2
+        rsds_W_per_m2: TwoDArrayFloat32 = self.data.grid.rsds_W_per_m2
         return self.data.to_HRU(data=rsds_W_per_m2, fn=None)
 
     @property
-    def tas_2m_K(self) -> npt.NDArray[np.float32]:
+    def tas_2m_K(self) -> TwoDArrayFloat32:
         """Get air temperature at 2m for HRUs in K."""
-        tas_2m_K: npt.NDArray[np.float32] = self.data.grid.tas_2m_K
+        tas_2m_K: TwoDArrayFloat32 = self.data.grid.tas_2m_K
         return self.data.to_HRU(data=tas_2m_K, fn=None)
 
     @property
-    def dewpoint_tas_2m_K(self) -> npt.NDArray[np.float32]:
+    def dewpoint_tas_2m_K(self) -> TwoDArrayFloat32:
         """Get dewpoint temperature at 2m for HRUs in K."""
-        dewpoint_tas_2m_K: npt.NDArray[np.float32] = self.data.grid.dewpoint_tas_2m_K
+        dewpoint_tas_2m_K: TwoDArrayFloat32 = self.data.grid.dewpoint_tas_2m_K
         return self.data.to_HRU(data=dewpoint_tas_2m_K, fn=None)
 
     @property
-    def wind_u10m_m_per_s(self) -> npt.NDArray[np.float32]:
+    def wind_u10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get u-component of wind at 10m for HRUs in m/s."""
-        wind_u10m_m_per_s: npt.NDArray[np.float32] = self.data.grid.wind_u10m_m_per_s
+        wind_u10m_m_per_s: TwoDArrayFloat32 = self.data.grid.wind_u10m_m_per_s
         return self.data.to_HRU(data=wind_u10m_m_per_s, fn=None)
 
     @property
-    def wind_v10m_m_per_s(self) -> npt.NDArray[np.float32]:
+    def wind_v10m_m_per_s(self) -> TwoDArrayFloat32:
         """Get v-component of wind at 10m for HRUs in m/s."""
-        wind_v10m_m_per_s: npt.NDArray[np.float32] = self.data.grid.wind_v10m_m_per_s
+        wind_v10m_m_per_s: TwoDArrayFloat32 = self.data.grid.wind_v10m_m_per_s
         return self.data.to_HRU(data=wind_v10m_m_per_s, fn=None)
 
 
@@ -1029,19 +1047,19 @@ class Data:
 
     def load_water_demand(self) -> None:
         """Load water demand data."""
-        self.model.industry_water_consumption_ds = load_water_demand_xr(
+        self.model.industry_water_consumption_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/industry_water_consumption"]
         )
-        self.model.industry_water_demand_ds = load_water_demand_xr(
+        self.model.industry_water_demand_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/industry_water_demand"]
         )
-        self.model.livestock_water_consumption_ds = load_water_demand_xr(
+        self.model.livestock_water_consumption_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
 
     def to_HRU(
-        self, *, data: npt.NDArray[np.generic], fn: str | None = None
-    ) -> npt.NDArray[np.generic]:
+        self, *, data: T_OneorTwoDArray, fn: str | None = None
+    ) -> T_OneorTwoDArray:
         """Function to convert from grid to HRU (Hydrologic Response Units).
 
         This method is designed to transform spatial grid data into a format suitable for HRUs, which are used in to represent distinct areas with homogeneous land use, soil type, and management conditions.
@@ -1165,6 +1183,7 @@ class Data:
         """
         assert ratio is None or (ratio > 0 and ratio < 1)
         assert ratio is None or np.issubdtype(array.dtype, np.floating)
+        assert np.issubdtype(array.dtype, (np.floating, np.integer))
         if array.ndim == 1:
             array = np.insert(array, i, array[i] * (ratio or 1), axis=0)
         elif array.ndim == 2:

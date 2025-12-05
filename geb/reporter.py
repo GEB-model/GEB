@@ -216,7 +216,7 @@ class Reporter:
                                 station_reporters[
                                     f"discharge_hourly_m3_per_s_{station_ID}"
                                 ] = {
-                                    "varname": f"grid.var.discharge_m3_s_per_substep",
+                                    "varname": "grid.var.discharge_m3_s_per_substep",
                                     "type": "grid",
                                     "function": f"sample_xy,{xy_grid[0]},{xy_grid[1]}",
                                     "substeps": 24,
@@ -722,7 +722,7 @@ class Reporter:
                         fill_value = np.nan
                     elif dtype in (int, np.int32, np.int64):
                         fill_value = -1
-                    elif dtype == bool:
+                    elif dtype is bool:
                         fill_value = False
                     else:
                         raise ValueError(
@@ -826,6 +826,12 @@ class Reporter:
 
     def finalize(self) -> None:
         """At the end of the model run, all previously collected data is reported to disk."""
+        # If no data has been collected, we return
+        if self.model.config["report"] is None:
+            self.model.logger.warning(
+                "No report configuration found. No data to report."
+            )
+            return None
         # Flush any remaining buffers
         for module_name, configs in self.model.config["report"].items():
             for name, config in configs.items():

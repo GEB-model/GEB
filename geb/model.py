@@ -519,6 +519,47 @@ class GEBModel(Module, HazardDriver):
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
+    def refresh_agent_attributes(self, agent_type: str = "households") -> None:
+        """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build or adding/ renaming of agent variables.
+
+        This function is only included for development purposes.
+
+        Args:
+            agent_type: Type of agent to refresh attributes for. Examples: "households", "crop_farmers", etc.
+
+        """
+        # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
+        current_time = self.spinup_start
+        end_time_exclusive = self.run_start
+
+        timestep_length = datetime.timedelta(days=1)
+        n_timesteps = (end_time_exclusive - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
+        assert n_timesteps > 0, "End time is before or identical to start time"
+
+        # create var bucket
+        self.var = self.store.create_bucket("var")
+
+        # initialize the model
+        self._initialize(
+            create_reporter=True,
+            current_time=current_time,
+            n_timesteps=n_timesteps,
+            timestep_length=datetime.timedelta(days=1),
+            load_data_from_store=False,
+            clean_report_folder=False,
+            in_spinup=True,
+        )
+
+        # save initial household attributes
+        print(f"Refreshing household attributes for {agent_type}...")
+        path: Path = self.store.path
+        name = getattr(self.agents, agent_type).name
+        self.logger.debug(f"Saving {name}.var")
+        bucket = self.store.buckets[f"{name}.var"]
+        bucket.save(path / name)
+
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
 

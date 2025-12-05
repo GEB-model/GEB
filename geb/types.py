@@ -1,5 +1,7 @@
 """Typing definitions for GEB."""
 
+from typing import Any, TypeVar
+
 import numpy as np
 
 ArrayFloat16 = np.ndarray[tuple[int], np.dtype[np.float16]]
@@ -30,7 +32,7 @@ ArrayInt = (
 ArrayBool = np.ndarray[tuple[int], np.dtype[np.bool_]]
 ArrayDatetime64 = np.ndarray[tuple[int], np.dtype[np.datetime64]]
 
-Array = ArrayFloat | ArrayInt | ArrayBool | ArrayDatetime64
+Array = np.ndarray[tuple[int], Any]  # General array type
 
 TwoDArrayFloat16 = np.ndarray[tuple[int, int], np.dtype[np.float16]]
 TwoDArrayFloat32 = np.ndarray[tuple[int, int], np.dtype[np.float32]]
@@ -58,7 +60,7 @@ TwoDArrayInt = (
 
 TwoDArrayBool = np.ndarray[tuple[int, int], np.dtype[np.bool_]]
 
-TwoDArray = TwoDArrayFloat | TwoDArrayInt | TwoDArrayBool
+TwoDArray = np.ndarray[tuple[int, int], Any]  # General 2D array type
 
 ThreeDArrayFloat16 = np.ndarray[tuple[int, int, int], np.dtype[np.float16]]
 ThreeDArrayFloat32 = np.ndarray[tuple[int, int, int], np.dtype[np.float32]]
@@ -86,4 +88,9 @@ ThreeDArrayInt = (
 
 ThreeDArrayBool = np.ndarray[tuple[int, int, int], np.dtype[np.bool_]]
 
-ThreeDArray = ThreeDArrayFloat | ThreeDArrayInt | ThreeDArrayBool
+ThreeDArray = np.ndarray[tuple[int, int, int], Any]  # General 3D array type
+
+
+T_Array = TypeVar("T_Array", bound=Array)
+T_TwoDArray = TypeVar("T_TwoDArray", bound=TwoDArray)
+T_ThreeDArray = TypeVar("T_ThreeDArray", bound=ThreeDArray)

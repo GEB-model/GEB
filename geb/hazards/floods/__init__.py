@@ -19,7 +19,11 @@ from geb.types import ArrayFloat32, TwoDArrayInt32
 from geb.workflows.io import read_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
-from ...workflows.io import read_dict, read_zarr, to_zarr
+from ...workflows.io import (
+    read_dict,
+    read_zarr,
+    write_zarr,
+)
 from ...workflows.raster import reclassify
 from .sfincs import (
     MultipleSFINCSSimulations,
@@ -472,7 +476,7 @@ class Floods(Module):
             self.model.output_folder / "flood_maps" / (sfincs_simulation.name + ".zarr")
         )
 
-        flood_depth: xr.DataArray = to_zarr(
+        flood_depth: xr.DataArray = write_zarr(
             da=flood_depth,
             path=filename,
             crs=flood_depth.rio.crs,
@@ -594,7 +598,7 @@ class Floods(Module):
                 self.config["minimum_flood_depth"]
             )
 
-            to_zarr(
+            write_zarr(
                 flood_depth_return_period,
                 self.model.output_folder / "flood_maps" / f"{return_period}.zarr",
                 crs=flood_depth_return_period.rio.crs,

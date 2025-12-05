@@ -28,7 +28,7 @@ from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
 from geb.workflows.raster import resample_like
 
-from ...workflows.io import calculate_scaling, to_zarr
+from ...workflows.io import calculate_scaling, write_zarr
 
 if TYPE_CHECKING:
     from geb.build import GEBModel
@@ -1190,7 +1190,7 @@ class Forcing:
                 Path(tmp_water_budget_folder) / "tmp_water_budget_file.zarr"
             )
             self.logger.info("Exporting temporary water budget to zarr")
-            water_budget = to_zarr(
+            water_budget = write_zarr(
                 water_budget,
                 tmp_water_budget_file,
                 crs=4326,
@@ -1234,7 +1234,7 @@ class Forcing:
                 SPEI.attrs = {
                     "_FillValue": np.nan,
                 }
-                SPEI: xr.DataArray = to_zarr(
+                SPEI: xr.DataArray = write_zarr(
                     SPEI,
                     tmp_spei_file,
                     x_chunksize=temp_xy_chunk_size,

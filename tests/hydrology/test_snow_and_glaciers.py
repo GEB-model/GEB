@@ -1548,7 +1548,7 @@ def _run_scenario(
     assert math.isclose(total_water_in, total_water_out, abs_tol=1e-3)
 
     return {
-        "timesteps": np.arange(n_hours),
+        "timesteps": np.arange(n_hours, dtype=np.float32),
         "swe_log": swe_log,
         "lw_log": lw_log,
         "snow_temp_log": snow_temp_log,

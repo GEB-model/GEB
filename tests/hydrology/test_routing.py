@@ -573,9 +573,9 @@ def test_kinematic(
     river_network: pyflwdir.FlwdirRaster = create_river_network(ldd, mask)
     router: KinematicWave = KinematicWave(
         river_network=river_network,
-        river_width=np.full_like(mask, 2.0)[mask],
-        river_length=np.full_like(mask, 5.0)[mask],
-        river_alpha=np.full_like(mask, 1.0)[mask],
+        river_width=np.full_like(mask, np.float32(2.0), dtype=np.float32)[mask],
+        river_length=np.full_like(mask, np.float32(5.0), dtype=np.float32)[mask],
+        river_alpha=np.full_like(mask, np.float32(1.0), dtype=np.float32)[mask],
         river_beta=0.6,
         dt=15,
         waterbody_id=np.full_like(mask, -1, dtype=np.int32)[mask],

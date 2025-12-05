@@ -25,7 +25,7 @@ from rasterio.crs import CRS
 from rasterio.features import geometry_mask
 from tqdm import tqdm
 
-from geb.workflows.io import read_zarr, to_zarr
+from geb.workflows.io import read_zarr, write_zarr
 
 
 def calculate_hit_rate(model: xr.DataArray, observations: xr.DataArray) -> float:
@@ -135,7 +135,7 @@ class Hydrology:
         mean_discharge = GEB_discharge.mean(dim="time")
         mean_discharge.attrs["_FillValue"] = np.nan
 
-        to_zarr(
+        write_zarr(
             mean_discharge,
             self.output_folder_evaluate / "mean_discharge_m3_per_s.zarr",
             crs=4326,
