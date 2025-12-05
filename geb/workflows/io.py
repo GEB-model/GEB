@@ -909,6 +909,7 @@ class AsyncGriddedForcingReader:
             data = await arr.getitem(
                 (slice(start_index, end_index), slice(None), slice(None))
             )
+            assert isinstance(data, np.ndarray)
 
             # Only apply the NaN workaround if the array actually uses NaN as fill value
             if np.isnan(data).any():

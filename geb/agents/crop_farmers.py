@@ -1241,10 +1241,11 @@ class CropFarmers(AgentBaseClass):
                 * (1 - discount_factor)
                 + water_deficit_day_m3_per_farmer * discount_factor
             )
+        # leap years can cause issues when determining the future water deficit
+        # to prevent this day index 365 is always set the same as day index 364
+        # when we are in a leap year, the day is passed, otherwise it will only have 1 in 4 year data
         elif day_index == 365:
-            self.var.cumulative_water_deficit_m3[:, 365] = (
-                self.var.cumulative_water_deficit_m3[:, 364]
-            )
+            pass
         else:
             self.var.cumulative_water_deficit_m3[:, day_index] = (
                 self.var.cumulative_water_deficit_m3[:, day_index - 1]
@@ -1255,23 +1256,14 @@ class CropFarmers(AgentBaseClass):
                     - self.var.cumulative_water_deficit_previous_day
                 )
             )
-            # print(self.var.cumulative_water_deficit_m3[:, day_index])
-            # print(self.var.cumulative_water_deficit_m3[:, day_index - 1])
             assert (
                 self.var.cumulative_water_deficit_m3[:, day_index]
                 >= self.var.cumulative_water_deficit_m3[:, day_index - 1]
             ).all()
-            # if this is the last day of the year, but not a leap year, the virtual
-            # 366th day of the year is the same as the 365th day of the year
-            # this avoids complications with the leap year
             if day_index == 364:
                 self.var.cumulative_water_deficit_m3[:, 365] = (
                     self.var.cumulative_water_deficit_m3[:, 364]
                 )
-            # elif day_index == 365:
-            #     self.var.cumulative_water_deficit_m3[:, 365] = (
-            #         self.var.cumulative_water_deficit_m3[:, 364]
-            #     )
 
     def get_gross_irrigation_demand_m3(
         self,
@@ -5085,7 +5077,7 @@ class CropFarmers(AgentBaseClass):
                     self.var.irrigation_limit_m3[:]
                 )
                 self.var.remaining_irrigation_limit_m3_groundwater[:] = (
-                    self.irrigation_limit_groundwater
+                    self.var.irrigation_limit_m3[:]
                 )
 
                 self.save_yearly_spei()
