@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Hashable, Mapping
-from typing import Any, Literal, overload
+from typing import Any, Literal, cast, overload
 
 import dask
 import geopandas as gpd
@@ -26,24 +26,36 @@ from pyresample.resampler import resample_blocks
 from rasterio.features import rasterize
 from scipy.interpolate import griddata
 from shapely.geometry import Polygon
-from xarray.core.types import T_Array
 
 from geb.types import (
-    Array,
-    ArrayBool,
-    T_ThreeDArray,
-    T_TwoDArray,
-    ThreeDArray,
-    TwoDArray,
+    ArrayWithScalar,
+    ThreeDArrayWithScalar,
     TwoDArrayBool,
     TwoDArrayFloat32,
     TwoDArrayFloat64,
+    TwoDArrayWithScalar,
 )
 
 
+@overload
 def decompress_with_mask(
-    array: np.ndarray, mask: TwoDArrayBool, fillvalue: int | float | None = None
-) -> np.ndarray:
+    array: TwoDArrayWithScalar,
+    mask: TwoDArrayBool,
+    fillvalue: int | float | None = None,
+) -> ThreeDArrayWithScalar: ...
+
+
+@overload
+def decompress_with_mask(
+    array: ArrayWithScalar, mask: TwoDArrayBool, fillvalue: int | float | None = None
+) -> TwoDArrayWithScalar: ...
+
+
+def decompress_with_mask(
+    array: TwoDArrayWithScalar | ArrayWithScalar,
+    mask: TwoDArrayBool,
+    fillvalue: int | float | None = None,
+) -> ThreeDArrayWithScalar | TwoDArrayWithScalar:
     """Decompress array.
 
     Args:
@@ -62,6 +74,7 @@ def decompress_with_mask(
     outmap = np.full(mask.size, fillvalue, dtype=array.dtype)
     output_shape = mask.shape
     if array.ndim == 2:
+        array = cast(TwoDArrayWithScalar[Any], array)
         assert array.shape[1] == mask.size - mask.sum()
         outmap = np.broadcast_to(outmap, (array.shape[0], outmap.size)).copy()
         output_shape = (array.shape[0], *output_shape)
@@ -254,14 +267,18 @@ def coords_to_pixels(
 
 
 @overload
-def compress(array: T_ThreeDArray, mask: ArrayBool) -> T_TwoDArray: ...
+def compress(
+    array: ThreeDArrayWithScalar, mask: TwoDArrayBool
+) -> TwoDArrayWithScalar: ...
 
 
 @overload
-def compress(array: T_TwoDArray, mask: ArrayBool) -> T_Array: ...
+def compress(array: TwoDArrayWithScalar, mask: TwoDArrayBool) -> ArrayWithScalar: ...
 
 
-def compress(array: ThreeDArray | TwoDArray, mask: ArrayBool) -> TwoDArray | Array:
+def compress(
+    array: ThreeDArrayWithScalar | TwoDArrayWithScalar, mask: TwoDArrayBool
+) -> TwoDArrayWithScalar | ArrayWithScalar:
     """Compress an array by applying a mask.
 
     Args:

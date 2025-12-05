@@ -3,6 +3,7 @@
 from typing import Any, TypeVar
 
 import numpy as np
+from numpy.typing import DTypeLike
 
 ArrayFloat16 = np.ndarray[tuple[int], np.dtype[np.float16]]
 ArrayFloat32 = np.ndarray[tuple[int], np.dtype[np.float32]]
@@ -94,3 +95,13 @@ ThreeDArray = np.ndarray[tuple[int, int, int], Any]  # General 3D array type
 T_Array = TypeVar("T_Array", bound=Array)
 T_TwoDArray = TypeVar("T_TwoDArray", bound=TwoDArray)
 T_ThreeDArray = TypeVar("T_ThreeDArray", bound=ThreeDArray)
+
+DType = TypeVar("DType", bound=DTypeLike)
+T_OneorTwoDArray = TypeVar("T_OneorTwoDArray", bound=Array | TwoDArray)
+T_Scalar = TypeVar("T_Scalar", bound=np.generic)
+T_ArrayNumber = TypeVar("T_ArrayNumber", bound=ArrayFloat | ArrayInt)
+
+# Aliases for compress overloads using T_Scalar
+ArrayWithScalar = np.ndarray[tuple[int], np.dtype[T_Scalar]]
+TwoDArrayWithScalar = np.ndarray[tuple[int, int], np.dtype[T_Scalar]]
+ThreeDArrayWithScalar = np.ndarray[tuple[int, int, int], np.dtype[T_Scalar]]
