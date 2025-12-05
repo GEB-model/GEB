@@ -1607,12 +1607,12 @@ class CropFarmers(AgentBaseClass):
 
     @property
     def surface_irrigating_mdb(self) -> np.ndarray:
-        """Only farmers that both have access to reservoir and surface irrigation"""
+        """Only farmers that both have access to reservoir and surface irrigation."""
         return self.is_in_command_area & self.surface_irrigated
 
     @property
     def channel_irrigating_mdb(self) -> np.ndarray:
-        """Only farmers that both have access to reservoir and surface irrigation"""
+        """Only farmers that both have access to reservoir and surface irrigation."""
         return self.surface_irrigated & ~self.surface_irrigating_mdb
 
     @property
@@ -4121,55 +4121,28 @@ class CropFarmers(AgentBaseClass):
         energy_costs = np.zeros(self.var.n, dtype=np.float32)
         water_costs = np.zeros(self.var.n, dtype=np.float32)
 
-        # Compute total pump duration per agent (average over crops)
-        crop_growth_duration = self.var.crop_calendar[:, :, 2].data
-        total_pump_duration = np.where(
-            crop_growth_duration == -1, 0, crop_growth_duration
-        ).sum(axis=1)
+        # # Compute total pump duration per agent (average over crops)
+        # crop_growth_duration = self.var.crop_calendar[:, :, 2].data
+        # total_pump_duration = np.where(
+        #     crop_growth_duration == -1, 0, crop_growth_duration
+        # ).sum(axis=1)
 
         # Get groundwater depth per agent and ensure non-negative values
         groundwater_depth = self.groundwater_depth.copy()
         groundwater_depth[groundwater_depth < 0] = 0
 
-        # Create unique groups based on crop combinations and elevation
-        has_well = self.var.adaptations[:, WELL_ADAPTATION] > 0
-        group_indices, n_groups = self.create_unique_groups()
+        yearly_abstraction_m3_by_farmer = self.var.yearly_abstraction_m3_by_farmer[
+            :, TOTAL_IRRIGATION, :
+        ].data
+        valid_years = (yearly_abstraction_m3_by_farmer != 0).any(axis=0)
 
-        # Compute yearly water abstraction per m² per agent
-        yearly_abstraction_m3_per_m2 = (
-            self.var.yearly_abstraction_m3_by_farmer
-            / self.field_size_per_farmer[..., None, None]
+        yearly_abstraction_m3 = np.mean(
+            yearly_abstraction_m3_by_farmer[:, valid_years], axis=1
         )
-
-        # Initialize array to store average extraction per agent
-        average_extraction_m2 = np.full(self.var.n, np.nan, dtype=np.float32)
-        # Loop over each unique crop group to compute average extraction
-        for group_idx in range(n_groups):
-            farmers_in_group = group_indices == group_idx
-            # Only select the agents with a well
-            farmers_in_group_with_well = np.where(farmers_in_group & has_well)
-
-            # Extract the abstraction values for the group, excluding zeros
-            extraction_values = yearly_abstraction_m3_per_m2[
-                farmers_in_group_with_well, :3, :
-            ]
-            non_zero_extractions = extraction_values[extraction_values != 0]
-
-            # Compute average extraction for the group if there are non-zero values
-            if non_zero_extractions.size > 0:
-                average_extraction = np.mean(non_zero_extractions)  # m³ per m² per year
-            else:
-                average_extraction = 0.0
-
-            # Store the average extraction for each group
-            average_extraction_m2[farmers_in_group] = average_extraction
-
-        # Compute average extraction per agent (m³/year)
-        average_extraction = average_extraction_m2 * self.field_size_per_farmer
 
         # Compute average extraction speed per agent (m³/s)
         average_extraction_speed = (
-            average_extraction / 365 / self.var.pump_hours / 3600
+            yearly_abstraction_m3 / 365 / self.var.pump_hours / 3600
         )  # Convert from m³/year to m³/s
 
         # Create boolean masks for different types of water sources
@@ -4177,36 +4150,37 @@ class CropFarmers(AgentBaseClass):
         mask_reservoir = self.surface_irrigating_mdb.copy()
         mask_groundwater = self.well_irrigated.copy()
 
-        # Compute power required for groundwater extraction per agent (kW)
-        power = (
-            self.var.specific_weight_water
-            * groundwater_depth[mask_groundwater]
-            * average_extraction_speed[mask_groundwater]
-            / self.var.pump_efficiency
-        ) / 1000  # Convert from W to kW
+        # # Compute power required for groundwater extraction per agent (kW)
+        # power = (
+        #     self.var.specific_weight_water
+        #     * groundwater_depth[mask_groundwater]
+        #     * average_extraction_speed[mask_groundwater]
+        #     / self.var.pump_efficiency
+        # ) / 1000  # Convert from W to kW
 
-        # Compute energy consumption per agent (kWh/year)
-        energy = power * (total_pump_duration[mask_groundwater] * self.var.pump_hours)
+        # # Compute energy consumption per agent (kWh/year)
+        # energy = power * (total_pump_duration[mask_groundwater] * self.var.pump_hours)
 
-        # Get energy cost rate per agent (USD per kWh)
-        energy_cost_rate = electricity_costs[mask_groundwater]
+        # # Get energy cost rate per agent (USD per kWh)
+        # energy_cost_rate = electricity_costs[mask_groundwater]
 
-        # Compute energy costs per agent (USD/m3) for groundwater irrigating farmers
-        energy_costs[mask_groundwater] = energy * energy_cost_rate
+        # # Compute energy costs per agent (USD/m3) for groundwater irrigating farmers
+        # energy_costs[mask_groundwater] = energy * energy_cost_rate
 
         # Compute water costs for agents using channel water (USD/m3)
         water_costs[mask_channel] = (
-            average_extraction[mask_channel] * self.water_price_mdb[mask_channel]
+            yearly_abstraction_m3[mask_channel] * self.water_price_mdb[mask_channel]
         )
 
         # Compute water costs for agents using reservoir water (USD/m3)
         water_costs[mask_reservoir] = (
-            average_extraction[mask_reservoir] * self.water_price_mdb[mask_reservoir]
+            yearly_abstraction_m3[mask_reservoir] * self.water_price_mdb[mask_reservoir]
         )
 
         # Compute water costs for agents using groundwater (USD/m3)
         water_costs[mask_groundwater] = (
-            average_extraction[mask_groundwater] * self.var.water_costs_m3_groundwater
+            yearly_abstraction_m3[mask_groundwater]
+            * self.water_price_mdb[mask_groundwater]
         )
 
         # Assume minimal interest rate as farmers pay directly
@@ -4451,18 +4425,13 @@ class CropFarmers(AgentBaseClass):
         # Compute profits without adaptation
         total_profits = self.compute_total_profits(yield_ratios)
         profit_events, profits_no_event = self.format_results(total_profits)
-        insurance_differentiator = (
-            self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
-        )
 
-        crop_elevation_group = np.hstack(
-            (
-                self.var.crop_calendar[:, :, 0].data,
-                self.in_command_area.reshape(-1, 1),
-                self.elev_class.reshape(-1, 1),
-                insurance_differentiator.reshape(-1, 1),
-                self.well_irrigated.reshape(-1, 1),
-            )
+        crop_elevation_group = self.create_farmer_classes(
+            self.crop_calendar_group,
+            self.surface_irrigating_mdb,
+            (self.channel_irrigating_mdb | self.well_irrigated).data,
+            self.region_agents,
+            self.irrigation_efficiency_group,
         )
 
         unique_crop_groups, group_indices = np.unique(
@@ -4569,6 +4538,8 @@ class CropFarmers(AgentBaseClass):
         yield_ratios_exp_cap = self.convert_probability_to_yield_ratio(
             self.farmer_yield_probability_relation_exp_cap
         )
+
+        # Calculate the income in a normal year
         total_profits_exp_cap = self.compute_total_profits(yield_ratios_exp_cap)
         _, profits_no_event_exp_cap = self.format_results(total_profits_exp_cap)
 
@@ -5187,7 +5158,7 @@ class CropFarmers(AgentBaseClass):
             )
 
             # create a unique index for each type of crop calendar that a farmer follows
-            crop_calendar_group = np.unique(
+            self.crop_calendar_group = np.unique(
                 self.var.crop_calendar[:, :, 0], axis=0, return_inverse=True
             )[1]
 
@@ -5202,7 +5173,7 @@ class CropFarmers(AgentBaseClass):
             )  # Vict is 0, NSW is 1
 
             self.var.farmer_base_class[:] = self.create_farmer_classes(
-                crop_calendar_group,
+                self.crop_calendar_group,
                 self.surface_irrigating_mdb,
                 (self.channel_irrigating_mdb | self.well_irrigated).data,
                 self.region_agents,
@@ -5404,6 +5375,9 @@ class CropFarmers(AgentBaseClass):
                         )
                         self.var.mean_irrigation_efficiency = np.mean(
                             self.var.irrigation_efficiency
+                        )
+                        _, self.irrigation_efficiency_group = np.unique(
+                            self.var.irrigation_efficiency, return_inverse=True
                         )
                         timer.finish_split("irr efficiency")
                     if self.crop_switching_adaptation_active:
