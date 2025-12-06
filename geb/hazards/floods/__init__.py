@@ -234,7 +234,7 @@ class Floods(Module):
         coastal_only: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
-        initial_water_level: float = 0.0,
+        initial_water_level: float | None = 0.0,
     ) -> SFINCSRootModel:
         """Builds or reads a SFINCS model without any forcing.
 

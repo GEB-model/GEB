@@ -1,10 +1,9 @@
 """Soil hydrology functions."""
 
 import numpy as np
-import numpy.typing as npt
 from numba import njit
 
-from geb.types import ArrayFloat32
+from geb.types import ArrayFloat32, Shape
 
 from .landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 
@@ -64,8 +63,8 @@ def add_water_to_topwater_and_evaporate_open_water(
 
 @njit(cache=True, inline="always")
 def rise_from_groundwater(
-    w: npt.NDArray[np.float32],
-    ws: npt.NDArray[np.float32],
+    w: ArrayFloat32,
+    ws: ArrayFloat32,
     capillary_rise_from_groundwater: np.float32,
 ) -> np.float32:
     """Adds capillary rise from groundwater to the bottom soil layer and moves excess water upwards for a single cell.
@@ -121,11 +120,11 @@ def get_infiltration_capacity(
 
 @njit(cache=True, inline="always")
 def infiltration(
-    ws: npt.NDArray[np.float32],
+    ws: ArrayFloat32,
     saturated_hydraulic_conductivity: np.float32,
     land_use_type: np.int32,
     soil_is_frozen: bool,
-    w: npt.NDArray[np.float32],
+    w: ArrayFloat32,
     topwater_m: np.float32,
 ) -> tuple[np.float32, np.float32, np.float32, np.float32]:
     """Simulates vertical transport of water in the soil for a single cell.
@@ -303,11 +302,11 @@ def get_flux(
 )
 def get_soil_moisture_at_pressure(
     capillary_suction: np.float32,
-    bubbling_pressure_cm: npt.NDArray[np.float32],
-    thetas: npt.NDArray[np.float32],
-    thetar: npt.NDArray[np.float32],
-    lambda_: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    bubbling_pressure_cm: np.ndarray[Shape, np.dtype[np.float32]],
+    thetas: np.ndarray[Shape, np.dtype[np.float32]],
+    thetar: np.ndarray[Shape, np.dtype[np.float32]],
+    lambda_: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculates the soil moisture content at a given soil water potential (capillary suction) using the van Genuchten model.
 
     Args:
@@ -320,25 +319,23 @@ def get_soil_moisture_at_pressure(
     Returns:
         The soil moisture content at the given soil water potential (m³/m³)
     """
-    alpha: npt.NDArray[np.float32] = np.float32(1) / bubbling_pressure_cm
-    n: npt.NDArray[np.float32] = lambda_ + np.float32(1)
-    m: npt.NDArray[np.float32] = np.float32(1) - np.float32(1) / n
+    alpha = np.float32(1) / bubbling_pressure_cm
+    n = lambda_ + np.float32(1)
+    m = np.float32(1) - np.float32(1) / n
     phi: np.float32 = -capillary_suction
 
-    water_retention_curve: npt.NDArray[np.float32] = (
-        np.float32(1) / (np.float32(1) + (alpha * phi) ** n)
-    ) ** m
+    water_retention_curve = (np.float32(1) / (np.float32(1) + (alpha * phi) ** n)) ** m
 
     return water_retention_curve * (thetas - thetar) + thetar
 
 
 def thetas_toth(
-    soil_organic_carbon: npt.NDArray[np.float32],
-    bulk_density: npt.NDArray[np.float32],
-    is_top_soil: npt.NDArray[np.bool_],
-    clay: npt.NDArray[np.float32],
-    silt: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    soil_organic_carbon: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
+    is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+    silt: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Determine saturated water content [m3/m3].
 
     Based on:
@@ -374,12 +371,12 @@ def thetas_toth(
 
 
 def thetas_wosten(
-    clay: npt.NDArray[np.float32],
-    bulk_density: npt.NDArray[np.float32],
-    silt: npt.NDArray[np.float32],
-    soil_organic_carbon: npt.NDArray[np.float32],
-    is_topsoil: npt.NDArray[np.bool_],
-) -> npt.NDArray[np.float32]:
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
+    silt: np.ndarray[Shape, np.dtype[np.float32]],
+    soil_organic_carbon: np.ndarray[Shape, np.dtype[np.float32]],
+    is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculates the saturated water content (theta_S) based on the provided equation.
 
     From: https://doi.org/10.1016/S0016-7061(98)00132-3
@@ -413,10 +410,10 @@ def thetas_wosten(
 
 
 def thetar_brakensiek(
-    sand: npt.NDArray[np.float32],
-    clay: npt.NDArray[np.float32],
-    thetas: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    sand: np.ndarray[Shape, np.dtype[np.float32]],
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+    thetas: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Determine residual water content [m3/m3].
 
     Thetas is equal to porosity (Φ) in this case.
@@ -452,10 +449,10 @@ def thetar_brakensiek(
 
 
 def get_bubbling_pressure(
-    clay: npt.NDArray[np.float32],
-    sand: npt.NDArray[np.float32],
-    thetas: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+    sand: np.ndarray[Shape, np.dtype[np.float32]],
+    thetas: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Determine bubbling pressure [cm].
 
     Thetas is equal to porosity (Φ) in this case.
@@ -493,10 +490,10 @@ def get_bubbling_pressure(
 
 
 def get_pore_size_index_brakensiek(
-    sand: npt.NDArray[np.float32],
-    thetas: npt.NDArray[np.float32],
-    clay: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    sand: np.ndarray[Shape, np.dtype[np.float32]],
+    thetas: np.ndarray[Shape, np.dtype[np.float32]],
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Determine Brooks-Corey pore size distribution index [-].
 
     Thetas is equal to porosity (Φ) in this case.
@@ -538,12 +535,12 @@ def get_pore_size_index_brakensiek(
 
 
 def get_pore_size_index_wosten(
-    clay: npt.NDArray[np.float32],
-    silt: npt.NDArray[np.float32],
-    soil_organic_carbon: npt.NDArray[np.float32],
-    bulk_density: npt.NDArray[np.float32],
-    is_top_soil: npt.NDArray[np.bool_],
-) -> npt.NDArray[np.float32]:
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+    silt: np.ndarray[Shape, np.dtype[np.float32]],
+    soil_organic_carbon: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
+    is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Determine Brooks-Corey pore size distribution index [-].
 
     See: https://doi.org/10.1016/S0016-7061(98)00132-3
@@ -580,10 +577,10 @@ def get_pore_size_index_wosten(
 
 
 def kv_brakensiek(
-    thetas: npt.NDArray[np.float32],
-    clay: npt.NDArray[np.float32],
-    sand: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    thetas: np.ndarray[Shape, np.dtype[np.float32]],
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+    sand: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Determine saturated hydraulic conductivity kv [m/s].
 
     Based on:
@@ -621,12 +618,12 @@ def kv_brakensiek(
 
 
 def kv_wosten(
-    silt: npt.NDArray[np.float32],
-    clay: npt.NDArray[np.float32],
-    bulk_density: npt.NDArray[np.float32],
-    organic_matter: npt.NDArray[np.float32],
-    is_topsoil: npt.NDArray[np.bool_],
-) -> npt.NDArray[np.float32]:
+    silt: np.ndarray[Shape, np.dtype[np.float32]],
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+    bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_matter: np.ndarray[Shape, np.dtype[np.float32]],
+    is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculates the saturated value based on the provided equation.
 
     From: https://doi.org/10.1016/S0016-7061(98)00132-3
@@ -661,8 +658,9 @@ def kv_wosten(
 
 
 def kv_cosby(
-    sand: npt.NDArray[np.float32], clay: npt.NDArray[np.float32]
-) -> npt.NDArray[np.float32]:
+    sand: np.ndarray[Shape, np.dtype[np.float32]],
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Determine saturated hydraulic conductivity kv [m/s].
 
     based on:

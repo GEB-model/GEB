@@ -29,7 +29,7 @@ import os
 import platform
 from pathlib import Path
 from time import time
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, overload
 
 import flopy
 import numpy as np
@@ -42,8 +42,13 @@ from xmipy.errors import InputError
 from geb.types import (
     ArrayFloat32,
     ArrayFloat64,
+    ArrayWithScalar,
+    ThreeDArrayFloat32,
+    ThreeDArrayWithScalar,
+    TwoDArrayBool,
     TwoDArrayFloat32,
     TwoDArrayFloat64,
+    TwoDArrayWithScalar,
 )
 from geb.workflows.io import WorkingDirectory
 from geb.workflows.raster import decompress_with_mask
@@ -234,14 +239,14 @@ class ModFlowSimulation:
         self,
         working_directory: Path,
         modflow_bin_folder: Path,
-        topography: npt.NDArray[np.float32],
+        topography: ArrayFloat32,
         gt: tuple[float, float, float, float, float, float],
-        specific_storage: npt.NDArray[np.float32],
-        specific_yield: npt.NDArray[np.float32],
-        layer_boundary_elevation: npt.NDArray[np.float32],
-        basin_mask: npt.NDArray[np.bool_],
-        hydraulic_conductivity: npt.NDArray[np.float32],
-        heads: npt.NDArray[np.float64],
+        specific_storage: TwoDArrayFloat32,
+        specific_yield: TwoDArrayFloat32,
+        layer_boundary_elevation: TwoDArrayFloat32,
+        basin_mask: TwoDArrayBool,
+        hydraulic_conductivity: TwoDArrayFloat32,
+        heads: TwoDArrayFloat64,
         heads_update_callback: Callable,
         min_remaining_layer_storage_m: float = 0.1,
         verbose: bool = False,
@@ -546,7 +551,7 @@ class ModFlowSimulation:
         )
 
         # Node property flow
-        k: TwoDArrayFloat32 = self.decompress(hydraulic_conductivity)
+        k: ThreeDArrayFloat32 = self.decompress(hydraulic_conductivity)
 
         # Initial conditions
         flopy.mf6.ModflowGwfic(
@@ -581,8 +586,8 @@ class ModFlowSimulation:
             },
         )
 
-        specific_storage: TwoDArrayFloat32 = self.decompress(specific_storage)
-        specific_yield: TwoDArrayFloat32 = self.decompress(specific_yield)
+        specific_storage: ThreeDArrayFloat32 = self.decompress(specific_storage)
+        specific_yield: ThreeDArrayFloat32 = self.decompress(specific_yield)
 
         # Storage
         # Somehow modeltime is not available when loading_package is set to False (the default) and what it should be.
@@ -1217,10 +1222,22 @@ class ModFlowSimulation:
         """
         self.heads = heads
 
+    @overload
     def decompress(
         self,
-        array: TwoDArrayFloat32,
-    ) -> TwoDArrayFloat32:
+        array: TwoDArrayWithScalar,
+    ) -> ThreeDArrayWithScalar: ...
+
+    @overload
+    def decompress(
+        self,
+        array: ArrayWithScalar,
+    ) -> TwoDArrayWithScalar: ...
+
+    def decompress(
+        self,
+        array: TwoDArrayWithScalar | ArrayWithScalar,
+    ) -> ThreeDArrayWithScalar | TwoDArrayWithScalar:
         """Decompress a compressed array using the model's grid.
 
         Args:

@@ -97,14 +97,26 @@ def read_array(fp: Path) -> np.ndarray:
 
 @overload
 def read_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
-) -> np.ndarray: ...
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
+) -> TwoDArray: ...
 
 
 @overload
 def read_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = True
-) -> tuple[np.ndarray, Affine, str]: ...
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
+) -> tuple[TwoDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path, layer: None = None, return_transform_and_crs: bool = False
+) -> ThreeDArray: ...
+
+
+@overload
+def read_grid(
+    filepath: Path, layer: None = None, return_transform_and_crs: bool = True
+) -> tuple[ThreeDArray, Affine, str]: ...
 
 
 def read_grid(

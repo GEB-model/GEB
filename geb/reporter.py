@@ -805,9 +805,11 @@ class Reporter:
         """
         buffer = config["_buffers"]
         zarr_group = zarr.open_group(config["_store"])
+        zarr_array = zarr_group[name]
+        assert isinstance(zarr_array, zarr.Array)
         time_indices = np.array([t for t, v in buffer])
         values = np.stack([v for t, v in buffer])
-        zarr_group[name][time_indices] = values
+        zarr_array[time_indices] = values
         config["_buffers"] = []
 
     def _flush_buffer_agents(self, config: dict, name: str) -> None:
@@ -819,9 +821,11 @@ class Reporter:
         """
         buffer = config["_buffers"]
         zarr_group = zarr.open_group(config["_store"])
+        zarr_array = zarr_group[name]
+        assert isinstance(zarr_array, zarr.Array)
         time_indices = np.array([t for t, v in buffer])
         values = np.stack([v for t, v in buffer])
-        zarr_group[name][time_indices] = values
+        zarr_array[time_indices] = values
         config["_buffers"] = []
 
     def finalize(self) -> None:

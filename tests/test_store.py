@@ -410,6 +410,37 @@ def test_reduce_ufunc(array: DynamicArray) -> None:
     assert result == 15
 
 
+def test_stack_dynamic_arrays() -> None:
+    """Test stacking multiple DynamicArrays using np.stack.
+
+    Verifies that np.stack works correctly with a list of DynamicArrays,
+    returning a numpy array with the expected shape and values.
+    """
+    d1 = DynamicArray(np.array([1, 2, 3]), max_n=10)
+    d2 = DynamicArray(np.array([4, 5, 6]), max_n=10)
+
+    stacked = np.stack([d1, d2])
+
+    assert isinstance(stacked, np.ndarray)
+    assert stacked.shape == (2, 3)
+    np.testing.assert_array_equal(stacked, np.array([[1, 2, 3], [4, 5, 6]]))
+
+
+def test_concatenate_dynamic_arrays() -> None:
+    """Test concatenating multiple DynamicArrays using np.concatenate.
+
+    Verifies that np.concatenate works correctly with a list of DynamicArrays.
+    """
+    d1 = DynamicArray(np.array([1, 2, 3]), max_n=10)
+    d2 = DynamicArray(np.array([4, 5, 6]), max_n=10)
+
+    concatenated = np.concatenate([d1, d2])
+
+    assert isinstance(concatenated, np.ndarray)
+    assert concatenated.shape == (6,)
+    np.testing.assert_array_equal(concatenated, np.array([1, 2, 3, 4, 5, 6]))
+
+
 def test_save_and_restore(array: DynamicArray) -> None:
     """Test saving to disk and restoring a DynamicArray.
 

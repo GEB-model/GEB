@@ -4,6 +4,7 @@ from time import time
 
 import numpy as np
 
+from geb.store import DynamicArray
 from geb.types import ArrayFloat
 
 
@@ -58,10 +59,14 @@ class TimingModule:
 def balance_check(
     name: str,
     how: str = "cellwise",
-    influxes: list[ArrayFloat] | ArrayFloat = [],
-    outfluxes: list[ArrayFloat] | ArrayFloat = [],
-    prestorages: list[ArrayFloat] | ArrayFloat = [],
-    poststorages: list[ArrayFloat] | ArrayFloat = [],
+    influxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    outfluxes: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    prestorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
+    poststorages: list[ArrayFloat | np.floating | DynamicArray]
+    | tuple[ArrayFloat | np.floating | DynamicArray] = [],
     tolerance: float = 1e-10,
     error_identifiers: dict = {},
     raise_on_error: bool = False,
@@ -94,15 +99,6 @@ def balance_check(
     income = 0
     out = 0
     store = 0
-
-    if not isinstance(influxes, (list, tuple)):
-        influxes = [influxes]
-    if not isinstance(outfluxes, (list, tuple)):
-        outfluxes = [outfluxes]
-    if not isinstance(prestorages, (list, tuple)):
-        prestorages = [prestorages]
-    if not isinstance(poststorages, (list, tuple)):
-        poststorages = [poststorages]
 
     if how == "cellwise":
         inflow = np.add.reduce(influxes)
@@ -139,14 +135,14 @@ def balance_check(
         assert not error_identifiers, (
             "Error identifiers not supported for 'sum' method."
         )
-        for fluxIn in influxes:
-            income += fluxIn.sum()
-        for fluxOut in outfluxes:
-            out += fluxOut.sum()
-        for preStorage in prestorages:
-            store += preStorage.sum()
-        for endStorage in poststorages:
-            store -= endStorage.sum()
+        for influx in influxes:
+            income += influx.sum()
+        for outflux in outfluxes:
+            out += outflux.sum()
+        for prestorage in prestorages:
+            store += prestorage.sum()
+        for poststorage in poststorages:
+            store -= poststorage.sum()
 
         balance = abs(income + store - out)
         if np.isnan(balance):

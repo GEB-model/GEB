@@ -5,6 +5,9 @@ from typing import Any, TypeVar
 import numpy as np
 from numpy.typing import DTypeLike
 
+Shape = TypeVar("Shape", bound=tuple[int, ...])
+
+
 ArrayFloat16 = np.ndarray[tuple[int], np.dtype[np.float16]]
 ArrayFloat32 = np.ndarray[tuple[int], np.dtype[np.float32]]
 ArrayFloat64 = np.ndarray[tuple[int], np.dtype[np.float64]]
@@ -105,3 +108,4 @@ T_ArrayNumber = TypeVar("T_ArrayNumber", bound=ArrayFloat | ArrayInt)
 ArrayWithScalar = np.ndarray[tuple[int], np.dtype[T_Scalar]]
 TwoDArrayWithScalar = np.ndarray[tuple[int, int], np.dtype[T_Scalar]]
 ThreeDArrayWithScalar = np.ndarray[tuple[int, int, int], np.dtype[T_Scalar]]
+AnyDArrayWithScalar = np.ndarray[Shape, np.dtype[T_Scalar]]

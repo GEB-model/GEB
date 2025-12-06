@@ -152,7 +152,7 @@ class SFINCSRootModel:
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
         setup_river_outflow_boundary: bool = True,
-        initial_water_level: float = 0.0,
+        initial_water_level: float | None = 0.0,
         custom_rivers_to_burn: gpd.GeoDataFrame | None = None,
     ) -> SFINCSRootModel:
         """Build a SFINCS model.

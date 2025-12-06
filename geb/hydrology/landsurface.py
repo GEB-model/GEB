@@ -350,7 +350,7 @@ def land_surface_model(
             runoff_m[hour, i] += direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
 
-            bottom_layer = N_SOIL_LAYERS - 1
+            bottom_layer = N_SOIL_LAYERS - 1  # ty: ignore[unresolved-reference]
 
             psi, unsaturated_hydraulic_conductivity_m_per_hour = (
                 get_soil_water_flow_parameters(
@@ -388,7 +388,7 @@ def land_surface_model(
             )
 
             # iterate from bottom to top layer (ignoring the bottom layer which is treated above)
-            for layer in range(N_SOIL_LAYERS - 2, -1, -1):
+            for layer in range(N_SOIL_LAYERS - 2, -1, -1):  # ty: ignore[unresolved-reference]
                 psi, unsaturated_hydraulic_conductivity_m_per_hour = (
                     get_soil_water_flow_parameters(
                         w=w[layer, i],
@@ -554,7 +554,7 @@ class LandSurface(Module):
         to change the number of soil layers between different datasets.
         """
         # set number of soil layers as global variable for numba
-        global N_SOIL_LAYERS
+        global N_SOIL_LAYERS  # ty: ignore[unresolved-global]
         N_SOIL_LAYERS = self.HRU.var.soil_layer_height.shape[0]
 
     def spinup(self) -> None:

@@ -2870,7 +2870,7 @@ class GEBModel(
                 '"setup_region" can only be called when starting a new model.'
             )
 
-        self.run_methods(methods, validate_order=False and type(self) is GEBModel)
+        self.run_methods(methods, validate_order=False, record_progress=False)
 
     def get_linear_indices(self, da: xr.DataArray) -> xr.DataArray:
         """Get linear indices for each cell in a 2D DataArray.

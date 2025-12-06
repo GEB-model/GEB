@@ -16,6 +16,7 @@ from numba import njit
 from scipy.spatial import KDTree
 
 from geb.types import (
+    AnyDArrayWithScalar,
     Array,
     ArrayFloat32,
     ArrayInt32,
@@ -890,8 +891,8 @@ class HRUs(BaseVariables):
         return outarray
 
     def convert_subgrid_to_HRU(
-        self, array: npt.NDArray[np.generic], method: str = "last"
-    ) -> npt.NDArray[np.generic]:
+        self, array: AnyDArrayWithScalar, method: str = "last"
+    ) -> AnyDArrayWithScalar:
         """Convert subgrid array to HRU array.
 
         Because HRUs describe multiple subgrid cells, the data within
@@ -1156,8 +1157,8 @@ class Data:
         return outdata
 
     def split_HRU_data(
-        self, array: npt.NDArray[np.generic], i: int, ratio: float | None = None
-    ) -> npt.NDArray[np.generic]:
+        self, array: AnyDArrayWithScalar, i: int, ratio: float | None = None
+    ) -> AnyDArrayWithScalar:
         """Function to split HRU data.
 
         Args:
