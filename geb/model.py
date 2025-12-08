@@ -3,7 +3,6 @@
 import copy
 import datetime
 import logging
-import os
 from pathlib import Path
 from time import time
 from types import TracebackType
@@ -15,6 +14,7 @@ import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 
+from geb import GEB_PACKAGE_DIR
 from geb.agents import Agents
 from geb.hazards.driver import HazardDriver
 from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
@@ -786,16 +786,8 @@ class GEBModel(Module, HazardDriver):
 
         Returns:
             Path to the folder containing GEB binaries.
-
-        Raises:
-            EnvironmentError: If the GEB_PACKAGE_DIR environment variable is not set.
         """
-        GEB_PACKAGE_DIR_str = os.environ.get("GEB_PACKAGE_DIR")
-        if GEB_PACKAGE_DIR_str is None:
-            raise EnvironmentError(
-                "GEB_PACKAGE_DIR environment variable is not set. Please set it to the GEB package directory."
-            )
-        return Path(GEB_PACKAGE_DIR_str) / "bin"
+        return GEB_PACKAGE_DIR / "bin"
 
     @property
     def diagnostics_folder(self) -> Path:

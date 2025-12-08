@@ -4,7 +4,9 @@ import faulthandler
 import os
 import platform
 from importlib.metadata import version
+from importlib.resources import files
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import numpy.typing as npt
@@ -17,11 +19,13 @@ from geb.workflows.io import fetch_and_save
 
 __version__: str = version("GEB")
 
+# set environment variable for GEB package directory
+GEB_PACKAGE_DIR = cast(Path, files("geb"))
+os.environ["GEB_PACKAGE_DIR"] = str(files("geb"))
+
 # Load environment variables from .env file
 load_dotenv()
 
-# set environment variable for GEB package directory
-os.environ["GEB_PACKAGE_DIR"] = str(Path(__file__).parent)
 
 # Auto-detect whether we are on the Ada HPC cluster of the Vrije Universiteit Amsterdam. If so, set some environment variables accordingly.
 if Path("/research/BETA-IVM-HPC/GEB").exists():
@@ -54,7 +58,7 @@ def load_numba_threading_layer(version: str = "2022.1.0") -> None:
 
     """
     version = "2022.1.0"
-    bin_path: Path = Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin" / "tbb"
+    bin_path: Path = GEB_PACKAGE_DIR / "bin" / "tbb"
     tbb_uncompressed_folder: Path = Path("oneapi-tbb-" + version)
 
     if platform.system() == "Linux":

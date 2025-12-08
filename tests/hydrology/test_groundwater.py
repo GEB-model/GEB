@@ -5,7 +5,6 @@ with surface water and the unsaturated zone.
 """
 
 import math
-import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable, Literal, TypedDict
@@ -30,7 +29,7 @@ from geb.types import (
 )
 from geb.workflows.raster import calculate_cell_area, compress
 
-from ..testconfig import output_folder, tmp_folder
+from ..testconfig import GEB_PACKAGE_DIR, output_folder, tmp_folder
 
 
 class ModFlowParams(TypedDict):
@@ -113,13 +112,9 @@ heads = np.full((NLAY, YSIZE, XSIZE), 0, dtype=np.float32)
 for layer in range(NLAY):
     heads[layer] = topography - 2
 
-GEB_PACKAGE_DIR_str: str | None = os.environ.get("GEB_PACKAGE_DIR")
-if GEB_PACKAGE_DIR_str is None:
-    raise RuntimeError("GEB_PACKAGE_DIR environment variable is not set.")
-
 default_params: ModFlowParams = {
     "working_directory": tmp_folder / "modflow",
-    "modflow_bin_folder": Path(GEB_PACKAGE_DIR_str) / "modflow" / "bin",
+    "modflow_bin_folder": GEB_PACKAGE_DIR / "modflow" / "bin",
     "gt": gt,
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),
     "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.8), basin_mask),

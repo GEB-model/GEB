@@ -9,6 +9,7 @@ import logging
 import os
 from contextlib import contextmanager
 from datetime import date, datetime
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -954,13 +955,7 @@ def create_multi_basin_configs(
     print("Creating build.yml in large_scale directory...")
     build_config_path = working_directory / "build.yml"
     # Read build config from geul example and automatically copy it
-    geul_build_path = (
-        Path(os.environ.get("GEB_PACKAGE_DIR"))
-        / ".."
-        / "examples"
-        / "geul"
-        / "build.yml"
-    )
+    geul_build_path = files("geb").parent / "examples" / "geul" / "build.yml"
 
     print(f"Reading build configuration from: {geul_build_path}")
 
