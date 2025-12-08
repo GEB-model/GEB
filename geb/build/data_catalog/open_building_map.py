@@ -24,7 +24,7 @@ from pyquadkey2 import quadkey
 from shapely import geometry
 from tqdm import tqdm
 
-from geb.workflows.io import fetch_and_save
+from geb.workflows.io import fetch_and_save, write_geom
 
 from .base import Adapter
 
@@ -161,14 +161,16 @@ class OpenBuildingMap(Adapter):
                 if buildings is not None:
                     list_of_buildings_in_geom.append(buildings)
         # concatenate all buildings
-        buildings_in_geom = pd.concat(list_of_buildings_in_geom, ignore_index=True)
+        buildings_in_geom: gpd.GeoDataFrame = pd.concat(
+            list_of_buildings_in_geom, ignore_index=True
+        )  # ty: ignore[invalid-assignment]
 
         # raise error if no buildings are found in model region
         if len(list_of_buildings_in_geom) == 0:
             raise RuntimeError("No OpenBuildingMap features were found in model domain")
         # write to file
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        buildings_in_geom.to_parquet(self.path)
+        write_geom(buildings_in_geom, self.path)
 
         return self
 
