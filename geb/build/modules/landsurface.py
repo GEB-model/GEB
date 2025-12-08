@@ -188,7 +188,6 @@ class LandSurface:
             self.set_other(
                 DEM_raster,
                 name=f"DEM/{DEM['name']}",
-                byteshuffle=True,
             )
             DEM["path"] = f"DEM/{DEM['name']}"
         low_elevation_coastal_zone = DEM_raster < 10

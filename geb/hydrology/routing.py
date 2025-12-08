@@ -1546,3 +1546,17 @@ class Routing(Module):
     def name(self) -> str:
         """Name of the module."""
         return "hydrology.routing"
+
+    @property
+    def outflow_rivers(self) -> gpd.GeoDataFrame:
+        """Get the outflow rivers.
+
+        Returns:
+            A GeoDataFrame containing the outflow rivers.
+        """
+        rivers: gpd.GeoDataFrame = self.rivers
+        rivers = rivers[~rivers["is_downstream_outflow_subbasin"]]
+        outflow_rivers: gpd.GeoDataFrame = rivers[
+            ~rivers["downstream_ID"].isin(rivers.index)
+        ]
+        return outflow_rivers

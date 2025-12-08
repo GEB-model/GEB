@@ -35,7 +35,7 @@ from rasterio.transform import Affine
 from tqdm import tqdm
 from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
-from zarr.codecs.blosc import BloscShuffle
+from zarr.codecs.zstd import ZstdCodec
 
 from geb.types import (
     ArrayDatetime64,
@@ -97,14 +97,26 @@ def read_array(fp: Path) -> np.ndarray:
 
 @overload
 def read_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = False
-) -> np.ndarray: ...
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = False
+) -> TwoDArray: ...
 
 
 @overload
 def read_grid(
-    filepath: Path, layer: int | None = 1, return_transform_and_crs: bool = True
-) -> tuple[np.ndarray, Affine, str]: ...
+    filepath: Path, layer: int = 1, return_transform_and_crs: bool = True
+) -> tuple[TwoDArray, Affine, str]: ...
+
+
+@overload
+def read_grid(
+    filepath: Path, layer: None = None, return_transform_and_crs: bool = False
+) -> ThreeDArray: ...
+
+
+@overload
+def read_grid(
+    filepath: Path, layer: None = None, return_transform_and_crs: bool = True
+) -> tuple[ThreeDArray, Affine, str]: ...
 
 
 def read_grid(
@@ -165,7 +177,8 @@ def read_grid(
                 f=y[0] - y_diff / 2,
             )
             crs = data_array.attrs["_CRS"]
-            wkt: str = crs["wkt"]  # ty: ignore[invalid-argument-type,non-subscriptable]
+            assert isinstance(crs, dict)
+            wkt: str = crs["wkt"]
             return data, transform, wkt
         else:
             return data
@@ -189,16 +202,18 @@ def read_geom(filepath: str | Path) -> gpd.GeoDataFrame:
 def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
     """Save a GeoDataFrame to a parquet file.
 
-    brotli is a bit slower but gives better compression,
-    gzip is faster to read. Higher compression levels
-    generally don't make it slower to read, therefore
-    we use the highest compression level for gzip
-
     Args:
         gdf: The GeoDataFrame to save.
         filepath: Path to the output parquet file.
     """
-    gdf.to_parquet(filepath, engine="pyarrow", compression="gzip", compression_level=9)
+    gdf.to_parquet(
+        filepath,
+        engine="pyarrow",
+        compression="zstd",
+        compression_level=9,
+        row_group_size=10_000,
+        schema_version="1.1.0",
+    )
 
 
 def read_dict(filepath: Path) -> Any:
@@ -471,7 +486,6 @@ def write_zarr(
     y_chunksize: int = 350,
     time_chunksize: int = 1,
     time_chunks_per_shard: int | None = 30,
-    byteshuffle: bool = True,
     filters: list = [],
     compressor: None | BytesBytesCodec = None,
     progress: bool = True,
@@ -487,7 +501,6 @@ def write_zarr(
         time_chunksize: The chunk size for the time dimension. Default is 1.
         time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
             to disable sharding.
-        byteshuffle: Whether to use byteshuffle compression. Default is True.
         filters: A list of filters to apply. Default is [].
         compressor: The compressor to use. Default is None, using the default Blosc compressor.
         progress: Whether to show a progress bar. Default is True.
@@ -552,10 +565,8 @@ def write_zarr(
                 shards["time"] = time_chunks_per_shard * chunks["time"]
 
         if compressor is None:
-            compressor: BloscCodec = BloscCodec(
-                cname="zstd",
-                clevel=9,
-                shuffle=BloscShuffle.shuffle if byteshuffle else BloscShuffle.noshuffle,
+            compressor: ZstdCodec = ZstdCodec(
+                level=22,
             )
 
         check_buffer_size(da, chunks_or_shards=shards if shards else chunks)
@@ -844,6 +855,14 @@ class AsyncGriddedForcingReader:
 
         # Check if the variable uses NaN as fill value for the retry workaround
         self.array = self.ds[self.variable_name]
+
+        for compressor in self.array.compressors:
+            # Blosc is not supported due to known issues with async reading
+            if isinstance(compressor, BloscCodec):
+                raise ValueError(
+                    f"Variable {self.variable_name} uses Blosc compression, which is not supported by AsyncGriddedForcingReader. Please recompress the data using a different codec (e.g., Zstd)."
+                )
+
         fill_value = self.array.fill_value
         # The fill value is NaN if it's a float type and is NaN, or explicitly None for some types
         has_nan_fill = isinstance(fill_value, (float, np.floating)) and np.isnan(
@@ -897,34 +916,14 @@ class AsyncGriddedForcingReader:
 
         Returns:
             The requested data slice (not a copy - caller must copy if needed).
-
-        Raises:
-            RuntimeError: If data loading fails after maximum retries.
         """
         # Select the variable array from the pre-opened async group.
         arr: zarr.AsyncArray[Any] = self.array.async_array
-        max_retries = 100
-        retries = 0
-        while retries < max_retries:
-            data = await arr.getitem(
-                (slice(start_index, end_index), slice(None), slice(None))
-            )
-            assert isinstance(data, np.ndarray)
-
-            # Only apply the NaN workaround if the array actually uses NaN as fill value
-            if np.isnan(data).any():
-                retries += 1
-                print(
-                    f"Warning: Async read returned NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
-                )
-                await asyncio.sleep(delay=0.1)  # brief pause before retrying
-            else:
-                return data
-
-        # If still NaN after retries, raise an error
-        raise RuntimeError(
-            f"Failed to load data for {self.variable_name} after {max_retries} retries due to NaN values."
+        data = await arr.getitem(
+            (slice(start_index, end_index), slice(None), slice(None))
         )
+        assert isinstance(data, np.ndarray)
+        return data
 
     async def preload_next(
         self, start_index: int, end_index: int, n: int

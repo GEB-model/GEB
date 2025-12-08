@@ -1,14 +1,15 @@
 """Module for concentrating runoff from different sources."""
 
 import numpy as np
-import numpy.typing as npt
+
+from geb.types import ArrayFloat32
 
 
 def concentrate_runoff(
-    interflow: npt.NDArray[np.float32],
-    baseflow: npt.NDArray[np.float32],
-    runoff: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    interflow: ArrayFloat32,
+    baseflow: ArrayFloat32,
+    runoff: ArrayFloat32,
+) -> ArrayFloat32:
     """Combines all sources of runoff.
 
     Args:

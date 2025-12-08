@@ -27,6 +27,7 @@ from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
 from shapely.geometry import Point
 
+from geb import GEB_PACKAGE_DIR
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.workflows.io import (
@@ -174,11 +175,12 @@ def get_river_graph(data_catalog: NewDataCatalog) -> networkx.DiGraph:
     """
     print("Loading MERIT basins river network...")
 
-    river_network: pd.DataFrame = (
+    river_network = (
         data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "NextDownID"])
         .set_index("COMID")
     )
+    assert isinstance(river_network, pd.DataFrame)
     assert river_network.index.name == "COMID", (
         "The index of the river network is not the COMID column"
     )
@@ -237,13 +239,14 @@ def get_subbasin_id_from_coordinate(
     # xmin == xmax and ymin == ymax
     # geoparquet uses < and >, not <= and >=, so we need to add
     # a small value to the coordinates to avoid missing the point
-    COMID: gpd.GeoDataFrame = (
+    COMID = (
         data_catalog.fetch("merit_basins_catchments")
         .read(
             bbox=(lon - 10e-6, lat - 10e-6, lon + 10e-6, lat + 10e-6),
         )
         .set_index("COMID")
     )
+    assert isinstance(COMID, gpd.GeoDataFrame)
 
     # get only the points where the point is inside the basin
     COMID = COMID[COMID.geometry.contains(Point(lon, lat))]
@@ -335,11 +338,12 @@ def get_all_downstream_subbasins_in_geom(
     logger.info("Loading river network data...")
 
     # Get river network data to find downstream basins (NextDownID = 0)
-    river_network: pd.DataFrame = (
+    river_network = (
         data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "NextDownID", "uparea"])
         .set_index("COMID")
     )
+    assert isinstance(river_network, pd.DataFrame)
 
     logger.info("Filtering for downstream subbasins (NextDownID = 0)...")
 
@@ -366,11 +370,12 @@ def get_subbasin_upstream_areas(
         Dictionary mapping COMID to upstream area in km2.
     """
     # Use filters to only read the rows we need - much faster than reading all data
-    river_network: pd.DataFrame = (
+    river_network = (
         data_catalog.fetch("merit_basins_rivers")
         .read(columns=["COMID", "uparea"], filters=[("COMID", "in", subbasin_ids)])
         .set_index("COMID")
     )
+    assert isinstance(river_network, pd.DataFrame)
 
     # Convert to dict for faster lookup and handle missing values
     upstream_areas = river_network["uparea"].to_dict()
@@ -715,7 +720,7 @@ def cluster_subbasins_by_area_and_proximity(
 def save_clusters_to_geoparquet(
     clusters: list[list[int]],
     data_catalog: NewDataCatalog,
-    output_path: str | Path,
+    output_path: Path,
     cluster_prefix: str = "cluster",
 ) -> None:
     """Save clusters to a geoparquet file with cluster IDs.
@@ -950,13 +955,7 @@ def create_multi_basin_configs(
     print("Creating build.yml in large_scale directory...")
     build_config_path = working_directory / "build.yml"
     # Read build config from geul example and automatically copy it
-    geul_build_path = (
-        Path(os.environ.get("GEB_PACKAGE_DIR"))
-        / ".."
-        / "examples"
-        / "geul"
-        / "build.yml"
-    )
+    geul_build_path = GEB_PACKAGE_DIR / "examples" / "geul" / "build.yml"
 
     print(f"Reading build configuration from: {geul_build_path}")
 
@@ -1030,7 +1029,7 @@ def save_clusters_as_merged_geometries(
     clusters: list[list[int]],
     data_catalog: NewDataCatalog,
     river_graph: networkx.DiGraph,
-    output_path: str | Path,
+    output_path: Path,
     cluster_prefix: str = "cluster",
     include_upstream: bool = True,
 ) -> None:
@@ -1501,7 +1500,7 @@ class GEBModel(
     def __init__(
         self,
         logger: logging.Logger,
-        root: str | None = None,
+        root: Path,
         data_catalog: str | None = None,
         epsg: int = 4326,
         data_provider: str = "default",
@@ -1599,6 +1598,7 @@ class GEBModel(
             ]
         elif "geom" in region:
             regions = self.new_data_catalog.fetch(region["geom"]["source"]).read()
+            assert isinstance(regions, gpd.GeoDataFrame)
             regions = regions[
                 regions[region["geom"]["column"]] == region["geom"]["key"]
             ]
@@ -1625,13 +1625,14 @@ class GEBModel(
         xmax += buffer
         ymax += buffer
 
-        ldd: xr.DataArray = self.new_data_catalog.fetch(
+        ldd = self.new_data_catalog.fetch(
             "merit_hydro_dir",
             xmin=xmin,
             xmax=xmax,
             ymin=ymin,
             ymax=ymax,
         ).read()
+        assert isinstance(ldd, xr.DataArray), "Expected ldd to be an xarray DataArray."
 
         ldd_network = pyflwdir.from_array(
             ldd.values,
@@ -1683,13 +1684,16 @@ class GEBModel(
             ldd.attrs["_FillValue"],
         )
 
-        ldd_elevation: xr.DataArray = self.new_data_catalog.fetch(
+        ldd_elevation = self.new_data_catalog.fetch(
             "merit_hydro_elv",
             xmin=xmin,
             xmax=xmax,
             ymin=ymin,
             ymax=ymax,
         ).read()
+        assert isinstance(ldd_elevation, xr.DataArray), (
+            "Expected ldd_elevation to be an xarray DataArray."
+        )
 
         assert ldd_elevation.shape == ldd.shape == mask.shape
 
@@ -1748,7 +1752,7 @@ class GEBModel(
         STUDY_AREA_OUTFLOW: int = 1
         NEARBY_OUTFLOW: int = 2
 
-        rivers: gpd.GeoDataFrame = (
+        rivers = (
             self.new_data_catalog.fetch(
                 "merit_basins_rivers",
             )
@@ -1757,6 +1761,9 @@ class GEBModel(
                 bbox=ldd.rio.bounds(),
             )
             .set_index("COMID")
+        )
+        assert isinstance(rivers, gpd.GeoDataFrame), (
+            "Expected rivers to be a GeoDataFrame."
         )
 
         rivers["outflow_type"] = rivers.apply(
@@ -2089,6 +2096,7 @@ class GEBModel(
         and ensures that the time dimension is consistent.
         """
         water_levels = self.data_catalog.get_dataset("GTSM")
+        assert isinstance(water_levels, xr.DataArray)
         assert (
             water_levels.time.diff("time").astype(np.int64)
             == (water_levels.time[1] - water_levels.time[0]).astype(np.int64)
@@ -2116,7 +2124,6 @@ class GEBModel(
             water_levels,
             name="waterlevels",
             time_chunksize=24 * 6,  # 10 minute data
-            byteshuffle=True,
         )
 
     @build_method
@@ -2201,7 +2208,7 @@ class GEBModel(
 
         self.table[name] = fp_with_root
 
-    def set_array(self, data: npt.NDArray[Any], name: str, write: bool = True) -> None:
+    def set_array(self, data: np.ndarray, name: str, write: bool = True) -> None:
         """Set an array and save it to disk.
 
         Args:
@@ -2459,7 +2466,6 @@ class GEBModel(
                 y_chunksize=y_chunksize,
                 time_chunksize=time_chunksize,
                 crs=da.rio.crs,
-                *args,
                 **kwargs,
             )
             self.other[name] = fp_with_root
@@ -2697,9 +2703,8 @@ class GEBModel(
         self,
         data: xr.DataArray,
         fill_value: int | float | bool,
-        nodata: int | float | bool,
+        nodata: int | float | bool | None,
         attrs: dict | None = None,
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Create a DataArray full of a specified value, with the same shape and coordinates as another DataArray.
@@ -2720,7 +2725,6 @@ class GEBModel(
             fill_value=fill_value,
             nodata=nodata,
             attrs=attrs,
-            *args,
             **kwargs,
         )
 
@@ -2870,7 +2874,7 @@ class GEBModel(
                 '"setup_region" can only be called when starting a new model.'
             )
 
-        self.run_methods(methods, validate_order=False and type(self) is GEBModel)
+        self.run_methods(methods, validate_order=False, record_progress=False)
 
     def get_linear_indices(self, da: xr.DataArray) -> xr.DataArray:
         """Get linear indices for each cell in a 2D DataArray.

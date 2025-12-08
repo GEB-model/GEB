@@ -1158,8 +1158,12 @@ class Households(AgentBaseClass):
 
             Args:
                 postcode: The postcode to evaluate.
+
             Returns:
                 A string indicating the trigger type.
+
+            Raises:
+                ValueError: If the postcode is not found in either affected postcodes list.
             """
             e = postcode in affected_postcodes_energy
             f = postcode in affected_postcodes_facilities
@@ -1169,6 +1173,10 @@ class Households(AgentBaseClass):
                 return "energy"
             elif f:
                 return "facilities"
+            else:
+                raise ValueError(
+                    f"Postcode {postcode} not found in either affected postcodes list."
+                )
 
         # Combine affected_postcodes from both strategies and remove duplicates
         affected_postcodes = np.unique(

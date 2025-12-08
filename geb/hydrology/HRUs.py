@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,32 +13,30 @@ import numpy.typing as npt
 import xarray as xr
 from affine import Affine
 from numba import njit
-from numpy.typing import DTypeLike
 from scipy.spatial import KDTree
-from xarray.core.types import T_Array
 
 from geb.types import (
+    AnyDArrayWithScalar,
     Array,
     ArrayFloat32,
     ArrayInt32,
-    T_Array,
-    T_ThreeDArray,
-    T_TwoDArray,
+    ArrayWithScalar,
+    T_ArrayNumber,
+    T_OneorTwoDArray,
     ThreeDArray,
     ThreeDArrayFloat32,
+    ThreeDArrayWithScalar,
     TwoDArray,
     TwoDArrayBool,
     TwoDArrayFloat32,
     TwoDArrayInt32,
+    TwoDArrayWithScalar,
 )
 from geb.workflows.io import read_grid, read_zarr
 from geb.workflows.raster import compress, decompress_with_mask
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
-
-DType = TypeVar("DType", bound=DTypeLike)
-T_OneorTwoDArray = TypeVar("T_OneorTwoDArray", bound=Array | TwoDArray)
 
 
 def determine_nearest_river_cell(
@@ -101,16 +99,13 @@ def load_water_demand_xr(filepath: str | Path) -> xr.Dataset:
     )
 
 
-T_ArrayFloat32 = TypeVar("T_ArrayFloat32", bound=ArrayFloat32)
-
-
 @njit(cache=True)
 def to_grid(
-    data: T_ArrayFloat32,
+    data: T_ArrayNumber,
     grid_to_HRU: ArrayInt32,
     land_use_ratio: ArrayFloat32,
     fn: str = "weightedmean",
-) -> T_ArrayFloat32:
+) -> T_ArrayNumber:
     """Numba helper function to convert from HRU to grid.
 
     Args:
@@ -167,12 +162,12 @@ def to_grid(
 
 @njit(cache=True)
 def to_HRU(
-    data: npt.NDArray[np.generic],
-    grid_to_HRU: npt.NDArray[np.int32],
-    land_use_ratio: npt.NDArray[np.float32],
-    output_data: npt.NDArray[np.generic],
+    data: T_ArrayNumber,
+    grid_to_HRU: ArrayInt32,
+    land_use_ratio: ArrayFloat32,
+    output_data: T_ArrayNumber,
     fn: str | None = None,
-) -> npt.NDArray[np.generic]:
+) -> T_ArrayNumber:
     """Numba helper function to convert from grid to HRU.
 
     Args:
@@ -314,12 +309,15 @@ class Grid(BaseVariables):
         return np.full(self.compressed_size, *args, **kwargs)
 
     @overload
-    def compress(self, array: T_TwoDArray) -> T_Array: ...
+    def compress(self, array: TwoDArrayWithScalar) -> ArrayWithScalar: ...
 
     @overload
-    def compress(self, array: T_ThreeDArray) -> T_TwoDArray: ...
+    def compress(self, array: ThreeDArrayWithScalar) -> TwoDArrayWithScalar: ...
 
-    def compress(self, array: T_TwoDArray | T_ThreeDArray) -> T_TwoDArray | T_Array:
+    def compress(
+        self,
+        array: TwoDArrayWithScalar | ThreeDArrayWithScalar,
+    ) -> ArrayWithScalar | TwoDArrayWithScalar:
         """Compress array.
 
         Args:
@@ -367,26 +365,28 @@ class Grid(BaseVariables):
         self.plot(self.decompress(array, fillvalue=fillvalue))
 
     @overload
-    def load(self, filepath: Path, compress: bool = True, layer: int = 1) -> Array: ...
+    def load(
+        self, filepath: Path, compress: Literal[True] = True, layer: int = 1
+    ) -> Array: ...
 
     @overload
     def load(
-        self, filepath: Path, compress: bool = True, layer: None = None
+        self, filepath: Path, compress: Literal[True] = True, layer: None = None
     ) -> TwoDArray: ...
 
     @overload
     def load(
-        self, filepath: Path, compress: bool = False, layer: int = 1
+        self, filepath: Path, compress: Literal[False] = False, layer: int = 1
     ) -> TwoDArray: ...
 
     @overload
     def load(
-        self, filepath: Path, compress: bool = False, layer: None = None
+        self, filepath: Path, compress: Literal[False] = False, layer: None = None
     ) -> ThreeDArray: ...
 
     def load(
         self, filepath: Path, compress: bool = True, layer: int | None = 1
-    ) -> TwoDArray | ThreeDArray:
+    ) -> Array | TwoDArray | ThreeDArray:
         """Load array from disk.
 
         Args:
@@ -891,8 +891,8 @@ class HRUs(BaseVariables):
         return outarray
 
     def convert_subgrid_to_HRU(
-        self, array: npt.NDArray[np.generic], method: str = "last"
-    ) -> npt.NDArray[np.generic]:
+        self, array: AnyDArrayWithScalar, method: str = "last"
+    ) -> AnyDArrayWithScalar:
         """Convert subgrid array to HRU array.
 
         Because HRUs describe multiple subgrid cells, the data within
@@ -1157,8 +1157,8 @@ class Data:
         return outdata
 
     def split_HRU_data(
-        self, array: npt.NDArray[np.generic], i: int, ratio: float | None = None
-    ) -> npt.NDArray[np.generic]:
+        self, array: AnyDArrayWithScalar, i: int, ratio: float | None = None
+    ) -> AnyDArrayWithScalar:
         """Function to split HRU data.
 
         Args:

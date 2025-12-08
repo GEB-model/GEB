@@ -21,7 +21,7 @@ import geopandas as gpd
 import yaml
 from shapely.geometry import box
 
-from geb import __version__
+from geb import GEB_PACKAGE_DIR, __version__
 from geb.build import GEBModel as GEBModelBuild
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
@@ -36,16 +36,13 @@ WORKING_DIRECTORY_DEFAULT: Path = Path(".")
 CONFIG_DEFAULT: Path = Path("model.yml")
 UPDATE_DEFAULT: Path = Path("update.yml")
 BUILD_DEFAULT: Path = Path("build.yml")
-GEB_PACKAGE_DIR_str: str | None = os.environ.get("GEB_PACKAGE_DIR", default=None)
-if not GEB_PACKAGE_DIR_str:
-    raise EnvironmentError("GEB_PACKAGE_DIR environment variable is not set.")
-GEB_PACKAGE_DIR: Path = Path(GEB_PACKAGE_DIR_str)
+
 DATA_CATALOG_DEFAULT: Path = GEB_PACKAGE_DIR / "data_catalog.yml"
 DATA_PROVIDER_DEFAULT: str = os.environ.get("GEB_DATA_PROVIDER", "default")
 DATA_ROOT_DEFAULT: Path = Path(
     os.environ.get(
         "GEB_DATA_ROOT",
-        GEB_PACKAGE_DIR / ".." / ".." / "data_catalog",
+        GEB_PACKAGE_DIR.parent.parent / "data_catalog",
     )
 )
 ALTER_FROM_MODEL_DEFAULT: Path = Path("../base")
@@ -643,7 +640,7 @@ def init_fn(
                 f"Update config file {update_config} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
-        example_folder: Path = GEB_PACKAGE_DIR / ".." / "examples" / from_example
+        example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
         if not example_folder.exists():
             raise FileNotFoundError(
                 f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
@@ -1495,7 +1492,7 @@ def init_multiple_fn(
     area_tolerance: float,
     cluster_prefix: str,
     overwrite: bool,
-    save_geoparquet: str | Path | None,
+    save_geoparquet: Path | None,
     save_map: str | Path | None,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
@@ -1605,7 +1602,7 @@ def init_multiple_fn(
                 )
 
     # Verify example folder exists
-    example_folder: Path = GEB_PACKAGE_DIR / ".." / "examples" / from_example
+    example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
     if not example_folder.exists():
         raise FileNotFoundError(
             f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
@@ -1738,7 +1735,7 @@ def init_multiple(
     area_tolerance: float,
     cluster_prefix: str,
     overwrite: bool,
-    save_geoparquet: str | None,
+    save_geoparquet: Path | None,
     save_map: str | None,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.

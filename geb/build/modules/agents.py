@@ -117,8 +117,15 @@ class Agents:
                 # Load the municipal water demand data for the given ISO3 code
                 if ISO3 not in municipal_water_demand.index:
                     countries_with_data = municipal_water_demand.index.unique().tolist()
-                    donor_countries = setup_donor_countries(self, countries_with_data)
-                    ISO3 = donor_countries.get(ISO3, None)
+                    donor_countries = setup_donor_countries(
+                        self.data_catalog,
+                        self.geom["global_countries"],
+                        countries_with_data,
+                        alternative_countries=self.geom["regions"]["ISO3"]
+                        .unique()
+                        .tolist(),
+                    )
+                    ISO3 = donor_countries[ISO3]
 
                     self.logger.warning(
                         f"Country {region['ISO3']} not present in municipal water demand data, using donor country {ISO3}"
@@ -157,9 +164,14 @@ class Agents:
                 )
 
                 donor_countries = setup_donor_countries(
-                    self, countries_with_water_withdrawal_data
+                    self.data_catalog,
+                    self.geom["global_countries"],
+                    countries_with_water_withdrawal_data,
+                    alternative_countries=self.geom["regions"]["ISO3"]
+                    .unique()
+                    .tolist(),
                 )
-                donor_country = donor_countries.get(ISO3, None)
+                donor_country = donor_countries[ISO3]
                 self.logger.info(
                     f"Missing municipal water withdrawal data for {ISO3}, filling with donor country {donor_country}"
                 )
@@ -199,8 +211,15 @@ class Agents:
                 )
 
                 # fill the municipal water withdrawal data for missing years from donor countries
-                donor_countries = setup_donor_countries(self, countries_with_data)
-                donor_country = donor_countries.get(ISO3, None)
+                donor_countries = setup_donor_countries(
+                    self.data_catalog,
+                    self.geom["global_countries"],
+                    countries_with_data,
+                    alternative_countries=self.geom["regions"]["ISO3"]
+                    .unique()
+                    .tolist(),
+                )
+                donor_country = donor_countries[ISO3]
                 self.logger.info(
                     f"Missing municipal water withdrawal data for {ISO3}, using donor country {donor_country}"
                 )
@@ -382,7 +401,12 @@ class Agents:
             geom=self.region.union_all(),
         )
         # setup donor countries for country missing in oecd data
-        donor_countries = setup_donor_countries(self, oecd_idd["REF_AREA"])
+        donor_countries = setup_donor_countries(
+            self.data_catalog,
+            self.geom["global_countries"],
+            oecd_idd["REF_AREA"],
+            alternative_countries=self.geom["regions"]["ISO3"].unique().tolist(),
+        )
 
         for country in countries["GID_0"]:
             income_distribution_parameters[country] = {}
@@ -471,7 +495,7 @@ class Agents:
             filtered_df = df[columns_to_keep]
             return filtered_df
 
-        def extract_years(df: pd.DataFrame) -> list[int]:
+        def extract_years(df: pd.DataFrame) -> list[str]:
             """Extracts year columns from a DataFrame.
 
             Args:
@@ -565,8 +589,15 @@ class Agents:
                 )
 
                 ## get all the donor countries for countries in the dataset
-                donor_countries = setup_donor_countries(self, countries_with_data)
-                donor_country = donor_countries.get(ISO3, None)
+                donor_countries = setup_donor_countries(
+                    self.data_catalog,
+                    self.geom["global_countries"],
+                    countries_with_data,
+                    alternative_countries=self.geom["regions"]["ISO3"]
+                    .unique()
+                    .tolist(),
+                )
+                donor_country = donor_countries[ISO3]
 
                 self.logger.info(
                     f"Missing inflation rates for {ISO3}, using donor country {donor_country}"
@@ -605,7 +636,12 @@ class Agents:
                     .tolist()
                 )
                 donor_countries = setup_donor_countries(
-                    self, countries_with_price_ratio_data
+                    self.data_catalog,
+                    self.geom["global_countries"],
+                    countries_with_price_ratio_data,
+                    alternative_countries=self.geom["regions"]["ISO3"]
+                    .unique()
+                    .tolist(),
                 )
                 donor_country = donor_countries.get(ISO3, None)
                 price_ratio_dict["data"][region_id] = retrieve_inflation_rates(
@@ -631,8 +667,15 @@ class Agents:
                     .index.unique()
                     .tolist()
                 )
-                donor_countries = setup_donor_countries(self, countries_with_lcu_data)
-                donor_country = donor_countries.get(ISO3, None)
+                donor_countries = setup_donor_countries(
+                    self.data_catalog,
+                    self.geom["global_countries"],
+                    countries_with_lcu_data,
+                    alternative_countries=self.geom["regions"]["ISO3"]
+                    .unique()
+                    .tolist(),
+                )
+                donor_country = donor_countries[ISO3]
                 lcu_dict["data"][region_id] = retrieve_inflation_rates(
                     lcu_filtered,
                     years_lcu,
@@ -828,7 +871,7 @@ class Agents:
             for _, region in self.geom["regions"].iterrows():
                 region_id = str(region["region_id"])
 
-                prices = pd.Series(index=range(start_year, end_year + 1))
+                prices: pd.Series = pd.Series(index=range(start_year, end_year + 1))
                 price_ratio_region_year = price_ratio["data"][region_id][
                     price_ratio["time"].index(str(reference_year))
                 ]
@@ -877,7 +920,14 @@ class Agents:
             # implement donors
             if country not in electricity_rates:
                 countries_with_data = list(electricity_rates.keys())
-                donor_countries = setup_donor_countries(self, countries_with_data)
+                donor_countries = setup_donor_countries(
+                    self.data_catalog,
+                    self.geom["global_countries"],
+                    countries_with_data,
+                    alternative_countries=self.geom["regions"]["ISO3"]
+                    .unique()
+                    .tolist(),
+                )
                 donor_country = donor_countries.get(country, None)
                 self.logger.info(
                     f"Missing electricity rates for {region['ISO3']}, using donor country {donor_country}"
@@ -1148,7 +1198,12 @@ class Agents:
             ).read()
 
             farm_countries_list = list(farm_sizes_per_region["ISO3"].unique())
-            farm_size_donor_country = setup_donor_countries(self, farm_countries_list)
+            farm_size_donor_country = setup_donor_countries(
+                self.data_catalog,
+                self.geom["global_countries"],
+                farm_countries_list,
+                alternative_countries=self.geom["regions"]["ISO3"].unique().tolist(),
+            )
         else:
             # load data source
             farm_sizes_per_region = pd.read_excel(
@@ -1172,7 +1227,7 @@ class Agents:
                 )
 
                 if ISO3 in farm_size_donor_country.keys():
-                    ISO3 = farm_size_donor_country.get(ISO3)
+                    ISO3 = farm_size_donor_country[ISO3]
                     self.logger.info(
                         f"Missing farm sizes for {region[country_iso3_column]}, using donor country {ISO3}"
                     )
@@ -2326,7 +2381,8 @@ class Agents:
                     preferences_global["ISO3"].unique().tolist()
                 )
                 donor_countries = setup_donor_countries(
-                    self,
+                    self.data_catalog,
+                    self.geom["global_countries"],
                     countries_with_preferences_data,
                     ISO3_codes_GLOBIOM_region.to_list(),
                 )

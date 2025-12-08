@@ -3,7 +3,6 @@
 import copy
 import datetime
 import logging
-import os
 from pathlib import Path
 from time import time
 from types import TracebackType
@@ -15,6 +14,7 @@ import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 
+from geb import GEB_PACKAGE_DIR
 from geb.agents import Agents
 from geb.hazards.driver import HazardDriver
 from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
@@ -160,6 +160,11 @@ class GEBModel(Module, HazardDriver):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
+        original_is_activated: bool = (
+            self.reporter.is_activated
+        )  # store original reporter state
+        self.reporter.is_activated = False  # disable reporting during multiverse runs
+
         if return_mean_discharge:
             mean_discharge: dict[
                 Any, float
@@ -252,6 +257,10 @@ class GEBModel(Module, HazardDriver):
             timestep=store_timestep,
             n_timesteps=store_n_timesteps,
         )  # restore the initial state of the multiverse
+
+        self.reporter.is_activated = (
+            original_is_activated  # restore original reporter state
+        )
 
         # after all forecast members have been processed, restore the original forcing data
         for loader in self.forcing.loaders.values():
@@ -778,7 +787,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             Path to the folder containing GEB binaries.
         """
-        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
+        return GEB_PACKAGE_DIR / "bin"
 
     @property
     def diagnostics_folder(self) -> Path:
