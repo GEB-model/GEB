@@ -14,6 +14,7 @@
 - Export discharge at outflow points by default (new setting in report: _outflow_points: true/false)
 - Add some tests for reporting
 - Remove support for Blosc encoding because of random async issues. Requires re-run of `setup_forcing` and `setup_spei`
+- Move examples to geb dir, so that they are included in the wheel
 
 To support this version:
 
