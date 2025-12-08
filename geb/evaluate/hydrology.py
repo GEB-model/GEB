@@ -1551,9 +1551,7 @@ class Hydrology:
             catchment_extent = [xmin, xmax, ymin, ymax]
 
             xmin, ymin, xmax, ymax = observation_final.rio.bounds()
-            flood_extent: tuple[float, float, float, float] = tuple(
-                [xmin, xmax, ymin, ymax]
-            )
+            flood_extent: tuple[float, float, float, float] = (xmin, xmax, ymin, ymax)
 
             # Step 6: Calculate performance metrics
             # Compute the arrays first to get concrete values
