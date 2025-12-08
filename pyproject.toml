@@ -4,6 +4,7 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = ""
+source-include = ["examples/**"]
 
 [project]
 name = "geb"
