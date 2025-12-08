@@ -46,4 +46,4 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         cd test_run
-        uv run --no-sync pytest -s
+        uv run pytest -s
