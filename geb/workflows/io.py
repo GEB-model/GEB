@@ -34,8 +34,7 @@ from pyproj import CRS
 from rasterio.transform import Affine
 from tqdm import tqdm
 from zarr.abc.codec import BytesBytesCodec
-from zarr.codecs import BloscCodec
-from zarr.codecs.blosc import BloscShuffle
+from zarr.codecs.zstd import ZstdCodec
 
 from geb.types import (
     ArrayDatetime64,
@@ -484,7 +483,6 @@ def write_zarr(
     y_chunksize: int = 350,
     time_chunksize: int = 1,
     time_chunks_per_shard: int | None = 30,
-    byteshuffle: bool = True,
     filters: list = [],
     compressor: None | BytesBytesCodec = None,
     progress: bool = True,
@@ -500,7 +498,6 @@ def write_zarr(
         time_chunksize: The chunk size for the time dimension. Default is 1.
         time_chunks_per_shard: The number of time chunks per shard. Default is 30. Set to None
             to disable sharding.
-        byteshuffle: Whether to use byteshuffle compression. Default is True.
         filters: A list of filters to apply. Default is [].
         compressor: The compressor to use. Default is None, using the default Blosc compressor.
         progress: Whether to show a progress bar. Default is True.
@@ -565,10 +562,8 @@ def write_zarr(
                 shards["time"] = time_chunks_per_shard * chunks["time"]
 
         if compressor is None:
-            compressor: BloscCodec = BloscCodec(
-                cname="zstd",
-                clevel=9,
-                shuffle=BloscShuffle.shuffle if byteshuffle else BloscShuffle.noshuffle,
+            compressor: ZstdCodec = ZstdCodec(
+                level=22,
             )
 
         check_buffer_size(da, chunks_or_shards=shards if shards else chunks)

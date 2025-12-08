@@ -399,7 +399,7 @@ def reclassify(
 def full_like(
     data: xr.DataArray,
     fill_value: int | float | bool,
-    nodata: int | float | bool,
+    nodata: int | float | bool | None,
     attrs: None | dict = None,
     name: str | None = None,
     *args: Any,
@@ -421,8 +421,13 @@ def full_like(
     Returns:
         A new DataArray with the same shape and coordinates as the input data,
         filled with the specified fill_value and with the specified nodata value in the attributes.
+
+    Raises:
+        ValueError: If nodata is None and fill_value is not a boolean.
     """
     assert isinstance(data, xr.DataArray)
+    if nodata is None and not isinstance(fill_value, bool):
+        raise ValueError("Nodata value must be set unless fill_value is a boolean. ")
     da: xr.DataArray = xr.full_like(data, fill_value, *args, **kwargs)
     if name is not None:
         da.name = name

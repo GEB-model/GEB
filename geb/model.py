@@ -160,6 +160,11 @@ class GEBModel(Module, HazardDriver):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
+        original_is_activated: bool = (
+            self.reporter.is_activated
+        )  # store original reporter state
+        self.reporter.is_activated = False  # disable reporting during multiverse runs
+
         if return_mean_discharge:
             mean_discharge: dict[
                 Any, float
@@ -252,6 +257,10 @@ class GEBModel(Module, HazardDriver):
             timestep=store_timestep,
             n_timesteps=store_n_timesteps,
         )  # restore the initial state of the multiverse
+
+        self.reporter.is_activated = (
+            original_is_activated  # restore original reporter state
+        )
 
         # after all forecast members have been processed, restore the original forcing data
         for loader in self.forcing.loaders.values():

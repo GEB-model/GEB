@@ -1495,7 +1495,7 @@ def init_multiple_fn(
     area_tolerance: float,
     cluster_prefix: str,
     overwrite: bool,
-    save_geoparquet: str | Path | None,
+    save_geoparquet: Path | None,
     save_map: str | Path | None,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
@@ -1738,7 +1738,7 @@ def init_multiple(
     area_tolerance: float,
     cluster_prefix: str,
     overwrite: bool,
-    save_geoparquet: str | None,
+    save_geoparquet: Path | None,
     save_map: str | None,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.
