@@ -93,6 +93,27 @@ def read_array(fp: Path) -> np.ndarray:
         return zarr_object
     else:
         raise ValueError(f"Unsupported file format: {fp.suffix}")
+    # if fp.suffix == ".npz":
+    #     # Load .npz file assuming data is under key "data"
+    #     return np.load(fp)["data"]
+
+    # elif fp.suffix == ".zarr":
+    #     z = zarr.open(fp, mode="r")
+
+    #     # If it's a group, check if it contains arrays
+    #     if isinstance(z, zarr.Group):
+    #         array_keys = list(z.array_keys())
+    #         if not array_keys:
+    #             # The group is empty, array not created yet
+    #             return None
+    #         # Return the first array inside the group
+    #         return z[array_keys[0]][...]
+    #     else:
+    #         # It's already an array
+    #         return z[...]
+
+    # else:
+    #     raise ValueError(f"Unsupported file format: {fp.suffix}")
 
 
 @overload
