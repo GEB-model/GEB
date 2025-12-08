@@ -9,7 +9,6 @@ import logging
 import os
 from contextlib import contextmanager
 from datetime import date, datetime
-from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
