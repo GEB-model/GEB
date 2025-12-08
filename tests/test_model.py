@@ -39,7 +39,6 @@ DEFAULT_BUILD_ARGS: dict[str, Any] = {}
 DEFAULT_RUN_ARGS: dict[str, Any] = {}
 
 
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
     "clean_working_directory",
     [False, True],
