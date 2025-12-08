@@ -12,3 +12,9 @@
 - Remove annotations from docstrings in farmers.py
 - Do not use self in setup_donor_countries
 - Export discharge at outflow points by default (new setting in report: _outflow_points: true/false)
+- Add some tests for reporting
+- Remove support for Blosc encoding because of random async issues. Requires re-run of `setup_forcing` and `setup_spei`
+
+To support this version:
+
+- Re-run `setup_forcing` and `setup_spei`
