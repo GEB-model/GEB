@@ -640,7 +640,7 @@ def init_fn(
                 f"Update config file {update_config} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
-        example_folder: Path = GEB_PACKAGE_DIR.parent / "examples" / from_example
+        example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
         if not example_folder.exists():
             raise FileNotFoundError(
                 f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
@@ -1602,7 +1602,7 @@ def init_multiple_fn(
                 )
 
     # Verify example folder exists
-    example_folder: Path = GEB_PACKAGE_DIR.parent / "examples" / from_example
+    example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
     if not example_folder.exists():
         raise FileNotFoundError(
             f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"

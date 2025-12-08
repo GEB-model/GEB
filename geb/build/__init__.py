@@ -28,6 +28,7 @@ from hydromt.data_catalog import DataCatalog
 from rasterio.env import defenv
 from shapely.geometry import Point
 
+from geb import GEB_PACKAGE_DIR
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.workflows.io import (
@@ -955,7 +956,7 @@ def create_multi_basin_configs(
     print("Creating build.yml in large_scale directory...")
     build_config_path = working_directory / "build.yml"
     # Read build config from geul example and automatically copy it
-    geul_build_path = files("geb").parent / "examples" / "geul" / "build.yml"
+    geul_build_path = GEB_PACKAGE_DIR / "examples" / "geul" / "build.yml"
 
     print(f"Reading build configuration from: {geul_build_path}")
 
