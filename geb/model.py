@@ -567,7 +567,7 @@ class GEBModel(Module, HazardDriver):
         name = getattr(self.agents, agent_type).name
         self.logger.debug(f"Saving {name}.var")
         bucket = self.store.buckets[f"{name}.var"]
-        bucket.save(path / name)
+        bucket.save(path / f"{name}.var")
 
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
