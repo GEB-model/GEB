@@ -1,10 +1,9 @@
 """GEB simulates the environment, the individual behaviour of people, households and organizations - including their interactions - at small and large scale."""
 
-__version__ = "1.0.0b8"
-
 import faulthandler
 import os
 import platform
+from importlib.metadata import version
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +14,8 @@ from llvmlite import binding
 from numba import config, njit, prange, threading_layer
 
 from geb.workflows.io import fetch_and_save
+
+__version__: str = version("GEB")
 
 # Load environment variables from .env file
 load_dotenv()
