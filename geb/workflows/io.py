@@ -39,6 +39,8 @@ from zarr.codecs.zstd import ZstdCodec
 
 from geb.types import (
     ArrayDatetime64,
+    ArrayFloat32,
+    ArrayFloat64,
     ThreeDArray,
     ThreeDArrayFloat32,
     TwoDArray,
@@ -766,40 +768,7 @@ class AsyncGriddedForcingReader:
 
     This reader uses the Zarr async API for efficient reads, with a workaround
     for occasional Zarr async loading issues.
-
-    All instances of this class share a single event loop running in a background thread.
     """
-
-    # Class-level shared event loop and thread
-    _shared_loop: asyncio.AbstractEventLoop | None = None
-    _shared_thread: threading.Thread | None = None
-    _init_lock = threading.Lock()
-
-    @classmethod
-    def _get_loop(cls) -> asyncio.AbstractEventLoop:
-        """Get or create the shared event loop.
-
-        Returns:
-            The shared event loop.
-        """
-        if cls._shared_loop is None:
-            with cls._init_lock:
-                if cls._shared_loop is None:
-                    cls._shared_loop = asyncio.new_event_loop()
-                    cls._shared_thread = threading.Thread(
-                        target=cls._run_shared_loop,
-                        daemon=True,
-                        name="AsyncZarrLoop",
-                    )
-                    cls._shared_thread.start()
-        return cls._shared_loop
-
-    @classmethod
-    def _run_shared_loop(cls) -> None:
-        """Run the shared event loop in a background thread."""
-        assert cls._shared_loop is not None
-        asyncio.set_event_loop(cls._shared_loop)
-        cls._shared_loop.run_forever()
 
     def __init__(
         self,
@@ -826,15 +795,10 @@ class AsyncGriddedForcingReader:
         self.ds = zarr.open_group(self.store, mode="r")
 
         # Metadata and time index
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="Numcodecs codecs are not in the Zarr version 3 specification",
-            )
-            time_arr = self.ds["time"]
-            assert isinstance(time_arr, zarr.Array)
-            time = time_arr[:]
-            assert isinstance(time, np.ndarray)
+        time_arr = self.ds["time"]
+        assert isinstance(time_arr, zarr.Array)
+        time = time_arr[:]
+        assert isinstance(time, np.ndarray)
 
         assert self.ds["time"].attrs.get("calendar") == "proleptic_gregorian"
 
@@ -882,19 +846,21 @@ class AsyncGriddedForcingReader:
 
         # Async event loop setup
         if self.asynchronous:
-            self.loop: asyncio.AbstractEventLoop | None = self._get_loop()
-            assert self.loop is not None
+            self.loop: asyncio.AbstractEventLoop | None = asyncio.new_event_loop()
+            self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+            self.thread.start()
 
             # Initialize lock in the shared loop
-            async def _init_lock() -> asyncio.Lock:
-                return asyncio.Lock()
+            async def _init_lock() -> tuple[asyncio.Lock, asyncio.Lock]:
+                return asyncio.Lock(), asyncio.Lock()
 
-            self.async_lock = asyncio.run_coroutine_threadsafe(
+            self.async_lock, self.io_lock = asyncio.run_coroutine_threadsafe(
                 _init_lock(), self.loop
             ).result()
         else:
             self.loop = None
             self.async_lock = None
+            self.io_lock = None
 
     def load(self, start_index: int, end_index: int) -> np.ndarray:
         """Safe synchronous load (only used if asynchronous=False).
@@ -902,51 +868,31 @@ class AsyncGriddedForcingReader:
         Returns:
             The requested data slice.
         """
-        array = self.ds[self.variable_name]
-        assert isinstance(array, zarr.Array)
-        data = array[start_index:end_index]
+        assert isinstance(self.array, zarr.Array)
+        data = self.array[start_index:end_index]
         assert isinstance(data, np.ndarray)
         return data
 
     async def load_await(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
         """Load data asynchronously via reusable async group.
 
-        Uses a workaround for Zarr async loading issues: if the first read returns
-        all NaN values (and the array uses NaN as fill value), retry the read.
-
         Returns:
             The requested data slice (not a copy - caller must copy if needed).
-
-        Raises:
-            RuntimeError: If data loading fails after maximum retries.
         """
-        # Select the variable array from the pre-opened async group.
-        arr = await self.async_group.getitem(self.variable_name)
-        max_retries = 100
-        retries = 0
-        while retries < max_retries:
-            data = await arr.get_orthogonal_selection(
+        assert self.io_lock is not None
+        async with self.io_lock:
+            # Select the variable array from the pre-opened async group.
+            arr = self.array.async_array
+            data = await arr.getitem(
                 (slice(start_index, end_index), slice(None), slice(None))
             )
 
-            # Only apply the NaN workaround if the array actually uses NaN as fill value
-            if np.any(np.isnan(data)):
-                retries += 1
-                print(
-                    f"Warning: Async read returned all NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
-                )
-                await asyncio.sleep(delay=0.1)  # brief pause before retrying
-            else:
-                return data
-
-        # If still all NaN after retries, raise an error
-        raise RuntimeError(
-            f"Failed to load data for {self.variable_name} after {max_retries} retries due to all NaN values."
-        )
+            assert isinstance(data, np.ndarray)
+            return data
 
     async def preload_next(
         self, start_index: int, end_index: int, n: int
-    ) -> npt.NDArray[Any] | None:
+    ) -> ThreeDArrayFloat32 | None:
         """Preload next timestep asynchronously.
 
         Returns:
@@ -958,7 +904,7 @@ class AsyncGriddedForcingReader:
 
     async def read_timestep_async(
         self, start_index: int, end_index: int, n: int
-    ) -> npt.NDArray[Any]:
+    ) -> ThreeDArrayFloat32:
         """Core async read with safe preload caching.
 
         This method ensures that only one read operation (including preloading)
@@ -1006,6 +952,10 @@ class AsyncGriddedForcingReader:
             if data is None:
                 if self.preloaded_data_future and not self.preloaded_data_future.done():
                     self.preloaded_data_future.cancel()
+                    try:
+                        await self.preloaded_data_future
+                    except asyncio.CancelledError:
+                        pass
                 data = await self.load_await(start_index, end_index)
 
             # Consistency check
@@ -1021,6 +971,13 @@ class AsyncGriddedForcingReader:
 
             # Schedule next preload
             assert self.loop is not None
+            if self.preloaded_data_future and not self.preloaded_data_future.done():
+                self.preloaded_data_future.cancel()
+                try:
+                    await self.preloaded_data_future
+                except asyncio.CancelledError:
+                    pass
+
             self.preloaded_data_future = self.loop.create_task(
                 self.preload_next(start_index, end_index, n)
             )
@@ -1098,15 +1055,18 @@ class AsyncGriddedForcingReader:
                     await self.preloaded_data_future
                 except asyncio.CancelledError:
                     pass
+            # Stop the loop
+            asyncio.get_event_loop().stop()
 
         if self.loop and self.loop.is_running():
             try:
                 asyncio.run_coroutine_threadsafe(cleanup(), self.loop).result(timeout=5)
             except Exception:
                 pass
+            self.thread.join(timeout=1)
 
     @property
-    def x(self) -> np.ndarray:
+    def x(self) -> ArrayFloat32 | ArrayFloat64:
         """The x-coordinates of the grid."""
         x_array = self.ds["x"]
         assert isinstance(x_array, zarr.Array)
@@ -1115,7 +1075,7 @@ class AsyncGriddedForcingReader:
         return x
 
     @property
-    def y(self) -> npt.NDArray[Any]:
+    def y(self) -> ArrayFloat32 | ArrayFloat64:
         """The y-coordinates of the grid."""
         y_array = self.ds["y"]
         assert isinstance(y_array, zarr.Array)
