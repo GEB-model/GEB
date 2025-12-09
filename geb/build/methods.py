@@ -28,7 +28,7 @@ class _build_method:
         def partial_decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                self.logger.info(f"Running {func.__name__}")
+                self.logger.info(f"Running method: {func.__name__}")
                 for key, value in kwargs.items():
                     self.logger.debug(f"{func.__name__}.{key}: {value}")
                 value: Any = func(*args, **kwargs)

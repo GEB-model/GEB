@@ -1504,7 +1504,7 @@ def init_multiple_fn(
     cluster_prefix: str,
     skip_merged_geometries: bool = False,
     skip_visualization: bool = False,
-    min_bbox_efficiency: float = 0.35,
+    min_bbox_efficiency: float = 0.99,
 ) -> None:
     """Create multiple models from a geometry by clustering downstream subbasins.
 
@@ -1721,9 +1721,9 @@ def init_multiple_fn(
 )
 @click.option(
     "--min-bbox-efficiency",
-    default=0.35,
+    default=0.99,
     type=float,
-    help="Minimum bbox efficiency (0-1) for cluster merging. Lower values allow more elongated clusters (less strict). Default: 0.35 (allows ~2.86:1 aspect ratio). Use 0.25-0.30 for more elongated clusters.",
+    help="Minimum bbox efficiency (0-1) for cluster merging. Higher values create more compact/square clusters. Default: 0.97 (97% land fill ratio, allows only ~3% wasted land). Use 0.85 for slightly less compact (85%), 0.70 for moderate compactness, or 0.60 for more elongated shapes.",
 )
 @working_directory_option
 def init_multiple(

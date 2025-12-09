@@ -586,7 +586,7 @@ def cluster_subbasins_following_coastline(
     logger: logging.Logger,
     river_graph: networkx.DiGraph,
     max_distance_km: float = 100.0,  # Maximum distance in km for cluster growth
-    min_bbox_efficiency: float = 0.35,  # Minimum bounding box efficiency (0-1) for ERA5 download optimization
+    min_bbox_efficiency: float = 0.99,  # Minimum bounding box efficiency (0-1) for ERA5 download optimization
 ) -> list[list[int]]:
     """Cluster outlet basins by adding entire upstream watersheds of nearby outlets.
 
@@ -870,246 +870,55 @@ def cluster_subbasins_following_coastline(
 
     # Post-processing configuration
     MERGE_DISTANCE_KM = 100.0
-    LARGE_INLAND_THRESHOLD_KM2 = 100000.0  # Don't auto-merge very large inland clusters
-    SMALL_CLUSTER_THRESHOLD_KM2 = 0.6 * target_area_km2  # Proportional to target area
+    SMALL_CLUSTER_THRESHOLD_PERCENT = 0.10  # 10% of target area
+
+    # Post-processing configuration
+    MERGE_DISTANCE_KM = 100.0
+    SMALL_CLUSTER_THRESHOLD_PERCENT = 0.10  # 10% of target area
 
     logger.info("\n=== POST-PROCESSING ===")
     logger.info(f"Merge distance: {MERGE_DISTANCE_KM:.0f} km")
-    logger.info(f"Large inland threshold: {LARGE_INLAND_THRESHOLD_KM2:,.0f} km²")
     logger.info(
-        f"Small cluster threshold: {SMALL_CLUSTER_THRESHOLD_KM2:,.0f} km² ({SMALL_CLUSTER_THRESHOLD_KM2 / target_area_km2:.0%} of target)"
+        f"Small cluster threshold: {SMALL_CLUSTER_THRESHOLD_PERCENT:.0%} of target area ({SMALL_CLUSTER_THRESHOLD_PERCENT * target_area_km2:,.0f} km²)"
     )
 
-    # Load river network for coastal/inland classification
-    river_network = (
-        data_catalog.fetch("merit_basins_rivers")
-        .read(columns=["COMID", "NextDownID"], filters=[("COMID", "in", subbasin_ids)])
-        .set_index("COMID")
-    )
-
-    # Post-processing 1: Merge inland clusters with nearby clusters (reordered - do this first)
-    logger.info("\n[1/3] Checking for inland clusters to merge with nearby clusters...")
-
-    # Post-processing 1: Merge inland clusters with nearby clusters (reordered - do this first)
-    logger.info("\n[1/3] Checking for inland clusters to merge with nearby clusters...")
-
-    # Identify which clusters are coastal vs inland
-    coastal_clusters = []
-    inland_clusters = []
-
-    for cluster_idx, cluster in enumerate(clusters):
-        is_coastal = any(
-            river_network.loc[outlet_id, "NextDownID"] == 0
-            for outlet_id in cluster
-            if outlet_id in river_network.index
-        )
-        if is_coastal:
-            coastal_clusters.append(cluster_idx)
-        else:
-            inland_clusters.append(cluster_idx)
-
-    logger.info(
-        f"  Found {len(coastal_clusters)} coastal clusters and {len(inland_clusters)} inland clusters"
-    )
-
-    if inland_clusters:
-        # Calculate cluster areas to check against large inland threshold
-        cluster_areas = {}
-        for cluster_idx, cluster in enumerate(clusters):
-            cluster_area = sum(
-                upstream_areas.get(outlet_id, 0.0) for outlet_id in cluster
-            )
-            cluster_areas[cluster_idx] = cluster_area
-
-        MERGE_DISTANCE_DEGREES = MERGE_DISTANCE_KM / 111.0
-        clusters_to_remove = set()
-
-        for inland_idx in inland_clusters:
-            inland_cluster = clusters[inland_idx]
-            inland_area = cluster_areas[inland_idx]
-
-            # Check if inland cluster is too large to merge
-            if inland_area > LARGE_INLAND_THRESHOLD_KM2:
-                logger.info(
-                    f"    Keeping large inland cluster {inland_idx} separate "
-                    f"(area: {inland_area:,.0f} km² > {LARGE_INLAND_THRESHOLD_KM2:,.0f} km² threshold)"
-                )
-                continue
-
-            # Get coordinates of inland cluster outlets
-            inland_indices = np.array([subbasin_to_idx[oid] for oid in inland_cluster])
-            inland_coords = coords_array[inland_indices]
-
-            # Find nearest cluster (excluding itself and already-removed clusters)
-            min_distance = float("inf")
-            nearest_cluster_idx = None
-
-            for other_idx, other_cluster in enumerate(clusters):
-                if other_idx == inland_idx or other_idx in clusters_to_remove:
-                    continue
-
-                other_indices = np.array(
-                    [subbasin_to_idx[oid] for oid in other_cluster]
-                )
-                other_coords = coords_array[other_indices]
-
-                # Calculate minimum distance
-                diffs = inland_coords[:, np.newaxis, :] - other_coords[np.newaxis, :, :]
-                distances = np.sqrt(np.sum(diffs**2, axis=2))
-                min_dist = float(distances.min())
-
-                if min_dist < min_distance:
-                    min_distance = min_dist
-                    nearest_cluster_idx = other_idx
-
-            # If within merge distance, check if merge would create inefficient cluster
-            if (
-                min_distance <= MERGE_DISTANCE_DEGREES
-                and nearest_cluster_idx is not None
-            ):
-                # Check if merging would exceed target area limit (allow 20% overage for flexibility)
-                target_area = cluster_areas[nearest_cluster_idx]
-                merged_area = target_area + inland_area
-                max_allowed_area = target_area_km2 * 1.2  # 20% overage allowed
-
-                # Calculate relative increase in cluster area
-                relative_increase = (
-                    inland_area / target_area if target_area > 0 else float("inf")
-                )
-
-                # If relative increase is <5%, always merge (marginal impact)
-                if relative_increase < 0.05:
-                    is_nearest_coastal = nearest_cluster_idx in coastal_clusters
-                    cluster_type = "coastal" if is_nearest_coastal else "inland"
-
-                    logger.info(
-                        f"    Merging inland cluster {inland_idx} (area: {inland_area:,.0f} km²) into {cluster_type} cluster {nearest_cluster_idx} "
-                        f"(distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km², relative increase: {relative_increase:.1%} < 5% threshold)"
-                    )
-
-                    clusters[nearest_cluster_idx].extend(inland_cluster)
-                    cluster_areas[nearest_cluster_idx] = merged_area
-                    clusters_to_remove.add(inland_idx)
-                    continue
-
-                # Otherwise, check if merging would reduce bounding box efficiency too much
-                target_cluster = clusters[nearest_cluster_idx]
-                merged_outlets = inland_cluster + target_cluster
-                merged_efficiency = calculate_bbox_efficiency(
-                    merged_outlets,
-                    subbasin_to_idx,
-                    coords_array,
-                    upstream_areas,
-                    river_graph,
-                    all_subbasin_coords,
-                    all_subbasin_areas,
-                )
-
-                # Check both area and bbox efficiency limits
-                if merged_area > max_allowed_area:
-                    logger.info(
-                        f"    Cannot merge inland cluster {inland_idx} (area: {inland_area:,.0f} km²) into cluster {nearest_cluster_idx} "
-                        f"(merged area {merged_area:,.0f} km² would exceed limit: {max_allowed_area:,.0f} km²)"
-                    )
-                elif merged_efficiency < min_bbox_efficiency:
-                    logger.info(
-                        f"    Cannot merge inland cluster {inland_idx} into cluster {nearest_cluster_idx} "
-                        f"(merged bbox efficiency {merged_efficiency:.1%} would be below limit: {min_bbox_efficiency:.1%})"
-                    )
-                else:
-                    is_nearest_coastal = nearest_cluster_idx in coastal_clusters
-                    cluster_type = "coastal" if is_nearest_coastal else "inland"
-
-                    logger.info(
-                        f"    Merging inland cluster {inland_idx} (area: {inland_area:,.0f} km²) into {cluster_type} cluster {nearest_cluster_idx} "
-                        f"(distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km², efficiency: {merged_efficiency:.1%})"
-                    )
-
-                    clusters[nearest_cluster_idx].extend(inland_cluster)
-                    cluster_areas[nearest_cluster_idx] = (
-                        merged_area  # Update area tracking
-                    )
-                    clusters_to_remove.add(inland_idx)
-            else:
-                logger.info(
-                    f"    Keeping inland cluster {inland_idx} separate "
-                    f"(area: {inland_area:,.0f} km², nearest cluster {min_distance * 111.0:.1f} km away, > {MERGE_DISTANCE_KM:.0f} km limit)"
-                )
-
-        # Remove merged inland clusters
-        if clusters_to_remove:
-            logger.info(
-                f"  Removing {len(clusters_to_remove)} merged inland clusters..."
-            )
-            clusters = [
-                cluster
-                for idx, cluster in enumerate(clusters)
-                if idx not in clusters_to_remove
-            ]
-            logger.info(f"  Cluster count after inland merging: {len(clusters)}")
-    else:
-        logger.info("  No inland clusters found")
-
-    # Post-processing 2: Merge small coastal clusters (reordered - do this second)
-    logger.info(
-        "\n[2/3] Checking for small coastal clusters to merge with nearby clusters..."
-    )
-
-    # Post-processing 2: Merge small coastal clusters (reordered - do this second)
-    logger.info(
-        "\n[2/3] Checking for small coastal clusters to merge with nearby clusters..."
-    )
-
-    # Recalculate coastal/inland classification (cluster indices changed after inland merging)
-    coastal_clusters_fresh = []
-    inland_clusters_fresh = []
-
-    for cluster_idx, cluster in enumerate(clusters):
-        is_coastal = any(
-            river_network.loc[outlet_id, "NextDownID"] == 0
-            for outlet_id in cluster
-            if outlet_id in river_network.index
-        )
-        if is_coastal:
-            coastal_clusters_fresh.append(cluster_idx)
-        else:
-            inland_clusters_fresh.append(cluster_idx)
-
-    logger.info(
-        f"  After inland merging: {len(coastal_clusters_fresh)} coastal, {len(inland_clusters_fresh)} inland clusters"
-    )
+    # Post-processing 1: Merge any clusters <10% of target area with nearest neighbor
+    logger.info("\n[1/2] Merging small clusters (<10% of target area)...")
 
     # Calculate cluster areas
     cluster_areas = {}
-    small_coastal_clusters = []
+    small_clusters = []  # Clusters < 10% of target area
+    SMALL_CLUSTER_THRESHOLD_KM2 = SMALL_CLUSTER_THRESHOLD_PERCENT * target_area_km2
 
     for cluster_idx, cluster in enumerate(clusters):
         cluster_area = sum(upstream_areas.get(outlet_id, 0.0) for outlet_id in cluster)
         cluster_areas[cluster_idx] = cluster_area
 
-        if (
-            cluster_idx in coastal_clusters_fresh
-            and cluster_area < SMALL_CLUSTER_THRESHOLD_KM2
-        ):
-            small_coastal_clusters.append(cluster_idx)
+        if cluster_area < SMALL_CLUSTER_THRESHOLD_KM2:
+            small_clusters.append(cluster_idx)
 
     logger.info(
-        f"  Found {len(small_coastal_clusters)} small coastal clusters (<{SMALL_CLUSTER_THRESHOLD_KM2:,.0f} km²)"
+        f"  Found {len(small_clusters)} small clusters (<{SMALL_CLUSTER_THRESHOLD_KM2:,.0f} km²)"
     )
 
-    if small_coastal_clusters:
+    if small_clusters:
         MERGE_DISTANCE_DEGREES = MERGE_DISTANCE_KM / 111.0
         clusters_to_remove = set()
 
-        for small_idx in small_coastal_clusters:
+        for small_idx in small_clusters:
+            # Skip if this cluster was already merged into another cluster
+            if small_idx in clusters_to_remove:
+                continue
+
             small_cluster = clusters[small_idx]
             small_area = cluster_areas[small_idx]
 
-            # Get coordinates
+            # Get coordinates of small cluster outlets
             small_indices = np.array([subbasin_to_idx[oid] for oid in small_cluster])
             small_coords = coords_array[small_indices]
 
-            # Find nearest cluster
+            # Find nearest cluster using minimum distance between ANY subbasins (not centroids!)
+            # This ensures we find truly adjacent clusters even if centroids are far apart
             min_distance = float("inf")
             nearest_cluster_idx = None
 
@@ -1122,99 +931,54 @@ def cluster_subbasins_following_coastline(
                 )
                 other_coords = coords_array[other_indices]
 
+                # Calculate minimum distance between ANY outlet in small cluster and ANY outlet in target cluster
+                # Broadcasting: (n_small, 1, 2) - (1, n_other, 2) = (n_small, n_other, 2)
                 diffs = small_coords[:, np.newaxis, :] - other_coords[np.newaxis, :, :]
                 distances = np.sqrt(np.sum(diffs**2, axis=2))
-                min_dist = float(distances.min())
+                min_dist = float(distances.min())  # Closest subbasin pair distance
 
                 if min_dist < min_distance:
                     min_distance = min_dist
                     nearest_cluster_idx = other_idx
 
-            # Merge if within distance and won't create too large cluster
-            if (
-                min_distance <= MERGE_DISTANCE_DEGREES
-                and nearest_cluster_idx is not None
-            ):
-                # Check if merging would exceed target area limit (allow 20% overage for flexibility)
+            # Simple rule: if cluster is <10% of target, ALWAYS merge with nearest neighbor
+            # No checks - small clusters must be merged to avoid inefficient tiny runs
+            if nearest_cluster_idx is not None:
+                # CRITICAL: Use CURRENT area of target cluster (may have been updated by previous merges)
                 target_area = cluster_areas[nearest_cluster_idx]
                 merged_area = target_area + small_area
-                max_allowed_area = target_area_km2 * 1.2  # 20% overage allowed
 
-                # Calculate relative increase in cluster area
-                relative_increase = (
-                    small_area / target_area if target_area > 0 else float("inf")
-                )
-
-                # If relative increase is <5%, always merge (marginal impact)
-                if relative_increase < 0.05:
-                    logger.info(
-                        f"    Merging small coastal cluster {small_idx} (area: {small_area:,.0f} km²) "
-                        f"into cluster {nearest_cluster_idx} (distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km², relative increase: {relative_increase:.1%} < 5% threshold)"
-                    )
-                    clusters[nearest_cluster_idx].extend(small_cluster)
-                    cluster_areas[nearest_cluster_idx] = merged_area
-                    clusters_to_remove.add(small_idx)
-                    continue
-
-                # Otherwise, check if merging would reduce bounding box efficiency too much
-                target_cluster = clusters[nearest_cluster_idx]
-                merged_outlets = small_cluster + target_cluster
-                merged_efficiency = calculate_bbox_efficiency(
-                    merged_outlets,
-                    subbasin_to_idx,
-                    coords_array,
-                    upstream_areas,
-                    river_graph,
-                    all_subbasin_coords,
-                    all_subbasin_areas,
-                )
-
-                # Check both area and bbox efficiency limits
-                if merged_area > max_allowed_area:
-                    logger.info(
-                        f"    Cannot merge small coastal cluster {small_idx} (area: {small_area:,.0f} km²) into cluster {nearest_cluster_idx} "
-                        f"(merged area {merged_area:,.0f} km² would exceed limit: {max_allowed_area:,.0f} km²)"
-                    )
-                elif merged_efficiency < min_bbox_efficiency:
-                    logger.info(
-                        f"    Cannot merge small coastal cluster {small_idx} into cluster {nearest_cluster_idx} "
-                        f"(merged bbox efficiency {merged_efficiency:.1%} would be below limit: {min_bbox_efficiency:.1%})"
-                    )
-                else:
-                    logger.info(
-                        f"    Merging small coastal cluster {small_idx} (area: {small_area:,.0f} km²) "
-                        f"into cluster {nearest_cluster_idx} (distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km², efficiency: {merged_efficiency:.1%})"
-                    )
-                    clusters[nearest_cluster_idx].extend(small_cluster)
-                    cluster_areas[nearest_cluster_idx] = (
-                        merged_area  # Update area tracking
-                    )
-                    clusters_to_remove.add(small_idx)
-            else:
+                # Force merge - log the result
                 logger.info(
-                    f"    Keeping small coastal cluster {small_idx} (area: {small_area:,.0f} km²) separate "
-                    f"(nearest cluster {min_distance * 111.0:.1f} km away, > {MERGE_DISTANCE_KM:.0f} km)"
+                    f"    Merging small cluster {small_idx} (area: {small_area:,.0f} km², {small_area / target_area_km2:.1%} of target) "
+                    f"into cluster {nearest_cluster_idx} (distance: {min_distance * 111.0:.1f} km, merged area: {merged_area:,.0f} km²)"
                 )
 
-        # Remove merged small coastal clusters
+                # CRITICAL: Update both the cluster list AND the cluster_areas dictionary
+                clusters[nearest_cluster_idx].extend(small_cluster)
+                cluster_areas[nearest_cluster_idx] = merged_area
+                clusters_to_remove.add(small_idx)
+            else:
+                logger.warning(
+                    f"    WARNING: Cannot find merge target for cluster {small_idx} (area: {small_area:,.0f} km²) - this should never happen!"
+                )
+
+        # Remove merged small clusters
         if clusters_to_remove:
             logger.info(
-                f"  Removing {len(clusters_to_remove)} merged small coastal clusters..."
+                f"  Merged and removing {len(clusters_to_remove)} small clusters..."
             )
             clusters = [
                 cluster
                 for idx, cluster in enumerate(clusters)
                 if idx not in clusters_to_remove
             ]
-            logger.info(f"  Cluster count after small coastal merging: {len(clusters)}")
+            logger.info(f"  Cluster count after small cluster merging: {len(clusters)}")
     else:
-        logger.info("  No small coastal clusters found")
+        logger.info("  No small clusters found")
 
-    # Post-processing 3: Assign any remaining unclustered basins (reordered - do this last)
-    logger.info("\n[3/3] Checking for unclustered outlet basins...")
-
-    # Post-processing 3: Assign any remaining unclustered basins (reordered - do this last)
-    logger.info("\n[3/3] Checking for unclustered outlet basins...")
+    # Post-processing 2: Assign any remaining unclustered basins
+    logger.info("\n[2/2] Checking for unclustered outlet basins...")
 
     all_clustered_outlets = set()
     for cluster in clusters:
