@@ -894,7 +894,7 @@ class AsyncGriddedForcingReader:
                 )
                 assert isinstance(data, np.ndarray)
 
-                if not np.all(np.isnan(data)):
+                if not np.any(np.isnan(data)):
                     return data
 
             else:
