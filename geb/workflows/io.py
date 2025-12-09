@@ -841,7 +841,7 @@ class AsyncGriddedForcingReader:
         # Cache tracking
         self.current_start_index = -1
         self.current_end_index = -1
-        self.current_data: npt.NDArray[Any] | None = None
+        self.current_data: ThreeDArrayFloat32 | None = None
         self.preloaded_data_future: asyncio.Task | None = None
 
         # Async event loop setup
@@ -862,7 +862,7 @@ class AsyncGriddedForcingReader:
             self.async_lock = None
             self.io_lock = None
 
-    def load(self, start_index: int, end_index: int) -> np.ndarray:
+    def load(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
         """Safe synchronous load (only used if asynchronous=False).
 
         Returns:
@@ -873,7 +873,7 @@ class AsyncGriddedForcingReader:
         assert isinstance(data, np.ndarray)
         return data
 
-    async def load_await(self, start_index: int, end_index: int) -> npt.NDArray[Any]:
+    async def load_await(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
         """Load data asynchronously via reusable async group.
 
         Returns:
