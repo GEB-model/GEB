@@ -892,10 +892,12 @@ class AsyncGriddedForcingReader:
                 data = await arr.getitem(
                     (slice(start_index, end_index), slice(None), slice(None))
                 )
-                assert isinstance(data, np.ndarray)
 
                 if not np.any(np.isnan(data)):
                     return data
+                print(
+                    f"Async load returned NaN values for indices {start_index}:{end_index}, retrying..."
+                )
 
             else:
                 raise IOError(
