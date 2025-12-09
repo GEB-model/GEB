@@ -1724,9 +1724,6 @@ def init_multiple(
     skip_merged_geometries: bool,
     skip_visualization: bool,
     min_bbox_efficiency: float,
-    overwrite: bool,
-    save_geoparquet: Path | None,
-    save_map: str | None,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.
 
