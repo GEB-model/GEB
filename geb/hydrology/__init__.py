@@ -114,6 +114,8 @@ class Hydrology(Data, Module):
             influx = (
                 self.grid.var.capillar.astype(np.float64) * self.grid.var.cell_area
             ).sum()
+        else:
+            prev_storage: np.float64 = np.float64(np.nan)
 
         self.lakes_reservoirs.step()
         timer.finish_split("Waterbodies")

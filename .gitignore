@@ -8,13 +8,15 @@ geb/hydrology/groundwater/bin
 geb/bin
 tests/output/
 tests/tmp/
-examples/*
-!examples/*
-examples/*/*
-!examples/*/build.yml
-!examples/*/model.yml
-!examples/*/update.yml
+geb/examples/*
+!geb/examples/*
+geb/examples/*/*
+!geb/examples/*/build.yml
+!geb/examples/*/model.yml
+!geb/examples/*/update.yml
 .snakemake
+**.code-workspace
+libmf6.so
 
 #ignore folder
 model

@@ -10,7 +10,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from geb.store import DynamicArray
-from geb.typing import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
+from geb.types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 
 from ..hydrology.lakes_reservoirs import RESERVOIR
 from .general import AgentBaseClass
@@ -51,6 +51,10 @@ class ReservoirOperators(AgentBaseClass):
 
         if self.model.in_spinup:
             self.spinup()
+
+        self.reservoir_release_factor = self.model.config["parameters"][
+            "reservoir_release_factor"
+        ]
 
     @property
     def name(self) -> str:

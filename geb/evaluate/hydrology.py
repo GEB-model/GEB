@@ -24,7 +24,7 @@ from rasterio.crs import CRS
 from rasterio.features import geometry_mask
 from tqdm import tqdm
 
-from geb.workflows.io import open_zarr, to_zarr
+from geb.workflows.io import read_zarr, write_zarr
 
 
 def calculate_hit_rate(model: xr.DataArray, observations: xr.DataArray) -> float:
@@ -122,7 +122,7 @@ class Hydrology:
                 f"Discharge file for run '{run_name}' does not exist in the report directory. Did you run the model?"
             )
         # load the discharge simulation
-        GEB_discharge = open_zarr(
+        GEB_discharge = read_zarr(
             self.model.output_folder
             / "report"
             / run_name
@@ -134,7 +134,7 @@ class Hydrology:
         mean_discharge = GEB_discharge.mean(dim="time")
         mean_discharge.attrs["_FillValue"] = np.nan
 
-        to_zarr(
+        write_zarr(
             mean_discharge,
             self.output_folder_evaluate / "mean_discharge_m3_per_s.zarr",
             crs=4326,
@@ -251,7 +251,7 @@ class Hydrology:
                 eval_result_folder.joinpath("evaluation_metrics.xlsx")
             )
             return
-        GEB_discharge = open_zarr(
+        GEB_discharge = read_zarr(
             self.model.output_folder
             / "report"
             / run_name
@@ -1086,7 +1086,7 @@ class Hydrology:
         *args: Any,
         export: bool = True,
         **kwargs: Any,
-    ) -> None:
+    ) -> go.Figure:
         """Create a water circle plot for the GEB model.
 
         Adapted from: https://github.com/mikhailsmilovic/flowplot
@@ -1101,6 +1101,9 @@ class Hydrology:
             export: Whether to export the water circle plot to a file.
             *args: ignored.
             **kwargs: ignored.
+
+        Returns:
+            A Plotly Figure object representing the water circle.
         """
         import plotly.io as pio
 
@@ -1219,7 +1222,9 @@ class Hydrology:
         # the size of a section is the sum of the flows in that section
         # plus the size of the section itself. So if all of the section
         # is made up of its children, the size of the section is 0.
-        water_circle_list: list[tuple[str, str, float | int]] = []
+        water_circle_list: list[
+            tuple[str | None, str | None, str, float | int, str]
+        ] = []
         color_map: dict[str, str] = {
             "in": "#636EFA",
             "out": "#EF5538",
@@ -1228,13 +1233,17 @@ class Hydrology:
         }
 
         def add_flow(
-            water_circle_list: list[tuple[str, str, float | int]],
+            water_circle_list: list[
+                tuple[str | None, str | None, str, float | int, str]
+            ],
             color_map: dict[str, str],
             root_section: str | None,
             parent: str | None,
             flow: str | None,
             value: int | float | dict[str, Any],
-        ) -> tuple[list[tuple[str, str, float | int]], dict[str, str]]:
+        ) -> tuple[
+            list[tuple[str | None, str | None, str, float | int, str]], dict[str, str]
+        ]:
             """Recursive function to add flows to the water circle list.
 
             Args:
@@ -1257,8 +1266,14 @@ class Hydrology:
                 Updated water circle list with the new flow added.
                 Updated color map with the new flow color added.
             """
+            if parent is not None and flow is None:
+                raise ValueError("Flow name cannot be None if parent is not None.")
+            elif flow is not None and parent is None:
+                raise ValueError("Parent cannot be None if flow name is not None.")
+
             if isinstance(value, (int, float)):  # stopping condition
                 # adopt the color of the parent if it exists
+                assert flow is not None
                 if parent is not None:
                     color_map[flow] = color_map[parent]
                 else:  # if no parent, this is a root section
@@ -1268,6 +1283,7 @@ class Hydrology:
                 )
             elif isinstance(value, dict):
                 if parent is not None:  # adopt the color of the parent
+                    assert flow is not None
                     color_map[flow] = color_map[parent]
                 else:  # if no parent, this is a root section
                     root_section = flow
@@ -1306,7 +1322,7 @@ class Hydrology:
 
         water_circle_df: pd.DataFrame = pd.DataFrame(
             water_circle_list,
-            columns=["root_section", "parent", "flow", "value", "color"],
+            columns=np.array(["root_section", "parent", "flow", "value", "color"]),
         )
 
         if storage_change > 0:
@@ -1377,7 +1393,7 @@ class Hydrology:
 
         def parse_flood_forecast_initialisation(
             filename: str,
-        ) -> tuple[str, str, str, str, str]:
+        ) -> tuple[str | None, str | None, str, str, str]:
             """Parse flood map filename to extract components.
 
             Expected format: YYYYMMDDTHHMMSS - MEMBER - EVENT_START - EVENT_END.zarr
@@ -1429,9 +1445,9 @@ class Hydrology:
         def calculate_performance_metrics(
             observation: Path | str,
             flood_map_path: Path | str,
+            output_folder: Path,
             visualization_type: str = "Hillshade",
-            output_folder: Path | str = None,
-        ) -> None:
+        ) -> dict[str, float | int] | None:
             """Calculate performance metrics for flood maps against observations.
 
             Args:
@@ -1440,12 +1456,20 @@ class Hydrology:
                 visualization_type: Type of visualization for plotting (default is "Hillshade").
                 output_folder: Path to the folder where results will be saved.
 
+            Returns:
+                Dictionary containing performance metrics:
+                    - hit_rate: Percentage of correctly predicted flooded areas.
+                    - false_alarm_ratio: Percentage of falsely predicted flooded areas.
+                    - critical_success_index: Overall accuracy of flood predictions.
+                    - flooded_area_km2: Total flooded area in square kilometers.
+                or None if an error occurs.
+
             Raises:
                 ValueError: If the observation file is not in .zarr format.
             """
             # Step 1: Open needed datasets
-            flood_map = open_zarr(flood_map_path)
-            obs = open_zarr(observation)
+            flood_map = read_zarr(flood_map_path)
+            obs = read_zarr(observation)
             print("obs CRS", obs.rio.crs)
             sim = flood_map.rio.reproject_match(obs)
             rivers = gpd.read_parquet(
@@ -1527,7 +1551,7 @@ class Hydrology:
             catchment_extent = [xmin, xmax, ymin, ymax]
 
             xmin, ymin, xmax, ymax = observation_final.rio.bounds()
-            flood_extent = [xmin, xmax, ymin, ymax]
+            flood_extent: tuple[float, float, float, float] = (xmin, xmax, ymin, ymax)
 
             # Step 6: Calculate performance metrics
             # Compute the arrays first to get concrete values
@@ -1552,7 +1576,7 @@ class Hydrology:
             flooded_area_km2 = flooded_pixels * (pixel_size * pixel_size) / 1_000_000
 
             # Step 7: Save results to file and plot the results
-            elevation_data = open_zarr(self.model.files["other"]["DEM/fabdem"])
+            elevation_data = read_zarr(self.model.files["other"]["DEM/fabdem"])
             elevation_data = elevation_data.rio.reproject_match(obs)
 
             elevation_array = (
@@ -2062,11 +2086,11 @@ class Hydrology:
             # check if observation file exists, if not, raise an error
             if not Path(self.config["floods"]["event_observation_file"]).exists():
                 raise FileNotFoundError(
-                    f"Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
+                    "Flood observation file is not found in the given path in the model.yml Please check the path in the config file."
                 )
             if Path(self.config["floods"]["event_observation_file"]).suffix != ".zarr":
                 raise ValueError(
-                    f"Flood observation file is not in the correct format. Please provide a .zarr file."
+                    "Flood observation file is not in the correct format. Please provide a .zarr file."
                 )
 
             # Find all flood maps corresponding to the event
@@ -2097,8 +2121,8 @@ class Hydrology:
                 calculate_performance_metrics(
                     observation=self.config["floods"]["event_observation_file"],
                     flood_map_path=flood_map_path,
-                    visualization_type="OSM",
                     output_folder=event_folder,
+                    visualization_type="OSM",
                 )
                 print(f"Successfully evaluated: {flood_map_path.name}")
 

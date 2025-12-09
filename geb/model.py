@@ -3,7 +3,6 @@
 import copy
 import datetime
 import logging
-import os
 from pathlib import Path
 from time import time
 from types import TracebackType
@@ -15,6 +14,7 @@ import pandas as pd
 import xarray as xr
 from dateutil.relativedelta import relativedelta
 
+from geb import GEB_PACKAGE_DIR
 from geb.agents import Agents
 from geb.hazards.driver import HazardDriver
 from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
@@ -23,7 +23,7 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 from geb.module import Module
 from geb.reporter import Reporter
 from geb.store import Store
-from geb.workflows.io import load_dict, load_geom, open_zarr
+from geb.workflows.io import read_dict, read_geom, read_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
@@ -76,17 +76,11 @@ class GEBModel(Module, HazardDriver):
         self.files = copy.deepcopy(
             files
         )  # make a deep copy to avoid issues when the model is initialized multiple times
-        if "geoms" in self.files:
-            # geoms was renamed to geom in the file library. To upgrade old models,
-            # we check if "geoms" is in the files and rename it to "geom"
-            # this line can be removed in august 2026 (also in geb/build/__init__.py)
-            self.files["geom"] = self.files.pop("geoms")  # upgrade old models
-
         for data in self.files.values():
             for key, value in data.items():
                 data[key] = self.input_folder / value  # make paths absolute
 
-        self.mask = load_geom(self.files["geom"]["mask"])  # load the model mask
+        self.mask = read_geom(self.files["geom"]["mask"])  # load the model mask
 
         self.store = Store(self)
 
@@ -166,6 +160,11 @@ class GEBModel(Module, HazardDriver):
         )  # create a temporary folder for the multiverse
         self.store.save(store_location)  # save the current state of the model
 
+        original_is_activated: bool = (
+            self.reporter.is_activated
+        )  # store original reporter state
+        self.reporter.is_activated = False  # disable reporting during multiverse runs
+
         if return_mean_discharge:
             mean_discharge: dict[
                 Any, float
@@ -178,12 +177,11 @@ class GEBModel(Module, HazardDriver):
         for loader_name, loader in self.forcing.loaders.items():
             if loader.supports_forecast:
                 # open one forecast to see the number of members
-                forecast_data[loader_name] = open_zarr(
+                forecast_data[loader_name] = read_zarr(
                     self.input_folder
                     / "other"
                     / "forecasts"
                     / self.config["general"]["forecasts"]["provider"]
-                    / self.forecast_issue_date
                     / f"{loader_name}_{forecast_issue_datetime.strftime('%Y%m%dT%H%M%S')}.zarr"
                 )  # open the forecast data for the variable
                 # these are the forecast members to loop over
@@ -260,13 +258,16 @@ class GEBModel(Module, HazardDriver):
             n_timesteps=store_n_timesteps,
         )  # restore the initial state of the multiverse
 
+        self.reporter.is_activated = (
+            original_is_activated  # restore original reporter state
+        )
+
         # after all forecast members have been processed, restore the original forcing data
         for loader in self.forcing.loaders.values():
             if loader.supports_forecast:
                 loader.unset_forecast()  # unset forecast mode
 
         self.multiverse_name: None = None  # reset the multiverse name
-
         if return_mean_discharge:
             return mean_discharge  # return the mean discharge for each member
         else:
@@ -331,11 +332,26 @@ class GEBModel(Module, HazardDriver):
                         return_mean_discharge=True,
                     )  # run the multiverse for the current timestep
 
+                    # after the multiverse has run all members for one day, if warning response is enabled, run the warning system
                     if self.config["agent_settings"]["households"]["warning_response"]:
-                        self.agents.households.water_level_warning_strategy()
-                        # self.get_critical_infrastructure()
-                        # self.critical_infrastructure_warning_strategy()
-                        self.agents.households.household_decision_making()
+                        print(
+                            f"Running flood early warning system for date time {self.current_time.isoformat()}..."
+                        )
+                        self.agents.households.create_flood_probability_maps(
+                            date_time=self.current_time, strategy=1, exceedance=True
+                        )
+                        self.agents.households.water_level_warning_strategy(
+                            date_time=self.current_time
+                        )
+                        self.agents.households.critical_infrastructure_warning_strategy(
+                            date_time=self.current_time
+                        )
+                        self.agents.households.household_decision_making(
+                            date_time=self.current_time
+                        )
+                        self.agents.households.update_households_geodataframe_w_warning_variables(
+                            date_time=self.current_time
+                        )
 
         t0 = time()
         self.agents.step()
@@ -387,7 +403,7 @@ class GEBModel(Module, HazardDriver):
         self.n_timesteps = n_timesteps
         self.current_timestep = 0
 
-        self.regions: gpd.GeoDataFrame = load_geom(self.files["geom"]["regions"])
+        self.regions: gpd.GeoDataFrame = read_geom(self.files["geom"]["regions"])
 
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
@@ -512,6 +528,47 @@ class GEBModel(Module, HazardDriver):
         print("Model run finished, finalizing report...")
         self.reporter.finalize()
 
+    def refresh_agent_attributes(self, agent_type: str = "households") -> None:
+        """Initiate the model to update household adaptation attributes to pre-spinup state after an updated build or adding/ renaming of agent variables.
+
+        This function is only included for development purposes.
+
+        Args:
+            agent_type: Type of agent to refresh attributes for. Examples: "households", "crop_farmers", etc.
+
+        """
+        # set the start and end time for the spinup. The end of the spinup is the start of the actual model run
+        current_time = self.spinup_start
+        end_time_exclusive = self.run_start
+
+        timestep_length = datetime.timedelta(days=1)
+        n_timesteps = (end_time_exclusive - current_time) / timestep_length
+        assert n_timesteps.is_integer()
+        n_timesteps = int(n_timesteps)
+        assert n_timesteps > 0, "End time is before or identical to start time"
+
+        # create var bucket
+        self.var = self.store.create_bucket("var")
+
+        # initialize the model
+        self._initialize(
+            create_reporter=True,
+            current_time=current_time,
+            n_timesteps=n_timesteps,
+            timestep_length=datetime.timedelta(days=1),
+            load_data_from_store=False,
+            clean_report_folder=False,
+            in_spinup=True,
+        )
+
+        # save initial household attributes
+        print(f"Refreshing household attributes for {agent_type}...")
+        path: Path = self.store.path
+        name = getattr(self.agents, agent_type).name
+        self.logger.debug(f"Saving {name}.var")
+        bucket = self.store.buckets[f"{name}.var"]
+        bucket.save(path / f"{name}.var")
+
     def spinup(self, initialize_only: bool = False) -> None:
         """Run the model for the spinup period.
 
@@ -618,7 +675,7 @@ class GEBModel(Module, HazardDriver):
         )
 
         # ugly switch to determine whether model has coastal basins
-        subbasins = load_geom(self.model.files["geom"]["routing/subbasins"])
+        subbasins = read_geom(self.model.files["geom"]["routing/subbasins"])
         if subbasins["is_coastal_basin"].any():
             generate_storm_surge_hydrographs(self)
 
@@ -654,7 +711,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path("simulation_root") / self.run_name
+        folder = Path(self.config["general"]["simulation_root"]) / self.run_name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -665,7 +722,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             simulation_root: Path of the simulation root.
         """
-        folder = Path("simulation_root") / "spinup"
+        folder = Path(self.config["general"]["simulation_root"]) / "spinup"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -730,7 +787,7 @@ class GEBModel(Module, HazardDriver):
         Returns:
             Path to the folder containing GEB binaries.
         """
-        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
+        return GEB_PACKAGE_DIR / "bin"
 
     @property
     def diagnostics_folder(self) -> Path:
@@ -850,7 +907,7 @@ class GEBModel(Module, HazardDriver):
             ValueError: If the spinup start date is before the model build start date.
             ValueError: If the run end date is after the model build end date.
         """
-        model_build_time_range: dict[str, str] = load_dict(
+        model_build_time_range: dict[str, str] = read_dict(
             self.files["dict"]["model_time_range"]
         )
 

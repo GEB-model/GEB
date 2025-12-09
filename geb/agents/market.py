@@ -9,8 +9,8 @@ import numpy as np
 import statsmodels.api as sm
 from numpy.linalg import LinAlgError
 
-from geb.typing import TwoDArrayFloat32
-from geb.workflows.io import load_dict
+from geb.types import TwoDArrayFloat32
+from geb.workflows.io import read_dict
 
 from ..data import load_regional_crop_data_from_dict
 from ..store import DynamicArray
@@ -122,7 +122,7 @@ class Market(AgentBaseClass):
             extra_dims_names=["params"],
         )
 
-        inflation = load_dict(
+        inflation = read_dict(
             self.model.files["dict"]["socioeconomics/inflation_rates"]
         )
         inflation["time"] = [int(time) for time in inflation["time"]]
@@ -231,9 +231,6 @@ class Market(AgentBaseClass):
             > 0
         ), "Negative prices predicted"
 
-        print("DEBUG year_index:", self.year_index)
-        print("DEBUG inflation length:", len(self.var.cumulative_inflation_per_region))
-
         # TODO: This assumes that the inflation is the same for all regions (region_idx=0)
         return (
             price_pred_per_region
@@ -312,7 +309,8 @@ class Market(AgentBaseClass):
             and "dynamic_market" in self.config
             and self.config["dynamic_market"] is True
         ):
-            return self.get_modelled_crop_prices()
+            simulated_price = self.get_modelled_crop_prices()
+            return simulated_price
         else:
             index = self._crop_prices[0].get(self.model.current_time)
             return self._crop_prices[1][index]

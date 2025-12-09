@@ -6,6 +6,8 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
+from geb.types import ArrayFloat32
+
 from .landcovers import (
     FOREST,
     GRASSLAND_LIKE,
@@ -19,10 +21,10 @@ N_SOIL_LAYERS: Literal[6] = 6
 
 @njit(cache=True, inline="always")
 def get_critical_soil_moisture_content(
-    p: npt.NDArray[np.float32],
-    wfc_m: npt.NDArray[np.float32],
-    wwp_m: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    p: np.float32,
+    wfc_m: ArrayFloat32,
+    wwp_m: ArrayFloat32,
+) -> ArrayFloat32:
     """Calculate the critical soil moisture content.
 
     The critical soil moisture content is defined as the quantity of stored soil moisture below
@@ -50,9 +52,9 @@ def get_critical_soil_moisture_content(
 @njit(cache=True, inline="always")
 def get_root_mass_ratios(
     root_depth_m: np.float32,
-    root_ratios: npt.NDArray[np.float32],
-    soil_layer_height_m: npt.NDArray[np.float32],
-) -> npt.NDArray[np.float32]:
+    root_ratios: ArrayFloat32,
+    soil_layer_height_m: ArrayFloat32,
+) -> ArrayFloat32:
     """Calculate the root mass ratios for each soil layer assuming a triangular root distribution.
 
     Args:

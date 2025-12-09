@@ -28,7 +28,7 @@ from geb.build.data_catalog.base import Adapter
 from geb.build.methods import build_method
 from geb.workflows.raster import resample_like
 
-from ...workflows.io import calculate_scaling, to_zarr
+from ...workflows.io import calculate_scaling, write_zarr
 
 if TYPE_CHECKING:
     from geb.build import GEBModel
@@ -772,7 +772,6 @@ class Forcing:
             name=name,
             *args,
             **kwargs,
-            byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
@@ -829,7 +828,6 @@ class Forcing:
             name=name,
             *args,
             **kwargs,
-            byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
@@ -884,7 +882,6 @@ class Forcing:
             name=name,
             *args,
             **kwargs,
-            byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
@@ -944,7 +941,6 @@ class Forcing:
             name=name,
             *args,
             **kwargs,
-            byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
@@ -1001,7 +997,6 @@ class Forcing:
             name=name,
             *args,
             **kwargs,
-            byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
@@ -1190,7 +1185,7 @@ class Forcing:
                 Path(tmp_water_budget_folder) / "tmp_water_budget_file.zarr"
             )
             self.logger.info("Exporting temporary water budget to zarr")
-            water_budget = to_zarr(
+            water_budget = write_zarr(
                 water_budget,
                 tmp_water_budget_file,
                 crs=4326,
@@ -1234,7 +1229,7 @@ class Forcing:
                 SPEI.attrs = {
                     "_FillValue": np.nan,
                 }
-                SPEI: xr.DataArray = to_zarr(
+                SPEI: xr.DataArray = write_zarr(
                     SPEI,
                     tmp_spei_file,
                     x_chunksize=temp_xy_chunk_size,
@@ -1360,6 +1355,7 @@ class Forcing:
         forecast_resolution: float,
         forecast_horizon: int,
         forecast_timestep_hours: int,
+        n_ensemble_members: int,
     ) -> None:
         """Sets up forecast data for the model based on configuration.
 
@@ -1372,6 +1368,7 @@ class Forcing:
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
+            n_ensemble_members: The number of ensemble members to download.
         """
         if (
             forecast_provider == "ECMWF"
@@ -1383,6 +1380,7 @@ class Forcing:
                 forecast_resolution,  # Pass spatial resolution
                 forecast_horizon,  # Pass forecast horizon in hours
                 forecast_timestep_hours,  # Pass timestep interval
+                n_ensemble_members,  # Pass number of ensemble members
             )
 
     def setup_forecasts_ECMWF(
@@ -1393,6 +1391,7 @@ class Forcing:
         forecast_resolution: float,
         forecast_horizon: int,
         forecast_timestep_hours: int,
+        n_ensemble_members: int = 50,
     ) -> None:
         """Sets up the folder structure for ECMWF forecast data.
 
@@ -1403,6 +1402,7 @@ class Forcing:
             forecast_resolution: The spatial resolution of the forecast data (degrees).
             forecast_horizon: The forecast horizon in hours.
             forecast_timestep_hours: The forecast timestep in hours.
+            n_ensemble_members: The number of ensemble members to download (default: 50).
         """
         MARS_codes: dict[str, float] = {  # Complete set of weather variables
             "tp": 228.128,  # total precipitation
@@ -1433,6 +1433,7 @@ class Forcing:
             forecast_resolution=forecast_resolution,
             forecast_horizon=forecast_horizon,  # Forecast horizon in hours
             forecast_timestep_hours=forecast_timestep_hours,  # Temporal resolution in hours
+            n_ensemble_members=n_ensemble_members,  # Number of ensemble members
         )
 
         for (

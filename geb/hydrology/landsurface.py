@@ -9,9 +9,9 @@ import zarr
 from numba import njit, prange  # noqa: F401
 
 from geb.module import Module
-from geb.typing import ArrayFloat32, ArrayInt32, TwoDArrayBool, TwoDArrayFloat32
+from geb.types import ArrayFloat32, ArrayInt32, TwoDArrayBool, TwoDArrayFloat32
 from geb.workflows import balance_check
-from geb.workflows.io import load_grid
+from geb.workflows.io import read_grid
 
 from .evapotranspiration import (
     calculate_bare_soil_evaporation,
@@ -350,7 +350,7 @@ def land_surface_model(
             runoff_m[hour, i] += direct_runoff_m
             groundwater_recharge_m[i] += groundwater_recharge_from_infiltraton_m
 
-            bottom_layer = N_SOIL_LAYERS - 1
+            bottom_layer = N_SOIL_LAYERS - 1  # ty: ignore[unresolved-reference]
 
             psi, unsaturated_hydraulic_conductivity_m_per_hour = (
                 get_soil_water_flow_parameters(
@@ -388,7 +388,7 @@ def land_surface_model(
             )
 
             # iterate from bottom to top layer (ignoring the bottom layer which is treated above)
-            for layer in range(N_SOIL_LAYERS - 2, -1, -1):
+            for layer in range(N_SOIL_LAYERS - 2, -1, -1):  # ty: ignore[unresolved-reference]
                 psi, unsaturated_hydraulic_conductivity_m_per_hour = (
                     get_soil_water_flow_parameters(
                         w=w[layer, i],
@@ -554,7 +554,7 @@ class LandSurface(Module):
         to change the number of soil layers between different datasets.
         """
         # set number of soil layers as global variable for numba
-        global N_SOIL_LAYERS
+        global N_SOIL_LAYERS  # ty: ignore[unresolved-global]
         N_SOIL_LAYERS = self.HRU.var.soil_layer_height.shape[0]
 
     def spinup(self) -> None:
@@ -610,7 +610,7 @@ class LandSurface(Module):
         # Soil properties
         self.HRU.var.soil_layer_height: TwoDArrayFloat32 = (
             self.HRU.convert_subgrid_to_HRU(
-                load_grid(
+                read_grid(
                     self.model.files["subgrid"]["soil/soil_layer_height"],
                     layer=None,
                 ),
@@ -619,28 +619,28 @@ class LandSurface(Module):
         )
 
         soil_organic_carbon: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            load_grid(
+            read_grid(
                 self.model.files["subgrid"]["soil/soil_organic_carbon"],
                 layer=None,
             ),
             method="mean",
         )
         bulk_density: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            load_grid(
+            read_grid(
                 self.model.files["subgrid"]["soil/bulk_density"],
                 layer=None,
             ),
             method="mean",
         )
         self.HRU.var.silt: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            load_grid(
+            read_grid(
                 self.model.files["subgrid"]["soil/silt"],
                 layer=None,
             ),
             method="mean",
         )
         self.HRU.var.clay: TwoDArrayFloat32 = self.HRU.convert_subgrid_to_HRU(
-            load_grid(
+            read_grid(
                 self.model.files["subgrid"]["soil/clay"],
                 layer=None,
             ),

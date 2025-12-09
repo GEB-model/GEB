@@ -99,5 +99,5 @@ def assign_calculation_group(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return (
         rivers.groupby(rivers["geometry"].apply(get_end_point))
         .apply(assign)
-        .reset_index(drop=True)
+        .reset_index(drop=True)  # ty: ignore[invalid-return-type]
     )

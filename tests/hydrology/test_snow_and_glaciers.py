@@ -16,7 +16,7 @@ from geb.hydrology.snow_glaciers import (
     snow_model,
     update_snow_temperature,
 )
-from geb.typing import ArrayFloat32
+from geb.types import ArrayFloat32
 
 from ..testconfig import output_folder
 
@@ -1548,7 +1548,7 @@ def _run_scenario(
     assert math.isclose(total_water_in, total_water_out, abs_tol=1e-3)
 
     return {
-        "timesteps": np.arange(n_hours),
+        "timesteps": np.arange(n_hours, dtype=np.float32),
         "swe_log": swe_log,
         "lw_log": lw_log,
         "snow_temp_log": snow_temp_log,

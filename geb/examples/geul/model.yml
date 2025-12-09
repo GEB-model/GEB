@@ -29,6 +29,7 @@ hazards:
     gpu: auto
     ncpus: auto # can be number or 'auto', use less cpus when running on interactive session
     force_overwrite: true
+    coastal_only: false
     return_periods:
       - 2
       - 1000
@@ -47,6 +48,14 @@ report:
       varname: grid.var.discharge_m3_s
       type: grid
       function: null
+      format: zarr
+      single_file: true
+    discharge_hourly:
+      varname: grid.var.discharge_m3_s_per_substep
+      type: grid
+      function: null
+      format: zarr
+      single_file: true
   agents.crop_farmers:
     channel_abstraction_m3_by_farmer_mean:
       varname: var.channel_abstraction_m3_by_farmer

@@ -9,12 +9,7 @@ from collections import deque
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Iterator,
-)
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Literal, overload
 
 import geopandas as gpd
 import numpy as np
@@ -23,7 +18,7 @@ import pandas as pd
 import yaml
 from numpy.typing import NDArray
 
-from geb.workflows.io import load_geom
+from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
@@ -55,7 +50,7 @@ class DynamicArray:
         n: int | None = None,
         max_n: int | None = None,
         extra_dims: tuple[int, ...] | None = None,
-        extra_dims_names: list[str] = [],
+        extra_dims_names: Iterable[str] = [],
         dtype: npt.DTypeLike | None = None,
         fill_value: Any | None = None,
     ) -> None:
@@ -250,6 +245,7 @@ class DynamicArray:
         """
         return np.asarray(self._data[: self.n], dtype=dtype)
 
+    @property
     def __array_interface__(self) -> dict[str, Any]:
         """
         Expose the array interface of the entire underlying data (up to max_n).
@@ -257,12 +253,12 @@ class DynamicArray:
         Returns:
             The __array_interface__ mapping from the underlying NumPy array.
         """
-        return self._data.__array_interface__()
+        return self._data.__array_interface__
 
     def __array_ufunc__(
         self,
-        ufunc: Callable,
-        method: str,
+        ufunc: np.ufunc,
+        method: Literal["__call__", "reduce", "reduceat", "accumulate", "outer", "at"],
         *inputs: tuple[Any],
         **kwargs: dict[str, Any],
     ) -> Any:
@@ -312,17 +308,18 @@ class DynamicArray:
         Returns:
             Result of calling the function on the underlying NumPy array(s).
         """
+
+        def recursive_convert(arg: Any) -> Any:
+            if isinstance(arg, DynamicArray):
+                return arg.data
+            if isinstance(arg, (list, tuple)):
+                return type(arg)(recursive_convert(x) for x in arg)
+            return arg
+
         # Explicitly call __array_function__ of the underlying NumPy array
-        modified_args: tuple = tuple(
-            arg.data if isinstance(arg, DynamicArray) else arg for arg in args
-        )
-        modified_types: tuple = tuple(
-            type(arg.data) if isinstance(arg, DynamicArray) else type(arg)
-            for arg in args
-        )
-        return self._data.__array_function__(
-            func, modified_types, modified_args, kwargs
-        )
+        modified_args = tuple(recursive_convert(arg) for arg in args)
+
+        return self._data.__array_function__(func, (np.ndarray,), modified_args, kwargs)
 
     def __setitem__(
         self,
@@ -368,6 +365,7 @@ class DynamicArray:
             data = self.data.__getitem__(key)
 
             new_extra_dims_names: list = []
+            assert self.extra_dims_names is not None
             for i, slicer in enumerate(key[1:]):
                 if isinstance(slicer, (slice, list)):
                     new_extra_dims_names.append(self.extra_dims_names[i])
@@ -434,7 +432,7 @@ class DynamicArray:
 
     def __getattr__(self, name: str) -> Any:
         """
-        Fallback attribute access to the active NumPy array.
+        Get attributes either from the wrapper internals or the active data.
 
         If the attribute is one of the internal attributes, defer to the normal
         attribute lookup. Otherwise, forward the attribute access to the active
@@ -767,7 +765,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__", inplace=True)
 
-    def _compare(self, value: Any, operation: str) -> DynamicArray:
+    def _compare(self, value: object, operation: str) -> Any:
         """
         Helper for comparison operations.
 
@@ -779,12 +777,22 @@ class DynamicArray:
             Result of the comparison.
         """
         if isinstance(value, DynamicArray):
-            return self.__class__(
-                getattr(self.data, operation)(value.data), max_n=self._data.shape[0]
-            )
-        return self.__class__(getattr(self.data, operation)(value))
+            res = getattr(self.data, operation)(value.data)
+            if res is NotImplemented:
+                return NotImplemented
+            return self.__class__(res, max_n=self._data.shape[0])
+        res = getattr(self.data, operation)(value)
+        if res is NotImplemented:
+            return NotImplemented
+        return self.__class__(res)
 
-    def __eq__(self, value: Any) -> DynamicArray:
+    @overload
+    def __eq__(self, value: DynamicArray) -> DynamicArray: ...
+
+    @overload
+    def __eq__(self, value: object) -> Any: ...
+
+    def __eq__(self, value: object) -> Any:
         """Equality comparison.
 
         Args:
@@ -795,7 +803,13 @@ class DynamicArray:
         """
         return self._compare(value, "__eq__")
 
-    def __ne__(self, value: Any) -> DynamicArray:
+    @overload
+    def __ne__(self, value: DynamicArray) -> DynamicArray: ...
+
+    @overload
+    def __ne__(self, value: object) -> Any: ...
+
+    def __ne__(self, value: object) -> Any:
         """Inequality comparison.
 
         Args:
@@ -1104,7 +1118,7 @@ class Bucket:
                 setattr(
                     self,
                     filename.stem,
-                    load_geom(filename),
+                    read_geom(filename),
                 )
             elif filename.suffix == ".parquet":
                 setattr(
@@ -1178,7 +1192,7 @@ class Store:
             The created Bucket instance.
         """
         assert name not in self.buckets
-        bucket = Bucket(validator=validator)
+        bucket: Bucket = Bucket(validator=validator)
         self.buckets[name] = bucket
         return bucket
 

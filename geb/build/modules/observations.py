@@ -416,9 +416,15 @@ class Observations:
 
                     # add station to Q_obs if station is not already in Q_obs
                     if station_name not in Q_obs.station_name.values:
-                        station_id = int(Q_obs.id.max() + 1)  # ID for the new station
+                        station_id = int(
+                            Q_obs_merged.id.max() + 1
+                        )  # ID for the new station
                         Q_obs_merged = add_station_Q_obs(
-                            station_id, station_name, Q_obs, station_coords, Q_station
+                            station_id,
+                            station_name,
+                            Q_obs_merged,
+                            station_coords,
+                            Q_station,
                         )  # name, coordinates, dataframe
                     else:
                         station_id = int(
@@ -436,7 +442,6 @@ class Observations:
             self.logger.warning(
                 "No discharge stations found in the region. Creating empty files"
             )
-
             # Create empty snapping results Excel file with proper columns
             empty_cols = [
                 "Q_obs_station_name",

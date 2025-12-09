@@ -5,7 +5,6 @@ with surface water and the unsaturated zone.
 """
 
 import math
-import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable, Literal, TypedDict
@@ -21,24 +20,31 @@ from geb.hydrology.groundwater.model import (
     get_groundwater_storage_m,
     get_water_table_depth,
 )
-from geb.typing import ArrayFloat32, ArrayFloat64, TwoDArrayBool
+from geb.types import (
+    ArrayFloat32,
+    ArrayFloat64,
+    TwoDArrayBool,
+    TwoDArrayFloat32,
+    TwoDArrayFloat64,
+)
 from geb.workflows.raster import calculate_cell_area, compress
 
-from ..testconfig import output_folder, tmp_folder
+from ..testconfig import GEB_PACKAGE_DIR, output_folder, tmp_folder
 
 
 class ModFlowParams(TypedDict):
     """Type definition for ModFlowSimulation parameters."""
 
-    model: Any  # DummyModel in tests, GEBModel in production
+    working_directory: Path
+    modflow_bin_folder: Path
     topography: ArrayFloat32
     gt: tuple[float, float, float, float, float, float]
-    specific_storage: ArrayFloat32
-    specific_yield: ArrayFloat32
-    layer_boundary_elevation: ArrayFloat32
+    specific_storage: TwoDArrayFloat32
+    specific_yield: TwoDArrayFloat32
+    layer_boundary_elevation: TwoDArrayFloat32
     basin_mask: TwoDArrayBool
-    hydraulic_conductivity: ArrayFloat32
-    heads: ArrayFloat64
+    hydraulic_conductivity: TwoDArrayFloat32
+    heads: TwoDArrayFloat64
     heads_update_callback: Callable[[ArrayFloat64], None]
     verbose: bool
     never_load_from_disk: bool
@@ -106,57 +112,9 @@ heads = np.full((NLAY, YSIZE, XSIZE), 0, dtype=np.float32)
 for layer in range(NLAY):
     heads[layer] = topography - 2
 
-
-class DummyGrid:
-    """A dummy grid class to simulate the grid structure."""
-
-    def __init__(self) -> None:
-        """Initializes a DummyGrid instance of the GEB grid with required attributes for the MODFLOW simulation to work."""
-        pass
-
-    def decompress(self, array: npt.NDArray[Any]) -> npt.NDArray[Any]:
-        """Decompress an array from 1D to 2D using the basin mask.
-
-        Args:
-            array: The compressed array.
-
-        Returns:
-            The decompressed array.
-        """
-        return decompress(array, basin_mask)
-
-
-class DummyHydrology:
-    """A dummy hydrology class to simulate the hydrology structure."""
-
-    def __init__(self) -> None:
-        """Initializes a DummyHydrology instance of the GEB hydrology with required attributes for the MODFLOW simulation to work."""
-        self.grid = DummyGrid()
-
-
-class DummyModel:
-    """A dummy model class to simulate the MODFLOW model structure."""
-
-    def __init__(self) -> None:
-        """Initializes a DummyModel instance of the GEB model with required attributes for the MODFLOW simulation to work.
-
-        For testing purposes only.
-        """
-        self.simulation_root_spinup = tmp_folder / "modflow"
-        self.hydrology = DummyHydrology()
-
-    @property
-    def bin_folder(self) -> Path:
-        """Gets the folder where MODFLOW binaries are stored.
-
-        Returns:
-            Path to the folder with MODFLOW binaries.
-        """
-        return Path(os.environ.get("GEB_PACKAGE_DIR")) / "bin"
-
-
 default_params: ModFlowParams = {
-    "model": DummyModel(),
+    "working_directory": tmp_folder / "modflow",
+    "modflow_bin_folder": GEB_PACKAGE_DIR / "modflow" / "bin",
     "gt": gt,
     "specific_storage": compress(np.full((NLAY, YSIZE, XSIZE), 0), basin_mask),
     "specific_yield": compress(np.full((NLAY, YSIZE, XSIZE), 0.8), basin_mask),
@@ -350,7 +308,8 @@ def test_wells() -> None:
 
 
 def visualize_modflow_results(
-    sim: ModFlowSimulation, axes: npt.NDArray[plt.Axes]
+    sim: ModFlowSimulation,
+    axes: tuple[plt.Axes, plt.Axes, plt.Axes, plt.Axes, plt.Axes],
 ) -> None:
     """This function is used to visualize the current state of a ModFlowSimulation.
 

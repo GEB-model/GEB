@@ -21,12 +21,12 @@ import geopandas as gpd
 import yaml
 from shapely.geometry import box
 
-from geb import __version__
+from geb import GEB_PACKAGE_DIR, __version__
 from geb.build import GEBModel as GEBModelBuild
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory, load_dict, to_dict
+from geb.workflows.io import WorkingDirectory, read_dict, write_dict
 from geb.workflows.methods import multi_level_merge
 
 PROFILING_DEFAULT: bool = False
@@ -36,14 +36,13 @@ WORKING_DIRECTORY_DEFAULT: Path = Path(".")
 CONFIG_DEFAULT: Path = Path("model.yml")
 UPDATE_DEFAULT: Path = Path("update.yml")
 BUILD_DEFAULT: Path = Path("build.yml")
-DATA_CATALOG_DEFAULT: Path = (
-    Path(os.environ.get("GEB_PACKAGE_DIR")) / "data_catalog.yml"
-)
+
+DATA_CATALOG_DEFAULT: Path = GEB_PACKAGE_DIR / "data_catalog.yml"
 DATA_PROVIDER_DEFAULT: str = os.environ.get("GEB_DATA_PROVIDER", "default")
 DATA_ROOT_DEFAULT: Path = Path(
     os.environ.get(
         "GEB_DATA_ROOT",
-        Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / ".." / "data_catalog",
+        GEB_PACKAGE_DIR.parent.parent / "data_catalog",
     )
 )
 ALTER_FROM_MODEL_DEFAULT: Path = Path("../base")
@@ -300,7 +299,7 @@ def click_run_options() -> Any:
 
 def run_model_with_method(
     method: str | None,
-    config: dict | str = CONFIG_DEFAULT,
+    config: dict | str | Path = CONFIG_DEFAULT,
     working_directory: Path = WORKING_DIRECTORY_DEFAULT,
     timing: bool = TIMING_DEFAULT,
     profiling: bool = PROFILING_DEFAULT,
@@ -342,28 +341,22 @@ def run_model_with_method(
         # TODO: This can be removed in 2026
         if not Path("input/files.yml").exists() and Path("input/files.json").exists():
             # convert input/files.json to input/files.yml
-            json_files: dict[str, Any] = load_dict(
+            json_files: dict[str, Any] = read_dict(
                 Path("input/files.json"),
             )
-            to_dict(json_files, Path("input/files.yml"))
+            write_dict(json_files, Path("input/files.yml"))
 
         files: dict[str, Any] = parse_config(
-            load_dict(Path("input/files.yml"))
+            read_dict(Path("input/files.yml"))
             if "files" not in config["general"]
             else config["general"]["files"]
         )
-
-        model_params = {
-            "config": config,
-            "files": files,
-            "timing": timing,
-        }
 
         if profiling:
             profile = cProfile.Profile()
             profile.enable()
 
-        geb = GEBModel(**model_params)
+        geb = GEBModel(config=config, files=files, timing=timing)
         if method is not None:
             getattr(geb, method)(**method_args)
         if close_after_run:
@@ -384,46 +377,43 @@ def run_model_with_method(
 
 @cli.command()
 @click_run_options()
-def run(*args: Any, **kwargs: Any) -> None:
+def run(**kwargs: Any) -> None:
     """Run model.
 
     Can be run after model spinup.
 
     Args:
-        *args: Positional arguments to pass to the run function.
         **kwargs: Keyword arguments to pass to the run function.
 
     """
-    run_model_with_method(method="run", *args, **kwargs)
+    run_model_with_method(method="run", **kwargs)
 
 
 @cli.command()
 @click_run_options()
-def spinup(*args: Any, **kwargs: Any) -> None:
+def spinup(**kwargs: Any) -> None:
     """Run model spinup.
 
     Can be run after model build.
 
     Args:
-        *args: Positional arguments to pass to the spinup function.
         **kwargs: Keyword arguments to pass to the spinup function.
 
     """
-    run_model_with_method(method="spinup", *args, **kwargs)
+    run_model_with_method(method="spinup", **kwargs)
 
 
 @cli.command()
 @click.argument("method", required=True)
 @click_run_options()
-def exec(method: str, *args: Any, **kwargs: Any) -> None:
+def exec(method: str, **kwargs: Any) -> None:
     """Execute a specific method on the model.
 
     Args:
         method: Method to run on the model.
-        *args: Positional arguments to pass to the method.
         **kwargs: Keyword arguments to pass to the method.
     """
-    run_model_with_method(method=method, *args, **kwargs)
+    run_model_with_method(method=method, **kwargs)
 
 
 def click_build_options(
@@ -585,7 +575,7 @@ def get_builder(
     arguments = {
         "root": input_folder,
         "data_catalog": data_catalog,
-        "logger": create_logger("build.log"),
+        "logger": create_logger(Path("build.log")),
         "data_provider": data_provider,
     }
 
@@ -650,9 +640,7 @@ def init_fn(
                 f"Update config file {update_config} already exists. Please remove it or use a different name, or use --overwrite."
             )
 
-        example_folder: Path = (
-            Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / "examples" / from_example
-        )
+        example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
         if not example_folder.exists():
             raise FileNotFoundError(
                 f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
@@ -900,7 +888,7 @@ def build_fn(
     "continue_",
     is_flag=True,
     default=False,
-    help="Continue previous build if it was interrupted or failed. Note that the progress is deleted anytime build without continue or update is run.",
+    help="Continue previous build if it was interrupted or failed.",
 )
 def build(*args: Any, **kwargs: Any) -> None:
     """Build model with configuration file.
@@ -976,14 +964,14 @@ def alter_fn(
             and (original_input_path / "files.json").exists()
         ):
             # convert input/files.json to input/files.yml
-            json_files: dict[str, Any] = load_dict(
+            json_files: dict[str, Any] = read_dict(
                 (original_input_path / "files.json"),
             )
-            to_dict(json_files, original_input_path / "files.yml")
+            write_dict(json_files, original_input_path / "files.yml")
             # remove the original json file
             (original_input_path / "files.json").unlink()
 
-        original_files = load_dict(original_input_path / "files.yml")
+        original_files = read_dict(original_input_path / "files.yml")
 
         for file_class, files in original_files.items():
             for file_name, file_path in files.items():
@@ -1429,7 +1417,7 @@ def workflow(
         snakemake_args: Additional arguments to pass to snakemake.
     """
     # Get GEB package directory for workflow files
-    geb_dir = Path(os.environ.get("GEB_PACKAGE_DIR")).parent
+    geb_dir: Path = GEB_PACKAGE_DIR.parent
 
     with WorkingDirectory(working_directory):
         # Build snakemake command
@@ -1601,9 +1589,7 @@ def init_multiple_fn(
     logger.info(f"Created {len(clusters)} clusters")
 
     # Verify example folder exists
-    example_folder: Path = (
-        Path(os.environ.get("GEB_PACKAGE_DIR")) / ".." / "examples" / from_example
-    )
+    example_folder: Path = GEB_PACKAGE_DIR / "examples" / from_example
     if not example_folder.exists():
         raise FileNotFoundError(
             f"Example folder {example_folder} does not exist. Did you use the right --from-example option?"
@@ -1738,6 +1724,9 @@ def init_multiple(
     skip_merged_geometries: bool,
     skip_visualization: bool,
     min_bbox_efficiency: float,
+    overwrite: bool,
+    save_geoparquet: Path | None,
+    save_map: str | None,
 ) -> None:
     """Initialize multiple models by clustering downstream subbasins in a geometry.
 

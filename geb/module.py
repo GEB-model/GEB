@@ -5,6 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Callable
 
+from geb.store import Bucket
+
 if TYPE_CHECKING:
     from geb.model import GEBModel
 
@@ -28,7 +30,7 @@ class Module(ABC):
         """
         self.model: GEBModel = model
         if create_var:
-            self.var = self.model.store.create_bucket(
+            self.var: Bucket = self.model.store.create_bucket(
                 f"{self.name}.var", validator=var_validator
             )
 
@@ -44,7 +46,7 @@ class Module(ABC):
         pass
 
     @abstractmethod
-    def step(self) -> None:
+    def step(self, *args: Any, **kwargs: Any) -> Any:
         """Perform a single time step of the module. This method should be overridden by subclasses."""
         pass
 

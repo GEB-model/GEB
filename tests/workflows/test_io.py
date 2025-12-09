@@ -18,7 +18,7 @@ from geb.workflows.io import (
     AsyncGriddedForcingReader,
     calculate_scaling,
     get_window,
-    to_zarr,
+    write_zarr,
 )
 
 from ..testconfig import tmp_folder
@@ -176,7 +176,7 @@ def test_io() -> None:
     da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
     da.attrs["_FillValue"] = np.nan
 
-    to_zarr(da, tmp_folder / "test.zarr", crs=4326)
+    write_zarr(da, tmp_folder / "test.zarr", crs=4326)
 
     time_dimension = np.linspace(0, 10, 10)
     values = np.random.rand(x.size, y.size, time_dimension.size).astype(np.float32)
@@ -185,7 +185,7 @@ def test_io() -> None:
     ).chunk()
     da.attrs["_FillValue"] = np.nan
 
-    to_zarr(da, tmp_folder / "test.zarr", crs=4326)
+    write_zarr(da, tmp_folder / "test.zarr", crs=4326)
 
     other_dimension = np.linspace(110, 115, 10)
     values = np.random.rand(x.size, y.size, other_dimension.size).astype(np.float32)
@@ -197,7 +197,7 @@ def test_io() -> None:
     ).chunk()
     da.attrs["_FillValue"] = np.nan
 
-    to_zarr(da, tmp_folder / "test.zarr", crs=4326)
+    write_zarr(da, tmp_folder / "test.zarr", crs=4326)
 
 
 def test_get_window() -> None:

@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 
-from geb.workflows.io import load_grid
+from geb.types import ThreeDArrayFloat32
+from geb.workflows.io import read_grid
 
 from .module import Module
 from .workflows.io import AsyncGriddedForcingReader
@@ -219,7 +220,7 @@ class ForcingLoader(ABC):
         """
         return self._supports_forecast
 
-    def load(self, dt: datetime) -> npt.NDArray[Any]:
+    def load(self, dt: datetime) -> ThreeDArrayFloat32:
         """Load and validate forcing data for a given time.
 
         If in forecast mode and the time is after the forecast issue date,
@@ -392,7 +393,7 @@ class Precipitation(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all() and (v_non_masked < 500 / 3600).all()
+        return ((v_non_masked >= 0).all() and (v_non_masked < 500 / 3600).all()).item()
 
 
 class Temperature(ForcingLoader):
@@ -440,7 +441,7 @@ class Temperature(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked > 170).all() and (v_non_masked < 370).all()
+        return ((v_non_masked > 170).all() and (v_non_masked < 370).all()).item()
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
         """Interpolate data to the model grid using bilinear interpolation.
@@ -503,7 +504,7 @@ class Wind(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= -150).all() and (v_non_masked < 150).all()
+        return ((v_non_masked >= -150).all() and (v_non_masked < 150).all()).item()
 
 
 class Pressure(ForcingLoader):
@@ -552,7 +553,7 @@ class Pressure(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked > 30_000).all() and (v_non_masked < 120_000).all()
+        return ((v_non_masked > 30_000).all() and (v_non_masked < 120_000).all()).item()
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
         """Interpolate data to the model grid using bilinear interpolation.
@@ -616,7 +617,7 @@ class RSDS(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all()
+        return (v_non_masked >= 0).all().item()
 
 
 class RLDS(ForcingLoader):
@@ -642,7 +643,7 @@ class RLDS(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all()
+        return (v_non_masked >= 0).all().item()
 
 
 class SPEI(ForcingLoader):
@@ -757,7 +758,7 @@ class Forcing(Module):
             model: The GEB model instance.
         """
         self.model = model
-        self.forcing_DEM = load_grid(model.files["other"]["climate/elevation_forcing"])
+        self.forcing_DEM = read_grid(model.files["other"]["climate/elevation_forcing"])
 
         # Initialize all forcing loaders upfront
         self._initialize_loaders()
@@ -830,7 +831,13 @@ class Forcing(Module):
             )
         return self._loaders[name]
 
-    def load(self, name: str, dt: datetime | None = None) -> npt.NDArray[Any] | float:
+    @overload
+    def load(self, name: Literal["CO2_ppm"], dt: datetime | None = None) -> float: ...
+
+    @overload
+    def load(self, name: str, dt: datetime | None = None) -> ThreeDArrayFloat32: ...
+
+    def load(self, name: str, dt: datetime | None = None) -> ThreeDArrayFloat32 | float:
         """Load forcing data for a given name and time.
 
         Args:
