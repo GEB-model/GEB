@@ -916,14 +916,33 @@ class AsyncGriddedForcingReader:
 
         Returns:
             The requested data slice (not a copy - caller must copy if needed).
+
+        Raises:
+            RuntimeError: If data loading fails after maximum retries.
         """
         # Select the variable array from the pre-opened async group.
-        arr: zarr.AsyncArray[Any] = self.array.async_array
-        data = await arr.getitem(
-            (slice(start_index, end_index), slice(None), slice(None))
+        arr = await self.async_group.getitem(self.variable_name)
+        max_retries = 100
+        retries = 0
+        while retries < max_retries:
+            data = await arr.get_orthogonal_selection(
+                (slice(start_index, end_index), slice(None), slice(None))
+            )
+
+            # Only apply the NaN workaround if the array actually uses NaN as fill value
+            if np.any(np.isnan(data)):
+                retries += 1
+                print(
+                    f"Warning: Async read returned all NaN values for {self.variable_name}, retrying {retries}/{max_retries}..."
+                )
+                await asyncio.sleep(delay=0.1)  # brief pause before retrying
+            else:
+                return data
+
+        # If still all NaN after retries, raise an error
+        raise RuntimeError(
+            f"Failed to load data for {self.variable_name} after {max_retries} retries due to all NaN values."
         )
-        assert isinstance(data, np.ndarray)
-        return data
 
     async def preload_next(
         self, start_index: int, end_index: int, n: int
