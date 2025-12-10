@@ -1371,10 +1371,6 @@ def create_hash_from_parameters(
             value = [make_hashable(v) for v in value]
         elif isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
             value = joblib.hash(value, hash_name="md5", coerce_mmap=True)
-        try:
-            hash(value)
-        except TypeError:
-            raise ValueError(f"Value {value} is not hashable")
         return value
 
     hashable_dict = make_hashable(parameters)
