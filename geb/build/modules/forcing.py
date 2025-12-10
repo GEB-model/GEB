@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from functools import partial
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -30,15 +30,15 @@ from geb.workflows.raster import resample_like
 
 from ...workflows.io import calculate_scaling, write_zarr
 
-if TYPE_CHECKING:
-    from geb.build import GEBModel
 
-
-def plot_forcing(self: GEBModel, da: xr.DataArray, name: str) -> None:
+def plot_normal_forcing(
+    mask: xr.DataArray, report_dir: Path, da: xr.DataArray, name: str
+) -> None:
     """Plot forcing data with a temporal (timeline) plot and a spatial plot.
 
     Args:
-        self: The class instance.
+        mask: The grid mask for the model.
+        report_dir: The directory where reports are saved.
         da: The xarray DataArray containing the forcing data. Must have dimensions 'time',
         name: The name of the variable being plotted, used for titles and filenames.
     """
@@ -46,7 +46,6 @@ def plot_forcing(self: GEBModel, da: xr.DataArray, name: str) -> None:
         4, 1, figsize=(20, 10), gridspec_kw={"hspace": 0.5}
     )  # Create 4 subplots stacked vertically
 
-    mask = self.grid["mask"]  # get the GEB grid
     data = (
         (da * ~mask).sum(dim=("y", "x")) / (~mask).sum()
     ).compute()  # Area-weighted average
@@ -69,40 +68,26 @@ def plot_forcing(self: GEBModel, da: xr.DataArray, name: str) -> None:
                 axes[i + 1],  # axis to plot on
             )
 
-    fp = self.report_dir / (
-        name + "_timeline.png"
-    )  # file path for saving the timeline plot
+    fp = report_dir / (name + "_timeline.png")  # file path for saving the timeline plot
     fp.parent.mkdir(parents=True, exist_ok=True)  # ensure directory exists
     plt.savefig(fp)  # save the timeline plot
     plt.close(fig)  # close the figure to free memory
 
-    spatial_data = da.mean(dim="time")  # mean over time for spatial plot
 
-    spatial_data.plot()  # plot the spatial data
-
-    plt.title(name)  # title
-    plt.xlabel("Longitude")  # x-axis label
-    plt.ylabel("Latitude")  # y-axis label
-
-    spatial_fp: Path = self.report_dir / (
-        name + "_spatial.png"
-    )  # file path for saving the spatial plot
-    plt.savefig(spatial_fp)  # save the spatial plot
-    plt.close()  # close the plot to free memory
-
-
-def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> None:
+def plot_forecasts(
+    mask: xr.DataArray, report_dir: Path, da: xr.DataArray, name: str
+) -> None:
     """Plot forecast data with a temporal (timeline) plot and a spatial plot.
 
     Handles only ensemble forecasts for now. Makes a spatial plot for every single ensemble member.
 
     Args:
-        geb_build_model: The class instance.
+        mask: The grid mask for the model.
+        report_dir: The directory where reports are saved.
         da: The xarray DataArray containing the forecast data. Must have dimensions 'time', 'y', 'x', and 'member'.
         name: The name of the variable being plotted, used for titles and filenames.
     """
     # pre-processing of plotting data
-    mask = geb_build_model.grid["mask"]  # get the GEB grid
     da_plot = da.copy()  # make a copy to avoid modifying the original data
     # Convert data to mm/hour if it's precipitation
     if "pr" in name.lower() and "kg m-2 s-1" in da_plot.attrs.get("units", ""):
@@ -154,7 +139,7 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
     ax_time.set_title(f"{name} - Ensemble Forecast Timeline")  # title
     ax_time.grid(True, alpha=0.3)  # light grid
 
-    fp = geb_build_model.report_dir / (name + "_ensemble_timeline.png")  # File path
+    fp = report_dir / (name + "_ensemble_timeline.png")  # File path
     fp.parent.mkdir(parents=True, exist_ok=True)  # ensure directory exists
     plt.tight_layout()  # tight layout
     plt.savefig(fp, dpi=300, bbox_inches="tight")  # save figure
@@ -228,7 +213,7 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
         )  # add country borders
 
         # Add region shapefile boundary with thick line
-        geb_build_model.geom["mask"].boundary.plot(
+        mask.boundary.plot(
             ax=ax, color="red", linewidth=3, transform=ccrs.PlateCarree()
         )
 
@@ -242,9 +227,7 @@ def plot_forecasts(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> No
     fig.suptitle(
         f"{name} - Ensemble Spatial Distribution (Max over Time)", y=0.99
     )  # Overall title
-    spatial_fp: Path = geb_build_model.report_dir / (
-        name + "_ensemble_spatial.png"
-    )  # File path
+    spatial_fp: Path = report_dir / (name + "_ensemble_spatial.png")  # File path
     plt.savefig(spatial_fp, dpi=300, bbox_inches="tight")  # Save figure
     plt.close(fig)  # Close figure to free memory
 
@@ -467,20 +450,23 @@ def plot_gif(
     imageio.mimsave(gif_fp, frames, fps=5)
 
 
-def _plot_data(geb_build_model: GEBModel, da: xr.DataArray, name: str) -> None:
+def plot_forcing(
+    mask: xr.DataArray, report_dir: Path, da: xr.DataArray, name: str
+) -> None:
     """Plot data using appropriate method based on data type.
 
-    Uses plot_forecasts if 'forecast' is in the name, otherwise uses plot_forcing.
+    Uses plot_forecasts if 'forecast' is in the name, otherwise uses plot_normal_forcing.
 
     Args:
-        geb_build_model: The class instance.
+        mask: The grid mask for the model.
+        report_dir: The directory where reports are saved.
         da: Data to plot.
         name: Name for the plots and file outputs.
     """
     if "forecast" in name.lower():
-        plot_forecasts(geb_build_model, da, name)  # plot forecasts
+        plot_forecasts(mask, report_dir, da, name)  # plot forecasts
     else:
-        plot_forcing(geb_build_model, da, name)  # plot historical forcing data
+        plot_normal_forcing(mask, report_dir, da, name)  # plot historical forcing data
 
 
 def plot_timeline(
@@ -592,7 +578,7 @@ class Forcing:
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         if "forecasts" in name.lower():
             # Check if GIF files already exist before creating them
             gif_fp_regular = self.report_dir / f"{name.replace('/', '_')}_animation.gif"
@@ -668,7 +654,7 @@ class Forcing:
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_rlds_W_per_m2(
@@ -721,7 +707,7 @@ class Forcing:
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_tas_2m_K(
@@ -777,7 +763,7 @@ class Forcing:
             time_chunksize=24,
         )
 
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_dewpoint_tas_2m_K(
@@ -832,7 +818,7 @@ class Forcing:
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_ps_pascal(
@@ -886,7 +872,7 @@ class Forcing:
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_wind_10m_m_per_s(
@@ -945,7 +931,7 @@ class Forcing:
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_SPEI(
@@ -1000,7 +986,7 @@ class Forcing:
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
-        _plot_data(self, da, name)
+        plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def setup_forcing_ERA5(self) -> None:
