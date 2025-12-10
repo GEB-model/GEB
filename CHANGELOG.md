@@ -1,4 +1,4 @@
-## v1.0.0b8
+# v1.0.0b8
 - Improve model startup time
 - Improve detection of outflow boundaries. Now uses intersection between river lines and geometry boundary.
 - Add an option in the config to run only coastal models.
@@ -19,3 +19,7 @@
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
+
+# v1.0.0b9
+- updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.
+- add a new option for flood models. We now auto-detect whether a change in the code or model input is made. If no change in the model or model input, we do not rebuild the SFINCS model.
