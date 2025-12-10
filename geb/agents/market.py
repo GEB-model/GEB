@@ -56,23 +56,23 @@ class Market(AgentBaseClass):
             self.model, "crops/crop_prices"
         )
 
-        if (
-            "calibration" in self.model.config
-            and "KGE_crops" in self.model.config["calibration"]["calibration_targets"]
-        ):
-            self.production_influence_calibration_factor = np.array(
-                [
-                    self.model.config["agent_settings"]["calibration_crops"][
-                        f"price_{i}"
-                    ]
-                    for i in range(self._crop_prices[1].shape[2])
-                ],
-                dtype=np.float32,
-            )
-        else:
-            self.production_influence_calibration_factor = np.ones(
-                self._crop_prices[1].shape[2], dtype=np.float32
-            )
+        # if (
+        #     "calibration" in self.model.config
+        #     and "KGE_crops" in self.model.config["calibration"]["calibration_targets"]
+        # ):
+        #     self.production_influence_calibration_factor = np.array(
+        #         [
+        #             self.model.config["agent_settings"]["calibration_crops"][
+        #                 f"price_{i}"
+        #             ]
+        #             for i in range(self._crop_prices[1].shape[2])
+        #         ],
+        #         dtype=np.float32,
+        #     )
+        # else:
+        self.production_influence_calibration_factor = np.ones(
+            self._crop_prices[1].shape[2], dtype=np.float32
+        )
 
     @property
     def name(self) -> str:

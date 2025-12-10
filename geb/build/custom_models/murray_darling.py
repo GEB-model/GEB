@@ -22,6 +22,585 @@ class Agents(GEBModel):
         super().__init__(*args, **kwargs)
 
     @build_method(depends_on=["setup_economic_data"])
+    def setup_irrigation_efficiency_australia(
+        self,
+        start_year: int,
+        end_year: int,
+    ) -> None:
+        fp = Path("calibration_data/water_use/murray_water_use.csv")
+
+        data_df = pd.read_csv(fp)
+        data_df["Value"] = pd.to_numeric(data_df["Value"], errors="coerce")
+
+        # Filter and rename columns
+        irrigation_types = [
+            "surface_irrigation",
+            "drip_or_trickle_irrigation",
+            "sprinkler_irrigation",
+        ]
+        irrigation_df = data_df[data_df["Description"].isin(irrigation_types)]
+        irrigation_df = irrigation_df.rename(columns={"Year": "time"})
+
+        # Parse e.g. "2002/3" -> datetime(2003-06-30)
+        def parse_water_year(wy_str):
+            return pd.to_datetime(f"{int(wy_str.split('/')[0]) + 1}-06-30")
+
+        irrigation_df["time"] = irrigation_df["time"].apply(parse_water_year)
+
+        # Pivot and compute total + fraction
+        irrigation_pivot = irrigation_df.pivot_table(
+            index=["time", "Region"],
+            columns="Description",
+            values="Value",
+            aggfunc="first",
+        )
+        irrigation_pivot["total_irrigation"] = irrigation_pivot[irrigation_types].sum(
+            axis=1
+        )
+        for irr_type in irrigation_types:
+            irrigation_pivot["fraction_" + irr_type] = (
+                irrigation_pivot[irr_type] / irrigation_pivot["total_irrigation"]
+            )
+
+        # Melt fractions into long format, combine with original
+        fraction_cols = ["fraction_" + x for x in irrigation_types]
+        fraction_df = (
+            irrigation_pivot[fraction_cols]
+            .reset_index()
+            .melt(
+                id_vars=["time", "Region"],
+                value_vars=fraction_cols,
+                var_name="Description",
+                value_name="Value",
+            )
+        )
+        combined_data_df = pd.concat(
+            [data_df, fraction_df[["time", "Region", "Description", "Value"]]],
+            ignore_index=True,
+        )
+
+        # Pivot for ratio-based estimation
+        pivot_df = combined_data_df.pivot_table(
+            index=["time", "Description"],
+            columns="Region",
+            values="Value",
+            aggfunc="first",
+        )
+
+        # Estimate missing data via ratio
+        ref_regions = {
+            "murray": "NSW",
+            "goulburn_broken": "VICT",
+            "north_central": "VICT",
+            "north_east": "VICT",
+        }
+        for target, ref in ref_regions.items():
+            if target in pivot_df.columns and ref in pivot_df.columns:
+                pivot_df["Ratio"] = pivot_df[target] / pivot_df[ref]
+                desc_ratio = pivot_df.groupby(level="Description")["Ratio"].mean()
+                pivot_df["Avg_Ratio"] = pivot_df.index.get_level_values(
+                    "Description"
+                ).map(desc_ratio)
+                pivot_df["Estimated"] = pivot_df[ref] * pivot_df["Avg_Ratio"]
+                pivot_df[target] = pivot_df[target].fillna(pivot_df["Estimated"])
+                pivot_df = pivot_df.drop(columns=["Ratio", "Avg_Ratio", "Estimated"])
+
+        # Normalize fraction rows to sum to 1
+        frac_desc = ["fraction_" + x for x in irrigation_types]
+        frac_df = pivot_df.loc[
+            pivot_df.index.get_level_values("Description").isin(frac_desc)
+        ].copy()
+        frac_df = frac_df.fillna(0)
+        frac_sum = frac_df.groupby(level=["time"]).sum()
+        frac_norm = frac_df.div(frac_sum)
+        pivot_df.update(frac_norm)
+
+        # Flatten for interpolation
+        df_flat = pivot_df.reset_index()
+        df_flat = df_flat.sort_values("time")
+        min_date = df_flat["time"].min()
+        max_date = df_flat["time"].max()
+
+        # For each Description, reindex on full date range, interpolate by time
+        all_desc = df_flat["Description"].unique()
+        groups = []
+        for d in all_desc:
+            g = df_flat[df_flat["Description"] == d].copy()
+
+            g = g.set_index("time")
+            g.index = pd.to_datetime(g.index, errors="coerce")
+            g = g.sort_index()
+
+            dates = pd.date_range(min_date, max_date, freq="YE-JUN")
+            g = g.reindex(dates, fill_value=np.nan)
+
+            non_numeric_cols = g.select_dtypes(exclude=["number"]).columns
+            temp_non_numeric = g[non_numeric_cols]
+            g = g.drop(columns=non_numeric_cols)
+
+            g = g.infer_objects(copy=False)
+            g = g.interpolate(method="time", limit_direction="both")
+
+            g[non_numeric_cols] = temp_non_numeric
+            g["Description"] = d
+            groups.append(g)
+
+        df_flat_int = pd.concat(groups).reset_index().rename(columns={"index": "time"})
+        pivot_df = df_flat_int.pivot_table(
+            index=["time", "Description"],
+            aggfunc="first",
+        ).sort_index(level="time")
+
+        import matplotlib.pyplot as plt
+
+        output_dir = Path("calibration_data/water_use/plots")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Range for expansion (arguments)
+        start_year = start_year
+        end_year = end_year
+
+        pivot = pivot_df.copy().reset_index()
+        pivot["time"] = pd.to_datetime(pivot["time"])
+        pivot["year"] = pivot["time"].dt.year.astype(float)
+
+        regions_to_fit = ["NSW", "VICT"]
+
+        # =========================
+        # 1. SIMPLE PROGRESSION PLOTS (ALL REGIONS)
+        # =========================
+
+        long_all = pivot.melt(
+            id_vars=["time", "year", "Description"],
+            var_name="Region",
+            value_name="fraction",
+        )
+
+        for region, g in long_all.groupby("Region"):
+            fig, ax = plt.subplots()
+            for desc, gg in g.groupby("Description"):
+                ax.plot(gg["time"], gg["fraction"], marker="o", label=desc)
+
+            ax.set_title(f"Irrigation fractions over time – {region}")
+            ax.set_xlabel("Year")
+            ax.set_ylabel("Fraction")
+            ax.legend()
+            ax.grid(True)
+
+            fig.savefig(
+                output_dir / f"irrigation_fractions_{region}.png",
+                dpi=150,
+                bbox_inches="tight",
+            )
+            plt.close(fig)
+
+        print("Saved simple progression plots for all regions.")
+
+        # =========================
+        # 2. PREPARE DATA FOR NSW & VICT (WIDE, COMPOSITIONAL)
+        # =========================
+
+        desc_map = {
+            "fraction_drip_or_trickle_irrigation": "drip",
+            "fraction_sprinkler_irrigation": "sprinkler",
+            "fraction_surface_irrigation": "surface",
+        }
+
+        def prepare_region_wide(long_all, region):
+            """
+            Return wide table for a region:
+            columns: year, drip, sprinkler, surface
+            Fractions are renormalised per year to sum exactly to 1.
+            """
+            sub = long_all[long_all["Region"] == region].copy()
+            sub["Var"] = sub["Description"].map(desc_map)
+            wide = sub.pivot(
+                index="year", columns="Var", values="fraction"
+            ).sort_index()
+
+            sum_frac = wide[["drip", "sprinkler", "surface"]].sum(axis=1)
+            wide[["drip", "sprinkler", "surface"]] = wide[
+                ["drip", "sprinkler", "surface"]
+            ].div(sum_frac, axis=0)
+
+            wide = wide.reset_index()
+            return wide
+
+        # =========================
+        # 3. LINEAR MODEL
+        # =========================
+
+        def fit_linear_model(years, y):
+            years = np.asarray(years, dtype=float)
+            y = np.asarray(y, dtype=float)
+            coeffs = np.polyfit(years, y, 1)  # [b, a]
+            yhat = np.polyval(coeffs, years)
+            ss_res = np.sum((y - yhat) ** 2)
+            ss_tot = np.sum((y - np.mean(y)) ** 2)
+            r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
+            return {"type": "linear", "coeffs": coeffs, "r2": r2}
+
+        def predict_linear_model(years, model):
+            years = np.asarray(years, dtype=float)
+            return np.polyval(model["coeffs"], years)
+
+        # =========================
+        # 4. LINEAR + SINUSOID MODEL
+        # =========================
+
+        def fit_linear_sine_model(years, y, period):
+            years = np.asarray(years, dtype=float)
+            y = np.asarray(y, dtype=float)
+
+            t0 = years.mean()
+            t = years - t0
+            omega = 2.0 * np.pi / period
+
+            X = np.column_stack(
+                [
+                    np.ones_like(t),
+                    t,
+                    np.sin(omega * t),
+                ]
+            )
+
+            params, *_ = np.linalg.lstsq(X, y, rcond=None)  # [a, b, c]
+
+            yhat = X @ params
+            ss_res = np.sum((y - yhat) ** 2)
+            ss_tot = np.sum((y - np.mean(y)) ** 2)
+            r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
+
+            return {
+                "type": "linear_sine",
+                "params": params,
+                "t0": t0,
+                "omega": omega,
+                "r2": r2,
+            }
+
+        def predict_linear_sine_model(years, model):
+            years = np.asarray(years, dtype=float)
+            t0 = model["t0"]
+            omega = model["omega"]
+            a, b, c = model["params"]
+
+            t = years - t0
+            return a + b * t + c * np.sin(omega * t)
+
+        # =========================
+        # 4b. LOGISTIC (S-SHAPED) MODEL
+        # =========================
+
+        def fit_logistic_model(years, y):
+            """
+            Logistic S-curve via logit transform:
+                logit(y) = ln(y/(1-y)) = a + b * year
+            with y clipped to (eps, 1-eps).
+            """
+            years = np.asarray(years, dtype=float)
+            y = np.asarray(y, dtype=float)
+
+            eps = 1e-6
+            y_clip = np.clip(y, eps, 1 - eps)
+            logit = np.log(y_clip / (1 - y_clip))
+
+            coeffs = np.polyfit(years, logit, 1)  # [b, a]
+            logit_hat = np.polyval(coeffs, years)
+            yhat = 1.0 / (1.0 + np.exp(-logit_hat))
+
+            ss_res = np.sum((y - yhat) ** 2)
+            ss_tot = np.sum((y - np.mean(y)) ** 2)
+            r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
+
+            return {"type": "logistic", "coeffs": coeffs, "r2": r2}
+
+        def predict_logistic_model(years, model):
+            years = np.asarray(years, dtype=float)
+            logit_hat = np.polyval(model["coeffs"], years)
+            return 1.0 / (1.0 + np.exp(-logit_hat))
+
+        # =========================
+        # 5. FIT MODELS FOR NSW & VICT
+        # =========================
+        period_years_NSW = 7
+        period_years_VICT = 8
+
+        fit_linear = {}
+        fit_sine = {}
+        fit_logistic = {}
+
+        for region in regions_to_fit:
+            wide = prepare_region_wide(long_all, region)
+
+            fit_linear[region] = {"data": wide, "models": {}}
+            fit_sine[region] = {"data": wide, "models": {}}
+            fit_logistic[region] = {"data": wide, "models": {}}
+
+            for var in ["drip", "sprinkler", "surface"]:
+                # linear
+                m_lin = fit_linear_model(wide["year"].values, wide[var].values)
+                fit_linear[region]["models"][var] = m_lin
+
+                # linear + sine
+                if region == "VICT":
+                    m_sin = fit_linear_sine_model(
+                        wide["year"].values, wide[var].values, period_years_VICT
+                    )
+                else:
+                    m_sin = fit_linear_sine_model(
+                        wide["year"].values, wide[var].values, period_years_NSW
+                    )
+                fit_sine[region]["models"][var] = m_sin
+
+                # logistic
+                m_log = fit_logistic_model(wide["year"].values, wide[var].values)
+                fit_logistic[region]["models"][var] = m_log
+
+        # Optional: print R² to see how they behave
+        for region in regions_to_fit:
+            print(f"=== {region} – LINEAR ===")
+            for var, m in fit_linear[region]["models"].items():
+                print(f"  {var}: R² = {m['r2']:.4f}")
+            print(f"=== {region} – LINEAR+SINE ===")
+            for var, m in fit_sine[region]["models"].items():
+                print(f"  {var}: R² = {m['r2']:.4f}")
+            print(f"=== {region} – LOGISTIC ===")
+            for var, m in fit_logistic[region]["models"].items():
+                print(f"  {var}: R² = {m['r2']:.4f}")
+
+        # =========================
+        # 6. BUILD EXPANDED PREDICTIONS WITH COMPOSITION CONSTRAINTS
+        # =========================
+
+        years_expanded = np.arange(start_year, end_year + 1)
+
+        def predict_region_composition(years, region, mode="linear"):
+            """
+            mode: "linear", "linear_sine", or "logistic"
+            Uses the corresponding fitted models, then enforces:
+            - 0 <= fraction <= 1
+            - drip + sprinkler + surface = 1
+            """
+            years = np.asarray(years, dtype=float)
+
+            if mode == "linear":
+                reg_fit = fit_linear[region]
+                f_drip = predict_linear_model(years, reg_fit["models"]["drip"])
+                f_spr = predict_linear_model(years, reg_fit["models"]["sprinkler"])
+                f_surf = predict_linear_model(years, reg_fit["models"]["surface"])
+
+            elif mode == "linear_sine":
+                reg_fit = fit_sine[region]
+                f_drip = predict_linear_sine_model(years, reg_fit["models"]["drip"])
+                f_spr = predict_linear_sine_model(years, reg_fit["models"]["sprinkler"])
+                f_surf = predict_linear_sine_model(years, reg_fit["models"]["surface"])
+
+            elif mode == "logistic":
+                reg_fit = fit_logistic[region]
+                f_drip = predict_logistic_model(years, reg_fit["models"]["drip"])
+                f_spr = predict_logistic_model(years, reg_fit["models"]["sprinkler"])
+                f_surf = predict_logistic_model(years, reg_fit["models"]["surface"])
+
+            else:
+                raise ValueError("mode must be 'linear', 'linear_sine', or 'logistic'")
+
+            comp = np.vstack([f_drip, f_spr, f_surf]).T
+
+            comp = np.clip(comp, 0.0, 1.0)
+            row_sums = comp.sum(axis=1, keepdims=True)
+            row_sums[row_sums == 0] = 1.0
+            comp = comp / row_sums
+
+            drip, spr, surf = comp.T
+
+            return pd.DataFrame(
+                {
+                    "Region": region,
+                    "year": years,
+                    "drip": drip,
+                    "sprinkler": spr,
+                    "surface": surf,
+                    "mode": mode,
+                }
+            )
+
+        # Build expanded predictions for all three modes
+        expanded_linear_list = []
+        expanded_sine_list = []
+        expanded_logistic_list = []
+
+        for region in regions_to_fit:
+            expanded_linear_list.append(
+                predict_region_composition(years_expanded, region, mode="linear")
+            )
+            expanded_sine_list.append(
+                predict_region_composition(years_expanded, region, mode="linear_sine")
+            )
+            expanded_logistic_list.append(
+                predict_region_composition(years_expanded, region, mode="logistic")
+            )
+
+        expanded_linear_df = pd.concat(expanded_linear_list, ignore_index=True)
+        expanded_sine_df = pd.concat(expanded_sine_list, ignore_index=True)
+        expanded_logistic_df = pd.concat(expanded_logistic_list, ignore_index=True)
+
+        # =========================
+        # 7. PLOTS: ORIGINAL + EXPANDED, FOR ALL MODES
+        # =========================
+
+        for region in regions_to_fit:
+            wide = fit_linear[region]["data"]
+
+            # ---- Linear ----
+            preds_lin = expanded_linear_df[expanded_linear_df["Region"] == region]
+
+            fig, ax = plt.subplots()
+            ax.plot(wide["year"], wide["drip"], "o", label="drip (obs)")
+            ax.plot(wide["year"], wide["sprinkler"], "o", label="sprinkler (obs)")
+            ax.plot(wide["year"], wide["surface"], "o", label="surface (obs)")
+
+            ax.plot(preds_lin["year"], preds_lin["drip"], "-", label="drip (linear)")
+            ax.plot(
+                preds_lin["year"],
+                preds_lin["sprinkler"],
+                "-",
+                label="sprinkler (linear)",
+            )
+            ax.plot(
+                preds_lin["year"], preds_lin["surface"], "-", label="surface (linear)"
+            )
+
+            ax.set_title(f"Irrigation fractions – linear fit & expanded – {region}")
+            ax.set_xlabel("Year")
+            ax.set_ylabel("Fraction")
+            ax.legend()
+            ax.grid(True)
+
+            fig.savefig(
+                output_dir / f"irrigation_fit_expanded_linear_{region}.png",
+                dpi=150,
+                bbox_inches="tight",
+            )
+            plt.close(fig)
+
+            # ---- Linear + Sine ----
+            preds_sin = expanded_sine_df[expanded_sine_df["Region"] == region]
+
+            fig, ax = plt.subplots()
+            ax.plot(wide["year"], wide["drip"], "o", label="drip (obs)")
+            ax.plot(wide["year"], wide["sprinkler"], "o", label="sprinkler (obs)")
+            ax.plot(wide["year"], wide["surface"], "o", label="surface (obs)")
+
+            ax.plot(preds_sin["year"], preds_sin["drip"], "-", label="drip (lin+sine)")
+            ax.plot(
+                preds_sin["year"],
+                preds_sin["sprinkler"],
+                "-",
+                label="sprinkler (lin+sine)",
+            )
+            ax.plot(
+                preds_sin["year"], preds_sin["surface"], "-", label="surface (lin+sine)"
+            )
+
+            ax.set_title(
+                f"Irrigation fractions – linear+sinusoidal fit & expanded – {region}"
+            )
+            ax.set_xlabel("Year")
+            ax.set_ylabel("Fraction")
+            ax.legend()
+            ax.grid(True)
+
+            fig.savefig(
+                output_dir / f"irrigation_fit_expanded_linear_sine_{region}.png",
+                dpi=150,
+                bbox_inches="tight",
+            )
+            plt.close(fig)
+
+            # ---- Logistic (S-shaped) ----
+            preds_log = expanded_logistic_df[expanded_logistic_df["Region"] == region]
+
+            fig, ax = plt.subplots()
+            ax.plot(wide["year"], wide["drip"], "o", label="drip (obs)")
+            ax.plot(wide["year"], wide["sprinkler"], "o", label="sprinkler (obs)")
+            ax.plot(wide["year"], wide["surface"], "o", label="surface (obs)")
+
+            ax.plot(preds_log["year"], preds_log["drip"], "-", label="drip (logistic)")
+            ax.plot(
+                preds_log["year"],
+                preds_log["sprinkler"],
+                "-",
+                label="sprinkler (logistic)",
+            )
+            ax.plot(
+                preds_log["year"],
+                preds_log["surface"],
+                "-",
+                label="surface (logistic)",
+            )
+
+            ax.set_title(
+                f"Irrigation fractions – logistic (S-curve) fit & expanded – {region}"
+            )
+            ax.set_xlabel("Year")
+            ax.set_ylabel("Fraction")
+            ax.legend()
+            ax.grid(True)
+
+            fig.savefig(
+                output_dir / f"irrigation_fit_expanded_logistic_{region}.png",
+                dpi=150,
+                bbox_inches="tight",
+            )
+            plt.close(fig)
+
+        print(
+            "Saved combined original + expanded plots for NSW and VICT, for linear, linear+sinusoidal and logistic models."
+        )
+
+        # =========================
+        # 8. STORE RESULTS AS DICTIONARIES (VICT=0, NSW=1)
+        # =========================
+
+        region_ids = {"VICT": 0, "NSW": 1}
+        years = list(range(start_year, end_year + 1))
+
+        irrigation_frac_map = {
+            "fraction_drip_or_trickle_irrigation": "drip",
+            "fraction_sprinkler_irrigation": "sprinkler",
+            "fraction_surface_irrigation": "surface",
+        }
+
+        def build_and_store_dicts(expanded_df):
+            expanded_df = expanded_df[
+                (expanded_df["year"] >= start_year) & (expanded_df["year"] <= end_year)
+            ].copy()
+
+            for dict_name, col in irrigation_frac_map.items():
+                irrig_dict = {"time": years, "data": {}}
+
+                for region_name, region_id in region_ids.items():
+                    sub = (
+                        expanded_df[expanded_df["Region"] == region_name]
+                        .set_index("year")
+                        .sort_index()
+                    )
+                    s = sub[col].reindex(years)
+                    s = s.interpolate().bfill().ffill()
+                    irrig_dict["data"][region_id] = s.tolist()
+
+                key_name = f"irrigation/{col}"
+                self.set_dict(irrig_dict, name=key_name)
+
+        # Choose which trajectories to use for the model dictionaries:
+        # build_and_store_dicts(expanded_linear_df)      # linear
+        # build_and_store_dicts(expanded_sine_df)        # linear+sine
+        build_and_store_dicts(expanded_logistic_df)  # logistic (S-shaped)
+
+        pass
+
+    @build_method(depends_on=["setup_economic_data"])
     def setup_water_prices_australia(
         self,
         start_year: int,

@@ -1090,6 +1090,41 @@ class LandSurface(Module):
             reference_evapotranspiration_grass_m, pr_kg_per_m2_per_s
         )
         self.model.agents.crop_farmers.save_pr(pr_kg_per_m2_per_s)
+
+        # prepare hydrological variables for export
+        cell_area = self.HRU.var.cell_area
+        owned_land = self.HRU.var.land_owners != -1
+
+        self.var.interception_evaporation_m3_agents = np.bincount(
+            self.HRU.var.land_owners[owned_land],
+            weights=interception_evaporation_m[owned_land] * cell_area[owned_land],
+        )
+        self.var.open_water_evaporation_m3_agents = np.bincount(
+            self.HRU.var.land_owners[owned_land],
+            weights=open_water_evaporation_m[owned_land] * cell_area[owned_land],
+        )
+        self.var.transpiration_m3_agents = np.bincount(
+            self.HRU.var.land_owners[owned_land],
+            weights=transpiration_m[owned_land] * cell_area[owned_land],
+        )
+        self.var.bare_soil_evaporation_m3_agents = np.bincount(
+            self.HRU.var.land_owners[owned_land],
+            weights=bare_soil_evaporation_m[owned_land] * cell_area[owned_land],
+        )
+        self.var.irrigation_loss_to_evaporation_m3_agents = np.bincount(
+            self.HRU.var.land_owners[owned_land],
+            weights=irrigation_loss_to_evaporation_m[owned_land]
+            * cell_area[owned_land],
+        )
+        self.var.runoff_m3_agents = np.bincount(
+            self.HRU.var.land_owners[owned_land],
+            weights=runoff_m_daily[owned_land] * cell_area[owned_land],
+        )
+        self.var.recharge_m3_agents = np.bincount(
+            self.HRU.var.land_owners[owned_land],
+            weights=groundwater_recharge_m[owned_land] * cell_area[owned_land],
+        )
+
         self.report(locals())
 
         return (

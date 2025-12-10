@@ -71,7 +71,7 @@ agent_settings:
           base: 1.6
           coef: -2.5
           max: 10
-          min: 0.01
+          min: 0.1
   farmers:
     ruleset:  
     base_management_yield_ratio: 1

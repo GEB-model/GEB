@@ -473,6 +473,12 @@ class WaterDemand(Module):
         if self.model.timing:
             print(timer)
 
+        self.var.return_flow_m3_agents = np.bincount(
+            self.HRU.var.land_owners[self.HRU.var.land_owners != -1],
+            weights=return_flow_irrigation_m[self.HRU.var.land_owners != -1]
+            * self.HRU.var.cell_area[self.HRU.var.land_owners != -1],
+        )
+
         self.report(locals())
 
         return (
