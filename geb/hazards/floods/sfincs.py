@@ -186,7 +186,7 @@ class SFINCSRootModel:
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
             custom_rivers_to_burn: A GeoDataFrame of custom rivers to burn into the model grid. If None, uses the provided rivers GeoDataFrame.
                 dataframe must contain 'width' and 'depth' columns.
-            overwrite: Whether to overwrite the existing model if it exists. If 'auto', the model is only rebuilt if
+            overwrite: Whether to overwrite the existing model if it exists. If 'auto', the model is only rebuilt if the input parameters or code have changed.
 
         Returns:
             The SFINCSRootModel instance with the built model.

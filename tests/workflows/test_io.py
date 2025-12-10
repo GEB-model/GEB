@@ -711,49 +711,6 @@ def test_create_hash_from_parameters_with_code() -> None:
         assert hash_dir1 != hash_dir3
 
 
-def test_create_hash_from_parameters_with_code() -> None:
-    """Test create_hash_from_parameters with code_path."""
-    import tempfile
-
-    params = {"a": 1}
-    base_hash = create_hash_from_parameters(params)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        p = Path(tmpdir)
-
-        # Test with file
-        f = p / "test.py"
-        f.write_text("print('hello')")
-
-        hash1 = create_hash_from_parameters(params, code_path=f)
-        assert hash1 != base_hash
-
-        hash2 = create_hash_from_parameters(params, code_path=f)
-        assert hash1 == hash2
-
-        # Modify file
-        f.write_text("print('hello world')")
-        hash3 = create_hash_from_parameters(params, code_path=f)
-        assert hash1 != hash3
-
-        # Test with directory
-        d = p / "subdir"
-        d.mkdir()
-        (d / "a.py").write_text("a=1")
-        (d / "b.py").write_text("b=2")
-
-        hash_dir1 = create_hash_from_parameters(params, code_path=d)
-        assert hash_dir1 != base_hash
-
-        hash_dir2 = create_hash_from_parameters(params, code_path=d)
-        assert hash_dir1 == hash_dir2
-
-        # Modify file in directory
-        (d / "a.py").write_text("a=2")
-        hash_dir3 = create_hash_from_parameters(params, code_path=d)
-        assert hash_dir1 != hash_dir3
-
-
 def test_read_write_hash() -> None:
     """Test reading and writing hashes."""
     hash_val = "deadbeef"

@@ -1354,7 +1354,7 @@ def create_hash_from_parameters(
         code_path: Optional path to a file or directory containing code to include in the hash.
 
     Returns:
-        A bytes object representing the hash of the parameters.
+        A hexadecimal string representing the hash of the parameters.
 
     Raises:
         ValueError: If the parameters dictionary contains a key named '_code_content'.
@@ -1362,13 +1362,13 @@ def create_hash_from_parameters(
 
     def make_hashable(value: Any) -> Any:
         if isinstance(value, np.ndarray):
-            return str(value.tobytes())
+            value = str(value.tobytes())
         elif isinstance(value, (xr.DataArray, xr.Dataset)):
-            return dask.tokenize.tokenize(value, ensure_deterministic=True)
+            value = dask.tokenize.tokenize(value, ensure_deterministic=True)
         elif isinstance(value, dict):
-            return {k: make_hashable(v) for k, v in value.items()}
+            value = {k: make_hashable(v) for k, v in value.items()}
         elif isinstance(value, list):
-            return [make_hashable(v) for v in value]
+            value = [make_hashable(v) for v in value]
         elif isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
             value = joblib.hash(value, hash_name="md5", coerce_mmap=True)
         try:
@@ -1398,8 +1398,6 @@ def create_hash_from_parameters(
                         continue
         hashable_dict["_code_content"] = code_content
 
-    Path("test.json").write_text(json.dumps(hashable_dict, sort_keys=True))
-
     hash_: str = hashlib.md5(
         json.dumps(hashable_dict, sort_keys=True).encode()
     ).hexdigest()
@@ -1411,7 +1409,7 @@ def write_hash(path: Path, hash: str) -> None:
 
     Args:
         path: The path to the file where the hash will be written.
-        hash: The hash as a bytes object.
+        hash: The hash as a str object.
     """
     path.write_text(hash)
 
@@ -1423,6 +1421,6 @@ def read_hash(path: Path) -> str:
         path: The path to the file containing the hash.
 
     Returns:
-        The hash as a bytes object.
+        The hash as a str object.
     """
-    return path.read_text()
+    return path.read_text().strip()

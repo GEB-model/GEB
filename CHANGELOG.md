@@ -21,5 +21,5 @@ To support this version:
 - Re-run `setup_forcing` and `setup_spei`
 
 # v1.0.0b9
-- updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.
-- add a new option for flood models. We now auto-detect whether a change in the code or model input is made. If no change in the model or model input, we do not rebuild the SFINCS model. This removes the option `force_overwrite` for sfincs models.
+- Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.
+- Add a new option for flood models. We now auto-detect whether a change in the code or model input is made. If no change in the model or model input, we do not rebuild the SFINCS model. This removes the option `force_overwrite` for sfincs models.

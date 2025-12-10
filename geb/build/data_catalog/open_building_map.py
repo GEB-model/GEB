@@ -67,7 +67,7 @@ class OpenBuildingMap(Adapter):
     def _extract_buildings_in_geom(
         self, gpkg_filename: Path, geom: geometry.polygon.Polygon
     ) -> gpd.GeoDataFrame | None:
-        """This function reads the downloaded geopackage containing the buildings. It the extracts only the buildings that lie within the geom.
+        """This function reads the downloaded geopackage containing the buildings. It then extracts only the buildings that lie within the geom.
 
         Args:
             gpkg_filename: filename of the dowloaded geopackage.
