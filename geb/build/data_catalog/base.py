@@ -131,7 +131,9 @@ class Adapter:
         """
         return self
 
-    def read(self, **kwargs: Any) -> xr.DataArray | pd.DataFrame | gpd.GeoDataFrame:
+    def read(
+        self, *args: Any, **kwargs: Any
+    ) -> xr.DataArray | pd.DataFrame | gpd.GeoDataFrame:
         """Read the processed data from storage.
 
         Detects the file format based on the file extension and uses the appropriate reader.
