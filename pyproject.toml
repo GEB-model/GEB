@@ -69,6 +69,7 @@ dependencies = [
     "ruff>=0.14.0",
     "snakemake>=9.13.4",
     "pytest-plt>=1.1.1",
+    "flask>=3.0.0",
     "pytest-benchmark>=5.2.1",
     "imageio>=2.37.2",
     "pyquadkey2>=0.3.2",

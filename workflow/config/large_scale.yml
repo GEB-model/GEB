@@ -1,10 +1,13 @@
 # Large-scale multi-basin cluster configuration
+# THIS IS THE CENTRAL CONFIGURATION FILE - all settings should be defined here
 
 # Directory containing the cluster models (created by init_multiple)
 LARGE_SCALE_DIR: "/scistor/ivm/tbr910/GEB/models/large_scale"
 
-# Prefix used when creating clusters (e.g., test_000, test_001, etc.)
-CLUSTER_PREFIX: "WE"
+# Prefix used when creating clusters (e.g., Europe_000, Europe_001, etc.)
+# This should match the prefix used in 'geb init_multiple --cluster-prefix' command
+# Also used as the default in geb_cluster.sh script
+CLUSTER_PREFIX: "Europe"
 
 # Evaluation methods to run for each cluster
 EVALUATION_METHODS: "plot_discharge,evaluate_discharge"

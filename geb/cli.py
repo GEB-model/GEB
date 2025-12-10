@@ -1634,6 +1634,7 @@ def init_multiple_fn(
             river_graph=river_graph,
             output_path=merged_basins_path,
             cluster_prefix=cluster_prefix,
+            buffer_distance_km=5.0,  # 5km buffer to merge nearby polygons (reduces MultiPolygon complexity)
         )
     else:
         logger.info("Skipping merged geometries (--skip-merged-geometries flag set)")

@@ -1556,11 +1556,14 @@ def save_clusters_as_merged_geometries(
     output_path: Path,
     cluster_prefix: str = "cluster",
     pre_simplify: bool = True,
+    buffer_distance_km: float = 5.0,
 ) -> None:
     """Save clusters as merged geometries - one polygon outline per cluster.
 
     This creates the most compact representation possible: each cluster becomes a single
-    dissolved polygon geometry representing the entire basin area.
+    dissolved polygon geometry representing the entire basin area. For clusters with many
+    disconnected pieces (islands, archipelagos), a buffer-dissolve-unbuffer operation is
+    applied to merge nearby polygons into single features for better performance.
 
     Args:
         clusters: List of clusters, where each cluster is a list of downstream COMID values.
@@ -1569,10 +1572,12 @@ def save_clusters_as_merged_geometries(
         output_path: Path where to save the geoparquet file.
         cluster_prefix: Prefix for cluster names.
         pre_simplify: If True, simplify geometries before dissolving (much faster). Default: True.
+        buffer_distance_km: Buffer distance in km to merge nearby polygons. Default: 5.0 km.
     """
     print(f"Creating merged cluster geometries: {output_path}")
     if pre_simplify:
         print("  Using optimized mode: simplify before dissolve (much faster)")
+    print(f"  Buffer distance for merging polygons: {buffer_distance_km} km")
 
     # Step 1: Pre-compute all upstream subbasins for all clusters using caching
     print("Pre-computing upstream subbasins for all clusters (with caching)...")
@@ -1673,7 +1678,33 @@ def save_clusters_as_merged_geometries(
         # Clean up internal boundaries
         merged_geometry = merged_geometry.buffer(0)
 
-        # Apply post-dissolve simplification
+        # For MultiPolygons with many pieces, use buffer-dissolve-unbuffer to merge nearby islands
+        # This significantly reduces polygon count for coastal clusters with archipelagos
+        if hasattr(merged_geometry, "geoms") and len(merged_geometry.geoms) > 10:
+            print(
+                f"    Cluster has {len(merged_geometry.geoms)} separate polygons - applying buffer merge..."
+            )
+
+            # Convert buffer distance from km to degrees (approximate at mid-latitude)
+            # At 45° latitude: 1° longitude ≈ 78 km, 1° latitude ≈ 111 km
+            # Use conservative estimate: 1° ≈ 100 km
+            buffer_degrees = buffer_distance_km / 100.0
+
+            # Buffer → Dissolve → Negative buffer
+            # This merges polygons within buffer_distance of each other
+            buffered = merged_geometry.buffer(buffer_degrees)
+            dissolved = (
+                unary_union([buffered]) if hasattr(buffered, "__iter__") else buffered
+            )
+            merged_geometry = dissolved.buffer(-buffer_degrees)
+
+            # Count final polygons
+            final_count = (
+                len(merged_geometry.geoms) if hasattr(merged_geometry, "geoms") else 1
+            )
+            print(f"    Reduced to {final_count} polygons after buffer merge")
+
+        # Apply post-dissolve simplification for smoother rendering
         post_simplify_tolerance = 0.01  # ~1km at equator
         merged_geometry = merged_geometry.simplify(
             post_simplify_tolerance, preserve_topology=True
