@@ -43,6 +43,7 @@ from geb.types import (
 from geb.workflows.io import (
     create_hash_from_parameters,
     read_geom,
+    read_hash,
     write_geom,
     write_hash,
     write_zarr,
@@ -210,7 +211,7 @@ class SFINCSRootModel:
                 parameters, code_path=Path(__file__)
             )
             if hash_file.exists():
-                previous_hash = hash_file.read_text()
+                previous_hash = read_hash(hash_file)
                 if previous_hash == current_hash:
                     print("Model and SFINCS code unchanged, reading existing model...")
                     return self.read()
