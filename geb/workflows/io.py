@@ -1371,6 +1371,8 @@ def create_hash_from_parameters(
             value = [make_hashable(v) for v in value]
         elif isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
             value = joblib.hash(value, hash_name="md5", coerce_mmap=True)
+        elif isinstance(value, np.generic):
+            value = value.item()
         try:
             json.dumps(value)
         except (TypeError, ValueError):

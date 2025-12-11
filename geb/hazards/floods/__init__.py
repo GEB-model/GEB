@@ -601,6 +601,8 @@ class Floods(Module):
                 crs=flood_depth_return_period.rio.crs,
             )
 
+            # simulation.cleanup()
+
     def run(self, event: dict[str, Any]) -> None:
         """Runs the SFINCS model for a given flood event.
 

@@ -97,7 +97,11 @@ def assign_calculation_group(rivers: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         return group
 
     return (
-        rivers.groupby(rivers["geometry"].apply(get_end_point))
-        .apply(assign)
-        .reset_index(drop=True)  # ty: ignore[invalid-return-type]
+        rivers.groupby(
+            rivers["geometry"].apply(get_end_point)
+        )  # rivers with the same endpoint should be grouped so that we can assign them different calculation groups
+        .apply(assign)  # assign calculation groups within each group
+        .droplevel(
+            0
+        )  # remove the grouping index, essentially restoring the original index
     )

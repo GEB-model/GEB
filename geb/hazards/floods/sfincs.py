@@ -96,6 +96,7 @@ class SFINCSRootModel:
         """
         self._name: str = name
         self._root = root
+        self._was_build = None
 
     @property
     def name(self) -> str:
@@ -140,6 +141,8 @@ class SFINCSRootModel:
         self.sfincs_model.read()
         self.rivers: gpd.GeoDataFrame = read_geom(self.path / "rivers.geoparquet")
         self.region: gpd.GeoDataFrame = read_geom(self.path / "region.geoparquet")
+
+        self.is_build_from_scratch = False
         return self
 
     def build(
@@ -504,6 +507,8 @@ class SFINCSRootModel:
         self.rivers.to_parquet(self.path / "rivers.geoparquet")
 
         sf.plot_basemap(fn_out="basemap.png")
+
+        self.is_build_from_scratch = True
 
         return self
 
@@ -1010,33 +1015,19 @@ class SFINCSRootModel:
             # Keep the original index (river IDs) so they don't collide with existing forcing points.
             inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(get_start_point)
 
-            # Ensure indices are integer-like (helpful for later comparisons)
-            try:
-                inflow_nodes.index = pd.Index(inflow_nodes.index).astype(int)
-            except Exception:
-                raise ValueError("Inflow node indices must be convertible to integers")
-
             # Build list of hydrograph DataFrames using the original node indices as column names
-            Q_list: list[pd.DataFrame] = []
+            Q: list[pd.DataFrame] = []
             for node_idx in inflow_nodes.index:
                 hydro = inflow_nodes.at[node_idx, f"hydrograph_{return_period}"]
                 # hydro is expected to be dict-like {iso_timestamp: Q} — convert to DataFrame with column named node_idx
                 df = pd.DataFrame.from_dict(
                     hydro, orient="index", columns=np.array([node_idx])
                 )
-                Q_list.append(df)
+                Q.append(df)
 
             # Concatenate the per-node series into a single DataFrame; index -> timestamps
-            Q: pd.DataFrame = pd.concat(Q_list, axis=1)
+            Q: pd.DataFrame = pd.concat(Q, axis=1)
             Q.index = pd.to_datetime(Q.index)
-
-            # Ensure columns have consistent integer dtype (same as inflow_nodes.index)
-            try:
-                Q.columns = pd.Index(Q.columns).astype(int)
-            except Exception:
-                raise ValueError(
-                    "Discharge DataFrame columns must be convertible to integers"
-                )
 
             assert not np.isnan(Q.values).any(), (
                 "NaN values found in discharge hydrographs"
@@ -1047,6 +1038,74 @@ class SFINCSRootModel:
                 start_time=Q.index[0],
                 end_time=Q.index[-1],
             )
+
+            # to keep the calculation groups separated, we need to set up thin dams
+            # between the model domains
+            subbasin_boundaries = []
+            for idx, river in group_rivers.iterrows():
+                downstream_ID = river["downstream_ID"]
+                # skip if the downstream ID is a coastal outflow (-1)
+                if downstream_ID == -1:
+                    continue
+                # skip if the downstream subbasin is the outflow subbasin
+                # in this case it is the model boundary anyway
+                downstream_river = self.rivers.loc[downstream_ID]
+                if downstream_river["is_downstream_outflow_subbasin"]:
+                    continue
+
+                downstream_subbasin = self.region.loc[downstream_ID]
+
+                # since the outflow subbbasin is already excluded,
+                # we can safely get the current subbasin
+                downstream_downstream_subbasin = self.region.loc[
+                    downstream_river["downstream_ID"]
+                ]
+
+                # get all basins that drain into the downstream downstream subbasin
+                other_contributing_rivers = self.rivers[
+                    (self.rivers["downstream_ID"] == downstream_river["downstream_ID"])
+                    & (self.rivers.index != downstream_ID)
+                ]
+                other_contributing_subbasins = self.region.loc[
+                    other_contributing_rivers.index
+                ].unary_union
+
+                if self.is_geographic:
+                    buffer = 0.00001  # ~1 m buffer for geographic coordinates
+                else:
+                    buffer = 1.0  # 1 m buffer for projected coordinates
+
+                # get the overlapping boundary between the downstream subbasin
+                # and all contributing subbasins.
+                outflow_boundary_geometry_contributing_basins = (
+                    downstream_subbasin.geometry.boundary.intersection(
+                        other_contributing_subbasins.buffer(buffer)
+                    )
+                )
+                subbasin_boundaries.append(
+                    outflow_boundary_geometry_contributing_basins
+                )
+
+                outflow_boundary_geometry_downstream_basin = (
+                    downstream_downstream_subbasin.geometry.boundary.intersection(
+                        downstream_subbasin.geometry.buffer(buffer)
+                    )
+                )
+                subbasin_boundaries.append(outflow_boundary_geometry_downstream_basin)
+
+            # Create a GeoDataFrame from the list of linestring geometries representing subbasin boundaries.
+            # This ensures proper handling of the geometries as a GeoDataFrame for further processing,
+            # such as setting up thin dams in the simulation.
+            subbasin_boundaries: gpd.GeoDataFrame = (
+                gpd.GeoDataFrame(
+                    geometry=subbasin_boundaries,
+                    crs=self.rivers.crs,
+                )
+                .explode(index_parts=False)
+                .reset_index(drop=True)
+            )
+
+            simulation.setup_thin_dams(subbasin_boundaries)
 
             simulation.set_discharge_forcing_from_nodes(
                 nodes=inflow_nodes.to_crs(self.sfincs_model.crs),
@@ -1120,6 +1179,24 @@ class SFINCSRootModel:
             True if the model has inflow rivers, False otherwise.
         """
         return not self.inflow_rivers.empty
+
+    @property
+    def is_build_from_scratch(self) -> bool:
+        """Checks if the SFINCS model was built or read from disk.
+
+        Returns:
+            True if the SFINCS model was built, False otherwise.
+        """
+        return self._is_build_from_scratch
+
+    @is_build_from_scratch.setter
+    def is_build_from_scratch(self, value: bool) -> None:
+        """Sets the is_build_from_scratch property of the SFINCS model.
+
+        Args:
+            value: A boolean indicating if the SFINCS model was built.
+        """
+        self._is_build_from_scratch = value
 
     def cleanup(self) -> None:
         """Cleans up the SFINCS model directory."""
@@ -1843,3 +1920,12 @@ class SFINCSSimulation:
         cumulative_precipitation = self.sfincs_model.results["cumprcp"].isel(timemax=-1)
         assert isinstance(cumulative_precipitation, xr.DataArray)
         return cumulative_precipitation
+
+    def setup_thin_dams(self, dam_locations: gpd.GeoDataFrame) -> None:
+        """Sets up thin dams in the ModFlow groundwater model.
+
+        Args:
+            dam_locations: A GeoDataFrame containing the locations of the dams.
+        """
+        self.sfincs_model.setup_structures(dam_locations, stype="thd")
+        self.sfincs_model.write_geoms(data_vars=["thd"])
