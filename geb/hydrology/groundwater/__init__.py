@@ -211,7 +211,9 @@ class GroundWater(Module):
         # this is the capillary rise for the NEXT timestep
         self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
         baseflow = groundwater_drainage * channel_ratio
-
+        print("Baseflow max:", baseflow.max())
+        print("Baseflow min:", baseflow.min())
+        print("Baseflow mean:", baseflow.mean())
         self.report(locals())
 
         return baseflow

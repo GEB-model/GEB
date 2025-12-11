@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 import yaml
 from yaml.dumper import Dumper
@@ -41,6 +42,7 @@ class HazardDriver:
         self.next_detection_time: datetime | None = (
             None  # Variable to keep track of when a flood has happened
         )
+        self.discharge_log: list = []
 
     def initialize(self, longest_flood_event_in_days: int) -> None:
         """Initializes the hazard driver.
@@ -120,11 +122,18 @@ class HazardDriver:
                             x=x, y=y, method="nearest"
                         ).compute()
 
+                        self.discharge_log.append(
+                            {
+                                "time": self.current_time,
+                                "discharge": float(discharge_location.values),
+                            }
+                        )
+
                         # Load in discharge_threshold after which there is a flood from the config file
                         threshold: int = self.config["hazards"]["floods"][
                             "discharge_threshold"
                         ]
-
+                        print(discharge_location)
                         # Check if discharge > threshold
                         if discharge_location > threshold:
                             print(
@@ -162,6 +171,23 @@ class HazardDriver:
                                 and e["end_time"] == new_event["end_time"]
                                 for e in existing_events
                             )
+                            import numpy as np
+
+                            def find_numpy(obj, path="root"):
+                                if isinstance(obj, dict):
+                                    for k, v in obj.items():
+                                        find_numpy(v, f"{path}.{k}")
+                                elif isinstance(obj, list):
+                                    for i, v in enumerate(obj):
+                                        find_numpy(v, f"{path}[{i}]")
+                                elif isinstance(obj, np.ndarray):
+                                    print(
+                                        "Found NumPy array in config at:",
+                                        path,
+                                        obj.shape,
+                                    )
+
+                            find_numpy(self.config)
 
                             # If the event doesn't exist yet in the config file, add it
                             if not event_exists:
@@ -178,6 +204,18 @@ class HazardDriver:
                             self.next_detection_time = self.current_time + timedelta(
                                 days=10
                             )
+
+                    end_time: datetime = datetime.combine(
+                        self.model.config["general"]["end_time"], datetime.min.time()
+                    )
+
+                    if self.model.current_time == end_time:
+                        print("end of sim reached")
+                        df_all: pd.DataFrame = pd.DataFrame(self.discharge_log)
+                        df_all.to_csv(
+                            Path(self.model.output_folder) / "discharge_timeseries.csv",
+                            index=False,
+                        )
 
             for event in self.config["hazards"]["floods"]["events"]:
                 assert isinstance(event["start_time"], datetime), (

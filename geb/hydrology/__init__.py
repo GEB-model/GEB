@@ -36,7 +36,7 @@ from .groundwater import GroundWater
 from .lakes_reservoirs import LakesReservoirs
 from .landsurface import LandSurface
 from .routing import Routing
-from .runoff_concentration import concentrate_runoff
+from .runoff_concentration import RunoffConcentrator
 from .water_demand import WaterDemand
 
 if TYPE_CHECKING:
@@ -71,6 +71,7 @@ class Hydrology(Data, Module):
         self.lakes_reservoirs = LakesReservoirs(self.model, self)
         self.water_demand = WaterDemand(self.model, self)
         self.hillslope_erosion = HillSlopeErosion(self.model, self)
+        self.runoff_concentrator = RunoffConcentrator(self.model, self)
 
     def get_current_storage(self) -> np.float64:
         """Get the current water storage in the hydrological system.
@@ -184,6 +185,10 @@ class Hydrology(Data, Module):
             groundwater_recharge_m, groundwater_abstraction_m3
         )
 
+        print("Baseflow max:", baseflow_m.max())
+        print("Baseflow min:", baseflow_m.min())
+        print("Baseflow mean:", baseflow_m.mean())
+
         if __debug__:
             invented_water += (
                 -(
@@ -216,8 +221,8 @@ class Hydrology(Data, Module):
 
         timer.finish_split("GW")
 
-        self.grid.var.total_runoff_m = concentrate_runoff(
-            interflow_m, baseflow_m, runoff_m
+        self.grid.var.total_runoff_m = self.runoff_concentrator.step(
+            interflow=interflow_m, baseflow=baseflow_m, runoff=runoff_m
         )
         timer.finish_split("Runoff concentration")
 

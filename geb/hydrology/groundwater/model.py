@@ -1147,49 +1147,49 @@ class ModFlowSimulation:
         assert not np.isnan(self.groundwater_content_m).any()
         assert not np.isnan(self.heads[-1] - self.layer_boundary_elevation[-1]).any()
 
-        if self.verbose:
-            print("MODFLOW")
-            print(
-                f"\ttimestep {int(self.mf6.get_current_time())} converged in {round(time() - t0, 2)} seconds"
-            )
-            print(
-                "\tHead statictics: mean",
-                self.heads.mean(),
-                "min",
-                self.heads.min(),
-                "max",
-                self.heads.max(),
-            )
-            print(
-                "\tGroundwater depth: mean",
-                self.groundwater_depth.mean(),
-                "min",
-                self.groundwater_depth.min(),
-                "max",
-                self.groundwater_depth.max(),
-            )
-            print("\tGroundwater content: mean", self.groundwater_content_m3.mean())
-            print(
-                "\tRecharge (mean)",
-                (self.recharge_m * self.area).mean(),
-                "m3",
-                self.recharge_m.mean(),
-                "m",
-            )
-            print(
-                "\tAbstraction (mean)",
-                self.actual_well_rate.mean(),
-                "m3",
-                (self.actual_well_rate.sum(axis=0) / self.area).mean(),
-                "m",
-            )
-            print(
-                "\tDrainage (mean)",
-                self.drainage_m3.mean(),
-                "m3",
-                self._drainage_m.mean(),
-                "m",
-            )
+        # if self.verbose:
+        print("MODFLOW")
+        print(
+            f"\ttimestep {int(self.mf6.get_current_time())} converged in {round(time() - t0, 2)} seconds"
+        )
+        print(
+            "\tHead statictics: mean",
+            self.heads.mean(),
+            "min",
+            self.heads.min(),
+            "max",
+            self.heads.max(),
+        )
+        print(
+            "\tGroundwater depth: mean",
+            self.groundwater_depth.mean(),
+            "min",
+            self.groundwater_depth.min(),
+            "max",
+            self.groundwater_depth.max(),
+        )
+        print("\tGroundwater content: mean", self.groundwater_content_m3.mean())
+        print(
+            "\tRecharge (mean)",
+            (self.recharge_m * self.area).mean(),
+            "m3",
+            self.recharge_m.mean(),
+            "m",
+        )
+        print(
+            "\tAbstraction (mean)",
+            self.actual_well_rate.mean(),
+            "m3",
+            (self.actual_well_rate.sum(axis=0) / self.area).mean(),
+            "m",
+        )
+        print(
+            "\tDrainage (mean)",
+            self.drainage_m3.mean(),
+            "m3",
+            self._drainage_m.mean(),
+            "m",
+        )
 
         self.heads_update_callback(self.heads)
 
