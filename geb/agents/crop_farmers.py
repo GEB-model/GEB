@@ -518,39 +518,39 @@ class CropFarmers(AgentBaseClass):
             fill_value=0,  # reset on day 0
         )
 
-        # ============================================================
-        # NEW: irrigation budget (monetary) per farmer
-        # 从配置中读取灌溉预算（货币），单位与水价一致（例如 €/m3 → €）
-        water_price_cfg = self.model.config["agent_settings"]["farmers"][
-            "expected_utility"
-        ]["water_price"]
+        # # ============================================================
+        # # NEW: irrigation budget (monetary) per farmer
+        # # 从配置中读取灌溉预算（货币），单位与水价一致（例如 €/m3 → €）
+        # water_price_cfg = self.model.config["agent_settings"]["farmers"][
+        #     "expected_utility"
+        # ]["water_price"]
 
-        # 每个农户的年度标称灌溉预算（如果 model.yml 里没写，就为 NaN）
-        irrigation_budget_value = float(
-            water_price_cfg.get("irrigation_budget_monetary", np.nan)
-        )
+        # # 每个农户的年度标称灌溉预算（如果 model.yml 里没写，就为 NaN）
+        # irrigation_budget_value = float(
+        #     water_price_cfg.get("irrigation_budget_monetary", np.nan)
+        # )
 
-        # 每个农户的“名义预算”：一年开始时的总预算上限
-        self.var.irrigation_budget_monetary = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            dtype=np.float32,
-            fill_value=np.nan,
-        )
-        self.var.irrigation_budget_monetary[:] = irrigation_budget_value
+        # # 每个农户的“名义预算”：一年开始时的总预算上限
+        # self.var.irrigation_budget_monetary = DynamicArray(
+        #     n=self.var.n,
+        #     max_n=self.var.max_n,
+        #     dtype=np.float32,
+        #     fill_value=np.nan,
+        # )
+        # self.var.irrigation_budget_monetary[:] = irrigation_budget_value
 
-        # 每年内“剩余”的可用预算（每天随着取水被扣减）
-        self.var.remaining_irrigation_budget_monetary = DynamicArray(
-            n=self.var.n,
-            max_n=self.var.max_n,
-            dtype=np.float32,
-            fill_value=np.nan,
-        )
-        # 初始：剩余预算 = 名义预算
-        self.var.remaining_irrigation_budget_monetary[:] = (
-            self.var.irrigation_budget_monetary[:]
-        )
-        
+        # # 每年内“剩余”的可用预算（每天随着取水被扣减）
+        # self.var.remaining_irrigation_budget_monetary = DynamicArray(
+        #     n=self.var.n,
+        #     max_n=self.var.max_n,
+        #     dtype=np.float32,
+        #     fill_value=np.nan,
+        # )
+        # # 初始：剩余预算 = 名义预算
+        # self.var.remaining_irrigation_budget_monetary[:] = (
+        #     self.var.irrigation_budget_monetary[:]
+        # )
+
         self.var.yield_ratios_drought_event = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
@@ -909,6 +909,64 @@ class CropFarmers(AgentBaseClass):
 
         self.update_field_indices()
 
+        # ============================================================
+        # NEW: irrigation budget (monetary) per farmer based on area
+        # ------------------------------------------------------------
+        # Step 1: 计算每个农户的灌溉总面积（ha）
+        # 假定：
+        # - cell_area: 长度 = n_fields 的 1D 数组，单位 m2
+        # - field_indices_by_farmer[i] : 第 i 个农户拥有的 field index 列表/ndarray
+
+        n_farmers = self.var.n
+        cell_area = self.model.hydrology.HRU.var.cell_area  # m2
+        field_indices_by_farmer = self.var.field_indices_by_farmer
+
+        area_ha_per_farmer = np.zeros(n_farmers, dtype=np.float32)
+
+        for i in range(n_farmers):
+            fields_i = field_indices_by_farmer[i]
+            # 如果你的结构是别的形式（例如存 start/end 索引），这里稍微改一下索引方式即可
+            if fields_i is None or len(fields_i) == 0:
+                continue
+            # fields_i 是 1D 索引数组或列表：从 cell_area 中挑出属于该 farmer 的地块面积
+            area_m2 = np.sum(cell_area[fields_i])
+            area_ha_per_farmer[i] = area_m2 / 10_000.0  # 1 ha = 10_000 m2
+
+        # Step 2: 从配置读取“每公顷预算”，生成每个农户的年度预算
+        water_price_cfg = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["water_price"]
+
+        # 每公顷每年的最大灌溉支出（货币单位/ha/year）
+        budget_per_ha = float(water_price_cfg.get("irrigation_budget_per_ha", np.nan))
+
+        # 名义预算：一个农户一年可用于灌溉的总货币预算
+        self.var.irrigation_budget_monetary = DynamicArray(
+            n=n_farmers,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+
+        if not np.isnan(budget_per_ha):
+            # B_i = budget_per_ha * area_ha_i
+            self.var.irrigation_budget_monetary[:] = area_ha_per_farmer * budget_per_ha
+        else:
+            # 未在配置中设置预算时：全部 NaN，后续逻辑会视作“不启用预算约束”
+            self.var.irrigation_budget_monetary[:] = np.nan
+
+        # 每年内“剩余”的可用预算（每天随着取水被扣减）
+        self.var.remaining_irrigation_budget_monetary = DynamicArray(
+            n=n_farmers,
+            max_n=self.var.max_n,
+            dtype=np.float32,
+            fill_value=np.nan,
+        )
+        # 年初：剩余预算 = 名义预算
+        self.var.remaining_irrigation_budget_monetary[:] = (
+            self.var.irrigation_budget_monetary[:]
+        )
+
     @staticmethod
     @njit(cache=True)
     def update_field_indices_numba(
@@ -1259,14 +1317,14 @@ class CropFarmers(AgentBaseClass):
         if __debug__:
             irrigation_limit_pre = self.var.remaining_irrigation_limit_m3.copy()
             available_channel_storage_m3_pre = available_channel_storage_m3.copy()
-        
+
         # 读一下是否启用成本优先（方便同时传给 workflows）
         use_cost_priority = np.bool_(
             self.model.config["agent_settings"]["farmers"].get(
                 "use_cost_priority", False
             )
         )
-        
+
         (
             self.var.channel_abstraction_m3_by_farmer[:],
             self.var.reservoir_abstraction_m3_by_farmer[:],
