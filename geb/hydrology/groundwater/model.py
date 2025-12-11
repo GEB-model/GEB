@@ -23,8 +23,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import platform
 from pathlib import Path
@@ -45,7 +43,12 @@ from geb.types import (
     TwoDArrayFloat32,
     TwoDArrayFloat64,
 )
-from geb.workflows.io import WorkingDirectory
+from geb.workflows.io import (
+    WorkingDirectory,
+    create_hash_from_parameters,
+    read_hash,
+    write_hash,
+)
 from geb.workflows.raster import decompress_with_mask
 
 if TYPE_CHECKING:
@@ -312,7 +315,7 @@ class ModFlowSimulation:
                 )
 
                 sim.write_simulation()
-                self.write_hash_to_disk()
+                write_hash(self.hash_file, self.hash)
             except:
                 if self.hash_file.exists():
                     self.hash_file.unlink()
@@ -751,11 +754,9 @@ class ModFlowSimulation:
                 value = str(value.tobytes())
             hashable_dict[key] = value
 
-        self.hash = hashlib.md5(
-            json.dumps(hashable_dict, sort_keys=True).encode()
-        ).digest()
+        self.hash = create_hash_from_parameters(arguments, code_path=Path(__file__))
         if self.hash_file.exists():
-            prev_hash = bytes.fromhex(self.hash_file.read_text())
+            prev_hash = read_hash(self.hash_file)
         else:
             prev_hash = None
 

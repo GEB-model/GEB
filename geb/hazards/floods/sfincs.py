@@ -13,7 +13,7 @@ import math
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -39,7 +39,12 @@ from geb.types import (
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
-from geb.workflows.io import load_geom
+from geb.workflows.io import (
+    create_hash_from_parameters,
+    read_geom,
+    read_hash,
+    write_hash,
+)
 from geb.workflows.raster import (
     calculate_cell_area,
     clip_region,
@@ -130,8 +135,8 @@ class SFINCSRootModel:
             raise FileNotFoundError(f"SFINCS model not found in {self.path}")
         self.sfincs_model = SfincsModel(root=str(self.path), mode="r")
         self.sfincs_model.read()
-        self.rivers: gpd.GeoDataFrame = load_geom(self.path / "rivers.geoparquet")
-        self.region: gpd.GeoDataFrame = load_geom(self.path / "region.geoparquet")
+        self.rivers: gpd.GeoDataFrame = read_geom(self.path / "rivers.geoparquet")
+        self.region: gpd.GeoDataFrame = read_geom(self.path / "region.geoparquet")
         return self
 
     def build(
@@ -153,6 +158,7 @@ class SFINCSRootModel:
         setup_river_outflow_boundary: bool = True,
         initial_water_level: float = 0.0,
         custom_rivers_to_burn: gpd.GeoDataFrame | None = None,
+        overwrite: bool | Literal["auto"] = True,
     ) -> SFINCSRootModel:
         """Build a SFINCS model.
 
@@ -178,6 +184,7 @@ class SFINCSRootModel:
             initial_water_level: The initial water level to initiate the model. SFINCS fills all cells below this level with water.
             custom_rivers_to_burn: A GeoDataFrame of custom rivers to burn into the model grid. If None, uses the provided rivers GeoDataFrame.
                 dataframe must contain 'width' and 'depth' columns.
+            overwrite: Whether to overwrite the existing model if it exists. If 'auto', the model is only rebuilt if the input parameters or code have changed.
 
         Returns:
             The SFINCSRootModel instance with the built model.
@@ -187,7 +194,37 @@ class SFINCSRootModel:
             ValueError: if grid_size_multiplier is not a positive integer.
             ValueError: if resolution of DEM is not square pixels.
         """
-        self.cleanup()
+        # if overwrite is True, always rebuild the model
+        if overwrite is True:
+            print("Building new SFINCS model...")
+            self.cleanup()
+        # determine if we need to rebuild the model based on hash of parameters and
+        # code
+        elif overwrite == "auto":
+            parameters: dict[str, Any] = locals()
+            parameters.pop("self")
+            hash_file: Path = self.path / "model.hash"
+            current_hash: str = create_hash_from_parameters(
+                parameters, code_path=Path(__file__)
+            )
+            if hash_file.exists():
+                previous_hash = read_hash(hash_file)
+                if previous_hash == current_hash:
+                    print("Model and SFINCS code unchanged, reading existing model...")
+                    return self.read()
+                else:
+                    print("Model or SFINCS code changed, rebuilding model...")
+            else:
+                print("No existing hash file, building model...")
+
+            self.cleanup()
+            self.path.mkdir(parents=True, exist_ok=True)
+            write_hash(hash_file, current_hash)
+
+        # if overwrite is False and model exists, read existing model
+        elif overwrite is False and self.exists():
+            print("Overwrite is False and model exists, reading existing model...")
+            return self.read()
 
         if not isinstance(grid_size_multiplier, int) or grid_size_multiplier <= 0:
             raise ValueError("grid_size_multiplier must be a positive integer")
@@ -821,7 +858,7 @@ class SFINCSRootModel:
         )
 
         locations: gpd.GeoDataFrame = (  # ty: ignore[invalid-assignment]
-            load_geom(self.model.files["geom"]["gtsm/stations_coast_rp"])
+            read_geom(self.model.files["geom"]["gtsm/stations_coast_rp"])
             .rename(columns={"station_id": "stations"})
             .set_index("stations")
         )

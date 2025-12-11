@@ -115,7 +115,7 @@ class Adapter:
             )
         return is_ready
 
-    def fetch(self) -> Adapter:
+    def fetch(self, *args: Any, **kwargs: Any) -> Adapter:
         """Process the data after downloading.
 
         Returns:

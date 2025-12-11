@@ -7,7 +7,7 @@ module-root = ""
 
 [project]
 name = "geb"
-version = "1.0.0b7"
+version = "1.0.0b9"
 description = "GEB simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale."
 authors = [
     {name = "Jens de Bruijn", email = "jens.de.bruijn@vu.nl"},
@@ -72,7 +72,9 @@ dependencies = [
     "pytest-benchmark>=5.2.1",
     "imageio>=2.37.2",
     "pyquadkey2>=0.3.2",
-    "osmnx>=2.0.6"
+    "osmnx>=2.0.6",
+    "joblib>=1.5.2",
+    "matplotlib>=3.10.7",
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"

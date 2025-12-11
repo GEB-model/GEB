@@ -17,8 +17,11 @@ from zarr.codecs.numcodecs import FixedScaleOffset
 from geb.workflows.io import (
     AsyncGriddedForcingReader,
     calculate_scaling,
+    create_hash_from_parameters,
     get_window,
-    to_zarr,
+    read_hash,
+    write_hash,
+    write_zarr,
 )
 
 from ..testconfig import tmp_folder
@@ -176,7 +179,7 @@ def test_io() -> None:
     da = xr.DataArray(values, coords={"x": x, "y": y}, dims=["y", "x"]).chunk()
     da.attrs["_FillValue"] = np.nan
 
-    to_zarr(da, tmp_folder / "test.zarr", crs=4326)
+    write_zarr(da, tmp_folder / "test.zarr", crs=4326)
 
     time_dimension = np.linspace(0, 10, 10)
     values = np.random.rand(x.size, y.size, time_dimension.size).astype(np.float32)
@@ -185,7 +188,7 @@ def test_io() -> None:
     ).chunk()
     da.attrs["_FillValue"] = np.nan
 
-    to_zarr(da, tmp_folder / "test.zarr", crs=4326)
+    write_zarr(da, tmp_folder / "test.zarr", crs=4326)
 
     other_dimension = np.linspace(110, 115, 10)
     values = np.random.rand(x.size, y.size, other_dimension.size).astype(np.float32)
@@ -197,7 +200,7 @@ def test_io() -> None:
     ).chunk()
     da.attrs["_FillValue"] = np.nan
 
-    to_zarr(da, tmp_folder / "test.zarr", crs=4326)
+    write_zarr(da, tmp_folder / "test.zarr", crs=4326)
 
 
 def test_get_window() -> None:
@@ -604,3 +607,128 @@ def test_asyncreader_rapid_access() -> None:
         data = reader.read_timestep(datetime(2000, 1, day))
         assert (data == day - 1).all()
     reader.close()
+
+
+def test_create_hash_from_parameters() -> None:
+    """Test create_hash_from_parameters with various input types."""
+    # Test basic types
+    params1 = {"a": 1, "b": "test", "c": 3.14}
+    hash1 = create_hash_from_parameters(params1)
+    assert isinstance(hash1, str)
+    assert len(hash1) > 0
+
+    # Test consistency
+    hash2 = create_hash_from_parameters(params1)
+    assert hash1 == hash2
+
+    # Test different input
+    params2 = {"a": 1, "b": "test", "c": 3.15}
+    hash3 = create_hash_from_parameters(params2)
+    assert hash1 != hash3
+
+    # Test with numpy array
+    params_np = {"arr": np.array([1, 2, 3])}
+    hash_np1 = create_hash_from_parameters(params_np)
+    hash_np2 = create_hash_from_parameters({"arr": np.array([1, 2, 3])})
+    assert hash_np1 == hash_np2
+
+    hash_np3 = create_hash_from_parameters({"arr": np.array([1, 2, 4])})
+    assert hash_np1 != hash_np3
+
+    # Test with xarray DataArray
+    da = xr.DataArray([1, 2, 3], coords={"x": [1, 2, 3]}, dims="x")
+    params_xr = {"da": da}
+    hash_xr1 = create_hash_from_parameters(params_xr)
+    hash_xr2 = create_hash_from_parameters({"da": da.copy()})
+    assert hash_xr1 == hash_xr2
+
+    da2 = xr.DataArray([1, 2, 4], coords={"x": [1, 2, 3]}, dims="x")
+    hash_xr3 = create_hash_from_parameters({"da": da2})
+    assert hash_xr1 != hash_xr3
+
+    # Test nested structures (list and dict)
+    params_nested = {
+        "list": [1, "a", np.array([1, 2])],
+        "dict": {"x": xr.DataArray([1]), "y": [1, 2]},
+    }
+    hash_nested1 = create_hash_from_parameters(params_nested)
+
+    params_nested_copy = {
+        "list": [1, "a", np.array([1, 2])],
+        "dict": {"x": xr.DataArray([1]), "y": [1, 2]},
+    }
+    hash_nested2 = create_hash_from_parameters(params_nested_copy)
+    assert hash_nested1 == hash_nested2
+
+    params_nested_diff = {
+        "list": [1, "b", np.array([1, 2])],
+        "dict": {"x": xr.DataArray([1]), "y": [1, 2]},
+    }
+    hash_nested3 = create_hash_from_parameters(params_nested_diff)
+    assert hash_nested1 != hash_nested3
+
+
+def test_create_hash_from_parameters_with_code() -> None:
+    """Test create_hash_from_parameters with code_path."""
+    import tempfile
+
+    params = {"a": 1}
+    base_hash = create_hash_from_parameters(params)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        p = Path(tmpdir)
+
+        # Test with file
+        f = p / "test.py"
+        f.write_text("print('hello')")
+
+        hash1 = create_hash_from_parameters(params, code_path=f)
+        assert hash1 != base_hash
+
+        hash2 = create_hash_from_parameters(params, code_path=f)
+        assert hash1 == hash2
+
+        # Modify file
+        f.write_text("print('hello world')")
+        hash3 = create_hash_from_parameters(params, code_path=f)
+        assert hash1 != hash3
+
+        # Test with directory
+        d = p / "subdir"
+        d.mkdir()
+        (d / "a.py").write_text("a=1")
+        (d / "b.py").write_text("b=2")
+
+        hash_dir1 = create_hash_from_parameters(params, code_path=d)
+        assert hash_dir1 != base_hash
+
+        hash_dir2 = create_hash_from_parameters(params, code_path=d)
+        assert hash_dir1 == hash_dir2
+
+        # Modify file in directory
+        (d / "a.py").write_text("a=2")
+        hash_dir3 = create_hash_from_parameters(params, code_path=d)
+        assert hash_dir1 != hash_dir3
+
+
+def test_read_write_hash() -> None:
+    """Test reading and writing hashes."""
+    hash_val = "deadbeef"
+    hash_file = tmp_folder / "test.hash"
+
+    write_hash(hash_file, hash_val)
+    assert hash_file.exists()
+    assert hash_file.read_text() == "deadbeef"
+
+    read_val = read_hash(hash_file)
+    assert read_val == hash_val
+
+    # Test with newline (simulating manual edit)
+    hash_file.write_text("deadbeef\n")
+    read_val = read_hash(hash_file)
+    assert read_val.strip() == hash_val
+
+    # Test empty
+    hash_val = ""
+    write_hash(hash_file, hash_val)
+    assert read_hash(hash_file) == hash_val

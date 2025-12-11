@@ -249,50 +249,52 @@ class Floods(Module):
             The built or read SFINCSRootModel instance.
         """
         sfincs_model = SFINCSRootModel(self.model.simulation_root, name)
-        if self.config["force_overwrite"] or not sfincs_model.exists():
-            for entry in self.DEM_config:
-                entry["elevtn"] = open_zarr(
-                    self.model.files["other"][entry["path"]]
-                ).to_dataset(name="elevtn")
+        for entry in self.DEM_config:
+            entry["elevtn"] = read_zarr(
+                self.model.files["other"][entry["path"]]
+            ).to_dataset(name="elevtn")
 
-            if region is None:
-                region = load_geom(self.model.files["geom"]["routing/subbasins"])
-            sfincs_model.build(
-                region=region,
-                DEMs=self.DEM_config,
-                rivers=self.model.hydrology.routing.rivers,
-                discharge=self.discharge_spinup_ds,
-                river_width_alpha=self.model.hydrology.grid.decompress(
-                    self.model.var.river_width_alpha
-                ),
-                river_width_beta=self.model.hydrology.grid.decompress(
-                    self.model.var.river_width_beta
-                ),
-                mannings=self.mannings,
-                grid_size_multiplier=self.config["grid_size_multiplier"],
-                subgrid=self.config["subgrid"],
-                depth_calculation_method=self.model.config["hydrology"]["routing"][
-                    "river_depth"
-                ]["method"],
-                depth_calculation_parameters=self.model.config["hydrology"]["routing"][
-                    "river_depth"
-                ]["parameters"]
-                if "parameters"
-                in self.model.config["hydrology"]["routing"]["river_depth"]
-                else {},
-                low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
-                coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
-                coastal=coastal,
-                setup_river_outflow_boundary=not coastal,
-                initial_water_level=initial_water_level,
-                custom_rivers_to_burn=load_geom(
-                    self.model.files["geom"]["routing/custom_rivers"]
-                )
-                if "routing/custom_rivers" in self.model.files["geom"]
-                else None,
+        if region is None:
+            region = read_geom(self.model.files["geom"]["routing/subbasins"])
+
+        rivers = self.model.hydrology.routing.rivers
+        if coastal_only:
+            rivers = rivers[rivers.intersects(region.union_all())]
+
+        sfincs_model.build(
+            region=region,
+            DEMs=self.DEM_config,
+            rivers=rivers,
+            discharge=self.discharge_spinup_ds,
+            river_width_alpha=self.model.hydrology.grid.decompress(
+                self.model.var.river_width_alpha
+            ),
+            river_width_beta=self.model.hydrology.grid.decompress(
+                self.model.var.river_width_beta
+            ),
+            mannings=self.mannings,
+            grid_size_multiplier=self.config["grid_size_multiplier"],
+            subgrid=self.config["subgrid"],
+            depth_calculation_method=self.model.config["hydrology"]["routing"][
+                "river_depth"
+            ]["method"],
+            depth_calculation_parameters=self.model.config["hydrology"]["routing"][
+                "river_depth"
+            ]["parameters"]
+            if "parameters" in self.model.config["hydrology"]["routing"]["river_depth"]
+            else {},
+            low_elevation_coastal_zone_mask=low_elevation_coastal_zone_mask,
+            coastal_boundary_exclude_mask=coastal_boundary_exclude_mask,
+            coastal=coastal,
+            setup_river_outflow_boundary=not coastal,
+            initial_water_level=initial_water_level,
+            custom_rivers_to_burn=read_geom(
+                self.model.files["geom"]["routing/custom_rivers"]
             )
-        else:
-            sfincs_model.read()
+            if "routing/custom_rivers" in self.model.files["geom"]
+            else None,
+            overwrite=self.config["overwrite"],
+        )
 
         return sfincs_model
 

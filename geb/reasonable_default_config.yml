@@ -26,7 +26,8 @@ hazards:
     flood_map_output_interval_seconds: null  # interval in seconds to output flood maps. null means no output.
     grid_size_multiplier: 1  # must be integer. The first DEM is used for the grid. This multiplier increases the grid cell size (i.e., reduces resolution) by this factor.
     subgrid: false
-    force_overwrite: true
+    overwrite: auto  # whether to overwrite existing flood model. True, False, "auto". If "auto", it will check if the model input parameters have changed.
+    coastal_only: false
     write_figures: true  # whether to generate and save diagnostic figures
     return_periods:
       - 2
