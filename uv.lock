@@ -1147,7 +1147,7 @@ wheels = [
 
 [[package]]
 name = "geb"
-version = "1.0.0b8"
+version = "1.0.0b9"
 source = { editable = "." }
 dependencies = [
     { name = "cartopy" },
@@ -1164,7 +1164,9 @@ dependencies = [
     { name = "hydromt" },
     { name = "hydromt-sfincs" },
     { name = "imageio" },
+    { name = "joblib" },
     { name = "kaleido" },
+    { name = "matplotlib" },
     { name = "networkx" },
     { name = "numba" },
     { name = "numpy" },
@@ -1251,8 +1253,10 @@ requires-dist = [
     { name = "hydromt", specifier = "==0.10.1" },
     { name = "hydromt-sfincs", specifier = ">=1.2.0" },
     { name = "imageio", specifier = ">=2.37.2" },
+    { name = "joblib", specifier = ">=1.5.2" },
     { name = "jupyter", marker = "extra == 'display'", specifier = ">=1.1.1" },
     { name = "kaleido", specifier = ">=1.0.0" },
+    { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "networkx" },
     { name = "numba", specifier = ">=0.63.0" },
     { name = "numpy", specifier = ">=2.1" },

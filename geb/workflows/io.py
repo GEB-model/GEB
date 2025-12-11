@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import hashlib
 import json
 import os
 import platform
@@ -17,7 +18,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, overload
 
+import dask
 import geopandas as gpd
+import joblib
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -1339,3 +1342,85 @@ def fast_rmtree(path: Path) -> None:
         raise NotImplementedError(
             f"Optimized fast deletion is not implemented for system: {system}"
         )
+
+
+def create_hash_from_parameters(
+    parameters: dict[str, Any], code_path: Path | None = None
+) -> str:
+    """Create a hash from a dictionary of parameters.
+
+    Args:
+        parameters: A dictionary of parameters.
+        code_path: Optional path to a file or directory containing code to include in the hash.
+
+    Returns:
+        A hexadecimal string representing the hash of the parameters.
+
+    Raises:
+        ValueError: If the parameters dictionary contains a key named '_code_content'.
+    """
+
+    def make_hashable(value: Any) -> Any:
+        if isinstance(value, np.ndarray):
+            value = str(value.tobytes())
+        elif isinstance(value, (xr.DataArray, xr.Dataset)):
+            value = dask.tokenize.tokenize(value, ensure_deterministic=True)
+        elif isinstance(value, dict):
+            value = {k: make_hashable(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            value = [make_hashable(v) for v in value]
+        elif isinstance(value, (pd.DataFrame, gpd.GeoDataFrame)):
+            value = joblib.hash(value, hash_name="md5", coerce_mmap=True)
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"Value {value} is not JSON serializable")
+        return value
+
+    hashable_dict = make_hashable(parameters)
+
+    if code_path is not None:
+        if "_code_content" in hashable_dict:
+            raise ValueError(
+                "The parameters dictionary cannot contain a key named '_code_content'"
+            )
+        code_content: dict[str, str] = {}
+        if code_path.is_file():
+            code_content[code_path.name] = code_path.read_text()
+        elif code_path.is_dir():
+            for root, _, files in sorted(os.walk(code_path)):
+                for file in sorted(files):
+                    file_path = Path(root) / file
+                    try:
+                        rel_path = str(file_path.relative_to(code_path))
+                        code_content[rel_path] = file_path.read_text()
+                    except UnicodeDecodeError:
+                        continue
+        hashable_dict["_code_content"] = code_content
+
+    hash_: str = hashlib.md5(
+        json.dumps(hashable_dict, sort_keys=True).encode()
+    ).hexdigest()
+    return hash_
+
+
+def write_hash(path: Path, hash: str) -> None:
+    """Write a hash to a file in hexadecimal format.
+
+    Args:
+        path: The path to the file where the hash will be written.
+        hash: The hash as a str object.
+    """
+    path.write_text(hash)
+
+
+def read_hash(path: Path) -> str:
+    """Read a hash from a file in hexadecimal format.
+
+    Args:
+        path: The path to the file containing the hash.
+
+    Returns:
+        The hash as a str object.
+    """
+    return path.read_text().strip()
