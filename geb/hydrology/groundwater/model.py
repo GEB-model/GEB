@@ -238,6 +238,9 @@ class ModFlowSimulation:
         why all public methods of this class communicate in m3, and not in m.
     """
 
+    area: ArrayFloat32
+    heads: TwoDArrayFloat64
+
     def __init__(
         self,
         working_directory: Path,
@@ -782,9 +785,7 @@ class ModFlowSimulation:
         with open("mfsim.stdout") as f:
             return f.readlines()
 
-    def load_bmi(
-        self, heads: npt.NDArray[np.float64], modflow_bin_folder: Path
-    ) -> None:
+    def load_bmi(self, heads: TwoDArrayFloat64, modflow_bin_folder: Path) -> None:
         """Load the Basic Model Interface.
 
         Args:
@@ -849,7 +850,7 @@ class ModFlowSimulation:
                 print("MODFLOW model initialized")
 
         area_tag: str = self.mf6.get_var_address("AREA", self.name, "DIS")
-        area: npt.NDArray[np.float64] = self.mf6.get_value_ptr(area_tag).reshape(
+        area: TwoDArrayFloat64 = self.mf6.get_value_ptr(area_tag).reshape(
             self.nlay, self.n_active_cells
         )
 
@@ -857,13 +858,13 @@ class ModFlowSimulation:
         assert (np.diff(area, axis=0) == 0).all()
 
         # so we can use the area of the top layer
-        self.area: npt.NDArray[np.float32] = area[0].astype(np.float32)
+        self.area = area[0].astype(np.float32)
 
         self.prepare_time_step()
 
         # because modflow rounds heads when they are written to file, we set the modflow heads
         # to the actual model heads to ensure that the model is in the same state as the modflow model
-        self.heads: npt.NDArray[np.float64] = heads
+        self.heads = heads
         assert not np.isnan(self.heads).any()
 
     @property
