@@ -8,9 +8,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from dateutil.relativedelta import relativedelta
 
-from geb.types import ThreeDArrayFloat32
+from geb.types import ArrayDatetime64, ThreeDArrayFloat32
 from geb.workflows.io import read_dict
 
 if TYPE_CHECKING:
@@ -25,7 +24,7 @@ class DateIndex:
     value can be be selected from another indexed object (e.g. a numpy array).
     """
 
-    def __init__(self, dates: list[date | datetime]) -> None:
+    def __init__(self, dates: list[datetime] | list[date]) -> None:
         """Create a DateIndex object that allows for fast lookup of dates.
 
         This class takes a list of dates and creates an index that allows for fast lookup of the index of a date in the list.
@@ -34,11 +33,10 @@ class DateIndex:
         Args:
             dates: a list of dates in datetime format. The dates should be sorted in ascending order.
         """
-        self.dates = np.array(dates)
+        self.dates: ArrayDatetime64 = np.array(dates, dtype=np.datetime64)
 
-        self.last_valid_date = self.dates[-1] + relativedelta(
-            self.dates[-1], self.dates[-2]
-        )  # extrapolate last date.
+        # the last valid date is extrapolated based on the last two dates
+        self.last_valid_date = self.dates[-1] + (self.dates[-1] - self.dates[-2])
 
     def get(self, date: date | datetime) -> int:
         """Get the index of a date in the list of dates.
@@ -63,6 +61,9 @@ class DateIndex:
             raise ValueError(
                 f"Date {date} is after last valid date {self.last_valid_date}"
             )
+
+        # convert date to numpy datetime64 for comparison
+        date: np.datetime64 = np.datetime64(date)
 
         return np.searchsorted(self.dates, date, side="right").item() - 1
 
