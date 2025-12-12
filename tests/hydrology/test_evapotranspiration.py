@@ -491,9 +491,11 @@ def test_evapotranspirate() -> None:
     w_cell = np.array(
         [0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32
     )  # Above field capacity
+    ws_cell = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
     topwater = np.float32(0.0)
     open_water_evaporation = np.float32(0.0)
     minimum_effective_root_depth = np.float32(0.1)
+    unsaturated_hydraulic_conductivity = np.float32(0.001)
 
     transpiration, evaporation, topwater_m = evapotranspirate(
         soil_is_frozen=soil_is_frozen,
@@ -514,6 +516,7 @@ def test_evapotranspirate() -> None:
         topwater_m=topwater,
         open_water_evaporation_m=open_water_evaporation,
         minimum_effective_root_depth_m=minimum_effective_root_depth,
+        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
 
     # Basic checks
@@ -584,6 +587,8 @@ def test_calculate_bare_soil_evaporation() -> None:
     open_water_evaporation = np.float32(0.0)
     w_cell = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres_cell = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
+    ws_cell = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
+    unsaturated_hydraulic_conductivity = np.float32(0.001)
 
     evaporation = calculate_bare_soil_evaporation(
         soil_is_frozen=soil_is_frozen,
@@ -592,6 +597,7 @@ def test_calculate_bare_soil_evaporation() -> None:
         open_water_evaporation_m=open_water_evaporation,
         w_m=w_cell,
         wres_m=wres_cell,
+        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
 
     # Basic checks
@@ -607,6 +613,7 @@ def test_calculate_bare_soil_evaporation() -> None:
         open_water_evaporation_m=open_water_evaporation,
         w_m=w_cell,
         wres_m=wres_cell,
+        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
     assert evaporation_frozen == 0.0
 
@@ -712,6 +719,8 @@ def test_calculate_bare_soil_evaporation_paddy() -> None:
 
     w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
+    ws = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
+    unsaturated_hydraulic_conductivity = np.float32(0.001)
 
     evaporation_paddy = calculate_bare_soil_evaporation(
         soil_is_frozen=False,
@@ -720,6 +729,7 @@ def test_calculate_bare_soil_evaporation_paddy() -> None:
         open_water_evaporation_m=0.0,
         w_m=w,
         wres_m=wres,
+        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
 
     # Should be 0 for paddy irrigation
@@ -732,6 +742,8 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
 
     w = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float32)
     wres = np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float32)
+    ws = np.array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4], dtype=np.float32)
+    unsaturated_hydraulic_conductivity = np.float32(0.001)
 
     # Test with open water evaporation reducing bare soil evaporation
     evaporation_with_open_water = calculate_bare_soil_evaporation(
@@ -741,6 +753,7 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
         open_water_evaporation_m=0.0005,  # Half of potential
         w_m=w,
         wres_m=wres,
+        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
 
     evaporation_no_open_water = calculate_bare_soil_evaporation(
@@ -750,6 +763,7 @@ def test_calculate_bare_soil_evaporation_open_water() -> None:
         open_water_evaporation_m=0.0,
         w_m=w,
         wres_m=wres,
+        unsaturated_hydraulic_conductivity_m_per_hour=unsaturated_hydraulic_conductivity,
     )
 
     # Should be less with open water evaporation
