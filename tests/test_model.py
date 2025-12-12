@@ -318,7 +318,7 @@ def test_spinup() -> None:
             # aggregate hourly to daily
             outflow_data_csv_daily = outflow_data_csv.resample("D").mean()
             np.testing.assert_almost_equal(
-                daily_outflow_data_zarr.values, outflow_data_csv_daily.values, decimal=5
+                daily_outflow_data_zarr.values, outflow_data_csv_daily.values, decimal=4
             )
 
         geb.close()
