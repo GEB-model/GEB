@@ -65,6 +65,10 @@ Raises:
 
 - Code can be run using uv. For example, run a script `uv run script.py`, or `uv run pytest`.
 
+## Testing the code
+
+- When adapting code, do run the tests to confirm behaviour. If there are no tests, suggest to the user to make those tests. Never run the tests in test_model.py though, unless explictly requested by the user.
+
 ## Checking and formatting
 
 - Code can be checked and formatted using ruff: `uv run ruff check` and `uv run ruff format`.
