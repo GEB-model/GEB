@@ -837,7 +837,7 @@ class Accuflux(Router):
         """
         Qold += sideflow_m3 / dt
 
-        evaporation_m3_s: ArrayFloat32 = evaporation_m3 / np.float32(dt)
+        evaporation_m3_s: ArrayFloat32 = evaporation_m3 * np.float32(1 / dt)
         actual_evaporation_m3_s: ArrayFloat32 = np.minimum(evaporation_m3_s, Qold)
         actual_evaporation_m3: ArrayFloat32 = actual_evaporation_m3_s * dt
         actual_evaporation_m3[waterbody_id != -1] = 0.0
