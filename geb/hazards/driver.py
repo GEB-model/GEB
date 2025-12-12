@@ -1,10 +1,15 @@
 """Module for managing short-lived hazard simulations such as floods."""
 
+from __future__ import annotations
+
 import copy
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from geb.hazards.floods import Floods
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 
 class HazardDriver:
@@ -13,14 +18,17 @@ class HazardDriver:
     Currently it only supports floods but can be extended to include other hazards such as landslides in the future.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initializes the HazardDriver class.
 
         If flood simulation is enabled in the configuration, it initializes the flood simulation by determining
         the longest flood event duration and setting up the SFINCS model accordingly.
         """
+        self.model = model
         # extract the longest flood event in days
-        flood_events: list[dict[str, Any]] = self.config["hazards"]["floods"]["events"]
+        flood_events: list[dict[str, Any]] = self.model.config["hazards"]["floods"][
+            "events"
+        ]
         if flood_events == [] or flood_events is None:
             longest_flood_event_in_days: int = 0
         else:
@@ -43,7 +51,7 @@ class HazardDriver:
 
         """
         self.floods: Floods = Floods(
-            self, longest_flood_event_in_days=longest_flood_event_in_days
+            self.model, longest_flood_event_in_days=longest_flood_event_in_days
         )
 
     def step(self) -> None:
@@ -52,15 +60,11 @@ class HazardDriver:
         If flood simulation is enabled in the configuration, it runs the SFINCS model for each flood event
         that ends during the current timestep.
         """
-        if self.config["hazards"]["floods"]["simulate"]:
-            if self.simulate_hydrology:
-                self.floods.save_discharge()
-                self.floods.save_runoff_m()
-
-            if self.config["hazards"]["floods"]["events"] is None:
+        if self.model.config["hazards"]["floods"]["simulate"]:
+            if self.model.config["hazards"]["floods"]["events"] is None:
                 return
 
-            for event in self.config["hazards"]["floods"]["events"]:
+            for event in self.model.config["hazards"]["floods"]["events"]:
                 assert isinstance(event["start_time"], datetime), (
                     f"Start time {event['start_time']} must be a datetime object."
                 )
@@ -77,17 +81,18 @@ class HazardDriver:
 
                 # since we are at the end of the timestep, we need to check if the current time plus the timestep length is greater than or equal to the start time of the event
                 timestep_end_time: datetime = (
-                    self.current_time
-                    + self.timestep_length
-                    - self.timestep_length / routing_substeps
+                    self.model.current_time
+                    + self.model.timestep_length
+                    - self.model.timestep_length / routing_substeps
                 )
                 if (
                     timestep_end_time >= event["end_time"]
-                    and event["end_time"] + self.timestep_length > timestep_end_time
+                    and event["end_time"] + self.model.timestep_length
+                    > timestep_end_time
                 ) or (
-                    event["end_time"] > self.simulation_end
+                    event["end_time"] > self.model.simulation_end
                     and event["start_time"] < timestep_end_time
-                    and self.current_timestep == self.n_timesteps - 1
+                    and self.model.current_timestep == self.model.n_timesteps - 1
                 ):
                     event: dict[str, datetime] = copy.deepcopy(event)
 

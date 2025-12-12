@@ -30,7 +30,7 @@ from .forcing import Forcing
 from .hydrology import Hydrology
 
 
-class GEBModel(Module, HazardDriver):
+class GEBModel(Module):
     """GEB parent class.
 
     Args:
@@ -358,7 +358,7 @@ class GEBModel(Module, HazardDriver):
         if self.simulate_hydrology:
             self.hydrology.step()
 
-        HazardDriver.step(self)
+        self.hazard_driver.step()
 
         self.report(locals())
 
@@ -409,7 +409,7 @@ class GEBModel(Module, HazardDriver):
 
         self.hydrology: Hydrology = Hydrology(self)
 
-        HazardDriver.__init__(self)
+        self.hazard_driver = HazardDriver(self)
 
         self.agents = Agents(self)
 

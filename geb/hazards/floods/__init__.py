@@ -15,7 +15,12 @@ import xarray as xr
 from shapely.geometry.point import Point
 
 from geb.module import Module
-from geb.types import ArrayFloat32, TwoDArrayInt32
+from geb.types import (
+    ArrayFloat32,
+    TwoDArrayFloat as TwoDArrayFloat,
+    TwoDArrayFloat32,
+    TwoDArrayInt32,
+)
 from geb.workflows.io import read_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
@@ -535,11 +540,11 @@ class Floods(Module):
             model_name = "coastal_region"
 
             # load location and offset for coastal water level forcing
-            locations = (
+            locations: gpd.GeoDataFrame = (
                 read_geom(self.model.files["geom"]["gtsm/stations_coast_rp"])
                 .rename(columns={"station_id": "stations"})
                 .set_index("stations")
-            )
+            )  # ty:ignore[invalid-assignment]
 
             offset = xr.open_dataarray(
                 self.model.files["other"][
@@ -620,7 +625,7 @@ class Floods(Module):
         else:
             self.run_single_event(start_time, end_time)
 
-    def save_discharge(self) -> None:
+    def save_discharge(self, discharge_m3_s_per_substep: TwoDArrayFloat32) -> None:
         """Saves the current discharge for the current timestep.
 
         SFINCS is run at the end of an event rather than at the beginning. Therefore,
@@ -629,13 +634,13 @@ class Floods(Module):
         so it can be used later when setting up the SFINCS model.
         """
         self.var.discharge_per_timestep.append(
-            self.hydrology.grid.var.discharge_m3_s_per_substep
+            discharge_m3_s_per_substep
         )  # this is a deque, so it will automatically remove the oldest discharge
 
-    def save_runoff_m(self) -> None:
+    def save_runoff_m(self, overland_runoff_m: TwoDArrayFloat32) -> None:
         """Saves the current runoff for the current timestep."""
         self.var.runoff_m_per_timestep.append(
-            self.model.hydrology.grid.var.total_runoff_m
+            overland_runoff_m
         )  # this is a deque, so it will automatically remove the oldest runoff
 
     @property
