@@ -2401,6 +2401,7 @@ class Hydrology:
         # ---------------------------------------------------------------------
         df_yearly = df.resample("Y").sum()
         df_yearly.to_csv(folder / "water_balance_yearly.csv")
+        print("Water balance yearly values saved.")
 
         # ---------------------------------------------------------------------
         # Multi-year stacked bar plot WITH LEGEND
@@ -2408,7 +2409,7 @@ class Hydrology:
         years = df_yearly.index.year
         n_years = len(years)
 
-        fig, axes = plt.subplots(n_years, 1, figsize=(12, 3.5 * n_years), sharex=True)
+        fig, axes = plt.subplots(n_years, 1, figsize=(16, 5 * n_years), sharex=True)
         if n_years == 1:
             axes = [axes]
 
@@ -2452,20 +2453,135 @@ class Hydrology:
 
             ax.set_title(f"Water Balance – {year}")
             ax.set_ylabel("m3/year")
-
+        print(legend_labels)
         # Add legend to entire figure (only once)
         fig.legend(
             legend_handles,
             legend_labels,
-            loc="upper center",
-            bbox_to_anchor=(0.5, 1.02),
-            ncol=3,
+            loc="lower center",
+            # bbox_to_anchor=(0.5, -0.02),
+            ncol=4,
         )
+        # plt.tight_layout(rect=[0, 0.05, 1, 1])
 
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        # plt.tight_layout(rect=[0, 0, 1, 0.95])
+        # fig.subplots_adjust(top=0.82)
 
         if export:
             fig_path = folder / "water_balance_yearly_subplots.png"
             plt.savefig(fig_path, dpi=300)
+            print(f"Water balance yearly plot saved as: {fig_path}")
 
         plt.show()
+
+        # import plotly.graph_objects as go
+
+        # def plot_water_balance_sankey(df_yearly, year, save_folder):
+        #     """Create a Sankey diagram for one year's water balance."""
+
+        #     row = df_yearly.loc[df_yearly.index.year == year].iloc[0]
+
+        #     # --- Step 1: Define all components ---
+        #     inputs = {
+        #         "rain": row["in_rain"],
+        #         "snow": row["in_snow"],
+        #     }
+        #     if "in_deposition" in df_yearly.columns:
+        #         inputs["deposition"] = row["in_deposition"]
+
+        #     outputs = {
+        #         "transpiration": row.get("out_evapotranspiration_transpiration", 0),
+        #         "bare soil evaporation": row.get(
+        #             "out_evapotranspiration_bare soil evaporation", 0
+        #         ),
+        #         "open water evaporation": row.get(
+        #             "out_evapotranspiration_open water evaporation", 0
+        #         ),
+        #         "interception evaporation": row.get(
+        #             "out_evapotranspiration_interception evaporation", 0
+        #         ),
+        #         "river evaporation": row.get(
+        #             "out_evapotranspiration_river evaporation", 0
+        #         ),
+        #         "waterbody evaporation": row.get(
+        #             "out_evapotranspiration_waterbody evaporation", 0
+        #         ),
+        #         "domestic water loss": row.get(
+        #             "out_water demand_domestic water loss", 0
+        #         ),
+        #         "industry water loss": row.get(
+        #             "out_water demand_industry water loss", 0
+        #         ),
+        #         "livestock water loss": row.get(
+        #             "out_water demand_livestock water loss", 0
+        #         ),
+        #         "river outflow": row.get("out_river outflow", 0),
+        #     }
+
+        #     storage_change = row["storage change"]
+
+        #     # --- Step 2: Build Sankey label list ---
+        #     labels = (
+        #         list(inputs.keys())
+        #         + ["system"]
+        #         + list(outputs.keys())
+        #         + ["storage change"]
+        #     )
+
+        #     # Index mapping
+        #     idx = {label: i for i, label in enumerate(labels)}
+
+        #     # --- Step 3: Build links ---
+        #     sources = []
+        #     targets = []
+        #     values = []
+
+        #     # Inputs → system
+        #     for k, v in inputs.items():
+        #         sources.append(idx[k])
+        #         targets.append(idx["system"])
+        #         values.append(v)
+
+        #     # System → outputs
+        #     for k, v in outputs.items():
+        #         sources.append(idx["system"])
+        #         targets.append(idx[k])
+        #         values.append(v)
+
+        #     # System → storage
+        #     sources.append(idx["system"])
+        #     targets.append(idx["storage change"])
+        #     values.append(abs(storage_change))
+
+        #     # --- Step 4: Create Plotly Sankey ---
+        #     fig = go.Figure(
+        #         go.Sankey(
+        #             node=dict(
+        #                 label=labels,
+        #                 pad=20,
+        #                 thickness=20,
+        #             ),
+        #             link=dict(
+        #                 source=sources,
+        #                 target=targets,
+        #                 value=values,
+        #             ),
+        #         )
+        #     )
+
+        #     fig.update_layout(
+        #         title=f"Water Balance Sankey Diagram — {year}",
+        #         font_size=12,
+        #         height=700,
+        #         width=1100,
+        #     )
+
+        #     fig.show()
+
+        #     # --- Step 5: SAVE THE FIGURES ---
+        #     html_path = save_folder / f"sankey_{year}.html"
+        #     fig.write_html(str(html_path))
+
+        # plot_water_balance_sankey(
+        #     df_yearly, years[0], folder
+        # )  # Plot for the first year only
