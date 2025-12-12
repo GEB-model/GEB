@@ -1233,7 +1233,7 @@ class Routing(Module):
 
     def step(
         self,
-        total_runoff_m: ArrayFloat32,
+        total_runoff_m: TwoDArrayFloat32,
         channel_abstraction_m3: ArrayFloat32,
         return_flow: ArrayFloat32,
         reference_evapotranspiration_water_m: TwoDArrayFloat32,
@@ -1442,7 +1442,8 @@ class Routing(Module):
                 self.grid.var.discharge_in_rivers_m3_s_substep,
                 rivers=self.rivers,
                 waterbody_ids=self.grid.var.waterBodyID,
-                outflow_per_waterbody_m3_s=outflow_per_waterbody_m3 / np.float32(3600),
+                outflow_per_waterbody_m3_s=outflow_per_waterbody_m3
+                * np.float32(1 / 3600),
             )
 
             self.grid.var.discharge_m3_s_per_substep[hour, :] = (
