@@ -2,8 +2,6 @@
 
 from typing import Any
 
-from .global_exposure_model import GlobalExposureModel
-
 from .base import Adapter
 from .destination_earth import DestinationEarth
 from .ecmwf import ECMWFForecasts
@@ -13,6 +11,7 @@ from .fao import GMIA
 from .gadm import GADM
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
+from .global_exposure_model import GlobalExposureModel
 from .globgm import GlobGM, GlobGMDEM
 from .grdc import GRDC
 from .hydrolakes import HydroLakes
