@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Literal
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -16,10 +17,6 @@ from tqdm import tqdm
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
-
-"""
-This module contains the Observations class. 
-"""
 
 
 def plot_snapping(
@@ -292,8 +289,8 @@ def select_river_segment(
     max_uparea_difference_ratio: float,
     max_spatial_difference_degrees: float,
     Q_obs_uparea_m2: float,
-    rivers_sorted: pd.DataFrame,
-) -> pd.DataFrame | bool:
+    rivers_sorted: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame | Literal[False]:
     """This function selects the closest river segment to the Q_obs station based on the spatial distance.
 
     It returns false if the spatial distance is larger than the max_spatial_difference_degrees.
@@ -458,7 +455,7 @@ class Observations:
                 "Q_obs_to_GEB_upstream_area_ratio",
                 "snapping_distance_degrees",
             ]
-            discharge_snapping_df = pd.DataFrame(columns=empty_cols)
+            discharge_snapping_df = pd.DataFrame(columns=np.array(empty_cols))
             discharge_snapping_df.to_excel(
                 self.report_dir / "snapping_discharge" / "discharge_snapping.xlsx",
                 index=False,
@@ -515,7 +512,7 @@ class Observations:
             Q_obs_station_name = str(
                 Q_obs_station.station_name.values
             )  # get the name of the station
-            Q_obs_station_coords = list(
+            Q_obs_station_coords = tuple(
                 (
                     float(Q_obs_station.x.values),
                     float(Q_obs_station.y.values),
@@ -607,19 +604,19 @@ class Observations:
             )  # get the value of the selected pixel
 
             # make variables for all the different coordinates
-            closest_point_coords = list(
+            closest_point_coords = tuple(
                 (
                     float(closest_point_on_riverline.x),
                     float(closest_point_on_riverline.y),
                 )
             )  # closest point coordinates
-            subgrid_pixel_coords = list(
+            subgrid_pixel_coords = tuple(
                 (
                     float(selected_subgrid_pixel.x.values),
                     float(selected_subgrid_pixel.y.values),
                 )
             )  ## subgrid pixel coordinates
-            grid_pixel_coords = list(
+            grid_pixel_coords = tuple(
                 (
                     float(upstream_area_grid_pixel.x.values),
                     float(upstream_area_grid_pixel.y.values),
