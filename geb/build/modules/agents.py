@@ -1599,6 +1599,17 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
+    @build_method
+    def setup_building_reconstruction_costs(self) -> None:
+        gadm_level1 = self.new_data_catalog.fetch("GADM_level1").read(
+            geom=self.region.union_all(),
+        )
+        countries_in_model = gadm_level1["COUNTRY"].unique().tolist()
+        global_exposure_model = self.new_data_catalog.fetch(
+            "global_exposure_model",
+            countries=countries_in_model,
+        ).read()
+
     def get_buildings_per_GDL_region(
         self, GDL_regions: gpd.GeoDataFrame
     ) -> dict[str, gpd.GeoDataFrame]:
