@@ -87,13 +87,14 @@ def get_subbasins_geometry(
         A GeoDataFrame containing the subbasins geometry for the given subbasin IDs.
             The index of the GeoDataFrame is the subbasin ID (COMID).
     """
-    subbasins: gpd.GeoDataFrame = data_catalog.fetch("merit_basins_catchments").read(
+    subbasins = data_catalog.fetch("merit_basins_catchments").read(
         filters=[
             ("COMID", "in", subbasin_ids),
         ],
     )
+    assert isinstance(subbasins, gpd.GeoDataFrame)
     assert len(subbasins) == len(subbasin_ids), "Some subbasins were not found"
-    return subbasins.set_index("COMID")
+    return subbasins.set_index("COMID")  # ty:ignore[invalid-return-type]
 
 
 def get_rivers(
@@ -110,38 +111,36 @@ def get_rivers(
     Returns:
         A GeoDataFrame containing the rivers for the given subbasin IDs.
     """
-    rivers: gpd.GeoDataFrame = (
-        data_catalog.fetch("merit_basins_rivers")
-        .read(
-            columns=[
-                "COMID",
-                "lengthkm",
-                "slope",
-                "uparea",
-                "maxup",
-                "NextDownID",
-                "geometry",
-            ],
-            filters=[
-                ("COMID", "in", subbasin_ids),
-            ],
-        )
-        .rename(
-            columns={
-                "NextDownID": "downstream_ID",
-            }
-        )
+    rivers = data_catalog.fetch("merit_basins_rivers").read(
+        columns=[
+            "COMID",
+            "lengthkm",
+            "slope",
+            "uparea",
+            "maxup",
+            "NextDownID",
+            "geometry",
+        ],
+        filters=[
+            ("COMID", "in", subbasin_ids),
+        ],
     )
+    assert isinstance(rivers, gpd.GeoDataFrame)
+    rivers: gpd.GeoDataFrame = rivers.rename(
+        columns={
+            "NextDownID": "downstream_ID",
+        }
+    ).set_index("COMID")  # ty:ignore[invalid-assignment]
     rivers["uparea_m2"] = rivers["uparea"] * 1e6  # convert from km^2 to m^2
     rivers["is_headwater_catchment"] = rivers["maxup"] == 0
-    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])
+    rivers: gpd.GeoDataFrame = rivers.drop(columns=["uparea"])  # ty:ignore[invalid-assignment]
     rivers.loc[rivers["downstream_ID"] == 0, "downstream_ID"] = -1
     assert len(rivers) == len(subbasin_ids), "Some rivers were not found"
     # reverse the river lines to have the downstream direction
     rivers["geometry"] = rivers["geometry"].apply(
         lambda x: LineString(list(x.coords)[::-1])
     )
-    return rivers.set_index("COMID")
+    return rivers
 
 
 def create_river_raster_from_river_lines(
@@ -204,9 +203,10 @@ def get_SWORD_translation_IDs_and_lengths(
         - SWORD_reach_lengths: A 2D numpy array of shape (N, M) where N is the number of SWORD reaches per river
             and M is the number of rivers. Each element is the length of the SWORD reach for that river.
     """
-    MERIT_Basins_to_SWORD: xr.Dataset = (
+    MERIT_Basins_to_SWORD = (
         data_catalog.fetch("merit_sword").read().sel(mb=rivers.index.tolist())
     )
+    assert isinstance(MERIT_Basins_to_SWORD, xr.DataArray)
 
     SWORD_reach_IDs = np.full((40, len(rivers)), dtype=np.int64, fill_value=-1)
     SWORD_reach_lengths = np.full(
@@ -242,13 +242,11 @@ def get_SWORD_river_widths(
     """
     unique_SWORD_reach_ids = np.unique(SWORD_reach_IDs[SWORD_reach_IDs != -1])
 
-    SWORD = (
-        data_catalog.fetch("sword")
-        .read(
-            sql=f"""SELECT * FROM sword WHERE reach_id IN ({",".join([str(ID) for ID in unique_SWORD_reach_ids])})"""
-        )
-        .set_index("reach_id")
+    SWORD = data_catalog.fetch("sword").read(
+        sql=f"""SELECT * FROM sword WHERE reach_id IN ({",".join([str(ID) for ID in unique_SWORD_reach_ids])})"""
     )
+    assert isinstance(SWORD, pd.DataFrame)
+    SWORD = SWORD.set_index("reach_id")
 
     assert len(SWORD) == len(unique_SWORD_reach_ids), (
         "Some SWORD reaches were not found, possibly the SWORD and MERIT data version are not correct"
@@ -331,7 +329,7 @@ class Hydrography:
         downstream_subbasins = get_downstream_subbasins(river_graph, sink_subbasin_ids)
         subbasin_ids.update(downstream_subbasins)
 
-        subbasins = get_subbasins_geometry(self.new_data_catalog, subbasin_ids)
+        subbasins = get_subbasins_geometry(self.new_data_catalog, list(subbasin_ids))
         subbasins["is_downstream_outflow_subbasin"] = pd.Series(
             True, index=downstream_subbasins
         ).reindex(subbasins.index, fill_value=False)
