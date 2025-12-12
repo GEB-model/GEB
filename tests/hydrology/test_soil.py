@@ -827,13 +827,15 @@ def test_pedotransfer_functions_consistency() -> None:
         clay = np.array([props["clay"]], dtype=np.float32)
         silt = np.array([props["silt"]], dtype=np.float32)
         bulk_density = np.array([props["bulk_density"]], dtype=np.float32)
-        organic_carbon = np.array([props["organic_carbon"]], dtype=np.float32)
+        organic_carbon_percentage = np.array(
+            [props["organic_carbon"]], dtype=np.float32
+        )
         is_top_soil = np.array([True], dtype=bool)
 
         # Calculate Thetas (Saturated Water Content)
         # Using Toth as a baseline for Brakensiek input
         thetas_val_toth = thetas_toth(
-            soil_organic_carbon=organic_carbon,
+            organic_carbon_percentage=organic_carbon_percentage,
             bulk_density=bulk_density,
             is_top_soil=is_top_soil,
             clay=clay,
@@ -844,7 +846,7 @@ def test_pedotransfer_functions_consistency() -> None:
             clay=clay,
             bulk_density=bulk_density,
             silt=silt,
-            soil_organic_carbon=organic_carbon,
+            organic_carbon_percentage=organic_carbon_percentage,
             is_topsoil=is_top_soil,
         )
 
@@ -862,7 +864,7 @@ def test_pedotransfer_functions_consistency() -> None:
             silt=silt,
             clay=clay,
             bulk_density=bulk_density,
-            organic_matter=organic_carbon,
+            organic_carbon_percentage=organic_carbon_percentage,
             is_topsoil=is_top_soil,
         )
         kv_c = kv_cosby(sand=sand, clay=clay)
@@ -882,7 +884,7 @@ def test_pedotransfer_functions_consistency() -> None:
         psi_index_w = get_pore_size_index_wosten(
             clay=clay,
             silt=silt,
-            soil_organic_carbon=organic_carbon,
+            organic_carbon_percentage=organic_carbon_percentage,
             bulk_density=bulk_density,
             is_top_soil=is_top_soil,
         )
@@ -918,10 +920,10 @@ def test_pedotransfer_functions_consistency() -> None:
         log_w = np.log10(val_w)
         log_c = np.log10(val_c)
 
-        # Check if they are within 2.5 orders of magnitude of each other
-        assert abs(log_b - log_w) < 2.5, f"Kv mismatch Brakensiek vs Wosten for {name}"
-        assert abs(log_b - log_c) < 2.5, f"Kv mismatch Brakensiek vs Cosby for {name}"
-        assert abs(log_w - log_c) < 2.5, f"Kv mismatch Wosten vs Cosby for {name}"
+        # Check if they are within 1.5 orders of magnitude of each other
+        assert abs(log_b - log_w) < 1.5, f"Kv mismatch Brakensiek vs Wosten for {name}"
+        assert abs(log_b - log_c) < 1.5, f"Kv mismatch Brakensiek vs Cosby for {name}"
+        assert abs(log_w - log_c) < 1.5, f"Kv mismatch Wosten vs Cosby for {name}"
 
         # Additional checks for other parameters
         assert 0 < thetar[0] < thetas_val_toth[0], f"Thetar invalid for {name}"

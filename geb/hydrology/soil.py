@@ -9,7 +9,7 @@ from .landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 
 # TODO: Load this dynamically as global var (see soil.py)
 N_SOIL_LAYERS = 6
-EXPERIMENT_ARNO_RUNOFF = False
+EXPERIMENT_ARNO_RUNOFF: bool = False
 
 
 @njit(cache=True, inline="always")
@@ -504,7 +504,7 @@ def get_soil_moisture_at_pressure(
 
 
 def thetas_toth(
-    soil_organic_carbon: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
     is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
     clay: np.ndarray[Shape, np.dtype[np.float32]],
@@ -518,7 +518,7 @@ def thetas_toth(
     Soil Sci., 66, 226-238. doi: 10.1111/ejss.121921211, 2015.
 
     Args:
-        soil_organic_carbon: soil organic carbon content [%].
+        organic_carbon_percentage: soil organic carbon content [%].
         bulk_density: bulk density [g /cm3].
         clay: clay percentage [%].
         silt: fsilt percentage [%].
@@ -530,12 +530,12 @@ def thetas_toth(
     """
     return (
         np.float32(0.6819)
-        - np.float32(0.06480) * (1 / (soil_organic_carbon + 1))
+        - np.float32(0.06480) * (1 / (organic_carbon_percentage + 1))
         - np.float32(0.11900) * bulk_density**2
         - np.float32(0.02668) * is_top_soil
         + np.float32(0.001489) * clay
         + np.float32(0.0008031) * silt
-        + np.float32(0.02321) * (1 / (soil_organic_carbon + 1)) * bulk_density**2
+        + np.float32(0.02321) * (1 / (organic_carbon_percentage + 1)) * bulk_density**2
         + np.float32(0.01908) * bulk_density**2 * is_top_soil
         - np.float32(0.0011090) * clay * is_top_soil
         - np.float32(0.00002315) * silt * clay
@@ -548,7 +548,7 @@ def thetas_wosten(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
-    organic_matter: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculates the saturated water content (theta_S) based on the provided equation.
@@ -559,7 +559,7 @@ def thetas_wosten(
         clay: Clay percentage (C).
         bulk_density: Bulk density (D).
         silt: Silt percentage (S).
-        organic_matter: Organic matter percentage (OM).
+        organic_carbon_percentage: Organic matter percentage (OM).
         is_topsoil: 1 for topsoil, 0 for subsoil.
 
     Returns:
@@ -570,13 +570,13 @@ def thetas_wosten(
         + 0.00169 * clay
         - 0.29619 * bulk_density
         - 0.000001491 * silt**2
-        + 0.0000821 * organic_matter**2
+        + 0.0000821 * organic_carbon_percentage**2
         + 0.02427 * (1 / clay)
         + 0.01113 * (1 / silt)
         + 0.01472 * np.log(silt)
-        - 0.0000733 * organic_matter * clay
+        - 0.0000733 * organic_carbon_percentage * clay
         - 0.000619 * bulk_density * clay
-        - 0.001183 * bulk_density * organic_matter
+        - 0.001183 * bulk_density * organic_carbon_percentage
         - 0.0001664 * is_topsoil * silt
     )
 
@@ -711,7 +711,7 @@ def get_pore_size_index_brakensiek(
 def get_pore_size_index_wosten(
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     silt: np.ndarray[Shape, np.dtype[np.float32]],
-    soil_organic_carbon: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
     is_top_soil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
@@ -722,7 +722,7 @@ def get_pore_size_index_wosten(
     Args:
         clay: clay percentage [%].
         silt: silt percentage [%].
-        soil_organic_carbon: soil organic carbon content [%].
+        organic_carbon_percentage: soil organic carbon content [%].
         bulk_density: bulk density [g /cm3].
         is_top_soil: top soil flag.
 
@@ -733,19 +733,19 @@ def get_pore_size_index_wosten(
         -25.23
         - 0.02195 * clay
         + 0.0074 * silt
-        - 0.1940 * soil_organic_carbon
+        - 0.1940 * organic_carbon_percentage
         + 45.5 * bulk_density
         - 7.24 * bulk_density**2
         + 0.0003658 * clay**2
-        + 0.002855 * soil_organic_carbon**2
+        + 0.002855 * organic_carbon_percentage**2
         - 12.81 * bulk_density**-1
         - 0.1524 * silt**-1
-        - 0.01958 * soil_organic_carbon**-1
+        - 0.01958 * organic_carbon_percentage**-1
         - 0.2876 * np.log(silt)
-        - 0.0709 * np.log(soil_organic_carbon)
+        - 0.0709 * np.log(organic_carbon_percentage)
         - 44.6 * np.log(bulk_density)
         - 0.02264 * bulk_density * clay
-        + 0.0896 * bulk_density * soil_organic_carbon
+        + 0.0896 * bulk_density * organic_carbon_percentage
         + 0.00718 * is_top_soil * clay
     )
 
@@ -795,7 +795,7 @@ def kv_wosten(
     silt: np.ndarray[Shape, np.dtype[np.float32]],
     clay: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
-    organic_matter: np.ndarray[Shape, np.dtype[np.float32]],
+    organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     is_topsoil: np.ndarray[Shape, np.dtype[np.bool_]],
 ) -> np.ndarray[Shape, np.dtype[np.float32]]:
     """Calculates the saturated value based on the provided equation.
@@ -807,7 +807,7 @@ def kv_wosten(
         is_topsoil: 1 for topsoil, 0 for subsoil.
         bulk_density: Bulk density (D).
         clay: Clay percentage (C).
-        organic_matter: Organic matter percentage (OM).
+        organic_carbon_percentage: Organic matter percentage (OM).
 
     Returns:
         float: The calculated Ks* value [m/s].
@@ -820,10 +820,10 @@ def kv_wosten(
         - 0.000484 * clay**2
         - 0.000322 * silt**2
         + 0.001 * (1 / silt)
-        - 0.0748 * (1 / organic_matter)
+        - 0.0748 * (1 / organic_carbon_percentage)
         - 0.643 * np.log(silt)
         - 0.01398 * bulk_density * clay
-        - 0.1673 * bulk_density * organic_matter
+        - 0.1673 * bulk_density * organic_carbon_percentage
         + 0.02986 * np.float32(is_topsoil) * clay
         - 0.03305 * np.float32(is_topsoil) * silt
     ) / (100 * 86400)  # convert to m/s
