@@ -2,6 +2,7 @@
 
 import math
 from datetime import datetime
+from typing import Any
 
 import geopandas as gpd
 import numpy as np
@@ -516,21 +517,28 @@ class Agents:
             price_ratio, ["Country Name", "Country Code"]
         )
         years_price_ratio = extract_years(price_ratio_filtered)
-        price_ratio_dict = {"time": years_price_ratio, "data": {}}  # price ratio
+        price_ratio_dict: dict[str, Any] = {
+            "time": years_price_ratio,
+            "data": {},
+        }  # price ratio
 
         lcu_filtered = select_years_from_df(
             LCU_per_USD, ["Country Name", "Country Code"]
         )
 
-        years_lcu = extract_years(lcu_filtered)
-        lcu_dict = {"time": years_lcu, "data": {}}  # LCU per USD
+        years_lcu: list[str] = extract_years(lcu_filtered)
+        lcu_dict: dict[str, Any] = {"time": years_lcu, "data": {}}  # LCU per USD
 
         # Assume lending_rates and inflation_rates are available
         # years_lending_rates = extract_years(lending_rates)
         years_inflation_rates = extract_years(inflation_rates)
 
         # lending_rates_dict = {"time": years_lending_rates, "data": {}}
-        inflation_rates_dict = {"time": years_inflation_rates, "data": {}}
+
+        inflation_rates_dict: dict[str, Any] = {
+            "time": years_inflation_rates,
+            "data": {},
+        }
 
         # Create a helper to process rates and assert single row data
         def retrieve_inflation_rates(
@@ -643,7 +651,7 @@ class Agents:
                     .unique()
                     .tolist(),
                 )
-                donor_country = donor_countries.get(ISO3, None)
+                donor_country = donor_countries[ISO3]
                 price_ratio_dict["data"][region_id] = retrieve_inflation_rates(
                     price_ratio_filtered,
                     years_price_ratio,
@@ -992,7 +1000,10 @@ class Agents:
 
         # Iterate over each price type and calculate the prices across years for each region
         for price_type, initial_price in price_types.items():
-            prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
+            prices_dict: dict[str, Any] = {
+                "time": list(range(start_year, end_year + 1)),
+                "data": {},
+            }
 
             for region in regions:
                 prices = pd.Series(index=range(start_year, end_year + 1))
