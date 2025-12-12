@@ -15,6 +15,7 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import KDTree
 
+from geb.store import Bucket
 from geb.types import (
     AnyDArrayWithScalar,
     Array,
@@ -31,6 +32,7 @@ from geb.types import (
     TwoDArray,
     TwoDArrayBool,
     TwoDArrayFloat32,
+    TwoDArrayFloat64,
     TwoDArrayInt32,
     TwoDArrayWithScalar,
 )
@@ -221,6 +223,18 @@ class BaseVariables:
         return self.mask.shape
 
 
+class GridVariables:
+    """This class contains functions to handle variables on the grid scale."""
+
+    interception_capacity_forest: TwoDArrayFloat32
+    heads: TwoDArrayFloat64
+    capillar: ArrayFloat32
+    layer_boundary_elevation: TwoDArrayFloat32
+    elevation: ArrayFloat32
+    specific_yield: TwoDArrayFloat32
+    hydraulic_conductivity: TwoDArrayFloat32
+
+
 class Grid(BaseVariables):
     """This class is to store data in the 'normal' grid cells. This class works with compressed and uncompressed arrays. On initialization of the class, the mask of the study area is read from disk. This is the shape of any uncompressed array. Many values in this array, however, fall outside the stuy area as they are masked. Therefore, the array can be compressed by saving only the non-masked values.
 
@@ -228,6 +242,8 @@ class Grid(BaseVariables):
 
     Then, the mask is compressed by removing all masked cells, resulting in a compressed array.
     """
+
+    var: GridVariables
 
     def __init__(self, data: Data, model: GEBModel) -> None:
         """Initialize Grid class.
@@ -515,6 +531,20 @@ class Grid(BaseVariables):
         return read_grid(self.model.files["other"]["climate/pr_gev_scale"])
 
 
+class HRUVariables(Bucket):
+    """This class contains functions to handle variables on the HRU scale."""
+
+    arno_shape_parameter: ArrayFloat32
+    interception_storage_m: ArrayFloat32
+    snow_temperature_C: ArrayFloat32
+    liquid_water_in_snow_m: ArrayFloat32
+    snow_water_equivalent_m: ArrayFloat32
+    topwater_m: ArrayFloat32
+    frost_index: ArrayFloat32
+    reservoir_command_areas: ArrayInt32
+    cell_area: ArrayFloat32
+
+
 class HRUs(BaseVariables):
     """This class forms the basis for the HRUs. To create the `HRUs`, each individual field owned by a farmer becomes a `HRU` first. Then, in addition, each other land use type becomes a separate HRU. `HRUs` never cross cell boundaries. This means that farmers whose fields are dispersed across multiple cells are simulated by multiple `HRUs`. Here, we assume that each `HRU`, is relatively homogeneous as it each `HRU` is operated by 1) a single farmer, or by a single other (i.e., non-farm) land-use type and 2) never crosses the boundary a hydrological model cell.
 
@@ -524,6 +554,8 @@ class HRUs(BaseVariables):
         data: Data class for model.
         model: The GEB model.
     """
+
+    var: HRUVariables
 
     def __init__(self, data: Data, model: GEBModel) -> None:
         """Initialize HRUs class.
