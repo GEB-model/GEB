@@ -221,7 +221,11 @@ class Hydrology(Data, Module):
 
         timer.finish_split("GW")
 
-        self.grid.var.total_runoff_m = self.runoff_concentrator.step(
+        (
+            self.grid.var.total_runoff_m,
+            self.grid.var.storage_start_m3,
+            self.grid.var.storage_end_m3,
+        ) = self.runoff_concentrator.step(
             interflow=interflow_m, baseflow=baseflow_m, runoff=runoff_m
         )
         timer.finish_split("Runoff concentration")
@@ -260,8 +264,8 @@ class Hydrology(Data, Module):
                 outfluxes=[
                     outflux_m3,
                 ],
-                prestorages=[prev_storage],
-                poststorages=[current_storage],
+                prestorages=[prev_storage + self.grid.var.storage_start_m3],
+                poststorages=[current_storage + self.grid.var.storage_end_m3],
                 tolerance=self.grid.compressed_size
                 / 3,  # increase tolerance for large models
             )

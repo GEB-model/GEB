@@ -50,6 +50,7 @@ class RunoffConcentrator(Module):
 
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
+
         self.lagtime = max(lagtime, 48)
 
         # precompute triangular weights
@@ -146,14 +147,15 @@ class RunoffConcentrator(Module):
         Returns:
             2D array with shape (24, n_cells) representing the routed hourly outflow for the day.
         """
-        n_steps, n_cells = runoff.shape  # n_steps = 24
+        n_steps, n_cells = runoff.shape
 
         if self.buffer is None:
             self._init_buffer(n_cells)
 
         # Advance buffer by one day (24 hours)
         self._advance_buffer(n_steps)
-        storage_start = self.buffer.copy().astype(np.float64)
+        storage_start_m = self.buffer.copy().astype(np.float64)
+        storage_start_m3 = (storage_start_m * self.grid.var.cell_area).sum()
 
         # Baseflow is distributed evenly across 24 substeps
         baseflow_per_step = (baseflow / n_steps).astype(np.float32)
@@ -161,25 +163,39 @@ class RunoffConcentrator(Module):
 
         # Apply triangular routing for each flow component
         self._apply_triangular(runoff, self.weights_runoff)
-        # self._apply_triangular(interflow, self.weights_interflow)
-        # self._apply_triangular(baseflow_series, self.weights_baseflow)
 
-        # Outflow is only the first 24 buffer steps which equals 24 hourly outflows
-        outflow = self.buffer[:n_steps].copy()  # shape (24, n_cells)
-        storage_end = self.buffer[n_steps:].copy().astype(np.float64)
-        print(self.grid.compressed_size / 3)
+        outflow_m = (
+            self.buffer[:n_steps].copy()
+        )  # Outflow is only the first 24 buffer steps which equals 24 hourly outflows
+        storage_end_m = (
+            self.buffer[n_steps:].copy().astype(np.float64)
+        )  # Everything that is stored for the next day
+        storage_end_m3 = (storage_end_m * self.grid.var.cell_area).sum()
+
+        print(storage_start_m.sum())
+        print(storage_end_m.sum())
+
+        outflow_m3 = (outflow_m * self.grid.var.cell_area).sum()
+        influxes_m3 = (
+            (runoff * self.grid.var.cell_area).sum()
+            + (interflow * self.grid.var.cell_area).sum()
+            + baseflow_series.sum() * self.grid.var.cell_area.sum()
+        )
+
         balance_check(
             name="RunoffConcentrator daily water balance",
             how="sum",
-            influxes=[runoff, interflow, baseflow_series],
-            outfluxes=[outflow.astype(np.float64)],
-            prestorages=[storage_start],
-            poststorages=[storage_end],
-            tolerance=1e-6,
+            influxes=[influxes_m3],
+            outfluxes=[outflow_m3],
+            prestorages=[storage_start_m3],
+            poststorages=[storage_end_m3],
+            tolerance=1,
             raise_on_error=False,
         )
-
-        return outflow
+        # outflow = runoff + interflow + (baseflow / 24.0).astype(np.float64)
+        # storage_start_m = np.zeros_like(outflow, dtype=np.float64)
+        # storage_end_m = np.zeros_like(outflow, dtype=np.float64)
+        return outflow_m, storage_start_m3, storage_end_m3
 
     @property
     def name(self) -> str:

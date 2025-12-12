@@ -2240,3 +2240,232 @@ class Hydrology:
             print(f"Completed processing event: {event_name}\n")
 
         print("Flood map performance metrics calculated for all events.")
+
+    def water_balance(
+        self,
+        run_name: str,
+        include_spinup: bool,
+        spinup_name: str,
+        *args: Any,
+        export: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        """Create a csv file and plot showing the water balance components.
+
+        Args:
+            run_name: Name of the run to evaluate.
+            include_spinup: Whether to include the spinup run in the evaluation.
+            spinup_name: Name of the spinup run to include in the evaluation.
+            export: Whether to export the water circle plot to a file.
+            *args: ignored.
+            **kwargs: ignored.
+        """
+        folder = self.model.output_folder / "report" / run_name
+
+        def read_csv_with_date_index(
+            folder: Path,
+            module: str,
+            name: str,
+        ) -> pd.Series:
+            """Read a CSV file with a date index.
+
+            Args:
+                folder: Path to the folder containing the CSV file.
+                module: Name of the module (subfolder) containing the CSV file.
+                name: Name of the CSV file (without extension).
+
+            Returns:
+                A pandas Series with the date index and the values from the CSV file.
+
+            """
+            df = pd.read_csv(
+                (folder / module / name).with_suffix(".csv"),
+                index_col=0,
+                parse_dates=True,
+            )[name]
+
+            return df
+
+        # because storage is the storage at the end of the timestep, we need to calculate the change
+        # across the entire simulation period.
+        storage = read_csv_with_date_index(
+            folder, "hydrology", "_water_balance_storage"
+        )
+        storage_change = storage.iloc[-1] - storage.iloc[0]
+
+        rain = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_rain"
+        )
+        snow = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_snow"
+        )
+
+        domestic_water_loss = read_csv_with_date_index(
+            folder, "hydrology.water_demand", "_water_balance_domestic_water_loss"
+        )
+        industry_water_loss = read_csv_with_date_index(
+            folder, "hydrology.water_demand", "_water_balance_industry_water_loss"
+        )
+        livestock_water_loss = read_csv_with_date_index(
+            folder, "hydrology.water_demand", "_water_balance_livestock_water_loss"
+        )
+
+        river_outflow = read_csv_with_date_index(
+            folder, "hydrology.routing", "_water_balance_river_outflow"
+        )
+
+        transpiration = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_transpiration"
+        )
+        bare_soil_evaporation = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_bare_soil_evaporation"
+        )
+        open_water_evaporation = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_open_water_evaporation"
+        )
+        interception_evaporation = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_interception_evaporation"
+        )
+        sublimation_or_deposition = read_csv_with_date_index(
+            folder, "hydrology.landsurface", "_water_balance_sublimation_or_deposition"
+        )
+        river_evaporation = read_csv_with_date_index(
+            folder, "hydrology.routing", "_water_balance_river_evaporation"
+        )
+        waterbody_evaporation = read_csv_with_date_index(
+            folder, "hydrology.routing", "_water_balance_waterbody_evaporation"
+        )
+
+        hierarchy: dict[str, Any] = {
+            "in": {
+                "rain": rain,
+                "snow": snow,
+            },
+            "out": {
+                "evapotranspiration": {
+                    "transpiration": transpiration,
+                    "bare soil evaporation": bare_soil_evaporation,
+                    "open water evaporation": open_water_evaporation,
+                    "interception evaporation": interception_evaporation,
+                    "river evaporation": river_evaporation,
+                    "waterbody evaporation": waterbody_evaporation,
+                },
+                "water demand": {
+                    "domestic water loss": domestic_water_loss,
+                    "industry water loss": industry_water_loss,
+                    "livestock water loss": livestock_water_loss,
+                },
+                "river outflow": river_outflow,
+            },
+            "storage change": abs(storage_change),
+        }
+
+        if sublimation_or_deposition.sum() > 0:
+            hierarchy["in"]["deposition"] = sublimation_or_deposition
+        else:
+            hierarchy["out"]["evapotranspiration"]["sublimation"] = abs(
+                sublimation_or_deposition
+            )
+
+        # ---------------------------------------------------------------------
+
+        # Convert storage change into a Series so it appears in yearly results
+        # ---------------------------------------------------------------------
+        storage_delta = storage.diff().fillna(0)
+
+        # Replace scalar in hierarchy
+        hierarchy["storage change"] = storage_delta
+
+        # ---------------------------------------------------------------------
+        # Flatten hierarchy
+        # ---------------------------------------------------------------------
+        flat = {}
+
+        def flatten(prefix, obj):
+            for k, v in obj.items():
+                name = f"{prefix}_{k}" if prefix else k
+                if isinstance(v, dict):
+                    flatten(name, v)
+                elif isinstance(v, pd.Series):
+                    flat[name] = v
+                else:
+                    pass
+
+        flatten("", hierarchy)
+
+        # Build DataFrame
+        df = pd.DataFrame(flat)
+
+        # ---------------------------------------------------------------------
+        # Yearly sums
+        # ---------------------------------------------------------------------
+        df_yearly = df.resample("Y").sum()
+        df_yearly.to_csv(folder / "water_balance_yearly.csv")
+
+        # ---------------------------------------------------------------------
+        # Multi-year stacked bar plot WITH LEGEND
+        # ---------------------------------------------------------------------
+        years = df_yearly.index.year
+        n_years = len(years)
+
+        fig, axes = plt.subplots(n_years, 1, figsize=(12, 3.5 * n_years), sharex=True)
+        if n_years == 1:
+            axes = [axes]
+
+        inputs_cols = [c for c in df_yearly.columns if c.startswith("in_")]
+        outputs_cols = [c for c in df_yearly.columns if c.startswith("out_")]
+        storage_cols = [c for c in df_yearly.columns if "storage" in c.lower()]
+
+        # legend building
+        legend_handles = []
+        legend_labels = []
+
+        def add_legend_entry(handle, label):
+            if label not in legend_labels:
+                legend_handles.append(handle)
+                legend_labels.append(label)
+
+        for ax, year in zip(axes, years):
+            row = df_yearly.loc[df_yearly.index.year == year].iloc[0]
+
+            # ------------ INPUTS ------------
+            bottom = 0
+            for col in inputs_cols:
+                label = col.replace("in_", "").replace("_", " ")
+                h = ax.bar("inputs", row[col], bottom=bottom, label=label)
+                add_legend_entry(h[0], f"input • {label}")
+                bottom += row[col]
+
+            # ------------ OUTPUTS ------------
+            bottom = 0
+            for col in outputs_cols:
+                label = col.replace("out_", "").replace("_", " ")
+                h = ax.bar("outputs", row[col], bottom=bottom, label=label)
+                add_legend_entry(h[0], f"output • {label}")
+                bottom += row[col]
+
+            # ------------ STORAGE ------------
+            for col in storage_cols:
+                label = col.replace("_", " ")
+                h = ax.bar("storage", row[col], label=label)
+                add_legend_entry(h[0], label)
+
+            ax.set_title(f"Water Balance – {year}")
+            ax.set_ylabel("m3/year")
+
+        # Add legend to entire figure (only once)
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=3,
+        )
+
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+        if export:
+            fig_path = folder / "water_balance_yearly_subplots.png"
+            plt.savefig(fig_path, dpi=300)
+
+        plt.show()

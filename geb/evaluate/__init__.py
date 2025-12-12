@@ -58,6 +58,7 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
                 "evaluate_hydrodynamics",
                 "evaluate_forecasts",
                 "plot_discharge_floods",
+                "water_balance",
             ]
         else:
             assert isinstance(methods, (list, tuple)), (

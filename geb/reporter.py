@@ -104,6 +104,84 @@ WATER_CIRCLE_REPORT_CONFIG = {
     },
 }
 
+WATER_BALANCE_REPORT_CONFIG = {
+    "hydrology": {
+        "_water_balance_storage": {
+            "varname": ".current_storage",
+            "type": "scalar",
+        },
+        "_water_balance_routing_loss": {
+            "varname": ".routing_loss_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.landsurface": {
+        "_water_balance_rain": {
+            "varname": ".rain_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_snow": {
+            "varname": ".snow_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_transpiration": {
+            "varname": ".transpiration_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_bare_soil_evaporation": {
+            "varname": ".bare_soil_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_open_water_evaporation": {
+            "varname": ".open_water_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_interception_evaporation": {
+            "varname": ".interception_evaporation_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+        "_water_balance_sublimation_or_deposition": {
+            "varname": ".sublimation_or_deposition_m",
+            "type": "HRU",
+            "function": "weightedsum",
+        },
+    },
+    "hydrology.routing": {
+        "_water_balance_river_evaporation": {
+            "varname": ".total_evaporation_in_rivers_m3",
+            "type": "scalar",
+        },
+        "_water_balance_waterbody_evaporation": {
+            "varname": ".total_waterbody_evaporation_m3",
+            "type": "scalar",
+        },
+        "_water_balance_river_outflow": {
+            "varname": ".total_outflow_at_pits_m3",
+            "type": "scalar",
+        },
+    },
+    "hydrology.water_demand": {
+        "_water_balance_domestic_water_loss": {
+            "varname": ".domestic_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_balance_industry_water_loss": {
+            "varname": ".industry_water_loss_m3",
+            "type": "scalar",
+        },
+        "_water_balance_livestock_water_loss": {
+            "varname": ".livestock_water_loss_m3",
+            "type": "scalar",
+        },
+    },
+}
+
 
 def create_time_array(
     start: datetime.datetime,
@@ -230,6 +308,12 @@ class Reporter:
                             report_config = multi_level_merge(
                                 report_config,
                                 WATER_CIRCLE_REPORT_CONFIG,
+                            )
+                    elif module_name == "_water_balance":
+                        if module_values is True:
+                            report_config = multi_level_merge(
+                                report_config,
+                                WATER_BALANCE_REPORT_CONFIG,
                             )
                     else:
                         raise ValueError(
