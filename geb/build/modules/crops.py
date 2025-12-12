@@ -10,6 +10,7 @@ import pandas as pd
 import xarray as xr
 
 from geb.build.methods import build_method
+from geb.types import TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import sample_from_map
 
@@ -156,7 +157,7 @@ class Crops:
     def process_crop_data(
         self,
         crop_prices: str | int | float,
-        translate_crop_names: dict | None = None,
+        translate_crop_names: dict[str, str] | None = None,
         adjust_currency: bool = False,
     ) -> dict[str, Any]:
         """Process crop price inputs into model-ready time series or constants.
@@ -333,18 +334,13 @@ class Crops:
                 ]
             ]
 
-            data = self.inter_and_extrapolate_prices(data, unique_regions)
+            data: pd.DataFrame = self.inter_and_extrapolate_prices(data, unique_regions)
 
             # Create a dictionary structure with regions as keys and crops as nested dictionaries
             # This is the required format for crop_farmers.py
             crop_data = self.dict["crops/crop_data"]["data"]
-            formatted_data = {
-                "type": "time_series",
-                "data": {},
-                "time": data.index.get_level_values("year")
-                .unique()
-                .tolist(),  # Extract unique years for the time key
-            }
+            time_index = data.index.get_level_values("year").unique().tolist()
+            data_per_region: dict[str, dict] = {}
 
             # If national_data is True, create a mapping from ISO3 code to representative region_id
             if national_data:
@@ -377,7 +373,7 @@ class Crops:
                 else:
                     # If data is not available for the region, fill with NaNs
                     region_data = pd.DataFrame(
-                        np.nan, index=formatted_data["time"], columns=data.columns
+                        np.nan, index=time_index, columns=data.columns
                     )
 
                 region_data.index.name = "year"  # Ensure index name is 'year'
@@ -413,20 +409,21 @@ class Crops:
                     else:
                         # If data is not available for the crop, but is not in the crop calendar, it
                         # is no issue, so we can fill with NaNs
-                        region_dict[str(crop_id)] = [np.nan] * len(
-                            formatted_data["time"]
-                        )
+                        region_dict[str(crop_id)] = [np.nan] * len(time_index)
+                data_per_region[str(region_id)] = region_dict
 
-                formatted_data["data"][str(region_id)] = region_dict
-
-            data = formatted_data.copy()
+            parsed_crop_prices: dict[str, str | dict | list[int]] = {
+                "type": "time_series",
+                "data": data_per_region,
+                "time": time_index,  # Extract unique years for the time key
+            }
 
         # data is a file path
         elif isinstance(crop_prices, str):
-            crop_prices = Path(crop_prices)
-            if not crop_prices.exists():
-                raise ValueError(f"file {crop_prices.resolve()} does not exist")
-            with open(crop_prices) as f:
+            crop_prices_path = Path(crop_prices)
+            if not crop_prices_path.exists():
+                raise ValueError(f"file {crop_prices_path.resolve()} does not exist")
+            with open(crop_prices_path) as f:
                 data = json.load(f)
             data = pd.DataFrame(
                 {
@@ -466,7 +463,7 @@ class Crops:
                 data, self.geom["regions"], adjust_currency
             )
 
-            data = {
+            parsed_crop_prices = {
                 "type": "time_series",
                 "time": data.xs(
                     data.index.get_level_values(0)[0], level=0
@@ -478,7 +475,7 @@ class Crops:
             }
 
         elif isinstance(crop_prices, (int, float)):
-            data = {
+            parsed_crop_prices: dict[str, str | int | float | dict] = {
                 "type": "constant",
                 "data": crop_prices,
             }
@@ -487,7 +484,7 @@ class Crops:
                 f"must be a file path or an integer, got {type(crop_prices)}"
             )
 
-        return data
+        return parsed_crop_prices
 
     def donate_and_receive_crop_prices(
         self,
@@ -606,7 +603,7 @@ class Crops:
                             [[region["region_id"]], donor_data_country.index],
                             names=["region_id", "year"],
                         ),
-                        columns=[donor_data_country.name],
+                        columns=np.array([donor_data_country.name]),
                     )
                     if data_out is None:
                         data_out = new_data.copy()
@@ -623,7 +620,7 @@ class Crops:
                             ],
                             names=["region_id", "year"],
                         ),
-                        columns=[column],
+                        columns=np.array([column]),
                     )
                     if data_out is None:
                         data_out = new_data.copy()
@@ -795,12 +792,12 @@ class Crops:
             translate_crop_names: Optional mapping to aggregate/rename source crop columns.
             adjust_currency: Whether to convert to USD using currency conversion when available.
         """
-        cultivation_costs = self.process_crop_data(
+        parsed_cultivation_costs = self.process_crop_data(
             crop_prices=cultivation_costs,
             translate_crop_names=translate_crop_names,
             adjust_currency=adjust_currency,
         )
-        self.set_dict(cultivation_costs, name="crops/cultivation_costs")
+        self.set_dict(parsed_cultivation_costs, name="crops/cultivation_costs")
 
     @build_method(
         depends_on=[
@@ -824,13 +821,13 @@ class Crops:
             translate_crop_names: Optional mapping to aggregate/rename source crop columns.
             adjust_currency: Whether to convert to USD using currency conversion when available.
         """
-        crop_prices = self.process_crop_data(
+        parsed_crop_prices = self.process_crop_data(
             crop_prices=crop_prices,
             translate_crop_names=translate_crop_names,
             adjust_currency=adjust_currency,
         )
-        self.set_dict(crop_prices, name="crops/crop_prices")
-        self.set_dict(crop_prices, name="crops/cultivation_costs")
+        self.set_dict(parsed_crop_prices, name="crops/crop_prices")
+        self.set_dict(parsed_crop_prices, name="crops/cultivation_costs")
 
     @build_method(depends_on=[])
     def determine_crop_area_fractions(self, resolution: str = "5-arcminute") -> None:
@@ -885,8 +882,10 @@ class Crops:
                         self.data_catalog.get_source(dataset_name).path
                     )
                     crop_map = crop_map.isel(
-                        **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
-                        band=0,
+                        {
+                            **get_window(crop_map.x, crop_map.y, self.bounds, buffer=2),
+                            **{"band": 0},
+                        },
                     )
 
                     crop_map = crop_map.fillna(0)
@@ -1019,18 +1018,24 @@ class Crops:
         )
 
         MIRCA_unit_grid = MIRCA_unit_grid.isel(
-            **get_window(MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2),
-            band=0,
+            {
+                **get_window(
+                    MIRCA_unit_grid.x, MIRCA_unit_grid.y, self.bounds, buffer=2
+                ),
+                **{"band": 0},
+            }
         )
 
-        crop_calendar = parse_MIRCA2000_crop_calendar(
-            self.data_catalog,
-            MIRCA_units=np.unique(MIRCA_unit_grid.values),
+        crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]] = (
+            parse_MIRCA2000_crop_calendar(
+                self.data_catalog,
+                MIRCA_units=np.unique(MIRCA_unit_grid.values).tolist(),
+            )
         )
 
         def fix_365_in_crop_calendar(
-            crop_calendar: dict[str, list[tuple[float, np.ndarray]]],
-        ) -> None:
+            crop_calendar: dict[int, list[tuple[float, TwoDArrayInt32]]],
+        ) -> dict[int, list[tuple[float, TwoDArrayInt32]]]:
             """Replace any 365 day-of-year values with 364 in the 4th column.
 
             Scans each (area, arr) pair in every dictionary entry. If a value 365 is
