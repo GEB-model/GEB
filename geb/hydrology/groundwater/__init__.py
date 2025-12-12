@@ -36,7 +36,6 @@ from geb.module import Module
 from geb.types import ArrayFloat32, TwoDArrayFloat64
 from geb.workflows import balance_check
 
-from ..routing import get_channel_ratio
 from .model import ModFlowSimulation
 
 if TYPE_CHECKING:
@@ -199,16 +198,8 @@ class GroundWater(Module):
 
         groundwater_drainage = self.modflow.drainage_m3 / self.grid.var.cell_area
 
-        channel_ratio: npt.NDArray[np.float32] = get_channel_ratio(
-            river_length=self.grid.var.river_length,
-            river_width=np.where(
-                ~np.isnan(self.grid.var.average_river_width),
-                self.grid.var.average_river_width,
-                0,
-            ),
-            cell_area=self.grid.var.cell_area,
-        )
-        channel_ratio.fill(1)
+        # we assume that all the baseflow ends up in the river
+        channel_ratio = np.float32(1.0)
 
         # this is the capillary rise for the NEXT timestep
         self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
