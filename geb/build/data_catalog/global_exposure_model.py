@@ -8,10 +8,6 @@ from urllib.parse import quote
 import requests
 from .base import Adapter
 
-GITHUB_TOKEN = "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"  # optional but recommended
-
-HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
-
 
 class GlobalExposureModel(Adapter):
     """Adapter for Global Exposure Model data."""
@@ -44,7 +40,7 @@ class GlobalExposureModel(Adapter):
         # ============================
 
         print("Downloading repository index...")
-        resp = requests.get(TREE_URL, headers=HEADERS)
+        resp = requests.get(TREE_URL)  # , headers=HEADERS)
         resp.raise_for_status()
 
         tree = resp.json()["tree"]
