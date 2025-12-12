@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+import tempfile
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+import pandas as pd
 import requests
 
 from .base import Adapter
+from geb.workflows.io import write_dict
 
 
 class GlobalExposureModel(Adapter):
@@ -23,7 +27,7 @@ class GlobalExposureModel(Adapter):
         """
         super().__init__(*args, **kwargs)
 
-    def filter_folders(
+    def _filter_folders(
         self, tree: list[dict[str, Any]], csv_files: list[str], country: str
     ) -> None:
         """Filter the repository tree for folders matching the specified country.
@@ -63,6 +67,52 @@ class GlobalExposureModel(Adapter):
 
         print(f"\nCSV files found: {len(csv_files)}")
 
+    def _download_and_process_csv(self, RAW_BASE: str, csv_files: list[str]) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            temp_dir: Path = Path(temp_dir_str)
+
+        for csv in csv_files:
+            url = RAW_BASE + quote(csv)
+            print("Downloading:", csv)
+
+            r = requests.get(url)
+            r.raise_for_status()
+
+            with tempfile.TemporaryDirectory() as temp_dir_str:
+                temp_dir: Path = Path(temp_dir_str)
+                out_path = temp_dir / os.path.basename(csv)
+                with open(out_path, "wb") as f:
+                    f.write(r.content)
+                # open the file with pandas and store as parquet
+                df = pd.read_csv(out_path)
+                damages_per_sqm = self._process_csv(df)
+                os.makedirs(self.path.parent, exist_ok=True)
+                write_dict(
+                    damages_per_sqm,
+                    self.path.with_name("damages_per_sqm.json"),
+                )
+
+    def _process_csv(self, df: pd.DataFrame) -> dict[str, dict[str, float]]:
+        # Example processing: just return the dataframe as is
+        # filter on Res
+        result = {}
+        df = df[df["OCCUPANCY"] == "Res"]
+        for admin_1 in df["NAME_1"].unique():
+            result[admin_1] = {}
+            for damage_type in [
+                "TOTAL_REPL_COST_USD",
+                "COST_STRUCTURAL_USD",
+                "COST_NONSTRUCTURAL_USD",
+                "COST_CONTENTS_USD",
+            ]:
+                df_admin_1 = df[df["NAME_1"] == admin_1]
+                total_damage = df_admin_1[damage_type].sum()
+                total_area = df_admin_1["TOTAL_AREA_SQM"].sum()
+                result[admin_1][damage_type + "_SQM"] = float(
+                    total_damage / total_area if total_area > 0 else 0
+                )
+        return result
+
     def fetch(self, url: str, countries: list[str]) -> GlobalExposureModel:
         """Fetch and process data for specific countries.
 
@@ -97,20 +147,13 @@ class GlobalExposureModel(Adapter):
 
         csv_files = []
         for country in countries:
-            self.filter_folders(tree, csv_files, country)
-
-        for csv in csv_files:
-            url = RAW_BASE + quote(csv)
-            print("Downloading:", csv)
-
-            r = requests.get(url)
-            r.raise_for_status()
-
-            out_path = os.path.join(OUTPUT_DIR, os.path.basename(csv))
-            with open(out_path, "wb") as f:
-                f.write(r.content)
+            self._filter_folders(tree, csv_files, country)
+        self._download_and_process_csv(RAW_BASE, csv_files)
 
         print("\nDone!")
 
         # Implementation would go here
         return self
+
+    def read(self, **kwargs):
+        return super().read(**kwargs)
