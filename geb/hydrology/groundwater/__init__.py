@@ -101,11 +101,6 @@ class GroundWater(Module):
             == self.grid.var.specific_yield.shape
         )
 
-        self.grid.var.leakageriver_factor = 0.001  # in m/day
-        self.grid.var.leakagelake_factor = 0.001  # in m/day
-
-        self.initial_water_table_depth = 2
-
         def get_initial_head() -> npt.NDArray[np.float64]:
             heads = self.hydrology.grid.load(
                 self.model.files["grid"]["groundwater/heads"], layer=None
