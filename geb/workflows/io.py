@@ -888,10 +888,12 @@ class AsyncGriddedForcingReader:
         assert self.io_lock is not None
         async with self.io_lock:
             # Select the variable array from the pre-opened async group.
-            arr = self.array.async_array
+            arr: zarr.AsyncArray[Any] = self.array.async_array
+
+            attempts: int = 100
 
             # Try up to 100 times
-            for _ in range(100):
+            for _ in range(attempts):
                 data = await arr.getitem(
                     (slice(start_index, end_index), slice(None), slice(None))
                 )
@@ -904,7 +906,7 @@ class AsyncGriddedForcingReader:
 
             else:
                 raise IOError(
-                    f"Async load failed after 3 attempts for indices {start_index}:{end_index}"
+                    f"Async load failed after {attempts} attempts for indices {start_index}:{end_index}"
                 )
 
     async def preload_next(
