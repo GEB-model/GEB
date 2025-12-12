@@ -2103,7 +2103,7 @@ class Households(AgentBaseClass):
 
         # Compute damages for buildings structure
         damages_buildings_structure: pd.Series = VectorScanner(
-            features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),
+            features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),  # ty:ignore[invalid-argument-type]
             hazard=flood_depth,
             vulnerability_curves=self.buildings_structure_curve,
         )
