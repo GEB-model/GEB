@@ -2,14 +2,14 @@
 
 import numpy as np
 
-from geb.types import ArrayFloat32
+from geb.types import ArrayFloat32, TwoDArrayFloat32
 
 
 def concentrate_runoff(
-    interflow: ArrayFloat32,
+    interflow: TwoDArrayFloat32,
     baseflow: ArrayFloat32,
-    runoff: ArrayFloat32,
-) -> ArrayFloat32:
+    runoff: TwoDArrayFloat32,
+) -> TwoDArrayFloat32:
     """Combines all sources of runoff.
 
     Args:
@@ -31,6 +31,6 @@ def concentrate_runoff(
     assert baseflow.ndim == 1
     assert runoff.ndim == 2
 
-    baseflow_per_timestep = baseflow / np.float32(24)
+    baseflow_per_timestep = baseflow * np.float32(1 / 24)
 
     return interflow + baseflow_per_timestep + runoff
