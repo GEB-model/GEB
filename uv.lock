@@ -1222,6 +1222,8 @@ dependencies = [
     { name = "scipy" },
     { name = "setuptools" },
     { name = "snakemake" },
+    { name = "snakemake-executor-plugin-slurm" },
+    { name = "snakemake-storage-plugin-fs" },
     { name = "statsmodels" },
     { name = "tqdm" },
     { name = "ty" },
@@ -1315,6 +1317,8 @@ requires-dist = [
     { name = "seaborn", marker = "extra == 'display'", specifier = ">=0.13.2" },
     { name = "setuptools", specifier = ">=75.8.0" },
     { name = "snakemake", specifier = ">=9.13.4" },
+    { name = "snakemake-executor-plugin-slurm", specifier = ">=0.13.3" },
+    { name = "snakemake-storage-plugin-fs", specifier = ">=1.0.0" },
     { name = "statsmodels", specifier = ">=0.14.5" },
     { name = "tqdm", specifier = ">=4.66.1" },
     { name = "ty", specifier = ">=0.0.1a25" },
@@ -4307,6 +4311,36 @@ wheels = [
 ]
 
 [[package]]
+name = "snakemake-executor-plugin-slurm"
+version = "2.0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "snakemake-executor-plugin-slurm-jobstep" },
+    { name = "snakemake-interface-common" },
+    { name = "snakemake-interface-executor-plugins" },
+    { name = "throttler" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e9/49/c0fd4eb05feb658b9f0e1a2315ed73a535d4dab183da04bb91db9608a3df/snakemake_executor_plugin_slurm-2.0.3.tar.gz", hash = "sha256:c70e67b8ad6386d1e076a13e24f59d930648de10346bba23dee81365a5e3e36d", size = 25462, upload-time = "2025-12-11T16:28:41.398Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/1d/66c05f9439ae9f029f64bb68ff7ddb546e01043c58945ae0b5987460da9d/snakemake_executor_plugin_slurm-2.0.3-py3-none-any.whl", hash = "sha256:b8511971c777c266280fcbce644164d7d6b802a0b00c80569595f63c47d719e3", size = 29326, upload-time = "2025-12-11T16:28:40.278Z" },
+]
+
+[[package]]
+name = "snakemake-executor-plugin-slurm-jobstep"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "snakemake-interface-common" },
+    { name = "snakemake-interface-executor-plugins" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/b7/74dc6815c618dd430c67b7cf39aab8231831a89c709b76a3411b45593d11/snakemake_executor_plugin_slurm_jobstep-0.3.0.tar.gz", hash = "sha256:ebcd374bdde2d4f356e61ac221cd4244566dd980db2de3250780f454e5251c49", size = 4544, upload-time = "2025-02-15T08:37:37.294Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/53/a4aa78e3f9fe28e50fcd4e1c51631a2d8173b18dc1b6a272d55d72475ce0/snakemake_executor_plugin_slurm_jobstep-0.3.0-py3-none-any.whl", hash = "sha256:b0b045fa8e14ce4662f188fcead389228afe95a6aeef4ea094fcca672ea76fa2", size = 5317, upload-time = "2025-02-15T08:37:35.699Z" },
+]
+
+[[package]]
 name = "snakemake-interface-common"
 version = "1.22.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4383,6 +4417,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d4/0c/906d09e4e99733b605a5b24b03fcdbe40c47787c770aea42421f225f9171/snakemake_interface_storage_plugins-4.3.2.tar.gz", hash = "sha256:2f45c6b784e2af5b6e7102d3cb700d597b7cf7515fcf02d7d1153065e90a7895", size = 14543, upload-time = "2025-12-01T13:30:30.754Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/80/7e/51e4d50494725c77116fc3978879babe1a15336d9b144bba061ec968e02a/snakemake_interface_storage_plugins-4.3.2-py3-none-any.whl", hash = "sha256:bd185233cb7882a58d79294ad2f8d1cead535744fe3c9d42d9ef51bc8f1744b1", size = 17800, upload-time = "2025-12-01T13:30:29.699Z" },
+]
+
+[[package]]
+name = "snakemake-storage-plugin-fs"
+version = "1.1.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "reretry" },
+    { name = "snakemake-interface-common" },
+    { name = "snakemake-interface-storage-plugins" },
+    { name = "sysrsync" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1c/0d/fbf95e4ed2f36541798ba2920734cee55bb8fd6724586c8455cc03ecd00b/snakemake_storage_plugin_fs-1.1.3.tar.gz", hash = "sha256:a3d4245915c5973645579afc1e2c7406dd5238ac600cdade388747095ced012e", size = 5010, upload-time = "2025-10-31T10:00:14.144Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/7a/91ffac71cb0a7e6959f780f38b623b81ed34c4f8b77bb7b043cf42565728/snakemake_storage_plugin_fs-1.1.3-py3-none-any.whl", hash = "sha256:6ab494a110b66cc6becba068a544a9d0a0774bd290c19a4a5de03099b3f7f698", size = 5763, upload-time = "2025-10-31T10:00:13.049Z" },
 ]
 
 [[package]]
@@ -4632,6 +4681,18 @@ wheels = [
 ]
 
 [[package]]
+name = "sysrsync"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "toml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/a0/eaf4f0691639d603ba3da73c4ebbd3da22dfae09565ab7ba38bc28d17de2/sysrsync-1.1.1.tar.gz", hash = "sha256:435f9eb620e68ffb18ca5cbad32b113396a432361c7722038eab65c97dd83bd5", size = 6903, upload-time = "2023-04-24T14:29:38.344Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/82/5939e68632beebdb6f61a52246c0243e8490d9f75e0f1a214dda0113d5f2/sysrsync-1.1.1-py3-none-any.whl", hash = "sha256:9c8877f162dce9c480804445fca56cd19bf41b998d2172651468ccebfdc60850", size = 7512, upload-time = "2023-04-24T14:29:10.186Z" },
+]
+
+[[package]]
 name = "tabulate"
 version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4691,6 +4752,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7a/fd/7a5ee21fd08ff70d3d33a5781c255cbe779659bd03278feb98b19ee550f4/tinycss2-1.4.0.tar.gz", hash = "sha256:10c0972f6fc0fbee87c3edb76549357415e94548c1ae10ebccdea16fb404a9b7", size = 87085, upload-time = "2024-10-24T14:58:29.895Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e6/34/ebdc18bae6aa14fbee1a08b63c015c72b64868ff7dae68808ab500c492e2/tinycss2-1.4.0-py3-none-any.whl", hash = "sha256:3a49cf47b7675da0b15d0c6e1df8df4ebd96e9394bb905a5775adb0d884c5289", size = 26610, upload-time = "2024-10-24T14:58:28.029Z" },
+]
+
+[[package]]
+name = "toml"
+version = "0.10.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/ba/1f744cdc819428fc6b5084ec34d9b30660f6f9daaf70eead706e3203ec3c/toml-0.10.2.tar.gz", hash = "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f", size = 22253, upload-time = "2020-11-01T01:40:22.204Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl", hash = "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b", size = 16588, upload-time = "2020-11-01T01:40:20.672Z" },
 ]
 
 [[package]]
