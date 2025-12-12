@@ -1,6 +1,7 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
 import base64
+import datetime
 import os
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import rioxarray as rxr
 import xarray as xr
 from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
@@ -1356,7 +1358,7 @@ class Hydrology:
 
         return water_circle
 
-    def evaluate_hydrodynamics(
+    def evaluate_hydrodynamics2(
         self, run_name: str = "default", *args: Any, **kwargs: Any
     ) -> None:
         """Evaluate hydrodynamic model performance against flood observations.
@@ -2100,7 +2102,7 @@ class Hydrology:
                     Path(self.model.output_folder) / "flood_maps" / flood_map_name
                 )
                 calculate_performance_metrics(
-                    observation=self.config["floods"]["event_observation_file"][
+                    observation=self.config["floods"]["event_observation_files"][
                         "raster"
                     ],
                     flood_map_path=flood_map_path,
@@ -2217,19 +2219,239 @@ class Hydrology:
         It calculates various performance metrics (hit rate, false alarms ratio, critical success index) and generates visualizations
         to illustrate the comparison. household_points: Path to the household points dataframe that contains the column with warning levels (geoparquet format).
         """
+        # Load necessary geodataframes
         obs_flood_extent = gpd.read_parquet(
             self.model.config["hazards"]["floods"]["event_observation_files"]["vector"]
         )
+
+        buildings_w_postal_codes = gpd.read_parquet(
+            self.model.output_folder / "buildings_w_postal_codes.geoparquet"
+        )
+
+        # Folder where to get the households gdf from
         households_folder: Path = self.model.output_folder / "action_maps"
 
+        def create_warning_performance_plots(
+            flooded: gpd.GeoDataFrame,
+            not_flooded: gpd.GeoDataFrame,
+            HR: float,
+            FAR: float,
+            CSI: float,
+            output_folder: Path,
+            initialization_date: str,
+            obs_flood_extent: gpd.GeoDataFrame,
+            admin_units: gpd.GeoDataFrame,
+            use_admin_units: bool,
+            target_crs: str | None = None,
+            visualization_type: str = "OSM",
+        ) -> None:
+            """
+            Creates a map showing the performance of the warnings for households.
+
+            Args:
+                flooded: GeoDataFrame with flooded households (column 'warning_level' present).
+                not_flooded: GeoDataFrame with non-flooded households (column 'warning_level' present).
+                HR: warnings hit rate for every forecast initialization date
+                FAR: warnings false alarm ratio for every forecast initialization date
+                CSI: warnings critical success index for every forecast initialization date
+                output_folder: folder to save the figure
+                initialization_date: string used in the title and filename
+                obs_flood_extent: GeoDataFrame with the observed flood extent
+                admin_units: GeoDataFrame with administrative units
+                use_admin_units: whether to use admin units for visualization
+                target_crs: target CRS (e.g., "EPSG:28992"). If None, uses the CRS of `flooded`.
+                visualization_type: currently only "OSM" is used (to add basemap).
+            """
+            output_folder.mkdir(parents=True, exist_ok=True)
+
+            # Define the target CRS
+            if target_crs is None:
+                target_crs = flooded.crs
+
+            flooded = flooded.to_crs(target_crs)
+            not_flooded = not_flooded.to_crs(target_crs)
+            obs_flood_extent = obs_flood_extent.to_crs(target_crs)
+
+            # Separate categories
+            households_false_alarms = not_flooded[not_flooded["warning_level"] >= 1]
+            households_misses = flooded[flooded["warning_level"] < 1]
+            households_hits = flooded[flooded["warning_level"] >= 1]
+
+            # Define extent based on observed flood extent
+            minx, miny, maxx, maxy = obs_flood_extent.total_bounds
+
+            margin = 3000
+            fig, ax = plt.subplots(figsize=(10, 10))
+
+            # Plot observed flood extent
+            obs_flood_extent.plot(
+                ax=ax,
+                color="blue",
+                edgecolor="blue",
+                linestyle="-",
+                linewidth=1.2,
+                zorder=1,
+                alpha=0.2,
+            )
+
+            if use_admin_units:
+                # Plot observed flood extent
+                admin_units.plot(
+                    ax=ax,
+                    color="none",
+                    edgecolor="black",
+                    linestyle="--",
+                    linewidth=1.0,
+                    zorder=5,
+                    alpha=0.7,
+                )
+
+            # Plot households
+            households_false_alarms.plot(
+                ax=ax,
+                markersize=15,
+                marker="$\u2302$",
+                color="orange",
+                alpha=0.8,
+                zorder=2,
+            )
+
+            households_misses.plot(
+                ax=ax,
+                markersize=12,
+                marker="$\u2302$",  # House symbol
+                color="red",
+                alpha=0.8,
+                zorder=3,
+            )
+
+            households_hits.plot(
+                ax=ax,
+                markersize=12,
+                marker="$\u2302$",  # House symbol
+                color="#94f944",
+                alpha=0.8,
+                zorder=4,
+            )
+
+            # Basemap
+            if visualization_type == "OSM":
+                try:
+                    ctx.add_basemap(
+                        ax,
+                        crs=target_crs,
+                        source=ctx.providers.OpenStreetMap.Mapnik,
+                        zoom=12,
+                        alpha=0.9,
+                    )
+                except Exception as e:
+                    print(f"It was not possible to add a basemap: {e}")
+
+            # Extent
+            ax.set_xlim(minx - margin, maxx + margin)
+            ax.set_ylim(miny - margin, maxy + margin)
+            ax.set_aspect("equal", adjustable="box")
+
+            ax.set_title(
+                f"Warnings Performance\nForecast Initialization: {initialization_date}",
+                fontsize=14,
+            )
+            ax.set_xlabel("x [m]")
+            ax.set_ylabel("y [m]")
+
+            # Legenda
+            green_patch = mpatches.Patch(color="#94f944", label="Hits")
+            orange_patch = mpatches.Patch(color="orange", label="False Alarms")
+            red_patch = mpatches.Patch(color="red", label="Misses")
+
+            legend_handles = [green_patch, orange_patch, red_patch]
+
+            flood_extent_patch = mpatches.Patch(
+                facecolor="blue",
+                edgecolor="blue",
+                alpha=0.2,
+                label="Observed Flood Extent",
+            )
+            legend_handles.append(flood_extent_patch)
+
+            if use_admin_units:
+                admin_units_patch = Line2D(
+                    [0],
+                    [0],
+                    color="black",
+                    linestyle="--",
+                    linewidth=1.0,
+                    label="Postal Codes",
+                )
+                legend_handles.append(admin_units_patch)
+
+            legend = ax.legend(handles=legend_handles, loc="upper right")
+
+            # Caixa com métricas
+            ax.text(
+                0.02,
+                0.02,
+                (
+                    "Validation Metrics:\n"
+                    f"HR   = {HR * 100:.1f} %\n"
+                    f"FAR  = {FAR * 100:.1f} %\n"
+                    f"CSI  = {CSI * 100:.1f} %"
+                ),
+                transform=ax.transAxes,
+                fontsize=10,
+                bbox=dict(
+                    facecolor="white",
+                    edgecolor="grey",
+                    boxstyle="round,pad=0.3",
+                    alpha=0.8,
+                ),
+                verticalalignment="bottom",
+                horizontalalignment="left",
+                zorder=6,
+            )
+
+            # CRS box
+            label_crs = target_crs.to_epsg()
+            crs_text = f"CRS: {label_crs}"
+            ax.text(
+                0.98,
+                0.02,
+                crs_text,
+                transform=ax.transAxes,
+                fontsize=8,
+                bbox=dict(
+                    facecolor="white",
+                    edgecolor="grey",
+                    boxstyle="round,pad=0.2",
+                    alpha=0.8,
+                ),
+                verticalalignment="bottom",
+                horizontalalignment="right",
+                zorder=6,
+            )
+
+            # Salvar figura
+            fig_name = f"warnings_performance_{initialization_date}.png"
+            fig_path = output_folder / fig_name
+            fig.savefig(fig_path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+            print(f"Warnings performance figure saved in: {fig_path}\n")
+
         def calculate_warning_performance_metrics(
-            obs_flood_extent: gpd.GeoDataFrame, households_folder: Path
+            obs_flood_extent: gpd.GeoDataFrame,
+            households_folder: Path,
+            use_admin_units: bool = False,
+            buildings_w_postal_codes: Path | None = None,
+            buildings_hit_threshold: float = 0.1,
         ) -> None:
             """Calculate performance metrics for warnings with respect to households.
 
             Args:
                 obs_flood_extent: GeoDataFrame containing the observed flood extent.
                 households_folder: Path to the folder containing household points GeoParquet files with the warning parameters. Must contain column of warning_level.
+                use_admin_units: If True, use administrative units (e.g., postal codes) to define validation map.
+                buildings_w_postal_codes: GeoDataFrame of the buildings containing a column with their postal codes. Required if use_admin_units is True.
+                buildings_hit_threshold: Fraction of buildings that must be flooded in an admin unit to consider it flooded.
             """
             files = sorted(
                 households_folder.glob(
@@ -2237,18 +2459,90 @@ class Hydrology:
                 )
             )
 
+            # Save the performance log to a csv file
+            performance_folder = self.output_folder_evaluate / "warnings"
+            performance_folder.mkdir(parents=True, exist_ok=True)
+
+            if use_admin_units:
+                postal_codes = gpd.read_parquet(
+                    self.model.files["geom"]["postal_codes"]
+                ).to_crs(obs_flood_extent.crs)
+                postal_codes = postal_codes.copy()
+
+                buildings = buildings_w_postal_codes.to_crs(obs_flood_extent.crs).copy()
+
+                flood_union = obs_flood_extent.geometry.union_all()
+                buildings["flooded"] = buildings.geometry.intersects(flood_union)
+
+                # Get the fraction of flooded buildings per postcode (mean of boolean is the fraction of True)
+                stats = buildings.groupby("postcode")["flooded"].mean()
+
+                # Mark postal codes as flooded if fraction of flooded buildings exceeds threshold
+                postal_codes["flooded"] = (
+                    postal_codes["postcode"].map(stats).fillna(0)
+                    >= buildings_hit_threshold
+                )
+
+                # Get the validation area as the dissolved geometry of flooded postal codes
+                validation_area = postal_codes.loc[postal_codes["flooded"]].dissolve()
+
+                # postal_codes = gpd.read_parquet(
+                #     self.model.files["geom"]["postal_codes"]
+                # )
+                # postal_codes["flooded"] = False
+                # buildings_w_postal_codes = buildings_w_postal_codes.to_crs(obs_flood_extent.crs)
+
+                # # Create a mask for buildings that overlap with the flood map
+                # buildings_mask = buildings_w_postal_codes.geometry.intersects(
+                #     obs_flood_extent.union_all()
+                # )
+
+                # buildings_w_postal_codes["flooded"] = False
+                # buildings_w_postal_codes.loc[buildings_mask, "flooded"] = True
+
+                # # Iterate through each postal code and check the fraction of flooded buildings
+                # for _, row in postal_codes.iterrows():
+                #     postal_code = row["postcode"]
+
+                #     # All buildings in this postal code
+                #     buildings_in_postal_code = buildings_w_postal_codes[
+                #         buildings_w_postal_codes["postcode"] == postal_code
+                #     ]
+
+                #     n_total = len(buildings_in_postal_code)
+
+                #     if n_total == 0:
+                #         percentage_flooded = 0
+                #     else:
+                #         # Flooded buildings in this postal code
+                #         flooded_in_postal_code = buildings_w_postal_codes[
+                #             (buildings_w_postal_codes["postcode"] == postal_code)
+                #             & (buildings_w_postal_codes["flooded"])
+                #         ]
+
+                #         percentage_flooded = len(flooded_in_postal_code) / n_total
+
+                #     if percentage_flooded >= buildings_hit_threshold:
+                #         postal_codes.at[_, "flooded"] = True
+
+                # validation_area = postal_codes[postal_codes["flooded"]].dissolve()
+            else:
+                validation_area = obs_flood_extent
+
             performance_log = []
             for file in files:
                 initialization_date_str = file.stem.split("_")[-1]
                 household_points = gpd.read_parquet(file)
-                # need to change it to the general households file
 
+                forecast_init_dt = datetime.datetime.strptime(
+                    initialization_date_str, "%Y%m%dT%H%M%S"
+                )
                 print(
-                    f"Evaluating warnings for forecast initialization on: {initialization_date_str}"
+                    f"Evaluating warnings for forecast initialization date: {forecast_init_dt.isoformat()}"
                 )
 
                 household_flood_check = household_points.sjoin(
-                    obs_flood_extent, predicate="within", how="left"
+                    validation_area, predicate="within", how="left"
                 )
 
                 household_flood_check["flooded"] = False
@@ -2261,15 +2555,15 @@ class Hydrology:
                 )
 
                 flooded = household_flood_check[household_flood_check["flooded"]]
+                not_flooded = household_flood_check[~household_flood_check["flooded"]]
                 print("Number of flooded households:", len(flooded))
 
                 hits = flooded[flooded["warning_level"] >= 1].shape[0]
-                print(f"Number of households correctly warned:: {hits}")
+                print(f"Number of households correctly warned: {hits}")
 
                 misses = flooded[flooded["warning_level"] < 1].shape[0]
                 print(f"Number of households missed: {misses}")
 
-                not_flooded = household_flood_check[~household_flood_check["flooded"]]
                 false_alarms = not_flooded[not_flooded["warning_level"] >= 1].shape[0]
                 print(
                     "Number of households warned in vain (false alarms):", false_alarms
@@ -2300,11 +2594,774 @@ class Hydrology:
                     }
                 )
 
-            # Save the performance log to a csv file
-            performance_folder = self.output_folder_evaluate / "warnings"
-            performance_folder.mkdir(parents=True, exist_ok=True)
+                create_warning_performance_plots(
+                    flooded=flooded,
+                    not_flooded=not_flooded,
+                    HR=HR,
+                    FAR=FAR,
+                    CSI=CSI,
+                    output_folder=performance_folder,
+                    initialization_date=initialization_date_str,
+                    obs_flood_extent=obs_flood_extent,
+                    admin_units=validation_area,
+                    use_admin_units=use_admin_units,
+                    target_crs=obs_flood_extent.crs,
+                    visualization_type="OSM",
+                )
 
             path = performance_folder / f"warnings_performance.csv"
             pd.DataFrame(performance_log).to_csv(path, index=False)
 
-        calculate_warning_performance_metrics(obs_flood_extent, households_folder)
+        calculate_warning_performance_metrics(
+            obs_flood_extent=obs_flood_extent,
+            households_folder=households_folder,
+            buildings_w_postal_codes=buildings_w_postal_codes,
+        )
+
+    # roy improved version of evaluate_hydrodynamics
+    def evaluate_hydrodynamics(
+        self, run_name: str = "default", *args: Any, **kwargs: Any
+    ) -> None:
+        """Evaluate hydrodynamic model performance against flood observations.
+
+        Calculates performance metrics (hit rate, false alarm ratio, critical success index)
+        for flood maps generated by the hydrodynamic model by comparing them against
+        observed flood extent data.
+
+        Args:
+            run_name: Name of the simulation run to evaluate.
+            *args: Additional positional arguments (ignored).
+            **kwargs: Additional keyword arguments (ignored).
+
+        Raises:
+            FileNotFoundError: If the flood map folder does not exist in the output directory.
+            ValueError: If the flood observation file is not in .zarr format.
+        """
+
+        # Main function for the performance metrics
+        def calculate_performance_metrics(
+            observation: Path | str,
+            flood_map_path: Path | str,
+            visualization_type: str = "Hillshade",
+            output_folder: Path | str = None,
+        ) -> None:
+            """Calculate performance metrics for flood maps against observations.
+
+            Args:
+                observation: Path to the observed flood extent data (.zarr format).
+                flood_map_path: Path to the model-generated flood map data (.zarr format).
+                visualization_type: Type of visualization for plotting (default is "Hillshade").
+                output_folder: Path to the folder where results will be saved.
+
+            Raises:
+                ValueError: If the observation file is not in .zarr format.
+            """
+            # Step 1: Open needed datasets
+            flood_map = read_zarr(flood_map_path)
+            obs = rxr.open_rasterio(observation)
+            # # resolution of obs should match the sfincs resolution
+            obs = obs.rio.write_crs(flood_map.rio.crs)
+            sim = flood_map.raster.reproject_like(obs)
+            rivers = gpd.read_parquet(
+                Path("simulation_root")
+                / run_name
+                / "SFINCS"
+                / "entire_region"
+                / "rivers.geoparquet"
+            )
+            region = gpd.read_file(
+                Path("simulation_root")
+                / run_name
+                / "SFINCS"
+                / "entire_region"
+                / "gis"
+                / "region.geojson"
+            ).to_crs(obs.rio.crs)
+
+            # Step 2: Clip out rivers from observations and simulations
+            crs_wgs84 = CRS.from_epsg(4326)
+            crs_mercator = CRS.from_epsg(3857)
+            rivers.set_crs(crs_wgs84, inplace=True)
+            gdf_mercator = rivers.to_crs(crs_mercator)
+            gdf_mercator["geometry"] = gdf_mercator.buffer(gdf_mercator["width"] / 2)
+
+            # Create river mask for simulation data
+            gdf_buffered_sim = gdf_mercator.to_crs(sim.rio.crs)
+            rivers_mask_sim = ~geometry_mask(
+                gdf_buffered_sim.geometry,
+                out_shape=sim.rio.shape,
+                transform=sim.rio.transform(),
+                all_touched=True,
+                invert=False,
+            )
+            sim_no_rivers = sim.where(~rivers_mask_sim).fillna(0)
+
+            # Create river mask for observation data
+            gdf_buffered_obs = gdf_mercator.to_crs(obs.rio.crs)
+            rivers_mask_obs = ~geometry_mask(
+                gdf_buffered_obs.geometry,
+                out_shape=obs.rio.shape,
+                transform=obs.rio.transform(),
+                all_touched=True,
+                invert=False,
+            )
+            obs_no_rivers = obs.where(~rivers_mask_obs).fillna(0)
+
+            # Step 3: Clip out region from observations
+            obs_region = obs_no_rivers.rio.clip(region.geometry.values, region.crs)
+
+            # Step 4: Optionally clip using extra validation region from config yml
+            extra_validation_path = self.config["floods"].get(
+                "extra_validation_region", None
+            )
+
+            if extra_validation_path and Path(extra_validation_path).exists():
+                extra_clip_region = gpd.read_file(extra_validation_path).set_crs(28992)
+                extra_clip_region = extra_clip_region.to_crs(region.crs)
+                extra_clip_region_buffer = extra_clip_region.buffer(160)
+
+                sim_extra_clipped = sim_no_rivers.rio.clip(
+                    extra_clip_region_buffer.geometry.values,
+                    extra_clip_region_buffer.crs,
+                )
+                clipped_out = (sim_no_rivers > 0.15) & (sim_extra_clipped.isnull())
+                clipped_out_raster = sim_no_rivers.where(clipped_out)
+            else:
+                # If no extra validation region, skip clipping
+                sim_extra_clipped = sim_no_rivers
+                clipped_out_raster = xr.full_like(sim_no_rivers, np.nan)
+
+            # Step 5: Mask water depth values
+            hmin = 0.15
+            sim_extra_clipped = sim_extra_clipped.raster.reproject_like(obs_region)
+            simulation_final = sim_extra_clipped > hmin
+            observation_final = obs_region > 0
+
+            xmin, ymin, xmax, ymax = region.total_bounds
+            catchment_extent = [xmin, xmax, ymin, ymax]
+
+            xmin, ymin, xmax, ymax = observation_final.rio.bounds()
+            flood_extent = [xmin, xmax, ymin, ymax]
+
+            # Step 6: Calculate performance metrics
+            # Compute the arrays first to get concrete values
+            sim_final_computed = simulation_final.compute()
+            obs_final_computed = observation_final.compute()
+
+            hit_rate = calculate_hit_rate(sim_final_computed, obs_final_computed) * 100
+            false_rate = (
+                calculate_false_alarm_ratio(sim_final_computed, obs_final_computed)
+                * 100
+            )
+            csi = (
+                calculate_critical_success_index(sim_final_computed, obs_final_computed)
+                * 100
+            )
+
+            flooded_pixels = float(sim_final_computed.sum().item())
+
+            # Calculate resolution in meters from coordinate spacing
+            x_res = float(np.abs(flood_map.x[1] - flood_map.x[0]))
+            pixel_size = x_res  # meters
+            flooded_area_km2 = flooded_pixels * (pixel_size * pixel_size) / 1_000_000
+
+            # Step 7: Save results to file and plot the results
+            elevation_data = read_zarr(self.model.files["other"]["DEM/fabdem"])
+            elevation_data = elevation_data.rio.reproject_match(obs)
+
+            elevation_array = (
+                elevation_data.squeeze().astype("float32").compute().values
+            )
+
+            ls = LightSource(azdeg=315, altdeg=45)
+            hillshade = ls.hillshade(elevation_array, vert_exag=1, dx=1, dy=1)
+
+            # Catchment borders
+            target_crs = obs_region.rio.crs
+            catchment_borders = region.boundary
+
+            if simulation_final.sum() > 0:
+                misses = (observation_final == 1) & (simulation_final == 0)
+                simulation_masked = simulation_final.where(simulation_final == 1)
+                hits = simulation_masked.where(observation_final)
+                misses_masked = misses.where(misses == 1)
+
+                if visualization_type == "OSM":
+                    # Ensure all arrays have the same shape by squeezing extra dimensions
+                    simulation_final = simulation_final.squeeze()
+                    observation_final = observation_final.squeeze()
+                    misses = misses.squeeze()
+                    hits = hits.squeeze()
+                    simulation_masked = simulation_masked.squeeze()
+                    misses_masked = misses_masked.squeeze()
+
+                    margin = 3000
+                    fig, ax = plt.subplots(figsize=(10, 10))
+
+                    # clipped_out_raster.plot(
+                    #     ax=ax, cmap=blue_cmap, add_colorbar=False, add_labels=False
+                    # )
+
+                    ax.imshow(
+                        simulation_masked,  # False alarms
+                        extent=flood_extent,
+                        # origin="lower",
+                        cmap="Wistia",
+                        vmin=0,
+                        vmax=1,
+                        interpolation="none",
+                        zorder=1,
+                    )
+                    ax.imshow(
+                        misses_masked,  # Misses
+                        extent=flood_extent,
+                        # origin="lower",
+                        cmap="autumn_r",
+                        vmin=0,
+                        vmax=1,
+                        interpolation="none",
+                        zorder=2,
+                    )
+
+                    ax.imshow(
+                        hits,
+                        extent=flood_extent,
+                        # origin="lower",
+                        cmap="brg",
+                        vmin=0,
+                        vmax=1,
+                        interpolation="none",
+                        zorder=3,
+                    )
+
+                    catchment_borders.plot(
+                        ax=ax,
+                        color="black",
+                        linestyle="--",
+                        linewidth=1.5,
+                        zorder=4,
+                        alpha=0.5,
+                    )
+                    # Add a base map
+                    ctx.add_basemap(
+                        ax,
+                        crs=target_crs,
+                        source="OpenStreetMap.Mapnik",
+                        zoom=12,
+                        zorder=0,
+                        alpha=0.9,
+                    )
+
+                    ax.set_title("Validation of the Predicted Flood Areas", fontsize=14)
+                    ax.set_xlabel("x [m]")
+                    ax.set_ylabel("y [m]")
+
+                    # Set the extent based on the raster bounds
+                    ax.set_xlim(
+                        catchment_extent[0] - margin, catchment_extent[1] + margin
+                    )
+                    ax.set_ylim(
+                        catchment_extent[2] - margin, catchment_extent[3] + margin
+                    )
+                    ax.set_aspect("equal", adjustable="box")
+
+                    green_patch = mpatches.Patch(color="#94f944", label="Hits")
+                    orange_patch = mpatches.Patch(color="orange", label="False Alarms")
+                    red_patch = mpatches.Patch(color="red", label="Misses")
+
+                    catchment_patch = Line2D(
+                        [0],
+                        [0],
+                        color="black",
+                        linestyle="--",
+                        linewidth=1.5,
+                        label="Catchment Border",
+                    )
+                    legend = ax.legend(
+                        handles=[
+                            green_patch,
+                            orange_patch,
+                            red_patch,
+                            catchment_patch,
+                        ]
+                    )
+
+                    # Add a comment about the metrics in the plot
+                    legend_bbox = legend.get_window_extent(
+                        renderer=fig.canvas.get_renderer()
+                    )
+                    legend_bbox_ax = legend_bbox.transformed(ax.transAxes.inverted())
+
+                    # Add text below legend using axes coordinates
+                    ax.annotate(
+                        f"Validation Metrics:\n"
+                        f"HR    = {hit_rate:.2f} %\n"
+                        f"FAR   = {false_rate:.2f} %\n"
+                        f"CSI   = {csi:.2f} %",
+                        xy=(legend_bbox_ax.x0 + 0.055, legend_bbox_ax.y0 + 0.002),
+                        xycoords="axes fraction",
+                        fontsize=10,
+                        bbox=dict(
+                            facecolor="white",
+                            edgecolor="grey",
+                            boxstyle="round,pad=0.2",
+                            alpha=0.8,
+                        ),
+                        verticalalignment="top",
+                        horizontalalignment="left",
+                        zorder=5,
+                    )
+
+                    crs_text = f"CRS: {target_crs.to_string()}"
+                    ax.annotate(
+                        crs_text,
+                        xy=(0.99, 0.02),  # Bottom right corner in axes coordinates
+                        xycoords="axes fraction",
+                        fontsize=8,
+                        bbox=dict(
+                            facecolor="white",
+                            edgecolor="grey",
+                            boxstyle="round,pad=0.2",
+                            alpha=0.8,
+                        ),
+                        verticalalignment="bottom",
+                        horizontalalignment="right",
+                        zorder=6,
+                    )
+
+                    simulation_filename = os.path.splitext(
+                        os.path.basename(flood_map_path)
+                    )[0]
+                    fig.savefig(
+                        output_folder
+                        / f"{simulation_filename}_validation_floodextent_plot.png",
+                        dpi=600,
+                        bbox_inches="tight",
+                    )
+                    print(
+                        f"Figure with {visualization_type} saved as: {output_folder / f'{simulation_filename}_validation_floodextent_plot.png'}"
+                    )
+
+                elif visualization_type == "Hillshade":
+                    green_cmap = mcolors.ListedColormap(["green"])  # Hits
+                    orange_cmap = mcolors.ListedColormap(["orange"])  # False alarms
+                    red_cmap = mcolors.ListedColormap(["red"])  # Misses
+                    blue_cmap = mcolors.ListedColormap(
+                        ["#72c1db"]
+                    )  # No observation data
+
+                    fig, ax = plt.subplots(figsize=(10, 10))
+
+                    ax.imshow(
+                        hillshade,
+                        cmap="gray",
+                        extent=(
+                            elevation_data.x.min(),
+                            elevation_data.x.max(),
+                            elevation_data.y.min(),
+                            elevation_data.y.max(),
+                        ),
+                    )
+
+                    region.boundary.plot(
+                        ax=ax, edgecolor="black", linewidth=2, label="Region Boundary"
+                    )
+
+                    clipped_out_raster.plot(
+                        ax=ax, cmap=blue_cmap, add_colorbar=False, add_labels=False
+                    )
+                    simulation_masked.plot(
+                        ax=ax, cmap=orange_cmap, add_colorbar=False, add_labels=False
+                    )
+                    hits.plot(
+                        ax=ax, cmap=green_cmap, add_colorbar=False, add_labels=False
+                    )
+                    misses_masked.plot(
+                        ax=ax, cmap=red_cmap, add_colorbar=False, add_labels=False
+                    )
+
+                    ax.set_aspect("equal")
+                    ax.axis("off")
+                    handles = [
+                        mpatches.Patch(color=green_cmap(0.5)),
+                        mpatches.Patch(color=red_cmap(0.5)),
+                        mpatches.Patch(color=orange_cmap(0.5)),
+                        mpatches.Patch(color=blue_cmap(0.5)),
+                        mlines.Line2D([], [], color="black", linewidth=2),
+                    ]
+
+                    labels = [
+                        "Hits",
+                        "Misses",
+                        "False alarms",
+                        "No observation data",
+                        "Region",
+                    ]
+
+                    plt.legend(
+                        handles=handles, labels=labels, loc="upper right", fontsize=16
+                    )
+
+                    simulation_filename = os.path.splitext(
+                        os.path.basename(flood_map_path)
+                    )[0]
+                    plt.savefig(
+                        output_folder
+                        / f"{simulation_filename}_validation_floodextent_plot.png"
+                    )
+                    print(
+                        f"Figure with {visualization_type} saved as: {output_folder / f'{simulation_filename}_validation_floodextent_plot.png'}"
+                    )
+
+                else:
+                    raise ValueError(
+                        f"Unknown visualization type: {visualization_type}, choose either 'OSM' or 'Hillshade'."
+                    )
+
+                performance_numbers = (
+                    output_folder / f"{simulation_filename}_performance_metrics.txt"
+                )
+
+                with open(performance_numbers, "w") as f:
+                    f.write(f"Hit rate (H): {hit_rate}\n")
+                    f.write(f"False alarm rate (F): {false_rate}\n")
+                    f.write(f"Critical Success Index (CSI) (C): {csi}\n")
+                    f.write(f"Number of flooded pixels: {flooded_pixels}\n")
+                    f.write(f"Flooded area (km2): {flooded_area_km2}")
+
+                # Return metrics for further analysis
+                return {
+                    "hit_rate": hit_rate,
+                    "false_alarm_rate": false_rate,
+                    "csi": csi,
+                    "flooded_area_km2": flooded_area_km2,
+                }
+
+        def create_forecast_performance_plots(
+            performance_df: pd.DataFrame, event_name: str, output_folder: Path
+        ) -> None:
+            """Create performance metric plots showing spread and mean across forecast initializations.
+
+            Generates line plots showing how performance metrics vary across different
+            forecast initialization times for a given flood event. Shows both the spread
+            of the ensemble (min-max range) with transparent fill and the ensemble mean as a black line.
+
+            Notes:
+                The spread is calculated using the minimum and maximum values across ensemble
+                members for each forecast initialization. If only one member exists for a
+                forecast initialization, no spread is shown for that time point.
+
+            Args:
+                performance_df: DataFrame containing performance metrics with forecast
+                    initialization times and ensemble members. Must include columns:
+                    'forecast_init', 'hit_rate', 'false_alarm_rate', 'csi', 'flooded_area_km2'.
+                event_name: Name of the flood event being analyzed.
+                output_folder: Directory to save the performance plots.
+
+            Raises:
+                ValueError: If required columns are missing from performance_df.
+            """
+            # Validate required columns
+            required_columns = [
+                "forecast_init",
+                "hit_rate",
+                "false_alarm_rate",
+                "csi",
+                "flooded_area_km2",
+            ]
+            missing_columns = [
+                col for col in required_columns if col not in performance_df.columns
+            ]
+            if missing_columns:
+                raise ValueError(
+                    f"Missing required columns in performance_df: {missing_columns}"
+                )
+
+            # Group by forecast initialization and calculate statistics
+            grouped_stats = (
+                performance_df.groupby("forecast_init")[
+                    ["hit_rate", "false_alarm_rate", "csi", "flooded_area_km2"]
+                ]
+                .agg(["mean", "min", "max", "std", "count"])
+                .reset_index()
+            )
+
+            # Convert forecast_init to datetime for better plotting
+            grouped_stats["forecast_init_dt"] = pd.to_datetime(
+                grouped_stats["forecast_init"], format="%Y%m%dT%H%M%S"
+            )
+
+            # Sort by datetime for proper line plotting
+            grouped_stats = grouped_stats.sort_values("forecast_init_dt")
+
+            # Create subplots for different metrics
+            fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+            fig.suptitle(
+                f"Forecast Performance Metrics with Ensemble Spread - {event_name}",
+                fontsize=16,
+                fontweight="bold",
+            )
+
+            # Define colors for spread (transparent) and metric-specific colors
+            spread_colors = {
+                "hit_rate": "#2E86AB",
+                "false_alarm_rate": "#A23B72",
+                "csi": "#F18F01",
+                "flooded_area_km2": "#636EFA",
+            }
+
+            # Hit Rate
+            ax = axes[0, 0]
+            metric = "hit_rate"
+
+            # Plot spread (min-max range) with transparent fill
+            ax.fill_between(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "min")],
+                grouped_stats[(metric, "max")],
+                color=spread_colors[metric],
+                alpha=0.3,
+                label="Ensemble member range (Min-Max)",
+            )
+
+            # Plot mean as black line
+            ax.plot(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "mean")],
+                color="black",
+                linewidth=2,
+                marker="o",
+                markersize=6,
+                label="Ensemble Mean",
+            )
+
+            ax.set_title("Hit Rate (%)", fontweight="bold")
+            ax.set_ylabel("Hit Rate (%)")
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim(0, 100)
+            ax.legend()
+
+            # False Alarm Rate
+            ax = axes[0, 1]
+            metric = "false_alarm_rate"
+
+            ax.fill_between(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "min")],
+                grouped_stats[(metric, "max")],
+                color=spread_colors[metric],
+                alpha=0.3,
+                label="Ensemble member range (Min-Max)",
+            )
+
+            ax.plot(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "mean")],
+                color="black",
+                linewidth=2,
+                marker="s",
+                markersize=6,
+                label="Ensemble Mean",
+            )
+
+            ax.set_title("False Alarm Rate (%)", fontweight="bold")
+            ax.set_ylabel("False Alarm Rate (%)")
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim(0, 100)
+            ax.legend()
+
+            # Critical Success Index
+            ax = axes[1, 0]
+            metric = "csi"
+
+            ax.fill_between(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "min")],
+                grouped_stats[(metric, "max")],
+                color=spread_colors[metric],
+                alpha=0.3,
+                label="Ensemble member range (Min-Max)",
+            )
+
+            ax.plot(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "mean")],
+                color="black",
+                linewidth=2,
+                marker="^",
+                markersize=6,
+                label="Ensemble Mean",
+            )
+
+            ax.set_title("Critical Success Index (%)", fontweight="bold")
+            ax.set_ylabel("CSI (%)")
+            ax.grid(True, alpha=0.3)
+            ax.set_ylim(0, 100)
+            ax.legend()
+
+            # Flooded Area
+            ax = axes[1, 1]
+            metric = "flooded_area_km2"
+
+            ax.fill_between(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "min")],
+                grouped_stats[(metric, "max")],
+                color=spread_colors[metric],
+                alpha=0.3,
+                label="Ensemble member range (Min-Max)",
+            )
+
+            ax.plot(
+                grouped_stats["forecast_init_dt"],
+                grouped_stats[(metric, "mean")],
+                color="black",
+                linewidth=2,
+                marker="d",
+                markersize=6,
+                label="Ensemble Mean",
+            )
+
+            ax.set_title("Flooded Area (km²)", fontweight="bold")
+            ax.set_ylabel("Area (km²)")
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+
+            # Format x-axis for all subplots
+            for ax in axes.flat:
+                ax.tick_params(axis="x", rotation=45)
+                ax.set_xlabel("Forecast Initialization Time")
+
+            plt.tight_layout()
+
+            # Save the plot
+            plot_filename = (
+                f"{event_name.replace(':', '_')}_forecast_performance_spread.png"
+            )
+            fig.savefig(output_folder / plot_filename, dpi=300, bbox_inches="tight")
+            print(
+                f"Forecast performance spread plot saved as: {output_folder / plot_filename}"
+            )
+
+        self.config = self.model.config["hazards"]
+
+        eval_hydrodynamics_folders = Path(self.output_folder_evaluate) / "hydrodynamics"
+
+        eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
+
+        # Calculate performance metrics for every event in the config file
+        for event in self.config["floods"]["events"]:
+            event_name = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}"
+            print(f"event: {event_name}")
+
+            flood_maps_folder = self.model.output_folder / "flood_maps"
+
+            # Create event-specific folder
+            if not self.model.config["general"]["forecasts"]["use"]:
+                event_folder = eval_hydrodynamics_folders / event_name
+                event_folder.mkdir(parents=True, exist_ok=True)
+
+            # check if flood map folder exists
+            if not flood_maps_folder.exists():
+                raise FileNotFoundError(
+                    "Flood map folder does not exist in the output directory. Did you run the hydrodynamic model?"
+                )
+
+            # check if observation file exists
+            if not Path(
+                self.config["floods"]["event_observation_files"]["raster"]
+            ).exists():
+                raise FileNotFoundError(
+                    "Flood observation file is not found in the given path in the model.yml. "
+                    "Please check the path in the config file."
+                )
+
+            if not self.model.config["general"]["forecasts"]["use"]:
+                print(
+                    "Forecasts use is set to false, so no forecasts are included in the evaluation."
+                )
+                flood_map_name = event_name + ".zarr"
+                flood_map_path = flood_maps_folder / flood_map_name
+
+                metrics = calculate_performance_metrics(
+                    observation=self.config["floods"]["event_observation_files"][
+                        "raster"
+                    ],
+                    flood_map_path=flood_map_path,
+                    visualization_type="OSM",
+                    output_folder=event_folder,
+                )
+                print(f"Successfully evaluated: {flood_map_path.name}")
+
+            else:
+                print("Evaluating flood forecasts...")
+
+                forecast_folders = sorted(flood_maps_folder.glob("forecast_*"))
+                initialization_dates = [
+                    f.name.split("_", 1)[1] for f in forecast_folders
+                ]
+
+                # get number of members from the first forecast folder
+                first_forecast_folder = forecast_folders[0]
+                n_ensemble_members = sum(
+                    1 for _ in first_forecast_folder.glob("member_*")
+                )
+
+                forecast_metrics_list = []
+                performance_metrics_list = []
+                for init_date_str in initialization_dates:
+                    for member in range(1, n_ensemble_members + 1):
+                        flood_map_path = (
+                            flood_maps_folder
+                            / f"forecast_{init_date_str}"
+                            / f"member_{member}"
+                            / f"{event_name}.zarr"
+                        )
+
+                        event_folder = (
+                            eval_hydrodynamics_folders
+                            / "forecasts"
+                            / f"forecast_{init_date_str}"
+                            / f"member_{member}"
+                        )
+                        event_folder.mkdir(parents=True, exist_ok=True)
+
+                        metrics = calculate_performance_metrics(
+                            observation=self.config["floods"][
+                                "event_observation_files"
+                            ]["raster"],
+                            flood_map_path=flood_map_path,
+                            visualization_type="OSM",
+                            output_folder=event_folder,
+                        )
+                        print("   Flood map evaluation complete.")
+
+                        metrics_with_metadata = {
+                            "forecast_init": init_date_str,
+                            "member": member,
+                            "filename": f"{init_date_str}_member{member}.zarr",
+                            **metrics,
+                        }
+
+                        performance_metrics_list.append(metrics_with_metadata)
+                        forecast_metrics_list.append(metrics)
+                        print(f"   Successfully evaluated: {flood_map_path.name}")
+
+                if performance_metrics_list:
+                    performance_df = pd.DataFrame(performance_metrics_list)
+
+                    # Create forecast performance plots
+                    create_forecast_performance_plots(
+                        performance_df, event_name, event_folder
+                    )
+
+                    # Save detailed performance metrics
+                    detailed_filename = f"{event_name.replace(' - ', '_')}_detailed_performance_metrics.csv"
+                    performance_df.to_csv(event_folder / detailed_filename, index=False)
+                    print(
+                        f"Detailed performance metrics saved as: {event_folder / detailed_filename}"
+                    )
+
+            print(f"Completed processing event: {event_name}\n")
+
+        print("Flood map performance metrics calculated for all events.")
