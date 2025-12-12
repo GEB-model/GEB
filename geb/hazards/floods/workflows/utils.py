@@ -451,9 +451,10 @@ def run_sfincs_simulation(
 
         c = (
             int(
-                os.getenv("SLURM_CPUS_PER_TASK")
-                or os.getenv("SLURM_CPUS_ON_NODE")
-                or os.cpu_count()
+                os.getenv("SLURM_CPUS_PER_TASK", None)
+                or os.getenv("SLURM_CPUS_ON_NODE", None)
+                or os.cpu_count()  # returns none if cannot be determined
+                or 1
             )
             if ncpus == "auto"
             else int(ncpus)
@@ -644,8 +645,10 @@ def get_discharge_and_river_parameters_by_river(
 
     discharge_df: pd.DataFrame = pd.DataFrame(index=discharge.time)
     river_parameters: pd.DataFrame = pd.DataFrame(
-        index=river_IDs,
-        columns=["river_width_alpha", "river_width_beta"],
+        index=np.array(river_IDs),
+        columns=np.array(
+            ["river_width_alpha", "river_width_beta"],
+        ),
     )
 
     i: int = 0
@@ -963,7 +966,9 @@ def gpd_pot_ad_auto(
     diag_df = (
         pd.DataFrame(
             diagnostics,
-            columns=["u", "sigma", "xi", "n_exc", "p_ad", "ks_p", "mrl_err", "A_R2"],
+            columns=np.array(
+                ["u", "sigma", "xi", "n_exc", "p_ad", "ks_p", "mrl_err", "A_R2"]
+            ),
         )
         .sort_values("u")
         .reset_index(drop=True)
