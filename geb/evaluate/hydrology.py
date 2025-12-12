@@ -20,7 +20,7 @@ import xarray as xr
 from matplotlib.colors import LightSource
 from matplotlib.lines import Line2D
 from permetrics.regression import RegressionMetric
-from rasterio.crs import CRS
+from rasterio.crs import CRS  # ty:ignore[unresolved-import]
 from rasterio.features import geometry_mask
 from tqdm import tqdm
 
