@@ -233,6 +233,12 @@ class GridVariables:
     elevation: ArrayFloat32
     specific_yield: TwoDArrayFloat32
     hydraulic_conductivity: TwoDArrayFloat32
+    upstream_area: ArrayFloat32
+    upstream_area_n_cells: ArrayInt32
+    river_mannings: ArrayFloat32
+    river_length: ArrayFloat32
+    average_river_width: ArrayFloat32
+    river_alpha: ArrayFloat32
 
 
 class Grid(BaseVariables):
@@ -1344,55 +1350,5 @@ class Data:
         )
         self.HRU.var.crop_harvest_age_days = self.split_HRU_data(
             self.HRU.var.crop_harvest_age_days, HRU
-        )
-        self.HRU.var.SnowCoverS = self.split_HRU_data(self.HRU.var.SnowCoverS, HRU)
-        self.HRU.var.DeltaTSnow = self.split_HRU_data(self.HRU.var.DeltaTSnow, HRU)
-        self.HRU.var.frost_index = self.split_HRU_data(self.HRU.var.frost_index, HRU)
-        self.HRU.var.percolationImp = self.split_HRU_data(
-            self.HRU.var.percolationImp, HRU
-        )
-        self.HRU.var.cropGroupNumber = self.split_HRU_data(
-            self.HRU.var.cropGroupNumber, HRU
-        )
-        self.HRU.var.actual_bare_soil_evaporation = self.split_HRU_data(
-            self.HRU.var.actual_bare_soil_evaporation, HRU
-        )
-        self.HRU.var.KSat1 = self.split_HRU_data(self.HRU.var.KSat1, HRU)
-        self.HRU.var.KSat2 = self.split_HRU_data(self.HRU.var.KSat2, HRU)
-        self.HRU.var.KSat3 = self.split_HRU_data(self.HRU.var.KSat3, HRU)
-        self.HRU.var.lambda1 = self.split_HRU_data(self.HRU.var.lambda1, HRU)
-        self.HRU.var.lambda2 = self.split_HRU_data(self.HRU.var.lambda2, HRU)
-        self.HRU.var.lambda3 = self.split_HRU_data(self.HRU.var.lambda3, HRU)
-        self.HRU.var.wwp1 = self.split_HRU_data(self.HRU.var.wwp1, HRU)
-        self.HRU.var.wwp2 = self.split_HRU_data(self.HRU.var.wwp2, HRU)
-        self.HRU.var.wwp3 = self.split_HRU_data(self.HRU.var.wwp3, HRU)
-        self.HRU.var.ws1 = self.split_HRU_data(self.HRU.var.ws1, HRU)
-        self.HRU.var.ws2 = self.split_HRU_data(self.HRU.var.ws2, HRU)
-        self.HRU.var.ws3 = self.split_HRU_data(self.HRU.var.ws3, HRU)
-        self.HRU.var.wres1 = self.split_HRU_data(self.HRU.var.wres1, HRU)
-        self.HRU.var.wres2 = self.split_HRU_data(self.HRU.var.wres2, HRU)
-        self.HRU.var.wres3 = self.split_HRU_data(self.HRU.var.wres3, HRU)
-        self.HRU.var.wfc1 = self.split_HRU_data(self.HRU.var.wfc1, HRU)
-        self.HRU.var.wfc2 = self.split_HRU_data(self.HRU.var.wfc2, HRU)
-        self.HRU.var.wfc3 = self.split_HRU_data(self.HRU.var.wfc3, HRU)
-        self.HRU.var.kunSatFC12 = self.split_HRU_data(self.HRU.var.kunSatFC12, HRU)
-        self.HRU.var.kunSatFC23 = self.split_HRU_data(self.HRU.var.kunSatFC23, HRU)
-        self.HRU.var.arnoBeta = self.split_HRU_data(self.HRU.var.arnoBeta, HRU)
-        self.HRU.var.w1 = self.split_HRU_data(self.HRU.var.w1, HRU)
-        self.HRU.var.w2 = self.split_HRU_data(self.HRU.var.w2, HRU)
-        self.HRU.var.w3 = self.split_HRU_data(self.HRU.var.w3, HRU)
-        self.HRU.var.topwater = self.split_HRU_data(self.HRU.var.topwater, HRU)
-        self.HRU.var.totAvlWater = self.split_HRU_data(self.HRU.var.totAvlWater, HRU)
-        self.HRU.var.minInterceptCap = self.split_HRU_data(
-            self.HRU.var.minInterceptCap, HRU
-        )
-        self.HRU.var.interception_storage = self.split_HRU_data(
-            self.HRU.var.interception_storage, HRU
-        )
-        self.HRU.var.potential_transpiration_crop_life = self.split_HRU_data(
-            self.HRU.var.potential_transpiration_crop_life, HRU
-        )
-        self.HRU.var.transpiration_crop_life = self.split_HRU_data(
-            self.HRU.var.transpiration_crop_life, HRU
         )
         return HRU
