@@ -18,7 +18,9 @@ from scipy.spatial import KDTree
 from geb.types import (
     AnyDArrayWithScalar,
     Array,
+    ArrayBool,
     ArrayFloat32,
+    ArrayFloat64,
     ArrayInt32,
     ArrayWithScalar,
     T_ArrayNumber,
@@ -801,6 +803,60 @@ class HRUs(BaseVariables):
             array: Array with size of number of HRUs.
         """
         return np.zeros(size, dtype, *args, **kwargs)
+
+    @overload
+    def full_compressed(
+        self,
+        fill_value: int,
+        dtype: type[np.int32],
+        *args: Any,
+        **kwargs: Any,
+    ) -> ArrayInt32: ...
+
+    @overload
+    def full_compressed(
+        self,
+        fill_value: float,
+        dtype: type[np.float64],
+        *args: Any,
+        **kwargs: Any,
+    ) -> ArrayFloat64: ...
+
+    @overload
+    def full_compressed(
+        self,
+        fill_value: float,
+        dtype: type[np.float32],
+        *args: Any,
+        **kwargs: Any,
+    ) -> ArrayFloat32: ...
+
+    @overload
+    def full_compressed(
+        self,
+        fill_value: np.float64,
+        dtype: type[np.float64],
+        *args: Any,
+        **kwargs: Any,
+    ) -> ArrayFloat64: ...
+
+    @overload
+    def full_compressed(
+        self,
+        fill_value: bool,
+        dtype: type[np.bool_],
+        *args: Any,
+        **kwargs: Any,
+    ) -> ArrayBool: ...
+
+    @overload
+    def full_compressed(
+        self,
+        fill_value: int | float | np.integer | np.floating | bool,
+        dtype: type,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Array: ...
 
     def full_compressed(
         self,
