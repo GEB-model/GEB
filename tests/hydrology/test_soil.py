@@ -1,5 +1,6 @@
 """Tests for scalar soil functions in GEB."""
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 from geb.hydrology.landcovers import (
@@ -10,12 +11,24 @@ from geb.hydrology.landcovers import (
 )
 from geb.hydrology.soil import (
     add_water_to_topwater_and_evaporate_open_water,
+    calculate_arno_runoff,
+    get_bubbling_pressure,
     get_infiltration_capacity,
+    get_pore_size_index_brakensiek,
+    get_pore_size_index_wosten,
     get_soil_moisture_at_pressure,
     get_soil_water_flow_parameters,
     infiltration,
+    kv_brakensiek,
+    kv_cosby,
+    kv_wosten,
     rise_from_groundwater,
+    thetar_brakensiek,
+    thetas_toth,
+    thetas_wosten,
 )
+
+from ..testconfig import output_folder
 
 
 def test_add_water_to_topwater_and_evaporate_open_water() -> None:
@@ -218,6 +231,7 @@ def test_infiltration() -> None:
             soil_is_frozen,
             w,
             topwater,
+            np.float32(0.1),
         )
     )
 
@@ -244,6 +258,7 @@ def test_infiltration() -> None:
             soil_is_frozen,
             w,
             topwater,
+            np.float32(0.1),
         )
     )
 
@@ -267,6 +282,7 @@ def test_infiltration() -> None:
             soil_is_frozen,
             w,
             topwater,
+            np.float32(0.1),
         )
     )
 
@@ -290,6 +306,7 @@ def test_infiltration() -> None:
             soil_is_frozen,
             w,
             topwater,
+            np.float32(0.1),
         )
     )
 
@@ -314,6 +331,7 @@ def test_infiltration() -> None:
             soil_is_frozen,
             w,
             topwater,
+            np.float32(0.1),
         )
     )
 
@@ -337,6 +355,7 @@ def test_infiltration() -> None:
             soil_is_frozen,
             w,
             topwater,
+            np.float32(0.1),
         )
     )
 
@@ -365,6 +384,7 @@ def test_infiltration() -> None:
             soil_is_frozen,
             w,
             topwater,
+            np.float32(0.1),
         )
     )
 
@@ -534,3 +554,413 @@ def test_get_soil_moisture_at_pressure() -> None:
         capillary_suction, bubbling_pressure_cm, thetas_arr, thetar_arr, lambda_arr
     )
     assert soil_moisture[0] < 0.1, "Should be close to residual at high suction"
+
+
+def test_plot_arno_runoff_response() -> None:
+    """Visualize the runoff response of the Arno/Xinanjiang model."""
+    ws = np.float32(100.0)
+
+    # Plot 1: Runoff vs Precipitation for different initial soil moisture (fixed b)
+    b = np.float32(0.4)  # Typical value
+    precip_values = np.linspace(0, 50, 100, dtype=np.float32)
+    w_ratios = [0.0, 0.25, 0.5, 0.75, 0.9, 1.0]
+
+    plt.figure(figsize=(10, 6))
+    for ratio in w_ratios:
+        w_init = np.float32(ratio * ws)
+        runoff_values = []
+        for p in precip_values:
+            r, _ = calculate_arno_runoff(
+                w_init, ws, b, p, infiltration_capacity_m=np.float32(1e9)
+            )
+            runoff_values.append(r)
+
+        plt.plot(precip_values, runoff_values, label=f"Initial W/Ws = {ratio}")
+
+    plt.plot(
+        precip_values, precip_values, "k--", alpha=0.3, label="1:1 Line (All Runoff)"
+    )
+    plt.xlabel("Precipitation (mm)")
+    plt.ylabel("Runoff (mm)")
+    plt.title(f"Runoff vs Precipitation (Ws={ws}, b={b})")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(output_folder / "arno_runoff_vs_precip.png")
+    plt.close()
+
+    # Plot 2: Runoff vs Soil Moisture for different b values (fixed P)
+    p = np.float32(10.0)
+    b_values = [0.01, 0.1, 0.5, 1.0, 2.0, 5.0]
+    w_ratios = np.linspace(0, 1, 100, dtype=np.float32)
+
+    plt.figure(figsize=(10, 6))
+    for b_val in b_values:
+        b = np.float32(b_val)
+        runoff_values = []
+        for ratio in w_ratios:
+            w_init = np.float32(ratio * ws)
+            r, _ = calculate_arno_runoff(
+                w_init, ws, b, p, infiltration_capacity_m=np.float32(1e9)
+            )
+            runoff_values.append(r)
+
+        plt.plot(w_ratios, runoff_values, label=f"b = {b_val}")
+
+    plt.axhline(y=p, color="k", linestyle="--", alpha=0.3, label="Precipitation")
+    plt.xlabel("Relative Soil Moisture (W/Ws)")
+    plt.ylabel("Runoff (mm)")
+    plt.title(f"Runoff vs Soil Moisture (P={p}mm, Ws={ws}mm)")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(output_folder / "arno_runoff_vs_moisture.png")
+    plt.close()
+
+
+def test_infiltration_arno_integration() -> None:
+    """Test infiltration with Arno runoff enabled."""
+    import geb.hydrology.soil
+
+    # Save original value
+    original_flag = geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF
+
+    try:
+        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = True
+
+        # Setup inputs
+        ws = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0], dtype=np.float32)
+        w = np.array(
+            [50.0, 50.0, 50.0, 50.0, 50.0, 50.0], dtype=np.float32
+        )  # 50% saturation
+        saturated_hydraulic_conductivity = np.full_like(
+            w, np.float32(10.0)
+        )  # High Ksat
+        land_use_type = np.int32(NON_PADDY_IRRIGATED)
+        soil_is_frozen = False
+        topwater = np.float32(10.0)  # 10mm rain
+
+        # Run infiltration using .py_func to use the python implementation with the updated global
+        # With Arno (b=0.4), even if not saturated, there should be some runoff.
+        # In the standard model, with Ksat=10 and topwater=10, and capacity=50,
+        # potential_infiltration = min(10, 50) = 10.
+        # infiltration = min(10, 10) = 10.
+        # So standard model would have 0 runoff.
+
+        # Let's verify standard model behavior first (with flag=False)
+        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = False
+        w_std = w.copy()
+        _, runoff_std, _, infil_std = infiltration.py_func(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            soil_is_frozen,
+            w_std,
+            topwater,
+            np.float32(0.4),
+        )
+        assert runoff_std == 0.0
+        assert infil_std == 10.0
+
+        # Now with Arno
+        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = True
+        w_arno = w.copy()
+        _, runoff_arno, _, infil_arno = infiltration.py_func(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            soil_is_frozen,
+            w_arno,
+            topwater,
+            np.float32(0.4),
+        )
+
+        # Arno should produce some runoff because of the curve
+        assert runoff_arno > 0.0
+        assert infil_arno < 10.0
+        assert abs(runoff_arno + infil_arno - topwater) < 1e-5
+
+    finally:
+        # Restore flag
+        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = original_flag
+
+
+def test_infiltration_arno_capacity_limit() -> None:
+    """Test that Arno infiltration is limited by infiltration capacity (Ksat)."""
+    import geb.hydrology.soil
+
+    # Save original value
+    original_flag = geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF
+
+    try:
+        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = True
+
+        # Setup inputs
+        ws = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0], dtype=np.float32)
+        w = np.array(
+            [10.0, 50.0, 50.0, 50.0, 50.0, 50.0], dtype=np.float32
+        )  # Low saturation (10/100 = 0.1)
+
+        # Ksat is low (2.0), Topwater is high (10.0)
+        # Arno would likely infiltrate most of the 10.0 if not limited,
+        # because relative saturation is low (0.1).
+        # Pass as array because infiltration expects array (for layers)
+        saturated_hydraulic_conductivity = np.full_like(w, np.float32(2.0))
+
+        land_use_type = np.int32(NON_PADDY_IRRIGATED)
+        soil_is_frozen = False
+        topwater = np.float32(10.0)
+        arno_shape_parameter = np.float32(0.4)
+
+        # Run infiltration using .py_func
+        _, runoff, _, infiltration_amount = infiltration.py_func(
+            ws,
+            saturated_hydraulic_conductivity,
+            land_use_type,
+            soil_is_frozen,
+            w,
+            topwater,
+            arno_shape_parameter,
+        )
+
+        # Infiltration should be limited to Ksat (2.0)
+        assert infiltration_amount == 2.0
+
+        # Runoff should be the rest (10.0 - 2.0 = 8.0)
+        assert runoff == 8.0
+
+        # Verify that if Ksat is high, infiltration is higher
+        saturated_hydraulic_conductivity_high = np.full_like(w, np.float32(20.0))
+        _, runoff_high, _, infiltration_amount_high = infiltration.py_func(
+            ws,
+            saturated_hydraulic_conductivity_high,
+            land_use_type,
+            soil_is_frozen,
+            w,
+            topwater,
+            arno_shape_parameter,
+        )
+
+        # With high Ksat, infiltration should be higher than 2.0
+        # (It will be determined by Arno curve)
+        assert infiltration_amount_high > 2.0
+        assert infiltration_amount_high <= 10.0
+
+    finally:
+        # Restore flag
+        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = original_flag
+
+
+def test_pedotransfer_functions_consistency() -> None:
+    """Test consistency between different pedotransfer functions for typical soils."""
+    # Define typical soil types with their properties
+    # Composition: sand, clay, silt (must sum to 100)
+    # Other props: bulk_density (g/cm3), organic_carbon (%)
+    soils = {
+        "Sand": {
+            "sand": 92.0,
+            "clay": 3.0,
+            "silt": 5.0,
+            "bulk_density": 1.6,
+            "organic_carbon": 0.5,
+        },
+        "Loamy Sand": {
+            "sand": 82.0,
+            "clay": 6.0,
+            "silt": 12.0,
+            "bulk_density": 1.55,
+            "organic_carbon": 0.8,
+        },
+        "Sandy Loam": {
+            "sand": 65.0,
+            "clay": 10.0,
+            "silt": 25.0,
+            "bulk_density": 1.5,
+            "organic_carbon": 1.2,
+        },
+        "Loam": {
+            "sand": 40.0,
+            "clay": 20.0,
+            "silt": 40.0,
+            "bulk_density": 1.4,
+            "organic_carbon": 2.0,
+        },
+        "Silt Loam": {
+            "sand": 20.0,
+            "clay": 15.0,
+            "silt": 65.0,
+            "bulk_density": 1.35,
+            "organic_carbon": 2.5,
+        },
+        "Silt": {
+            "sand": 5.0,
+            "clay": 5.0,
+            "silt": 90.0,
+            "bulk_density": 1.3,
+            "organic_carbon": 3.0,
+        },
+        "Clay Loam": {
+            "sand": 30.0,
+            "clay": 35.0,
+            "silt": 35.0,
+            "bulk_density": 1.35,
+            "organic_carbon": 2.0,
+        },
+        "Clay": {
+            "sand": 20.0,
+            "clay": 60.0,
+            "silt": 20.0,
+            "bulk_density": 1.25,
+            "organic_carbon": 3.5,
+        },
+    }
+
+    print()
+    print(
+        f"{'Soil Type':<15} | {'Kv Brakensiek':<15} | {'Kv Wosten':<15} | {'Kv Cosby':<15} | {'Thetas Toth':<15} | {'Thetas Wosten':<15} | {'Thetar':<15} | {'Bubbling P':<15} | {'Psi Index B':<15} | {'Psi Index W':<15}"
+    )
+    print("-" * 160)
+
+    results = {}
+
+    for name, props in soils.items():
+        # Prepare inputs as numpy arrays (scalar-like)
+        sand = np.array([props["sand"]], dtype=np.float32)
+        clay = np.array([props["clay"]], dtype=np.float32)
+        silt = np.array([props["silt"]], dtype=np.float32)
+        bulk_density = np.array([props["bulk_density"]], dtype=np.float32)
+        organic_carbon = np.array([props["organic_carbon"]], dtype=np.float32)
+        is_top_soil = np.array([True], dtype=bool)
+
+        # Calculate Thetas (Saturated Water Content)
+        # Using Toth as a baseline for Brakensiek input
+        thetas_val_toth = thetas_toth(
+            soil_organic_carbon=organic_carbon,
+            bulk_density=bulk_density,
+            is_top_soil=is_top_soil,
+            clay=clay,
+            silt=silt,
+        )
+
+        thetas_val_wosten = thetas_wosten(
+            clay=clay,
+            bulk_density=bulk_density,
+            silt=silt,
+            soil_organic_carbon=organic_carbon,
+            is_topsoil=is_top_soil,
+        )
+
+        # Check if Thetas values are reasonable (0 to 1)
+        assert 0.3 < thetas_val_toth[0] < 0.8, (
+            f"Thetas Toth out of range for {name}: {thetas_val_toth[0]}"
+        )
+        assert 0.3 < thetas_val_wosten[0] < 0.8, (
+            f"Thetas Wosten out of range for {name}: {thetas_val_wosten[0]}"
+        )
+
+        # Calculate Hydraulic Conductivity (Kv)
+        kv_b = kv_brakensiek(thetas=thetas_val_toth, clay=clay, sand=sand)
+        kv_w = kv_wosten(
+            silt=silt,
+            clay=clay,
+            bulk_density=bulk_density,
+            organic_matter=organic_carbon,
+            is_topsoil=is_top_soil,
+        )
+        kv_c = kv_cosby(sand=sand, clay=clay)
+
+        val_b = kv_b[0]
+        val_w = kv_w[0]
+        val_c = kv_c[0]
+
+        # Additional parameters
+        thetar = thetar_brakensiek(sand=sand, clay=clay, thetas=thetas_val_toth)
+        bubbling_pressure = get_bubbling_pressure(
+            clay=clay, sand=sand, thetas=thetas_val_toth
+        )
+        psi_index_b = get_pore_size_index_brakensiek(
+            sand=sand, thetas=thetas_val_toth, clay=clay
+        )
+        psi_index_w = get_pore_size_index_wosten(
+            clay=clay,
+            silt=silt,
+            soil_organic_carbon=organic_carbon,
+            bulk_density=bulk_density,
+            is_top_soil=is_top_soil,
+        )
+
+        print(
+            f"{name:<15} | {val_b:.2e}        | {val_w:.2e}        | {val_c:.2e}        | {thetas_val_toth[0]:.4f}          | {thetas_val_wosten[0]:.4f}          | {thetar[0]:.4f}          | {bubbling_pressure[0]:.2f}           | {psi_index_b[0]:.4f}          | {psi_index_w[0]:.4f}"
+        )
+
+        # Store results for cross-soil comparison
+        results[name] = {
+            "kv_b": val_b,
+            "kv_w": val_w,
+            "kv_c": val_c,
+            "thetar": thetar[0],
+            "thetas_toth": thetas_val_toth[0],
+            "thetas_wosten": thetas_val_wosten[0],
+            "bubbling_pressure": bubbling_pressure[0],
+            "psi_index_b": psi_index_b[0],
+            "psi_index_w": psi_index_w[0],
+        }
+
+        # Check if Kv values are positive
+        assert val_b > 0
+        assert val_w > 0
+        assert val_c > 0
+
+        # Check order of magnitude consistency
+        # We allow for some deviation, e.g., 1-2 orders of magnitude, as these are empirical functions
+        # and can vary significantly. However, they shouldn't be wildly different (e.g. 1e-5 vs 1e-9).
+
+        # Using log10 to compare orders of magnitude
+        log_b = np.log10(val_b)
+        log_w = np.log10(val_w)
+        log_c = np.log10(val_c)
+
+        # Check if they are within 2.5 orders of magnitude of each other
+        assert abs(log_b - log_w) < 2.5, f"Kv mismatch Brakensiek vs Wosten for {name}"
+        assert abs(log_b - log_c) < 2.5, f"Kv mismatch Brakensiek vs Cosby for {name}"
+        assert abs(log_w - log_c) < 2.5, f"Kv mismatch Wosten vs Cosby for {name}"
+
+        # Additional checks for other parameters
+        assert 0 < thetar[0] < thetas_val_toth[0], f"Thetar invalid for {name}"
+        assert bubbling_pressure[0] > 0, f"Bubbling pressure invalid for {name}"
+        assert psi_index_b[0] > 0, f"Pore size index Brakensiek invalid for {name}"
+        assert psi_index_w[0] > 0, f"Pore size index Wosten invalid for {name}"
+
+    # Cross-soil consistency checks
+    # Sand should have higher conductivity than Clay
+    assert results["Sand"]["kv_b"] > results["Clay"]["kv_b"], (
+        "Sand should be more conductive than Clay (Brakensiek)"
+    )
+    assert results["Sand"]["kv_w"] > results["Clay"]["kv_w"], (
+        "Sand should be more conductive than Clay (Wosten)"
+    )
+    assert results["Sand"]["kv_c"] > results["Clay"]["kv_c"], (
+        "Sand should be more conductive than Clay (Cosby)"
+    )
+
+    # Clay should have higher bubbling pressure (suction) than Sand
+    assert (
+        results["Clay"]["bubbling_pressure"] > results["Sand"]["bubbling_pressure"]
+    ), "Clay should have higher bubbling pressure than Sand"
+
+    # Sand should have higher pore size index (lambda) than Clay
+    assert results["Sand"]["psi_index_b"] > results["Clay"]["psi_index_b"], (
+        "Sand should have higher lambda than Clay (Brakensiek)"
+    )
+
+    # Clay should have higher residual water content than Sand
+    assert results["Clay"]["thetar"] > results["Sand"]["thetar"], (
+        "Clay should have higher residual water content than Sand"
+    )
+
+    # Clay should have higher saturated water content (porosity) than Sand
+    # (Due to lower bulk density and structure)
+    assert results["Clay"]["thetas_toth"] > results["Sand"]["thetas_toth"], (
+        "Clay should have higher Thetas than Sand (Toth)"
+    )
+    assert results["Clay"]["thetas_wosten"] > results["Sand"]["thetas_wosten"], (
+        "Clay should have higher Thetas than Sand (Wosten)"
+    )
