@@ -36,6 +36,8 @@ ArrayInt = (
 ArrayBool = np.ndarray[tuple[int], np.dtype[np.bool_]]
 ArrayDatetime64 = np.ndarray[tuple[int], np.dtype[np.datetime64]]
 
+ArrayStr = np.ndarray[tuple[int], np.dtype[np.str_]]
+
 Array = np.ndarray[tuple[int], Any]  # General array type
 
 TwoDArrayFloat16 = np.ndarray[tuple[int, int], np.dtype[np.float16]]

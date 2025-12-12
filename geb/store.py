@@ -18,6 +18,7 @@ import pandas as pd
 import yaml
 from numpy.typing import NDArray
 
+from geb.types import ArrayStr
 from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:
@@ -50,7 +51,7 @@ class DynamicArray:
         n: int | None = None,
         max_n: int | None = None,
         extra_dims: tuple[int, ...] | None = None,
-        extra_dims_names: Iterable[str] = [],
+        extra_dims_names: Iterable[str] | ArrayStr = [],
         dtype: npt.DTypeLike | None = None,
         fill_value: Any | None = None,
     ) -> None:
@@ -186,7 +187,7 @@ class DynamicArray:
         return self._n
 
     @property
-    def extra_dims_names(self) -> npt.NDArray[np.str_] | None:
+    def extra_dims_names(self) -> ArrayStr | None:
         """
         Names associated with any extra trailing dimensions.
 
@@ -196,7 +197,7 @@ class DynamicArray:
         return self._extra_dims_names
 
     @extra_dims_names.setter
-    def extra_dims_names(self, value: npt.NDArray[np.str_]) -> None:
+    def extra_dims_names(self, value: ArrayStr) -> None:
         """
         Set names for extra trailing dimensions.
 
