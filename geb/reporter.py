@@ -1038,7 +1038,7 @@ class Reporter:
 
                     df.plot(y=name, title=f"{module_name}.{name}", ax=ax)
                     plt.grid()
-                    plt.savefig(folder / (name + ".png"))
+                    plt.savefig(folder / (name + ".svg"), format="svg")
                     plt.close()
 
     def report(
