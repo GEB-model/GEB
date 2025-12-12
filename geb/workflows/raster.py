@@ -479,14 +479,20 @@ def rasterize_like(
     if name == "rasterized" and column is not None:
         name: str = column
 
+    if dtype == bool:
+        burn_type = np.uint8
+    else:
+        burn_type = dtype
+
     da: xr.DataArray = full_like(
         data=raster,
         fill_value=nodata,
         nodata=nodata,
         attrs=raster.attrs,
-        dtype=dtype,
+        dtype=burn_type,
         name=name,
     )
+
     geoms: gpd.Geoseries = gdf.geometry
 
     assert da.rio.crs == gdf.crs, "CRS of raster and GeoDataFrame must match"
@@ -506,6 +512,10 @@ def rasterize_like(
         **kwargs,
     )
     da.values = out
+
+    if dtype == bool:
+        da = da.astype(bool)
+
     return da
 
 

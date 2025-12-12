@@ -5,9 +5,6 @@ import numpy as np
 import pytest
 import rioxarray  # noqa: F401
 import xarray as xr
-from rasterio.transform import from_bounds
-from shapely.geometry import Polygon
-
 from geb.workflows.raster import (
     compress,
     convert_nodata,
@@ -23,6 +20,8 @@ from geb.workflows.raster import (
     reclassify,
     repeat_grid,
 )
+from rasterio.transform import from_bounds
+from shapely.geometry import Polygon
 
 
 def test_pixels_to_coords() -> None:
@@ -141,7 +140,7 @@ def test_repeat_grid() -> None:
 
 
 @pytest.mark.parametrize(
-    "dtype", [np.uint8, np.int32, np.int64, np.float32, np.float64]
+    "dtype", [bool, np.uint8, np.int32, np.int64, np.float32, np.float64]
 )
 def test_rasterize_like(dtype: type) -> None:
     """Test the rasterize_like function.
@@ -161,10 +160,15 @@ def test_rasterize_like(dtype: type) -> None:
     # Create GeoDataFrame with polygons and a value column
     poly1 = Polygon([(0, 0), (4, 0), (4, 4), (0, 4)])
     poly2 = Polygon([(5, 5), (5, 8), (8, 8), (8, 5)])
-    gdf = gpd.GeoDataFrame({"value": [1, 2]}, geometry=[poly1, poly2], crs="EPSG:28992")
 
-    nodata = 255
-    result = rasterize_like(
+    if dtype is bool:
+        values = [True, True]
+    else:
+        values = [1, 2]
+    gdf = gpd.GeoDataFrame({"value": values}, geometry=[poly1, poly2], crs="EPSG:28992")
+
+    nodata = False if dtype is bool else 255
+    result: xr.DataArray = rasterize_like(
         gdf, column="value", raster=raster, dtype=dtype, nodata=nodata, all_touched=True
     )
 
@@ -175,8 +179,12 @@ def test_rasterize_like(dtype: type) -> None:
     assert result.attrs["_FillValue"] == nodata
     assert result.coords.equals(raster.coords)
 
-    assert np.all(result.values[0:4, 0:4] == 1)
-    assert np.all(result.values[5:8, 5:8] == 2)
+    if dtype is bool:
+        assert np.all(result.values[0:4, 0:4])
+        assert np.all(result.values[5:8, 5:8])
+    else:
+        assert np.all(result.values[0:4, 0:4] == 1)
+        assert np.all(result.values[5:8, 5:8] == 2)
 
     # Check that areas outside polygons are nodata
     # For example, bottom-left corner
