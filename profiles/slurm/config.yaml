@@ -1,0 +1,36 @@
+# Snakemake SLURM profile for GEB large-scale cluster execution
+# This profile configures Snakemake to submit jobs to SLURM with appropriate resources
+
+# Basic SLURM configuration
+cluster: "sbatch --parsable --job-name={rule}_{wildcards.cluster} --output=/scistor/ivm/tbr910/GEB/sh_scripts/large_scale/logs/run_logs/{rule}_{wildcards.cluster}-%j.out --error=/scistor/ivm/tbr910/GEB/sh_scripts/large_scale/logs/run_logs/{rule}_{wildcards.cluster}-%j.err --partition={resources.slurm_partition} --account={resources.slurm_account} --ntasks=1 --cpus-per-task={resources.cpus} --mem={resources.mem_mb}M --time=8-00:00:00"
+
+# Configuration overrides
+config:
+  LARGE_SCALE_DIR: "/scistor/ivm/tbr910/GEB/models/large_scale"
+  CLUSTER_PREFIX: "Europe"
+  EVALUATION_METHODS: "plot_discharge,evaluate_discharge"
+
+# Job management
+jobs: 10
+max-jobs-per-second: 2
+max-status-checks-per-second: 0.5
+
+# Resource defaults (will be overridden by rule-specific resources)
+default-resources:
+  - cpus=2
+  - mem_mb=64000
+  - runtime=11520  # 8 days in minutes (8 * 24 * 60 = 11520)
+  - slurm_partition=ivm
+  - slurm_account=ivm
+
+# Rerun incomplete jobs and keep going on failures
+rerun-incomplete: true
+keep-going: true
+printshellcmds: true
+
+# Latency wait (important for network filesystems)
+latency-wait: 60
+
+# Use conda for environment management if needed
+use-conda: false
+use-singularity: false
