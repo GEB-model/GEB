@@ -187,13 +187,18 @@ class DynamicArray:
         return self._n
 
     @property
-    def extra_dims_names(self) -> ArrayStr | None:
+    def extra_dims_names(self) -> ArrayStr:
         """
         Names associated with any extra trailing dimensions.
 
         Returns:
             Array of names for extra trailing dimensions, or None.
+
+        Raises:
+            AttributeError: If `extra_dims_names` has not been set.
         """
+        if not hasattr(self, "_extra_dims_names"):
+            raise AttributeError("extra_dims_names attribute not set")
         return self._extra_dims_names
 
     @extra_dims_names.setter
