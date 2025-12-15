@@ -1533,7 +1533,6 @@ class Households(AgentBaseClass):
         # calculate damages for adapting and not adapting households based on building footprints
         damages_do_not_adapt, damages_adapt = self.calculate_building_flood_damages()
         damages_unprotected_w, damages_adapt_w = self.calculate_building_wind_damages()
-        # premium_multirisk = self.Insurance_premium()
 
         # calculate expected utilities
         EU_adapt = self.decision_module.calcEU_adapt_flood(
@@ -1609,8 +1608,7 @@ class Households(AgentBaseClass):
             sigma=1,
         )
 
-        EU_multirisk_insurance = self.decision_module.calcEU_insure_multirisk(
-            geom_id="NoID",
+        EU_do_nothing = self.decision_module.calcEU_do_nothing_multirisk(
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
@@ -1620,18 +1618,40 @@ class Households(AgentBaseClass):
             risk_perception=self.var.risk_perception.data,
             expected_damages_flood=damages_do_not_adapt,
             expected_damages_wind=damages_unprotected_w,
-            p_flood=1 / self.return_periods,  # dummy, should be multirisk damages
-            p_wind=1
-            / self.windstorm_return_periods,  # dummy, should be multirisk return period
-            time_adapted=self.var.time_with_insurance.data,
-            loan_duration=0,  # insurance premium to be calculated
+            p_flood=1 / self.return_periods,
+            p_wind=1 / self.windstorm_return_periods,
             T=35,
-            r=0.03,  # needs to be adapted for insurance
+            r=0.03,
             sigma=1,
-            deductible=0.1,
-            loading_factor=0.3,  # needs to be discussed for insurance
-            adapted_floodproofing=self.var.adapted.data == 1,
-            adapted_windshutters=self.var.adapted_shutters.data == 1,
+            public_share=0.5,
+        )
+
+        EU_multirisk_insurance, premium, premium_private, premium_public = (
+            self.decision_module.calcEU_insure_multirisk(
+                geom_id="NoID",
+                n_agents=self.n,
+                wealth=self.var.wealth.data,
+                income=self.var.income.data,
+                expenditure_cap=1,
+                amenity_value=self.var.amenity_value.data,
+                amenity_weight=1,
+                risk_perception=self.var.risk_perception.data,
+                expected_damages_flood=damages_do_not_adapt,
+                expected_damages_wind=damages_unprotected_w,
+                p_flood=1 / self.return_periods,  # dummy, should be multirisk damages
+                p_wind=1
+                / self.windstorm_return_periods,  # dummy, should be multirisk return period
+                time_adapted=self.var.time_with_insurance.data,
+                loan_duration=0,  # insurance premium to be calculated
+                T=35,
+                r=0.03,  # needs to be adapted for insurance
+                sigma=1,
+                deductible=0.1,
+                loading_factor=0.3,  # needs to be discussed for insurance
+                public_share=0.5,
+                adapted_floodproofing=self.var.adapted.data == 1,
+                adapted_windshutters=self.var.adapted_shutters.data == 1,
+            )
         )
 
         # execute strategy (flood adaptation)
@@ -1645,24 +1665,25 @@ class Households(AgentBaseClass):
         self.var.time_adapted_shutters[household_adapting_shutters] += 1
 
         # execute strategy (multirisk insurance)
-        household_adopting_insurance = np.where(
-            EU_multirisk_insurance > EU_do_not_adapt
-        )[0]
-        self.var.adapted_insurance[household_adopting_insurance] = 1
-        self.var.time_with_insurance[household_adopting_insurance] += 1
+        households_insurance = np.where(EU_multirisk_insurance > EU_do_nothing)[0]
+        self.var.adapted_insurance[households_insurance] = 1
+        self.var.time_with_insurance[households_insurance] += 1
 
         # update column in buildings
         self.update_building_adaptation_status(
             household_adapting_flood, "floodproofing"
         )
         self.update_building_adaptation_status(household_adapting_shutters, "shutters")
-        self.update_building_adaptation_status(
-            household_adopting_insurance, "insurance"
-        )
+        self.update_building_adaptation_status(households_insurance, "insurance")
 
-        self.buildings.to_file(
-            "C:/Users/nxu279/GitHub/Data/buildings_adapted.gpkg", driver="GPKG"
-        )
+        # Store premiums for research output
+        self.var.premium = premium
+        self.var.premium_private = premium_private
+        self.var.premium_public = premium_public
+
+        # self.buildings.to_file(
+        #     "C:/Users/nxu279/GitHub/Data/buildings_adapted.gpkg", driver="GPKG"
+        # )
 
         # ds = xr.open_zarr(
         #     "C:/Users/nxu279/GitHub/GEB_try/models/etaple/base/output/flood_maps/coastal_0500.zarr"
@@ -1674,7 +1695,7 @@ class Households(AgentBaseClass):
         print(
             f"N households that adapted with Window Shutters: {len(household_adapting_shutters)}"
         )
-        print(f"N households that took insurance: {len(household_adopting_insurance)}")
+        print(f"N households taking insurance: {len(households_insurance)}")
 
     def load_objects(self) -> None:
         """Load buildings, roads, and rail geometries from model files."""
@@ -2202,110 +2223,6 @@ class Households(AgentBaseClass):
             / f"households_with_warning_parameters_{date_time.isoformat().replace(':', '').replace('-', '')}.geoparquet"
         )
 
-    # def calculate_building_wind_damages(self) -> Tuple[np.ndarray, np.ndarray]:
-    #     """This function calculates the windstorm damages for the households in the model.
-
-    #     Returns:
-    #         Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing the damage arrays
-    #         for unprotected buildings, buildings with window shutters, and buildings with strengthened windows.
-    #     """
-    #     # print("Starting wind damage calculation...")
-
-    #     w_damages_unprotected = np.zeros(
-    #         (self.windstorm_return_periods.size, self.n), np.float32
-    #     )
-    #     w_damages_shutters = np.zeros(
-    #         (self.windstorm_return_periods.size, self.n), np.float32
-    #     )
-
-    #     crs = self.flood_maps[self.return_periods[0]].rio.crs
-    #     windstorm_map_crs = {
-    #         rp: self.windstorm_maps[rp].rio.reproject(crs)
-    #         for rp in self.windstorm_return_periods
-    #     }
-    #     buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(crs)
-    #     buildings = buildings[buildings["flooded"]]
-    #     # only calculate damages for buildings with more than 0 occupant
-    #     buildings = buildings[buildings["n_occupants"] > 0]
-    #     # buildings_unprotected = buildings[buildings["flooded"]].copy()
-    #     # buildings_unprotected["object_type"] = "building_unprotected"
-
-    #     # print("Building CRS before reprojection:", self.buildings.crs)
-    #     # print("Wind map CRS:", windstorm_map_crs)
-
-    #     for i, return_period in enumerate(self.windstorm_return_periods):
-    #         windstorm_map = windstorm_map_crs[return_period]
-
-    #         # # Unprotected buildings
-    #         # buildings_unprotected = self.buildings.copy()
-    #         # buildings_unprotected["object_type"] = "building_unprotected"
-
-    #         # print(
-    #         #    f"wind - Number of buildings to process: {len(buildings_unprotected)} "
-    #         # )  -> 129432 should we also only use the flooded buildings?
-    #         wind_damage_unprotected: pd.Series = VectorScanner(
-    #             features=buildings.rename(
-    #                 columns={"maximum_damage_m2": "maximum_damage"}
-    #             ),
-    #             hazard=windstorm_map,
-    #             vulnerability_curves=self.wind_buildings_structure_curve,
-    #             disable_progress=True,
-    #         )
-    #         total_damage_wind = wind_damage_unprotected.sum()
-    #         print(
-    #             f"Wind damages to building unprotected structure rp{return_period} are {round(total_damage_wind / 1e6, 2)} M€"
-    #         )
-
-    #         buildings_with_wind_damages = buildings[["osm_id", "osm_way_id"]].copy()
-    #         buildings_with_wind_damages["damage"] = wind_damage_unprotected
-
-    #         # Shutters
-    #         buildings_shutters = buildings.copy()
-    #         buildings_shutters["object_type"] = "building_window_shutters"
-
-    #         wind_damage_shutters: pd.Series = VectorScanner(
-    #             features=buildings_shutters.rename(
-    #                 columns={"maximum_damage_m2": "maximum_damage"}
-    #             ),
-    #             hazard=windstorm_map,
-    #             vulnerability_curves=self.wind_buildings_structure_curve,
-    #             disable_progress=True,
-    #         )
-    #         total_damage_wind = wind_damage_shutters.sum()
-    #         print(
-    #             f"Wind damages to windproof structure rp{return_period} are {round(total_damage_wind / 1e6, 2)} M€"
-    #         )
-
-    #         buildings_with_damages_shutters = buildings[["osm_id", "osm_way_id"]].copy()
-    #         buildings_with_damages_shutters["damage"] = wind_damage_shutters
-
-    #         # add damages to agents (unprotected buildings)
-    #         for _, row in buildings_with_wind_damages.iterrows():
-    #             damage = row["damage"]
-    #             if row["osm_id"] is not None:
-    #                 osm_id = int(row["osm_id"])
-    #                 idx_agents_in_building = np.where(self.var.osm_id == osm_id)[0]
-    #                 w_damages_unprotected[i, idx_agents_in_building] = damage
-    #             else:
-    #                 osm_way_id = int(row["osm_way_id"])
-    #                 idx_agents_in_building_way = np.where(
-    #                     self.var.osm_way_id == osm_way_id
-    #                 )[0]
-    #                 w_damages_unprotected[i, idx_agents_in_building_way] = damage
-
-    #         # Add damages to agents (Window Shutters)
-    #         for _, row in buildings_with_damages_shutters.iterrows():
-    #             damage = row["damage"]
-    #             if row["osm_id"] is not None:
-    #                 osm_id = int(row["osm_id"])
-    #                 idx_agents = np.where(self.var.osm_id == osm_id)[0]
-    #                 w_damages_shutters[i, idx_agents] = damage
-    #             else:
-    #                 osm_way_id = int(row["osm_way_id"])
-    #                 idx_agents = np.where(self.var.osm_way_id == osm_way_id)[0]
-    #                 w_damages_shutters[i, idx_agents] = damage
-
-    #     return w_damages_unprotected, w_damages_shutters  # w_damages_strengthened
     def calculate_building_wind_damages(
         self, verbose: bool = True, export_building_damages: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -2394,199 +2311,6 @@ class Households(AgentBaseClass):
                     f"Wind Damages adapt rp{return_period}: {round(damages_adapt_w[i].sum() / 1e6)} million"
                 )
         return damages_unprotected_w, damages_adapt_w
-
-    def Insurance_premium(
-        self,
-        expected_damages_flood: np.ndarray,
-        p_flood: np.ndarray,
-        expected_damages_wind: np.ndarray,
-        p_wind: np.ndarray,
-        loading_factor: float = 0.3,  # dummy value for now
-    ) -> np.ndarray:
-        """
-        This function calculates the insurance premium for each household based on the expected damages from flood and windstorm events.
-
-        Args:
-            expected_damages_flood: Expected damages from flood events.
-            p_flood: Probability of flood events.
-            expected_damages_wind: Expected damages from windstorm events.
-            p_wind: Probability of windstorm events.
-            loading_factor: The loading factor to account for administrative costs and profit margin.
-
-        Returns:
-            premium: np.ndarray (n_agents,) final premium for each household.
-        """
-
-        def calc_EAD(damages, probabilities):
-            idx = np.argsort(probabilities)
-            probabilities = probabilities[idx]
-            damages = damages[idx, :]
-            return np.trapz(damages, x=probabilities, axis=0)
-
-        # Calculate Expected Annual Damages (EAD) for flood and windstorm
-        EAD_flood = (
-            calc_EAD(expected_damages_flood, p_flood)
-            if expected_damages_flood.size
-            else np.zeros(expected_damages_wind.shape[1])
-        )
-        EAD_wind = (
-            calc_EAD(expected_damages_wind, p_wind)
-            if expected_damages_wind.size
-            else np.zeros(expected_damages_flood.shape[1])
-        )
-
-        EAD_total = EAD_flood + EAD_wind
-        premium = EAD_total * (1.0 + loading_factor)
-
-        return premium
-
-    # def calculate_building_wind_damages(self) -> Tuple[np.ndarray, np.ndarray]:
-    #     """This function calculates the windstorm damages for the households in the model.
-
-    #     Returns:
-    #         Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing the damage arrays
-    #         for unprotected buildings, buildings with window shutters, and buildings with strengthened windows.
-    #     """
-    #     # print("Starting wind damage calculation...")
-
-    #     w_damages_unprotected = np.zeros(
-    #         (self.windstorm_return_periods.size, self.n), np.float32
-    #     )
-    #     w_damages_shutters = np.zeros(
-    #         (self.windstorm_return_periods.size, self.n), np.float32
-    #     )
-
-    #     crs = self.flood_maps[self.return_periods[0]].rio.crs
-    #     windstorm_map_crs = {
-    #         rp: self.windstorm_maps[rp].rio.reproject(crs)
-    #         for rp in self.windstorm_return_periods
-    #     }
-    #     buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(crs)
-    #     buildings = buildings[buildings["flooded"]]
-    #     # buildings_unprotected = buildings[buildings["flooded"]].copy()
-    #     # buildings_unprotected["object_type"] = "building_unprotected"
-
-    #     # print("Building CRS before reprojection:", self.buildings.crs)
-    #     # print("Wind map CRS:", windstorm_map_crs)
-
-    #     for i, return_period in enumerate(self.windstorm_return_periods):
-    #         windstorm_map = windstorm_map_crs[return_period]
-
-    #         # # Unprotected buildings
-    #         # buildings_unprotected = self.buildings.copy()
-    #         # buildings_unprotected["object_type"] = "building_unprotected"
-
-    #         # print(
-    #         #    f"wind - Number of buildings to process: {len(buildings_unprotected)} "
-    #         # )  -> 129432 should we also only use the flooded buildings?
-    #         wind_damage_unprotected: pd.Series = VectorScanner(
-    #             features=buildings.rename(
-    #                 columns={"maximum_damage_m2": "maximum_damage"}
-    #             ),
-    #             hazard=windstorm_map,
-    #             vulnerability_curves=self.wind_buildings_structure_curve,
-    #             disable_progress=True,
-    #         )
-    #         total_damage_wind = wind_damage_unprotected.sum()
-    #         print(
-    #             f"Wind damages to building unprotected structure rp{return_period} are {round(total_damage_wind / 1e6, 2)} M€"
-    #         )
-
-    #         buildings_with_wind_damages = buildings[["osm_id", "osm_way_id"]].copy()
-    #         buildings_with_wind_damages["damage"] = wind_damage_unprotected
-
-    #         # Shutters
-    #         buildings_shutters = buildings.copy()
-    #         buildings_shutters["object_type"] = "building_window_shutters"
-
-    #         wind_damage_shutters: pd.Series = VectorScanner(
-    #             features=buildings_shutters.rename(
-    #                 columns={"maximum_damage_m2": "maximum_damage"}
-    #             ),
-    #             hazard=windstorm_map,
-    #             vulnerability_curves=self.wind_buildings_structure_curve,
-    #             disable_progress=True,
-    #         )
-    #         total_damage_wind = wind_damage_shutters.sum()
-    #         print(
-    #             f"Wind damages to windproof structure rp{return_period} are {round(total_damage_wind / 1e6, 2)} M€"
-    #         )
-
-    #         buildings_with_damages_shutters = buildings[["osm_id", "osm_way_id"]].copy()
-    #         buildings_with_damages_shutters["damage"] = wind_damage_shutters
-
-    #         # add damages to agents (unprotected buildings)
-    #         for _, row in buildings_with_wind_damages.iterrows():
-    #             damage = row["damage"]
-    #             if row["osm_id"] is not None:
-    #                 osm_id = int(row["osm_id"])
-    #                 idx_agents_in_building = np.where(self.var.osm_id == osm_id)[0]
-    #                 w_damages_unprotected[i, idx_agents_in_building] = damage
-    #             else:
-    #                 osm_way_id = int(row["osm_way_id"])
-    #                 idx_agents_in_building_way = np.where(
-    #                     self.var.osm_way_id == osm_way_id
-    #                 )[0]
-    #                 w_damages_unprotected[i, idx_agents_in_building_way] = damage
-
-    #         # Add damages to agents (Window Shutters)
-    #         for _, row in buildings_with_damages_shutters.iterrows():
-    #             damage = row["damage"]
-    #             if row["osm_id"] is not None:
-    #                 osm_id = int(row["osm_id"])
-    #                 idx_agents = np.where(self.var.osm_id == osm_id)[0]
-    #                 w_damages_shutters[i, idx_agents] = damage
-    #             else:
-    #                 osm_way_id = int(row["osm_way_id"])
-    #                 idx_agents = np.where(self.var.osm_way_id == osm_way_id)[0]
-    #                 w_damages_shutters[i, idx_agents] = damage
-
-    #     return w_damages_unprotected, w_damages_shutters  # w_damages_strengthened
-
-    def Insurance_premium(
-        self,
-        expected_damages_flood: np.ndarray,
-        p_flood: np.ndarray,
-        expected_damages_wind: np.ndarray,
-        p_wind: np.ndarray,
-        loading_factor: float = 0.3,  # dummy value for now
-    ) -> np.ndarray:
-        """
-        This function calculates the insurance premium for each household based on the expected damages from flood and windstorm events.
-
-        Args:
-            expected_damages_flood: Expected damages from flood events.
-            p_flood: Probability of flood events.
-            expected_damages_wind: Expected damages from windstorm events.
-            p_wind: Probability of windstorm events.
-            loading_factor: The loading factor to account for administrative costs and profit margin.
-
-        Returns:
-            premium: np.ndarray (n_agents,) final premium for each household.
-        """
-
-        def calc_EAD(damages, probabilities):
-            idx = np.argsort(probabilities)
-            probabilities = probabilities[idx]
-            damages = damages[idx, :]
-            return np.trapz(damages, x=probabilities, axis=0)
-
-        # Calculate Expected Annual Damages (EAD) for flood and windstorm
-        EAD_flood = (
-            calc_EAD(expected_damages_flood, p_flood)
-            if expected_damages_flood.size
-            else np.zeros(expected_damages_wind.shape[1])
-        )
-        EAD_wind = (
-            calc_EAD(expected_damages_wind, p_wind)
-            if expected_damages_wind.size
-            else np.zeros(expected_damages_flood.shape[1])
-        )
-
-        EAD_total = EAD_flood + EAD_wind
-        premium = EAD_total * (1.0 + loading_factor)
-
-        return premium
 
     def flood(self, flood_depth: xr.DataArray) -> float:
         """This function computes the damages for the assets and land use types in the model.
