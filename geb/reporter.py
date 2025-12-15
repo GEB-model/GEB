@@ -706,7 +706,7 @@ class Reporter:
         if type_ is None:
             raise ValueError(f"Type not specified for {config}.")
 
-        if config["function"] is None and "path" not in config:
+        if "function" in config and config["function"] is None and "path" not in config:
             zarr_path: Path = self.report_folder / module_name / (name + ".zarr")
             zarr_path.parent.mkdir(parents=True, exist_ok=True)
             config["path"] = str(zarr_path)
