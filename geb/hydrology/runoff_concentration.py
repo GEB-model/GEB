@@ -3,7 +3,8 @@
 from typing import TYPE_CHECKING
 
 import numpy as np
-import numpy.typing as npt
+
+from geb.types import ArrayFloat32
 
 from geb.module import Module
 from geb.workflows import balance_check
@@ -133,10 +134,10 @@ class RunoffConcentrator(Module):
 
     def step(
         self,
-        interflow: npt.NDArray[np.float32],  # shape (24, n_cells)
-        baseflow: npt.NDArray[np.float32],  # shape (n_cells,)
-        runoff: npt.NDArray[np.float32],  # shape (24, n_cells)
-    ) -> npt.NDArray[np.float32]:
+        interflow: ArrayFloat32,  # shape (24, n_cells)
+        baseflow: ArrayFloat32,  # shape (n_cells,)
+        runoff: ArrayFloat32,  # shape (24, n_cells)
+    ) -> ArrayFloat32:
         """Route daily runoff, interflow and baseflow through the triangular lag buffer.
 
         Args:

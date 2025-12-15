@@ -67,7 +67,7 @@ def compute_all_numba(
 def VectorScannerMultiCurves(
     features: gpd.GeoDataFrame,
     hazard: xr.DataArray,
-    multi_curves: dict,
+    multi_curves: dict[str, pd.Series],
 ) -> pd.DataFrame:
     """Computes flood damages for a set of building features using multiple depth-damage curves, with heavy optimizations for large datasets.
 
@@ -94,8 +94,7 @@ def VectorScannerMultiCurves(
             A dataframe indexed by building ID (same index as input features),
             with one column per damage curve, containing damages in EUR.
     """
-    # ---------- Prepare curves ----------
-    curve_names = list(multi_curves.keys())
+    curve_names: list[str] = list(multi_curves.keys())
 
     # Shared x-values
     curve_x = multi_curves[curve_names[0]].index.values.astype(np.float64)
@@ -117,7 +116,7 @@ def VectorScannerMultiCurves(
     curve_y = np.ascontiguousarray(curve_y)
     curve_slopes = np.ascontiguousarray(curve_slopes)
 
-    # ---------- Extract exposure geometry ----------
+    # Extract exposure geometry
     features, _, _, cell_area_m2 = VectorExposureDS(
         hazard_file=hazard,
         feature_file=features,
@@ -131,7 +130,7 @@ def VectorScannerMultiCurves(
     filtered = filtered[filtered["values"].apply(sum) > 0]
     filtered["len_values"] = filtered["values"].apply(len).astype(np.int32)
 
-    # ---------- Efficient list flattening ----------
+    # Efficient list flattening
     vals = (v for sub in filtered["values"].array for v in sub)
     covs = (c for sub in filtered["coverage"].array for c in sub)
 
@@ -148,10 +147,10 @@ def VectorScannerMultiCurves(
         dtype=np.float64,
     )
 
-    # ---------- Clip hazard values for stable searchsorted ----------
+    # Clip hazard values for stable searchsorted
     inundation_parts = np.clip(inundation_parts, curve_x[0], curve_x[-2])
 
-    # ---------- Compute damages for every part ----------
+    # Compute damages for every part
     damage_matrix = compute_all_numba(
         inundation_parts,
         coverage_parts,
@@ -161,16 +160,16 @@ def VectorScannerMultiCurves(
         curve_slopes,
     )
 
-    # ---------- Aggregate per building (vectorized) ----------
+    # Aggregate per building (vectorized)
     lengths = filtered["len_values"].to_numpy()
     starts = np.r_[0, lengths.cumsum()[:-1]]
 
     damage_matrix_final = np.add.reduceat(damage_matrix, starts, axis=0)
 
-    # ---------- Return as DataFrame ----------
+    # Return as DataFrame
     df_damage = pd.DataFrame(
         damage_matrix_final,
-        columns=curve_names,
+        columns=np.array(curve_names),
         index=filtered.index,
     )
     # fill missing buildings with zero damage

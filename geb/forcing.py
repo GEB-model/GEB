@@ -393,7 +393,7 @@ class Precipitation(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all() and (v_non_masked < 500 / 3600).all()
+        return ((v_non_masked >= 0).all() and (v_non_masked < 500 / 3600).all()).item()
 
 
 class Temperature(ForcingLoader):
@@ -441,7 +441,7 @@ class Temperature(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked > 170).all() and (v_non_masked < 370).all()
+        return ((v_non_masked > 170).all() and (v_non_masked < 370).all()).item()
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
         """Interpolate data to the model grid using bilinear interpolation.
@@ -504,7 +504,7 @@ class Wind(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= -150).all() and (v_non_masked < 150).all()
+        return ((v_non_masked >= -150).all() and (v_non_masked < 150).all()).item()
 
 
 class Pressure(ForcingLoader):
@@ -553,7 +553,7 @@ class Pressure(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked > 30_000).all() and (v_non_masked < 120_000).all()
+        return ((v_non_masked > 30_000).all() and (v_non_masked < 120_000).all()).item()
 
     def interpolate(self, data: npt.NDArray[np.float32]) -> npt.NDArray[Any]:
         """Interpolate data to the model grid using bilinear interpolation.
@@ -617,7 +617,7 @@ class RSDS(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all()
+        return (v_non_masked >= 0).all().item()
 
 
 class RLDS(ForcingLoader):
@@ -643,7 +643,7 @@ class RLDS(ForcingLoader):
             True if valid, otherwise raises ValueError.
         """
         v_non_masked = v[:, self.grid_mask]
-        return (v_non_masked >= 0).all()
+        return (v_non_masked >= 0).all().item()
 
 
 class SPEI(ForcingLoader):

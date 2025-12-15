@@ -13,18 +13,20 @@ import numpy.typing as npt
 from numba import njit
 from scipy.stats import genextreme
 
+from geb.types import ArrayInt64
 from geb.workflows import TimingModule
 from geb.workflows.io import read_grid
 from geb.workflows.neighbors import find_neighbors
 from geb.workflows.raster import pixels_to_coords, sample_from_map
 
 from ..data import (
+    DateIndex,
     load_crop_data,
     load_economic_data,
     load_regional_crop_data_from_dict,
 )
 from ..hydrology.landcovers import GRASSLAND_LIKE, NON_PADDY_IRRIGATED, PADDY_IRRIGATED
-from ..store import DynamicArray
+from ..store import Bucket, DynamicArray
 from ..workflows import balance_check
 from ..workflows.io import read_array
 from .decision_module import DecisionModule
@@ -68,8 +70,8 @@ def _fit_linear(X: np.ndarray, y: np.ndarray) -> tuple[float, float]:
     relations.
 
     Args:
-        X (np.ndarray): One-dimensional predictor values.
-        y (np.ndarray): One-dimensional response values.
+        X: One-dimensional predictor values.
+        y: One-dimensional response values.
 
     Returns:
         tuple[float, float]: The fitted `(m, c)` where `m` is the slope and
@@ -86,8 +88,8 @@ def _r2(y: np.ndarray, yhat: np.ndarray) -> float:
     Used to determine the fit for the yield - spei relation.
 
     Args:
-        y (np.ndarray): True target values.
-        yhat (np.ndarray): Predicted target values.
+        y: True target values.
+        yhat: Predicted target values.
 
     Returns:
         float: R² score. Returns ``nan`` if the variance of ``y`` is zero.
@@ -110,10 +112,10 @@ def cumulative_mean(
     masked elements are updated.
 
     Args:
-        mean (np.ndarray): Current cumulative mean array; updated in place.
-        counter (np.ndarray): Count of observations per element; updated in place.
-        update (np.ndarray): New observation(s) to incorporate.
-        mask (np.ndarray | None, optional): Boolean mask selecting elements to
+        mean: Current cumulative mean array; updated in place.
+        counter: Count of observations per element; updated in place.
+        update: New observation(s) to incorporate.
+        mask: Boolean mask selecting elements to
             update. If ``None``, all elements are updated. Defaults to ``None``.
 
     Notes:
@@ -134,8 +136,8 @@ def shift_and_update(array: np.ndarray, update: np.ndarray | float | int) -> Non
     """Shift each row right by one and set the first column to ``update``.
 
     Args:
-        array (np.ndarray): 2D array modified in place; shape ``(n, m)`` with ``m >= 1``.
-        update (np.ndarray | float | int): Values assigned to the first column.
+        array: 2D array modified in place; shape ``(n, m)`` with ``m >= 1``.
+        update: Values assigned to the first column.
             May be a scalar or a 1D array of length ``n``.
 
     Notes:
@@ -167,6 +169,19 @@ def advance_crop_rotation_year(
     ) % crop_calendar_rotation_years
 
 
+class CropFarmersVariables(Bucket):
+    """Variables for the CropFarmers agent."""
+
+    n: int
+    max_n: int
+    channel_abstraction_m3_by_farmer: DynamicArray
+    reservoir_abstraction_m3_by_farmer: DynamicArray
+    groundwater_abstraction_m3_by_farmer: DynamicArray
+    remaining_irrigation_limit_m3_channel: DynamicArray
+    remaining_irrigation_limit_m3_reservoir: DynamicArray
+    remaining_irrigation_limit_m3_groundwater: DynamicArray
+
+
 class CropFarmers(AgentBaseClass):
     """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.
 
@@ -175,6 +190,12 @@ class CropFarmers(AgentBaseClass):
         agents: The class that includes all agent types (allowing easier communication between agents).
         redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
     """
+
+    var: CropFarmersVariables
+    well_status: npt.NDArray[np.int32]
+    insurance_diffentiator: npt.NDArray[np.int32]
+    in_command_area: npt.NDArray[np.int32]
+    elev_class: npt.NDArray[np.int32]
 
     def __init__(self, model: GEBModel, agents: Agents, reduncancy: float) -> None:
         """Initialize the CropFarmers agent module.
@@ -1172,7 +1193,7 @@ class CropFarmers(AgentBaseClass):
         On non-leap years, the value for day 365 is copied from day 364.
 
         Args:
-            pr_kg_per_m2_per_s (npt.NDArray[np.floating]): Precipitation time-step
+            pr_kg_per_m2_per_s: Precipitation time-step
                 series per HRU in kg·m⁻²·s⁻¹ (1 kg·m⁻² = 1 mm).
 
         """
@@ -1206,9 +1227,9 @@ class CropFarmers(AgentBaseClass):
         non-leap years, day 366 mirrors day 365.
 
         Args:
-            reference_evapotranspiration_grass_m_per_day (npt.NDArray[np.floating]): Reference ET (m/day) per HRU.
-            pr_kg_per_m2_per_s (npt.NDArray[np.floating]): Precipitation (kg·m⁻²·s⁻¹) per HRU per time-step.
-            discount_factor (float, optional): Smoothing factor in [0, 1] applied to
+            reference_evapotranspiration_grass_m_per_day: Reference ET (m/day) per HRU.
+            pr_kg_per_m2_per_s: Precipitation (kg·m⁻²·s⁻¹) per HRU per time-step.
+            discount_factor: Smoothing factor in [0, 1] applied to
                 the new day's deficit (higher values weight the current day more).
                 Defaults to 0.2.
         """
@@ -1527,11 +1548,11 @@ class CropFarmers(AgentBaseClass):
             balance_check(
                 name="water withdrawal_1",
                 how="sum",
-                influxes=(
+                influxes=[
                     self.var.channel_abstraction_m3_by_farmer,
                     self.var.reservoir_abstraction_m3_by_farmer,
                     self.var.groundwater_abstraction_m3_by_farmer,
-                ),
+                ],
                 outfluxes=[
                     (water_withdrawal_m * self.model.hydrology.HRU.var.cell_area)
                 ],
@@ -1542,25 +1563,25 @@ class CropFarmers(AgentBaseClass):
             balance_check(
                 name="water withdrawal channel",
                 how="sum",
-                outfluxes=self.var.channel_abstraction_m3_by_farmer,
-                prestorages=available_channel_storage_m3_pre,
-                poststorages=available_channel_storage_m3,
+                outfluxes=[self.var.channel_abstraction_m3_by_farmer],
+                prestorages=[available_channel_storage_m3_pre],
+                poststorages=[available_channel_storage_m3],
                 tolerance=50,
             )
 
             balance_check(
                 name="water withdrawal reservoir",
                 how="sum",
-                outfluxes=self.var.reservoir_abstraction_m3_by_farmer,
-                influxes=reservoir_abstraction_m3,
+                outfluxes=[self.var.reservoir_abstraction_m3_by_farmer],
+                influxes=[reservoir_abstraction_m3],
                 tolerance=50,
             )
 
             balance_check(
                 name="water withdrawal groundwater",
                 how="sum",
-                outfluxes=self.var.groundwater_abstraction_m3_by_farmer,
-                influxes=groundwater_abstraction_m3,
+                outfluxes=[self.var.groundwater_abstraction_m3_by_farmer],
+                influxes=[groundwater_abstraction_m3],
                 tolerance=10,
             )
 
@@ -1568,7 +1589,7 @@ class CropFarmers(AgentBaseClass):
             balance_check(
                 name="water withdrawal_2",
                 how="sum",
-                outfluxes=(
+                outfluxes=[
                     self.var.channel_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
                     ].astype(np.float64),
@@ -1578,8 +1599,8 @@ class CropFarmers(AgentBaseClass):
                     self.var.groundwater_abstraction_m3_by_farmer[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
                     ].astype(np.float64),
-                ),
-                prestorages=(
+                ],
+                prestorages=[
                     irrigation_limit_pre_reservoir[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3_reservoir)
                     ].astype(np.float64),
@@ -1589,8 +1610,8 @@ class CropFarmers(AgentBaseClass):
                     irrigation_limit_pre_groundwater[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
                     ].astype(np.float64),
-                ),
-                poststorages=(
+                ],
+                poststorages=[
                     self.var.remaining_irrigation_limit_m3_channel[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3_channel)
                     ].astype(np.float64),
@@ -1600,7 +1621,7 @@ class CropFarmers(AgentBaseClass):
                     self.var.remaining_irrigation_limit_m3_groundwater[
                         ~np.isnan(self.var.remaining_irrigation_limit_m3_groundwater)
                     ].astype(np.float64),
-                ),
+                ],
                 tolerance=50,
             )
 
@@ -1608,12 +1629,12 @@ class CropFarmers(AgentBaseClass):
             balance_check(
                 name="water consumption",
                 how="sum",
-                influxes=(
+                influxes=[
                     water_consumption_m,
                     returnFlowIrr_m,
                     addtoevapotrans_m,
-                ),
-                outfluxes=water_withdrawal_m,
+                ],
+                outfluxes=[water_withdrawal_m],
                 tolerance=50,
             )
 
@@ -1821,8 +1842,8 @@ class CropFarmers(AgentBaseClass):
         """Aggregate a field HRU-level array to farmer-level totals.
 
         Args:
-            array (npt.NDArray[np.floating]): Values per field (compressed over owned fields).
-            method (str, optional): Aggregation method; only ``"sum"`` is supported.
+            array: Values per field (compressed over owned fields).
+            method: Aggregation method; only ``"sum"`` is supported.
                 Defaults to ``"sum"``.
 
         Returns:
@@ -1845,8 +1866,8 @@ class CropFarmers(AgentBaseClass):
         """Expand a per-farmer array to per-field values.
 
         Args:
-            array (npt.NDArray): Values per farmer.
-            nodata (float | int | bool): Fill value for fields without an owner.
+            array: Values per farmer.
+            nodata: Fill value for fields without an owner.
 
         Returns:
             npt.NDArray: Values mapped to each field (same shape as ``land_owners``).
@@ -1861,7 +1882,7 @@ class CropFarmers(AgentBaseClass):
         Uses ``NaN`` for unowned fields when the dtype is floating, otherwise ``-1``.
 
         Args:
-            array (npt.NDArray): Values per farmer.
+            array: Values per farmer.
 
         Returns:
             npt.NDArray: Decompressed array aligned with the HRU raster.
@@ -2202,10 +2223,10 @@ class CropFarmers(AgentBaseClass):
         period completed to size loans. Updates per-farmer loan costs and trackers.
 
         Args:
-            loaning_farmers (npt.NDArray[np.bool_]): Boolean mask of farmers applying for a loan.
-            drought_loss_current (npt.NDArray[np.floating]): Latest drought loss (%)
+            loaning_farmers: Boolean mask of farmers applying for a loan.
+            drought_loss_current: Latest drought loss (%)
                 per farmer.
-            current_crop_age (npt.NDArray[np.floating]): Current crop age per farmer
+            current_crop_age: Current crop age per farmer
                 (days or time units consistent with the crop calendar).
         """
         # Compute the maximum loan amount based on the average profits of the last 10 years
@@ -2332,9 +2353,9 @@ class CropFarmers(AgentBaseClass):
         caps the resulting premium by the government cap.
 
         Args:
-            potential_insured_loss (npt.NDArray[np.floating]): Potential insured loss per
+            potential_insured_loss: Potential insured loss per
                 farmer-year; shape matches ``yearly_income``.
-            government_premium_cap (npt.NDArray[np.floating]): Maximum allowed premium per
+            government_premium_cap: Maximum allowed premium per
                 farmer (currency units).
 
         Returns:
@@ -2400,7 +2421,7 @@ class CropFarmers(AgentBaseClass):
         ``payout_mask``.
 
         Args:
-            insured_farmers_mask (npt.NDArray[np.bool_]): Boolean mask indicating
+            insured_farmers_mask: Boolean mask indicating
                 which farmers are covered by personal insurance.
 
         Returns:
@@ -2464,16 +2485,16 @@ class CropFarmers(AgentBaseClass):
         loading factor and are capped by the government premium cap.
 
         Args:
-            potential_insured_loss (npt.NDArray[np.floating]): Potential insured loss per
+            potential_insured_loss: Potential insured loss per
                 farmer-year; shape matches ``yearly_income``.
-            history (npt.NDArray[np.floating]): Historical index (e.g., rainfall) per
+            history: Historical index (e.g., rainfall) per
                 farmer-year aligned with ``potential_insured_loss``.
-            gev_params (npt.NDArray[np.floating]): Fitted GEV parameters per farmer
+            gev_params: Fitted GEV parameters per farmer
                 (shape as required by the pricing routine).
-            strike_vals (npt.NDArray[np.floating]): Candidate strike levels.
-            exit_vals (npt.NDArray[np.floating]): Candidate exit levels.
-            rate_vals (npt.NDArray[np.floating]): Candidate rate-on-line values.
-            government_premium_cap (npt.NDArray[np.floating]): Max premium per farmer.
+            strike_vals: Candidate strike levels.
+            exit_vals: Candidate exit levels.
+            rate_vals: Candidate rate-on-line values.
+            government_premium_cap: Max premium per farmer.
 
         Returns:
             tuple[npt.NDArray[np.floating], npt.NDArray[np.floating],
@@ -2531,11 +2552,11 @@ class CropFarmers(AgentBaseClass):
         and records payout events in ``payout_mask`` at ``index_nr``.
 
         Args:
-            strike (npt.NDArray[np.floating]): Strike level per farmer.
-            exit (npt.NDArray[np.floating]): Exit level per farmer (≤ strike).
-            rate (npt.NDArray[np.floating]): Rate-on-line per farmer.
-            insured_farmers_mask (npt.NDArray[np.bool_]): Boolean mask of insured farmers.
-            index_nr (int): Column in ``payout_mask`` corresponding to this product.
+            strike: Strike level per farmer.
+            exit: Exit level per farmer (≤ strike).
+            rate: Rate-on-line per farmer.
+            insured_farmers_mask: Boolean mask of insured farmers.
+            index_nr: Column in ``payout_mask`` corresponding to this product.
 
         Returns:
             npt.NDArray[np.floating]: Per farmer-year payouts shaped like
@@ -2581,7 +2602,7 @@ class CropFarmers(AgentBaseClass):
         yield-SPEI relationship using the groupwise linear relation.
 
         Args:
-            potential_insured_loss (npt.NDArray[np.floating]): Potential insured loss
+            potential_insured_loss: Potential insured loss
                 per farmer-year; shape compatible with ``yearly_income``.
 
         Returns:
@@ -2615,14 +2636,14 @@ class CropFarmers(AgentBaseClass):
         """Assign microcredit annual costs into available loan slots (Numba).
 
         Args:
-            all_loans_annual_cost (np.ndarray): Array of per-farmer annual loan costs
+            all_loans_annual_cost: Array of per-farmer annual loan costs
                 with shape ``(n_farmers, n_types, n_slots)``; updated in place.
-            loan_tracker (np.ndarray): Remaining duration per loan slot; updated in place.
-            loaning_farmers (np.ndarray): Boolean mask of farmers receiving a loan.
-            annual_cost_loan (np.ndarray): Annual cost for new loan, to be added to
+            loan_tracker: Remaining duration per loan slot; updated in place.
+            loaning_farmers: Boolean mask of farmers receiving a loan.
+            annual_cost_loan: Annual cost for new loan, to be added to
                 all_loans_annual_cost
-            loan_duration (int): Duration (years) to set for new loans.
-            loan_type (int): Loan type index (e.g., 0=..., 1=microcredit).
+            loan_duration: Duration (years) to set for new loans.
+            loan_type: Loan type index (e.g., 0=..., 1=microcredit).
         """
         farmers_getting_loan = np.where(loaning_farmers)[0]
 
@@ -2666,7 +2687,7 @@ class CropFarmers(AgentBaseClass):
             farmers_going_out_of_business=False,
         )
         if farmers_selling_land.size > 0:
-            self.remove_agents(farmers_selling_land)
+            self.remove_agents(farmers_selling_land, GRASSLAND_LIKE)
 
         number_of_planted_fields = np.count_nonzero(plant_map >= 0)
         if number_of_planted_fields > 0:
@@ -2736,7 +2757,7 @@ class CropFarmers(AgentBaseClass):
         sampled at harvesting farmers' locations.
 
         Args:
-            harvesting_farmers (npt.NDArray[np.bool_]): Boolean mask of farmers
+            harvesting_farmers: Boolean mask of farmers
                 who are harvesting this step.
         """
         spei = self.model.hydrology.grid.spei_uncompressed
@@ -2773,8 +2794,8 @@ class CropFarmers(AgentBaseClass):
         precipitation over that window per farmer, adding it to the cumulative total.
 
         Args:
-            harvesting_farmers (npt.NDArray[np.bool_]): Boolean mask of farmers who are harvesting.
-            crop_age (npt.NDArray[np.floating]): Current crop age per farmer (days).
+            harvesting_farmers: Boolean mask of farmers who are harvesting.
+            crop_age: Current crop age per farmer (days).
         """
         avg_age = np.mean(crop_age, dtype=np.int32)
         end_day = self.model.current_day_of_year - 1
@@ -2864,11 +2885,11 @@ class CropFarmers(AgentBaseClass):
         are then mapped back to each farmer in that group.
 
         Args:
-            yearly_yield_ratio (npt.NDArray[np.floating]): Yearly yield ratio per
+            yearly_yield_ratio: Yearly yield ratio per
                 farmer-year (0-1).
-            yearly_SPEI_probability (npt.NDArray[np.floating]): Yearly SPEI exceedance
+            yearly_SPEI_probability: Yearly SPEI exceedance
                 probabilities per farmer-year.
-            drop_k (int, optional): Number of worst absolute residuals to drop per
+            drop_k: Number of worst absolute residuals to drop per
                 group before refitting. Defaults to ``2``.
 
         Returns:
@@ -2966,11 +2987,11 @@ class CropFarmers(AgentBaseClass):
         and maps parameters back to farmers.
 
         Args:
-            yearly_yield_ratio (npt.NDArray[np.floating]): Yearly yield ratio per
+            yearly_yield_ratio: Yearly yield ratio per
                 farmer-year (0-1).
-            yearly_SPEI_probability (npt.NDArray[np.floating]): Yearly SPEI
+            yearly_SPEI_probability: Yearly SPEI
                 exceedance probabilities per farmer-year.
-            drop_k (int, optional): Number of worst absolute residuals to drop per
+            drop_k: Number of worst absolute residuals to drop per
                 group before refitting. Defaults to ``2``.
 
         Returns:
@@ -3054,7 +3075,7 @@ class CropFarmers(AgentBaseClass):
         alternative where beneficial.
 
         Args:
-            farmer_yield_probability_relation (npt.NDArray[np.floating]): Per-farmer
+            farmer_yield_probability_relation: Per-farmer
                 yield-SPEI relationship used to evaluate profits under drought risk.
         """
         # Fetch loan configuration
@@ -3100,7 +3121,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Construct a dictionary of parameters to pass to the decision module functions
-        decision_params = {
+        decision_params: dict[str, Any] = {
             "loan_duration": loan_duration,
             "expenditure_cap": within_budget,
             "n_agents": self.var.n,
@@ -3241,12 +3262,12 @@ class CropFarmers(AgentBaseClass):
         (adaptations, well depth, etc.) in place.
 
         Args:
-            farmer_yield_probability_relation (npt.NDArray[np.floating]): Per-farmer
+            farmer_yield_probability_relation: Per-farmer
                 yield-SPEI relationship used to evaluate profits under drought risk.
-            average_extraction_speed (npt.NDArray[np.floating] | float): Average pump
+            average_extraction_speed: Average pump
                 extraction speed (can be scalar or per-farmer array).
-            energy_cost (npt.NDArray[np.floating]): Energy cost per farmer (currency/yr).
-            water_cost (npt.NDArray[np.floating]): Water cost per farmer (currency/yr).
+            energy_cost: Energy cost per farmer (currency/yr).
+            water_cost: Water cost per farmer (currency/yr).
         """
         groundwater_depth = self.groundwater_depth.copy()
         groundwater_depth[groundwater_depth <= 0] = 0.001
@@ -3317,7 +3338,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Construct a dictionary of parameters to pass to the decision module functions
-        decision_params = {
+        decision_params: dict[str, Any] = {
             "loan_duration": loan_duration,
             "expenditure_cap": within_budget,
             "n_agents": self.var.n,
@@ -3483,7 +3504,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Construct a dictionary of parameters to pass to the decision module functions
-        decision_params = {
+        decision_params: dict[str, Any] = {
             "loan_duration": loan_duration,
             "expenditure_cap": within_budget,
             "n_agents": self.var.n,
@@ -3552,10 +3573,10 @@ class CropFarmers(AgentBaseClass):
         constraints. Updates adaptation state and fraction of irrigated field.
 
         Args:
-            farmer_yield_probability_relation (npt.NDArray[np.floating]): Per-farmer
+            farmer_yield_probability_relation: Per-farmer
                 yield-SPEI relationship used for profit evaluation.
-            energy_cost (npt.NDArray[np.floating]): Annual energy cost per farmer.
-            water_cost (npt.NDArray[np.floating]): Annual water cost per farmer.
+            energy_cost: Annual energy cost per farmer.
+            water_cost: Annual water cost per farmer.
         """
         # Constants
         adaptation_type = 3
@@ -3623,7 +3644,7 @@ class CropFarmers(AgentBaseClass):
         )
 
         # Construct a dictionary of parameters to pass to the decision module functions
-        decision_params = {
+        decision_params: dict[str, Any] = {
             "loan_duration": loan_duration,
             "expenditure_cap": self.var.expenditure_cap,
             "n_agents": self.var.n,
@@ -3684,7 +3705,7 @@ class CropFarmers(AgentBaseClass):
         adaptation_names: Sequence[str],
         farmer_yield_probability_relation_base: npt.NDArray[np.floating],
         farmer_yield_probability_relations_insured: Sequence[npt.NDArray[np.floating]],
-        premiums: npt.NDArray[np.floating],
+        premiums: list[DynamicArray],
     ) -> None:
         """Evaluate and adopt insurance options using expected utility (SEUT).
 
@@ -3693,16 +3714,16 @@ class CropFarmers(AgentBaseClass):
         subject to constraints. Updates adaptation state in place.
 
         Args:
-            adaptation_types (Sequence[int]): Numeric codes of insurance adaptations
+            adaptation_types: Numeric codes of insurance adaptations
                 to evaluate (e.g., personal, index, etc.).
-            adaptation_names (Sequence[str]): Human-readable names aligned with
+            adaptation_names: Human-readable names aligned with
                 ``adaptation_types`` for logging.
-            farmer_yield_probability_relation_base (npt.NDArray[np.floating]):
+            farmer_yield_probability_relation_base:
                 Base (uninsured) yield-SPEI relation per farmer.
-            farmer_yield_probability_relations_insured (Sequence[npt.NDArray[np.floating]]):
+            farmer_yield_probability_relations_insured:
                 Per-option insured yield-SPEI relations; same order as
                 ``adaptation_types``.
-            premiums (npt.NDArray[np.floating]): Annual premium per farmer for each
+            premiums: Annual premium per farmer for each
                 option; shape should broadcast with the per-option loop.
         """
         loan_duration = self.var.insurance_duration
@@ -3787,7 +3808,7 @@ class CropFarmers(AgentBaseClass):
             )
 
             # Construct a dictionary of parameters to pass to the decision module functions
-            decision_params = {
+            decision_params: dict[str, Any] = {
                 "loan_duration": loan_duration,
                 "expenditure_cap": within_budget,
                 "n_agents": self.var.n,
@@ -3886,17 +3907,17 @@ class CropFarmers(AgentBaseClass):
         who adapt (timers, loan costs, yield-SPEI relationships).
 
         Args:
-            adaptation_type (int): Adaptation code (e.g., well, insurance variant).
-            adapted (npt.NDArray[np.bool_]): Current boolean mask of adapted agents.
-            loan_duration (int): Loan duration in years for the adaptation.
-            annual_cost (npt.NDArray[np.floating]): Annualized adaptation cost per agent.
-            SEUT_do_nothing (npt.NDArray[np.floating]): SEUT values for not adapting.
-            SEUT_adapt (npt.NDArray[np.floating]): SEUT values for adapting.
-            ids_to_switch_to (npt.NDArray[np.integer]): Mapping of agents to donor
+            adaptation_type: Adaptation code (e.g., well, insurance variant).
+            adapted: Current boolean mask of adapted agents.
+            loan_duration: Loan duration in years for the adaptation.
+            annual_cost: Annualized adaptation cost per agent.
+            SEUT_do_nothing: SEUT values for not adapting.
+            SEUT_adapt: SEUT values for adapting.
+            ids_to_switch_to: Mapping of agents to donor
                 indices for updating historical series (yield/income/SPEI).
 
         Returns:
-            npt.NDArray[np.bool_]: Boolean mask indicating which agents adapt this step.
+            Boolean mask indicating which agents adapt this step.
         """
         if adaptation_type in (
             PERSONAL_INSURANCE_ADAPTATION,
@@ -4138,13 +4159,13 @@ class CropFarmers(AgentBaseClass):
     def calculate_well_costs_global(
         self,
         groundwater_depth: npt.NDArray[np.floating],
-        average_extraction_speed: npt.NDArray[np.floating],
+        average_extraction_speed: npt.NDArray[np.floating] | float,
     ) -> tuple[npt.NDArray[np.floating], npt.NDArray[np.floating]]:
         """Compute annual well-installation/operation costs and potential well length.
 
         Args:
-            groundwater_depth (npt.NDArray[np.floating]): Groundwater depth per agent (m).
-            average_extraction_speed (npt.NDArray[np.floating]): Average water extraction
+            groundwater_depth: Groundwater depth per agent (m).
+            average_extraction_speed: Average water extraction
                 speed per agent (m³/s).
 
         Returns:
@@ -4257,9 +4278,9 @@ class CropFarmers(AgentBaseClass):
         Then turns yield into profit, and adds the adaptation yield difference to those probabilities
 
         Args:
-            additional_diffentiators (npt.NDArray): Extra differentiators for grouping agents.
-            adapted (npt.NDArray[np.bool_]): Mask indicating which agents are adapted.
-            farmer_yield_probability_relation (npt.NDArray[np.floating]): Per-farmer yield–SPEI relation.
+            additional_diffentiators: Extra differentiators for grouping agents.
+            adapted: Mask indicating which agents are adapted.
+            farmer_yield_probability_relation: Per-farmer yield–SPEI relation.
 
         Returns:
             tuple[
@@ -4320,9 +4341,9 @@ class CropFarmers(AgentBaseClass):
         the no-drought case.
 
         Args:
-            unique_crop_calendars (npt.NDArray[np.integer]): Distinct crop-calendar
+            unique_crop_calendars: Distinct crop-calendar
                 options to evaluate (calendar IDs per phase).
-            farmer_yield_probability_relation (npt.NDArray[np.floating]): Per-farmer
+            farmer_yield_probability_relation: Per-farmer
                 yield-SPEI relationship used to compute yield ratios.
 
         Returns:
@@ -4422,9 +4443,9 @@ class CropFarmers(AgentBaseClass):
         """Compute total profits for all agents across different drought scenarios.
 
         Args:
-            yield_ratios (np.ndarray): Yield ratios for agents under different drought scenarios.
-            crops_mask (np.ndarray): Mask indicating valid crop entries.
-            nan_array (np.ndarray): Array filled with NaNs for reference.
+            yield_ratios: Yield ratios for agents under different drought scenarios.
+            crops_mask: Mask indicating valid crop entries.
+            nan_array: Array filled with NaNs for reference.
 
         Returns:
             np.ndarray: Total profits for agents under each drought scenario.
@@ -4455,7 +4476,7 @@ class CropFarmers(AgentBaseClass):
         the required annual cost per m².
 
         Args:
-            total_annual_costs_m2 (npt.NDArray[np.floating]): Annual adaptation cost
+            total_annual_costs_m2: Annual adaptation cost
                 per m² for each farmer.
 
         Returns:
@@ -4480,7 +4501,7 @@ class CropFarmers(AgentBaseClass):
         """Transpose and slice the total profits matrix, and extract the 'no drought' scenario profits.
 
         Args:
-            total_profits (np.ndarray): Total profits matrix.
+            total_profits: Total profits matrix.
 
         Returns:
             Tuple[np.ndarray, np.ndarray]: Transposed profits and 'no drought' scenario profits.
@@ -4506,10 +4527,10 @@ class CropFarmers(AgentBaseClass):
         ``[0, 1]``.
 
         Args:
-            farmer_yield_probability_relation (npt.NDArray[np.floating]): Per-farmer
+            farmer_yield_probability_relation: Per-farmer
                 parameters of shape ``(n_farmers, 2)`` where column 0 is the intercept
                 and column 1 is the slope.
-            model (Literal["exponential", "linear"], optional): Relation type. Defaults
+            model: Relation type. Defaults
                 to ``"exponential"``.
 
         Returns:
@@ -4554,7 +4575,7 @@ class CropFarmers(AgentBaseClass):
         only the base class is used. Groups are defined by unique rows.
 
         Args:
-            *additional_diffentiators (npt.NDArray[np.integer]): Optional per-agent arrays
+            *additional_diffentiators: Optional per-agent arrays
                 (all length ``n_agents``) that further distinguish groups.
 
         Returns:
@@ -4586,11 +4607,11 @@ class CropFarmers(AgentBaseClass):
         farmer to use as a donor index.
 
         Args:
-            additional_diffentiators (npt.NDArray[np.integer]): Per-farmer grouping
+            additional_diffentiators: Per-farmer grouping
                 keys (e.g., classes/categorical columns) used to form peer groups.
-            adapted (npt.NDArray[np.bool_]): Boolean mask indicating which farmers
+            adapted: Boolean mask indicating which farmers
                 have adopted the adaptation.
-            yield_ratios (npt.NDArray[np.floating]): Yield ratios per farmer and
+            yield_ratios: Yield ratios per farmer and
                 drought event, shaped ``(n_farmers, n_events)``.
 
         Returns:
@@ -4648,7 +4669,7 @@ class CropFarmers(AgentBaseClass):
         adapted: npt.NDArray[np.bool_],
         additional_diffentiator_expiration: npt.NDArray[np.bool_],
         additional_diffentiator_grouping: npt.NDArray[np.integer],
-        adaptation_type: npt.NDArray[np.integer],
+        adaptation_type: npt.NDArray[np.integer] | int,
     ) -> None:
         """Expire shallow/aged wells and refresh affected farmers' histories.
 
@@ -4705,12 +4726,12 @@ class CropFarmers(AgentBaseClass):
         gains are then mapped back to each farmer.
 
         Args:
-            additional_diffentiators (npt.NDArray[np.integer]): Per-farmer grouping
+            additional_diffentiators: Per-farmer grouping
                 keys used to define comparable peer groups.
-            adapted (npt.NDArray[np.bool_]): Boolean mask indicating which farmers
+            adapted: Boolean mask indicating which farmers
                 have adopted the adaptation.
-            energy_cost (npt.NDArray[np.floating]): Annual energy cost per farmer.
-            water_cost (npt.NDArray[np.floating]): Annual water cost per farmer.
+            energy_cost: Annual energy cost per farmer.
+            water_cost: Annual water cost per farmer.
 
         Returns:
             tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]:
@@ -4914,7 +4935,7 @@ class CropFarmers(AgentBaseClass):
 
     def get_value_per_farmer_from_region_id(
         self,
-        data: tuple[dict[datetime, int], npt.NDArray[np.floating]],
+        data: tuple[DateIndex, dict[int, npt.NDArray[Any]]],
         time: datetime,
         subset: npt.NDArray[np.bool_] | None = None,
     ) -> npt.NDArray[np.float32]:
@@ -4925,11 +4946,11 @@ class CropFarmers(AgentBaseClass):
         ``self.var.region_id`` (or a subset of farmers if provided).
 
         Args:
-            data (tuple[dict[datetime, int], npt.NDArray[np.floating]]): A pair
+            data: A pair
                 ``(date_index, values_by_region)`` where ``date_index[time] -> int``
                 and ``values_by_region[region_id][index] -> float``.
-            time (datetime): Timestamp used to obtain the column/index into the values array.
-            subset (npt.NDArray[np.bool_], optional): Boolean mask of farmers to map.
+            time: Timestamp used to obtain the column/index into the values array.
+            subset: Boolean mask of farmers to map.
                 If ``None``, all farmers are used.
 
         Returns:
@@ -5104,14 +5125,16 @@ class CropFarmers(AgentBaseClass):
                 self.var.crop_calendar[:, :, 0], axis=0, return_inverse=True
             )[1]
 
-            self.insurance_diffentiator = np.int32(
+            self.insurance_diffentiator = (
                 self.var.adaptations[:, PERSONAL_INSURANCE_ADAPTATION] > 0
-            )  # only personal insurance affects adaptation
+            ).astype(np.int32)  # only personal insurance affects adaptation
 
             self.blank_additional_differentiator = np.zeros(
                 self.var.n, dtype=np.float32
             )
-            self.well_status = np.int32(self.var.adaptations[:, WELL_ADAPTATION] > 0)
+            self.well_status = (self.var.adaptations[:, WELL_ADAPTATION] > 0).astype(
+                np.int32
+            )
 
             self.var.farmer_base_class[:] = self.create_farmer_classes(
                 crop_calendar_group,
@@ -5403,7 +5426,7 @@ class CropFarmers(AgentBaseClass):
 
     def remove_agents(
         self,
-        farmer_indices: list[int],
+        farmer_indices: ArrayInt64,
         new_land_use_type: int,
     ) -> np.ndarray:
         """Remove multiple farmers and reassign their HRUs.
@@ -5413,8 +5436,8 @@ class CropFarmers(AgentBaseClass):
         were disowned.
 
         Args:
-            farmer_indices (list[int]): Farmer indices to remove.
-            new_land_use_type (int): Land-use code to assign to vacated HRUs.
+            farmer_indices: Farmer indices to remove.
+            new_land_use_type: Land-use code to assign to vacated HRUs.
 
         Returns:
             np.ndarray: Concatenated array of HRU indices that were disowned.
@@ -5444,8 +5467,8 @@ class CropFarmers(AgentBaseClass):
         indices that were disowned.
 
         Args:
-            farmer_idx (int): Index of the farmer to remove.
-            new_land_use_type (int): Land-use code to assign to vacated HRUs.
+            farmer_idx: Index of the farmer to remove.
+            new_land_use_type: Land-use code to assign to vacated HRUs.
 
         Returns:
             np.ndarray: HRU indices that were disowned for this farmer.
@@ -5572,9 +5595,9 @@ class CropFarmers(AgentBaseClass):
         """Add a new farmer at given HRU indices and initialize arrays.
 
         Args:
-            indices (tuple[np.ndarray, np.ndarray]): Row/column index arrays that
+            indices: Row/column index arrays that
                 define the HRUs to assign to the new farmer.
-            values (dict[str, object], optional): Per-array initialization values
+            values: Per-array initialization values
                 keyed by agent array name.
         """
         HRU = self.model.data.split(indices)

@@ -33,7 +33,7 @@ import numpy as np
 import numpy.typing as npt
 
 from geb.module import Module
-from geb.types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
+from geb.types import ArrayFloat32, TwoDArrayFloat64
 from geb.workflows import balance_check
 
 from ..routing import get_channel_ratio
@@ -157,8 +157,8 @@ class GroundWater(Module):
     def step(
         self,
         groundwater_recharge_m: ArrayFloat32,
-        groundwater_abstraction_m3: ArrayFloat64,
-    ) -> ArrayFloat64:
+        groundwater_abstraction_m3: ArrayFloat32,
+    ) -> ArrayFloat32:
         """Perform a groundwater model step.
 
         Args:
@@ -176,7 +176,9 @@ class GroundWater(Module):
             groundwater_storage_pre = self.modflow.groundwater_content_m3
 
         self.modflow.set_recharge_m3(groundwater_recharge_m * self.grid.var.cell_area)
-        self.modflow.set_groundwater_abstraction_m3(groundwater_abstraction_m3)
+        self.modflow.set_groundwater_abstraction_m3(
+            groundwater_abstraction_m3.astype(np.float64)
+        )
         self.modflow.step()
 
         if __debug__:
@@ -210,7 +212,7 @@ class GroundWater(Module):
 
         # this is the capillary rise for the NEXT timestep
         self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
-        baseflow = groundwater_drainage * channel_ratio
+        baseflow = (groundwater_drainage * channel_ratio).astype(np.float32)
         print("Baseflow max:", baseflow.max())
         print("Baseflow min:", baseflow.min())
         print("Baseflow mean:", baseflow.mean())

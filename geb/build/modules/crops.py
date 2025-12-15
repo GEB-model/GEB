@@ -539,7 +539,14 @@ class Crops:
 
             if country_data.empty:  # happens if country is not in GLOBIOM regions dataset (e.g. Kosovo). Fill these countries using data from a country that is in the GLOBIOM regions dataset, using the regular donor countries setup.
                 countries_with_donor_data = donor_data.ISO3.unique().tolist()
-                donor_countries = setup_donor_countries(self, countries_with_donor_data)
+                donor_countries = setup_donor_countries(
+                    self.data_catalog,
+                    self.geom["global_countries"],
+                    countries_with_donor_data,
+                    alternative_countries=self.geom["regions"]["ISO3"]
+                    .unique()
+                    .tolist(),
+                )
                 ISO3 = donor_countries.get(ISO3, None)
                 self.logger.info(
                     f"Missing price donor data for {region['ISO3']}, using donor country {ISO3}. This country is NOT in the GLOBIOM regions dataset"

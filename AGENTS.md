@@ -11,11 +11,12 @@ These instructions translate the project's Pull Request checklist into explicit 
 - Variable naming: Use clear, descriptive names understandable by a non-domain expert.
 - Units: Include units for parameters and return values unless they are standard SI defaults (e.g., hydrology in meters).
 - Monetary units: All monetary amounts are nominal USD for the stated year; indicate the year when appropriate.
+- When a new config options is added, a default configuration must be added to `geb/reasonable_default_config.yml`.
 
 ## How Copilot should generate or modify code
 
 - Docstrings: Generate Google-style docstrings for every new or substantially edited function. Include `Args`, `Returns`, and `Raises` sections. If units apply, put them in the parameter or return description.
-- Types: Add Python type hints to function signatures (PEP 484). Use `|` where appropriate, and prefer concrete types (e.g., `float`, `int`, `str`, `List[float]`, `Dict[str, Any]`).
+- Types: Add Python type hints to function signatures (PEP 484). Use `|` where appropriate, and prefer concrete types (e.g., `float`, `int`, `str`, `list[float]`, `dict[str, int]`).
 - Comments: Insert short inline comments to explain *why* a non-obvious step is needed. Avoid comments that restate the code.
 - Names: Prefer descriptive names (e.g., `drainage_rate_m_per_s` instead of `r`) and avoid domain jargon when a plain name will do. If domain terms are needed, add a brief docstring note explaining them.
 - Units and money: Always document units in parameter/return docstrings, e.g., `(meters)`, `(USD, nominal)`. If a function converts units or uses a specific year's dollars, state that clearly.

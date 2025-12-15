@@ -9,13 +9,7 @@ from collections import deque
 from datetime import datetime
 from operator import attrgetter
 from pathlib import Path
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Iterator,
-    Literal,
-)
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Literal, overload
 
 import geopandas as gpd
 import numpy as np
@@ -56,7 +50,7 @@ class DynamicArray:
         n: int | None = None,
         max_n: int | None = None,
         extra_dims: tuple[int, ...] | None = None,
-        extra_dims_names: list[str] = [],
+        extra_dims_names: Iterable[str] = [],
         dtype: npt.DTypeLike | None = None,
         fill_value: Any | None = None,
     ) -> None:
@@ -314,17 +308,18 @@ class DynamicArray:
         Returns:
             Result of calling the function on the underlying NumPy array(s).
         """
+
+        def recursive_convert(arg: Any) -> Any:
+            if isinstance(arg, DynamicArray):
+                return arg.data
+            if isinstance(arg, (list, tuple)):
+                return type(arg)(recursive_convert(x) for x in arg)
+            return arg
+
         # Explicitly call __array_function__ of the underlying NumPy array
-        modified_args: tuple = tuple(
-            arg.data if isinstance(arg, DynamicArray) else arg for arg in args
-        )
-        modified_types: tuple = tuple(
-            type(arg.data) if isinstance(arg, DynamicArray) else type(arg)
-            for arg in args
-        )
-        return self._data.__array_function__(
-            func, modified_types, modified_args, kwargs
-        )
+        modified_args = tuple(recursive_convert(arg) for arg in args)
+
+        return self._data.__array_function__(func, (np.ndarray,), modified_args, kwargs)
 
     def __setitem__(
         self,
@@ -770,7 +765,7 @@ class DynamicArray:
         """
         return self._perform_operation(other, "__pow__", inplace=True)
 
-    def _compare(self, value: object, operation: str) -> DynamicArray:
+    def _compare(self, value: object, operation: str) -> Any:
         """
         Helper for comparison operations.
 
@@ -782,12 +777,22 @@ class DynamicArray:
             Result of the comparison.
         """
         if isinstance(value, DynamicArray):
-            return self.__class__(
-                getattr(self.data, operation)(value.data), max_n=self._data.shape[0]
-            )
-        return self.__class__(getattr(self.data, operation)(value))
+            res = getattr(self.data, operation)(value.data)
+            if res is NotImplemented:
+                return NotImplemented
+            return self.__class__(res, max_n=self._data.shape[0])
+        res = getattr(self.data, operation)(value)
+        if res is NotImplemented:
+            return NotImplemented
+        return self.__class__(res)
 
-    def __eq__(self, value: object) -> DynamicArray:
+    @overload
+    def __eq__(self, value: DynamicArray) -> DynamicArray: ...
+
+    @overload
+    def __eq__(self, value: object) -> Any: ...
+
+    def __eq__(self, value: object) -> Any:
         """Equality comparison.
 
         Args:
@@ -798,7 +803,13 @@ class DynamicArray:
         """
         return self._compare(value, "__eq__")
 
-    def __ne__(self, value: object) -> DynamicArray:
+    @overload
+    def __ne__(self, value: DynamicArray) -> DynamicArray: ...
+
+    @overload
+    def __ne__(self, value: object) -> Any: ...
+
+    def __ne__(self, value: object) -> Any:
         """Inequality comparison.
 
         Args:
@@ -1181,7 +1192,7 @@ class Store:
             The created Bucket instance.
         """
         assert name not in self.buckets
-        bucket = Bucket(validator=validator)
+        bucket: Bucket = Bucket(validator=validator)
         self.buckets[name] = bucket
         return bucket
 

@@ -39,7 +39,6 @@ DEFAULT_BUILD_ARGS: dict[str, Any] = {}
 DEFAULT_RUN_ARGS: dict[str, Any] = {}
 
 
-@pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
     "clean_working_directory",
     [False, True],
@@ -236,9 +235,7 @@ def test_update_with_dict() -> None:
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")
 @pytest.mark.parametrize(
     "method",
-    [
-        "setup_hydrography",
-    ],
+    ["setup_hydrography"],
 )
 def test_update_with_method(method: str) -> None:
     """Test updating model configuration using different methods.
@@ -282,7 +279,49 @@ def test_spinup() -> None:
         args: dict[str, Any] = DEFAULT_RUN_ARGS.copy()
         args["config"] = parse_config(CONFIG_DEFAULT)
         args["config"]["hazards"]["floods"]["simulate"] = True
-        run_model_with_method(method="spinup", **args)
+        geb: GEBModel = run_model_with_method(
+            method="spinup", **args, close_after_run=False
+        )
+
+        routing_report_folder: Path = (
+            working_directory / "output" / "report" / "spinup" / "hydrology.routing"
+        )
+
+        hourly_discharge_data = xr.open_dataarray(
+            routing_report_folder / "discharge_hourly.zarr"
+        )
+
+        daily_discharge_data = xr.open_dataarray(
+            routing_report_folder / "discharge_daily.zarr"
+        )
+
+        outflow_rivers = geb.hydrology.routing.outflow_rivers
+        for ID, river in outflow_rivers.iterrows():
+            outflow_data_csv: pd.DataFrame = pd.read_csv(
+                routing_report_folder / f"river_outflow_hourly_m3_per_s_{ID}.csv",
+                parse_dates=["time"],
+            ).set_index("time")[f"river_outflow_hourly_m3_per_s_{ID}"]
+
+            outflow_xy = river["hydrography_xy"][-1]
+            hourly_outflow_data_zarr: pd.DataFrame = hourly_discharge_data.isel(
+                y=outflow_xy[1], x=outflow_xy[0]
+            ).to_dataframe()["discharge_hourly"]
+
+            np.testing.assert_almost_equal(
+                hourly_outflow_data_zarr.values, outflow_data_csv.values, decimal=5
+            )
+
+            daily_outflow_data_zarr: pd.DataFrame = daily_discharge_data.isel(
+                y=outflow_xy[1], x=outflow_xy[0]
+            ).to_dataframe()["discharge_daily"]
+
+            # aggregate hourly to daily
+            outflow_data_csv_daily = outflow_data_csv.resample("D").mean()
+            np.testing.assert_almost_equal(
+                daily_outflow_data_zarr.values, outflow_data_csv_daily.values, decimal=5
+            )
+
+        geb.close()
 
 
 @pytest.mark.skipif(IN_GITHUB_ACTIONS, reason="Too heavy for GitHub Actions.")

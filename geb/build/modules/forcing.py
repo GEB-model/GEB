@@ -294,7 +294,7 @@ def plot_gif(
 
     # Calculate all percentiles at once with the quantile function over the ensemble dimension
     ensemble_percentiles_xr = da.quantile(
-        percentiles_decimal, dim=ensemble_dim, keep_attrs=True
+        percentiles_decimal, dim=[ensemble_dim], keep_attrs=True
     )
 
     # Rename the 'quantile' dimension to 'percentile' and assign percentile values
@@ -499,7 +499,7 @@ def plot_timeline(
     if "units" in da.attrs:
         ax.set_ylabel(da.attrs["units"])
     ax.set_xlim(data.time[0], data.time[-1])
-    ax.set_ylim(data.min(), data.max() * 1.1)
+    ax.set_ylim(data.min().item(), data.max().item() * 1.1)
     significant_digits: int = 6
     ax.set_title(
         f"{name} - mean: {data.mean().item():.{significant_digits}f} - min: {data.min().item():.{significant_digits}f} - max: {data.max().item():.{significant_digits}f}"
@@ -772,7 +772,6 @@ class Forcing:
             name=name,
             *args,
             **kwargs,
-            byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
@@ -829,7 +828,6 @@ class Forcing:
             name=name,
             *args,
             **kwargs,
-            byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
@@ -884,7 +882,6 @@ class Forcing:
             name=name,
             *args,
             **kwargs,
-            byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
@@ -944,7 +941,6 @@ class Forcing:
             name=name,
             *args,
             **kwargs,
-            byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
@@ -1001,7 +997,6 @@ class Forcing:
             name=name,
             *args,
             **kwargs,
-            byteshuffle=True,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
         )
