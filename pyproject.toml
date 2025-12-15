@@ -196,9 +196,6 @@ norecursedirs = [".venv", "build", "dist", "tmp*"]
 testpaths = ["tests"]
 addopts = "--ignore=.venv"
 
-[tool.ty.environment]
-python-version = "3.13"
-
 [tool.ty.rules]
 possibly-missing-attribute = "ignore"
 unresolved-attribute = "ignore"
