@@ -100,6 +100,7 @@ agent_settings:
         ruleset: no-adaptation
       adaptation_sprinkler:
         ruleset: no-adaptation
+        adaptation_type: dynamic
         lifespan_base: 25
         lifespan_sprink_drip: 15
         loan_duration: 21

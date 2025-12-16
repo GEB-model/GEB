@@ -22,6 +22,15 @@ class Agents(GEBModel):
         super().__init__(*args, **kwargs)
 
     @build_method(depends_on=["setup_economic_data"])
+    def setup_cultivation_costs_australia(
+        self,
+        start_year: int,
+        end_year: int,
+        crops = [0,2,3,9,14,23,25],
+    ) -> None:
+        pass
+
+    @build_method(depends_on=["setup_economic_data"])
     def setup_irrigation_efficiency_australia(
         self,
         start_year: int,

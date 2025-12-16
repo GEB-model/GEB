@@ -280,18 +280,18 @@ class Market(AgentBaseClass):
         self.track_production_and_price()
         if (
             # run price model at the end of the spinup
-            (self.model.current_time == self.model.spinup_end and self.model.in_spinup)
-            or
-            # and on 5-year anniversaries
-            (
-                not self.model.in_spinup
-                and (self.model.current_time.year - self.model.run_start.year) % 5 == 0
-                and (
-                    self.model.current_time.month == self.hydrological_year_start
-                    and self.model.current_time.day == 1
-                )
-                and (self.model.current_time.year - self.model.run_start.year) >= 5
-            )
+            self.model.current_time == self.model.spinup_end and self.model.in_spinup
+            # or
+            # # and on 5-year anniversaries
+            # (
+            #     not self.model.in_spinup
+            #     and (self.model.current_time.year - self.model.run_start.year) % 5 == 0
+            #     and (
+            #         self.model.current_time.month == self.hydrological_year_start
+            #         and self.model.current_time.day == 1
+            #     )
+            #     and (self.model.current_time.year - self.model.run_start.year) >= 5
+            # )
         ):
             self.estimate_price_model()
 
