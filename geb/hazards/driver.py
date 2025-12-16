@@ -7,12 +7,13 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from geb.hazards.floods import Floods
+from geb.module import Module
 
 if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
-class HazardDriver:
+class HazardDriver(Module):
     """Class that manages the simulation of short-lived hazards such as floods.
 
     Currently it only supports floods but can be extended to include other hazards such as landslides in the future.
@@ -24,7 +25,9 @@ class HazardDriver:
         If flood simulation is enabled in the configuration, it initializes the flood simulation by determining
         the longest flood event duration and setting up the SFINCS model accordingly.
         """
-        self.model = model
+        super().__init__(model)
+
+        self.model: GEBModel = model
         # extract the longest flood event in days
         flood_events: list[dict[str, Any]] = self.model.config["hazards"]["floods"][
             "events"
@@ -37,6 +40,18 @@ class HazardDriver:
             ]
             longest_flood_event_in_days = max(flood_event_lengths).days
         self.initialize(longest_flood_event_in_days=longest_flood_event_in_days + 1)
+
+    def spinup(self) -> None:
+        """Spinup method for the hazard driver.
+
+        Currently does nothing as hazards do not require spinup.
+        """
+        pass
+
+    @property
+    def name(self) -> str:
+        """Returns the name of the module."""
+        return "hazard_driver"
 
     def initialize(self, longest_flood_event_in_days: int) -> None:
         """Initializes the hazard driver.
