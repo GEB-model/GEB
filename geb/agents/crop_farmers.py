@@ -13,7 +13,7 @@ import numpy.typing as npt
 from numba import njit
 from scipy.stats import genextreme
 
-from geb.types import ArrayInt64
+from geb.types import ArrayInt32, ArrayInt64, TwoDArrayInt32
 from geb.workflows import TimingModule
 from geb.workflows.io import read_grid
 from geb.workflows.neighbors import find_neighbors
@@ -1034,7 +1034,7 @@ class CropFarmers(AgentBaseClass):
     @njit(cache=True)
     def update_field_indices_numba(
         land_owners: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[TwoDArrayInt32, ArrayInt32]:
         """Creates `field_indices_by_farmer` and `field_indices`. These indices are used to quickly find the fields for a specific farmer.
 
         Args:
@@ -1049,8 +1049,10 @@ class CropFarmers(AgentBaseClass):
             n_agents = agents.size - 1
         else:
             n_agents = agents.size
-        field_indices_by_farmer = np.full((n_agents, 2), -1, dtype=np.int32)
-        field_indices = np.full(land_owners.size, -1, dtype=np.int32)
+        field_indices_by_farmer: TwoDArrayInt32 = np.full(
+            (n_agents, 2), -1, dtype=np.int32
+        )
+        field_indices: ArrayInt32 = np.full(land_owners.size, -1, dtype=np.int32)
 
         land_owners_sort_idx = np.argsort(land_owners)
         land_owners_sorted = land_owners[land_owners_sort_idx]
