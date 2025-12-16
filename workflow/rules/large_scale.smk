@@ -20,11 +20,6 @@ CLUSTER_PREFIX = "Europe"
 LARGE_SCALE_DIR = "/scistor/ivm/tbr910/GEB/models/large_scale"
 EVALUATION_METHODS = "plot_discharge,evaluate_discharge"
 
-def get_cluster_priority(wildcards):
-    """Calculate priority for cluster - lower numbers get higher priority (executed first)."""
-    cluster_name = wildcards.cluster
-    return CLUSTER_PRIORITIES.get(cluster_name, 500)
-
 # Cache for basin areas to avoid repeated file reads
 _basin_area_cache = {}
 
@@ -61,7 +56,7 @@ def get_basin_area_km2(cluster_name):
         return 30000.0  # Default area
 
 def get_resources(cluster_name, phase="build"):
-    """Get both memory allocation and SLURM partition based on basin size and round-robin distribution."""
+    """Get both memory allocation and SLURM partition based on basin size and strategic assignment."""
     area_km2 = get_basin_area_km2(cluster_name)
     
     # Memory allocation based on basin size
@@ -70,15 +65,24 @@ def get_resources(cluster_name, phase="build"):
     else:  # Larger basins
         memory_mb = 200000  # 200GB
     
-    # Distribute clusters across partitions using round-robin to balance load
-    # Get cluster index for round-robin assignment
+    # Strategic partition assignment to balance load and limit jobs per partition
+    # Assign clusters to partitions based on size and index to ensure balanced distribution
     try:
         cluster_index = CLUSTER_NAMES.index(cluster_name)
     except ValueError:
         cluster_index = 0
     
-    # Round-robin assignment across 3 partitions
-    partition_index = cluster_index % 3
+    # Strategic assignment: prioritize largest basins for ivm-fat, then distribute others
+    if area_km2 >= 650000:  # Largest basins (>650k km²) go to ivm-fat
+        partition_index = 2  # ivm-fat
+    elif area_km2 >= 500000:  # Very large basins (500k-650k km²) go to defq only
+        partition_index = 0  # defq
+    elif area_km2 >= 200000:  # Medium basins (200k-500k km²) alternate between defq and ivm-fat
+        # Alternate between defq and ivm-fat for medium basins
+        partition_index = 0 if (cluster_index % 2 == 0) else 2
+    else:  # Small basins (<200k km²) go to ivm or defq
+        # Small basins alternate between defq and ivm (ivm only gets small basins)
+        partition_index = 0 if (cluster_index % 2 == 0) else 1
     
     if partition_index == 0:
         partition = "defq"
@@ -141,6 +145,7 @@ rule build_cluster:
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_account="ivm"
+    group: lambda wildcards: get_resources(wildcards.cluster)[1]  # Use partition name as group
     shell:
         """
         mkdir -p $(dirname {log})
@@ -166,6 +171,7 @@ rule spinup_cluster:
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_account="ivm"
+    group: lambda wildcards: get_resources(wildcards.cluster)[1]  # Use partition name as group
     shell:
         """
         mkdir -p $(dirname {log})
@@ -191,6 +197,7 @@ rule run_cluster:
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 56000)[1],
         partition_arg=lambda wildcards: get_resources(wildcards.cluster, 56000)[2],
         slurm_account="ivm"
+    group: lambda wildcards: get_resources(wildcards.cluster)[1]  # Use partition name as group
     shell:
         """
         mkdir -p $(dirname {log})
@@ -221,6 +228,7 @@ rule evaluate_cluster:
         cpus=2,
         slurm_partition="ivm",
         slurm_account="ivm"
+    group: "ivm"  # Evaluations always run on ivm partition
     shell:
         """
         mkdir -p $(dirname {log})
