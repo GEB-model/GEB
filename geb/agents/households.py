@@ -1507,7 +1507,6 @@ class Households(AgentBaseClass):
             n_agents=self.n,
             wealth=self.var.wealth.data,
             income=self.var.income.data,
-            expendature_cap=1,
             amenity_value=self.var.amenity_value.data,
             amenity_weight=1,
             risk_perception=self.var.risk_perception.data,
@@ -1663,16 +1662,13 @@ class Households(AgentBaseClass):
             ("trunk_link", "damage_parameters/flood/road/trunk_link/curve"),
         ]
 
-        severity_column = None
         for road_type, path in road_types:
             df = pd.read_parquet(self.model.files["table"][path])
-
-            if severity_column is None:
-                severity_column = df["severity"]
-
             df = df.rename(columns={"damage_ratio": road_type})
 
             road_curves.append(df[[road_type]])
+
+        severity_column: pd.DataFrame = df[["severity"]]
 
         self.var.road_curves = pd.concat([severity_column] + road_curves, axis=1)
         self.var.road_curves.set_index("severity", inplace=True)
@@ -1875,7 +1871,7 @@ class Households(AgentBaseClass):
                     "building_flood_proofed"
                 ],
             }
-            damage_buildings: pd.Series = VectorScannerMultiCurves(
+            damage_buildings: pd.DataFrame = VectorScannerMultiCurves(
                 features=building_multicurve.rename(
                     columns={"maximum_damage_m2": "maximum_damage"}
                 ),
