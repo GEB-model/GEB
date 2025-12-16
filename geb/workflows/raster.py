@@ -26,6 +26,7 @@ from pyresample.resampler import resample_blocks
 from rasterio.features import rasterize
 from scipy.interpolate import griddata
 from shapely.geometry import Polygon
+from xarray.core.coordinates import DataArrayCoordinates
 
 from geb.types import (
     ArrayWithScalar,
@@ -962,10 +963,10 @@ def get_area_definition(da: xr.DataArray) -> AreaDefinition:
 
 
 def _fill_in_coords(
-    target_coords: xr.core.coordinates.DataArrayCoordinates,
-    source_coords: xr.core.coordinates.DataArrayCoordinates,
+    target_coords: DataArrayCoordinates,
+    source_coords: DataArrayCoordinates,
     data_dims: tuple[Hashable, ...],
-) -> list[xr.core.coordinates.DataArrayCoordinates]:
+) -> list[DataArrayCoordinates]:
     """Fill in missing coordinates that are also dimensions from source except for 'x' and 'y' which are taken from target.
 
     For example useful to fill the time coordinate
