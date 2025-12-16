@@ -39,7 +39,7 @@ def plot_flood_map(flood_map: xr.DataArray, name: str) -> None:
         name: The name of the plot file.
     """
     fig, ax = plt.subplots(figsize=(10, 6))
-    flood_map.plot(ax=ax)
+    flood_map.plot(ax=ax)  # ty:ignore[missing-argument]
     plt.savefig(SFINCS_PLOT_FOLDER / f"{name}.png")
 
 
@@ -721,6 +721,8 @@ def test_read(geb_model: GEBModel) -> None:
         if sfincs_model_build.is_geographic:
             sfincs_model_build.cell_area == sfincs_model_read.cell_area
         else:
+            assert isinstance(sfincs_model_read.cell_area, xr.DataArray)
+            assert isinstance(sfincs_model_build.cell_area, xr.DataArray)
             assert (sfincs_model_build.cell_area == sfincs_model_read.cell_area).all()
         assert sfincs_model_build.path == sfincs_model_read.path
         assert sfincs_model_build.rivers.equals(sfincs_model_read.rivers)
