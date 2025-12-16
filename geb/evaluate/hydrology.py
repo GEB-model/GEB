@@ -214,15 +214,17 @@ class Hydrology:
 
             # Create empty evaluation dataframe with proper structure
             empty_evaluation_df = pd.DataFrame(
-                columns=[
-                    "station_name",
-                    "x",
-                    "y",
-                    "Q_obs_to_GEB_upstream_area_ratio",
-                    "KGE",
-                    "NSE",
-                    "R",
-                ]
+                columns=np.array(
+                    [
+                        "station_name",
+                        "x",
+                        "y",
+                        "Q_obs_to_GEB_upstream_area_ratio",
+                        "KGE",
+                        "NSE",
+                        "R",
+                    ]
+                )
             ).set_index(pd.Index([], name="station_ID"))
 
             # Save empty evaluation metrics as Excel file
