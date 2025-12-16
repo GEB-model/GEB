@@ -11,7 +11,7 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 
-from geb.types import ThreeDArrayFloat32
+from geb.types import ArrayFloat32, ThreeDArrayFloat32
 from geb.workflows.io import read_grid
 
 from .module import Module
@@ -22,11 +22,11 @@ if TYPE_CHECKING:
 
 
 def generate_bilinear_interpolation_weights(
-    src_x: npt.NDArray[np.float32],
-    src_y: npt.NDArray[np.float32],
-    tgt_x: npt.NDArray[np.float32],
-    tgt_y: npt.NDArray[np.float32],
-) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.float32]]:
+    src_x: ArrayFloat32,
+    src_y: ArrayFloat32,
+    tgt_x: ArrayFloat32,
+    tgt_y: ArrayFloat32,
+) -> tuple[ArrayFloat32, ArrayFloat32]:
     """
     Generates indices and weights for bilinear interpolation.
 
@@ -738,6 +738,9 @@ class CO2:
         raise NotImplementedError("CO2 loader does not support forecast mode.")
 
 
+ForcingLoaderTypes = dict[str, ForcingLoader | CO2]
+
+
 class Forcing(Module):
     """Module to handle climate forcing data.
 
@@ -774,7 +777,7 @@ class Forcing(Module):
         )
 
         # Initialize all loaders
-        self._loaders: dict[str, ForcingLoader | CO2] = {
+        self._loaders: ForcingLoaderTypes = {
             "pr_kg_per_m2_per_s": Precipitation(self.model, grid_mask=grid_mask),
             "tas_2m_K": Temperature(
                 self.model,
@@ -854,7 +857,7 @@ class Forcing(Module):
         return self[name].load(dt)
 
     @property
-    def loaders(self) -> dict[str, ForcingLoader | CO2]:
+    def loaders(self) -> ForcingLoaderTypes:
         """Get all forcing loaders.
 
         Returns:

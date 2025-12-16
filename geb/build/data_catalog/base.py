@@ -79,7 +79,7 @@ class Adapter:
         return self.root / self.filename
 
     @property
-    def root(self) -> Path | None:
+    def root(self) -> Path:
         """Root directory for the dataset.
 
         If the directory does not exist, it will be created.
@@ -126,14 +126,16 @@ class Adapter:
     def fetch(self, *args: Any, **kwargs: Any) -> Adapter:
         """Process the data after downloading.
 
+        Args:
+            *args: Additional positional arguments for data processing.
+            **kwargs: Additional keyword arguments for data processing.
+
         Returns:
             The Adapter instance.
         """
         return self
 
-    def read(
-        self, *args: Any, **kwargs: Any
-    ) -> xr.DataArray | pd.DataFrame | gpd.GeoDataFrame:
+    def read(self, *args: Any, **kwargs: Any) -> Any:
         """Read the processed data from storage.
 
         Detects the file format based on the file extension and uses the appropriate reader.

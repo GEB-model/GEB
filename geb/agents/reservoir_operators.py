@@ -129,7 +129,7 @@ class ReservoirOperators(AgentBaseClass):
         )
 
     def get_command_area_release(
-        self, gross_irrigation_demand_m3: ArrayFloat32
+        self, gross_irrigation_demand_m3: ArrayFloat64
     ) -> ArrayFloat64:
         """Get the command area release for the reservoirs.
 
@@ -193,9 +193,9 @@ class ReservoirOperators(AgentBaseClass):
 
     def get_maximum_abstraction_m3_by_farmer(
         self,
-        farmer_command_areas: npt.NDArray[np.float32],
-        gross_irrigation_demand_m3_per_farmer: npt.NDArray[np.float32],
-    ) -> npt.NDArray[np.float32]:
+        farmer_command_areas: ArrayInt32,
+        gross_irrigation_demand_m3_per_farmer: ArrayFloat32,
+    ) -> ArrayFloat64:
         """Get the maximum abstraction from reservoirs for each farmer.
 
         If the configuration is set to equal abstraction, the maxmimum abstraction
@@ -210,7 +210,7 @@ class ReservoirOperators(AgentBaseClass):
         """
         if self.config["equal_abstraction"] is True:
             command_area_mask: ArrayBool = farmer_command_areas != -1
-            demand_per_command_area: ArrayFloat64 = np.bincount(
+            demand_per_command_area = np.bincount(
                 farmer_command_areas[command_area_mask],
                 weights=gross_irrigation_demand_m3_per_farmer[command_area_mask],
                 minlength=self.model.hydrology.lakes_reservoirs.n,
@@ -230,7 +230,7 @@ class ReservoirOperators(AgentBaseClass):
             correction_factor_per_farmer[~command_area_mask] = np.nan
             return gross_irrigation_demand_m3_per_farmer * correction_factor_per_farmer
         else:
-            return np.full_like(farmer_command_areas, np.inf, dtype=np.float32)
+            return np.full_like(farmer_command_areas, np.inf, dtype=np.float64)
 
     def track_inflow(self, inflow_m3: npt.NDArray[np.float32]) -> None:
         """Track the inflow to the reservoirs. Is called from the routing module every time step.
@@ -303,7 +303,7 @@ class ReservoirOperators(AgentBaseClass):
 
     def _get_release(
         self,
-        irrigation_demand_m3: ArrayFloat32,
+        irrigation_demand_m3: ArrayFloat64,
         daily_substeps: int,
         enforce_minimum_usable_release_m3: bool,
     ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:

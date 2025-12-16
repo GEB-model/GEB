@@ -29,6 +29,7 @@ from geb.agents.crop_farmers import (
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
+from geb.types import ArrayBool, ArrayFloat64, ThreeDArrayInt32
 from geb.workflows.raster import repeat_grid
 
 from .. import GEBModel
@@ -372,12 +373,13 @@ class Survey:
 
         if plot or save:
             _, ax = plt.subplots()
-            x = np.linspace(mean - 3 * std, mean + 3 * std, 1000)
+            x: ArrayFloat64 = np.linspace(mean - 3 * std, mean + 3 * std, 1000)
             y = norm.pdf(x, mean, std)
             ax.plot(x, y, color="black")
             for left_sd, right_sd in zip(values_sd_values[:-1], values_sd_values[1:]):
                 assert left_sd < right_sd
-                ax.fill_between(x, y, where=(x >= left_sd) & (x < right_sd))
+                drought: ArrayBool = (x >= left_sd) & (x < right_sd)
+                ax.fill_between(x, y, where=drought)  # ty:ignore[invalid-argument-type]
             if plot:
                 plt.show()
             if save:
@@ -1518,6 +1520,8 @@ class fairSTREAMModel(GEBModel):
         crop_calendar = zarr.load(
             "/net/sys/pscst001/export/BETA-IVM-BAZIS/mka483/GEB_p3/GEB_models/models/bhima/base/input/array/agents/farmers/crop_calendar.zarr"
         )
+        assert isinstance(crop_calendar, np.ndarray)
+        crop_calendar: ThreeDArrayInt32 = crop_calendar  # ty:ignore[invalid-assignment]
         most_common_check = [TUR, MOONG, GRAM]
         replaced_value = [TUR, MOONG, GRAM]
         crop_calendar_per_farmer = replace_crop(
