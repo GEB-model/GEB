@@ -241,6 +241,7 @@ class GridVariables(Bucket):
     river_alpha: ArrayFloat32
     cell_area: ArrayFloat32
     waterBodyID: ArrayInt32
+    discharge_m3_s: ArrayFloat32
 
 
 class Grid(BaseVariables):
@@ -557,6 +558,16 @@ class HRUVariables(Bucket):
     HRU_to_grid: ArrayInt32
     grid_to_HRU: ArrayInt32
     linear_mapping: TwoDArrayInt32
+    crop_age_days_map: ArrayInt32
+    potential_transpiration_crop_life: ArrayFloat32
+    transpiration_crop_life: ArrayFloat32
+    crop_map: ArrayInt32
+    topwater: ArrayFloat32
+    soil_layer_height: TwoDArrayFloat32
+    wfc: TwoDArrayFloat32
+    w: TwoDArrayFloat32
+    ws: TwoDArrayFloat32
+    wwp: TwoDArrayFloat32
 
 
 class HRUs(BaseVariables):
