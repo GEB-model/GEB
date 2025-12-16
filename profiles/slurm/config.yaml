@@ -1,8 +1,9 @@
 # Snakemake SLURM profile for GEB large-scale cluster execution
 # This profile configures Snakemake to submit jobs to SLURM with appropriate resources
 
-# Basic SLURM configuration
-cluster: "sbatch --parsable --job-name={rule}_{wildcards.cluster} --output=/scistor/ivm/tbr910/GEB/sh_scripts/large_scale/logs/run_logs/{rule}_{wildcards.cluster}-%j.out --error=/scistor/ivm/tbr910/GEB/sh_scripts/large_scale/logs/run_logs/{rule}_{wildcards.cluster}-%j.err --partition={resources.slurm_partition} --account={resources.slurm_account} --ntasks=1 --cpus-per-task={resources.cpus} --mem={resources.mem_mb}M --time=8-00:00:00"
+# Basic SLURM configuration  
+# Handle missing wildcards gracefully with conditional formatting
+cluster: "sbatch --parsable --job-name={rule}_{wildcards.cluster} --output=/scistor/ivm/tbr910/GEB/sh_scripts/large_scale/logs/run_logs/{rule}_{wildcards.cluster}-%j.out --error=/scistor/ivm/tbr910/GEB/sh_scripts/large_scale/logs/run_logs/{rule}_{wildcards.cluster}-%j.err --account={resources.slurm_account} --ntasks=1 --cpus-per-task={resources.cpus} --mem={resources.mem_mb}M --time=8-00:00:00 {resources.partition_arg}"
 
 # Configuration overrides
 config:
@@ -11,17 +12,26 @@ config:
   EVALUATION_METHODS: "plot_discharge,evaluate_discharge"
 
 # Job management
-jobs: 10
+jobs: 6
 max-jobs-per-second: 2
 max-status-checks-per-second: 0.5
 
+# Partition-specific job limits
+group-components:
+  ivm: 2        # Max 2 concurrent jobs on regular ivm nodes
+  ivm-fat: 2    # Max 2 concurrent jobs on high-memory ivm-fat nodes
+  defq: 2       # Max 2 concurrent jobs on default queue (fallback)
+
 # Resource defaults (will be overridden by rule-specific resources)
+# Keep coordinator job lightweight - only cluster rules need large memory
+# Use defq for coordinator (no partition specified), cluster rules will override with specific partitions
 default-resources:
   - cpus=2
-  - mem_mb=64000
+  - mem_mb=4000    # 4GB for lightweight coordinator job
   - runtime=11520  # 8 days in minutes (8 * 24 * 60 = 11520)
-  - slurm_partition=ivm
+  - slurm_partition=defq
   - slurm_account=ivm
+  - partition_arg=""  # Empty for defq (default queue), rules will override
 
 # Rerun incomplete jobs and keep going on failures
 rerun-incomplete: true

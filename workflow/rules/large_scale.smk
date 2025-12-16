@@ -1,7 +1,13 @@
 """Large-scale multi-basin cluster rules for GEB model.
 
 This module contains rules for running the complete GEB pipeline
-on multiple basin clusters created by init_multiple command.
+on multiple basin clusters created by init_m    resources:
+        mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
+        runtime=11520,  # 8 days
+        cpus=6,
+        slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
+        partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
+        slurm_account="ivm"
 """
 
 import os
@@ -54,22 +60,41 @@ def get_basin_area_km2(cluster_name):
         _basin_area_cache[cluster_name] = 30000.0
         return 30000.0  # Default area
 
-def get_resources(cluster_name, base_memory_mb):
-    """Get both memory allocation and SLURM partition based on basin size."""
+def get_resources(cluster_name, phase="build"):
+    """Get both memory allocation and SLURM partition based on basin size and round-robin distribution."""
     area_km2 = get_basin_area_km2(cluster_name)
     
-    # Define scaling based on basin size
-    if area_km2 > 600000:  # Very large basins (like Danube ~817k km²)
-        memory_mb = min(base_memory_mb * 4, 128000)  # Up to 128GB
-        partition = "ivm-fat" 
-    elif area_km2 > 35000:  # Large basins (your preferred threshold)
-        memory_mb = min(base_memory_mb * 2, 56000)  # Up to 56GB
-        partition = "ivm"
-    else:  # Standard basins
-        memory_mb = base_memory_mb
-        partition = "ivm"
+    # Memory allocation based on basin size
+    if area_km2 < 200000:  # Smaller basins
+        memory_mb = 60000   # 60GB
+    else:  # Larger basins
+        memory_mb = 200000  # 200GB
     
-    return memory_mb, partition
+    # Distribute clusters across partitions using round-robin to balance load
+    # Get cluster index for round-robin assignment
+    try:
+        cluster_index = CLUSTER_NAMES.index(cluster_name)
+    except ValueError:
+        cluster_index = 0
+    
+    # Round-robin assignment across 3 partitions
+    partition_index = cluster_index % 3
+    
+    if partition_index == 0:
+        partition = "defq"
+        partition_arg = ""  # defq uses default queue (no partition specified)
+        # For defq, always use 200GB (since defq handles any memory size)
+        memory_mb = 200000
+    elif partition_index == 1:
+        partition = "ivm"
+        partition_arg = "--partition=ivm"
+    else:  # partition_index == 2
+        partition = "ivm-fat"
+        partition_arg = "--partition=ivm-fat"
+        # Ensure ivm-fat gets enough memory
+        memory_mb = max(memory_mb, 200000)
+    
+    return memory_mb, partition, partition_arg
 
 # Dynamically discover cluster directories (run only once)
 def get_cluster_names():
@@ -93,25 +118,13 @@ if 'CLUSTER_NAMES' not in globals():
         raise ValueError("No cluster directories found in " + LARGE_SCALE_DIR + " matching pattern Europe_*")
     print(f"Found {len(CLUSTER_NAMES)} clusters: {CLUSTER_NAMES}")
 
-# Create static priority mapping for sequential ordering (000→001→002→etc.)
-CLUSTER_PRIORITIES = {}
-for cluster_name in CLUSTER_NAMES:
-    try:
-        cluster_num = int(cluster_name.split('_')[-1])
-        CLUSTER_PRIORITIES[cluster_name] = 1000 - cluster_num  # Higher number = higher priority
-    except (ValueError, IndexError):
-        CLUSTER_PRIORITIES[cluster_name] = 500  # Default priority for malformed names
-print(f"Cluster priorities: {dict(list(CLUSTER_PRIORITIES.items())[:5])}...")  # Show first 5
-
 # Print basin areas and memory allocation for each cluster (for debugging)
 for cluster_name in CLUSTER_NAMES:
     area_km2 = get_basin_area_km2(cluster_name)
-    build_mem, partition = get_resources(cluster_name, 32000)
-    run_mem, _ = get_resources(cluster_name, 56000)
+    memory_mb, partition, partition_arg = get_resources(cluster_name)
     area_str = "{:,.0f}".format(area_km2)
-    build_gb = "{:.0f}".format(build_mem/1000)
-    run_gb = "{:.0f}".format(run_mem/1000)
-    print("Cluster " + cluster_name + ": " + area_str + " km² → " + partition + " partition (build: " + build_gb + "GB, run: " + run_gb + "GB)")
+    memory_gb = "{:.0f}".format(memory_mb/1000)
+    print("Cluster " + cluster_name + ": " + area_str + " km² → " + partition + " partition (" + memory_gb + "GB)")
 
 # Rule to build a cluster
 rule build_cluster:
@@ -122,10 +135,11 @@ rule build_cluster:
     log:
         LARGE_SCALE_DIR + "/{cluster}/base/logs/build.log"
     resources:
-        mem_mb=lambda wildcards: get_resources(wildcards.cluster, 32000)[0],
+        mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=11520,  # 8 days
         cpus=2,
-        slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 32000)[1],
+        slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
+        partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_account="ivm"
     shell:
         """
@@ -146,10 +160,11 @@ rule spinup_cluster:
     log:
         LARGE_SCALE_DIR + "/{cluster}/base/logs/spinup.log"
     resources:
-        mem_mb=lambda wildcards: get_resources(wildcards.cluster, 48000)[0],
+        mem_mb=lambda wildcards: get_resources(wildcards.cluster)[0],
         runtime=11520,  # 8 days
         cpus=4,
-        slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 48000)[1],
+        slurm_partition=lambda wildcards: get_resources(wildcards.cluster)[1],
+        partition_arg=lambda wildcards: get_resources(wildcards.cluster)[2],
         slurm_account="ivm"
     shell:
         """
@@ -174,6 +189,7 @@ rule run_cluster:
         runtime=11520,  # 8 days
         cpus=6,
         slurm_partition=lambda wildcards: get_resources(wildcards.cluster, 56000)[1],
+        partition_arg=lambda wildcards: get_resources(wildcards.cluster, 56000)[2],
         slurm_account="ivm"
     shell:
         """
