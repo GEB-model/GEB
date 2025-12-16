@@ -4,9 +4,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from geb.types import ArrayFloat32
-
 from geb.module import Module
+from geb.types import ArrayFloat32, ArrayFloat64
 from geb.workflows import balance_check
 
 if TYPE_CHECKING:
@@ -62,7 +61,7 @@ class RunoffConcentrator(Module):
         # rolling buffer: shape [lagtime, n_cells]
         self.buffer = None
 
-    def _triangular_weights(self, peak: float) -> npt.NDArray[np.float64]:
+    def _triangular_weights(self, peak: float) -> ArrayFloat64:
         weights = np.zeros(self.lagtime, dtype=np.float64)
         areaFractionOld = 0.0
         div = 2.0 * peak**2
@@ -90,8 +89,8 @@ class RunoffConcentrator(Module):
 
     def _apply_triangular(
         self,
-        flow: npt.NDArray[np.float64],  # shape (24, n_cells)
-        weights: npt.NDArray[np.float64],  # shape (lagtime,)
+        flow: ArrayFloat64,  # shape (24, n_cells)
+        weights: ArrayFloat64,  # shape (lagtime,)
     ) -> None:
         lag = len(weights)
         n_steps = flow.shape[0]  # = 24
@@ -195,7 +194,9 @@ class RunoffConcentrator(Module):
         )
         # outflow = runoff + interflow + (baseflow / 24.0).astype(np.float64)
         # storage_start_m = np.zeros_like(outflow, dtype=np.float64)
+        # storage_start_m3 = (storage_start_m * self.grid.var.cell_area).sum()
         # storage_end_m = np.zeros_like(outflow, dtype=np.float64)
+        # storage_end_m3 = (storage_end_m * self.grid.var.cell_area).sum()
         return outflow_m, storage_start_m3, storage_end_m3
 
     @property

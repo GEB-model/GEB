@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from zarr import config
 import zarr.storage
 from dateutil.relativedelta import relativedelta
 from zarr.codecs import ZstdCodec
@@ -789,7 +790,7 @@ class Reporter:
         if type_ is None:
             raise ValueError(f"Type not specified for {config}.")
 
-        if config["function"] is None and "path" not in config:
+        if "function" in config and config["function"] is None and "path" not in config:
             zarr_path: Path = self.report_folder / module_name / (name + ".zarr")
             zarr_path.parent.mkdir(parents=True, exist_ok=True)
             config["path"] = str(zarr_path)
@@ -1084,7 +1085,7 @@ class Reporter:
         # Flush any remaining buffers
         for module_name, configs in self.model.config["report"].items():
             for name, config in configs.items():
-                if config["function"] is None:
+                if "function" in config and config["function"] is None:
                     chunk_time_size: int = config["_chunk_data"].shape[0]
                     buffer_end: int = config["_index"] % chunk_time_size
                     if buffer_end == 0:
