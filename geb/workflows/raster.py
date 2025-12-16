@@ -519,10 +519,24 @@ def rasterize_like(
     return da
 
 
+@overload
 def convert_nodata(
     da: xr.DataArray,
     new_nodata: float | int | bool,
-) -> xr.DataArray:
+) -> xr.DataArray: ...
+
+
+@overload
+def convert_nodata(
+    da: xr.Dataset,
+    new_nodata: float | int | bool,
+) -> xr.Dataset: ...
+
+
+def convert_nodata(
+    da: xr.DataArray | xr.Dataset,
+    new_nodata: float | int | bool,
+) -> xr.DataArray | xr.Dataset:
     """Convert the nodata value of a DataArray to a new nodata value.
 
     Args:
