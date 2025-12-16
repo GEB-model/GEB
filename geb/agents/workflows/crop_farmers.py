@@ -46,8 +46,8 @@ def farmer_command_area(
     n: int,
     field_indices: npt.NDArray[np.int32],
     field_indices_by_farmer: npt.NDArray[np.int32],
-    reservoir_command_areas: npt.NDArray[np.int32],
-) -> npt.NDArray[np.int32]:
+    reservoir_command_areas: ArrayInt32,
+) -> ArrayInt32:
     """Map each farmer to the first available reservoir command area.
 
     Args:
