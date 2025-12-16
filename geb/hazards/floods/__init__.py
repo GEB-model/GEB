@@ -189,7 +189,7 @@ class Floods(Module):
     @property
     def name(self) -> str:
         """The name of the module."""
-        return "floods"
+        return "hazard_driver.floods"
 
     def spinup(self) -> None:
         """Spinup method for the Floods module.
