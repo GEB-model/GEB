@@ -247,7 +247,7 @@ class ReservoirOperators(AgentBaseClass):
 
     def release(
         self, daily_substeps: int, current_substep: int
-    ) -> tuple[ArrayFloat64, ArrayFloat64]:
+    ) -> tuple[ArrayFloat32, ArrayFloat32]:
         """Calculate and apply the release of water from reservoirs for a given substep.
 
         This method determines the release for the main channel and the command area
@@ -297,7 +297,9 @@ class ReservoirOperators(AgentBaseClass):
             atol=1e-7,
         )
 
-        return main_channel_release, command_area_release_substep
+        return main_channel_release.astype(
+            np.float32
+        ), command_area_release_substep.astype(np.float32)
 
     def _get_release(
         self,
