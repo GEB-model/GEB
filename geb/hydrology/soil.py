@@ -426,6 +426,32 @@ def get_soil_moisture_at_pressure(
     return water_retention_curve * (thetas - thetar) + thetar
 
 
+def clip_brakensiek(
+    clay: np.ndarray[Shape, np.dtype[np.float32]],
+    sand: np.ndarray[Shape, np.dtype[np.float32]],
+) -> tuple[
+    np.ndarray[Shape, np.dtype[np.float32]], np.ndarray[Shape, np.dtype[np.float32]]
+]:
+    """Clip clay and sand percentages for Brakensiek pedotransfer functions.
+
+    The Brakensiek functions expect clay in [5, 60] and sand in [5, 70].
+
+    Args:
+        clay: Clay percentage array [%].
+        sand: Sand percentage array [%].
+
+    Returns:
+        Tuple of (clay_clipped, sand_clipped) with values clipped to the valid ranges.
+    """
+    clay_out = np.empty_like(clay)
+    sand_out = np.empty_like(sand)
+
+    np.clip(clay, np.float32(5), np.float32(60), out=clay_out)
+    np.clip(sand, np.float32(5), np.float32(70), out=sand_out)
+
+    return clay_out, sand_out
+
+
 def thetas_toth(
     organic_carbon_percentage: np.ndarray[Shape, np.dtype[np.float32]],
     bulk_density: np.ndarray[Shape, np.dtype[np.float32]],
@@ -530,8 +556,8 @@ def thetar_brakensiek(
     Returns:
         residual water content [m3/m3].
     """
-    clay = np.clip(clay, 5, 60)
-    sand = np.clip(sand, 5, 70)
+    # Clip clay and sand values to avoid unrealistic results and in accordance with original paper
+    clay, sand = clip_brakensiek(clay, sand)
     return (
         np.float32(-0.0182482)
         + np.float32(0.00087269) * sand
@@ -611,8 +637,8 @@ def get_pore_size_index_brakensiek(
         pore size distribution index [-].
 
     """
-    clay = np.clip(clay, 5, 60)
-    sand = np.clip(sand, 5, 70)
+    # Clip clay and sand values to avoid unrealistic results and in accordance with original paper
+    clay, sand = clip_brakensiek(clay, sand)
     poresizeindex = np.exp(
         -0.7842831
         + 0.0177544 * sand
@@ -693,8 +719,8 @@ def kv_brakensiek(
     Returns:
         saturated hydraulic conductivity [m/s].
     """
-    clay = np.clip(clay, np.float32(5), np.float32(60))
-    sand = np.clip(sand, np.float32(5), np.float32(70))
+    # Clip clay and sand values to avoid unrealistic results and in accordance with original paper
+    clay, sand = clip_brakensiek(clay, sand)
     kv = np.exp(
         19.52348 * thetas
         - 8.96847

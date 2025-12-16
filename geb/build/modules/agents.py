@@ -874,7 +874,10 @@ class Agents:
 
         # Iterate over each price type and calculate the prices across years for each region
         for price_type, initial_price in price_types.items():
-            prices_dict = {"time": list(range(start_year, end_year + 1)), "data": {}}
+            prices_dict = {
+                "time": list(range(start_year, end_year + 1)),
+            }
+            prices_dict_data: dict[str, list] = {}
 
             for _, region in self.geom["regions"].iterrows():
                 region_id = str(region["region_id"])
@@ -904,7 +907,9 @@ class Agents:
                         ]
                     )
 
-                prices_dict["data"][region_id] = prices.tolist()
+                prices_dict_data[region_id] = prices.tolist()
+
+            prices_dict["data"] = prices_dict_data
 
             # Set the calculated prices in the appropriate dictionary
             self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
@@ -917,8 +922,8 @@ class Agents:
 
         electricity_rates_dict = {
             "time": list(range(start_year, end_year + 1)),
-            "data": {},
         }
+        electricity_rates_dict_data: dict[str, list] = {}
 
         for _, region in self.geom["regions"].iterrows():
             region_id = str(region["region_id"])
@@ -964,7 +969,9 @@ class Agents:
                     ]
                 )
 
-            electricity_rates_dict["data"][region_id] = prices.tolist()
+            electricity_rates_dict_data[region_id] = prices.tolist()
+
+        electricity_rates_dict["data"] = electricity_rates_dict_data
 
         # Set the calculated prices in the appropriate dictionary
         self.set_dict(electricity_rates_dict, name="socioeconomics/electricity_cost")

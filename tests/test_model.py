@@ -346,7 +346,9 @@ def test_forcing() -> None:
             t_1: datetime = datetime(2020, 1, 1, 0, 0, 0)
             forcing_1 = loader.load(t_1)
 
-            if isinstance(forcing_0, (xr.DataArray, np.ndarray)):
+            if isinstance(forcing_0, (xr.DataArray, np.ndarray)) and isinstance(
+                forcing_1, (xr.DataArray, np.ndarray)
+            ):
                 assert forcing_0.shape == forcing_1.shape, (
                     f"Shape of forcing data for {name} does not match for times {t_0} and {t_1}."
                 )

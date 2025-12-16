@@ -18,7 +18,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, overload
 
-import dask
+import dask.tokenize
 import geopandas as gpd
 import joblib
 import numpy as np
@@ -161,6 +161,8 @@ def read_grid(
         data = data_array[:]
         if data.dtype == np.float64:
             data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)
+        assert data.ndim in (2, 3)
+        data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
         if return_transform_and_crs:
             x_array: zarr.Array | zarr.Group = group["x"]
             assert isinstance(x_array, zarr.Array)
@@ -772,6 +774,8 @@ class AsyncGriddedForcingReader:
     for occasional Zarr async loading issues.
     """
 
+    array: zarr.Array
+
     def __init__(
         self,
         filepath: Path,
@@ -820,7 +824,9 @@ class AsyncGriddedForcingReader:
         self.time_size = self.datetime_index.size
 
         # Check if the variable uses NaN as fill value for the retry workaround
-        self.array = self.ds[self.variable_name]
+        array = self.ds[self.variable_name]
+        assert isinstance(array, zarr.Array)
+        self.array: zarr.Array = array
 
         for compressor in self.array.compressors:
             # Blosc is not supported due to known issues with async reading
@@ -872,8 +878,10 @@ class AsyncGriddedForcingReader:
         """
         assert isinstance(self.array, zarr.Array)
         data = self.array[start_index:end_index]
-        assert isinstance(data, np.ndarray)
-        return data
+        assert (
+            isinstance(data, np.ndarray) and data.dtype == np.float32 and data.ndim == 3
+        )
+        return data  # ty:ignore[invalid-return-type]
 
     async def load_await(self, start_index: int, end_index: int) -> ThreeDArrayFloat32:
         """Load data asynchronously via reusable async group.
@@ -898,7 +906,12 @@ class AsyncGriddedForcingReader:
                 )
 
                 if not np.any(np.isnan(data)):
-                    return data
+                    assert (
+                        isinstance(data, np.ndarray)
+                        and data.dtype == np.float32
+                        and data.ndim == 3
+                    )
+                    return data  # ty:ignore[invalid-return-type]
                 print(
                     f"Async load returned NaN values for indices {start_index}:{end_index}, retrying..."
                 )
@@ -1089,8 +1102,8 @@ class AsyncGriddedForcingReader:
         x_array = self.ds["x"]
         assert isinstance(x_array, zarr.Array)
         x = x_array[:]
-        assert isinstance(x, np.ndarray) and x.dtype == np.float32
-        return x
+        assert isinstance(x, np.ndarray) and x.dtype == np.float32 and x.ndim == 1
+        return x  # ty:ignore[invalid-return-type]
 
     @property
     def y(self) -> ArrayFloat32:
@@ -1098,8 +1111,8 @@ class AsyncGriddedForcingReader:
         y_array = self.ds["y"]
         assert isinstance(y_array, zarr.Array)
         y = y_array[:]
-        assert isinstance(y, np.ndarray) and y.dtype == np.float32
-        return y
+        assert isinstance(y, np.ndarray) and y.dtype == np.float32 and y.ndim == 1
+        return y  # ty:ignore[invalid-return-type]
 
 
 class WorkingDirectory:

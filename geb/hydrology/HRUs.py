@@ -223,7 +223,7 @@ class BaseVariables:
         return self.mask.shape
 
 
-class GridVariables:
+class GridVariables(Bucket):
     """This class contains functions to handle variables on the grid scale."""
 
     interception_capacity_forest: TwoDArrayFloat32
@@ -239,6 +239,8 @@ class GridVariables:
     river_length: ArrayFloat32
     average_river_width: ArrayFloat32
     river_alpha: ArrayFloat32
+    cell_area: ArrayFloat32
+    waterBodyID: ArrayInt32
 
 
 class Grid(BaseVariables):
@@ -260,7 +262,7 @@ class Grid(BaseVariables):
         """
         self.data = data
         self.model = model
-        self.var = self.model.store.create_bucket("hydrology.grid.var")
+        self.var: GridVariables = self.model.store.create_bucket("hydrology.grid.var")
 
         self.scaling = 1
         mask, self.transform, self.crs = read_grid(
@@ -549,6 +551,12 @@ class HRUVariables(Bucket):
     frost_index: ArrayFloat32
     reservoir_command_areas: ArrayInt32
     cell_area: ArrayFloat32
+    land_use_type: ArrayInt32
+    land_use_ratio: ArrayFloat32
+    land_owners: ArrayInt32
+    HRU_to_grid: ArrayInt32
+    grid_to_HRU: ArrayInt32
+    linear_mapping: TwoDArrayInt32
 
 
 class HRUs(BaseVariables):
@@ -614,7 +622,7 @@ class HRUs(BaseVariables):
         In addition, several mapping arrays are created to map between HRUs and grid cells. These are
         later used in functions to convert between HRU and grid scales.
         """
-        self.var = self.model.store.create_bucket(
+        self.var: HRUVariables = self.model.store.create_bucket(
             "hydrology.HRU.var",
             validator=lambda x: isinstance(x, np.ndarray)
             and (not np.issubdtype(x.dtype, np.floating) or x.dtype == np.float32),
@@ -803,13 +811,12 @@ class HRUs(BaseVariables):
     def create_HRUs(
         self,
     ) -> tuple[
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
+        ArrayInt32,
+        ArrayFloat32,
+        ArrayInt32,
+        ArrayInt32,
+        ArrayInt32,
+        TwoDArrayInt32,
     ]:
         """Function to create HRUs.
 

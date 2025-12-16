@@ -125,7 +125,7 @@ def plot_snapping(
         cbar_kwargs={"label": "Upstream area [m2]"},
         zorder=0,
         alpha=1,
-    )
+    )  # ty:ignore[missing-argument]
     rivers.plot(ax=ax, color="blue", linewidth=1)
     closest_river_segment.plot(
         ax=ax, color="green", linewidth=3, label="Closest river segment"

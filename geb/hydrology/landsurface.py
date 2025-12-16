@@ -13,6 +13,7 @@ from geb.store import Bucket
 from geb.types import (
     ArrayFloat32,
     ArrayInt32,
+    ThreeDArrayFloat32,
     TwoDArrayBool,
     TwoDArrayFloat32,
 )
@@ -635,6 +636,11 @@ class LandSurface(Module):
         assert isinstance(interception_capacity_forest_group, zarr.Array)
         interception_capacity_forest_array = interception_capacity_forest_group[:]
         assert isinstance(interception_capacity_forest_array, np.ndarray)
+        # fmt: off
+        interception_capacity_forest_array: ThreeDArrayFloat32 = (
+            interception_capacity_forest_array
+        )  # ty:ignore[invalid-assignment]
+        # fmt: on
 
         self.grid.var.interception_capacity_forest: TwoDArrayFloat32 = (
             self.grid.compress(interception_capacity_forest_array)
@@ -651,7 +657,12 @@ class LandSurface(Module):
         assert isinstance(interception_capacity_grassland_group, zarr.Array)
         interception_capacity_grassland_array = interception_capacity_grassland_group[:]
         assert isinstance(interception_capacity_grassland_array, np.ndarray)
-        interception_capacity_grassland_array = interception_capacity_grassland_array
+
+        # fmt: off
+        interception_capacity_grassland_array: ThreeDArrayFloat32 = (
+            interception_capacity_grassland_array
+        )  # ty:ignore[invalid-assignment]
+        # fmt: on
 
         self.grid.var.interception_capacity_grassland: TwoDArrayFloat32 = (
             self.grid.compress(interception_capacity_grassland_array)
@@ -665,9 +676,17 @@ class LandSurface(Module):
             "crop_coefficient"
         ]
         assert isinstance(forest_crop_factor_per_10_days_group, zarr.Array)
+        forest_crop_factor_per_10_days_group_array = (
+            forest_crop_factor_per_10_days_group[:]
+        )
+        # fmt: off
+        forest_crop_factor_per_10_days_group_array: ThreeDArrayFloat32 = (
+            forest_crop_factor_per_10_days_group_array
+        )  # ty:ignore[invalid-assignment]
+        # fmt: on
 
         self.grid.var.forest_crop_factor_per_10_days = (
-            forest_crop_factor_per_10_days_group[:]
+            forest_crop_factor_per_10_days_group_array
         )
 
         # Default follows AQUACROP recommendation, see reference manual for AquaCrop v7.1 – Chapter 3

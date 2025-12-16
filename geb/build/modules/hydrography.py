@@ -147,7 +147,7 @@ def create_river_raster_from_river_lines(
     rivers: gpd.GeoDataFrame,
     target: xr.DataArray,
     column: str | None = None,
-    index: str | None = None,
+    index: bool | None = None,
 ) -> npt.NDArray[np.int32]:
     """Create a river raster from river lines.
 

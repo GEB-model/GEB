@@ -142,7 +142,7 @@ class Hydrology:
 
         fig, ax = plt.subplots(figsize=(10, 10))
 
-        mean_discharge.plot(ax=ax, cmap="Blues")
+        mean_discharge.plot(ax=ax, cmap="Blues")  # ty:ignore[missing-argument]
 
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")

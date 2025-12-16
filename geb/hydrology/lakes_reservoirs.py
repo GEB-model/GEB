@@ -29,7 +29,7 @@ import geopandas as gpd
 import numpy as np
 
 from geb.module import Module
-from geb.types import Array, ArrayBool, ArrayFloat32, ArrayInt32
+from geb.types import Array, ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 from geb.workflows import balance_check
 from geb.workflows.io import read_grid
 
@@ -124,7 +124,7 @@ else:
 
 
 def get_lake_height_from_bottom(
-    lake_storage: ArrayFloat32, lake_area: ArrayFloat32
+    lake_storage: ArrayFloat64, lake_area: ArrayFloat32
 ) -> ArrayFloat32:
     """Calculate the height of a lake above the bottom given its storage and area.
 
@@ -137,13 +137,13 @@ def get_lake_height_from_bottom(
     Returns:
         Height of the lake above the bottom in m
     """
-    height_from_bottom = lake_storage / lake_area
+    height_from_bottom = (lake_storage / lake_area).astype(np.float32)
     return height_from_bottom
 
 
 def get_lake_storage_from_height_above_bottom(
     lake_height: ArrayFloat32, lake_area: ArrayFloat32
-) -> ArrayFloat32:
+) -> ArrayFloat64:
     """Calculate the storage of a lake given its height above the bottom and area.
 
     Args:
@@ -153,11 +153,11 @@ def get_lake_storage_from_height_above_bottom(
     Returns:
         Storage of the lake in m3
     """
-    return lake_height * lake_area
+    return (lake_height * lake_area).astype(np.float64)
 
 
 def get_lake_height_above_outflow(
-    lake_storage: ArrayFloat32,
+    lake_storage: ArrayFloat64,
     lake_area: ArrayFloat32,
     outflow_height: ArrayFloat32,
 ) -> ArrayFloat32:
@@ -227,7 +227,7 @@ def get_lake_factor(
 
 
 def estimate_outflow_height(
-    lake_capacity: ArrayFloat32,
+    lake_capacity: ArrayFloat64,
     lake_factor: ArrayFloat32,
     lake_area: ArrayFloat32,
     avg_outflow: ArrayFloat32,
@@ -253,7 +253,7 @@ def estimate_outflow_height(
 
 def get_lake_outflow(
     dt: float,
-    storage: ArrayFloat32,
+    storage: ArrayFloat64,
     lake_factor: ArrayFloat32,
     lake_area: ArrayFloat32,
     outflow_height: ArrayFloat32,
@@ -717,7 +717,7 @@ class LakesReservoirs(Module):
         return self.var.water_body_type == LAKE
 
     @property
-    def reservoir_storage(self) -> ArrayFloat32:
+    def reservoir_storage(self) -> ArrayFloat64:
         """Gets the storage of each reservoir in the model.
 
         Returns:
@@ -726,12 +726,12 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_reservoir]
 
     @reservoir_storage.setter
-    def reservoir_storage(self, value: ArrayFloat32) -> None:
+    def reservoir_storage(self, value: ArrayFloat64) -> None:
         """Sets the storage of each reservoir in the model."""
         self.var.storage[self.is_reservoir] = value
 
     @property
-    def reservoir_capacity(self) -> ArrayFloat32:
+    def reservoir_capacity(self) -> ArrayFloat64:
         """Gets the capacity of each reservoir in the model.
 
         Returns:
@@ -740,7 +740,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_reservoir]
 
     @reservoir_capacity.setter
-    def reservoir_capacity(self, value: ArrayFloat32) -> None:
+    def reservoir_capacity(self, value: ArrayFloat64) -> None:
         """Sets the capacity of each reservoir in the model.
 
         Args:
@@ -749,7 +749,7 @@ class LakesReservoirs(Module):
         self.var.capacity[self.is_reservoir] = value
 
     @property
-    def lake_storage(self) -> ArrayFloat32:
+    def lake_storage(self) -> ArrayFloat64:
         """Gets the storage of each lake in the model.
 
         Returns:
@@ -758,12 +758,12 @@ class LakesReservoirs(Module):
         return self.var.storage[self.is_lake]
 
     @lake_storage.setter
-    def lake_storage(self, value: ArrayFloat32) -> None:
+    def lake_storage(self, value: ArrayFloat64) -> None:
         """Sets the storage of each lake in the model."""
         self.var.storage[self.is_lake] = value
 
     @property
-    def lake_capacity(self) -> ArrayFloat32:
+    def lake_capacity(self) -> ArrayFloat64:
         """Gets the capacity of each lake in the model.
 
         Returns:
@@ -772,7 +772,7 @@ class LakesReservoirs(Module):
         return self.var.capacity[self.is_lake]
 
     @lake_capacity.setter
-    def lake_capacity(self, value: ArrayFloat32) -> None:
+    def lake_capacity(self, value: ArrayFloat64) -> None:
         """Sets the capacity of each lake in the model."""
         self.var.capacity[self.is_lake] = value
 
@@ -783,7 +783,9 @@ class LakesReservoirs(Module):
         Returns:
             The fill percentage of each reservoir in the model.
         """
-        return self.reservoir_storage / self.reservoir_capacity * 100
+        return (self.reservoir_storage / self.reservoir_capacity * 100).astype(
+            np.float32
+        )
 
     @property
     def n(self) -> int:

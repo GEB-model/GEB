@@ -2155,7 +2155,8 @@ class GEBModel(
             for asset_type, asset_parameters in hazard_parameters.items():
                 for component, asset_compontents in asset_parameters.items():
                     curve = pd.DataFrame(
-                        asset_compontents["curve"], columns=["severity", "damage_ratio"]
+                        asset_compontents["curve"],
+                        columns=np.array(["severity", "damage_ratio"]),
                     )
 
                     self.set_table(
@@ -2183,7 +2184,8 @@ class GEBModel(
                 and the corresponding scaling factor.
         """
         risk_scaling_factors_df = pd.DataFrame(
-            risk_scaling_factors, columns=["exceedance_probability", "scaling_factor"]
+            risk_scaling_factors,
+            columns=np.array(["exceedance_probability", "scaling_factor"]),
         )
         self.set_table(risk_scaling_factors_df, name="precipitation_scaling_factors")
 
@@ -2225,7 +2227,7 @@ class GEBModel(
             self.logger.info(f"Writing file {fp}")
             self.files["array"][name] = fp
             fp_with_root.parent.mkdir(parents=True, exist_ok=True)
-            zarr.save_array(fp_with_root, data, overwrite=True)
+            zarr.save_array(fp_with_root, data, overwrite=True)  # ty:ignore[invalid-argument-type]
 
         self.array[name] = fp_with_root
 
