@@ -9,7 +9,6 @@ from .landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 
 # TODO: Load this dynamically as global var (see soil.py)
 N_SOIL_LAYERS = 6
-EXPERIMENT_ARNO_RUNOFF: bool = False
 
 
 @njit(cache=True, inline="always")
@@ -188,19 +187,19 @@ def calculate_arno_runoff(
             np.float32(1.0) - term_new ** (arno_shape_parameter + np.float32(1.0))
         )
 
-    infiltration_amount = new_soil_water_storage - current_soil_water_storage
-    infiltration_amount = max(infiltration_amount, np.float32(0.0))
-    infiltration_amount = min(infiltration_amount, topwater_m)
+    infiltration_amount_m: np.float32 = (
+        new_soil_water_storage - current_soil_water_storage
+    )
+    infiltration_amount_m = max(infiltration_amount_m, np.float32(0.0))
+    infiltration_amount_m = min(infiltration_amount_m, topwater_m)
 
     # Limit infiltration by infiltration capacity
-    if infiltration_amount > infiltration_capacity_m:
-        infiltration_amount = infiltration_capacity_m
+    if infiltration_amount_m > infiltration_capacity_m:
+        infiltration_amount_m = infiltration_capacity_m
 
-    runoff = topwater_m - infiltration_amount
+    runoff_m: np.float32 = topwater_m - infiltration_amount_m
 
-    # print(infiltration_amount / (infiltration_amount + runoff + 1e-9))
-
-    return runoff, infiltration_amount
+    return runoff_m, infiltration_amount_m
 
 
 @njit(cache=True, inline="always")
@@ -284,66 +283,45 @@ def infiltration(
 
     Returns:
         A tuple containing:
+            - topwater_m: Updated topwater in meters.
             - direct_runoff: Direct runoff from the cell in meters.
             - groundwater_recharge: Groundwater recharge from the cell in meters (currently set to 0.0).
             - infiltration: Infiltration into the soil for the cell in meters.
     """
-    if EXPERIMENT_ARNO_RUNOFF:
-        if soil_is_frozen or land_use_type == SEALED or land_use_type == OPEN_WATER:
-            # No infiltration allowed
-            infiltration_amount = np.float32(0.0)
-            direct_runoff = topwater_m
-            topwater_m = np.float32(0.0)
-            return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
-        else:
-            direct_runoff, infiltration_amount = calculate_arno_runoff(
-                current_soil_water_storage=w[0],
-                max_soil_water_capacity=ws[0],
-                arno_shape_parameter=arno_shape_parameter,
-                topwater_m=topwater_m,
-                infiltration_capacity_m=saturated_hydraulic_conductivity[0],
-            )
-            w[0] += infiltration_amount
-            # Ensure we don't exceed saturation due to float errors
-            w[0] = min(w[0], ws[0])
-
-            # In Arno scheme, all topwater is processed into runoff or infiltration
-            topwater_m = np.float32(0.0)
-
-            if land_use_type == PADDY_IRRIGATED:
-                ponding_allowance = np.float32(0.05)
-                ponding = min(direct_runoff, ponding_allowance)
-                topwater_m += ponding
-                direct_runoff -= ponding
-
-            return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
+    if soil_is_frozen or land_use_type == SEALED or land_use_type == OPEN_WATER:
+        # No infiltration allowed
+        infiltration_amount: np.float32 = np.float32(0.0)
+        direct_runoff: np.float32 = topwater_m
+        topwater_m: np.float32 = np.float32(0.0)
+        return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
     else:
-        # Calculate potential infiltration for the cell
-        potential_infiltration: np.float32 = get_infiltration_capacity(
-            saturated_hydraulic_conductivity
+        direct_runoff, infiltration_amount = calculate_arno_runoff(
+            current_soil_water_storage=w[0] + w[1],
+            max_soil_water_capacity=ws[0] + ws[1],
+            arno_shape_parameter=arno_shape_parameter,
+            topwater_m=topwater_m,
+            infiltration_capacity_m=saturated_hydraulic_conductivity[0],
         )
-        top_layer_capacity: np.float32 = ws[0] - w[0]
-        potential_infiltration = min(potential_infiltration, top_layer_capacity)
+        toplayer_infiltration = min(infiltration_amount, ws[0] - w[0])
+        second_layer_infiltration = infiltration_amount - toplayer_infiltration
 
-        # Calculate infiltration for the cell
-        infiltration_amount: np.float32 = min(
-            potential_infiltration
-            * (not soil_is_frozen)
-            * (land_use_type != SEALED)  # no infiltration on sealed areas
-            * (land_use_type != OPEN_WATER),  # no infiltration on open water
-            topwater_m,
-        )
-        topwater_m -= infiltration_amount
+        w[0] += toplayer_infiltration
+        # Ensure we don't exceed saturation due to float errors
+        w[0] = min(w[0], ws[0])
 
-        w[0] += infiltration_amount
-        w[0] = min(w[0], ws[0])  # ensure that the top layer does not exceed saturation
+        w[1] += second_layer_infiltration
+        # Ensure we don't exceed saturation due to float errors
+        w[1] = min(w[1], ws[1])
 
-        # Calculate direct runoff
-        direct_runoff = max(
-            np.float32(0),
-            topwater_m - np.float32(0.05) * (land_use_type == PADDY_IRRIGATED),
-        )
-        topwater_m -= direct_runoff
+        # In Arno scheme, all topwater is processed into runoff or infiltration
+        topwater_m: np.float32 = np.float32(0.0)
+
+        if land_use_type == PADDY_IRRIGATED:
+            ponding_allowance: np.float32 = np.float32(0.05)
+            ponding = min(direct_runoff, ponding_allowance)
+            topwater_m += ponding
+            direct_runoff -= ponding
+
         return topwater_m, direct_runoff, np.float32(0.0), infiltration_amount
 
 
@@ -413,61 +391,6 @@ def get_soil_water_flow_parameters(
     psi = -phi
 
     return psi, unsaturated_hydraulic_conductivity
-
-
-@njit(cache=True, inline="always")
-def get_mean_unsaturated_hydraulic_conductivity(
-    unsaturated_hydraulic_conductivity_1: np.float32,
-    unsaturated_hydraulic_conductivity_2: np.float32,
-) -> np.float32:
-    """Calculate the mean unsaturated hydraulic conductivity between two soil layers using the geometric mean.
-
-    Args:
-        unsaturated_hydraulic_conductivity_1: Unsaturated hydraulic conductivity of the first soil layer.
-        unsaturated_hydraulic_conductivity_2: Unsaturated hydraulic conductivity of the second soil layer.
-
-    Returns:
-        The mean unsaturated hydraulic conductivity between the two soil layers.
-    """
-    # harmonic mean
-    # mean_unsaturated_hydraulic_conductivity = (
-    #     2
-    #     * unsaturated_hydraulic_conductivity_1
-    #     * unsaturated_hydraulic_conductivity_2
-    #     / (unsaturated_hydraulic_conductivity_1 + unsaturated_hydraulic_conductivity_2)
-    # )
-    # geometric mean
-    mean_unsaturated_hydraulic_conductivity = np.sqrt(
-        unsaturated_hydraulic_conductivity_1 * unsaturated_hydraulic_conductivity_2
-    )
-    # ensure that there is some minimum flow is possible
-    mean_unsaturated_hydraulic_conductivity = max(
-        mean_unsaturated_hydraulic_conductivity, np.float32(1e-9)
-    )
-    return mean_unsaturated_hydraulic_conductivity
-
-
-@njit(cache=True, inline="always")
-def get_flux(
-    mean_unsaturated_hydraulic_conductivity: np.float32,
-    psi_lower: np.float32,
-    psi_upper: np.float32,
-    delta_z: np.float32,
-) -> np.float32:
-    """Calculate the flux between two soil layers using Darcy's law.
-
-    Args:
-        mean_unsaturated_hydraulic_conductivity: Mean unsaturated hydraulic conductivity between the two soil layers.
-        psi_lower: Soil water potential of the lower soil layer.
-        psi_upper: Soil water potential of the upper soil layer.
-        delta_z: Distance between the two soil layers.
-
-    Returns:
-        The flux between the two soil layers.
-    """
-    return -mean_unsaturated_hydraulic_conductivity * (
-        (psi_lower - psi_upper) / delta_z - np.float32(1)
-    )
 
 
 @njit(
