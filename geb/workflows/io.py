@@ -43,7 +43,6 @@ from zarr.codecs.zstd import ZstdCodec
 from geb.types import (
     ArrayDatetime64,
     ArrayFloat32,
-    ArrayFloat64,
     ThreeDArray,
     ThreeDArrayFloat32,
     TwoDArray,
@@ -1085,21 +1084,21 @@ class AsyncGriddedForcingReader:
             self.thread.join(timeout=1)
 
     @property
-    def x(self) -> ArrayFloat32 | ArrayFloat64:
+    def x(self) -> ArrayFloat32:
         """The x-coordinates of the grid."""
         x_array = self.ds["x"]
         assert isinstance(x_array, zarr.Array)
         x = x_array[:]
-        assert isinstance(x, np.ndarray)
+        assert isinstance(x, np.ndarray) and x.dtype == np.float32
         return x
 
     @property
-    def y(self) -> ArrayFloat32 | ArrayFloat64:
+    def y(self) -> ArrayFloat32:
         """The y-coordinates of the grid."""
         y_array = self.ds["y"]
         assert isinstance(y_array, zarr.Array)
         y = y_array[:]
-        assert isinstance(y, np.ndarray)
+        assert isinstance(y, np.ndarray) and y.dtype == np.float32
         return y
 
 
