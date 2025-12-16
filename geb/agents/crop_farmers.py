@@ -3288,7 +3288,7 @@ class CropFarmers(AgentBaseClass):
         self,
         yearly_yield_ratio: npt.NDArray[np.floating],
         yearly_SPEI_probability: npt.NDArray[np.floating],
-        unique_group_differentiator: npt.NDArray[np.bool_] = None
+        unique_group_differentiator: npt.NDArray[np.bool_] = None,
         drop_k: int = 2,
     ) -> npt.NDArray[np.floating]:
         """Fit grouped linear yield-SPEI model and return per-farmer parameters.
@@ -3303,6 +3303,9 @@ class CropFarmers(AgentBaseClass):
                 farmer-year (0-1).
             yearly_SPEI_probability (npt.NDArray[np.floating]): Yearly SPEI
                 exceedance probabilities per farmer-year.
+            unique_group_differentiator: npt.NDArray[np.bool_] = None: an additional
+            array with classes that distinguish between agents based on chosen parameters
+            (e.g., irrigation source or basin location)
             drop_k (int, optional): Number of worst absolute residuals to drop per
                 group before refitting. Defaults to ``2``.
 
@@ -3312,7 +3315,7 @@ class CropFarmers(AgentBaseClass):
         """
         if unique_group_differentiator is None:
             unique_group_differentiator = np.zeros(self.var.n, dtype=np.bool_)
-            
+
         group_indices, n_groups = self.create_unique_groups(unique_group_differentiator)
         assert (np.any(self.var.yearly_SPEI_probability != 0, axis=1) > 0).all()
 
