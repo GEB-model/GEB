@@ -40,7 +40,7 @@ if Path("/research/BETA-IVM-HPC/GEB").exists():
     )
 else:
     os.environ["SFINCS_SIF_CONTAINER"] = os.getenv(
-        "SFINCS_SIF_CONTAINER", "deltares/sfincs-cpu-v2.3.0-mt-Faber-Release.sif"
+        "SFINCS_SIF_CONTAINER", "deltares/sfincs-cpu:sfincs-v2.3.0-mt-Faber-Release"
     )
     os.environ["SFINCS_SIF_CONTAINER_GPU"] = os.getenv(
         "SFINCS_SIF_CONTAINER_GPU", "mvanormondt/sfincs-gpu:coldeze_combo_ccall"
