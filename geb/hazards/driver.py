@@ -75,6 +75,7 @@ class HazardDriver:
                 return
 
             if self.config["hazards"]["floods"]["detect_floods_from_discharge"]:
+                print("Detecting floods from discharge...")
                 if self.model.in_spinup:
                     return
                 else:
@@ -137,69 +138,72 @@ class HazardDriver:
                         # Check if discharge > threshold
                         if discharge_location > threshold:
                             print(
-                                f"Flood detected at {self.current_time}, discharge = {discharge_location:.2f} "
+                                f"Flood detected at {self.current_time}, discharge = {discharge_location:.2f}"
                             )
-                            start_time: datetime = self.current_time - timedelta(
-                                days=5
-                            )  # Set start date of flood 5 days before peak discharge
-                            end_time: datetime = self.current_time + timedelta(
-                                days=5
-                            )  # Set end date of flood 5 days after peak discharge
 
-                            # Block of code to save the start and end time of the detected event
-                            def represent_datetime(
-                                dumper: Dumper, data: datetime
-                            ) -> ScalarNode:
-                                return dumper.represent_scalar(
-                                    "tag:yaml.org,2002:timestamp",
-                                    data.strftime("%Y-%m-%d %H:%M:%S"),
-                                )
+                            start_time = self.current_time - timedelta(days=5)
+                            end_time = self.current_time + timedelta(days=5)
 
-                            yaml.add_representer(datetime, represent_datetime)
-                            new_event: dict[str, datetime] = {
+                            # ---- EVENT (IN-MEMORY: datetime objects) ----
+                            new_event_mem = {
                                 "start_time": start_time,
                                 "end_time": end_time,
                             }
 
-                            # Check if event already exists
-                            existing_events: list[dict[str, datetime]] = self.config[
-                                "hazards"
-                            ]["floods"].get("events", [])
+                            # ---- EVENT (PERSISTED: strings only) ----
+                            new_event_yaml = {
+                                "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                                "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            }
 
-                            event_exists: bool = any(
-                                e["start_time"] == new_event["start_time"]
-                                and e["end_time"] == new_event["end_time"]
-                                for e in existing_events
+                            # ==========================================================
+                            # 1️⃣ UPDATE self.config (IN MEMORY — MODEL USES THIS)
+                            # ==========================================================
+                            hazards_cfg = self.config.setdefault("hazards", {})
+                            floods_cfg = hazards_cfg.setdefault("floods", {})
+                            events_mem = floods_cfg.setdefault("events", [])
+
+                            event_exists_mem = any(
+                                e["start_time"] == new_event_mem["start_time"]
+                                and e["end_time"] == new_event_mem["end_time"]
+                                for e in events_mem
                             )
-                            import numpy as np
 
-                            def find_numpy(obj, path="root"):
-                                if isinstance(obj, dict):
-                                    for k, v in obj.items():
-                                        find_numpy(v, f"{path}.{k}")
-                                elif isinstance(obj, list):
-                                    for i, v in enumerate(obj):
-                                        find_numpy(v, f"{path}[{i}]")
-                                elif isinstance(obj, np.ndarray):
-                                    print(
-                                        "Found NumPy array in config at:",
-                                        path,
-                                        obj.shape,
-                                    )
-
-                            find_numpy(self.config)
-
-                            # If the event doesn't exist yet in the config file, add it
-                            if not event_exists:
-                                self.config["hazards"]["floods"]["events"].append(
-                                    new_event
-                                )
-                                config_path = Path.cwd() / "model.yml"
-                                with open(config_path, "w") as f:
-                                    yaml.safe_dump(self.config, f, sort_keys=False)
-                                print("Flood event saved to config.")
+                            if not event_exists_mem:
+                                events_mem.append(new_event_mem)
+                                print("Flood event added to in-memory config.")
                             else:
-                                print("Flood event already in config, skipping save.")
+                                print("Flood event already in in-memory config.")
+
+                            # ==========================================================
+                            # 2️⃣ UPDATE model.yml (DISK — YAML-SAFE ONLY)
+                            # ==========================================================
+                            config_path = Path.cwd() / "model.yml"
+
+                            with open(config_path, "r") as f:
+                                config_yaml = yaml.safe_load(f) or {}
+
+                            hazards_yaml = config_yaml.setdefault("hazards", {})
+                            floods_yaml = hazards_yaml.setdefault("floods", {})
+                            events_yaml = floods_yaml.setdefault("events", [])
+
+                            event_exists_yaml = any(
+                                e.get("start_time") == new_event_yaml["start_time"]
+                                and e.get("end_time") == new_event_yaml["end_time"]
+                                for e in events_yaml
+                            )
+
+                            if not event_exists_yaml:
+                                events_yaml.append(new_event_yaml)
+
+                                tmp_path = config_path.with_suffix(".tmp")
+                                with open(tmp_path, "w") as f:
+                                    yaml.safe_dump(config_yaml, f, sort_keys=False)
+
+                                tmp_path.replace(config_path)
+                                print("Flood event saved to model.yml.")
+                            else:
+                                print("Flood event already in model.yml.")
 
                             self.next_detection_time = self.current_time + timedelta(
                                 days=10

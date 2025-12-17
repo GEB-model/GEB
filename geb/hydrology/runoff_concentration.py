@@ -1,11 +1,13 @@
 """Module for concentrating runoff from different sources."""
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from geb.module import Module
-from geb.types import ArrayFloat32, ArrayFloat64
+from geb.types import ArrayFloat64, TwoDArrayFloat64
 from geb.workflows import balance_check
 
 if TYPE_CHECKING:
@@ -14,7 +16,7 @@ if TYPE_CHECKING:
 
 class RunoffConcentrator(Module):
     """
-    Stateful runoff concentrator using triangular weighting.
+    Module to apply runoff concentration using triangular weighting.
 
     Receives sub-daily runoff (24 timesteps per day) and maintains a
     rolling buffer to carry over runoff to future days.
@@ -22,25 +24,20 @@ class RunoffConcentrator(Module):
 
     def __init__(
         self,
-        model,
-        hydrology,
+        model: GEBModel,
+        hydrology: Hydrology,
         lagtime: int = 48,
         runoff_peak: float = 3.0,
-        interflow_peak: float = 4.0,
-        baseflow_peak: float = 5.0,
     ) -> None:
         """Initialize the runoff concentrator model.
 
-        Currently in super alpha stage and uses a lot of constants and assumptions. Should NOT
-        be used for science yet.
+        Currently in development. Not finished yet, but working first version.
 
         Args:
             model: The GEB model instance.
             hydrology: The hydrology module instance.
-            lagtime: int = 24,
+            lagtime: int = 48,
             runoff_peak: float = 3.0,
-            interflow_peak: float = 4.0,
-            baseflow_peak: float = 5.0,
         """
         super().__init__(model)
         self.hydrology = hydrology
@@ -51,37 +48,40 @@ class RunoffConcentrator(Module):
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
-        self.lagtime = max(lagtime, 48)
+        self.lagtime: int = lagtime
 
         # precompute triangular weights
         self.weights_runoff = self._triangular_weights(runoff_peak)
-        self.weights_interflow = self._triangular_weights(interflow_peak)
-        self.weights_baseflow = self._triangular_weights(baseflow_peak)
 
         # rolling buffer: shape [lagtime, n_cells]
         self.buffer = None
 
     def _triangular_weights(self, peak: float) -> ArrayFloat64:
-        weights = np.zeros(self.lagtime, dtype=np.float64)
-        areaFractionOld = 0.0
-        div = 2.0 * peak**2
+        """Compute triangular weights for given peak lag time.
+
+        Returns:
+            1D array of shape (lagtime,) containing the weights.
+        """
+        weights: ArrayFloat64 = np.zeros(self.lagtime, dtype=np.float64)
+        areaFractionOld: float = 0.0
+        div: float = 2.0 * peak**2
 
         for lag in range(self.lagtime):
             lag1 = float(lag + 1)
-            lag1alt = 2.0 * peak - lag1
-            area = (lag1**2) / div
-            areaAlt = 1.0 - (lag1alt**2) / div
+            lag1alt: float = 2.0 * peak - lag1
+            area: float = (lag1**2) / div
+            areaAlt: float = 1.0 - (lag1alt**2) / div
 
             if lag1 <= peak:
-                areaFractionSum = area
+                areaFractionSum: float = area
             else:
-                areaFractionSum = areaAlt
+                areaFractionSum: float = areaAlt
 
             if lag1alt <= 0.0:
                 areaFractionSum = 1.0
 
-            areaFraction = areaFractionSum - areaFractionOld
-            areaFractionOld = areaFractionSum
+            areaFraction: float = areaFractionSum - areaFractionOld
+            areaFractionOld: float = areaFractionSum
             weights[lag] = areaFraction
 
         weights /= weights.sum()  # normalize
@@ -89,11 +89,12 @@ class RunoffConcentrator(Module):
 
     def _apply_triangular(
         self,
-        flow: ArrayFloat64,  # shape (24, n_cells)
+        flow: TwoDArrayFloat64,  # shape (24, n_cells)
         weights: ArrayFloat64,  # shape (lagtime,)
     ) -> None:
-        lag = len(weights)
-        n_steps = flow.shape[0]  # = 24
+        """Apply triangular weighting to the flow and update the buffer."""
+        lag: int = len(weights)
+        n_steps: int = flow.shape[0]  # = 24
 
         # For each hourly timestep
         for t in range(n_steps):
@@ -111,15 +112,14 @@ class RunoffConcentrator(Module):
                 # else: future contribution beyond lagtime is dropped
 
     def _init_buffer(self, n_cells: int) -> None:
-        self.n_cells = n_cells
-        self.lagtime = 48  # 2 days of hourly storage
-        self.buffer = np.zeros((self.lagtime, n_cells), dtype=np.float64)
-        self.runoff_peak = 3.0
-        self.interflow_peak: float = 4.0
-        self.baseflow_peak: float = 5.0
-        self.weights_runoff = self._triangular_weights(self.runoff_peak)
-        self.weights_interflow = self._triangular_weights(self.interflow_peak)
-        self.weights_baseflow = self._triangular_weights(self.baseflow_peak)
+        """Initialize the rolling buffer."""
+        self.n_cells: int = n_cells
+        self.lagtime: int = 48  # 2 days of hourly storage
+        self.buffer: TwoDArrayFloat64 = np.zeros(
+            (self.lagtime, n_cells), dtype=np.float64
+        )
+        self.runoff_peak: float = 3.0
+        self.weights_runoff: ArrayFloat64 = self._triangular_weights(self.runoff_peak)
 
     def _advance_buffer(self, n_steps: int) -> None:
         """Shift buffer forward by n_steps (24 hours)."""
@@ -133,11 +133,16 @@ class RunoffConcentrator(Module):
 
     def step(
         self,
-        interflow: ArrayFloat32,  # shape (24, n_cells)
-        baseflow: ArrayFloat32,  # shape (n_cells,)
-        runoff: ArrayFloat32,  # shape (24, n_cells)
-    ) -> ArrayFloat32:
-        """Route daily runoff, interflow and baseflow through the triangular lag buffer.
+        interflow: TwoDArrayFloat64,  # shape (24, n_cells)
+        baseflow: ArrayFloat64,  # shape (n_cells,)
+        runoff: TwoDArrayFloat64,  # shape (24, n_cells)
+    ) -> TwoDArrayFloat64:
+        """Concentrate runoff using triangular weighting.
+
+        Currently being developed. For now, we only apply it to runoff and leave baseflow
+        and interflow unchanged. We take the assumption that runoff is smoothed out over 3
+        timesteps (= 3 hours). Further work include channging the time component to also
+        include slopes and land uses.
 
         Args:
             runoff: 2D array with shape (24, n_cells) containing sub-daily surface runoff.
@@ -145,8 +150,20 @@ class RunoffConcentrator(Module):
             baseflow: 1D array with shape (n_cells,) containing daily baseflow.
 
         Returns:
-            2D array with shape (24, n_cells) representing the routed hourly outflow for the day.
+            2D array with shape (24, n_cells) representing the runoff concentrated outflow.
         """
+        assert (runoff >= 0).all()
+        assert (interflow >= 0).all()
+        assert (baseflow >= 0).all()
+
+        assert interflow.shape[0] == 24
+        assert runoff.shape[0] == 24
+        assert interflow.ndim == 2
+        assert baseflow.ndim == 1
+        assert runoff.ndim == 2
+
+        n_steps: int
+        n_cells: int
         n_steps, n_cells = runoff.shape
 
         if self.buffer is None:
@@ -154,50 +171,53 @@ class RunoffConcentrator(Module):
 
         # Advance buffer by one day (24 hours)
         self._advance_buffer(n_steps)
-        storage_start_m = self.buffer.copy().astype(np.float64)
-        storage_start_m3 = (storage_start_m * self.grid.var.cell_area).sum()
+        storage_start_m: TwoDArrayFloat64 = self.buffer.copy().astype(np.float64)
+        storage_start_m3: float = (storage_start_m * self.grid.var.cell_area).sum()
 
         # Baseflow is distributed evenly across 24 substeps
-        baseflow_per_step = (baseflow / n_steps).astype(np.float32)
-        baseflow_series = np.broadcast_to(baseflow_per_step, (n_steps, n_cells))
+        baseflow_per_step: ArrayFloat64 = (baseflow / n_steps).astype(np.float64)
+        baseflow_array: TwoDArrayFloat64 = np.broadcast_to(
+            baseflow_per_step, (n_steps, n_cells)
+        )  # Create array that matches the shape of the runoff
 
-        # Apply triangular routing for each flow component
+        # Apply triangular weighting to (for now only) runoff
         self._apply_triangular(runoff, self.weights_runoff)
 
-        outflow_m = (
+        outflow_runoff_m: TwoDArrayFloat64 = (
             self.buffer[:n_steps].copy()
         )  # Outflow is only the first 24 buffer steps which equals 24 hourly outflows
-        storage_end_m = (
+        total_outflow_m: TwoDArrayFloat64 = (
+            outflow_runoff_m + baseflow_array + interflow
+        )  # Get total outflow (including baseflow and interflow which did not change)
+        storage_end_m: TwoDArrayFloat64 = (
             self.buffer[n_steps:].copy().astype(np.float64)
         )  # Everything that is stored for the next day
-        storage_end_m3 = (storage_end_m * self.grid.var.cell_area).sum()
+        storage_end_m3: float = (storage_end_m * self.grid.var.cell_area).sum()
 
-        print(storage_start_m.sum())
-        print(storage_end_m.sum())
+        outflow_m3: float = (
+            (outflow_runoff_m * self.grid.var.cell_area).sum()
+            + interflow.sum() * self.grid.var.cell_area.sum()
+            + baseflow_array.sum() * self.grid.var.cell_area.sum()
+        )
 
-        outflow_m3 = (outflow_m * self.grid.var.cell_area).sum()
-        influxes_m3 = (
+        inflow_m3: float = (
             (runoff * self.grid.var.cell_area).sum()
             + (interflow * self.grid.var.cell_area).sum()
-            + baseflow_series.sum() * self.grid.var.cell_area.sum()
+            + baseflow_array.sum() * self.grid.var.cell_area.sum()
         )
 
         balance_check(
             name="RunoffConcentrator daily water balance",
             how="sum",
-            influxes=[influxes_m3],
+            influxes=[inflow_m3],
             outfluxes=[outflow_m3],
             prestorages=[storage_start_m3],
             poststorages=[storage_end_m3],
             tolerance=1,
             raise_on_error=False,
         )
-        # outflow = runoff + interflow + (baseflow / 24.0).astype(np.float64)
-        # storage_start_m = np.zeros_like(outflow, dtype=np.float64)
-        # storage_start_m3 = (storage_start_m * self.grid.var.cell_area).sum()
-        # storage_end_m = np.zeros_like(outflow, dtype=np.float64)
-        # storage_end_m3 = (storage_end_m * self.grid.var.cell_area).sum()
-        return outflow_m, storage_start_m3, storage_end_m3
+
+        return total_outflow_m, storage_start_m3, storage_end_m3
 
     @property
     def name(self) -> str:
@@ -209,42 +229,9 @@ class RunoffConcentrator(Module):
         return "hydrology.runoff_concentrator"
 
     def spinup(self) -> None:
-        """Initialize variables needed for the hillslope erosion model.
+        """Initialize variables needed for the runoff concentration model.
 
-        Currently this is in alpha stage and uses a lot of constants and assumptions. Should NOT
-        be use for science yet.
         Returns:
             None
         """
         return None
-
-
-# def concentrate_runoff(
-#     interflow: npt.NDArray[np.float32],
-#     baseflow: npt.NDArray[np.float32],
-#     runoff: npt.NDArray[np.float32],
-# ) -> npt.NDArray[np.float32]:
-#     """Combines all sources of runoff.
-
-#     Args:
-#         interflow: The interflow [m] for the cell.
-#         baseflow: The baseflow [m] for the cell.
-#         runoff: The surface runoff [m] for the cell.
-
-#     Returns:
-#         The total runoff [m] for the cell.
-#     """
-#     assert (runoff >= 0).all()
-#     assert (interflow >= 0).all()
-#     assert (baseflow >= 0).all()
-
-#     assert interflow.shape[0] == 24
-#     assert runoff.shape[0] == 24
-
-#     assert interflow.ndim == 2
-#     assert baseflow.ndim == 1
-#     assert runoff.ndim == 2
-
-#     baseflow_per_timestep = baseflow / np.float32(24)
-
-#     return interflow + baseflow_per_timestep + runoff

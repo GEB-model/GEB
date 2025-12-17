@@ -187,10 +187,6 @@ class Hydrology(Data, Module):
             groundwater_recharge_m, groundwater_abstraction_m3
         )
 
-        print("Baseflow max:", baseflow_m.max())
-        print("Baseflow min:", baseflow_m.min())
-        print("Baseflow mean:", baseflow_m.mean())
-
         if __debug__:
             invented_water += (
                 -(

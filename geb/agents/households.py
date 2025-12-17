@@ -447,7 +447,6 @@ class Households(AgentBaseClass):
         if self.config["adapt_to_actual_floods"]:
             # Find the flood event that corresponds to the current time (in the model)
             for event in self.flood_events:
-                print(self.flood_events)
                 end: datetime = event["end_time"]
 
                 if self.model.current_time == end + timedelta(days=14):
@@ -473,30 +472,22 @@ class Households(AgentBaseClass):
                         depths, nan=0.0
                     )  # replace NaNs outside the raster with 0
 
-                    print(depths)
-                    print(f"Min flood depth: {np.min(depths):.3f} m")
-                    print(f"Max flood depth: {np.max(depths):.3f} m")
-                    print(f"Mean flood depth: {np.mean(depths):.3f} m")
-
                     # Identify flooded households (more than 5cm of water)
                     flooded = depths > 0.05  #
 
                     # Print some statistics to check if the flooded households are identified correctly
-                    print(flooded)
-                    n_total = len(flooded)
-                    n_true = np.sum(flooded)
-                    n_false = n_total - n_true
-                    print(f"Total households: {n_total}")
-                    print(f"Flooded (True): {n_true} ({100 * n_true / n_total:.2f}%)")
-                    print(
-                        f"Not flooded (False): {n_false} ({100 * n_false / n_total:.2f}%)"
-                    )
+                    # print(flooded)
+                    # n_total = len(flooded)
+                    # n_true = np.sum(flooded)
+                    # n_false = n_total - n_true
+                    # print(f"Total households: {n_total}")
+                    # print(f"Flooded (True): {n_true} ({100 * n_true / n_total:.2f}%)")
+                    # print(
+                    #     f"Not flooded (False): {n_false} ({100 * n_false / n_total:.2f}%)"
+                    # )
 
                     # Reset years_since_last_flood to 0 for flooded households
                     self.var.years_since_last_flood.data[flooded] = 0
-
-                    print(self.var.household_points)
-                    print(self.var.locations.data)
 
         else:
             if (
@@ -511,13 +502,13 @@ class Households(AgentBaseClass):
             + self.var.risk_perc_min
         )
 
-        # Print flood risk perception stats
-        print(self.var.risk_perception)
-        print(self.var.risk_perception.data)
-        print("Risk perception stats:")
-        print(f"  Min: {np.min(self.var.risk_perception.data):.4f}")
-        print(f"  Max: {np.max(self.var.risk_perception.data):.4f}")
-        print(f"  Mean: {np.mean(self.var.risk_perception.data):.4f}")
+        # # Print flood risk perception stats
+        # print(self.var.risk_perception)
+        # print(self.var.risk_perception.data)
+        # print("Risk perception stats:")
+        # print(f"  Min: {np.min(self.var.risk_perception.data):.4f}")
+        # print(f"  Max: {np.max(self.var.risk_perception.data):.4f}")
+        # print(f"  Mean: {np.mean(self.var.risk_perception.data):.4f}")
 
         stats = {
             "time": self.model.current_time,
@@ -2150,8 +2141,8 @@ class Households(AgentBaseClass):
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         if self.config["adapt"]:
-            print(buildings["flooded"].value_counts())
-            print(buildings["flood_proofed"].value_counts())
+            # print(buildings["flooded"].value_counts())
+            # print(buildings["flood_proofed"].value_counts())
             household_points = gpd.sjoin_nearest(
                 household_points,
                 buildings[["geometry", "flood_proofed"]],
@@ -2174,8 +2165,8 @@ class Households(AgentBaseClass):
                 "building_unprotected",
             )
 
-            print(buildings)
-            print(buildings_centroid)
+            # print(buildings)
+            # print(buildings_centroid)
 
         else:
             household_points["protect_building"] = False
@@ -2197,13 +2188,10 @@ class Households(AgentBaseClass):
             ].apply(lambda x: "building_protected" if x else "building_unprotected")
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
-            # Create the folder to save damage maps if it doesn't exist
+        # Create the folder to save damage maps if it doesn't exist
         damage_folder: Path = self.model.output_folder / "damage_maps"
         damage_folder.mkdir(parents=True, exist_ok=True)
 
-        print(
-            self.buildings_content_curve,
-        )
         damages_buildings_content = VectorScanner(
             features=buildings_centroid,
             hazard=flood_depth,
@@ -2221,7 +2209,6 @@ class Households(AgentBaseClass):
 
         print(f"damages to building content are: {total_damages_content}")
 
-        print(self.buildings_structure_curve)
         # Compute damages for buildings structure
         damages_buildings_structure: pd.Series = VectorScanner(
             features=buildings.rename(columns={"maximum_damage_m2": "maximum_damage"}),
@@ -2363,8 +2350,10 @@ class Households(AgentBaseClass):
                 * water_demand_multiplier_per_household
             ) * self.config["adjust_demand_factor"]
         elif self.config["water_demand"]["method"] == "custom_value":
+            print("setting custom water demand value for all households")
             # Function to set a custom_value for household water demand. All households have the same demand.
             custom_value = self.config["water_demand"]["custom_value"]["value"]
+            print(f"custom water demand value set to: {custom_value} m3 per day")
             self.var.water_demand_per_household_m3 = np.full(
                 self.var.region_id.shape, custom_value, dtype=float
             )
