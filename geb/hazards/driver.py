@@ -8,8 +8,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import yaml
-from yaml.dumper import Dumper
-from yaml.nodes import ScalarNode
 
 from geb.hazards.floods import Floods
 from geb.types import ThreeDArrayFloat32, TwoDArrayFloat32

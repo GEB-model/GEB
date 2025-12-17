@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from zarr import config
 import zarr.storage
 from dateutil.relativedelta import relativedelta
 from zarr.codecs import ZstdCodec
