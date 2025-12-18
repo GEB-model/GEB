@@ -501,14 +501,6 @@ class Households(AgentBaseClass):
             + self.var.risk_perc_min
         )
 
-        # # Print flood risk perception stats
-        # print(self.var.risk_perception)
-        # print(self.var.risk_perception.data)
-        # print("Risk perception stats:")
-        # print(f"  Min: {np.min(self.var.risk_perception.data):.4f}")
-        # print(f"  Max: {np.max(self.var.risk_perception.data):.4f}")
-        # print(f"  Mean: {np.mean(self.var.risk_perception.data):.4f}")
-
         stats = {
             "time": self.model.current_time,
             "min_risk": np.min(self.var.risk_perception.data),
