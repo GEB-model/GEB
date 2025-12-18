@@ -139,9 +139,9 @@ class RunoffConcentrator(Module):
         """Concentrate runoff using triangular weighting.
 
         Currently being developed. For now, we only apply it to runoff and leave baseflow
-        and interflow unchanged. We take the assumption that runoff is smoothed out over 3
-        timesteps (= 3 hours). Further work include channging the time component to also
-        include slopes and land uses.
+        and interflow unchanged. We take the assumption that runoff is smoothed out over 6
+        timesteps (= 6 hours), with the peak being at timestep 3. Further work includes
+        changing the time component to also include slopes and land uses.
 
         Args:
             runoff: 2D array with shape (24, n_cells) containing sub-daily surface runoff.
