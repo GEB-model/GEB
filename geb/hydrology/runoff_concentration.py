@@ -36,8 +36,8 @@ class RunoffConcentrator(Module):
         Args:
             model: The GEB model instance.
             hydrology: The hydrology module instance.
-            lagtime: int = 48,
-            runoff_peak: float = 3.0,
+            lagtime: int = 48 hours,
+            runoff_peak: float = 3.0 hours,
         """
         super().__init__(model)
         self.hydrology = hydrology
@@ -49,6 +49,7 @@ class RunoffConcentrator(Module):
         self.grid = hydrology.grid
 
         self.lagtime: int = lagtime
+        self.runoff_peak: float = runoff_peak
 
         # precompute triangular weights
         self.weights_runoff = self._triangular_weights(runoff_peak)
@@ -72,11 +73,14 @@ class RunoffConcentrator(Module):
             area: float = (lag1**2) / div
             areaAlt: float = 1.0 - (lag1alt**2) / div
 
-            areaFractionSum: float = (
-                1.0
-                if lag1alt <= 0.0
-                else (area if lag1 <= peak else areaAlt)
-            )
+            if lag1 <= peak:
+                areaFractionSum: float = area
+            else:
+                areaFractionSum: float = areaAlt
+
+            if lag1alt <= 0.0:
+                areaFractionSum = 1.0
+
             areaFraction: float = areaFractionSum - areaFractionOld
             areaFractionOld: float = areaFractionSum
             weights[lag] = areaFraction
@@ -111,11 +115,9 @@ class RunoffConcentrator(Module):
     def _init_buffer(self, n_cells: int) -> None:
         """Initialize the rolling buffer."""
         self.n_cells: int = n_cells
-        self.lagtime: int = 48  # 2 days of hourly storage
         self.buffer: TwoDArrayFloat64 = np.zeros(
             (self.lagtime, n_cells), dtype=np.float64
         )
-        self.runoff_peak: float = 3.0
         self.weights_runoff: ArrayFloat64 = self._triangular_weights(self.runoff_peak)
 
     def _advance_buffer(self, n_steps: int) -> None:
@@ -193,14 +195,14 @@ class RunoffConcentrator(Module):
 
         outflow_m3: float = (
             (outflow_runoff_m * self.grid.var.cell_area).sum()
-            + interflow.sum() * self.grid.var.cell_area.sum()
-            + baseflow_array.sum() * self.grid.var.cell_area.sum()
+            + (interflow * self.grid.var.cell_area).sum()
+            + (baseflow_array * self.grid.var.cell_area).sum()
         )
 
         inflow_m3: float = (
             (runoff * self.grid.var.cell_area).sum()
             + (interflow * self.grid.var.cell_area).sum()
-            + baseflow_array.sum() * self.grid.var.cell_area.sum()
+            + (baseflow_array * self.grid.var.cell_area).sum()
         )
 
         balance_check(

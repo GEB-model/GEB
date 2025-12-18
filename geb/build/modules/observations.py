@@ -179,8 +179,7 @@ def add_station_Q_obs(
             "id": [station_id],  # Assign the station ID
         },
     )
-    print(station_name)
-    print(new_station_ds)
+
     # Add the new station to the Q_obs dataset
     Q_obs_merged = xr.concat([Q_obs, new_station_ds], dim="id")
 
@@ -438,7 +437,7 @@ class Observations:
         Q_obs_clipped = clip_Q_obs(
             Q_obs_merged, region_mask
         )  # filter Q_obs stations based on the region shapefile
-        print(Q_obs_clipped)
+
         if len(Q_obs_clipped.id) == 0:
             # No stations found - create empty files
             self.logger.warning(
@@ -507,7 +506,7 @@ class Observations:
         # Snapping to river and validation of discharges
         # create list for results of snapping
         discharge_snapping_results = []
-        print(Q_obs_clipped.id.values)
+
         # start looping over the Q_obs stations
         for station_id in tqdm(Q_obs_clipped.id.values):
             # create Q_obs variables

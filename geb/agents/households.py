@@ -2338,10 +2338,8 @@ class Households(AgentBaseClass):
                 * water_demand_multiplier_per_household
             ) * self.config["adjust_demand_factor"]
         elif self.config["water_demand"]["method"] == "custom_value":
-            print("setting custom water demand value for all households")
             # Function to set a custom_value for household water demand. All households have the same demand.
             custom_value = self.config["water_demand"]["custom_value"]["value"]
-            print(f"custom water demand value set to: {custom_value} m3 per day")
             self.var.water_demand_per_household_m3 = np.full(
                 self.var.region_id.shape, custom_value, dtype=float
             )
@@ -2367,7 +2365,7 @@ class Households(AgentBaseClass):
 
                 # Check if a flood has recently happened by comparing the current time to the end of flood + 14 days
                 # (assumption that people wait around 2 weeks before adapting)
-                flood_trigger: datetime = any(
+                is_flood_triggered: bool = any(
                     current_time
                     == (
                         e["end_time"] + timedelta(days=14)
@@ -2382,7 +2380,7 @@ class Households(AgentBaseClass):
                 if (
                     self.model.current_time.month == 1
                     and self.model.current_time.day == 1
-                ) or flood_trigger:
+                ) or is_flood_triggered:
                     if "flooded" not in self.buildings.columns:
                         self.update_building_attributes()
                     print(f"Thinking about adapting at {current_time}...")

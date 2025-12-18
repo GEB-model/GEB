@@ -148,7 +148,7 @@ class Floods(Module):
         n_timesteps: The number of timesteps to keep in memory for discharge calculations (default is 10).
     """
 
-    def __init__(self, model: GEBModel, longest_flood_event_in_days: int = 11) -> None:
+    def __init__(self, model: GEBModel, longest_flood_event_in_days: int = 10) -> None:
         """Initializes the Floods class.
 
         Args:
