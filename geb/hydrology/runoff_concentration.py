@@ -72,14 +72,11 @@ class RunoffConcentrator(Module):
             area: float = (lag1**2) / div
             areaAlt: float = 1.0 - (lag1alt**2) / div
 
-            if lag1 <= peak:
-                areaFractionSum: float = area
-            else:
-                areaFractionSum: float = areaAlt
-
-            if lag1alt <= 0.0:
-                areaFractionSum = 1.0
-
+            areaFractionSum: float = (
+                1.0
+                if lag1alt <= 0.0
+                else (area if lag1 <= peak else areaAlt)
+            )
             areaFraction: float = areaFractionSum - areaFractionOld
             areaFractionOld: float = areaFractionSum
             weights[lag] = areaFraction
