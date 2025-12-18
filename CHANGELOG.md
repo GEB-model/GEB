@@ -25,3 +25,7 @@ To support this version:
 - Add a new option for flood models. We now auto-detect whether a change in the code or model input is made. If no change in the model or model input, we do not rebuild the SFINCS model. This removes the option `force_overwrite` for sfincs models.
 - Fix JSON serialization error in hash file generation by properly converting NumPy scalar types (bool, int, float) to Python native types.
 - Update to new SFINCS version.
+- Added a new option to detect floods based on actual discharge values from the hydrological model
+- Added a new option so that households can adapt to actual floods in the model
+- Implemented a simple version on runoff concentration so runoff is slowed down on its way to become discharge
+- Updated the performance_hydrodynamics function so it uses a list of observation files and matches these to the right flood map per event from sfincs. The name of the observation file has to be the same of the flood event (i.e. startdate - enddate.zarr)

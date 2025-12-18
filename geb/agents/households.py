@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -95,6 +96,8 @@ class Households(AgentBaseClass):
 
         if self.config["adapt"]:
             self.load_flood_maps()
+            self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
+            self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
 
         self.load_objects()
         self.load_max_damage_values()
@@ -439,16 +442,84 @@ class Households(AgentBaseClass):
         # update timer
         self.var.years_since_last_flood.data += 1
 
-        # generate random flood (not based on actual modeled flood data, replace this later with events)
-        if np.random.random() < 0.1:
-            print("Flood event!")
-            self.var.years_since_last_flood.data = 0
+        # Here we update flood risk perception based on actual floods that have happened and whether a household was flooded (yes/no)
+        if self.config["adapt_to_actual_floods"]:
+            # Find the flood event that corresponds to the current time (in the model)
+            for event in self.flood_events:
+                end: datetime = event["end_time"]
+
+                if self.model.current_time == end + timedelta(days=14):
+                    # Open the flood map
+                    flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
+                    flood_map_path: Path = (
+                        self.model.output_folder / "flood_maps" / flood_map_name
+                    )
+
+                    flood_map: xr.DataArray = read_zarr(flood_map_path)
+
+                    # Get the locations of the household locations and reproject to flood map
+                    households_proj = self.var.household_points.to_crs(
+                        flood_map.rio.crs
+                    )
+
+                    xs = households_proj.geometry.x.values
+                    ys = households_proj.geometry.y.values
+
+                    # Interpolate flood depths at household locations
+                    depths = flood_map.interp(x=("points", xs), y=("points", ys)).values
+                    depths = np.nan_to_num(
+                        depths, nan=0.0
+                    )  # replace NaNs outside the raster with 0
+
+                    # Identify flooded households (more than 5cm of water)
+                    flooded = depths > 0.05  #
+
+                    # Print some statistics to check if the flooded households are identified correctly
+                    # print(flooded)
+                    # n_total = len(flooded)
+                    # n_true = np.sum(flooded)
+                    # n_false = n_total - n_true
+                    # print(f"Total households: {n_total}")
+                    # print(f"Flooded (True): {n_true} ({100 * n_true / n_total:.2f}%)")
+                    # print(
+                    #     f"Not flooded (False): {n_false} ({100 * n_false / n_total:.2f}%)"
+                    # )
+
+                    # Reset years_since_last_flood to 0 for flooded households
+                    self.var.years_since_last_flood.data[flooded] = 0
+
+        else:
+            if (
+                np.random.random() < 0.1
+            ):  # generate random flood (not based on actual modeled flood data)
+                print("Flood event!")
+                self.var.years_since_last_flood.data = 0
 
         self.var.risk_perception.data = (
             self.var.risk_perc_max
-            * 1.6 ** (self.var.risk_decr * self.var.years_since_last_flood)
+            * 1.6 ** (self.var.risk_decr * self.var.years_since_last_flood.data)
             + self.var.risk_perc_min
         )
+
+        stats = {
+            "time": self.model.current_time,
+            "min_risk": np.min(self.var.risk_perception.data),
+            "max_risk": np.max(self.var.risk_perception.data),
+            "mean_risk": np.mean(self.var.risk_perception.data),
+        }
+        self.flood_risk_perceptions_statistics.append(stats)
+
+        # Append and save floor risk perception data spatially
+        df = pd.DataFrame(
+            {
+                "time": [self.model.current_time] * len(self.var.household_points),
+                "x": self.var.household_points.geometry.x,
+                "y": self.var.household_points.geometry.y,
+                "risk_perception": self.var.risk_perception.data,
+                "years_since_last_flood": self.var.years_since_last_flood.data,
+            }
+        )
+        self.flood_risk_perceptions.append(df)
 
     def load_ensemble_flood_maps(self, date_time: datetime.datetime) -> xr.DataArray:
         """Loads the flood maps for all ensemble members for a specific forecast date time.
@@ -1992,9 +2063,9 @@ class Households(AgentBaseClass):
 
         """
         flood_depth: xr.DataArray = flood_depth.compute()
-        # flood_map = flood_map.chunk({"x": 100, "y": 1000})
 
         buildings: gpd.GeoDataFrame = self.buildings.copy().to_crs(flood_depth.rio.crs)
+
         household_points: gpd.GeoDataFrame = self.var.household_points.copy().to_crs(
             flood_depth.rio.crs
         )
@@ -2059,6 +2130,31 @@ class Households(AgentBaseClass):
                 default="building_unprotected",
             )
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
+
+        if self.config["adapt"]:
+            # print(buildings["flooded"].value_counts())
+            # print(buildings["flood_proofed"].value_counts())
+            household_points = gpd.sjoin_nearest(
+                household_points,
+                buildings[["geometry", "flood_proofed"]],
+                how="left",
+                distance_col=None,  # optional
+            )
+            buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
+
+            buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
+
+            buildings["object_type"] = np.where(
+                buildings["flood_proofed"],
+                "building_flood_proofed",
+                "building_unprotected",
+            )
+
+            buildings_centroid["object_type"] = np.where(
+                buildings_centroid["flood_proofed"],
+                "building_protected",
+                "building_unprotected",
+            )
 
         else:
             household_points["protect_building"] = False
@@ -2260,16 +2356,78 @@ class Households(AgentBaseClass):
 
     def step(self) -> None:
         """Advance the households by one time step."""
-        if (
-            self.config["adapt"]
-            and self.model.current_time.month == 1
-            and self.model.current_time.day == 1
-        ):
-            if "flooded" not in self.buildings.columns:
-                self.update_building_attributes()
+        if self.config["adapt"]:
+            if self.config["adapt_to_actual_floods"]:
+                self.flood_events: list[dict[str, datetime]] = self.model.config[
+                    "hazards"
+                ]["floods"]["events"]
+                current_time: datetime = self.model.current_time
 
-            print("Thinking about adapting...")
-            self.decide_household_strategy()
+                # Check if a flood has recently happened by comparing the current time to the end of flood + 14 days
+                # (assumption that people wait around 2 weeks before adapting)
+                is_flood_triggered: bool = any(
+                    current_time
+                    == (
+                        e["end_time"] + timedelta(days=14)
+                        if isinstance(e["end_time"], datetime)
+                        else datetime.strptime(e["end_time"], "%Y-%m-%d %H:%M:%S")
+                        + timedelta(days=14)
+                    )
+                    for e in self.flood_events
+                )
+
+                # Households adapt on first day of the year or 2 weeks after flood happened
+                if (
+                    self.model.current_time.month == 1
+                    and self.model.current_time.day == 1
+                ) or is_flood_triggered:
+                    if "flooded" not in self.buildings.columns:
+                        self.update_building_attributes()
+                    print(f"Thinking about adapting at {current_time}...")
+                    self.decide_household_strategy()
+
+                end_time: datetime = datetime.combine(
+                    self.model.config["general"]["end_time"], datetime.min.time()
+                )
+
+                if self.model.current_time == end_time:
+                    print("end of sim reached")
+                    df_all: pd.DataFrame = pd.concat(
+                        self.flood_risk_perceptions, ignore_index=True
+                    )
+
+                    gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
+                        df_all,
+                        geometry=gpd.points_from_xy(df_all.x, df_all.y),
+                        crs=self.var.household_points.crs,
+                    )
+
+                    out_path: Path = (
+                        Path(self.model.output_folder) / "risk_perceptions.gpkg"
+                    )
+                    print(f"saved risk perception here: {out_path}")
+                    gdf.to_file(out_path, layer="perceptions", driver="GPKG")
+
+                    df_stats: pd.DataFrame = pd.DataFrame(
+                        self.flood_risk_perceptions_statistics
+                    )
+                    out_path: Path = (
+                        Path(self.model.output_folder) / "risk_perception_stats.csv"
+                    )
+                    df_stats.to_csv(out_path, index=False)
+                    print(f"Saved risk perception statistics to {out_path}")
+
+            else:  # Household don't respond to actual floods, but make decision on the first day of the year. Decisions are based on random floods
+                if (
+                    self.config["adapt"]
+                    and self.model.current_time.month == 1
+                    and self.model.current_time.day == 1
+                ):
+                    if "flooded" not in self.buildings.columns:
+                        self.update_building_attributes()
+                    print("Thinking about adapting...")
+                    self.decide_household_strategy()
+
         self.report(locals())
 
     @property

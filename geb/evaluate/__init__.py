@@ -33,7 +33,7 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
         spinup_name: str = "spinup",
         run_name: str = "default",
         include_spinup: bool = False,
-        include_yearly_plots: bool = False,
+        include_yearly_plots: bool = True,
         correct_Q_obs: bool = False,
     ) -> None:
         """Run the evaluation methods.
@@ -54,8 +54,11 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
             methods: list = [
                 "plot_discharge",
                 "evaluate_discharge",
+                "water_circle",
                 "evaluate_hydrodynamics",
                 "evaluate_forecasts",
+                "plot_discharge_floods",
+                "water_balance",
             ]
         else:
             assert isinstance(methods, (list, tuple)), (
