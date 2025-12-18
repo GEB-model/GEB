@@ -56,20 +56,6 @@ class Market(AgentBaseClass):
             self.model, "crops/crop_prices"
         )
 
-        # if (
-        #     "calibration" in self.model.config
-        #     and "KGE_crops" in self.model.config["calibration"]["calibration_targets"]
-        # ):
-        #     self.production_influence_calibration_factor = np.array(
-        #         [
-        #             self.model.config["agent_settings"]["calibration_crops"][
-        #                 f"price_{i}"
-        #             ]
-        #             for i in range(self._crop_prices[1].shape[2])
-        #         ],
-        #         dtype=np.float32,
-        #     )
-        # else:
         self.production_influence_calibration_factor = np.ones(
             self._crop_prices[1].shape[2], dtype=np.float32
         )
@@ -220,6 +206,8 @@ class Market(AgentBaseClass):
             production = self.var.production[
                 :, self.year_index - 1
             ]  # for now taking the previous year, should be updated
+            # Change 0s to 1 to prevent log(0) becoming infinite
+            production = np.where(production.data == 0, 1, production.data)
             price_pred = np.exp(
                 1 * self.var.parameters[:, 0]
                 + self.production_influence_calibration_factor

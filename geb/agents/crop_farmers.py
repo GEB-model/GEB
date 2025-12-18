@@ -222,6 +222,9 @@ class CropFarmers(AgentBaseClass):
         self.water_price = load_economic_data(
             self.model.files["dict"]["socioeconomics/water_price"]
         )
+        # self.water_price_channel = load_economic_data(
+        #     self.model.files["dict"]["socioeconomics/water_price_channel"]
+        # )
 
         # diversions
         self.diversions = load_economic_data(
@@ -327,6 +330,23 @@ class CropFarmers(AgentBaseClass):
         self.base_efficiency = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["adaptation_sprinkler"]["base_efficiency"]
+
+        self.static_water_price = self.model.config["agent_settings"]["farmers"][
+            "expected_utility"
+        ]["water_price"]["static"]
+
+        # Set water costs
+        if self.static_water_price:
+            self.water_costs_m3_channel = self.model.config["agent_settings"][
+                "farmers"
+            ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
+            self.water_costs_m3_reservoir = self.model.config["agent_settings"][
+                "farmers"
+            ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
+            self.water_costs_m3_groundwater = self.model.config["agent_settings"][
+                "farmers"
+            ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
+
         self.allocation_reduction = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["adaptation_sprinkler"]["allocation_reduction"]
@@ -395,17 +415,6 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["insurance"]["duration"]
         self.var.p_droughts = np.array([100, 50, 25, 10, 5, 2, 1])
-
-        # Set water costs
-        self.var.water_costs_m3_channel = self.model.config["agent_settings"][
-            "farmers"
-        ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
-        self.var.water_costs_m3_reservoir = self.model.config["agent_settings"][
-            "farmers"
-        ]["expected_utility"]["water_price"]["water_costs_m3_groundwater"]
-        self.var.water_costs_m3_groundwater = self.model.config["agent_settings"][
-            "farmers"
-        ]["expected_utility"]["water_price"]["water_costs_m3_channel"]
 
         # Irr efficiency variables
         self.var.lifespan_irrigation = self.model.config["agent_settings"]["farmers"][
@@ -645,6 +654,15 @@ class CropFarmers(AgentBaseClass):
 
         # 2D-array for storing yearly abstraction by farmer. 0: channel abstraction, 1: reservoir abstraction, 2: groundwater abstraction, 3: total abstraction
         self.var.yearly_abstraction_m3_by_farmer = DynamicArray(
+            n=self.var.n,
+            max_n=self.var.max_n,
+            extra_dims=(4, self.var.total_spinup_time),
+            extra_dims_names=("abstraction_type", "year"),
+            dtype=np.float32,
+            fill_value=0,
+        )
+
+        self.var.yearly_water_costs_by_farmer = DynamicArray(
             n=self.var.n,
             max_n=self.var.max_n,
             extra_dims=(4, self.var.total_spinup_time),
@@ -1428,7 +1446,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     @property
-    def water_price(self) -> np.ndarray:
+    def water_price_array(self) -> np.ndarray:
         """Yearly water price per region (USD/m³).
 
         Taken from observed water markets data.
@@ -1440,6 +1458,24 @@ class CropFarmers(AgentBaseClass):
             self.var.n,
             self.get_value_per_farmer_from_region_id(
                 self.water_price, self.model.current_time
+            ),
+            dtype=np.float32,
+        )
+        return water_price_usd_m3
+
+    @property
+    def water_price_array_channel(self) -> np.ndarray:
+        """Yearly water price per region (USD/m³).
+
+        Taken from observed water markets data.
+        """
+        # HETAO: here, the water price is set using data from the build module.
+        # You can do something similar by adapting the setup_water_prices_australia if you have yearly price data
+        # Otherwise you could replace this function by one that determines it based on other parameters.
+        water_price_usd_m3 = np.full(
+            self.var.n,
+            self.get_value_per_farmer_from_region_id(
+                self.water_price_channel, self.model.current_time
             ),
             dtype=np.float32,
         )
@@ -3360,9 +3396,6 @@ class CropFarmers(AgentBaseClass):
     def adapt_irrigation_well(
         self,
         farmer_yield_probability_relation: npt.NDArray[np.floating],
-        average_extraction_speed: npt.NDArray[np.floating] | float,
-        energy_cost: npt.NDArray[np.floating],
-        water_cost: npt.NDArray[np.floating],
     ) -> None:
         """Checks farmers will take irrigation wells based on expected utility and constraints.
 
@@ -3381,6 +3414,20 @@ class CropFarmers(AgentBaseClass):
         """
         groundwater_depth = self.groundwater_depth.copy()
         groundwater_depth[groundwater_depth <= 0] = 0.001
+
+        yearly_abstraction_m3_by_farmer = self.var.yearly_abstraction_m3_by_farmer[
+            :, TOTAL_IRRIGATION, :
+        ].data
+        valid_years = (yearly_abstraction_m3_by_farmer != 0).any(axis=0)
+
+        yearly_abstraction_m3 = np.mean(
+            yearly_abstraction_m3_by_farmer[:, valid_years], axis=1
+        )
+
+        # Compute average extraction speed per agent (m³/s)
+        average_extraction_speed = (
+            yearly_abstraction_m3 / 365 / self.var.pump_hours / 3600
+        )  # Convert from m³/year to m³/s
 
         annual_cost, well_depth = self.calculate_well_costs_global(
             groundwater_depth, average_extraction_speed
@@ -3416,8 +3463,11 @@ class CropFarmers(AgentBaseClass):
             adaptation_type=WELL_ADAPTATION,
         )
 
-        energy_cost_m2 = energy_cost / self.field_size_per_farmer
-        water_cost_m2 = water_cost / self.field_size_per_farmer
+        water_costs = np.zeros(self.var.n, dtype=np.float32)
+        energy_costs = np.zeros(self.var.n, dtype=np.float32)
+
+        energy_cost_m2 = energy_costs / self.field_size_per_farmer
+        water_cost_m2 = water_costs / self.field_size_per_farmer
 
         (
             energy_diff_m2,
@@ -3530,8 +3580,7 @@ class CropFarmers(AgentBaseClass):
             farmer_yield_probability_relation: Per-farmer parameters for the
                 yield-SPEI relation used to evaluate profits under drought risk.
                 Shape (n_agents, 2).
-            energy_cost: Annual energy cost per farmer (LCU/year). Shape (n_agents,).
-            water_cost: Annual water cost per farmer (LCU/year). Shape (n_agents,).
+            annual_cost: Annual cost per farmer (LCU/year). Shape (n_agents,).
             adaptation_costs_m2: Capital cost per m² for the efficiency upgrade
                 (LCU/m²). Shape (n_agents,).
             adaptation_type: Index of the adaptation slot/column to update.
@@ -3544,8 +3593,12 @@ class CropFarmers(AgentBaseClass):
             "expected_utility"
         ]["adaptation_sprinkler"]["loan_duration"]
 
+        # The total expenses of the farmer with a new adaptation
         total_annual_costs_m2 = (
-            annual_cost + self.var.all_loans_annual_cost[:, -1, 0]
+            annual_cost  # annual cost = cost of irrigation efficiency,
+            + self.var.all_loans_annual_cost[
+                :, -1, 0
+            ]  # self.var.all_loans_annual_cost[:, -1, 0] are the total current loans
         ) / self.field_size_per_farmer
 
         # Solely the annual cost of the adaptation
@@ -3579,32 +3632,24 @@ class CropFarmers(AgentBaseClass):
             adaptation_type=adaptation_type,
         )
 
-        yearly_water_use_m3 = np.mean(
-            self.var.yearly_abstraction_m3_by_farmer[:, TOTAL_IRRIGATION, :], axis=1
+        # Determine the lower / higher water costs with a different efficiency
+        yearly_water_costs_by_farmer = self.var.yearly_water_costs_by_farmer[
+            :, TOTAL_IRRIGATION, :
+        ].data
+        valid_years = (yearly_water_costs_by_farmer != 0).any(axis=0)
+
+        yearly_water_costs = np.mean(
+            yearly_water_costs_by_farmer[:, valid_years], axis=1
         )
-        yearly_new_water_use_m3 = yearly_water_use_m3 * (
+        yearly_new_costs = yearly_water_costs * (
             self.var.irrigation_efficiency / efficiency
         )
-        delta_yearly_water_m3 = yearly_water_use_m3 - yearly_new_water_use_m3
+        delta_yearly_water_costs = yearly_water_costs - yearly_new_costs
 
-        water_costs = np.zeros(self.var.n, dtype=np.float32)
+        # TO DO: set differences in pumping / energy costs as well
         energy_costs = np.zeros(self.var.n, dtype=np.float32)
 
-        water_costs[self.channel_irrigating_mdb] = (
-            delta_yearly_water_m3[self.channel_irrigating_mdb]
-            * self.water_price[self.channel_irrigating_mdb]
-        )
-        # Compute water costs for agents using reservoir water (USD/m3)
-        water_costs[self.reservoir_irrigating_mdb] = (
-            delta_yearly_water_m3[self.reservoir_irrigating_mdb]
-            * self.water_price[self.reservoir_irrigating_mdb]
-        )
-        # Compute water costs for agents using groundwater (USD/m3)
-        water_costs[self.well_irrigated] = (
-            delta_yearly_water_m3[self.well_irrigated]
-            * self.water_price[self.well_irrigated]
-        )
-        water_diff_m2 = water_costs / self.field_size_per_farmer
+        water_diff_m2 = delta_yearly_water_costs / self.field_size_per_farmer
         energy_diff_m2 = energy_costs / self.field_size_per_farmer
 
         (
@@ -3917,45 +3962,31 @@ class CropFarmers(AgentBaseClass):
             ]["seut_factor"]
         else:
             factor = self.model.config["agent_settings"]["farmers"]["expected_utility"][
-                "adaptation_well"
+                "adaptation_sprinkler"
             ]["seut_factor"]
         # Compare EU values for those who haven't adapted yet and get boolean results
 
         adjusted_do_nothing = SEUT_do_nothing * (factor ** np.sign(SEUT_do_nothing))
         SEUT_adaptation_decision = SEUT_adapt > adjusted_do_nothing
 
-        # social_network_adaptation = adapted[self.var.social_network]
+        social_network_adaptation = adapted[self.var.social_network]
 
-        # # Check whether adapting agents have adaptation type in their network and create mask
-        # network_has_adaptation = np.any(social_network_adaptation == 1, axis=1)
+        # Check whether adapting agents have adaptation type in their network and create mask
+        network_has_adaptation = np.any(social_network_adaptation == 1, axis=1)
 
-        # # Increase intention factor if someone in network has adaptation
-        # intention_factor_adjusted = self.var.intention_factor.copy()
-        # intention_factor_adjusted = np.clip(
-        #     self.var.intention_factor.data - 0.3, 0.05, 0.2
-        # )
+        # Increase intention factor if someone in network has adaptation
+        intention_factor_adjusted = self.var.intention_factor.copy()
+        intention_factor_adjusted = np.clip(
+            self.var.intention_factor.data - 0.3, 0.05, 0.2
+        )
 
-        # if adaptation_type in (
-        #     PERSONAL_INSURANCE_ADAPTATION,
-        #     INDEX_INSURANCE_ADAPTATION,
-        #     PR_INSURANCE_ADAPTATION,
-        # ):
-        #     social_network_payout = self.var.payout_mask[
-        #         self.var.social_network, adaptation_type
-        #     ]
-        #     network_has_payout = np.any(social_network_payout == 1, axis=1)
-        #     intention_factor_adjusted[network_has_payout] += 0.4
+        intention_factor_adjusted[network_has_adaptation] += 0.4
 
-        #     agent_has_payout = self.var.payout_mask[:, adaptation_type]
-        #     intention_factor_adjusted[agent_has_payout] += 0.4
-        # else:
-        #     intention_factor_adjusted[network_has_adaptation] += 0.4
+        # Determine whether it passed the intention threshold
+        random_values = np.random.rand(*intention_factor_adjusted.shape)
+        intention_mask = random_values < intention_factor_adjusted
 
-        # # Determine whether it passed the intention threshold
-        # random_values = np.random.rand(*intention_factor_adjusted.shape)
-        # intention_mask = random_values < intention_factor_adjusted
-
-        # SEUT_adaptation_decision = SEUT_adaptation_decision  # & intention_mask
+        SEUT_adaptation_decision = SEUT_adaptation_decision & intention_mask
 
         # Update the adaptation status
         self.var.adaptations[SEUT_adaptation_decision, adaptation_type] = 1
@@ -4097,101 +4128,60 @@ class CropFarmers(AgentBaseClass):
 
         return annual_cost_surface, annual_cost_sprinkler, annual_cost_drip
 
-    def calculate_water_costs(
-        self,
-    ) -> tuple[
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
-    ]:
-        """Calculate water/energy costs and average extraction speed per agent.
+    def calculate_water_costs(self) -> None:
+        """Uses yearly water abstraction from different sources (channel, reservoir, groundwater) for each farmer and converts it to costs.
 
-        Computes:
-        - energy costs for groundwater users (USD/year),
-        - water costs for all agents by source (USD/year),
-        - average extraction speed per agent (m³/s),
+        Also computes the total costs per farmer.
 
-        and updates loan-related arrays in place.
-
-        Returns:
-            tuple[npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
-                Energy costs, water costs, and average extraction speed per agent.
         """
-        # Get electricity costs per agent based on their region and current time
-        # electricity_costs = np.full(
-        #     self.var.n,
-        #     self.get_value_per_farmer_from_region_id(
-        #         self.electricity_cost, self.model.current_time
-        #     ),
-        #     dtype=np.float32,
-        # )
-
-        # Initialize energy and water costs arrays
-        energy_costs = np.zeros(self.var.n, dtype=np.float32)
-        water_costs = np.zeros(self.var.n, dtype=np.float32)
-
-        # # Compute total pump duration per agent (average over crops)
-        # crop_growth_duration = self.var.crop_calendar[:, :, 2].data
-        # total_pump_duration = np.where(
-        #     crop_growth_duration == -1, 0, crop_growth_duration
-        # ).sum(axis=1)
-
-        # Get groundwater depth per agent and ensure non-negative values
-        groundwater_depth = self.groundwater_depth.copy()
-        groundwater_depth[groundwater_depth < 0] = 0
-
-        yearly_abstraction_m3_by_farmer = self.var.yearly_abstraction_m3_by_farmer[
-            :, TOTAL_IRRIGATION, :
-        ].data
-        valid_years = (yearly_abstraction_m3_by_farmer != 0).any(axis=0)
-
-        yearly_abstraction_m3 = np.mean(
-            yearly_abstraction_m3_by_farmer[:, valid_years], axis=1
-        )
-
-        # Compute average extraction speed per agent (m³/s)
-        average_extraction_speed = (
-            yearly_abstraction_m3 / 365 / self.var.pump_hours / 3600
-        )  # Convert from m³/year to m³/s
-
-        # Create boolean masks for different types of water sources
         mask_channel = self.channel_irrigating_mdb.copy()
         mask_reservoir = self.reservoir_irrigating_mdb.copy()
         mask_groundwater = self.well_irrigated.copy()
 
-        # # Compute power required for groundwater extraction per agent (kW)
-        # power = (
-        #     self.var.specific_weight_water
-        #     * groundwater_depth[mask_groundwater]
-        #     * average_extraction_speed[mask_groundwater]
-        #     / self.var.pump_efficiency
-        # ) / 1000  # Convert from W to kW
+        if self.static_water_price:
+            price_channel = self.water_costs_m3_channel  # scalar
+            price_reservoir = self.water_costs_m3_reservoir  # scalar
+            price_groundwater = self.water_costs_m3_groundwater  # scalar
+        else:
+            price_channel = self.water_price_mdb[mask_channel]
+            price_reservoir = self.water_price_mdb[mask_reservoir]
+            price_groundwater = self.water_price_mdb[mask_groundwater]
 
-        # # Compute energy consumption per agent (kWh/year)
-        # energy = power * (total_pump_duration[mask_groundwater] * self.var.pump_hours)
-
-        # # Get energy cost rate per agent (USD per kWh)
-        # energy_cost_rate = electricity_costs[mask_groundwater]
-
-        # # Compute energy costs per agent (USD/m3) for groundwater irrigating farmers
-        # energy_costs[mask_groundwater] = energy * energy_cost_rate
-
-        # Compute water costs for agents using channel water (USD/m3)
-        water_costs[mask_channel] = (
-            yearly_abstraction_m3[mask_channel] * self.water_price[mask_channel]
+        water_costs_channel = (
+            self.var.yearly_water_costs_by_farmer[mask_channel, CHANNEL_IRRIGATION, 0]
+            * price_channel
+        )
+        water_costs_reservoir = (
+            self.var.yearly_water_costs_by_farmer[
+                mask_reservoir, RESERVOIR_IRRIGATION, 0
+            ]
+            * price_reservoir
+        )
+        water_costs_groundwater = (
+            self.var.yearly_water_costs_by_farmer[
+                mask_groundwater, GROUNDWATER_IRRIGATION, 0
+            ]
+            * price_groundwater
         )
 
-        # Compute water costs for agents using reservoir water (USD/m3)
-        water_costs[mask_reservoir] = (
-            yearly_abstraction_m3[mask_reservoir] * self.water_price[mask_reservoir]
+        # Write back per-source costs
+        self.var.yearly_water_costs_by_farmer[mask_channel, CHANNEL_IRRIGATION, 0] = (
+            water_costs_channel
         )
+        self.var.yearly_water_costs_by_farmer[
+            mask_reservoir, RESERVOIR_IRRIGATION, 0
+        ] = water_costs_reservoir
+        self.var.yearly_water_costs_by_farmer[
+            mask_groundwater, GROUNDWATER_IRRIGATION, 0
+        ] = water_costs_groundwater
 
-        # Compute water costs for agents using groundwater (USD/m3)
-        water_costs[mask_groundwater] = (
-            yearly_abstraction_m3[mask_groundwater] * self.water_price[mask_groundwater]
-        )
+        # Total: robust with differing masks
+        total = self.var.yearly_water_costs_by_farmer[:, TOTAL_IRRIGATION, 0]
+        total[mask_channel] += water_costs_channel
+        total[mask_reservoir] += water_costs_reservoir
+        total[mask_groundwater] += water_costs_groundwater
 
-        # Assume minimal interest rate as farmers pay directly
+        # Adds the water costs to the annual loan for farmers
         interest_rate_farmer = 0.0001  # Annual interest rate
         loan_duration = 2  # Loan duration in years
 
@@ -4202,7 +4192,7 @@ class CropFarmers(AgentBaseClass):
             * (1 + interest_rate_farmer) ** loan_duration
             / ((1 + interest_rate_farmer) ** loan_duration - 1)
         )
-        annual_cost_water_energy = (water_costs + energy_costs) * annuity_factor
+        annual_cost_water_energy = total * annuity_factor
 
         # Update loan records with the annual cost of water and energy
         for i in range(4):
@@ -4218,8 +4208,6 @@ class CropFarmers(AgentBaseClass):
 
         # Add the annual cost to the total loan annual costs
         self.var.all_loans_annual_cost.data[:, -1, 0] += annual_cost_water_energy
-
-        return energy_costs, water_costs, average_extraction_speed
 
     def calculate_well_costs_global(
         self,
@@ -4450,13 +4438,17 @@ class CropFarmers(AgentBaseClass):
             crop_elevation_group, axis=0, return_inverse=True
         )
 
+        yearly_profits_m2 = (
+            self.var.yearly_income
+            - self.var.yearly_water_costs_by_farmer[:, TOTAL_IRRIGATION, :]
+        ) / self.field_size_per_farmer[..., None]
+
         # Calculate the yield gains for crop switching for different farmers
         (
             profit_gains,
             new_farmer_id,
         ) = crop_profit_difference_njit_parallel(
-            yearly_profits=self.var.yearly_income.data
-            / self.field_size_per_farmer[..., None],  # income per m2
+            yearly_profits=yearly_profits_m2.data,  # income per m2
             crop_elevation_group=crop_elevation_group,
             unique_crop_groups=unique_crop_groups,
             group_indices=group_indices,
@@ -5177,6 +5169,9 @@ class CropFarmers(AgentBaseClass):
                 self.var.yearly_income / self.var.yearly_potential_income
             )
 
+            # Update the water costs
+            self.calculate_water_costs()
+
             # HETAO: here we determine the farmer groups. They influence the yield-probability relation
             # and adaptation. We do this by creating arrays where we give e.g. 0 to farmers that use reservoir
             # irrigation, 1 to river water and 2 to groundwater.
@@ -5198,12 +5193,6 @@ class CropFarmers(AgentBaseClass):
                 self.var.irrigation_efficiency_group,
             )
             print("Nr of base groups", len(np.unique(self.var.farmer_base_class[:])))
-
-            energy_cost, water_cost, average_extraction_speed = (
-                self.calculate_water_costs()
-            )
-
-            timer.finish_split("water & energy costs")
 
             if (
                 not self.model.in_spinup
@@ -5237,9 +5226,6 @@ class CropFarmers(AgentBaseClass):
                     if self.wells_adaptation_active:
                         self.adapt_irrigation_well(
                             farmer_yield_probability_relation,
-                            average_extraction_speed,
-                            energy_cost,
-                            water_cost,
                         )
                         timer.finish_split("irr well")
                     if (
@@ -5282,12 +5268,14 @@ class CropFarmers(AgentBaseClass):
             # Update loans
             self.update_loans()
 
-            matrix_abstraction = (
+            matrix_abs = (
                 self.var.yearly_abstraction_m3_by_farmer
             )  # shape (n_farmers, 4, 20)
-            shift_and_reset_matrix(
-                matrix_abstraction.reshape(-1, matrix_abstraction.shape[-1])
-            )
+            matrix_costs = (
+                self.var.yearly_water_costs_by_farmer
+            )  # shape (n_farmers, 4, 20)
+            shift_and_reset_matrix(matrix_abs.reshape(-1, matrix_abs.shape[-1]))
+            shift_and_reset_matrix(matrix_costs.reshape(-1, matrix_costs.shape[-1]))
 
             # Shift the potential and yearly profits forward
             shift_and_reset_matrix(self.var.yearly_income)

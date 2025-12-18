@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +16,170 @@ from .. import GEBModel
 
 
 class Agents(GEBModel):
-    """Contains copied build methods for the agents for GEB and additional functions for the murray-darling basin."""
+    """Build methods for agents in GEB, including Murray–Darling-specific logic."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Forward arguments to the base ``GEBModel`` initializer."""
+        """Initialize an Agents model.
+
+        Forwards all arguments to the base ``GEBModel`` initializer.
+
+        Args:
+            *args: Positional arguments forwarded to ``GEBModel``.
+            **kwargs: Keyword arguments forwarded to ``GEBModel``.
+        """
         super().__init__(*args, **kwargs)
+
+    @build_method(depends_on=["set_time_range", "setup_economic_data"])
+    def setup_crop_cultivation_costs_by_reference_year(
+        self,
+        crop_costs: dict[str, dict[str, Any]],
+        n_crops: int = 26,
+    ) -> None:
+        """Build crop cultivation cost time series using crop-specific reference years.
+
+        For each region and crop, construct an annual time series of cultivation
+        costs (e.g. USD per square metre) from a single reference-year value. The
+        given reference-year value is inflated forward and deflated backward using
+        region-specific inflation rates, and the resulting time series are stored
+        in the internal dictionary.
+
+        Notes:
+            The input ``crop_costs`` is expected to contain, for each crop key,
+            at least the fields ``reference_year`` and ``value``. Reference years
+            must fall within the model time range and be present in the inflation
+            time axis.
+
+        Args:
+            crop_costs: Mapping from crop identifier to a specification that
+                includes a reference year and a per-area cost value. Keys are crop
+                IDs that can be cast to integers.
+            n_crops: Total number of potential crops. This is used to ensure that
+                the output dictionary has entries for all crop IDs in the range
+                from 0 to ``n_crops - 1``, even if some are missing from
+                ``crop_costs``.
+
+
+        Raises:
+            ValueError: If a crop specification is missing the required fields
+                ``reference_year`` or ``value``, or if the reference year lies
+                outside the model time range or is missing from the inflation
+                time axis.
+        """
+        inflation_rates = self.dict["socioeconomics/inflation_rates"]
+        regions = list(inflation_rates["data"].keys())
+
+        start_year = int(self.start_date.year)
+        end_year = int(self.end_date.year)
+        years = list(range(start_year, end_year + 1))
+
+        # Inflation time axis lookup (often stored as strings)
+        infl_time_years = [int(y) for y in inflation_rates["time"]]
+        year_to_idx = {y: i for i, y in enumerate(infl_time_years)}
+
+        # Normalize YAML keys to canonical string crop ids
+        crop_costs_norm: dict[str, dict[str, Any]] = {
+            str(int(k)): v for k, v in crop_costs.items()
+        }
+
+        def inflate_series_from_reference(
+            initial_value: float | None,
+            reference_year: int,
+            region_id: str,
+        ) -> list[float]:
+            """Create an annual series from a reference-year cultivation cost.
+
+            Given a single reference-year cost, build a time series over the model
+            time range by applying regional inflation rates backward and forward
+            in time.
+
+            Notes:
+                If ``initial_value`` is missing or not a valid number, the function
+                returns a series of missing values for all years. The reference
+                year must lie within the model time range and be present in the
+                inflation rate time axis.
+
+            Args:
+                initial_value: Cultivation cost in the reference year. If None or
+                    not a valid number, the result is a list of missing values.
+                reference_year: Year for which ``initial_value`` applies. Must lie
+                    between ``start_year`` and ``end_year``.
+                region_id: Region identifier used to select the appropriate
+                    inflation series.
+
+            Returns:
+                A list of annual cultivation costs for each year between
+                ``start_year`` and ``end_year`` (inclusive).
+
+            Raises:
+                ValueError: If the reference year is outside the model time range
+                    or not present in the inflation time axis.
+            """
+            if initial_value is None or (
+                isinstance(initial_value, float) and np.isnan(initial_value)
+            ):
+                return [np.nan] * len(years)
+
+            reference_year = int(reference_year)
+
+            if reference_year < start_year or reference_year > end_year:
+                raise ValueError(
+                    f"reference_year={reference_year} must be within [{start_year}, {end_year}] "
+                    f"(region_id={region_id})."
+                )
+            if reference_year not in year_to_idx:
+                raise ValueError(
+                    "reference_year="
+                    f"{reference_year} not present in socioeconomics/"
+                    "inflation_rates['time']."
+                )
+
+            s = pd.Series(index=years, dtype="float64")
+            s.loc[reference_year] = float(initial_value)
+
+            # Forward: y-1 -> y multiply by inflation rate for year y
+            for y in range(reference_year + 1, end_year + 1):
+                infl = inflation_rates["data"][region_id][year_to_idx[y]]
+                s.loc[y] = s.loc[y - 1] * infl
+
+            # Backward: y+1 -> y divide by inflation rate for year y+1
+            for y in range(reference_year - 1, start_year - 1, -1):
+                infl_next = inflation_rates["data"][region_id][year_to_idx[y + 1]]
+                s.loc[y] = s.loc[y + 1] / infl_next
+
+            return s.tolist()
+
+        cultivation_costs: dict[str, Any] = {
+            "type": "time_series",
+            "time": years,
+            "data": {},
+        }
+
+        for region_id in regions:
+            region_dict: dict[str, list[float]] = {}
+
+            for crop_id in range(int(n_crops)):
+                crop_key = str(crop_id)
+                spec = crop_costs_norm.get(crop_key)
+
+                if spec is None:
+                    region_dict[crop_key] = [np.nan] * len(years)
+                    continue
+
+                if "reference_year" not in spec or "value" not in spec:
+                    raise ValueError(
+                        f"crop_costs['{crop_key}'] must contain 'reference_year' and "
+                        f"'value'. Got keys: {list(spec.keys())}"
+                    )
+
+                region_dict[crop_key] = inflate_series_from_reference(
+                    initial_value=spec["value"],
+                    reference_year=spec["reference_year"],
+                    region_id=str(region_id),
+                )
+
+            cultivation_costs["data"][str(region_id)] = region_dict
+
+        self.set_dict(cultivation_costs, name="crops/cultivation_costs")
 
     @build_method(depends_on=["setup_economic_data"])
     def setup_irrigation_efficiency_australia(
@@ -27,6 +187,26 @@ class Agents(GEBModel):
         start_year: int,
         end_year: int,
     ) -> None:
+        """Set up irrigation efficiency trajectories for Australian regions.
+
+        Read historical irrigation type data, estimate missing values, fit several
+        time-series models (linear, linear plus sinusoidal, and logistic), and
+        create region-specific trajectories of irrigation type fractions for the
+        model period.
+
+        Notes:
+            The method creates diagnostic plots on disk and then stores the final
+            trajectories as dictionaries that can be used as model inputs. The
+            stored irrigation fractions are constrained to be between zero and
+            one and to sum to one for each year and region.
+
+        Args:
+            start_year: First simulation year (inclusive) for which trajectories
+                are generated.
+            end_year: Last simulation year (inclusive) for which trajectories
+                are generated.
+
+        """
         fp = Path("calibration_data/water_use/murray_water_use.csv")
 
         data_df = pd.read_csv(fp)
@@ -42,7 +222,21 @@ class Agents(GEBModel):
         irrigation_df = irrigation_df.rename(columns={"Year": "time"})
 
         # Parse e.g. "2002/3" -> datetime(2003-06-30)
-        def parse_water_year(wy_str):
+        def parse_water_year(wy_str: str) -> pd.Timestamp:
+            """Parse a water year string into a June-30 timestamp.
+
+            Notes:
+                The expected format is a string with a slash, such as "2002/3",
+                where the calendar year is taken as the first part plus one, and
+                June 30 of that year is returned.
+
+            Args:
+                wy_str: Water year string to parse.
+
+            Returns:
+                A pandas timestamp corresponding to the June 30 date of the
+                water year.
+            """
             return pd.to_datetime(f"{int(wy_str.split('/')[0]) + 1}-06-30")
 
         irrigation_df["time"] = irrigation_df["time"].apply(parse_water_year)
@@ -123,7 +317,7 @@ class Agents(GEBModel):
 
         # For each Description, reindex on full date range, interpolate by time
         all_desc = df_flat["Description"].unique()
-        groups = []
+        groups: list[pd.DataFrame] = []
         for d in all_desc:
             g = df_flat[df_flat["Description"] == d].copy()
 
@@ -155,10 +349,6 @@ class Agents(GEBModel):
 
         output_dir = Path("calibration_data/water_use/plots")
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Range for expansion (arguments)
-        start_year = start_year
-        end_year = end_year
 
         pivot = pivot_df.copy().reset_index()
         pivot["time"] = pd.to_datetime(pivot["time"])
@@ -206,16 +396,30 @@ class Agents(GEBModel):
             "fraction_surface_irrigation": "surface",
         }
 
-        def prepare_region_wide(long_all, region):
+        def prepare_region_wide(
+            long_all_df: pd.DataFrame,
+            region: str,
+        ) -> pd.DataFrame:
+            """Prepare a wide compositional table for a single region.
+
+            The returned table contains one row per year with columns for the
+            irrigation type fractions. Fractions are renormalised per year so that
+            they sum exactly to one.
+
+            Args:
+                long_all_df: Long-format irrigation fraction table for all regions.
+                region: Name of the region to extract.
+
+            Returns:
+                A wide-format table with columns ``"year"``, ``"drip"``,
+                ``"sprinkler"``, and ``"surface"`` containing yearly fractions.
             """
-            Return wide table for a region:
-            columns: year, drip, sprinkler, surface
-            Fractions are renormalised per year to sum exactly to 1.
-            """
-            sub = long_all[long_all["Region"] == region].copy()
+            sub = long_all_df[long_all_df["Region"] == region].copy()
             sub["Var"] = sub["Description"].map(desc_map)
             wide = sub.pivot(
-                index="year", columns="Var", values="fraction"
+                index="year",
+                columns="Var",
+                values="fraction",
             ).sort_index()
 
             sum_frac = wide[["drip", "sprinkler", "surface"]].sum(axis=1)
@@ -230,30 +434,78 @@ class Agents(GEBModel):
         # 3. LINEAR MODEL
         # =========================
 
-        def fit_linear_model(years, y):
-            years = np.asarray(years, dtype=float)
-            y = np.asarray(y, dtype=float)
-            coeffs = np.polyfit(years, y, 1)  # [b, a]
-            yhat = np.polyval(coeffs, years)
-            ss_res = np.sum((y - yhat) ** 2)
-            ss_tot = np.sum((y - np.mean(y)) ** 2)
+        def fit_linear_model(
+            years: Sequence[float],
+            y: Sequence[float],
+        ) -> dict[str, Any]:
+            """Fit a linear trend model for irrigation fractions.
+
+            Notes:
+                The model is of the form f(year) = a * year + b and is fitted via
+                least squares. Model quality is summarised by the coefficient of
+                determination.
+
+            Args:
+                years: Sequence of years at which observations are available.
+                y: Observed fractions corresponding to ``years``.
+
+            Returns:
+                A dictionary containing the model parameters, the fitted type
+                label, and the coefficient of determination.
+            """
+            years_arr = np.asarray(years, dtype=float)
+            y_arr = np.asarray(y, dtype=float)
+            coeffs = np.polyfit(years_arr, y_arr, 1)
+            yhat = np.polyval(coeffs, years_arr)
+            ss_res = np.sum((y_arr - yhat) ** 2)
+            ss_tot = np.sum((y_arr - np.mean(y_arr)) ** 2)
             r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
             return {"type": "linear", "coeffs": coeffs, "r2": r2}
 
-        def predict_linear_model(years, model):
-            years = np.asarray(years, dtype=float)
-            return np.polyval(model["coeffs"], years)
+        def predict_linear_model(
+            years: Sequence[float],
+            model: dict[str, Any],
+        ) -> np.ndarray:
+            """Predict irrigation fractions using a linear trend model.
+
+            Args:
+                years: Years at which to compute model predictions.
+                model: Fitted linear model dictionary.
+
+            Returns:
+                Array of predicted fractions for each year in ``years``.
+            """
+            years_arr = np.asarray(years, dtype=float)
+            return np.polyval(model["coeffs"], years_arr)
 
         # =========================
         # 4. LINEAR + SINUSOID MODEL
         # =========================
 
-        def fit_linear_sine_model(years, y, period):
-            years = np.asarray(years, dtype=float)
-            y = np.asarray(y, dtype=float)
+        def fit_linear_sine_model(
+            years: Sequence[float],
+            y: Sequence[float],
+            period: float,
+        ) -> dict[str, Any]:
+            """Fit a linear-plus-sinusoidal model for irrigation fractions.
 
-            t0 = years.mean()
-            t = years - t0
+            The model combines a linear trend and a sinusoidal component with a
+            prescribed period, fitted via least squares.
+
+            Args:
+                years: Years at which observations are available.
+                y: Observed fractions corresponding to ``years``.
+                period: Period of the sinusoidal component in years.
+
+            Returns:
+                A dictionary with fitted parameters, the reference time shift, the
+                angular frequency, and the coefficient of determination.
+            """
+            years_arr = np.asarray(years, dtype=float)
+            y_arr = np.asarray(y, dtype=float)
+
+            t0 = years_arr.mean()
+            t = years_arr - t0
             omega = 2.0 * np.pi / period
 
             X = np.column_stack(
@@ -264,11 +516,11 @@ class Agents(GEBModel):
                 ]
             )
 
-            params, *_ = np.linalg.lstsq(X, y, rcond=None)  # [a, b, c]
+            params, *_ = np.linalg.lstsq(X, y_arr, rcond=None)
 
             yhat = X @ params
-            ss_res = np.sum((y - yhat) ** 2)
-            ss_tot = np.sum((y - np.mean(y)) ** 2)
+            ss_res = np.sum((y_arr - yhat) ** 2)
+            ss_tot = np.sum((y_arr - np.mean(y_arr)) ** 2)
             r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
 
             return {
@@ -279,45 +531,85 @@ class Agents(GEBModel):
                 "r2": r2,
             }
 
-        def predict_linear_sine_model(years, model):
-            years = np.asarray(years, dtype=float)
+        def predict_linear_sine_model(
+            years: Sequence[float],
+            model: dict[str, Any],
+        ) -> np.ndarray:
+            """Predict irrigation fractions using a linear-plus-sinusoidal model.
+
+            Args:
+                years: Years at which to compute model predictions.
+                model: Fitted linear-plus-sinusoidal model dictionary.
+
+            Returns:
+                Array of predicted fractions for each year in ``years``.
+            """
+            years_arr = np.asarray(years, dtype=float)
             t0 = model["t0"]
             omega = model["omega"]
             a, b, c = model["params"]
 
-            t = years - t0
+            t = years_arr - t0
             return a + b * t + c * np.sin(omega * t)
 
         # =========================
         # 4b. LOGISTIC (S-SHAPED) MODEL
         # =========================
 
-        def fit_logistic_model(years, y):
+        def fit_logistic_model(
+            years: Sequence[float],
+            y: Sequence[float],
+        ) -> dict[str, Any]:
+            """Fit a logistic curve model to irrigation fractions.
+
+            The model uses a logit transform of the fractions and fits a linear
+            function in the transformed space. Predictions are mapped back via the
+            logistic function.
+
+            Notes:
+                Fractions are clipped slightly away from 0 and 1 before applying
+                the logit transform to avoid numerical issues.
+
+            Args:
+                years: Years at which observations are available.
+                y: Observed fractions corresponding to ``years``.
+
+            Returns:
+                A dictionary containing the fitted parameters, the model type, and
+                the coefficient of determination.
             """
-            Logistic S-curve via logit transform:
-                logit(y) = ln(y/(1-y)) = a + b * year
-            with y clipped to (eps, 1-eps).
-            """
-            years = np.asarray(years, dtype=float)
-            y = np.asarray(y, dtype=float)
+            years_arr = np.asarray(years, dtype=float)
+            y_arr = np.asarray(y, dtype=float)
 
             eps = 1e-6
-            y_clip = np.clip(y, eps, 1 - eps)
+            y_clip = np.clip(y_arr, eps, 1 - eps)
             logit = np.log(y_clip / (1 - y_clip))
 
-            coeffs = np.polyfit(years, logit, 1)  # [b, a]
-            logit_hat = np.polyval(coeffs, years)
+            coeffs = np.polyfit(years_arr, logit, 1)
+            logit_hat = np.polyval(coeffs, years_arr)
             yhat = 1.0 / (1.0 + np.exp(-logit_hat))
 
-            ss_res = np.sum((y - yhat) ** 2)
-            ss_tot = np.sum((y - np.mean(y)) ** 2)
+            ss_res = np.sum((y_arr - yhat) ** 2)
+            ss_tot = np.sum((y_arr - np.mean(y_arr)) ** 2)
             r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
 
             return {"type": "logistic", "coeffs": coeffs, "r2": r2}
 
-        def predict_logistic_model(years, model):
-            years = np.asarray(years, dtype=float)
-            logit_hat = np.polyval(model["coeffs"], years)
+        def predict_logistic_model(
+            years: Sequence[float],
+            model: dict[str, Any],
+        ) -> np.ndarray:
+            """Predict irrigation fractions using a logistic curve model.
+
+            Args:
+                years: Years at which to compute model predictions.
+                model: Fitted logistic model dictionary.
+
+            Returns:
+                Array of predicted fractions for each year in ``years``.
+            """
+            years_arr = np.asarray(years, dtype=float)
+            logit_hat = np.polyval(model["coeffs"], years_arr)
             return 1.0 / (1.0 + np.exp(-logit_hat))
 
         # =========================
@@ -326,9 +618,9 @@ class Agents(GEBModel):
         period_years_NSW = 7
         period_years_VICT = 8
 
-        fit_linear = {}
-        fit_sine = {}
-        fit_logistic = {}
+        fit_linear: dict[str, dict[str, Any]] = {}
+        fit_sine: dict[str, dict[str, Any]] = {}
+        fit_logistic: dict[str, dict[str, Any]] = {}
 
         for region in regions_to_fit:
             wide = prepare_region_wide(long_all, region)
@@ -345,11 +637,15 @@ class Agents(GEBModel):
                 # linear + sine
                 if region == "VICT":
                     m_sin = fit_linear_sine_model(
-                        wide["year"].values, wide[var].values, period_years_VICT
+                        wide["year"].values,
+                        wide[var].values,
+                        period_years_VICT,
                     )
                 else:
                     m_sin = fit_linear_sine_model(
-                        wide["year"].values, wide[var].values, period_years_NSW
+                        wide["year"].values,
+                        wide[var].values,
+                        period_years_NSW,
                     )
                 fit_sine[region]["models"][var] = m_sin
 
@@ -375,32 +671,65 @@ class Agents(GEBModel):
 
         years_expanded = np.arange(start_year, end_year + 1)
 
-        def predict_region_composition(years, region, mode="linear"):
+        def predict_region_composition(
+            years: Sequence[float],
+            region: str,
+            mode: str = "linear",
+        ) -> pd.DataFrame:
+            """Predict regional irrigation type composition over time.
+
+            Select and evaluate one of the fitted models for a given region, then
+            enforce compositional constraints on the resulting fractions.
+
+            Notes:
+                The predicted fractions are clipped between zero and one and then
+                rescaled so that drip, sprinkler, and surface irrigation fractions
+                sum to one for each year.
+
+            Args:
+                years: Years for which to generate predictions.
+                region: Name of the region to use.
+                mode: Model type to use. Supported values are "linear",
+                    "linear_sine", and "logistic".
+
+            Returns:
+                A table with columns for the region name, year, predicted
+                fractions for each irrigation type, and the chosen model mode.
+
+            Raises:
+                ValueError: If ``mode`` is not one of the supported values.
             """
-            mode: "linear", "linear_sine", or "logistic"
-            Uses the corresponding fitted models, then enforces:
-            - 0 <= fraction <= 1
-            - drip + sprinkler + surface = 1
-            """
-            years = np.asarray(years, dtype=float)
+            years_arr = np.asarray(years, dtype=float)
 
             if mode == "linear":
                 reg_fit = fit_linear[region]
-                f_drip = predict_linear_model(years, reg_fit["models"]["drip"])
-                f_spr = predict_linear_model(years, reg_fit["models"]["sprinkler"])
-                f_surf = predict_linear_model(years, reg_fit["models"]["surface"])
+                f_drip = predict_linear_model(years_arr, reg_fit["models"]["drip"])
+                f_spr = predict_linear_model(years_arr, reg_fit["models"]["sprinkler"])
+                f_surf = predict_linear_model(years_arr, reg_fit["models"]["surface"])
 
             elif mode == "linear_sine":
                 reg_fit = fit_sine[region]
-                f_drip = predict_linear_sine_model(years, reg_fit["models"]["drip"])
-                f_spr = predict_linear_sine_model(years, reg_fit["models"]["sprinkler"])
-                f_surf = predict_linear_sine_model(years, reg_fit["models"]["surface"])
+                f_drip = predict_linear_sine_model(
+                    years_arr,
+                    reg_fit["models"]["drip"],
+                )
+                f_spr = predict_linear_sine_model(
+                    years_arr,
+                    reg_fit["models"]["sprinkler"],
+                )
+                f_surf = predict_linear_sine_model(
+                    years_arr,
+                    reg_fit["models"]["surface"],
+                )
 
             elif mode == "logistic":
                 reg_fit = fit_logistic[region]
-                f_drip = predict_logistic_model(years, reg_fit["models"]["drip"])
-                f_spr = predict_logistic_model(years, reg_fit["models"]["sprinkler"])
-                f_surf = predict_logistic_model(years, reg_fit["models"]["surface"])
+                f_drip = predict_logistic_model(years_arr, reg_fit["models"]["drip"])
+                f_spr = predict_logistic_model(
+                    years_arr,
+                    reg_fit["models"]["sprinkler"],
+                )
+                f_surf = predict_logistic_model(years_arr, reg_fit["models"]["surface"])
 
             else:
                 raise ValueError("mode must be 'linear', 'linear_sine', or 'logistic'")
@@ -417,7 +746,7 @@ class Agents(GEBModel):
             return pd.DataFrame(
                 {
                     "Region": region,
-                    "year": years,
+                    "year": years_arr,
                     "drip": drip,
                     "sprinkler": spr,
                     "surface": surf,
@@ -426,9 +755,9 @@ class Agents(GEBModel):
             )
 
         # Build expanded predictions for all three modes
-        expanded_linear_list = []
-        expanded_sine_list = []
-        expanded_logistic_list = []
+        expanded_linear_list: list[pd.DataFrame] = []
+        expanded_sine_list: list[pd.DataFrame] = []
+        expanded_logistic_list: list[pd.DataFrame] = []
 
         for region in regions_to_fit:
             expanded_linear_list.append(
@@ -468,7 +797,10 @@ class Agents(GEBModel):
                 label="sprinkler (linear)",
             )
             ax.plot(
-                preds_lin["year"], preds_lin["surface"], "-", label="surface (linear)"
+                preds_lin["year"],
+                preds_lin["surface"],
+                "-",
+                label="surface (linear)",
             )
 
             ax.set_title(f"Irrigation fractions – linear fit & expanded – {region}")
@@ -492,7 +824,12 @@ class Agents(GEBModel):
             ax.plot(wide["year"], wide["sprinkler"], "o", label="sprinkler (obs)")
             ax.plot(wide["year"], wide["surface"], "o", label="surface (obs)")
 
-            ax.plot(preds_sin["year"], preds_sin["drip"], "-", label="drip (lin+sine)")
+            ax.plot(
+                preds_sin["year"],
+                preds_sin["drip"],
+                "-",
+                label="drip (lin+sine)",
+            )
             ax.plot(
                 preds_sin["year"],
                 preds_sin["sprinkler"],
@@ -500,7 +837,10 @@ class Agents(GEBModel):
                 label="sprinkler (lin+sine)",
             )
             ax.plot(
-                preds_sin["year"], preds_sin["surface"], "-", label="surface (lin+sine)"
+                preds_sin["year"],
+                preds_sin["surface"],
+                "-",
+                label="surface (lin+sine)",
             )
 
             ax.set_title(
@@ -526,7 +866,12 @@ class Agents(GEBModel):
             ax.plot(wide["year"], wide["sprinkler"], "o", label="sprinkler (obs)")
             ax.plot(wide["year"], wide["surface"], "o", label="surface (obs)")
 
-            ax.plot(preds_log["year"], preds_log["drip"], "-", label="drip (logistic)")
+            ax.plot(
+                preds_log["year"],
+                preds_log["drip"],
+                "-",
+                label="drip (logistic)",
+            )
             ax.plot(
                 preds_log["year"],
                 preds_log["sprinkler"],
@@ -556,7 +901,8 @@ class Agents(GEBModel):
             plt.close(fig)
 
         print(
-            "Saved combined original + expanded plots for NSW and VICT, for linear, linear+sinusoidal and logistic models."
+            "Saved combined original + expanded plots for NSW and VICT, for linear, "
+            "linear+sinusoidal and logistic models."
         )
 
         # =========================
@@ -572,13 +918,26 @@ class Agents(GEBModel):
             "fraction_surface_irrigation": "surface",
         }
 
-        def build_and_store_dicts(expanded_df):
+        def build_and_store_dicts(expanded_df: pd.DataFrame) -> None:
+            """Build and store irrigation fraction dictionaries for the model.
+
+            Notes:
+                For each irrigation type and region, the function reindexes onto
+                the model year range, fills gaps by interpolation and edge filling,
+                and stores the resulting series under the appropriate key in the
+                model dictionary.
+
+            Args:
+                expanded_df: Expanded prediction table containing regional
+                    irrigation fractions by year.
+
+            """
             expanded_df = expanded_df[
                 (expanded_df["year"] >= start_year) & (expanded_df["year"] <= end_year)
             ].copy()
 
             for dict_name, col in irrigation_frac_map.items():
-                irrig_dict = {"time": years, "data": {}}
+                irrig_dict: dict[str, Any] = {"time": years, "data": {}}
 
                 for region_name, region_id in region_ids.items():
                     sub = (
@@ -598,8 +957,6 @@ class Agents(GEBModel):
         # build_and_store_dicts(expanded_sine_df)        # linear+sine
         build_and_store_dicts(expanded_logistic_df)  # logistic (S-shaped)
 
-        pass
-
     @build_method(depends_on=["setup_economic_data"])
     def setup_water_prices_australia(
         self,
@@ -608,39 +965,46 @@ class Agents(GEBModel):
     ) -> None:
         """Set up Australian water price and diversion time series.
 
-        This method constructs monthly water price and annual diversion series for
-        Australian regions based on observed datasets and inflation adjustments.
-        The resulting time series are stored in the internal economics dictionaries.
+        Construct monthly water price and annual diversion series for Australian
+        regions based on observed datasets and inflation adjustments. The resulting
+        time series are stored in the internal socio-economic dictionaries.
 
         Notes:
-            Water prices are converted from AUD to USD using pre-loaded conversion
-            rates and then deflated using region-specific inflation rates.
-            Diversions are kept at annual resolution.
+            Water prices are converted from local currency units to USD using
+            pre-loaded conversion rates and then deflated using region-specific
+            inflation rates. Diversions are kept at annual resolution.
 
         Args:
-            start_year: First simulation year (inclusive) for which data is generated.
-            end_year: Last simulation year (inclusive) for which data is generated.
+            start_year: First simulation year (inclusive) for which data is
+                generated.
+            end_year: Last simulation year (inclusive) for which data is
+                generated.
+
         """
 
         def get_observed_diversion_price() -> tuple[pd.DataFrame, pd.DataFrame]:
             """Load and preprocess observed diversion and water price data.
 
-            The function reads MDB and market outlook datasets, filters regions of
-            interest, converts units and frequencies, and returns aligned monthly
-            water prices and annual diversions for Victoria and New South Wales.
+            Read MDB catchment and market outlook datasets, filter regions of
+            interest, convert units and frequencies, and return aligned monthly
+            water prices and annual diversions for the relevant states.
 
             Notes:
-                Water prices are interpolated to monthly resolution, while diversions
-                remain at annual resolution (water year ending in June).
+                Water prices are interpolated to monthly resolution, while
+                diversions remain at annual resolution with a water year ending in
+                June. All prices are converted to USD per cubic metre.
+
+            Args:
+                None.
 
             Returns:
-                A tuple containing:
-                    A DataFrame with monthly observed water prices by state.
-                    A DataFrame with annual observed diversions by region or state.
+                A tuple containing the monthly observed water prices and annual
+                observed diversions, both indexed by time and with columns for
+                aggregated regions.
             """
-            full_southern_MDB = "southern" in os.getcwd()
+            full_southern_mdb = "southern" in os.getcwd()
             # Regions of interest
-            if full_southern_MDB:
+            if full_southern_mdb:
                 regions_of_interest = [
                     "VIC Goulburn-Broken",
                     "VIC Murray Above",
@@ -665,10 +1029,12 @@ class Agents(GEBModel):
             ################ Water price #######################
             # Observed data path
             water_price_observed_fp = Path(
-                "calibration_data/water_use/WaterMarketOutlook_2023-04_data_tables_v1.0.0.xlsx"
+                "calibration_data/water_use/"
+                "WaterMarketOutlook_2023-04_data_tables_v1.0.0.xlsx"
             )
             water_price_observed_df = pd.read_excel(
-                water_price_observed_fp, sheet_name=3
+                water_price_observed_fp,
+                sheet_name=3,
             )
 
             # Filter relevant regions, rename columns
@@ -684,7 +1050,9 @@ class Agents(GEBModel):
             ).dt.normalize()
 
             pivot_df = filtered_prices_df.pivot(
-                index="time", columns="Region", values="water_price_observed"
+                index="time",
+                columns="Region",
+                values="water_price_observed",
             ).sort_index()
             pivot_df = pivot_df.apply(pd.to_numeric, errors="coerce").interpolate(
                 method="time"
@@ -706,7 +1074,7 @@ class Agents(GEBModel):
                 ]
             ].mean(axis=1)
 
-            if full_southern_MDB:
+            if full_southern_mdb:
                 pivot_df["Australian Capital Territory"] = pivot_df[
                     [
                         "NSW Murray Below",
@@ -731,12 +1099,14 @@ class Agents(GEBModel):
             df_observed_price = pivot_df.drop(columns=["year", "conversion_rate"])
             df_observed_price.index.name = "time"
 
-            # Load the new dataset so supplement prices earlier than 2004
-            diversions_price__observed_fp = Path(
-                "calibration_data/water_use/MDBWaterMarketCatchmentDataset_Supply_v1.0.0.xlsx"
+            # Load the new dataset to supplement prices earlier than 2004
+            diversions_price_observed_fp = Path(
+                "calibration_data/water_use/"
+                "MDBWaterMarketCatchmentDataset_Supply_v1.0.0.xlsx"
             )
             diversions_price_observed_df = pd.read_excel(
-                diversions_price__observed_fp, sheet_name=1
+                diversions_price_observed_fp,
+                sheet_name=1,
             )
 
             # Filter to only the regions of interest
@@ -758,12 +1128,14 @@ class Agents(GEBModel):
             )
 
             pivot_water_price_df = filtered_water_price_df.pivot(
-                index="time", columns="Region", values="water_price_observed"
+                index="time",
+                columns="Region",
+                values="water_price_observed",
             ).sort_index()
 
-            # pivot_price_df = pivot_price_df.shift(1)
             pivot_water_price_df = pivot_water_price_df.apply(
-                pd.to_numeric, errors="coerce"
+                pd.to_numeric,
+                errors="coerce",
             ).interpolate("time")
 
             pivot_water_price_df["Victoria"] = pivot_water_price_df[
@@ -783,7 +1155,7 @@ class Agents(GEBModel):
                 ]
             ].mean(axis=1)
 
-            if full_southern_MDB:
+            if full_southern_mdb:
                 pivot_water_price_df["Australian Capital Territory"] = (
                     pivot_water_price_df[
                         [
@@ -798,18 +1170,20 @@ class Agents(GEBModel):
             end_date = "2004-06-30"
             monthly_index = pd.date_range(start=start_date, end=end_date, freq="MS")
 
-            def find_year_ended_june_for_month(m: pd.Timestamp) -> pd.Timestamp:
+            def find_year_ended_june_for_month(
+                ts: pd.Timestamp,
+            ) -> pd.Timestamp:
                 """Map a calendar month to the corresponding June-30 water year date.
 
                 Args:
-                    m: Calendar month timestamp.
+                    ts: Calendar month timestamp.
 
                 Returns:
                     Timestamp representing the June 30 date of the water year.
                 """
-                if m.month < 7:
-                    return pd.Timestamp(year=m.year, month=6, day=30)
-                return pd.Timestamp(year=m.year + 1, month=6, day=30)
+                if ts.month < 7:
+                    return pd.Timestamp(year=ts.year, month=6, day=30)
+                return pd.Timestamp(year=ts.year + 1, month=6, day=30)
 
             df_list: list[pd.DataFrame] = []
             for m in monthly_index:
@@ -820,7 +1194,9 @@ class Agents(GEBModel):
                 else:
                     df_list.append(
                         pd.DataFrame(
-                            np.nan, index=[0], columns=pivot_water_price_df.columns
+                            np.nan,
+                            index=[0],
+                            columns=pivot_water_price_df.columns,
                         ).assign(time=m)
                     )
             df_annual_to_monthly = pd.concat(df_list, ignore_index=True).set_index(
@@ -838,7 +1214,7 @@ class Agents(GEBModel):
             )
             df_combined = df_combined.reindex(full_monthly_index)
             df_observed_price = df_combined.interpolate(method="time")
-            df_observed_price_USD_m3 = df_observed_price / 1000  # from ML to m3
+            df_observed_price_usd_m3 = df_observed_price / 1000  # from ML to m3
 
             ################ Diversions #######################
 
@@ -853,10 +1229,11 @@ class Agents(GEBModel):
             )
 
             pivot_diversions_df = filtered_diversions_df.pivot(
-                index="time", columns="Region", values="diversion_observed"
+                index="time",
+                columns="Region",
+                values="diversion_observed",
             ).sort_index()
 
-            # pivot_price_df = pivot_price_df.shift(1)
             pivot_diversions_df = (
                 pivot_diversions_df.apply(pd.to_numeric, errors="coerce")
                 .replace(0, np.nan)
@@ -871,7 +1248,7 @@ class Agents(GEBModel):
                     "VIC Loddon-Campaspe",
                 ]
             ].sum(axis=1)
-            if full_southern_MDB:
+            if full_southern_mdb:
                 pivot_diversions_df["New South Wales"] = pivot_diversions_df[
                     [
                         "NSW Murray Below",
@@ -897,7 +1274,7 @@ class Agents(GEBModel):
 
             pivot_diversions_df_m3 = pivot_diversions_df * 1000  # from ML to m3
 
-            return df_observed_price_USD_m3, pivot_diversions_df_m3
+            return df_observed_price_usd_m3, pivot_diversions_df_m3
 
         df_observed_price, df_observed_diversion = get_observed_diversion_price()
 
@@ -956,7 +1333,8 @@ class Agents(GEBModel):
 
                     baseline = real_values[0]
                     prices = pd.Series(
-                        index=range(start_year, end_year + 1), dtype=float
+                        index=range(start_year, end_year + 1),
+                        dtype=float,
                     )
                     prices.loc[min_obs_year] = baseline
 
@@ -1017,11 +1395,12 @@ class Agents(GEBModel):
                         Args:
                             prev_date: Previous time step in the monthly series.
                             curr_date: Current time step in the monthly series.
-                            region: Region identifier used to look up inflation rates.
+                            region: Region identifier used to look up inflation
+                                rates.
 
                         Returns:
-                            Multiplicative inflation factor to apply when moving from
-                            ``prev_date`` to ``curr_date``.
+                            Multiplicative inflation factor to apply when moving
+                            from ``prev_date`` to ``curr_date``.
                         """
                         if curr_date.year != prev_date.year:
                             y_str = str(curr_date.year)
@@ -1065,20 +1444,32 @@ class Agents(GEBModel):
 
     @build_method(depends_on=["setup_economic_data"])
     def setup_drip_irrigation_prices_by_reference_year(
-        self: Any,
+        self,
         drip_irrigation_price: float,
         reference_year: int,
         start_year: int,
         end_year: int,
     ) -> None:
-        """Create region-specific drip-irrigation price time series via annual inflation.
+        """Create region-specific drip-irrigation price time series via inflation.
 
-        Stores under ``economics/drip_irrigation_price`` with:
-        - ``time``: list[int] of years
-        - ``data``: dict[region_id] → list[float] (one per year)
+        Construct an annual drip-irrigation price series for each region based on
+        a single reference-year price and region-specific inflation rates, and
+        store the result in the model dictionary.
 
-        The reference year's price is given; subsequent years are inflated forward,
-        previous years are deflated backward.
+        Notes:
+            Prices in years after the reference year are obtained by inflating
+            forward using the annual inflation rates; prices in earlier years are
+            obtained by deflating backward. If inflation data is missing for a
+            given year, the last available price is carried forward or backward.
+
+        Args:
+            drip_irrigation_price: Baseline drip-irrigation price in the
+                reference year, in the relevant currency per unit area.
+            reference_year: Calendar year to which ``drip_irrigation_price``
+                applies.
+            start_year: First year of the model period (inclusive).
+            end_year: Last year of the model period (inclusive).
+
         """
         self.logger.info("Setting up drip irrigation prices by reference year")
 
@@ -1087,7 +1478,10 @@ class Agents(GEBModel):
         infl_years: list[str] = [str(y) for y in inflation["time"]]
 
         price_name = "drip_irrigation_price"
-        out = {"time": list(range(start_year, end_year + 1)), "data": {}}
+        out: dict[str, Any] = {
+            "time": list(range(start_year, end_year + 1)),
+            "data": {},
+        }
 
         for region in regions:
             series = pd.Series(index=out["time"], dtype=float)

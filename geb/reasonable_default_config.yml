@@ -72,7 +72,7 @@ agent_settings:
           base: 1.6
           coef: -2.5
           max: 10
-          min: 0.1
+          min: 0.5
   farmers:
     ruleset:  
     base_management_yield_ratio: 1
@@ -135,6 +135,7 @@ agent_settings:
         decision_horizon: 10
         expenditure_cap: 0.5
       water_price:
+        static: false
         water_costs_m3_reservoir: 0
         water_costs_m3_groundwater: 0
         water_costs_m3_channel: 0
