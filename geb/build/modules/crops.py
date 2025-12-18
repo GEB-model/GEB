@@ -823,7 +823,7 @@ class Crops:
             adjust_currency=adjust_currency,
         )
         self.set_dict(crop_prices, name="crops/crop_prices")
-        self.set_dict(crop_prices, name="crops/cultivation_costs")
+        # self.set_dict(crop_prices, name="crops/cultivation_costs")
 
     @build_method(depends_on=[])
     def determine_crop_area_fractions(self, resolution: str = "5-arcminute") -> None:
@@ -989,6 +989,7 @@ class Crops:
         self,
         year: int = 2000,
         reduce_crops: bool = False,
+        unify_variants: bool = False,
         replace_base: bool = False,
         minimum_area_ratio: float = 0.01,
         replace_crop_calendar_unit_code: dict = {},
@@ -998,6 +999,7 @@ class Crops:
         Args:
             year: Reference year (calendar year).
             reduce_crops: If True, reduce the number of crops per calendar based on area.
+            unify_variants: If True, make different cropping patterns of the same crop into one.
             replace_base: If True, replace base crop definitions with alternatives.
             minimum_area_ratio: Threshold for considering a crop present in a unit.
             replace_crop_calendar_unit_code: Optional mapping to replace MIRCA unit codes.
@@ -1415,6 +1417,14 @@ class Crops:
                 crop_calendar_per_farmer, most_common_check, replaced_value
             )
 
+            # Replace others_annual by potatoes as it has the most similar hydrological parameters
+            # Is replaced because others annual is difficult to parametrize (in terms of costs)
+            most_common_check = [POTATOES]
+            replaced_value = [OTHERS_ANNUAL]
+            crop_calendar_per_farmer = replace_crop(
+                crop_calendar_per_farmer, most_common_check, replaced_value
+            )
+
             unique_rows = np.unique(crop_calendar_per_farmer, axis=0)
             values = unique_rows[:, 0, 0]
             unique_values, counts = np.unique(values, return_counts=True)
@@ -1431,12 +1441,13 @@ class Crops:
                         == farmer_crop_calender.shape[0]
                     )
 
-            # duplicates = unique_values[counts > 1]
-            # if len(duplicates) > 0:
-            #     for duplicate in duplicates:
-            #         crop_calendar_per_farmer = unify_crop_variants(
-            #             crop_calendar_per_farmer, duplicate
-            #         )
+            if unify_variants:
+                duplicates = unique_values[counts > 1]
+                if len(duplicates) > 0:
+                    for duplicate in duplicates:
+                        crop_calendar_per_farmer = unify_crop_variants(
+                            crop_calendar_per_farmer, duplicate
+                        )
 
         check_crop_calendar(crop_calendar_per_farmer)
 
