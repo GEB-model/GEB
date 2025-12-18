@@ -42,20 +42,18 @@ class RunoffConcentrator(Module):
         super().__init__(model)
         self.hydrology = hydrology
 
-        if self.model.in_spinup:
-            self.spinup()
-
         self.HRU = hydrology.HRU
         self.grid = hydrology.grid
 
         self.lagtime: int = lagtime
         self.runoff_peak: float = runoff_peak
+        self.overland_runoff_storage_end_m3: float = 0.0
 
         # precompute triangular weights
         self.weights_runoff = self._triangular_weights(runoff_peak)
 
-        # rolling buffer: shape [lagtime, n_cells]
-        self.buffer = None
+        if self.model.in_spinup:
+            self.spinup()
 
     def _triangular_weights(self, peak: float) -> ArrayFloat64:
         """Compute triangular weights for given peak lag time.
@@ -109,26 +107,18 @@ class RunoffConcentrator(Module):
 
                 idx = t + k
                 if idx < lag:
-                    self.buffer[idx] += w * ft
+                    self.grid.var.buffer[idx] += w * ft
                 # else: future contribution beyond lagtime is dropped
-
-    def _init_buffer(self, n_cells: int) -> None:
-        """Initialize the rolling buffer."""
-        self.n_cells: int = n_cells
-        self.buffer: TwoDArrayFloat64 = np.zeros(
-            (self.lagtime, n_cells), dtype=np.float64
-        )
-        self.weights_runoff: ArrayFloat64 = self._triangular_weights(self.runoff_peak)
 
     def _advance_buffer(self, n_steps: int) -> None:
         """Shift buffer forward by n_steps (24 hours)."""
         if n_steps >= self.lagtime:
-            self.buffer[:] = 0.0
+            self.grid.var.buffer[:] = 0.0
             return
 
         # Shift forward
-        self.buffer[:-n_steps] = self.buffer[n_steps:]
-        self.buffer[-n_steps:] = 0.0
+        self.grid.var.buffer[:-n_steps] = self.grid.var.buffer[n_steps:]
+        self.grid.var.buffer[-n_steps:] = 0.0
 
     def step(
         self,
@@ -165,13 +155,14 @@ class RunoffConcentrator(Module):
         n_cells: int
         n_steps, n_cells = runoff.shape
 
-        if self.buffer is None:
-            self._init_buffer(n_cells)
-
         # Advance buffer by one day (24 hours)
         self._advance_buffer(n_steps)
-        storage_start_m: TwoDArrayFloat64 = self.buffer.copy().astype(np.float64)
-        storage_start_m3: float = (storage_start_m * self.grid.var.cell_area).sum()
+        overland_runoff_storage_start_m: TwoDArrayFloat64 = (
+            self.grid.var.buffer.copy().astype(np.float64)
+        )
+        overland_runoff_storage_start_m3: float = (
+            overland_runoff_storage_start_m * self.grid.var.cell_area
+        ).sum()
 
         # Baseflow is distributed evenly across 24 substeps
         baseflow_per_step: ArrayFloat64 = (baseflow / n_steps).astype(np.float64)
@@ -183,15 +174,17 @@ class RunoffConcentrator(Module):
         self._apply_triangular(runoff, self.weights_runoff)
 
         outflow_runoff_m: TwoDArrayFloat64 = (
-            self.buffer[:n_steps].copy()
+            self.grid.var.buffer[:n_steps].copy()
         )  # Outflow is only the first 24 buffer steps which equals 24 hourly outflows
         total_outflow_m: TwoDArrayFloat64 = (
             outflow_runoff_m + baseflow_array + interflow
         )  # Get total outflow (including baseflow and interflow which did not change)
-        storage_end_m: TwoDArrayFloat64 = (
-            self.buffer[n_steps:].copy().astype(np.float64)
+        overland_runoff_storage_end_m: TwoDArrayFloat64 = (
+            self.grid.var.buffer[n_steps:].copy().astype(np.float64)
         )  # Everything that is stored for the next day
-        storage_end_m3: float = (storage_end_m * self.grid.var.cell_area).sum()
+        self.overland_runoff_storage_end_m3: float = (
+            overland_runoff_storage_end_m * self.grid.var.cell_area
+        ).sum()
 
         outflow_m3: float = (
             (outflow_runoff_m * self.grid.var.cell_area).sum()
@@ -205,18 +198,19 @@ class RunoffConcentrator(Module):
             + (baseflow_array * self.grid.var.cell_area).sum()
         )
 
-        balance_check(
-            name="RunoffConcentrator daily water balance",
-            how="sum",
-            influxes=[inflow_m3],
-            outfluxes=[outflow_m3],
-            prestorages=[storage_start_m3],
-            poststorages=[storage_end_m3],
-            tolerance=1,
-            raise_on_error=False,
-        )
+        if __debug__:
+            balance_check(
+                name="RunoffConcentrator daily water balance",
+                how="sum",
+                influxes=[inflow_m3],
+                outfluxes=[outflow_m3],
+                prestorages=[overland_runoff_storage_start_m3],
+                poststorages=[self.overland_runoff_storage_end_m3],
+                tolerance=1,
+                raise_on_error=False,
+            )
 
-        return total_outflow_m, storage_start_m3, storage_end_m3
+        return total_outflow_m
 
     @property
     def name(self) -> str:
@@ -233,4 +227,14 @@ class RunoffConcentrator(Module):
         Returns:
             None
         """
+        self.grid.var.buffer = np.stack(
+            [
+                self.grid.full_compressed(0.0, dtype=np.float64)
+                for _ in range(self.lagtime)
+            ],
+            axis=0,
+        ).astype(np.float64)
+
+        self.weights_runoff: ArrayFloat64 = self._triangular_weights(self.runoff_peak)
+
         return None
