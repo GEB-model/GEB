@@ -56,20 +56,6 @@ class Market(AgentBaseClass):
             self.model, "crops/crop_prices"
         )
 
-        # if (
-        #     "calibration" in self.model.config
-        #     and "KGE_crops" in self.model.config["calibration"]["calibration_targets"]
-        # ):
-        #     self.production_influence_calibration_factor = np.array(
-        #         [
-        #             self.model.config["agent_settings"]["calibration_crops"][
-        #                 f"price_{i}"
-        #             ]
-        #             for i in range(self._crop_prices[1].shape[2])
-        #         ],
-        #         dtype=np.float32,
-        #     )
-        # else:
         self.production_influence_calibration_factor = np.ones(
             self._crop_prices[1].shape[2], dtype=np.float32
         )
@@ -163,6 +149,12 @@ class Market(AgentBaseClass):
             :,
             estimation_start_year:estimation_end_year,
         ]
+        if np.any(production <= 0):
+            # log(0) or log(negative) will explode/NaN
+            bad = np.where(production <= 0)[0]
+            print(
+                "[PRICE DEBUG] production <= 0 crops:", bad, "values:", production[bad]
+            )
 
         print("Look into increasing yield and increasing price")
         for crop in range(self.var.production.shape[0]):
@@ -220,6 +212,8 @@ class Market(AgentBaseClass):
             production = self.var.production[
                 :, self.year_index - 1
             ]  # for now taking the previous year, should be updated
+            # Change 0s to 1 to prevent log(0) becoming infinite
+            production = np.where(production.data == 0, 1, production.data)
             price_pred = np.exp(
                 1 * self.var.parameters[:, 0]
                 + self.production_influence_calibration_factor
@@ -232,6 +226,31 @@ class Market(AgentBaseClass):
             price_pred_per_region[:, self.var.production[:, self.year_index - 1] > 0]
             > 0
         ), "Negative prices predicted"
+
+        if not (
+            self.var.production[
+                self.var.production[:, self.year_index - 1] > 0, self.year_index - 1
+            ]
+            > 0
+        ).all():
+            bad = np.where(
+                ~(
+                    self.var.production[
+                        self.var.production[:, self.year_index - 1] > 0,
+                        self.year_index - 1,
+                    ]
+                    > 0
+                )
+            )[0]
+            print("[PRICE DEBUG] 0 production at crops:", bad)
+            last_year_index = self.year_index - 1
+            print(
+                "  production last 5 years:",
+                self.var.production[bad, 5:last_year_index],
+            )
+            print("  production last year:", self.var.production[bad, last_year_index])
+            print("  beta0:", self.var.parameters[bad, 0])
+            print("  beta1:", self.var.parameters[bad, 1])
 
         # TODO: This assumes that the inflation is the same for all regions (region_idx=0)
         return (
