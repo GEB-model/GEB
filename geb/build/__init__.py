@@ -1516,9 +1516,9 @@ class GEBModel(
             epsg: EPSG code for the model grid. Default is 4326 (WGS84).
             data_provider: Data provider to use for the data catalog. Default is "default".
         """
-        self.logger = logger
-        self.data_catalog = DataCatalog(
-            data_libs=[data_catalog], logger=self.logger, fallback_lib=None
+        self._logger = logger
+        self._data_catalog = DataCatalog(
+            data_libs=[data_catalog], logger=self._logger, fallback_lib=None
         )
 
         Hydrography.__init__(self)
@@ -1532,7 +1532,7 @@ class GEBModel(
         self.root = root
         self.epsg = epsg
         self.data_provider = data_provider
-        self.new_data_catalog = NewDataCatalog()
+        self._new_data_catalog = NewDataCatalog()
 
         # the grid, subgrid, and region subgrids are all datasets, which should
         # have exactly matching coordinates
@@ -1547,6 +1547,115 @@ class GEBModel(
         self.array = DelayedReader(zarr.load)
         self.params = DelayedReader(reader=read_params)
         self.other = DelayedReader(reader=read_zarr)
+        self.files = {}
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Get the logger."""
+        return self._logger
+
+    @logger.setter
+    def logger(self, value: logging.Logger) -> None:
+        self._logger = value
+
+    @property
+    def data_catalog(self) -> DataCatalog:
+        """Get the data catalog."""
+        return self._data_catalog
+
+    @data_catalog.setter
+    def data_catalog(self, value: DataCatalog) -> None:
+        self._data_catalog = value
+
+    @property
+    def new_data_catalog(self) -> NewDataCatalog:
+        """Get the new data catalog."""
+        return self._new_data_catalog
+
+    @new_data_catalog.setter
+    def new_data_catalog(self, value: NewDataCatalog) -> None:
+        self._new_data_catalog = value
+
+    @property
+    def grid(self) -> xr.Dataset:
+        """Get the grid."""
+        return self._grid
+
+    @grid.setter
+    def grid(self, value: xr.Dataset) -> None:
+        self._grid = value
+
+    @property
+    def subgrid(self) -> xr.Dataset:
+        """Get the subgrid."""
+        return self._subgrid
+
+    @subgrid.setter
+    def subgrid(self, value: xr.Dataset) -> None:
+        self._subgrid = value
+
+    @property
+    def region_subgrid(self) -> xr.Dataset:
+        """Get the region subgrid."""
+        return self._region_subgrid
+
+    @region_subgrid.setter
+    def region_subgrid(self, value: xr.Dataset) -> None:
+        self._region_subgrid = value
+
+    @property
+    def geom(self) -> DelayedReader:
+        """Get the geometry reader."""
+        return self._geom
+
+    @geom.setter
+    def geom(self, value: DelayedReader) -> None:
+        self._geom = value
+
+    @property
+    def table(self) -> DelayedReader:
+        """Get the table reader."""
+        return self._table
+
+    @table.setter
+    def table(self, value: DelayedReader) -> None:
+        self._table = value
+
+    @property
+    def array(self) -> DelayedReader:
+        """Get the array reader."""
+        return self._array
+
+    @array.setter
+    def array(self, value: DelayedReader) -> None:
+        self._array = value
+
+    @property
+    def params(self) -> DelayedReader:
+        """Get the params reader."""
+        return self._params
+
+    @params.setter
+    def params(self, value: DelayedReader) -> None:
+        self._params = value
+
+    @property
+    def other(self) -> DelayedReader:
+        """Get the other reader."""
+        return self._other
+
+    @other.setter
+    def other(self, value: DelayedReader) -> None:
+        self._other = value
+
+    @property
+    def files(self) -> dict:
+        """Get the files dictionary."""
+        return self._files
+
+    @files.setter
+    def files(self, value: dict) -> None:
+        self._files = value
 
     @build_method
     def setup_region(

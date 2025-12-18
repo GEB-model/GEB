@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from geb.build.data_catalog import NewDataCatalog
 
 
-class BaseModel(ABC):
+class BuildModelBase(ABC):
     """Abstract base class for model components."""
 
     @property
@@ -218,14 +218,14 @@ class BaseModel(ABC):
         """Abstract method to set a dictionary."""
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
     def bounds(self) -> tuple[float, float, float, float]:
         """Abstract method to get bounds."""
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
     def region(self) -> gpd.GeoDataFrame:
         """Abstract method to get region geometry."""
         pass
@@ -248,8 +248,8 @@ class BaseModel(ABC):
         """Abstract method to create a full_like DataArray."""
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
     def subgrid_factor(self) -> int:
         """Abstract method to get subgrid factor."""
         pass
@@ -295,8 +295,8 @@ class BaseModel(ABC):
         """Abstract setter for end date."""
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
     def ISIMIP_ssp(self) -> str:
         """Abstract method to get ISIMIP SSP scenario."""
         pass
@@ -307,8 +307,8 @@ class BaseModel(ABC):
         """Abstract setter for ISIMIP SSP scenario."""
         pass
 
-    @abstractmethod
     @property
+    @abstractmethod
     def ssp(self) -> str:
         """Abstract method to get SSP scenario."""
         pass

@@ -118,7 +118,7 @@ class HazardDriver(Module):
                         > self.model.simulation_end + self.model.timestep_length
                     ):
                         print(
-                            f"Warning: Flood event {event} ends after the model end time {self.simulation_end}. Simulating only part of flood event."
+                            f"Warning: Flood event {event} ends after the model end time {self.model.simulation_end}. Simulating only part of flood event."
                         )
                         event["end_time"] = (
                             self.model.simulation_end + self.model.timestep_length

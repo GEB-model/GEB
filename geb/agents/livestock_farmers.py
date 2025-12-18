@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import calendar
-from typing import TYPE_CHECKING
+import datetime
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import numpy.typing as npt
+import xarray as xr
 
+from geb.hydrology.HRUs import load_water_demand_xr
+from geb.store import Bucket
 from geb.types import ArrayFloat32
 
 from ..hydrology.landcovers import GRASSLAND_LIKE
@@ -18,6 +22,14 @@ if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
+class LiveStockFarmersVariables(Bucket):
+    """Variables for the LivestockFarmers agent."""
+
+    current_water_demand: ArrayFloat32
+    current_efficiency: np.float32
+    last_water_demand_update: datetime.datetime
+
+
 class LiveStockFarmers(AgentBaseClass):
     """This class is used to simulate the government.
 
@@ -25,6 +37,8 @@ class LiveStockFarmers(AgentBaseClass):
         model: The GEB model.
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
+
+    var: LiveStockFarmersVariables
 
     def __init__(
         self, model: GEBModel, agents: Agents, reduncancy: float | None
@@ -55,6 +69,10 @@ class LiveStockFarmers(AgentBaseClass):
         if self.model.in_spinup:
             self.spinup()
 
+        self.livestock_water_consumption_ds: xr.Dataset = load_water_demand_xr(
+            self.model.files["other"]["water_demand/livestock_water_consumption"]
+        )
+
     @property
     def name(self) -> str:
         """The name of the module.
@@ -80,7 +98,9 @@ class LiveStockFarmers(AgentBaseClass):
             - The updated water demand as a numpy array (in m3/day).
             - The current efficiency as a float.
         """
-        days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
+        days_in_year: Literal[366, 365] = (
+            366 if calendar.isleap(self.model.current_time.year) else 365
+        )
 
         # grassland/non-irrigated land that is not owned by a crop farmer
         land_use_type = self.HRU.var.land_use_type
@@ -90,7 +110,7 @@ class LiveStockFarmers(AgentBaseClass):
 
         # transform from mio m3 per year to m3/day
         water_consumption = (
-            self.model.livestock_water_consumption_ds.sel(
+            self.livestock_water_consumption_ds.sel(
                 time=self.model.current_time, method="ffill", tolerance="366D"
             ).livestock_water_consumption
             * 1_000_000
@@ -139,7 +159,7 @@ class LiveStockFarmers(AgentBaseClass):
         """
         if (
             np.datetime64(self.model.current_time, "ns")
-            in self.model.livestock_water_consumption_ds.time
+            in self.livestock_water_consumption_ds.time
         ):
             water_demand, efficiency = self.update_water_demand()
             self.var.current_water_demand = water_demand

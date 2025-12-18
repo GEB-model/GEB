@@ -20,7 +20,7 @@ from tqdm import tqdm
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
 
-from .base import BaseModel
+from .base import BuildModelBase
 
 
 def plot_snapping(
@@ -338,7 +338,7 @@ def select_river_segment(
     return closest_river_segment
 
 
-class Observations(BaseModel):
+class Observations(BuildModelBase):
     """Collects, parses and processes observational data for model evaluation."""
 
     def __init__(self) -> None:

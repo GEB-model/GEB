@@ -30,7 +30,7 @@ from geb.build.methods import build_method
 from geb.workflows.raster import resample_like
 
 from ...workflows.io import calculate_scaling, write_zarr
-from .base import BaseModel
+from .base import BuildModelBase
 
 
 def plot_normal_forcing(
@@ -516,7 +516,7 @@ def get_chunk_size(da: xr.DataArray, target: float | int = 1e8) -> int:
     return int(target / (da.dtype.itemsize * spatial_size))
 
 
-class Forcing(BaseModel):
+class Forcing(BuildModelBase):
     """Contains methods to download and process climate forcing data for GEB."""
 
     def __init__(self) -> None:

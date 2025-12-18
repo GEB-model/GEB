@@ -35,7 +35,7 @@ from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 working_directory: Path = tmp_folder / "model"
 working_directory_coastal: Path = tmp_folder / "model_coastal"
 
-DEFAULT_BUILD_ARGS: dict[str, Any] = {}
+DEFAULT_BUILD_ARGS: dict[str, Any] = {"continue_": True}
 DEFAULT_RUN_ARGS: dict[str, Any] = {}
 
 

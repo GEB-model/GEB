@@ -27,6 +27,7 @@ from rasterio.features import geometry_mask
 from tqdm import tqdm
 
 if TYPE_CHECKING:
+    from geb.evaluate import Evaluate
     from geb.model import GEBModel
 
 from geb.workflows.io import read_zarr, write_zarr
@@ -88,9 +89,10 @@ def calculate_critical_success_index(
 class Hydrology:
     """Implements several functions to evaluate the hydrological module of GEB."""
 
-    def __init__(self, model: GEBModel) -> None:
+    def __init__(self, model: GEBModel, evaluator: Evaluate) -> None:
         """Initialize the Hydrology evaluation module."""
         self.model = model
+        self.evaluator = evaluator
 
     def plot_discharge(
         self, run_name: str = "default", *args: Any, **kwargs: Any
@@ -141,7 +143,7 @@ class Hydrology:
 
         write_zarr(
             mean_discharge,
-            self.output_folder_evaluate / "mean_discharge_m3_per_s.zarr",
+            self.evaluator.output_folder_evaluate / "mean_discharge_m3_per_s.zarr",
             crs=4326,
         )
 
@@ -153,7 +155,8 @@ class Hydrology:
         ax.set_ylabel("Latitude")
 
         plt.savefig(
-            self.output_folder_evaluate / "mean_discharge_m3_per_s.png", dpi=300
+            self.evaluator.output_folder_evaluate / "mean_discharge_m3_per_s.png",
+            dpi=300,
         )
 
     def evaluate_discharge(
@@ -189,10 +192,12 @@ class Hydrology:
         """
         #  create folders
         eval_plot_folder: Path = (
-            Path(self.output_folder_evaluate) / "discharge" / "plots"
+            Path(self.evaluator.output_folder_evaluate) / "discharge" / "plots"
         )
         eval_result_folder = (
-            Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
+            Path(self.evaluator.output_folder_evaluate)
+            / "discharge"
+            / "evaluation_results"
         )
 
         eval_plot_folder.mkdir(parents=True, exist_ok=True)
@@ -676,19 +681,19 @@ class Hydrology:
             ctx.add_basemap(
                 ax[0],
                 crs=evaluation_gdf.crs.to_string(),
-                source=ctx.providers.Esri.WorldImagery,
+                source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
                 attribution=False,  # Remove attribution text
             )
             ctx.add_basemap(
                 ax[1],
                 crs=evaluation_gdf.crs.to_string(),
-                source=ctx.providers.Esri.WorldImagery,
+                source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
                 attribution=False,  # Remove attribution text
             )
             ctx.add_basemap(
                 ax[2],
                 crs=evaluation_gdf.crs.to_string(),
-                source=ctx.providers.Esri.WorldImagery,
+                source=ctx.providers.Esri.WorldImagery,  # ty:ignore[unresolved-attribute]
                 attribution=False,  # Remove attribution text
             )
 
@@ -1001,7 +1006,9 @@ class Hydrology:
             export: Whether to save the skill score graphs to PNG files.
         """
         eval_result_folder = (
-            Path(self.output_folder_evaluate) / "discharge" / "evaluation_results"
+            Path(self.evaluator.output_folder_evaluate)
+            / "discharge"
+            / "evaluation_results"
         )
         evaluation_df = pd.read_excel(
             eval_result_folder.joinpath("evaluation_metrics.xlsx")
@@ -1374,7 +1381,7 @@ class Hydrology:
 
         if export:
             water_circle.write_image(
-                self.output_folder_evaluate / "water_circle.png", scale=5
+                self.evaluator.output_folder_evaluate / "water_circle.png", scale=5
             )
 
         return water_circle
@@ -1705,7 +1712,7 @@ class Hydrology:
 
                     # Add a comment about the metrics in the plot
                     legend_bbox = legend.get_window_extent(
-                        renderer=fig.canvas.get_renderer()
+                        renderer=fig.canvas.get_renderer()  # ty:ignore[unresolved-attribute]
                     )
                     legend_bbox_ax = legend_bbox.transformed(ax.transAxes.inverted())
 
@@ -2062,7 +2069,9 @@ class Hydrology:
 
         self.config = self.model.config["hazards"]
 
-        eval_hydrodynamics_folders = Path(self.output_folder_evaluate) / "hydrodynamics"
+        eval_hydrodynamics_folders = (
+            Path(self.evaluator.output_folder_evaluate) / "hydrodynamics"
+        )
 
         eval_hydrodynamics_folders.mkdir(parents=True, exist_ok=True)
 

@@ -20,15 +20,17 @@ import xarray
 from geb.workflows.io import read_zarr
 
 if TYPE_CHECKING:
+    from geb.evaluate import Evaluate
     from geb.model import GEBModel
 
 
 class MeteorologicalForecasts:
     """Implements several functions to evaluate the meteorological forecasts inside GEB."""
 
-    def __init__(self, model: GEBModel) -> None:
+    def __init__(self, model: GEBModel, evaluator: Evaluate) -> None:
         """Initialize MeteorologicalForecasts."""
         self.model = model
+        self.evaluator = evaluator
 
     def evaluate_forecasts(
         self, model: Any, output_folder: Path, *args: Any, **kwargs: Any

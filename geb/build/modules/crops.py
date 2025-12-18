@@ -35,10 +35,10 @@ from ..workflows.conversions import (
 )
 from ..workflows.crop_calendars import parse_MIRCA2000_crop_calendar
 from ..workflows.farmers import get_farm_locations
-from .base import BaseModel
+from .base import BuildModelBase
 
 
-class Crops(BaseModel):
+class Crops(BuildModelBase):
     """Contains all build methods for setting up crops for GEB."""
 
     def __init__(self) -> None:

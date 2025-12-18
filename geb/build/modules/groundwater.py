@@ -13,10 +13,10 @@ from geb.workflows.raster import (
     resample_like,
 )
 
-from .base import BaseModel
+from .base import BuildModelBase
 
 
-class GroundWater(BaseModel):
+class GroundWater(BuildModelBase):
     """Contains all build methods for the groundwater for GEB."""
 
     def __init__(self) -> None:

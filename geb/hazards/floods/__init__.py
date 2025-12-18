@@ -15,6 +15,7 @@ import xarray as xr
 from shapely.geometry.point import Point
 
 from geb.module import Module
+from geb.store import Bucket
 from geb.types import (
     ArrayFloat32,
     TwoDArrayFloat as TwoDArrayFloat,
@@ -145,6 +146,13 @@ def group_subbasins(
     return groups
 
 
+class FloodVariables(Bucket):
+    """Class to hold variables for the Floods module."""
+
+    discharge_per_timestep: deque[TwoDArrayFloat32]
+    runoff_m_per_timestep: deque[TwoDArrayFloat32]
+
+
 class Floods(Module):
     """The class that implements all methods to setup, run, and post-process hydrodynamic flood models.
 
@@ -152,6 +160,8 @@ class Floods(Module):
         model: The GEB model instance.
         n_timesteps: The number of timesteps to keep in memory for discharge calculations (default is 10).
     """
+
+    var: FloodVariables
 
     def __init__(self, model: GEBModel, longest_flood_event_in_days: int = 10) -> None:
         """Initializes the Floods class.
@@ -278,10 +288,10 @@ class Floods(Module):
             rivers=rivers,
             discharge=self.discharge_spinup_ds,
             river_width_alpha=self.model.hydrology.grid.decompress(
-                self.model.var.river_width_alpha
+                self.model.hydrology.grid.var.river_width_alpha
             ),
             river_width_beta=self.model.hydrology.grid.decompress(
-                self.model.var.river_width_beta
+                self.model.hydrology.grid.var.river_width_beta
             ),
             mannings=self.mannings,
             grid_size_multiplier=self.config["grid_size_multiplier"],

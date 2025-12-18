@@ -29,10 +29,10 @@ from ..workflows.conversions import (
 )
 from ..workflows.farmers import create_farms, get_farm_distribution
 from ..workflows.population import load_GLOPOP_S
-from .base import BaseModel
+from .base import BuildModelBase
 
 
-class Agents(BaseModel):
+class Agents(BuildModelBase):
     """Contains all build methods for the agents for GEB."""
 
     def __init__(self) -> None:

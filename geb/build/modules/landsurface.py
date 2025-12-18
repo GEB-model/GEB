@@ -21,10 +21,10 @@ from geb.workflows.raster import (
 )
 
 from ..workflows.soilgrids import load_soilgrids
-from .base import BaseModel
+from .base import BuildModelBase
 
 
-class LandSurface(BaseModel):
+class LandSurface(BuildModelBase):
     """Implements land surface submodel, responsible for land surface characteristics and processes."""
 
     def __init__(self) -> None:

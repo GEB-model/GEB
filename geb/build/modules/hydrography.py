@@ -18,10 +18,17 @@ from shapely.geometry import LineString, Point, shape
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
-from geb.types import ArrayBool, ArrayFloat32, ArrayInt32
+from geb.types import (
+    ArrayBool,
+    ArrayFloat32,
+    ArrayInt32,
+    TwoDArrayFloat64,
+    TwoDArrayInt32,
+    TwoDArrayInt64,
+)
 from geb.workflows.raster import rasterize_like, snap_to_grid
 
-from .base import BaseModel
+from .base import BuildModelBase
 
 
 def get_all_upstream_subbasin_ids(
@@ -149,7 +156,7 @@ def create_river_raster_from_river_lines(
     target: xr.DataArray,
     column: str | None = None,
     index: bool | None = None,
-) -> npt.NDArray[np.int32]:
+) -> TwoDArrayInt32:
     """Create a river raster from river lines.
 
     Args:
@@ -187,7 +194,7 @@ def create_river_raster_from_river_lines(
 
 def get_SWORD_translation_IDs_and_lengths(
     data_catalog: NewDataCatalog, rivers: gpd.GeoDataFrame
-) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.float64]]:
+) -> tuple[TwoDArrayInt64, TwoDArrayFloat64]:
     """Get the SWORD reach IDs and lengths for each river based on the MERIT basin ID.
 
     Each river can have multiple SWORD reach IDs, so the output is a 2D array of shape (N, M)
@@ -207,10 +214,12 @@ def get_SWORD_translation_IDs_and_lengths(
     MERIT_Basins_to_SWORD = (
         data_catalog.fetch("merit_sword").read().sel(mb=rivers.index.tolist())
     )
-    assert isinstance(MERIT_Basins_to_SWORD, xr.DataArray)
+    assert isinstance(MERIT_Basins_to_SWORD, xr.Dataset)
 
-    SWORD_reach_IDs = np.full((40, len(rivers)), dtype=np.int64, fill_value=-1)
-    SWORD_reach_lengths = np.full(
+    SWORD_reach_IDs: TwoDArrayInt64 = np.full(
+        (40, len(rivers)), dtype=np.int64, fill_value=-1
+    )
+    SWORD_reach_lengths: TwoDArrayFloat64 = np.full(
         (40, len(rivers)), dtype=np.float64, fill_value=np.nan
     )
     for i in range(1, 41):
@@ -225,8 +234,8 @@ def get_SWORD_translation_IDs_and_lengths(
 
 
 def get_SWORD_river_widths(
-    data_catalog: NewDataCatalog, SWORD_reach_IDs: npt.NDArray[np.int64]
-) -> npt.NDArray[np.float64]:
+    data_catalog: NewDataCatalog, SWORD_reach_IDs: TwoDArrayInt64
+) -> TwoDArrayFloat64:
     """Get the river widths from the SWORD dataset based on the SWORD reach IDs.
 
     Each river can have multiple SWORD reach IDs, so the input is a 2D array of shape (N, M).
@@ -270,7 +279,7 @@ def get_SWORD_river_widths(
     return SWORD_river_width
 
 
-class Hydrography(BaseModel):
+class Hydrography(BuildModelBase):
     """Contains all build methods for the hydrography for GEB."""
 
     def __init__(self) -> None:
@@ -293,12 +302,14 @@ class Hydrography(BaseModel):
             The resulting Manning's coefficient is then set as the `routing/mannings` attribute of the grid using the
             `set_grid()` method.
         """
-        a = (2 * self.grid["cell_area"]) / self.grid["routing/upstream_area"]
-        a = xr.where(a < 1, a, 1, keep_attrs=True)
-        b = self.grid["routing/outflow_elevation"] / 2000
-        b = xr.where(b < 1, b, 1, keep_attrs=True)
+        a: xr.DataArray = (2 * self.grid["cell_area"]) / self.grid[
+            "routing/upstream_area"
+        ]
+        a: xr.DataArray = xr.where(a < 1, a, 1, keep_attrs=True)
+        b: xr.DataArray = self.grid["routing/outflow_elevation"] / 2000
+        b: xr.DataArray = xr.where(b < 1, b, 1, keep_attrs=True)
 
-        mannings = 0.025 + 0.015 * a + 0.030 * b
+        mannings: xr.DataArray = 0.025 + 0.015 * a + 0.030 * b
         mannings.attrs["_FillValue"] = np.nan
 
         self.set_grid(mannings, "routing/mannings")

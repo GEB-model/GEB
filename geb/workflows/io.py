@@ -49,6 +49,8 @@ from geb.types import (
     TwoDArrayFloat32,
 )
 
+zarr.config.set({"codec_pipeline.fill_missing_chunks": False})
+
 
 def read_table(fp: Path) -> pd.DataFrame:
     """Load a parquet file as a pandas DataFrame.

@@ -6,6 +6,7 @@ build methods.
 """
 
 import zipfile
+from abc import ABC
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -203,12 +204,16 @@ def unify_crop_variants(
     return crop_calendar_per_farmer
 
 
-class Survey:
+class Survey(ABC):
     """Base class for parsing and processing survey data.
 
     Subclasses should provide concrete implementations to load and parse
     survey data into ``self.survey`` and ``self.samples`` pandas objects.
     """
+
+    samples: pd.DataFrame
+    survey: pd.DataFrame
+    bins: dict[str, dict[str, Any]]
 
     def __init__(self) -> None:
         """Initialize an empty registry of value mappers.

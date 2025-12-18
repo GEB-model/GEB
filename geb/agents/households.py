@@ -5,11 +5,10 @@ from __future__ import annotations
 import datetime
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import geopandas as gpd
 import numpy as np
-import numpy.typing as npt
 import osmnx as ox
 import pandas as pd
 import xarray as xr
@@ -20,7 +19,7 @@ from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
-from geb.types import TwoDArrayBool, TwoDArrayInt
+from geb.types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
 from geb.workflows.io import read_params
 
 from ..hydrology.landcovers import (
@@ -35,6 +34,8 @@ from .general import AgentBaseClass
 if TYPE_CHECKING:
     from geb.agents import Agents
     from geb.model import GEBModel
+
+    from ..store import Bucket
 
 
 def from_landuse_raster_to_polygon(
@@ -61,8 +62,55 @@ def from_landuse_raster_to_polygon(
     return gdf
 
 
+class HouseholdVariables(Bucket):
+    """Variables for the Households agent."""
+
+    household_points: gpd.GeoDataFrame
+    actions_taken: DynamicArray
+    possible_measures: list[str]
+    possible_warning_triggers: list[str]
+    municipal_water_demand_per_capita_m3_baseline: ArrayFloat32
+    income: DynamicArray
+    building_id_of_household: DynamicArray
+    wealth: DynamicArray
+    property_value: DynamicArray
+    locations: DynamicArray
+    years_since_last_flood: DynamicArray
+    risk_perception: DynamicArray
+    sizes: DynamicArray
+    water_efficiency_per_household: ArrayFloat32
+    municipal_water_withdrawal_m3_per_capita_per_day_multiplier: pd.DataFrame
+    risk_perc_max: float
+    risk_perc_min: float
+    risk_decr: float
+    wlranges_and_measures: dict[int, Any]
+    implementation_times: Any
+    rail_curve: pd.DataFrame
+    warning_trigger: DynamicArray
+    evacuated: DynamicArray
+    warning_level: DynamicArray
+    warning_reached: DynamicArray
+    response_probability: DynamicArray
+    amenity_value: DynamicArray
+    adaptation_costs: DynamicArray
+    recommended_measures: DynamicArray
+    time_adapted: DynamicArray
+    max_dam_buildings_structure: float
+    forest_curve: pd.DataFrame
+    agriculture_curve: pd.DataFrame
+    road_curves: pd.DataFrame
+    adapted: DynamicArray
+    max_dam_buildings_content: float
+    max_dam_rail: float
+    max_dam_forest_m2: float
+    max_dam_agriculture_m2: float
+    region_id: DynamicArray
+
+
 class Households(AgentBaseClass):
     """This class implements the household agents."""
+
+    var: HouseholdVariables
 
     def __init__(self, model: GEBModel, agents: Agents, reduncancy: float) -> None:
         """Initialize the Households agent module.
@@ -374,12 +422,12 @@ class Households(AgentBaseClass):
 
         # initiate array with property values (used as max damage) [dummy data for now, could use Huizinga combined with building footprint to calculate better values]
         self.var.property_value = DynamicArray(
-            np.int64(self.var.wealth.data * 0.8), max_n=self.max_n
+            (self.var.wealth.data * 0.8).astype(np.int64), max_n=self.max_n
         )
         # initiate array with RANDOM annual adaptation costs [dummy data for now, values are available in literature]
-        adaptation_costs = np.int64(
+        adaptation_costs = (
             np.maximum(self.var.property_value.data * 0.05, 10_800)
-        )
+        ).astype(np.int64)
         self.var.adaptation_costs = DynamicArray(adaptation_costs, max_n=self.max_n)
 
         # initiate array with amenity value [dummy data for now, use hedonic pricing studies to calculate actual values]
@@ -2189,9 +2237,9 @@ class Households(AgentBaseClass):
     def water_demand(
         self,
     ) -> tuple[
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
-        npt.NDArray[np.float32],
+        ArrayFloat32,
+        ArrayFloat32,
+        ArrayFloat32,
     ]:
         """Calculate the water demand per household in m3 per day.
 

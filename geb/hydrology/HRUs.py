@@ -1204,9 +1204,6 @@ class Data:
         self.model.industry_water_demand_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/industry_water_demand"]
         )
-        self.model.livestock_water_consumption_ds: xr.Dataset = load_water_demand_xr(
-            self.model.files["other"]["water_demand/livestock_water_consumption"]
-        )
 
     def to_HRU(
         self, *, data: T_OneorTwoDArray, fn: str | None = None

@@ -26,8 +26,8 @@ class Evaluate:
     def __init__(self, model: GEBModel) -> None:
         """Initialize the Evaluate class."""
         self.model: GEBModel = model
-        self.hydrology = Hydrology(model)
-        self.meteorological_forecasts = MeteorologicalForecasts(model)
+        self.hydrology = Hydrology(model, self)
+        self.meteorological_forecasts = MeteorologicalForecasts(model, self)
 
     def run(
         self,
