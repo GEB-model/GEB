@@ -1377,8 +1377,12 @@ class Hydrology:
     def evaluate_hydrodynamics(
         self, run_name: str = "default", *args: Any, **kwargs: Any
     ) -> None:
-        """Method to plot the mean discharge from the GEB model.
+        """Evaluate hydrodynamic model performance against flood observations.
 
+        This method loads modelled flood maps and corresponding observations,
+        computes spatial performance metrics (e.g., hit rate, false alarm ratio,
+        critical success index), and generates diagnostic visualisations and
+        summary outputs for the specified simulation run.
         Args:
             run_name: Name of the simulation run to evaluate.
             *args: Additional positional arguments (ignored).
