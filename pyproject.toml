@@ -197,6 +197,5 @@ testpaths = ["tests"]
 addopts = "--ignore=.venv"
 
 [tool.ty.rules]
-possibly-missing-attribute = "ignore"
-unresolved-attribute = "ignore"
+unresolved-attribute = "warn"
 
