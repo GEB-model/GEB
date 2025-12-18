@@ -2156,9 +2156,6 @@ class Households(AgentBaseClass):
                 "building_unprotected",
             )
 
-            # print(buildings)
-            # print(buildings_centroid)
-
         else:
             household_points["protect_building"] = False
 
