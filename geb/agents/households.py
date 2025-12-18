@@ -96,7 +96,7 @@ class Households(AgentBaseClass):
 
         if self.config["adapt"]:
             self.load_flood_maps()
-            self.flood_risk_perceptions = []  # Store the flood risk percpetions in here
+            self.flood_risk_perceptions = []  # Store the flood risk perceptions in here
             self.flood_risk_perceptions_statistics = []  # Store some statistics on flood risk perceptions here
 
         self.load_objects()
