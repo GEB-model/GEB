@@ -4,7 +4,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-import rioxarray as rxr
+import rioxarray
+import rioxarray.merge
 import xarray as xr
 
 from geb.workflows.io import fetch_and_save, write_zarr
@@ -51,11 +52,11 @@ class GEBCO(Adapter):
             print("Merging tiles into single DataArray. This may take a while...")
             das: list[xr.DataArray] = []
             for path in tile_paths:
-                da = rxr.open_rasterio(self.root / path)
+                da = rioxarray.open_rasterio(self.root / path)
                 assert isinstance(da, xr.DataArray)
                 das.append(da.sel(band=1))
 
-            da: xr.DataArray = rxr.merge.merge_arrays(das)
+            da: xr.DataArray = rioxarray.merge.merge_arrays(das)
 
             da.attrs = {
                 k: v

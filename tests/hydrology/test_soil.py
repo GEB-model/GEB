@@ -618,135 +618,92 @@ def test_plot_arno_runoff_response() -> None:
 
 def test_infiltration_arno_integration() -> None:
     """Test infiltration with Arno runoff enabled."""
-    import geb.hydrology.soil
+    # Setup inputs
+    ws = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0], dtype=np.float32)
+    w = np.array(
+        [50.0, 50.0, 50.0, 50.0, 50.0, 50.0], dtype=np.float32
+    )  # 50% saturation
+    saturated_hydraulic_conductivity = np.full_like(w, np.float32(10.0))  # High Ksat
+    land_use_type = np.int32(NON_PADDY_IRRIGATED)
+    soil_is_frozen = False
+    topwater = np.float32(10.0)  # 10mm rain
 
-    # Save original value
-    original_flag = geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF
+    # Run infiltration using .py_func to use the python implementation with the updated global
+    # With Arno (b=0.4), even if not saturated, there should be some runoff.
+    # In the standard model, with Ksat=10 and topwater=10, and capacity=50,
+    # potential_infiltration = min(10, 50) = 10.
+    # infiltration = min(10, 10) = 10.
+    # So standard model would have 0 runoff.
 
-    try:
-        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = True
+    w_arno = w.copy()
+    _, runoff_arno, _, infil_arno = infiltration.py_func(
+        ws,
+        saturated_hydraulic_conductivity,
+        land_use_type,
+        soil_is_frozen,
+        w_arno,
+        topwater,
+        np.float32(0.4),
+    )
 
-        # Setup inputs
-        ws = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0], dtype=np.float32)
-        w = np.array(
-            [50.0, 50.0, 50.0, 50.0, 50.0, 50.0], dtype=np.float32
-        )  # 50% saturation
-        saturated_hydraulic_conductivity = np.full_like(
-            w, np.float32(10.0)
-        )  # High Ksat
-        land_use_type = np.int32(NON_PADDY_IRRIGATED)
-        soil_is_frozen = False
-        topwater = np.float32(10.0)  # 10mm rain
-
-        # Run infiltration using .py_func to use the python implementation with the updated global
-        # With Arno (b=0.4), even if not saturated, there should be some runoff.
-        # In the standard model, with Ksat=10 and topwater=10, and capacity=50,
-        # potential_infiltration = min(10, 50) = 10.
-        # infiltration = min(10, 10) = 10.
-        # So standard model would have 0 runoff.
-
-        # Let's verify standard model behavior first (with flag=False)
-        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = False
-        w_std = w.copy()
-        _, runoff_std, _, infil_std = infiltration.py_func(
-            ws,
-            saturated_hydraulic_conductivity,
-            land_use_type,
-            soil_is_frozen,
-            w_std,
-            topwater,
-            np.float32(0.4),
-        )
-        assert runoff_std == 0.0
-        assert infil_std == 10.0
-
-        # Now with Arno
-        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = True
-        w_arno = w.copy()
-        _, runoff_arno, _, infil_arno = infiltration.py_func(
-            ws,
-            saturated_hydraulic_conductivity,
-            land_use_type,
-            soil_is_frozen,
-            w_arno,
-            topwater,
-            np.float32(0.4),
-        )
-
-        # Arno should produce some runoff because of the curve
-        assert runoff_arno > 0.0
-        assert infil_arno < 10.0
-        assert abs(runoff_arno + infil_arno - topwater) < 1e-5
-
-    finally:
-        # Restore flag
-        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = original_flag
+    # Arno should produce some runoff because of the curve
+    assert runoff_arno > 0.0
+    assert infil_arno < 10.0
+    assert abs(runoff_arno + infil_arno - topwater) < 1e-5
 
 
 def test_infiltration_arno_capacity_limit() -> None:
     """Test that Arno infiltration is limited by infiltration capacity (Ksat)."""
-    import geb.hydrology.soil
+    # Setup inputs
+    ws = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0], dtype=np.float32)
+    w = np.array(
+        [10.0, 50.0, 50.0, 50.0, 50.0, 50.0], dtype=np.float32
+    )  # Low saturation (10/100 = 0.1)
 
-    # Save original value
-    original_flag = geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF
+    # Ksat is low (2.0), Topwater is high (10.0)
+    # Arno would likely infiltrate most of the 10.0 if not limited,
+    # because relative saturation is low (0.1).
+    # Pass as array because infiltration expects array (for layers)
+    saturated_hydraulic_conductivity = np.full_like(w, np.float32(2.0))
 
-    try:
-        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = True
+    land_use_type = np.int32(NON_PADDY_IRRIGATED)
+    soil_is_frozen = False
+    topwater = np.float32(10.0)
+    arno_shape_parameter = np.float32(0.4)
 
-        # Setup inputs
-        ws = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0], dtype=np.float32)
-        w = np.array(
-            [10.0, 50.0, 50.0, 50.0, 50.0, 50.0], dtype=np.float32
-        )  # Low saturation (10/100 = 0.1)
+    # Run infiltration using .py_func
+    _, runoff, _, infiltration_amount = infiltration.py_func(
+        ws,
+        saturated_hydraulic_conductivity,
+        land_use_type,
+        soil_is_frozen,
+        w,
+        topwater,
+        arno_shape_parameter,
+    )
 
-        # Ksat is low (2.0), Topwater is high (10.0)
-        # Arno would likely infiltrate most of the 10.0 if not limited,
-        # because relative saturation is low (0.1).
-        # Pass as array because infiltration expects array (for layers)
-        saturated_hydraulic_conductivity = np.full_like(w, np.float32(2.0))
+    # Infiltration should be limited to Ksat (2.0)
+    assert infiltration_amount == 2.0
 
-        land_use_type = np.int32(NON_PADDY_IRRIGATED)
-        soil_is_frozen = False
-        topwater = np.float32(10.0)
-        arno_shape_parameter = np.float32(0.4)
+    # Runoff should be the rest (10.0 - 2.0 = 8.0)
+    assert runoff == 8.0
 
-        # Run infiltration using .py_func
-        _, runoff, _, infiltration_amount = infiltration.py_func(
-            ws,
-            saturated_hydraulic_conductivity,
-            land_use_type,
-            soil_is_frozen,
-            w,
-            topwater,
-            arno_shape_parameter,
-        )
+    # Verify that if Ksat is high, infiltration is higher
+    saturated_hydraulic_conductivity_high = np.full_like(w, np.float32(20.0))
+    _, runoff_high, _, infiltration_amount_high = infiltration.py_func(
+        ws,
+        saturated_hydraulic_conductivity_high,
+        land_use_type,
+        soil_is_frozen,
+        w,
+        topwater,
+        arno_shape_parameter,
+    )
 
-        # Infiltration should be limited to Ksat (2.0)
-        assert infiltration_amount == 2.0
-
-        # Runoff should be the rest (10.0 - 2.0 = 8.0)
-        assert runoff == 8.0
-
-        # Verify that if Ksat is high, infiltration is higher
-        saturated_hydraulic_conductivity_high = np.full_like(w, np.float32(20.0))
-        _, runoff_high, _, infiltration_amount_high = infiltration.py_func(
-            ws,
-            saturated_hydraulic_conductivity_high,
-            land_use_type,
-            soil_is_frozen,
-            w,
-            topwater,
-            arno_shape_parameter,
-        )
-
-        # With high Ksat, infiltration should be higher than 2.0
-        # (It will be determined by Arno curve)
-        assert infiltration_amount_high > 2.0
-        assert infiltration_amount_high <= 10.0
-
-    finally:
-        # Restore flag
-        geb.hydrology.soil.EXPERIMENT_ARNO_RUNOFF = original_flag
+    # With high Ksat, infiltration should be higher than 2.0
+    # (It will be determined by Arno curve)
+    assert infiltration_amount_high > 2.0
+    assert infiltration_amount_high <= 10.0
 
 
 def test_pedotransfer_functions_consistency() -> None:

@@ -1,5 +1,7 @@
 """This module contains the classes and functions processing observational data during model building."""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 from typing import Literal
@@ -17,6 +19,8 @@ from tqdm import tqdm
 
 from geb.build.methods import build_method
 from geb.workflows.io import get_window
+
+from .base import BaseModel
 
 
 def plot_snapping(
@@ -55,11 +59,11 @@ def plot_snapping(
     fig, ax = plt.subplots(
         subplot_kw={"projection": ccrs.PlateCarree()}, figsize=(15, 10)
     )
-    ax.coastlines()
-    ax.add_feature(cfeature.BORDERS)
-    ax.add_feature(cfeature.LAND)
-    ax.add_feature(cfeature.OCEAN)
-    ax.add_feature(cfeature.LAKES)
+    ax.coastlines()  # ty:ignore[unresolved-attribute]
+    ax.add_feature(cfeature.BORDERS)  # ty:ignore[unresolved-attribute]
+    ax.add_feature(cfeature.LAND)  # ty:ignore[unresolved-attribute]
+    ax.add_feature(cfeature.OCEAN)  # ty:ignore[unresolved-attribute]
+    ax.add_feature(cfeature.LAKES)  # ty:ignore[unresolved-attribute]
 
     # Set the extent to zoom in around the gauge location
     buffer = 0.05  # Adjust this value to control the zoom level
@@ -69,7 +73,7 @@ def plot_snapping(
     ymin = Q_obs_station_coords[1] - buffer
     ymax = Q_obs_station_coords[1] + buffer
 
-    ax.set_extent(
+    ax.set_extent(  # ty:ignore[unresolved-attribute]
         [
             xmin,
             xmax,
@@ -334,7 +338,7 @@ def select_river_segment(
     return closest_river_segment
 
 
-class Observations:
+class Observations(BaseModel):
     """Collects, parses and processes observational data for model evaluation."""
 
     def __init__(self) -> None:
@@ -466,11 +470,11 @@ class Observations:
             self.set_table(empty_discharge_df, name="discharge/Q_obs")
 
             # Create empty snapped locations geometry
-            empty_geom = gpd.GeoDataFrame(
+            empty_geom: gpd.GeoDataFrame = gpd.GeoDataFrame(
                 discharge_snapping_df,
                 geometry=gpd.GeoSeries([], crs="EPSG:4326"),
                 crs="EPSG:4326",
-            ).set_index(pd.Index([], name="Q_obs_station_ID"))
+            ).set_index(pd.Index([], name="Q_obs_station_ID"))  # ty:ignore[invalid-assignment]
             self.set_geom(empty_geom, name="discharge/discharge_snapped_locations")
 
             self.logger.info("Empty discharge datasets created")
@@ -668,7 +672,7 @@ class Observations:
             index=False,
         )  # save the dataframe to an excel file
 
-        discharge_snapping_gdf = gpd.GeoDataFrame(
+        discharge_snapping_gdf: gpd.GeoDataFrame = gpd.GeoDataFrame(
             discharge_snapping_df,
             geometry=gpd.points_from_xy(
                 discharge_snapping_df["snapped_grid_pixel_lonlat"].apply(
@@ -679,7 +683,7 @@ class Observations:
                 ),
             ),
             crs="EPSG:4326",  # Set the coordinate reference system
-        ).set_index("Q_obs_station_ID")
+        ).set_index("Q_obs_station_ID")  # ty:ignore[invalid-assignment]
 
         # drop the columns that have not associated snapped stations
         discharge_df = discharge_df[discharge_snapping_gdf.index]

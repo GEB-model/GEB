@@ -109,9 +109,9 @@ class WaterDemand(Module):
             method="last",
         )
 
-        water_body_mapping = self.hydrology.lakes_reservoirs.var.waterbody_mapping
+        waterbody_mapping = self.hydrology.waterbodies.var.waterbody_mapping
         self.HRU.var.reservoir_command_areas = np.take(
-            water_body_mapping, reservoir_command_areas, mode="clip"
+            waterbody_mapping, reservoir_command_areas, mode="clip"
         )
 
     def get_available_water(
@@ -128,10 +128,10 @@ class WaterDemand(Module):
             Available water in groundwater.
         """
         available_reservoir_storage_m3: np.ndarray = np.zeros(
-            self.hydrology.lakes_reservoirs.n, dtype=np.float32
+            self.hydrology.waterbodies.n, dtype=np.float32
         )
 
-        available_reservoir_storage_m3[self.hydrology.lakes_reservoirs.is_reservoir] = (
+        available_reservoir_storage_m3[self.hydrology.waterbodies.is_reservoir] = (
             self.model.agents.reservoir_operators.get_command_area_release(
                 gross_irrigation_demand_m3_per_command_area
             )
@@ -249,17 +249,17 @@ class WaterDemand(Module):
             )
         )
 
-        gross_irrigation_demand_m3_per_water_body: npt.NDArray[np.float32] = (
+        gross_irrigation_demand_m3_per_waterbody: npt.NDArray[np.float32] = (
             weighted_sum_per_reservoir(
                 self.model.agents.crop_farmers.command_area,
                 gross_irrigation_demand_m3_per_farmer_reservoir,
-                min_length=self.hydrology.lakes_reservoirs.n,
+                min_length=self.hydrology.waterbodies.n,
             )
         )
 
         gross_irrigation_demand_m3_per_reservoir: npt.NDArray[np.float32] = (
-            gross_irrigation_demand_m3_per_water_body[
-                self.hydrology.lakes_reservoirs.is_reservoir
+            gross_irrigation_demand_m3_per_waterbody[
+                self.hydrology.waterbodies.is_reservoir
             ]
         )
 

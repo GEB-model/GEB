@@ -11,21 +11,11 @@ import xarray as xr
 from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
 
-from geb.agents.crop_farmers import (
-    FIELD_EXPANSION_ADAPTATION,
-    INDEX_INSURANCE_ADAPTATION,
-    IRRIGATION_EFFICIENCY_ADAPTATION,
-    PERSONAL_INSURANCE_ADAPTATION,
-    PR_INSURANCE_ADAPTATION,
-    SURFACE_IRRIGATION_EQUIPMENT,
-    WELL_ADAPTATION,
-)
 from geb.build.methods import build_method
-from geb.types import ArrayBool, ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
     clip_with_grid,
-    interpolate_na_2d,
     pixels_to_coords,
     sample_from_map,
 )
@@ -37,11 +27,12 @@ from ..workflows.conversions import (
     SUPERWELL_NAME_TO_ISO3,
     setup_donor_countries,
 )
-from ..workflows.farmers import create_farms, get_farm_distribution, get_farm_locations
+from ..workflows.farmers import create_farms, get_farm_distribution
 from ..workflows.population import load_GLOPOP_S
+from .base import BaseModel
 
 
-class Agents:
+class Agents(BaseModel):
     """Contains all build methods for the agents for GEB."""
 
     def __init__(self) -> None:
@@ -735,10 +726,10 @@ class Agents:
         # lending_rates_dict["time"] = lending_rates.index.astype(str).tolist()
         # lending_rates_dict["data"] = lending_rates.to_dict(orient="list")
 
-        self.set_dict(inflation_rates_dict, name="socioeconomics/inflation_rates")
-        # self.set_dict(lending_rates_dict, name="socioeconomics/lending_rates")
-        self.set_dict(price_ratio_dict, name="socioeconomics/price_ratio")
-        self.set_dict(lcu_dict, name="socioeconomics/LCU_per_USD")
+        self.set_params(inflation_rates_dict, name="socioeconomics/inflation_rates")
+        # self.set_params(lending_rates_dict, name="socioeconomics/lending_rates")
+        self.set_params(price_ratio_dict, name="socioeconomics/price_ratio")
+        self.set_params(lcu_dict, name="socioeconomics/LCU_per_USD")
 
     @build_method
     def setup_irrigation_sources(self, irrigation_sources: dict[str, int]) -> None:
@@ -747,7 +738,7 @@ class Agents:
         Args:
             irrigation_sources: A dictionary mapping irrigation source names to their corresponding IDs.
         """
-        self.set_dict(irrigation_sources, name="agents/farmers/irrigation_sources")
+        self.set_params(irrigation_sources, name="agents/farmers/irrigation_sources")
 
     @build_method(depends_on=["set_time_range", "setup_economic_data"])
     def setup_irrigation_prices_by_reference_year(
@@ -784,7 +775,7 @@ class Agents:
             'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
         # Retrieve the inflation rates data
-        inflation_rates = self.dict["socioeconomics/inflation_rates"]
+        inflation_rates = self.params["socioeconomics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())
 
         # Create a dictionary to store the various types of prices with their initial reference year values
@@ -828,7 +819,7 @@ class Agents:
                 prices_dict["data"][region] = prices.tolist()
 
             # Set the calculated prices in the appropriate dictionary
-            self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
+            self.set_params(prices_dict, name=f"socioeconomics/{price_type}")
 
     @build_method(depends_on=["setup_economic_data"])
     def setup_well_prices_by_reference_year_global(
@@ -859,8 +850,8 @@ class Agents:
             'socioeconomics/well_prices' and 'socioeconomics/upkeep_prices_well_per_m2', respectively.
         """
         # Retrieve the inflation rates data
-        inflation_rates = self.dict["socioeconomics/inflation_rates"]
-        price_ratio = self.dict["socioeconomics/price_ratio"]
+        inflation_rates = self.params["socioeconomics/inflation_rates"]
+        price_ratio = self.params["socioeconomics/price_ratio"]
 
         # Create a dictionary to store the various types of prices with their initial reference year values
         price_types = {
@@ -912,7 +903,7 @@ class Agents:
             prices_dict["data"] = prices_dict_data
 
             # Set the calculated prices in the appropriate dictionary
-            self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
+            self.set_params(prices_dict, name=f"socioeconomics/{price_type}")
 
         electricity_rates = self.data_catalog.get_dataframe("gcam_electricity_rates")
         electricity_rates["ISO3"] = electricity_rates["Country"].map(
@@ -974,7 +965,7 @@ class Agents:
         electricity_rates_dict["data"] = electricity_rates_dict_data
 
         # Set the calculated prices in the appropriate dictionary
-        self.set_dict(electricity_rates_dict, name="socioeconomics/electricity_cost")
+        self.set_params(electricity_rates_dict, name="socioeconomics/electricity_cost")
 
     def setup_drip_irrigation_prices_by_reference_year(
         self,
@@ -997,7 +988,7 @@ class Agents:
             resulting prices are stored in the dictionaries with the region ID as the key.
         """
         # Retrieve the inflation rates data
-        inflation_rates = self.dict["socioeconomics/inflation_rates"]
+        inflation_rates = self.params["socioeconomics/inflation_rates"]
         regions = list(inflation_rates["data"].keys())
 
         # Create a dictionary to store the various types of prices with their initial reference year values
@@ -1036,7 +1027,7 @@ class Agents:
                 prices_dict["data"][region] = prices.tolist()
 
             # Set the calculated prices in the appropriate dictionary
-            self.set_dict(prices_dict, name=f"socioeconomics/{price_type}")
+            self.set_params(prices_dict, name=f"socioeconomics/{price_type}")
 
     def set_farmers_and_create_farms(self, farmers: pd.DataFrame) -> None:
         """Sets up the farmers data for GEB.
@@ -1067,12 +1058,12 @@ class Agents:
             with names of the form 'agents/farmers/{column}'.
         """
         regions: gpd.GeoDataFrame = self.geom["regions"]
-        region_ids: TwoDArrayInt32 = self.region_subgrid["region_ids"]
+        region_ids: xr.DataArray = self.region_subgrid["region_ids"]
         full_region_cultivated_land: xr.DataArray = self.region_subgrid[
             "landsurface/full_region_cultivated_land"
         ]
 
-        farms: TwoDArrayInt32 = self.full_like(
+        farms: xr.DataArray = self.full_like(
             region_ids, fill_value=-1, nodata=-1, dtype=np.int32
         )
         for region_id in tqdm(regions["region_id"]):
@@ -1139,7 +1130,7 @@ class Agents:
         )
         assert farmers.iloc[-1].name == subgrid_farms_in_study_area.max()
 
-        subgrid_farms_in_study_area_: TwoDArrayInt32 = self.full_like(
+        subgrid_farms_in_study_area_: xr.DataArray = self.full_like(
             self.subgrid["mask"],
             fill_value=-1,
             nodata=-1,
@@ -1281,6 +1272,7 @@ class Agents:
                 .astype(np.float64)
                 .mean()
                 .compute()
+                .item()
             )
 
             if data_source == "lowder":
@@ -2537,170 +2529,6 @@ class Agents:
 
         interest_rate = np.full(n_farmers, interest_rate, dtype=np.float32)
         self.set_array(interest_rate, name="agents/farmers/interest_rate")
-
-    def setup_farmer_irrigation_source(
-        self, irrigating_farmers: ArrayBool, year: int
-    ) -> None:
-        """Sets up the irrigation source for farmers based on global irrigation area data.
-
-        Args:
-            irrigating_farmers: A boolean array indicating which farmers are irrigating.
-            year: The year for which to set up the irrigation source.
-        """
-        fraction_sw_irrigation_data = self.new_data_catalog.fetch(
-            "global_irrigation_area_surface_water"
-        ).read()
-        fraction_sw_irrigation_data.attrs["_FillValue"] = np.nan
-
-        fraction_sw_irrigation_data = fraction_sw_irrigation_data.isel(
-            get_window(
-                fraction_sw_irrigation_data.x,
-                fraction_sw_irrigation_data.y,
-                self.bounds,
-                buffer=5,
-            ),
-        )
-        fraction_sw_irrigation_data: xr.DataArray = interpolate_na_2d(
-            fraction_sw_irrigation_data
-        )
-
-        fraction_gw_irrigation_data = self.new_data_catalog.fetch(
-            "global_irrigation_area_groundwater"
-        ).read()
-        fraction_gw_irrigation_data.attrs["_FillValue"] = np.nan
-
-        fraction_gw_irrigation_data = fraction_gw_irrigation_data.isel(
-            get_window(
-                fraction_gw_irrigation_data.x,
-                fraction_gw_irrigation_data.y,
-                self.bounds,
-                buffer=5,
-            ),
-        )
-        fraction_gw_irrigation_data: xr.DataArray = interpolate_na_2d(
-            fraction_gw_irrigation_data
-        )
-
-        farmer_locations = get_farm_locations(
-            self.subgrid["agents/farmers/farms"], method="centroid"
-        )
-
-        # Determine which farmers are irrigating
-        grid_id_da = self.get_linear_indices(fraction_sw_irrigation_data)
-        ny, nx = (
-            fraction_sw_irrigation_data.sizes["y"],
-            fraction_sw_irrigation_data.sizes["x"],
-        )
-
-        n_cells = grid_id_da.max().item()
-        n_farmers = self.array["agents/farmers/id"].size
-
-        farmer_cells = sample_from_map(
-            grid_id_da.values,
-            farmer_locations,
-            grid_id_da.rio.transform(recalc=True).to_gdal(),
-        )
-        fraction_sw_irrigation_farmers = sample_from_map(
-            fraction_sw_irrigation_data.values,
-            farmer_locations,
-            fraction_sw_irrigation_data.rio.transform(recalc=True).to_gdal(),
-        )
-        fraction_gw_irrigation_farmers = sample_from_map(
-            fraction_gw_irrigation_data.values,
-            farmer_locations,
-            fraction_gw_irrigation_data.rio.transform(recalc=True).to_gdal(),
-        )
-
-        adaptations = np.full(
-            (
-                n_farmers,
-                max(
-                    [
-                        SURFACE_IRRIGATION_EQUIPMENT,
-                        WELL_ADAPTATION,
-                        IRRIGATION_EFFICIENCY_ADAPTATION,
-                        FIELD_EXPANSION_ADAPTATION,
-                        PERSONAL_INSURANCE_ADAPTATION,
-                        INDEX_INSURANCE_ADAPTATION,
-                        PR_INSURANCE_ADAPTATION,
-                    ]
-                )
-                + 1,
-            ),
-            -1,
-            dtype=np.int32,
-        )
-
-        for i in range(n_cells):
-            farmers_cell_mask = farmer_cells == i  # Boolean mask for farmers in cell i
-            farmers_cell_indices = np.where(farmers_cell_mask)[0]  # Absolute indices
-
-            irrigating_farmers_mask = irrigating_farmers[farmers_cell_mask]
-            num_irrigating_farmers = np.sum(irrigating_farmers_mask)
-
-            if num_irrigating_farmers > 0:
-                fraction_sw = fraction_sw_irrigation_farmers[farmers_cell_mask][0]
-                fraction_gw = fraction_gw_irrigation_farmers[farmers_cell_mask][0]
-
-                # Normalize fractions
-                total_fraction = fraction_sw + fraction_gw
-
-                # Handle edge cases if there are irrigating farmers but no data on sw/gw
-                if total_fraction == 0:
-                    # Find neighboring cells with valid data
-                    neighbor_ids = self.get_neighbor_cell_ids_for_linear_indices(
-                        i, nx, ny
-                    )
-                    found_valid_neighbor = False
-
-                    for neighbor_id in neighbor_ids:
-                        if neighbor_id not in np.unique(farmer_cells):
-                            continue
-
-                        neighbor_mask = farmer_cells == neighbor_id
-                        fraction_sw_neighbor = fraction_sw_irrigation_farmers[
-                            neighbor_mask
-                        ][0]
-                        fraction_gw_neighbor = fraction_gw_irrigation_farmers[
-                            neighbor_mask
-                        ][0]
-                        neighbor_total_fraction = (
-                            fraction_sw_neighbor + fraction_gw_neighbor
-                        )
-
-                        if neighbor_total_fraction > 0:
-                            # Found valid neighbor
-                            fraction_sw = fraction_sw_neighbor
-                            fraction_gw = fraction_gw_neighbor
-                            total_fraction = neighbor_total_fraction
-
-                            found_valid_neighbor = True
-                            break
-                    if not found_valid_neighbor:
-                        # No valid neighboring cells found, handle accordingly
-                        print(f"No valid data found for cell {i} and its neighbors.")
-                        continue  # Skip this cell
-
-                # Normalize fractions
-                probabilities = np.array([fraction_sw, fraction_gw], dtype=np.float64)
-                probabilities_sum = probabilities.sum()
-                probabilities /= probabilities_sum
-
-                # Indices of irrigating farmers in the region (absolute indices)
-                farmer_indices_in_region = farmers_cell_indices[irrigating_farmers_mask]
-
-                # Assign irrigation sources using np.random.choice
-                irrigation_equipment_per_farmer = np.random.choice(
-                    [SURFACE_IRRIGATION_EQUIPMENT, WELL_ADAPTATION],
-                    size=len(farmer_indices_in_region),
-                    p=probabilities,
-                )
-
-                adaptations[
-                    farmer_indices_in_region, irrigation_equipment_per_farmer
-                ] = 1
-
-        self.set_array(adaptations, name="agents/farmers/adaptations")
 
     @build_method(depends_on=[])
     def setup_assets(

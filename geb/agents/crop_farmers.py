@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, Sequence
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 from numba import njit
 from scipy.stats import genextreme
 
@@ -180,6 +181,14 @@ class CropFarmersVariables(Bucket):
     remaining_irrigation_limit_m3_channel: DynamicArray
     remaining_irrigation_limit_m3_reservoir: DynamicArray
     remaining_irrigation_limit_m3_groundwater: DynamicArray
+    crop_data: pd.DataFrame
+    crop_data_type: Literal["GAEZ", "MIRCA2000"]
+    crop_ids: dict[int, str]
+    field_indices: ArrayInt32
+    harvested_crop: DynamicArray
+    actual_yield_per_farmer: DynamicArray
+    irrigation_limit_m3: DynamicArray
+    household_size: DynamicArray
 
 
 class CropFarmers(AgentBaseClass):
@@ -3083,7 +3092,9 @@ class CropFarmers(AgentBaseClass):
         # Fetch loan configuration
         loan_duration = 2
 
-        index = self.cultivation_costs[0].get(self.model.current_time)
+        date_index = self.cultivation_costs[0]
+        assert isinstance(date_index, DateIndex)
+        index = date_index.get(self.model.current_time)
         cultivation_cost = self.cultivation_costs[1][index]
 
         # Determine the cultivation costs of the current rotation
@@ -5608,7 +5619,7 @@ class CropFarmers(AgentBaseClass):
 
         pixels = np.column_stack(indices)[:, [1, 0]]
         agent_location = np.mean(
-            pixels_to_coords(pixels + 0.5, self.HRU.var.gt), axis=0
+            pixels_to_coords(pixels + 0.5, self.HRU.gt), axis=0
         )  # +.5 to use center of pixels
 
         self.var.n += 1  # increment number of agents

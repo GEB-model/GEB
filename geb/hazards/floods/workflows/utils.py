@@ -269,25 +269,25 @@ def run_sfincs_subprocess(
     """
     print(f"Running SFINCS with: {cmd}")
     with open(file=log_file, mode="w") as log:
-        process: subprocess.Popen[str] = subprocess.Popen(
+        with subprocess.Popen(
             args=cmd,
             cwd=working_directory,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-        )
+        ) as process:
+            stdout = process.stdout
+            stderr = process.stderr
+            assert stdout is not None
+            assert stderr is not None
 
-        # Continuously read lines from stdout and stderr
-        for line in iter(
-            lambda: process.stdout.readline() or process.stderr.readline(), ""
-        ):
-            print(line.rstrip())
-            log.write(line)
-            log.flush()
+            # Continuously read lines from stdout and stderr
+            for line in iter(lambda: stdout.readline() or stderr.readline(), ""):
+                print(line.rstrip())
+                log.write(line)
+                log.flush()
 
-        process.stdout.close()
-        process.stderr.close()
-        process.wait()
+            process.wait()
 
     return process.returncode
 

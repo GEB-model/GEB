@@ -47,7 +47,7 @@ class DynamicArray:
 
     def __init__(
         self,
-        input_array: npt.ArrayLike | None = None,
+        input_array: np.ndarray | None = None,
         n: int | None = None,
         max_n: int | None = None,
         extra_dims: tuple[int, ...] | None = None,
@@ -458,7 +458,7 @@ class DynamicArray:
             "_extra_dims_names",
             "extra_dims_names",
         ):
-            return super().__getattr__(name)
+            return object.__getattribute__(self, name)
         else:
             return getattr(self.data, name)
 
@@ -956,7 +956,7 @@ class Bucket:
 
     """
 
-    def __init__(self, validator: Callable | None = None) -> None:
+    def __init__(self, validator: Callable[..., bool] | None = None) -> None:
         """Initialize the Bucket with an optional validator.
 
         Args:
@@ -990,7 +990,8 @@ class Bucket:
         | str
         | dict
         | datetime
-        | Callable,
+        | Callable[..., bool]
+        | None,
     ) -> None:
         """Set an value in the bucket with optional validation, except if the name is '_validator'.
 

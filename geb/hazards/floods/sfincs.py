@@ -22,6 +22,7 @@ import numpy.typing as npt
 import pandas as pd
 import pyflwdir
 import rasterio
+import rasterio.features
 import xarray as xr
 from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.workflows import burn_river_rect
@@ -29,7 +30,7 @@ from pyflwdir import FlwdirRaster
 from pyflwdir.dem import fill_depressions
 from scipy.ndimage import value_indices
 from shapely import line_locate_point
-from shapely.geometry import Point
+from shapely.geometry import MultiPoint, Point
 from tqdm import tqdm
 
 from geb.hydrology.routing import get_river_width
@@ -370,12 +371,11 @@ class SFINCSRootModel:
 
         self.plot_rivers()
 
+        self.calculate_river_outflow_conditions()
+
         if setup_river_outflow_boundary:
             # must be performed BEFORE burning rivers.
             self.setup_river_outflow_boundary()
-        else:
-            self.rivers["outflow_elevation"] = np.nan
-            self.rivers["outflow_point_xy"] = None
 
         river_representative_points = []
         for ID in self.rivers.index:
@@ -520,10 +520,12 @@ class SFINCSRootModel:
         self.rivers.plot(ax=ax, color="blue")
         plt.savefig(self.path / "gis" / "rivers.png")
 
-    def setup_river_outflow_boundary(
-        self,
-    ) -> None:
-        """Sets up river outflow boundary condition for the SFINCS model.
+    def calculate_river_outflow_conditions(self) -> None:
+        """Calculates outflow elevation and coordinates for all rivers.
+
+        Determines the outflow point for each river (intersection with region boundary
+        for downstream-most rivers, or downstream endpoint for internal rivers)
+        and retrieves the elevation at that point from the DEM.
 
         Raises:
             ValueError: if the calculated outflow point is not a single point.
@@ -541,90 +543,109 @@ class SFINCSRootModel:
             write_geom(self.rivers, self.path / "debug_rivers.geoparquet")
             write_geom(self.region, self.path / "debug_region.geoparquet")
 
+        self.rivers["outflow_elevation"] = np.nan
+        self.rivers["outflow_point_xy"] = None
+        self.rivers["is_outflow_boundary"] = False
+
+        for river_idx, river in self.rivers.iterrows():
+            # outflow point is the intersection of the river geometry with the region boundary
+            # this will be used as the central point of the outflow boundary condition
+            subbasin_boundary = self.region.loc[river_idx]
+            outflow_point: Point | MultiPoint = river.geometry.intersection(
+                subbasin_boundary.geometry.boundary
+            )
+            if not isinstance(outflow_point, Point):
+                export_diagnostics()
+                raise ValueError(
+                    "Calculated outflow point is not a single point. Please check the river geometries and region boundary."
+                )
+
+            outflow_col, outflow_row = coord_to_pixel(
+                (outflow_point.x, outflow_point.y),
+                self.mask.rio.transform().to_gdal(),
+            )
+
+            subbasin_mask = rasterize_like(
+                gdf=subbasin_boundary,
+                raster=self.mask,
+                dtype=bool,
+                nodata=False,
+                burn_value=True,
+                all_touched=False,
+            )
+
+            # due to floating point precision, the intersection point
+            # may be just outside the model grid. We therefore check if the
+            # point is outside the grid, and if so, move it 1 m upstream along the river
+            if not subbasin_mask.values[outflow_row, outflow_col]:
+                # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
+                outflow_point = river.geometry.interpolate(
+                    line_locate_point(river.geometry, outflow_point) - 0.000008983
+                    if self.is_geographic
+                    else 1.0
+                )
+                outflow_col, outflow_row = coord_to_pixel(
+                    (outflow_point.x, outflow_point.y),
+                    self.mask.rio.transform().to_gdal(),
+                )
+
+                # if still outside the grid, raise error for boundary rivers
+                if not subbasin_mask.values[outflow_row, outflow_col]:
+                    export_diagnostics()
+                    raise ValueError(
+                        "Calculated outflow point is outside of the model grid. Please check the river geometries and region boundary."
+                    )
+
+            outflow_elevation: float = self.elevation[outflow_row, outflow_col].item()
+            self.rivers.at[river_idx, "outflow_elevation"] = outflow_elevation
+            self.rivers.at[river_idx, "outflow_point_xy"] = (
+                outflow_point.x,
+                outflow_point.y,
+            )
+
+    def setup_river_outflow_boundary(
+        self,
+    ) -> None:
+        """Sets up river outflow boundary condition for the SFINCS model.
+
+        Uses pre-calculated outflow points to set up boundary conditions for
+        downstream-most rivers.
+        """
         downstream_most_rivers: gpd.GeoDataFrame = self.rivers.loc[
             self.rivers["is_downstream_outflow_subbasin"]
             | (self.rivers["downstream_ID"] == 0)
         ]
 
-        self.rivers["outflow_elevation"] = np.nan
-        self.rivers["outflow_point_xy"] = None
+        if downstream_most_rivers.empty:
+            return
 
-        if not downstream_most_rivers.empty:
-            for river_idx, river in downstream_most_rivers.iterrows():
-                # outflow point is the intersection of the river geometry with the region boundary
-                # this will be used as the central point of the outflow boundary condition
-                outflow_point = river.geometry.intersection(
-                    self.region.union_all().boundary
-                )
-                if not isinstance(outflow_point, Point):
-                    export_diagnostics()
-                    raise ValueError(
-                        "Calculated outflow point is not a single point. Please check the river geometries and region boundary."
-                    )
+        for river_idx, river in downstream_most_rivers.iterrows():
+            outflow_point_xy = river["outflow_point_xy"]
 
-                outflow_col, outflow_row = coord_to_pixel(
-                    (outflow_point.x, outflow_point.y),
-                    self.mask.rio.transform().to_gdal(),
-                )
-                # due to floating point precision, the intersection point
-                # may be just outside the model grid. We therefore check if the
-                # point is outside the grid, and if so, move it 1 m upstream along the river
-                if not self.mask.values[outflow_row, outflow_col]:
-                    # move outflow point 1 m upstream. 0.000008983 degrees is approximately 1 m
-                    outflow_point = river.geometry.interpolate(
-                        line_locate_point(river.geometry, outflow_point) - 0.000008983
-                        if self.is_geographic
-                        else 1.0
-                    )
-                    outflow_col, outflow_row = coord_to_pixel(
-                        (outflow_point.x, outflow_point.y),
-                        self.mask.rio.transform().to_gdal(),
-                    )
-                    # if still outside the grid, raise error
-                    if not self.mask.values[outflow_row, outflow_col]:
-                        export_diagnostics()
-                        raise ValueError(
-                            "Calculated outflow point is outside of the model grid. Please check the river geometries and region boundary."
-                        )
-                assert outflow_col >= 0 and outflow_row >= 0, (
-                    "Calculated outflow point is outside of the model grid"
-                )
-                outflow_boundary_width_m = 500
-                try:
-                    outflow_mask: TwoDArrayBool = create_outflow_in_mask(
-                        self.mask.values,
-                        row=outflow_row,
-                        col=outflow_col,
-                        width_cells=(
-                            math.ceil(
-                                (
-                                    (
-                                        outflow_boundary_width_m
-                                        / self.estimated_cell_size_m
-                                    )
-                                    - 1
-                                )
-                                / 2
-                            )
-                            * 2
-                            + 1
-                        ),
-                    )
-                except ValueError:
-                    export_diagnostics()
-                    raise
+            outflow_col, outflow_row = coord_to_pixel(
+                outflow_point_xy,
+                self.mask.rio.transform().to_gdal(),
+            )
 
-                outflow_elevation: float = self.elevation[
-                    outflow_row, outflow_col
-                ].item()
-                self.rivers.at[river_idx, "outflow_elevation"] = outflow_elevation
-                self.rivers.at[river_idx, "outflow_point_xy"] = (
-                    outflow_point.x,
-                    outflow_point.y,
-                )
+            self.rivers.at[river_idx, "is_outflow_boundary"] = True
+            outflow_boundary_width_m = 500
 
-                assert self.sfincs_model.grid_type == "regular"
-                self.mask.values[outflow_mask] = SFINCS_WATER_LEVEL_BOUNDARY
+            outflow_mask: TwoDArrayBool = create_outflow_in_mask(
+                self.mask.values,
+                row=outflow_row,
+                col=outflow_col,
+                width_cells=(
+                    math.ceil(
+                        ((outflow_boundary_width_m / self.estimated_cell_size_m) - 1)
+                        / 2
+                    )
+                    * 2
+                    + 1
+                ),
+            )
+
+            assert self.sfincs_model.grid_type == "regular"
+            self.mask.values[outflow_mask] = SFINCS_WATER_LEVEL_BOUNDARY
 
     def get_flood_plain(self, maximum_hand: float = 30.0) -> gpd.GeoDataFrame:
         """Returns the flood plain grid of the SFINCS model.
@@ -756,7 +777,12 @@ class SFINCSRootModel:
 
         Returns:
             True if the SFINCS model uses a geographic coordinate system, False otherwise.
+
+        Raises:
+            ValueError: if the CRS is not defined for the SFINCS model.
         """
+        if self.sfincs_model.crs is None:
+            raise ValueError("CRS is not defined for the SFINCS model.")
         return self.sfincs_model.crs.is_geographic
 
     @property
@@ -770,8 +796,9 @@ class SFINCSRootModel:
             cell_area: xr.DataArray = xr.full_like(
                 self.elevation, np.nan, dtype=np.float32
             )
+            height, width = self.shape
             cell_area.values = calculate_cell_area(
-                self.elevation.rio.transform(), shape=self.shape
+                self.elevation.rio.transform(), height, width
             )
             return cell_area
         else:
@@ -795,6 +822,7 @@ class SFINCSRootModel:
             The estimated cell size of the SFINCS model grid in meters.
         """
         if self.is_geographic:
+            assert isinstance(self.cell_area, xr.DataArray)
             avg_cell_area = self.cell_area.mean().item()
             estimated_cell_size = np.sqrt(avg_cell_area)
             return estimated_cell_size
@@ -977,11 +1005,6 @@ class SFINCSRootModel:
             An instance of MultipleSFINCSSimulations containing the created simulations.
                 This class aims to emulate a single SFINCSSimulation instance as if
                 it was one.
-
-        Raises:
-            ValueError: If inflow node indices cannot be converted to integers,
-                if the discharge DataFrame columns cannot be converted to integers,
-                or if the discharge hydrographs contain NaN values.
         """
         working_dir: Path = self.path / "working_dir"
         working_dir_return_period: Path = working_dir / f"rp_{return_period}"
@@ -1103,7 +1126,7 @@ class SFINCSRootModel:
                 )
                 .explode(index_parts=False)
                 .reset_index(drop=True)
-            )
+            )  # ty:ignore[invalid-assignment]
 
             simulation.setup_thin_dams(subbasin_boundaries)
 
@@ -1857,18 +1880,24 @@ class SFINCSSimulation:
 
         Returns:
             The total flood volume in cubic meters.
+
+        Raises:
+            ValueError: If the model CRS is not defined.
         """
         if hasattr(flood_depth, "compute"):
             flood_depth = flood_depth.compute()
+
+        if self.sfincs_model.crs is None:
+            raise ValueError("Model CRS is not defined.")
 
         # Calculate cell area based on the model's CRS
         if self.sfincs_model.crs.is_geographic:
             cell_area: xr.DataArray = xr.full_like(
                 self.sfincs_model.grid["dep"], np.nan, dtype=np.float32
             )
+            height, width = self.sfincs_model.grid["dep"].shape
             cell_area.values = calculate_cell_area(
-                self.sfincs_model.grid["dep"].rio.transform(),
-                shape=self.sfincs_model.grid["dep"].shape,
+                self.sfincs_model.grid["dep"].rio.transform(), height, width
             )
         else:
             cell_area = xr.full_like(

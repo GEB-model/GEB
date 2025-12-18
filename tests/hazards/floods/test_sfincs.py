@@ -110,7 +110,7 @@ def build_sfincs(
     """
     sfincs_model: SFINCSRootModel = SFINCSRootModel(tmp_folder / "SFINCS", name)
     DEM_config: list[dict[str, str | Path | xr.DataArray | xr.Dataset]] = (
-        geb_model.floods.DEM_config.copy()
+        geb_model.hazard_driver.floods.DEM_config.copy()
     )
     for entry in DEM_config:
         if "elevtn" not in entry:
@@ -122,14 +122,14 @@ def build_sfincs(
         region=region,
         DEMs=DEM_config,
         rivers=rivers,
-        discharge=geb_model.floods.discharge_spinup_ds,
+        discharge=geb_model.hazard_driver.floods.discharge_spinup_ds,
         river_width_alpha=geb_model.model.hydrology.grid.decompress(
-            geb_model.model.var.river_width_alpha
+            geb_model.hydrology.grid.var.river_width_alpha
         ),
         river_width_beta=geb_model.model.hydrology.grid.decompress(
-            geb_model.model.var.river_width_beta
+            geb_model.hydrology.grid.var.river_width_beta
         ),
-        mannings=geb_model.floods.mannings,
+        mannings=geb_model.hazard_driver.floods.mannings,
         grid_size_multiplier=10,
         subgrid=subgrid,
         depth_calculation_method=geb_model.model.config["hydrology"]["routing"][
@@ -139,7 +139,9 @@ def build_sfincs(
             "river_depth"
         ]["parameters"]
         if "parameters"
-        in geb_model.floods.model.config["hydrology"]["routing"]["river_depth"]
+        in geb_model.hazard_driver.floods.model.config["hydrology"]["routing"][
+            "river_depth"
+        ]
         else {},
         setup_river_outflow_boundary=False,
         custom_rivers_to_burn=read_geom(
@@ -251,13 +253,15 @@ def test_accumulated_runoff(
         end_time: datetime = datetime(2000, 1, 10, 0)
 
         if not geographic:
-            geb_model.floods.DEM_config
+            geb_model.hazard_driver.floods.DEM_config
 
             dem: xr.DataArray = read_zarr(
-                geb_model.model.files["other"][geb_model.floods.DEM_config[0]["path"]]
+                geb_model.model.files["other"][
+                    geb_model.hazard_driver.floods.DEM_config[0]["path"]
+                ]
             )
 
-            geb_model.floods.DEM_config[0]["elevtn"] = dem.rio.reproject(
+            geb_model.hazard_driver.floods.DEM_config[0]["elevtn"] = dem.rio.reproject(
                 dst_crs=dem.rio.estimate_utm_crs(),
             ).to_dataset(name="elevtn")
 

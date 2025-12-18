@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import zarr
+import zarr.storage
 from numba import njit, prange  # noqa: F401
 
 from geb.module import Module
@@ -564,6 +565,7 @@ class LandSurfaceVariables(Bucket):
     interception_storage_m: ArrayFloat32
     arno_shape_parameter: TwoDArrayFloat32
     crop_map: ArrayInt32
+    minimum_effective_root_depth_m: np.float32
 
 
 class LandSurface(Module):

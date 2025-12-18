@@ -34,11 +34,11 @@ from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
-from .lakes_reservoirs import LakesReservoirs
 from .landsurface import LandSurface
 from .routing import Routing
 from .runoff_concentration import concentrate_runoff
 from .water_demand import WaterDemand
+from .waterbodies import WaterBodies
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology
@@ -64,12 +64,12 @@ class Hydrology(Data, Module):
         if not self.model.simulate_hydrology:
             return
 
-        self.dynamic_water_bodies = False
+        self.dynamic_waterbodies = False
 
         self.landsurface = LandSurface(self.model, self)
         self.groundwater = GroundWater(self.model, self)
         self.routing = Routing(self.model, self)
-        self.lakes_reservoirs = LakesReservoirs(self.model, self)
+        self.waterbodies = WaterBodies(self.model, self)
         self.water_demand = WaterDemand(self.model, self)
         self.hillslope_erosion = HillSlopeErosion(self.model, self)
 
@@ -99,7 +99,7 @@ class Hydrology(Data, Module):
             )
             .astype(np.float64)
             .sum()
-            + self.lakes_reservoirs.var.storage.astype(np.float64).sum()
+            + self.waterbodies.var.storage.astype(np.float64).sum()
             + self.groundwater.groundwater_content_m3.astype(np.float64).sum()
         )
 
@@ -118,7 +118,7 @@ class Hydrology(Data, Module):
         else:
             prev_storage: np.float64 = np.float64(np.nan)
 
-        self.lakes_reservoirs.step()
+        self.waterbodies.step()
         timer.finish_split("Waterbodies")
 
         (
@@ -278,7 +278,7 @@ class Hydrology(Data, Module):
 
         timer.finish_split("Routing")
 
-        self.hillslope_erosion.step()
+        self.hillslope_erosion.step(overland_runoff_m.sum(axis=0))
         timer.finish_split("Hill slope erosion")
 
         if self.model.timing:

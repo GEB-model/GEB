@@ -5,7 +5,7 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 
-from geb.hydrology.lakes_reservoirs import (
+from geb.hydrology.waterbodies import (
     estimate_lake_outflow,
     estimate_outflow_height,
     get_lake_factor,

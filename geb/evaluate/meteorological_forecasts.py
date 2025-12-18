@@ -5,8 +5,10 @@ comparing ECMWF ensemble forecasts against ERA5 reanalysis data for precipitatio
 Supports both intensity and cumulative precipitation plotting.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -17,13 +19,16 @@ import xarray
 # from matplotlib_scalebar.scalebar import ScaleBar
 from geb.workflows.io import read_zarr
 
+if TYPE_CHECKING:
+    from geb.model import GEBModel
+
 
 class MeteorologicalForecasts:
     """Implements several functions to evaluate the meteorological forecasts inside GEB."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize MeteorologicalForecasts."""
-        pass
+        self.model = model
 
     def evaluate_forecasts(
         self, model: Any, output_folder: Path, *args: Any, **kwargs: Any

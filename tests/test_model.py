@@ -28,7 +28,7 @@ from geb.cli import (
 )
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.model import GEBModel
-from geb.workflows.io import WorkingDirectory, read_zarr, write_dict
+from geb.workflows.io import WorkingDirectory, read_zarr, write_params
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder
 
@@ -129,7 +129,7 @@ def test_init_coastal(clean_working_directory: bool) -> None:
                 "setup_gtsm_station_data",
             )
         }
-        write_dict(build_config, Path("build.yml"))
+        write_params(build_config, Path("build.yml"))
 
         assert Path("model.yml").exists()
         assert Path("build.yml").exists()

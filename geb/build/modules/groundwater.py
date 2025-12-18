@@ -13,8 +13,10 @@ from geb.workflows.raster import (
     resample_like,
 )
 
+from .base import BaseModel
 
-class GroundWater:
+
+class GroundWater(BaseModel):
     """Contains all build methods for the groundwater for GEB."""
 
     def __init__(self) -> None:
@@ -310,7 +312,7 @@ class GroundWater:
 
             initial_depth = resample_like(
                 initial_depth_static,
-                self.grid,
+                self.grid["mask"],
                 method="bilinear",
             )
 

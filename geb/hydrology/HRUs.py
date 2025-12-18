@@ -44,11 +44,11 @@ if TYPE_CHECKING:
 
 
 def determine_nearest_river_cell(
-    upstream_area: npt.NDArray[np.float32],
-    HRU_to_grid: npt.NDArray[np.int32],
-    mask: npt.NDArray[np.bool_],
+    upstream_area: TwoDArrayFloat32,
+    HRU_to_grid: ArrayInt32,
+    mask: TwoDArrayBool,
     threshold_m2: float | int,
-) -> npt.NDArray[np.int32]:
+) -> ArrayInt32:
     """This function finds the nearest river cell to each HRU.
 
     It does so by first selecting the rivers, by checking if the upstream area is
@@ -64,8 +64,8 @@ def determine_nearest_river_cell(
     Returns:
         For each HRU, the index of the nearest river cell in the valid grid cells.
     """
-    valid_indices: npt.NDArray[np.int64] = np.argwhere(~mask)
-    valid_values: npt.NDArray[np.float32] = upstream_area[~mask]
+    valid_indices = np.argwhere(~mask)
+    valid_values = upstream_area[~mask]
 
     grid_cells_above_threshold_mask: npt.NDArray[np.bool_] = valid_values > threshold_m2
     grid_cells_above_threshold_indices: npt.NDArray[np.int64] = valid_indices[
@@ -78,7 +78,7 @@ def determine_nearest_river_cell(
     tree: KDTree = KDTree(grid_cells_above_threshold_indices)
     distances, indices_in_above = tree.query(valid_indices)
 
-    nearest_indices_in_valid: npt.NDArray[np.int32] = (
+    nearest_indices_in_valid: ArrayInt32 = (
         grid_cells_above_threshold_indices_in_valid[indices_in_above]
     ).astype(np.int32)
 
@@ -209,6 +209,8 @@ def to_HRU(
 class BaseVariables:
     """This class has some basic functions that can be used for variables regardless of scale."""
 
+    mask: TwoDArrayBool
+
     def __init__(self) -> None:
         """Initialize BaseVariables class."""
         pass
@@ -242,6 +244,14 @@ class GridVariables(Bucket):
     cell_area: ArrayFloat32
     waterBodyID: ArrayInt32
     discharge_m3_s: ArrayFloat32
+    discharge_in_rivers_m3_s_substep: ArrayFloat32
+    waterbody_outflow_points: ArrayInt32
+    interception_capacity_grassland: TwoDArrayFloat32
+    forest_crop_factor_per_10_days: TwoDArrayFloat32
+    discharge_m3_s_per_substep: TwoDArrayFloat32
+    discharge_m3_s_substep: ArrayFloat32
+    river_width_alpha: ArrayFloat32
+    river_width_beta: ArrayFloat32
 
 
 class Grid(BaseVariables):
@@ -253,6 +263,7 @@ class Grid(BaseVariables):
     """
 
     var: GridVariables
+    transform: Affine
 
     def __init__(self, data: Data, model: GEBModel) -> None:
         """Initialize Grid class.
@@ -269,6 +280,7 @@ class Grid(BaseVariables):
         mask, self.transform, self.crs = read_grid(
             self.model.files["grid"]["mask"],
             return_transform_and_crs=True,
+            layer=1,
         )
         self.mask = mask.astype(bool)
         self.gt = self.transform.to_gdal()
@@ -557,6 +569,7 @@ class HRUVariables(Bucket):
     land_owners: ArrayInt32
     HRU_to_grid: ArrayInt32
     grid_to_HRU: ArrayInt32
+    nearest_river_grid_cell: ArrayInt32
     linear_mapping: TwoDArrayInt32
     crop_age_days_map: ArrayInt32
     potential_transpiration_crop_life: ArrayFloat32
@@ -568,6 +581,32 @@ class HRUVariables(Bucket):
     w: TwoDArrayFloat32
     ws: TwoDArrayFloat32
     wwp: TwoDArrayFloat32
+    wres: TwoDArrayFloat32
+    crop_harvest_age_days: ArrayInt32
+    silt_percentage: TwoDArrayFloat32
+    clay_percentage: TwoDArrayFloat32
+    sand_percentage: TwoDArrayFloat32
+    bubbling_pressure_cm: TwoDArrayFloat32
+    lambda_pore_size_distribution: TwoDArrayFloat32
+    saturated_hydraulic_conductivity_m_per_s: TwoDArrayFloat32
+    organic_matter_percentage: TwoDArrayFloat32
+    bulk_density: TwoDArrayFloat32
+    natural_crop_groups: ArrayFloat32
+    transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
+    potential_transpiration_crop_life_per_crop_stage: TwoDArrayFloat32
+    cell_length: ArrayFloat32
+    water_depth_in_field: ArrayFloat32
+    slope: ArrayFloat32
+    cover: ArrayFloat32
+    plant_height: ArrayFloat32
+    no_erosion: ArrayBool
+    tillaged: ArrayBool
+    no_vegetation: ArrayBool
+    stem_diameter: ArrayFloat32
+    no_elements: ArrayFloat32
+    canopy_cover: ArrayFloat32
+    stem_diameter_harvested: ArrayFloat32
+    no_elements_harvested: ArrayFloat32
 
 
 class HRUs(BaseVariables):
@@ -1347,10 +1386,10 @@ class Data:
         self.HRU.var.grid_to_HRU[self.HRU.var.HRU_to_grid[HRU] :] += 1
 
         self.HRU.var.land_owners = self.split_HRU_data(self.HRU.var.land_owners, HRU)
-        self.model.agents.farmers.update_field_indices()
+        self.model.agents.crop_farmers.update_field_indices()
 
-        self.model.agents.farmers.field_indices = self.split_HRU_data(
-            self.model.agents.farmers.field_indices, HRU
+        self.model.agents.crop_farmers.var.field_indices = self.split_HRU_data(
+            self.model.agents.crop_farmers.var.field_indices, HRU
         )
 
         self.HRU.var.land_use_type = self.split_HRU_data(

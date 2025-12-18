@@ -25,7 +25,7 @@ from geb.workflows.io import read_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED
 from ...workflows.io import (
-    read_dict,
+    read_params,
     read_zarr,
     write_zarr,
 )
@@ -169,7 +169,7 @@ class Floods(Module):
             else {}
         )
 
-        self.DEM_config: list[dict[str, Any]] = read_dict(
+        self.DEM_config: list[dict[str, Any]] = read_params(
             self.model.files["dict"]["hydrodynamics/DEM_config"]
         )
 

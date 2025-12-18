@@ -737,14 +737,6 @@ class ModFlowSimulation:
 
         return sim
 
-    def write_hash_to_disk(self) -> None:
-        """Write the hash of the model input to disk.
-
-        This is used to check if the model input has changed next run
-        and if the model can be loaded from disk.
-        """
-        self.hash_file.write_text(self.hash.hex())
-
     def load_from_disk(self, arguments: dict[str, Any]) -> bool:
         """Check if the model input has changed and load from disk if not.
 

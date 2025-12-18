@@ -18,7 +18,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyflwdir
-import rasterio
+import rasterio.features
 import xarray as xr
 import yaml
 import zarr
@@ -31,9 +31,9 @@ from geb import GEB_PACKAGE_DIR
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
 from geb.workflows.io import (
-    read_dict,
-    write_dict,
+    read_params,
     write_geom,
+    write_params,
     write_table,
 )
 from geb.workflows.raster import clip_region, full_like, repeat_grid
@@ -806,7 +806,9 @@ def create_cluster_visualization_map(
 
     # Create cluster assignments with colors
     cluster_data = []
-    colors = plt.cm.Set3(np.linspace(0, 1, len(clusters)))  # Generate distinct colors
+    colors = plt.cm.Set3(  # ty:ignore[unresolved-attribute]
+        np.linspace(0, 1, len(clusters))
+    )  # Generate distinct colors
 
     for cluster_idx, cluster_subbasins in enumerate(clusters):
         cluster_id = f"{cluster_prefix}_{cluster_idx:03d}"
@@ -870,7 +872,7 @@ def create_cluster_visualization_map(
         ctx.add_basemap(
             ax,
             crs=cluster_gdf_mercator.crs,  # pass CRS object instead of string
-            source=ctx.providers.CartoDB.DarkMatter,  # Dark background
+            source=ctx.providers.CartoDB.DarkMatter,  # Dark background  # ty:ignore[unresolved-attribute]
             alpha=0.8,  # Slightly transparent to not overpower subbasins
         )
         print("Added dark CartoDB background")
@@ -1540,11 +1542,11 @@ class GEBModel(
 
         # all other data types are dictionaries because these entries don't
         # necessarily match the grid coordinates, shapes etc.
-        self.geom: DelayedReader = DelayedReader(reader=gpd.read_parquet)
-        self.table: DelayedReader = DelayedReader(reader=pd.read_parquet)
-        self.array: DelayedReader = DelayedReader(zarr.load)
-        self.dict: DelayedReader = DelayedReader(reader=read_dict)
-        self.other: DelayedReader = DelayedReader(reader=read_zarr)
+        self.geom = DelayedReader(reader=gpd.read_parquet)
+        self.table = DelayedReader(reader=pd.read_parquet)
+        self.array = DelayedReader(zarr.load)
+        self.params = DelayedReader(reader=read_params)
+        self.other = DelayedReader(reader=read_zarr)
 
     @build_method
     def setup_region(
@@ -2013,7 +2015,7 @@ class GEBModel(
 
         """
         assert start_date < end_date, "Start date must be before end date."
-        self.set_dict(
+        self.set_params(
             {"start_date": start_date, "end_date": end_date},
             name="model_time_range",
         )
@@ -2027,7 +2029,7 @@ class GEBModel(
         Returns:
             The start date of the model.
         """
-        start_date = self.dict["model_time_range"]["start_date"]
+        start_date = self.params["model_time_range"]["start_date"]
 
         # TODO: This can be removed in 2026
         if isinstance(start_date, str):
@@ -2043,7 +2045,7 @@ class GEBModel(
         Returns:
             The end date of the model.
         """
-        end_date = self.dict["model_time_range"]["end_date"]
+        end_date = self.params["model_time_range"]["end_date"]
 
         # TODO: This can be removed in 2026
         if isinstance(end_date, str):
@@ -2060,7 +2062,7 @@ class GEBModel(
         assert ssp in ["ssp1", "ssp3", "ssp5"], (
             f"SSP {ssp} not supported. Supported SSPs are: ssp1, ssp3, ssp5."
         )
-        self.set_dict({"ssp": ssp}, name="ssp")
+        self.set_params({"ssp": ssp}, name="ssp")
 
     @property
     def ssp(self) -> str:
@@ -2069,7 +2071,7 @@ class GEBModel(
         Returns:
             The SSP name. If no SSP was set, returns "ssp3" (middle of the road).
         """
-        return self.dict["ssp"]["ssp"] if "ssp" in self.dict else "ssp3"
+        return self.params["ssp"]["ssp"] if "ssp" in self.params else "ssp3"
 
     @property
     def ISIMIP_ssp(self) -> str:
@@ -2168,7 +2170,7 @@ class GEBModel(
                         "maximum_damage": asset_compontents["maximum_damage"]
                     }
 
-                    self.set_dict(
+                    self.set_params(
                         maximum_damage,
                         name=f"damage_parameters/{hazard}/{asset_type}/{component}/maximum_damage",
                     )
@@ -2231,7 +2233,7 @@ class GEBModel(
 
         self.array[name] = fp_with_root
 
-    def set_dict(self, data: dict, name: str, write: bool = True) -> None:
+    def set_params(self, data: dict, name: str, write: bool = True) -> None:
         """Set a dictionary and save it to disk.
 
         Args:
@@ -2248,9 +2250,9 @@ class GEBModel(
 
             self.files["dict"][name] = fp
 
-            write_dict(data, fp_with_root)
+            write_params(data, fp_with_root)
 
-        self.dict[name] = fp_with_root
+        self.params[name] = fp_with_root
 
     def set_geom(self, geom: gpd.GeoDataFrame, name: str, write: bool = True) -> None:
         """Set a geometry and save it to disk.
@@ -2298,7 +2300,7 @@ class GEBModel(
             else:
                 file_library[type_name].update(type_files)
 
-        write_dict(file_library, self.files_path)
+        write_params(file_library, self.files_path)
 
     def read_or_create_file_library(self) -> dict:
         """Reads the file library from disk.
@@ -2322,7 +2324,7 @@ class GEBModel(
                 "other": {},
             }
         else:
-            files = read_dict(self.files_path)
+            files = read_params(self.files_path)
 
             # geoms was renamed to geom in the file library. To upgrade old models,
             # we check if "geoms" is in the files and rename it to "geom"
@@ -2346,15 +2348,15 @@ class GEBModel(
         for name, fn in self.files["table"].items():
             self.table[name] = Path(self.root, fn)
 
-    def read_dict(self) -> None:
+    def read_params(self) -> None:
         """Reads all dictionaries from disk based on the file library."""
         for name, fn in self.files["dict"].items():
-            self.dict[name] = Path(self.root, fn)
+            self.params[name] = Path(self.root, fn)
 
     def read_grid(self) -> None:
         """Reads all grid data arrays from disk based on the file library."""
         # first read and set the mask. This is required.
-        grid_files: dict[str, dict[str, Path]] = self.files["grid"]
+        grid_files: dict[str, Path] = self.files["grid"]
         if len(grid_files) == 0:
             return
         mask: xr.DataArray = read_zarr(Path(self.root) / grid_files["mask"])
@@ -2369,7 +2371,7 @@ class GEBModel(
     def read_subgrid(self) -> None:
         """Reads all subgrid data arrays from disk based on the file library."""
         # first read and set the mask. This is required.
-        subgrid_files: dict[str, dict[str, Path]] = self.files["subgrid"]
+        subgrid_files: dict[str, Path] = self.files["subgrid"]
         if len(subgrid_files) == 0:
             return
         mask: xr.DataArray = read_zarr(Path(self.root) / subgrid_files["mask"])
@@ -2383,7 +2385,7 @@ class GEBModel(
     def read_region_subgrid(self) -> None:
         """Reads all region subgrid data arrays from disk based on the file library."""
         # first read and set the mask. This is required.
-        region_subgrid_files: dict[str, dict[str, Path]] = self.files["region_subgrid"]
+        region_subgrid_files: dict[str, Path] = self.files["region_subgrid"]
         if len(region_subgrid_files) == 0:
             return
         mask: xr.DataArray = read_zarr(Path(self.root) / region_subgrid_files["mask"])
@@ -2409,7 +2411,7 @@ class GEBModel(
             self.read_geom()
             self.read_array()
             self.read_table()
-            self.read_dict()
+            self.read_params()
 
             self.read_subgrid()
             self.read_grid()
@@ -2425,7 +2427,6 @@ class GEBModel(
         x_chunksize: int = XY_CHUNKSIZE,
         y_chunksize: int = XY_CHUNKSIZE,
         time_chunksize: int = 1,
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Set a data array that does not fit into other categories.
@@ -2444,7 +2445,6 @@ class GEBModel(
                 Defaults to XY_CHUNKSIZE.
             time_chunksize: The chunk size in the time dimension for writing to zarr.
                 Defaults to 1.
-            *args: Additional arguments to pass to write_zarr.
             **kwargs: Additional keyword arguments to pass to write_zarr.
 
         Returns:
@@ -2680,17 +2680,6 @@ class GEBModel(
         self._root = Path(root).absolute()
 
     @property
-    def preprocessing_dir(self) -> Path:
-        """Directory where preprocessing data is stored.
-
-        Used for caching data.
-
-        Returns:
-            Directory path
-        """
-        return Path(self.root).parent / "preprocessing"
-
-    @property
     def report_dir(self) -> Path:
         """Directory to save reports to for logging and checking.
 
@@ -2877,71 +2866,3 @@ class GEBModel(
             )
 
         self.run_methods(methods, validate_order=False, record_progress=False)
-
-    def get_linear_indices(self, da: xr.DataArray) -> xr.DataArray:
-        """Get linear indices for each cell in a 2D DataArray.
-
-        A linear index is a single integer that represents the position of a cell in a flattened version of the array.
-        For a 2D array with shape (ny, nx), the linear index of a cell at position (row, column) is calculated as:
-        `linear_index = row * nx + column`.
-
-        Args:
-            da: A 2D xarray DataArray with dimensions 'y' and 'x'.
-
-        Returns:
-            A 2D xarray DataArray of the same shape as `da`, where each cell contains its linear index.
-            The linear index is calculated as `row * number_of_columns + column`.
-
-        """
-        # Get the sizes of the spatial dimensions
-        ny, nx = da.sizes["y"], da.sizes["x"]
-
-        # Create an array of sequential integers from 0 to ny*nx - 1
-        grid_ids = np.arange(ny * nx).reshape(ny, nx)
-
-        # Create a DataArray with the same coordinates and dimensions as your spatial grid
-        grid_id_da: xr.DataArray = xr.DataArray(
-            grid_ids,
-            coords={
-                "y": da.coords["y"],
-                "x": da.coords["x"],
-            },
-            dims=["y", "x"],
-        )
-
-        return grid_id_da
-
-    def get_neighbor_cell_ids_for_linear_indices(
-        self, cell_id: int, nx: int, ny: int, radius: int = 1
-    ) -> list[int]:
-        """Get the linear indices of the neighboring cells of a cell in a 2D grid.
-
-        Linear indices are the indices of the cells in the flattened version of an array.
-        For a 2D array with shape (ny, nx), the linear index of a cell at position (row, column)
-        is calculated as:
-            `linear_index = row * nx + column`.
-
-        Args:
-            cell_id: The linear index of the cell for which to find neighbors.
-            nx: The number of columns in the grid.
-            ny: The number of rows in the grid.
-            radius: The radius around the cell to consider as neighbors. Default is 1.
-
-        Returns:
-            A list of linear indices of the neighboring cells.
-
-        """
-        row: int = cell_id // nx
-        col: int = cell_id % nx
-
-        neighbor_cell_ids: list[int] = []
-        for dr in range(-radius, radius + 1):
-            for dc in range(-radius, radius + 1):
-                if dr == 0 and dc == 0:
-                    continue  # Skip the cell itself
-                r: int = row + dr
-                c: int = col + dc
-                if 0 <= r < ny and 0 <= c < nx:
-                    neighbor_id: int = r * nx + c
-                    neighbor_cell_ids.append(neighbor_id)
-        return neighbor_cell_ids

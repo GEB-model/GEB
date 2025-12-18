@@ -243,6 +243,10 @@ class ForcingLoader(ABC):
             self.forecast_issue_datetime is not None
             and dt + self.model.timestep_length >= self.forecast_issue_datetime
         ):
+            if self.ds_forecast is None:
+                raise ValueError(
+                    "Forecast data array is not set, but loader is in forecast mode."
+                )
             # find how many substeps to load from the normal data source
             substeps_to_forecast: int = int(
                 (self.forecast_issue_datetime - dt).total_seconds()
@@ -738,9 +742,6 @@ class CO2:
         raise NotImplementedError("CO2 loader does not support forecast mode.")
 
 
-ForcingLoaderTypes = dict[str, ForcingLoader | CO2]
-
-
 class Forcing(Module):
     """Module to handle climate forcing data.
 
@@ -777,7 +778,7 @@ class Forcing(Module):
         )
 
         # Initialize all loaders
-        self._loaders: ForcingLoaderTypes = {
+        self._loaders: dict[str, CO2 | ForcingLoader] = {
             "pr_kg_per_m2_per_s": Precipitation(self.model, grid_mask=grid_mask),
             "tas_2m_K": Temperature(
                 self.model,
@@ -815,6 +816,12 @@ class Forcing(Module):
             The name of the module.
         """
         return "forcing"
+
+    @overload
+    def __getitem__(self, name: Literal["CO2_ppm"]) -> CO2: ...
+
+    @overload
+    def __getitem__(self, name: str) -> ForcingLoader: ...
 
     def __getitem__(self, name: str) -> ForcingLoader | CO2:
         """Get the forcing loader for a given name.
@@ -857,13 +864,22 @@ class Forcing(Module):
         return self[name].load(dt)
 
     @property
-    def loaders(self) -> ForcingLoaderTypes:
+    def loaders(self) -> dict[str, CO2 | ForcingLoader]:
         """Get all forcing loaders.
 
         Returns:
             A dictionary of all forcing loaders.
         """
         return self._loaders
+
+    @property
+    def forcing_loaders(self) -> dict[str, ForcingLoader]:
+        """Get all forcing loaders except CO2.
+
+        Returns:
+            A dictionary of all forcing loaders except CO2.
+        """
+        return {k: v for k, v in self._loaders.items() if isinstance(v, ForcingLoader)}
 
     def spinup(self) -> None:
         """Prepare the forcing module for the simulation.

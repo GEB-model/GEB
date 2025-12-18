@@ -1,9 +1,11 @@
 """Module implementing hydrology evaluation functions for the GEB model."""
 
+from __future__ import annotations
+
 import base64
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import branca.colormap as cm
 import contextily as ctx
@@ -23,6 +25,9 @@ from permetrics.regression import RegressionMetric
 from rasterio.crs import CRS  # ty:ignore[unresolved-import]
 from rasterio.features import geometry_mask
 from tqdm import tqdm
+
+if TYPE_CHECKING:
+    from geb.model import GEBModel
 
 from geb.workflows.io import read_zarr, write_zarr
 
@@ -83,9 +88,9 @@ def calculate_critical_success_index(
 class Hydrology:
     """Implements several functions to evaluate the hydrological module of GEB."""
 
-    def __init__(self) -> None:
+    def __init__(self, model: GEBModel) -> None:
         """Initialize the Hydrology evaluation module."""
-        pass
+        self.model = model
 
     def plot_discharge(
         self, run_name: str = "default", *args: Any, **kwargs: Any
@@ -522,11 +527,11 @@ class Hydrology:
                 # Making yearly plots for every year in validation_df
                 # Get available years from validation_df (intersection of obs & sim time range)
                 if include_yearly_plots:
-                    years_to_plot = sorted(validation_df.index.year.unique())
+                    years_to_plot = sorted(validation_df.index.year.unique())  # ty:ignore[possibly-missing-attribute]
 
                     for year in years_to_plot:
                         # Filter data for the current year
-                        one_year_df = validation_df[validation_df.index.year == year]
+                        one_year_df = validation_df[validation_df.index.year == year]  # ty:ignore[possibly-missing-attribute]
 
                         # Skip if there's no data for the year
                         if one_year_df.empty:

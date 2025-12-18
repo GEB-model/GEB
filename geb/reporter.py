@@ -910,13 +910,15 @@ class Reporter:
                     )
 
                 root_group = config["_root_group"]
+                value_store_array = root_group[name]
+                assert isinstance(value_store_array, zarr.Array)
 
                 assert isinstance(value, (np.ndarray, DynamicArray))
-                if value.size < root_group[name].shape[0]:
+                if value.size < value_store_array.shape[0]:
                     print("Padding array with NaNs or -1 - temporary solution")
                     value = np.pad(
                         value.data if isinstance(value, DynamicArray) else value,
-                        (0, root_group[name].shape[0] - value.size),
+                        (0, value_store_array.shape[0] - value.size),
                         mode="constant",
                         constant_values=get_fill_value(value) or False,
                     )

@@ -9,18 +9,19 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import pyflwdir
-import rasterio
+import rasterio.features
 import xarray as xr
 from pyflwdir import FlwdirRaster
-from rasterio.features import rasterize
 from scipy.ndimage import value_indices
 from shapely.geometry import LineString, Point, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.hydrology.lakes_reservoirs import LAKE, LAKE_CONTROL, RESERVOIR
+from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
 from geb.types import ArrayBool, ArrayFloat32, ArrayInt32
 from geb.workflows.raster import rasterize_like, snap_to_grid
+
+from .base import BaseModel
 
 
 def get_all_upstream_subbasin_ids(
@@ -173,7 +174,7 @@ def create_river_raster_from_river_lines(
         raise ValueError(
             "Either column or index must be provided, or both must be None"
         )
-    river_raster = rasterize(
+    river_raster = rasterio.features.rasterize(
         zip(rivers.geometry, values),
         out_shape=target.shape,
         fill=-1,
@@ -269,7 +270,7 @@ def get_SWORD_river_widths(
     return SWORD_river_width
 
 
-class Hydrography:
+class Hydrography(BaseModel):
     """Contains all build methods for the hydrography for GEB."""
 
     def __init__(self) -> None:
@@ -487,7 +488,7 @@ class Hydrography:
         )
 
         # flow direction
-        ldd: npt.NDArray[np.uint8] = self.full_like(
+        ldd: xr.DataArray = self.full_like(
             outflow_elevation, fill_value=255, nodata=255, dtype=np.uint8
         )
         ldd.data = flow_raster.to_array(ftype="ldd")
@@ -1031,7 +1032,7 @@ class Hydrography:
         )
         assert waterbodies["waterbody_type"].dtype == np.int32
 
-        water_body_id: xr.DataArray = rasterize_like(
+        waterbody_id: xr.DataArray = rasterize_like(
             gdf=waterbodies,
             column="waterbody_id",
             raster=self.grid["mask"],
@@ -1040,7 +1041,7 @@ class Hydrography:
             all_touched=True,
         )
 
-        sub_water_body_id: xr.DataArray = rasterize_like(
+        sub_waterbody_id: xr.DataArray = rasterize_like(
             gdf=waterbodies,
             column="waterbody_id",
             raster=self.subgrid["mask"],
@@ -1049,15 +1050,16 @@ class Hydrography:
             all_touched=True,
         )
 
-        self.set_grid(water_body_id, name="waterbodies/water_body_id")
-        self.set_subgrid(sub_water_body_id, name="waterbodies/sub_water_body_id")
+        self.set_grid(waterbody_id, name="waterbodies/waterbody_id")
+        self.set_subgrid(sub_waterbody_id, name="waterbodies/sub_waterbody_id")
 
         waterbodies["volume_flood"] = waterbodies["volume_total"]
 
         if command_areas:
             command_areas = self.data_catalog.get_geodataframe(
                 command_areas, geom=self.region, predicate="intersects"
-            )
+            )  # ty:ignore[invalid-assignment]
+            assert isinstance(command_areas, gpd.GeoDataFrame)
             command_areas = command_areas[
                 ~command_areas["waterbody_id"].isnull()
             ].reset_index(drop=True)
@@ -1112,7 +1114,7 @@ class Hydrography:
             )
 
         else:
-            command_areas = self.full_like(
+            command_areas: xr.DataArray = self.full_like(
                 self.grid["mask"],
                 fill_value=-1,
                 nodata=-1,
@@ -1166,7 +1168,7 @@ class Hydrography:
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.data_catalog.get_source("GTSM").path.format(1979, "01")
+        ref_file = self.data_catalog.get_source("GTSM").path.format(1979, "01")  # ty:ignore[possibly-missing-attribute]
         ref = xr.open_dataset(ref_file)
 
         x_coords = ref.station_x_coordinate.load()
@@ -1193,7 +1195,7 @@ class Hydrography:
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM").path.format(
+                f = self.data_catalog.get_source("GTSM").path.format(  # ty:ignore[possibly-missing-attribute]
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})
@@ -1234,7 +1236,7 @@ class Hydrography:
         min_lon, min_lat, max_lon, max_lat = model_bounds
 
         # First: get station indices from ONE representative file
-        ref_file = self.data_catalog.get_source("GTSM_surge").path.format(1979, "01")
+        ref_file = self.data_catalog.get_source("GTSM_surge").path.format(1979, "01")  # ty:ignore[possibly-missing-attribute]
         ref = xr.open_dataset(ref_file)
 
         x_coords = ref.station_x_coordinate.load()
@@ -1252,7 +1254,7 @@ class Hydrography:
         gtsm_data_region = []
         for year in temporal_range:
             for month in range(1, 13):
-                f = self.data_catalog.get_source("GTSM_surge").path.format(
+                f = self.data_catalog.get_source("GTSM_surge").path.format(  # ty:ignore[possibly-missing-attribute]
                     year, f"{month:02d}"
                 )
                 ds = xr.open_dataset(f, chunks={"time": -1})

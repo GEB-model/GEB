@@ -1332,7 +1332,7 @@ class fairSTREAMModel(GEBModel):
 
         crop_name_to_ID = {
             crop["name"]: int(ID)
-            for ID, crop in self.dict["crops/crop_data"]["data"].items()
+            for ID, crop in self.params["crops/crop_data"]["data"].items()
         }
 
         # process crop calendars

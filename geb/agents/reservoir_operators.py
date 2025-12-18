@@ -12,7 +12,7 @@ import pandas as pd
 from geb.store import DynamicArray
 from geb.types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 
-from ..hydrology.lakes_reservoirs import RESERVOIR
+from ..hydrology.waterbodies import RESERVOIR
 from .general import AgentBaseClass
 
 if TYPE_CHECKING:
@@ -24,6 +24,21 @@ FLOOD_RESERVOIR: int = 2
 RESERVOIR_MEMORY_YEARS: int = 20
 
 
+class ReservoirOperatorVariables:
+    """Variables for the ReservoirOperators agent."""
+
+    active_reservoirs: pd.DataFrame
+    reservoir_M_factor: DynamicArray
+    storage_year_start: ArrayFloat64
+    alpha: ArrayFloat32
+    reservoir_purpose: ArrayInt32
+    multi_year_monthly_total_inflow: npt.NDArray[np.float32]
+    multi_year_monthly_total_irrigation_demand_m3: ArrayFloat32
+    multi_year_monthly_usable_command_area_release_m3: ArrayFloat32
+    hydrological_year_counter: int
+    history_fill_index: int = RESERVOIR_MEMORY_YEARS
+
+
 class ReservoirOperators(AgentBaseClass):
     """This class is used to simulate the government.
 
@@ -31,6 +46,8 @@ class ReservoirOperators(AgentBaseClass):
         model: The GEB model.
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
+
+    var: ReservoirOperatorVariables
 
     def __init__(self, model: GEBModel, agents: Agents) -> None:
         """Initialize the ReservoirOperators agent.
@@ -63,18 +80,16 @@ class ReservoirOperators(AgentBaseClass):
 
     def spinup(self) -> None:
         """Initialize the reservoir operators during spinup."""
-        water_body_data: pd.DataFrame = (
-            self.model.hydrology.lakes_reservoirs.var.water_body_data[
-                self.model.hydrology.lakes_reservoirs.var.water_body_data[
-                    "waterbody_type"
-                ]
+        waterbody_data: pd.DataFrame = (
+            self.model.hydrology.waterbodies.var.waterbody_data[
+                self.model.hydrology.waterbodies.var.waterbody_data["waterbody_type"]
                 == 2
             ].copy()
         )
 
-        assert (water_body_data["volume_total"] > 0).all()
-        self.var.active_reservoirs = water_body_data[
-            water_body_data["waterbody_type"] == RESERVOIR
+        assert (waterbody_data["volume_total"] > 0).all()
+        self.var.active_reservoirs = waterbody_data[
+            waterbody_data["waterbody_type"] == RESERVOIR
         ]
 
         # Based on Shin et al. (2019)
@@ -213,14 +228,14 @@ class ReservoirOperators(AgentBaseClass):
             demand_per_command_area = np.bincount(
                 farmer_command_areas[command_area_mask],
                 weights=gross_irrigation_demand_m3_per_farmer[command_area_mask],
-                minlength=self.model.hydrology.lakes_reservoirs.n,
+                minlength=self.model.hydrology.waterbodies.n,
             )
             command_area_release_m3: ArrayFloat64 = np.full(
-                self.model.hydrology.lakes_reservoirs.n, np.nan, dtype=np.float64
+                self.model.hydrology.waterbodies.n, np.nan, dtype=np.float64
             )
-            command_area_release_m3[
-                self.model.hydrology.lakes_reservoirs.is_reservoir
-            ] = self.command_area_release_m3
+            command_area_release_m3[self.model.hydrology.waterbodies.is_reservoir] = (
+                self.command_area_release_m3
+            )
             correction_factor: ArrayFloat64 = (
                 command_area_release_m3 / demand_per_command_area
             )
@@ -690,15 +705,15 @@ class ReservoirOperators(AgentBaseClass):
         Returns:
             An array with the storage of each reservoir (m3).
         """
-        return self.model.hydrology.lakes_reservoirs.reservoir_storage
+        return self.model.hydrology.waterbodies.reservoir_storage
 
     @storage.setter
     def storage(self, value: ArrayFloat64) -> None:
-        self.model.hydrology.lakes_reservoirs.reservoir_storage = value
+        self.model.hydrology.waterbodies.reservoir_storage = value
 
     # @property
     # def evaporation_m3(self):
-    #     return self.model.hydrology.lakes_reservoirs.potential_evaporation_per_water_body_m3_reservoir
+    #     return self.model.hydrology.waterbodies.potential_evaporation_per_waterbody_m3_reservoir
 
     @property
     def capacity(self) -> ArrayFloat64:
@@ -707,7 +722,7 @@ class ReservoirOperators(AgentBaseClass):
         Returns:
             An array with the capacity of each reservoir (m3).
         """
-        return self.model.hydrology.lakes_reservoirs.reservoir_capacity
+        return self.model.hydrology.waterbodies.reservoir_capacity
 
     @capacity.setter
     def capacity(self, value: ArrayFloat64) -> None:
@@ -716,7 +731,7 @@ class ReservoirOperators(AgentBaseClass):
         Args:
             value: An array with the capacity of each reservoir (m3).
         """
-        self.model.hydrology.lakes_reservoirs.reservoir_capacity = value
+        self.model.hydrology.waterbodies.reservoir_capacity = value
 
     @property
     def fill_ratio(self) -> ArrayFloat64:
@@ -745,8 +760,8 @@ class ReservoirOperators(AgentBaseClass):
         Returns:
             An array with the waterbody IDs of the reservoirs.
         """
-        return self.model.hydrology.lakes_reservoirs.var.waterbody_ids_original[
-            self.model.hydrology.lakes_reservoirs.is_reservoir
+        return self.model.hydrology.waterbodies.var.waterbody_ids_original[
+            self.model.hydrology.waterbodies.is_reservoir
         ]
 
     @property

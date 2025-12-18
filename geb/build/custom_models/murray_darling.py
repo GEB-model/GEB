@@ -17,7 +17,7 @@ class Agents(BaseAgents):
     def setup_water_prices_australia(self: Any, start_year: int, end_year: int) -> None:
         """Build and store observed monthly water prices (USD) and annual diversions.
 
-        Creates two dictionaries under ``self.dict`` via ``self.set_dict``:
+        Creates two dictionaries under ``self.params`` via ``self.set_params``:
 
         - ``economics/water_price``: monthly USD prices per region (YYYY-MM-01 steps)
         - ``economics/diversions``: annual diversions per region (integers years)
@@ -338,7 +338,7 @@ class Agents(BaseAgents):
                     out_data[region_id] = prices.tolist()
 
             out["data"] = out_data
-            self.set_dict(out, name=f"economics/{key}")
+            self.set_params(out, name=f"economics/{key}")
 
     def setup_drip_irrigation_prices_by_reference_year(
         self: Any,
@@ -392,4 +392,4 @@ class Agents(BaseAgents):
 
             out["data"][region] = series.tolist()
 
-        self.set_dict(out, name=f"economics/{price_name}")
+        self.set_params(out, name=f"economics/{price_name}")

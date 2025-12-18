@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import xclim.indices as xci
+import xclim.indices.stats as xcistats
 from dateutil.relativedelta import relativedelta
 from matplotlib.colors import ListedColormap
 from zarr.codecs.numcodecs import FixedScaleOffset
@@ -29,6 +30,7 @@ from geb.build.methods import build_method
 from geb.workflows.raster import resample_like
 
 from ...workflows.io import calculate_scaling, write_zarr
+from .base import BaseModel
 
 
 def plot_normal_forcing(
@@ -102,7 +104,9 @@ def plot_forecasts(
     # Timeline plot
     fig, ax_time = plt.subplots(1, 1, figsize=(12, 9))  # Create temporal plot
 
-    colors = plt.cm.viridis(np.linspace(0, 1, n_members))  # Distinct colors for members
+    colors = plt.cm.viridis(  # ty:ignore[unresolved-attribute]
+        np.linspace(0, 1, n_members)
+    )  # Distinct colors for members
 
     spatial_average = (
         (da_plot * ~mask).sum(dim=("y", "x")) / (~mask).sum()
@@ -160,7 +164,9 @@ def plot_forecasts(
         hspace=0.2, wspace=0.2, bottom=0.05, left=0.05, right=0.85
     )  # Tighter spacing
 
-    custom_cmap = plt.cm.Blues  # Use simple Blues colormap
+    custom_cmap = (
+        plt.cm.Blues  # ty:ignore[unresolved-attribute]
+    )  # Use simple Blues colormap
     da_plot_max_over_time = da_plot.max(dim="time")  # max over time for color scale
     for i, member in enumerate(
         da_plot_max_over_time.member
@@ -262,6 +268,7 @@ def plot_gif(
         forecast_date = ""
 
     for dim in da.dims:
+        assert isinstance(dim, str)
         if (
             "member" in dim.lower()
             or "ensemble" in dim.lower()
@@ -400,7 +407,7 @@ def plot_gif(
                 ctx.add_basemap(
                     ax,
                     crs="EPSG:4326",
-                    source=ctx.providers.OpenStreetMap.Mapnik,
+                    source=ctx.providers.OpenStreetMap.Mapnik,  # ty:ignore[unresolved-attribute]
                     zorder=0,
                 )
 
@@ -509,7 +516,7 @@ def get_chunk_size(da: xr.DataArray, target: float | int = 1e8) -> int:
     return int(target / (da.dtype.itemsize * spatial_size))
 
 
-class Forcing:
+class Forcing(BaseModel):
     """Contains methods to download and process climate forcing data for GEB."""
 
     def __init__(self) -> None:
@@ -525,7 +532,6 @@ class Forcing:
         self,
         da: xr.DataArray,
         name: str = "climate/pr_kg_per_m2_per_s",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Precipitation DataArray with appropriate attributes and scaling.
@@ -535,7 +541,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the precipitation data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -572,11 +577,10 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
         if "forecasts" in name.lower():
@@ -608,7 +612,6 @@ class Forcing:
         self,
         da: xr.DataArray,
         name: str = "climate/rsds_W_per_m2",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Surface Downwelling Shortwave Radiation DataArray with appropriate attributes and scaling.
@@ -618,7 +621,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the shortwave radiation data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -648,11 +650,10 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
@@ -661,7 +662,6 @@ class Forcing:
         self,
         da: xr.DataArray,
         name: str = "climate/rlds_W_per_m2",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Surface Downwelling Longwave Radiation DataArray with appropriate attributes and scaling.
@@ -671,7 +671,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the longwave radiation data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -701,11 +700,10 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
@@ -714,7 +712,6 @@ class Forcing:
         self,
         da: xr.DataArray,
         name: str = "climate/tas_2m_K",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Air Temperature DataArray with appropriate attributes and scaling.
@@ -724,7 +721,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the air temperature data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -756,11 +752,10 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
 
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
@@ -770,7 +765,6 @@ class Forcing:
         self,
         da: xr.DataArray,
         name: str = "climate/dewpoint_tas_2m_K",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Dewpoint Temperature DataArray with appropriate attributes and scaling.
@@ -780,7 +774,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the dewpoint temperature data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -812,11 +805,10 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
@@ -825,7 +817,6 @@ class Forcing:
         self,
         da: xr.DataArray,
         name: str = "climate/ps_pascal",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Surface Air Pressure DataArray with appropriate attributes and scaling.
@@ -835,7 +826,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the surface air pressure data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -866,11 +856,10 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
@@ -880,7 +869,6 @@ class Forcing:
         da: xr.DataArray,
         direction: str,
         name: str = "climate/wind_{direction}10m_m_per_s",
-        *args: Any,
         **kwargs: Any,
     ) -> xr.DataArray:
         """Sets the Near-Surface Wind Speed DataArray with appropriate attributes and scaling.
@@ -891,7 +879,6 @@ class Forcing:
             da: The xarray DataArray containing the wind speed data.
             direction: The wind direction component (e.g., 'u' or 'v').
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -925,17 +912,16 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
-            **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da) // 24,
             time_chunksize=24,
+            **kwargs,
         )
         plot_forcing(self.grid["mask"], self.report_dir, da, name)
         return da
 
     def set_SPEI(
-        self, da: xr.DataArray, name: str = "climate/SPEI", *args: Any, **kwargs: Any
+        self, da: xr.DataArray, name: str = "climate/SPEI", **kwargs: Any
     ) -> xr.DataArray:
         """Sets the Standard Precipitation Evapotranspiration Index (SPEI) DataArray with appropriate attributes and scaling.
 
@@ -944,7 +930,6 @@ class Forcing:
         Args:
             da: The xarray DataArray containing the SPEI data.
             name: The name to assign to the DataArray in the model.
-            *args: Additional positional arguments to pass to the set_other method.
             **kwargs: Additional keyword arguments to pass to the set_other method.
 
         Returns:
@@ -981,7 +966,6 @@ class Forcing:
         da: xr.DataArray = self.set_other(
             da,
             name=name,
-            *args,
             **kwargs,
             filters=filters,
             time_chunks_per_shard=get_chunk_size(da),
@@ -1237,7 +1221,9 @@ class Forcing:
                     .compute()
                 )
 
-                GEV = xci.stats.fit(SPEI_yearly_min, dist="genextreme").compute()
+                GEV: xr.DataArray = xcistats.fit(
+                    SPEI_yearly_min, dist="genextreme"
+                ).compute()
 
                 self.set_other(
                     GEV.sel(dparams="c").astype(np.float32), name="climate/gev_c"

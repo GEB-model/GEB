@@ -22,12 +22,19 @@ from geb.hazards.floods.workflows.construct_storm_surge_hydrographs import (
 )
 from geb.module import Module
 from geb.reporter import Reporter
-from geb.store import Store
-from geb.workflows.io import read_dict, read_geom, read_zarr
+from geb.store import Bucket, Store
+from geb.workflows.io import read_geom, read_params, read_zarr
 
 from .evaluate import Evaluate
 from .forcing import Forcing
 from .hydrology import Hydrology
+
+
+class GEBModelVariables(Bucket):
+    """Class to hold GEB model variables."""
+
+    _spinup_start: datetime.datetime
+    _run_start: datetime.datetime
 
 
 class GEBModel(Module):
@@ -39,6 +46,8 @@ class GEBModel(Module):
         mode: Mode of the model. Either `w` (write) or `r` (read).
         timing: Boolean indicating if the model steps should be timed.
     """
+
+    var: GEBModelVariables
 
     def __init__(
         self,
@@ -548,7 +557,7 @@ class GEBModel(Module):
         assert n_timesteps > 0, "End time is before or identical to start time"
 
         # create var bucket
-        self.var = self.store.create_bucket("var")
+        self.var: GEBModelVariables = self.store.create_bucket("var")
 
         # initialize the model
         self._initialize(
@@ -606,7 +615,7 @@ class GEBModel(Module):
         #     }
         # }
 
-        self.var = self.store.create_bucket("var")
+        self.var: GEBModelVariables = self.store.create_bucket("var")
 
         self.check_time_range()
         self._initialize(
@@ -679,7 +688,7 @@ class GEBModel(Module):
         if subbasins["is_coastal_basin"].any():
             generate_storm_surge_hydrographs(self)
 
-        self.floods.get_return_period_maps()
+        self.hazard_driver.floods.get_return_period_maps()
 
     def evaluate(self, *args: Any, **kwargs: Any) -> None:
         """Call the evaluator to evaluate the model results."""
@@ -862,7 +871,7 @@ class GEBModel(Module):
 
             # Close all async forcing readers
             if hasattr(self, "forcing"):
-                for forcing_loader in self.forcing._loaders.values():
+                for forcing_loader in self.forcing.forcing_loaders.values():
                     if hasattr(forcing_loader, "reader"):
                         forcing_loader.reader.close()
 
@@ -907,7 +916,7 @@ class GEBModel(Module):
             ValueError: If the spinup start date is before the model build start date.
             ValueError: If the run end date is after the model build end date.
         """
-        model_build_time_range: dict[str, str] = read_dict(
+        model_build_time_range: dict[str, str] = read_params(
             self.files["dict"]["model_time_range"]
         )
 

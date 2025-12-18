@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from geb.model import GEBModel
 
 
-class Evaluate(Hydrology, MeteorologicalForecasts):
+class Evaluate:
     """The main class that implements all evaluation procedures for the GEB model.
 
     Args:
@@ -26,6 +26,8 @@ class Evaluate(Hydrology, MeteorologicalForecasts):
     def __init__(self, model: GEBModel) -> None:
         """Initialize the Evaluate class."""
         self.model: GEBModel = model
+        self.hydrology = Hydrology(model)
+        self.meteorological_forecasts = MeteorologicalForecasts(model)
 
     def run(
         self,

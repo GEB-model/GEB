@@ -159,10 +159,11 @@ def read_grid(
         data_array: zarr.Array | zarr.Group = group[filepath.stem]
         assert isinstance(data_array, zarr.Array)
         data = data_array[:]
-        if data.dtype == np.float64:
-            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)
-        assert data.ndim in (2, 3)
+        assert isinstance(data, np.ndarray)
         data: TwoDArray | ThreeDArray = data  # type: ignore[assignment]
+        if data.dtype == np.float64:
+            data: TwoDArrayFloat32 | ThreeDArrayFloat32 = data.asfloat(np.float32)  # ty:ignore[unresolved-attribute]
+        assert data.ndim in (2, 3)
         if return_transform_and_crs:
             x_array: zarr.Array | zarr.Group = group["x"]
             assert isinstance(x_array, zarr.Array)
@@ -222,7 +223,7 @@ def write_geom(gdf: gpd.GeoDataFrame, filepath: Path) -> None:
     )
 
 
-def read_dict(filepath: Path) -> Any:
+def read_params(filepath: Path) -> Any:
     """Load a dictionary from a JSON or YAML file.
 
     Args:
@@ -264,7 +265,7 @@ def _convert_paths_to_strings(obj: Any) -> Any:
         return obj
 
 
-def write_dict(d: dict, filepath: Path) -> None:
+def write_params(d: dict, filepath: Path) -> None:
     """Save a dictionary to a YAML file.
 
     Args:
@@ -642,7 +643,7 @@ def write_zarr(
 def get_window(
     x: xr.DataArray,
     y: xr.DataArray,
-    bounds: tuple[int | float, int | float, int | float, int | float],
+    bounds: tuple[float, float, float, float],
     buffer: int = 0,
     raise_on_out_of_bounds: bool = True,
     raise_on_buffer_out_of_bounds: bool = True,
