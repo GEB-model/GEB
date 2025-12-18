@@ -40,7 +40,11 @@ hazards:
       - 1000
     SFINCS:
       gpu: auto  # True, False, "auto". If "auto", it will check if a GPU is available using nvidia-smi.
-    detect_floods_from_discharge: false
+    detect_floods_from_discharge: false # If True, floods are detected based on discharge thresholds at a specific location.
+    discharge_threshold: 30  # discharge threshold in m3/s for flood detection
+    threshold_location: 
+    - lon
+    - lat  # [lon, lat] of the location where the discharge threshold is applied.
   damage:
     simulate: false
   erosion:
@@ -61,8 +65,8 @@ agent_settings:
     dynamic_market: false
     price_frequency: yearly
   households:
-    adapt: false
-    adapt_to_actual_floods: false
+    adapt: false # If True households adapt their houses based on random floods, like DYNAMO-M
+    adapt_to_actual_floods: false # If True households adapt their houses based on actual floods experienced
     warning_response: false
     water_demand:
       method: default
@@ -71,7 +75,6 @@ agent_settings:
       flood_risk_calculations:
         risk_perception:
           base: 1.6
-
           coef: -2.5
           max: 10
           min: 0.01

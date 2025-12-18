@@ -35,7 +35,9 @@ class HazardDriver:
             ]
             longest_flood_event_in_days = max(flood_event_lengths).days
 
-        self.initialize(longest_flood_event_in_days=longest_flood_event_in_days + 10)
+        self.initialize(
+            longest_flood_event_in_days=longest_flood_event_in_days + 10
+        )  # Here we add 10 days as a buffer to ensure we capture the full event
 
         self.next_detection_time: datetime | None = (
             None  # Variable to keep track of when a flood has happened
@@ -139,24 +141,21 @@ class HazardDriver:
                                 f"Flood detected at {self.current_time}, discharge = {discharge_location:.2f}"
                             )
 
-                            start_time = self.current_time - timedelta(days=5)
+                            start_time = self.current_time - timedelta(
+                                days=5
+                            )  # Here we assume a flood duration of 10 days
                             end_time = self.current_time + timedelta(days=5)
 
-                            # ---- EVENT (IN-MEMORY: datetime objects) ----
                             new_event_mem = {
                                 "start_time": start_time,
                                 "end_time": end_time,
                             }
 
-                            # ---- EVENT (PERSISTED: strings only) ----
                             new_event_yaml = {
                                 "start_time": start_time.strftime("%Y-%m-%d %H:%M:%S"),
                                 "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
                             }
 
-                            # ==========================================================
-                            # 1️⃣ UPDATE self.config (IN MEMORY — MODEL USES THIS)
-                            # ==========================================================
                             hazards_cfg = self.config.setdefault("hazards", {})
                             floods_cfg = hazards_cfg.setdefault("floods", {})
                             events_mem = floods_cfg.setdefault("events", [])
@@ -173,9 +172,6 @@ class HazardDriver:
                             else:
                                 print("Flood event already in in-memory config.")
 
-                            # ==========================================================
-                            # 2️⃣ UPDATE model.yml (DISK — YAML-SAFE ONLY)
-                            # ==========================================================
                             config_path = Path.cwd() / "model.yml"
 
                             with open(config_path, "r") as f:
@@ -199,7 +195,6 @@ class HazardDriver:
                                     yaml.safe_dump(config_yaml, f, sort_keys=False)
 
                                 tmp_path.replace(config_path)
-                                print("Flood event saved to model.yml.")
                             else:
                                 print("Flood event already in model.yml.")
 
@@ -212,7 +207,6 @@ class HazardDriver:
                     )
 
                     if self.model.current_time == end_time:
-                        print("end of sim reached")
                         df_all: pd.DataFrame = pd.DataFrame(self.discharge_log)
                         df_all.to_csv(
                             Path(self.model.output_folder) / "discharge_timeseries.csv",
