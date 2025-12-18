@@ -28,6 +28,7 @@ import numpy as np
 import numpy.typing as npt
 
 from geb.module import Module
+from geb.store import Bucket
 from geb.types import ArrayFloat32
 
 if TYPE_CHECKING:
@@ -319,6 +320,27 @@ def get_flow_velocity(
     )
 
 
+class HillSlopeErosionVariables(Bucket):
+    """Variables for the HillSlopeErosion module."""
+
+    total_erosion: np.float32
+    mannings_bare_soil: np.float32
+    surface_roughness_parameter_tillage: np.float32
+    alpha: np.float32
+    K_clay: np.float32
+    K_silt: np.float32
+    K_sand: np.float32
+    detachability_due_to_runoff_clay: np.float32
+    detachability_due_to_runoff_silt: np.float32
+    detachability_due_to_runoff_sand: np.float32
+    particle_diameter_clay: np.float32
+    particle_diameter_silt: np.float32
+    particle_diameter_sand: np.float32
+    rho: np.float32
+    rho_s: np.float32
+    eta: np.float32
+
+
 class HillSlopeErosion(Module):
     """Calculate soil erosion on hillslopes using the MMF model.
 
@@ -327,6 +349,8 @@ class HillSlopeErosion(Module):
     or event-based soil loss by considering the detachment and transport of soil
     particles separately.
     """
+
+    var: HillSlopeErosionVariables
 
     def __init__(self, model: GEBModel, hydrology: Hydrology) -> None:
         """Initialize the hillslope erosion model.
