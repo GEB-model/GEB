@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
 import odc.stac
-import pystac
+import planetary_computer
 import pystac_client
-import rasterio
-import s3fs
 import xarray as xr
 
 from .base import Adapter
@@ -26,23 +23,18 @@ class ESAWorldCover(Adapter):
         """Fetch the ESA WorldCover dataset from the specified STAC URL.
 
         Args:
-            url: The STAC API URL for the ESA WorldCover collection.
+            url: The STAC API URL to fetch the dataset from.
             *args: Additional positional arguments (not used).
             **kwargs: Additional keyword arguments (not used).
 
         Returns:
             The ESAWorldCover adapter instance.
-
-        Raises:
-            ValueError: If the root catalog URL cannot be determined from the collection.
         """
-        self.collection = pystac.Collection.from_file(url)
-        parent = self.collection.get_parent()
-        assert parent is not None, "Collection has no parent catalog."
-        root_catalog_url = parent.get_self_href()
-        if not root_catalog_url:
-            raise ValueError("Could not determine root catalog URL from collection.")
-        self.client = pystac_client.Client.open(root_catalog_url)
+        self.catalog = pystac_client.Client.open(
+            url,
+            modifier=planetary_computer.sign_inplace,
+        )
+
         return self
 
     def read(
@@ -63,9 +55,8 @@ class ESAWorldCover(Adapter):
         Returns:
             xarray.DataArray: The data array containing the ESA WorldCover data for the specified bounding box.
         """
-        # Search for items within the specific collection and bounding box
-        search_result = self.client.search(
-            collections=[self.collection.id],
+        search_result = self.catalog.search(
+            collections=["esa-worldcover"],
             bbox=(
                 xmin,
                 ymin,
@@ -78,35 +69,20 @@ class ESAWorldCover(Adapter):
         item_list = list(search_result.items())
         assert len(item_list) > 0, "No items found for the specified bounding box."
 
-        # The STAC items don't have resolution and crs information, so we need to open one asset to get it
-        assets = item_list[0].assets
-        assert len(assets) == 1, "Expected exactly one asset per item."
-        tif_url = list(assets.values())[0].href
-
-        with s3fs.S3FileSystem(anon=True).open(tif_url) as f:
-            src = rasterio.open(f)
-            crs = src.profile["crs"]
-            resolution = abs(src.profile["transform"].a)
-            dtype = src.profile["dtype"]
-            nodata = src.profile["nodata"]
-            nodata = getattr(np, dtype)(nodata)  # convert to correct type
-
         # Load the data using ODC STAC into an xarray Dataset
-        ds = (
-            odc.stac.load(
-                item_list,
-                crs=crs,
-                chunks={"x": 3000, "y": 3000},
-                resolution=resolution,
-                dtype=dtype,
-            )
-            .isel(time=0)
+        ds: xr.Dataset = odc.stac.load(
+            item_list,
+            chunks={"longitude": 3000, "latitude": 3000},
+        )
+        da: xr.DataArray = ds["map"]
+        da = (
+            da.isel(time=-1)
             .rename({"latitude": "y", "longitude": "x"})
             .sel(
                 x=slice(xmin, xmax),
                 y=slice(ymax, ymin),
             )
         )
-        da = ds["ESA_WORLDCOVER_10M_MAP"]
-        da.attrs["_FillValue"] = nodata
+        da.attrs["_FillValue"] = da.attrs["nodata"]
+        del da.attrs["nodata"]
         return da
