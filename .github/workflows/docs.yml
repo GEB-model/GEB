@@ -1,4 +1,4 @@
-name: sphinx
+name: mkdocs build and deploy
 on:
   push:
     branches:

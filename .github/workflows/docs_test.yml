@@ -1,4 +1,4 @@
-name: Test Sphinx Docs (Non-Main Branches)
+name: Test mkdocs (Non-Main Branches)
 
 on:
   push:
@@ -11,7 +11,7 @@ env:
 
 jobs:
   build-docs:
-    name: Build Sphinx Documentation
+    name: Build documentation
     runs-on: ubuntu-latest
     steps:
       # Check out the repository

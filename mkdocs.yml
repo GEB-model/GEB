@@ -4,7 +4,7 @@ site_author: Jens de Bruijn
 repo_url: https://github.com/GEB-model/GEB
 repo_name: GEB-model/GEB
 edit_uri: edit/main/docs/
-docs_dir: .
+docs_dir: docs
 
 theme:
   name: material
@@ -28,7 +28,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          paths: [..]
+          paths: [.]
           options:
             docstring_style: google
             show_source: true
@@ -36,7 +36,7 @@ plugins:
             extensions:
               - griffe_pydantic
   - bibtex:
-      bib_file: references.bib
+      bib_file: docs/references.bib
 
 markdown_extensions:
   - footnotes
@@ -47,7 +47,7 @@ markdown_extensions:
       anchor_linenums: true
   - pymdownx.inlinehilite
   - pymdownx.snippets:
-      base_path: [".."]
+      base_path: ["."]
   - pymdownx.tabbed:
       alternate_style: true
   - attr_list
@@ -62,7 +62,10 @@ nav:
     - Configuration: getting_started/configuration.md
     - Creating a model: getting_started/creating_a_model.md
     - Running the model: getting_started/running.md
+    - Reporting: getting_started/reporting.md
     - ODD protocol: getting_started/ODD/ODD_protocol.md
+  - Model:
+    - Model: model/model.md
   - Agents:
     - Overview: agents/index.md
     - Households: agents/households.md
@@ -91,9 +94,6 @@ nav:
     - Forecasts: forecasts.md
     - Calibration: getting_started/calibration.md
     - PlantFATE: plantFATE.md
-  - Reference:
-    - Model: model.md
-    - Report: report.md
   - About:
     - Authors: about/authors.md
     - Contribution guide: about/contribution_guide.md
