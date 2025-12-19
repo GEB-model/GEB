@@ -1,8 +1,10 @@
 # GEB
 
-Welcome to GEB's documentation! GEB stands for Geographic Environmental and Behavioural model and is named after Geb, the personification of Earth in Egyptian mythology.
+GEB (Geographical Environmental and Behavioural model) simulates the environment (e.g., hydrology, floods), the individual people, households and orginizations as well as their interactions at both small and large scale. The model does so through a "deep" coupling of an agent-based model a hydrological model, a vegetation model and a hydrodynamic model. You can find full documentation [here](https://docs.geb.sh/).
 
-GEB aims to simulate both environment, the individual behaviour of people and their interactions at small and large scale. The model does so through a "deep" coupling of an agent-based model which simulates millions individual people or households, a hydrological model, a vegetation model and a hydrodynamic model.
+The figure below shows a schematic overview of GEB.
+
+![Schematic model overview of GEB.](https://raw.githubusercontent.com/GEB-model/GEB/refs/heads/main/docs/images/schematic_overview.svg "Schematic model overview")
 
 ## Building on the shoulders of giants
 

@@ -9,6 +9,11 @@
 - [Carolina Carral](https://vu.nl/en/research/scientists/carolina-ferman-carral)
 - [Roy Pontman](https://research.vu.nl/en/persons/roy-pontman/)
 
+# Others
+We are also extremely grateful to others without whom the GEB model wouldn't exist, providing funding, writing and editing papers, guidance, strategy, and contributing in an infinite number of brainstorming sessions:
+- [Jeroen Aerts](https://research.vu.nl/en/persons/jeroen-aerts/)
+- [Hans de Moel](https://research.vu.nl/en/persons/hans-de-moel/)
+
 # Past contributors
 - [Mikhail Smilovic](https://iiasa.ac.at/staff/mikhail-smilovic) - we are especially grateful for using their model framework [CWatM](https://cwatm.iiasa.ac.at) as the basis.
 - [Peter Burek](https://iiasa.ac.at/staff/peter-burek) - we are especially grateful for using their model framework [CWatM](https://cwatm.iiasa.ac.at) as the basis.
@@ -17,3 +22,8 @@
 # Students who used and contributed directly or indirectly to the development of GEB
 - Romijn Servaas
 - Thomas van Eldik
+- Huub Koper
+- Anna Verhoef
+- Merlijne Hermans
+- Vivek Gena
+- Olimboy Abdurakhmanov

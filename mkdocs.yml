@@ -58,12 +58,11 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started:
-    - Overview and installation: getting_started/overview_and_installation.md
+    - Installation: getting_started/installation.md
     - Configuration: getting_started/configuration.md
-    - Creating a model: getting_started/creating_a_model.md
+    - Building a model: getting_started/building_a_model.md
     - Running the model: getting_started/running.md
     - Reporting: getting_started/reporting.md
-    - ODD protocol: getting_started/ODD/ODD_protocol.md
   - Model:
     - Model: model/model.md
   - Agents:
@@ -75,6 +74,7 @@ nav:
     - Government: agents/government.md
     - Market: agents/market.md
     - Industry: agents/industry.md
+    - ODD protocol: agents/ODD/protocol.md
   - Hydrology:
     - Overview: hydrology/index.md
     - Groundwater: hydrology/groundwater.md
@@ -91,11 +91,11 @@ nav:
     - Overview: hazards/index.md
     - Floods: hazards/floods.md
   - Advanced topics:
-    - Forecasts: forecasts.md
-    - Calibration: getting_started/calibration.md
-    - PlantFATE: plantFATE.md
+    - Forecasts: advanced_topics/forecasts.md
+    - Calibration: advanced_topics/calibration.md
+    - PlantFATE: advanced_topics/plantFATE.md
   - About:
-    - Authors: about/authors.md
+    - Developers: about/developers.md
     - Contribution guide: about/contribution_guide.md
     - Updates: about/updates.md
     - License: about/license.md
