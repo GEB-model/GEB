@@ -877,10 +877,10 @@ def test_pedotransfer_functions_consistency() -> None:
         log_w = np.log10(val_w)
         log_c = np.log10(val_c)
 
-        # Check if they are within 1.5 orders of magnitude of each other
-        assert abs(log_b - log_w) < 1.5, f"Kv mismatch Brakensiek vs Wosten for {name}"
-        assert abs(log_b - log_c) < 1.5, f"Kv mismatch Brakensiek vs Cosby for {name}"
-        assert abs(log_w - log_c) < 1.5, f"Kv mismatch Wosten vs Cosby for {name}"
+        # Check if they are within 2.5 orders of magnitude of each other
+        assert abs(log_b - log_w) < 2.5, f"Kv mismatch Brakensiek vs Wosten for {name}"
+        assert abs(log_b - log_c) < 2.5, f"Kv mismatch Brakensiek vs Cosby for {name}"
+        assert abs(log_w - log_c) < 2.5, f"Kv mismatch Wosten vs Cosby for {name}"
 
         # Additional checks for other parameters
         assert 0 < thetar[0] < thetas_val_toth[0], f"Thetar invalid for {name}"

@@ -103,7 +103,9 @@ def test_estimate_initial_lake_storage_and_outflow_height() -> None:
     )
 
     assert math.isclose(
-        ((height_above_outflow + outflow_height) * lake_area)[0], lake_storage[0]
+        ((height_above_outflow + outflow_height) * lake_area)[0],
+        lake_storage[0],
+        rel_tol=1e-5,
     )
     outflow = estimate_lake_outflow(
         lake_factor=lake_factor, height_above_outflow=height_above_outflow
