@@ -19,9 +19,9 @@ We are also extremely grateful to the grandmasters without whom the GEB model wo
 
 # Past contributors
 
-- [Mikhail Smilovic](https://iiasa.ac.at/staff/mikhail-smilovic) - we are especially grateful for using their model framework [CWatM](https://cwatm.iiasa.ac.at) as the basis.
-- [Peter Burek](https://iiasa.ac.at/staff/peter-burek) - we are especially grateful for using their model framework [CWatM](https://cwatm.iiasa.ac.at) as the basis.
-- Luca Guillaumot - we are especially grateful for using their model framework [CWatM](https://cwatm.iiasa.ac.at) as the basis.
+- [Mikhail Smilovic](https://iiasa.ac.at/staff/mikhail-smilovic) - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
+- [Peter Burek](https://iiasa.ac.at/staff/peter-burek) - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
+- Luca Guillaumot - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
 
 # Students who used and contributed directly or indirectly
 
