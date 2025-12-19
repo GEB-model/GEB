@@ -621,7 +621,10 @@ class Crops(BuildModelBase):
                         columns=np.array([donor_data_country.name]),
                     )
 
-                    data_out = data_out.combine_first(new_data)
+                    if data_out.empty:
+                        data_out = new_data
+                    else:
+                        data_out = data_out.combine_first(new_data)
 
                 else:
                     new_data = pd.DataFrame(
@@ -636,7 +639,10 @@ class Crops(BuildModelBase):
                         columns=np.array([column]),
                     )
 
-                    data_out = data_out.combine_first(new_data)
+                    if data_out.empty:
+                        data_out = new_data
+                    else:
+                        data_out = data_out.combine_first(new_data)
 
         data_out = data_out.drop(columns=["ISO3"])
         data_out = data_out.dropna(axis=1, how="all")
