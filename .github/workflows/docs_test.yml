@@ -26,4 +26,4 @@ jobs:
           uv sync --dev
       - name: Build MkDocs
         run: |
-          uv run mkdocs build -f docs/mkdocs.yml
+          uv run mkdocs build -f mkdocs.yml
