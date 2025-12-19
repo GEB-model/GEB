@@ -107,7 +107,9 @@ class DestinationEarth(Adapter):
                 "Failed to connect to Destination Earth API after 3 attempts."
             )
 
-        da: xr.DataArray = da.drop_vars(["number", "surface", "depthBelowLandLayer"])
+        da: xr.DataArray = da.drop_vars(
+            ["number", "surface", "depthBelowLandLayer"], errors="ignore"
+        )
 
         buffer: float = 0.5
         buffered_bounds: tuple[float, float, float, float] = (
