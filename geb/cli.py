@@ -126,6 +126,19 @@ def parse_config(
         ]  # remove inherits key from config to avoid infinite recursion
         config = multi_level_merge(inherited_config, config)
         config = parse_config(config, current_directory=current_directory)
+
+    # Validate config
+    from pydantic import ValidationError
+
+    from geb.config_schema import Config
+
+    try:
+        Config(**config)
+    except ValidationError as e:
+        # We warn instead of raising an error to allow for extra fields or partial configs
+        # during development, but ideally this should be strict.
+        logging.warning(f"Configuration validation failed: {e}")
+
     return config
 
 

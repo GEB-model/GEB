@@ -1,4 +1,0 @@
-Authors
-############
-
-.. include:: authors.rst

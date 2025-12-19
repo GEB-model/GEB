@@ -1332,7 +1332,6 @@ class Forcing(BuildModelBase):
         """Sets up forecast data for the model based on configuration.
 
         Args:
-            forecast_variable: List of ECMWF parameter codes to download (see ECMWF documentation).
             forecast_start: The forecast initialization time (date or datetime).
             forecast_end: The forecast end time (date or datetime).
             forecast_provider: The forecast data provider to use (default: "ECMWF").
