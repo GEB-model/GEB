@@ -264,7 +264,7 @@ class _build_method:
         if not progress_path.exists():
             return []
         with open(progress_path, "r") as f:
-            completed_methods = f.read().splitlines()
+            completed_methods: list[str] = f.read().splitlines()
         return completed_methods
 
     def log_time_taken(self) -> None:
