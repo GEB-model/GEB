@@ -80,7 +80,7 @@ nav:
     - Groundwater: hydrology/groundwater.md
     - Land Surface: hydrology/landsurface.md
     - Routing: hydrology/routing.md
-    - Lakes and Reservoirs: hydrology/lakes_reservoirs.md
+    - Waterbodies: hydrology/waterbodies.md
     - Evapotranspiration: hydrology/evapotranspiration.md
     - Interception: hydrology/interception.md
     - Snow and Glaciers: hydrology/snow_glaciers.md
