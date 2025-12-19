@@ -1,0 +1,3 @@
+# Households
+
+::: geb.agents.households

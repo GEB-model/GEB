@@ -183,13 +183,7 @@ class CropFarmersVariables(Bucket):
 
 
 class CropFarmers(AgentBaseClass):
-    """The agent class for the farmers. Contains all data and behaviourial methods. The __init__ function only gets the model as arguments, the agent parent class and the redundancy. All other variables are loaded at later stages.
-
-    Args:
-        model: The GEB model.
-        agents: The class that includes all agent types (allowing easier communication between agents).
-        redundancy: a lot of data is saved in pre-allocated NumPy arrays. While this allows much faster operation, it does mean that the number of agents cannot grow beyond the size of the pre-allocated arrays. This parameter allows you to specify how much redundancy should be used. A lower redundancy means less memory is used, but the model crashes if the redundancy is insufficient.
-    """
+    """The agent class for the farmers."""
 
     var: CropFarmersVariables
     well_status: npt.NDArray[np.int32]
@@ -1915,7 +1909,6 @@ class CropFarmers(AgentBaseClass):
 
         Args:
             n: Number of farmers.
-            start_day_per_month: Array containing the starting day of each month.
             field_indices_by_farmer: This array contains the indices where the fields of a farmer are stored in `field_indices`.
             field_indices: This array contains the indices of all fields, ordered by farmer. In other words, if a farmer owns multiple fields, the indices of the fields are indices.
             crop_map: Subarray map of crops.
@@ -4444,8 +4437,6 @@ class CropFarmers(AgentBaseClass):
 
         Args:
             yield_ratios: Yield ratios for agents under different drought scenarios.
-            crops_mask: Mask indicating valid crop entries.
-            nan_array: Array filled with NaNs for reference.
 
         Returns:
             np.ndarray: Total profits for agents under each drought scenario.
@@ -4799,7 +4790,6 @@ class CropFarmers(AgentBaseClass):
         Args:
             yield_ratios: The array of yield ratios for the crops.
             crops_mask: A mask that denotes valid crops, based on certain conditions.
-            array_with_reference: An array initialized with NaNs, later used to store reference yields and crop prices.
             nan_array: An array filled with NaNs, used for initializing arrays.
 
         Returns:

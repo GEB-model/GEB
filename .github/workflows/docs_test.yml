@@ -19,22 +19,11 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-      - name: Install Pandoc and xelatex
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra texlive-latex-extra librsvg2-bin
       - name: Set up uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
       - name: Install the project
         run: |
           uv sync --dev
-      - name: Build Sphinx docs
+      - name: Build MkDocs
         run: |
-          cd docs
-          mkdir -p _build
-          uv run make html
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: build_logs
-          path: /tmp/sphinx-err-*.log
+          uv run mkdocs build -f docs/mkdocs.yml

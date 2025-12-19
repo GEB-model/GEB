@@ -150,11 +150,9 @@ class DestinationEarth(Adapter):
 
         Args:
             variable: short name of the variable to process (e.g., "t2m"). Codes can be found here: https://codes.ecmwf.int/grib/param-db/
-            folder: folder to store the downloaded data
             start_date: start date of the time period to process
             end_date: end date of the time period to process
             bounds:  bounding box in the format (min_lon, min_lat, max_lon, max_lat)
-            logger:  logger to use for logging
 
         Raises:
             NotImplementedError: If the step type of the data is not "accum" or "instant".
