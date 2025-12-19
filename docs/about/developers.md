@@ -23,7 +23,7 @@ We are also extremely grateful to the grandmasters without whom the GEB model wo
 - [Peter Burek](https://iiasa.ac.at/staff/peter-burek) - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
 - Luca Guillaumot - we are especially grateful for using [CWatM](https://cwatm.iiasa.ac.at) as original basis.
 
-# Students who used and contributed directly or indirectly
+# Students who contributed directly or indirectly
 
 - Romijn Servaas
 - Thomas van Eldik
