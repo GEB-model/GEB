@@ -314,7 +314,6 @@ class ECMWFForecasts(Adapter):
         We process forecasts for each initialization time separately. The forecast file contains all variables needed for GEB.
 
         Args:
-            preprocessing_folder: Path to the folder containing the downloaded ECMWF forecast data.
             bounds: The bounding box in the format (min_lon, min_lat, max_lon,
                     max_lat).
             forecast_issue_date: The forecast initialization time.

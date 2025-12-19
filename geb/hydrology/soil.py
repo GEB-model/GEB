@@ -136,7 +136,6 @@ def infiltration(
         soil_is_frozen: Boolean indicating if the soil is frozen.
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.
         topwater_m: Topwater for the cell in meters, modified in place.
-        soil_layer_height: Soil layer heights for the cell in meters, shape (N_SOIL_LAYERS,).
 
     Returns:
         A tuple containing:
