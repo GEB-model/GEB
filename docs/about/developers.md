@@ -10,9 +10,9 @@
 - [Carolina Carral](https://vu.nl/en/research/scientists/carolina-ferman-carral)
 - [Roy Pontman](https://research.vu.nl/en/persons/roy-pontman/)
 
-# Others
+# Grandmasters
 
-We are also extremely grateful to others without whom the GEB model wouldn't exist, providing funding, writing and editing papers, guidance, strategy, and contributing in an infinite number of brainstorming sessions:
+We are also extremely grateful to the grandmasters without whom the GEB model wouldn't exist; providing funding, writing and editing papers, guidance, strategy, and contributing in an infinite number of brainstorming sessions:
 
 - [Jeroen Aerts](https://research.vu.nl/en/persons/jeroen-aerts/)
 - [Hans de Moel](https://research.vu.nl/en/persons/hans-de-moel/)
