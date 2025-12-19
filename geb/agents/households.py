@@ -25,7 +25,7 @@ from geb.workflows.io import read_params
 from ..hydrology.landcovers import (
     FOREST,
 )
-from ..store import DynamicArray
+from ..store import Bucket, DynamicArray
 from ..workflows.damage_scanner import VectorScanner, VectorScannerMultiCurves
 from ..workflows.io import read_array, read_table, read_zarr, write_zarr
 from .decision_module import DecisionModule
@@ -34,8 +34,6 @@ from .general import AgentBaseClass
 if TYPE_CHECKING:
     from geb.agents import Agents
     from geb.model import GEBModel
-
-    from ..store import Bucket
 
 
 def from_landuse_raster_to_polygon(
@@ -70,6 +68,7 @@ class HouseholdVariables(Bucket):
     possible_measures: list[str]
     possible_warning_triggers: list[str]
     municipal_water_demand_per_capita_m3_baseline: ArrayFloat32
+    water_demand_per_household_m3: ArrayFloat32
     income: DynamicArray
     building_id_of_household: DynamicArray
     wealth: DynamicArray

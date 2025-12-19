@@ -14,7 +14,13 @@ import pandas as pd
 from numba import njit
 from scipy.stats import genextreme
 
-from geb.types import ArrayInt32, ArrayInt64, TwoDArrayInt32
+from geb.types import (
+    ArrayFloat64,
+    ArrayInt32,
+    ArrayInt64,
+    TwoDArrayBool,
+    TwoDArrayInt32,
+)
 from geb.workflows import TimingModule
 from geb.workflows.io import read_grid
 from geb.workflows.neighbors import find_neighbors
@@ -189,6 +195,85 @@ class CropFarmersVariables(Bucket):
     actual_yield_per_farmer: DynamicArray
     irrigation_limit_m3: DynamicArray
     household_size: DynamicArray
+    water_costs_m3_channel: float
+    water_costs_m3_reservoir: float
+    water_costs_m3_groundwater: float
+    field_indices_by_farmer: DynamicArray
+    subdistrict_map: TwoDArrayInt32
+    risk_aversion: DynamicArray
+    discount_rate: DynamicArray
+    intention_factor: DynamicArray
+    risk_perception: DynamicArray
+    interest_rate: DynamicArray
+    crop_calendar: DynamicArray
+    crop_calendar_rotation_years: DynamicArray
+    current_crop_calendar_rotation_year_index: DynamicArray
+    adaptations: DynamicArray
+    drought_threshold: float
+    time_adapted: DynamicArray
+    well_depth: DynamicArray
+    social_network: DynamicArray
+    lifespan_well: int
+    pr_premium: DynamicArray
+    insured_yearly_income: DynamicArray
+    index_premium: DynamicArray
+    personal_premium: DynamicArray
+    total_spinup_time: int
+    return_fraction: DynamicArray
+    n_loans: int
+    risk_perc_max: float
+    risk_perc_min: float
+    risk_decr: float
+    specific_weight_water: float
+    previous_month: int
+    p_droughts: ArrayInt32
+    yearly_income: DynamicArray
+    drought_timer: DynamicArray
+    expenditure_cap: float
+    moving_average_threshold: float
+    farmer_base_class: DynamicArray
+    return_fraction_surface: float
+    irr_eff_surface: float
+    GEV_pr_parameters: DynamicArray
+    return_fraction_drip: float
+    irr_eff_drip: float
+    drought_threshold: float
+    why_class: DynamicArray
+    locations: DynamicArray
+    elevation: DynamicArray
+    irrigation_efficiency: DynamicArray
+    GEV_parameters: DynamicArray
+    yearly_SPEI: DynamicArray
+    yearly_yield_ratio: DynamicArray
+    activation_order_by_elevation_fixed: DynamicArray
+    adaptations: DynamicArray
+    yearly_abstraction_m3_by_farmer: DynamicArray
+    fraction_irrigated_field: DynamicArray
+    irrigation_limit_reset_day_index: DynamicArray
+    cumulative_water_deficit_m3: DynamicArray
+    max_paddy_water_level: DynamicArray
+    region_id: DynamicArray
+    cumulative_water_deficit_current_day: DynamicArray
+    cumulative_water_deficit_previous_day: DynamicArray
+    yearly_pr: DynamicArray
+    all_loans_annual_cost: DynamicArray
+    pump_hours: int
+    pump_efficiency: float
+    lifespan_irrigation: int
+    loan_tracker: DynamicArray
+    yearly_SPEI_probability: DynamicArray
+    maintenance_factor: float
+    max_initial_sat_thickness: float
+    cumulative_pr_mm: DynamicArray
+    yearly_potential_income: DynamicArray
+    adapted: DynamicArray
+    cumulative_pr_during_growing_season: DynamicArray
+    base_management_yield_ratio: DynamicArray
+    insurance_duration: int
+    cumulative_SPEI_during_growing_season: DynamicArray
+    cumulative_SPEI_count_during_growing_season: DynamicArray
+    avg_income_per_agent: ArrayFloat64
+    payout_mask: TwoDArrayBool
 
 
 class CropFarmers(AgentBaseClass):
@@ -354,7 +439,7 @@ class CropFarmers(AgentBaseClass):
         self.var.insurance_duration = self.model.config["agent_settings"]["farmers"][
             "expected_utility"
         ]["insurance"]["duration"]
-        self.var.p_droughts = np.array([100, 50, 25, 10, 5, 2, 1])
+        self.var.p_droughts = np.array([100, 50, 25, 10, 5, 2, 1], dtype=np.int32)
 
         # Set water costs
         self.var.water_costs_m3_channel = self.model.config["agent_settings"][
@@ -1391,7 +1476,7 @@ class CropFarmers(AgentBaseClass):
         return self.command_area != -1
 
     @property
-    def surface_irrigated(self) -> np.ndarray:
+    def surface_irrigated(self) -> DynamicArray:
         """Boolean mask of farmers that have surface-irrigation equipment."""
         return self.var.adaptations[:, SURFACE_IRRIGATION_EQUIPMENT] > 0
 
@@ -1406,7 +1491,7 @@ class CropFarmers(AgentBaseClass):
         )
 
     @property
-    def well_irrigated(self) -> np.ndarray:
+    def well_irrigated(self) -> DynamicArray:
         """Boolean mask of farmers that have a well adaptation."""
         return self.var.adaptations[:, WELL_ADAPTATION] > 0
 
@@ -5603,7 +5688,7 @@ class CropFarmers(AgentBaseClass):
             values: Per-array initialization values
                 keyed by agent array name.
         """
-        HRU = self.model.data.split(indices)
+        HRU = self.model.hydrology.HRU.split(indices)
         assert self.HRU.var.land_owners[HRU] == -1, "There is already a farmer here."
         self.HRU.var.land_owners[HRU] = self.var.n
 
@@ -5618,7 +5703,7 @@ class CropFarmers(AgentBaseClass):
             if name == "locations":
                 agent_array[self.var.n - 1] = agent_location
             elif name == "elevation":
-                agent_array[self.var.n - 1] = self.elevation_subgrid.sample_coords(
+                agent_array[self.var.n - 1] = self.var.elevation_subgrid.sample_coords(
                     np.expand_dims(agent_location, axis=0)
                 )
             elif name == "region_id":

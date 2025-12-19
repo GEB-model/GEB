@@ -278,6 +278,7 @@ def infiltration(
         soil_is_frozen: Boolean indicating if the soil is frozen.
         w: Soil water content in each layer for the cell in meters, shape (N_SOIL_LAYERS,), modified in place.
         topwater_m: Topwater for the cell in meters, modified in place.
+        arno_shape_parameter: Arno shape parameter for the cell.
 
     Returns:
         A tuple containing:

@@ -144,7 +144,7 @@ if __debug__:
     # of an array in a Numba-compiled function will return invalid values or lead
     # to an access violation error (it’s reading from invalid memory locations).
     # Setting BOUNDSCHECK to 1 will enable bounds checking for all array accesses
-    numba.config.BOUNDSCHECK = 1
+    numba.config.BOUNDSCHECK = 1  # ty:ignore[unresolved-attribute]
 
 os.environ["NUMBA_ENABLE_AVX"] = "0"  # Enable AVX instructions
 # os.environ["NUMBA_PARALLEL_DIAGNOSTICS"] = "4"
