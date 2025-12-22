@@ -432,7 +432,7 @@ data_catalog: dict[str, dict[str, Any]] = {
         "adapter": GlobalExposureModel(
             folder="global_exposure_model",
             local_version=1,
-            filename="global_exposure_model.parquet",
+            filename="global_exposure_model.json",
             cache="local",
         ),
         "url": "https://datapub.gfz.de/download/10.5880.GFZ.LKUT.2025.002-Caweb/2025-002_Oostwegel-et-al_data/",
