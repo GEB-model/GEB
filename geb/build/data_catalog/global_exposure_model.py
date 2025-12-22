@@ -1,10 +1,10 @@
 """This script downloads all CSV files from a specific country folder in the global_exposure_model GitHub repository."""
 
 from __future__ import annotations
-import unicodedata
 
 import os
 import tempfile
+import unicodedata
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -12,8 +12,9 @@ from urllib.parse import quote
 import pandas as pd
 import requests
 
-from .base import Adapter
 from geb.workflows.io import write_dict
+
+from .base import Adapter
 
 
 class GlobalExposureModel(Adapter):
@@ -118,6 +119,7 @@ class GlobalExposureModel(Adapter):
         """Fetch and process data for specific countries.
 
         Args:
+            url: required but not used in this implementation.
             countries: The list of countries to fetch data for.
         Returns:
             GlobalExposureModel: The adapter instance with the processed data.
@@ -163,5 +165,12 @@ class GlobalExposureModel(Adapter):
         # Implementation would go here
         return self
 
-    def read(self, **kwargs):
+    def read(self, **kwargs: Any) -> dict[str, dict[str, float]]:
+        """Read the dataset into an xarray DataArray.
+
+        Args:
+            **kwargs: Additional keyword arguments to pass to the reader function.
+        Returns:
+            The dataset as a dictionary.
+        """
         return super().read(**kwargs)

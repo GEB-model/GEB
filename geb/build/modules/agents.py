@@ -1,8 +1,9 @@
 """Module containing build methods for the agents for GEB."""
 
+import difflib
 import math
 from datetime import datetime
-import difflib
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -1599,8 +1600,18 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
-    # @build_method
-    def setup_building_reconstruction_costs(self, buildings) -> None:
+    def setup_building_reconstruction_costs(
+        self, buildings: gpd.GeoDataFrame
+    ) -> gpd.GeoDataFrame:
+        """Assigns reconstruction costs to buildings based on the global exposure model.
+
+        Args:
+            buildings: A GeoDataFrame containing building data within the model domain.
+        Returns:
+            A GeoDataFrame with reconstruction costs assigned to each building.
+        Raises:
+            ValueError: If a region in GADM level 1 is not found in the global exposure model.
+        """
         # convert table to deal with name changes since GADM 2016
         convert_table = {
             "Hauts-de-France": "Nord-Pas-de-Calais",
@@ -1678,12 +1689,7 @@ class Agents:
         buildings = self.setup_building_reconstruction_costs(buildings)
 
         # # write to input folder
-        # if "assets/open_building_map" not in self.files["geom"]:
         self.set_geom(buildings, name="assets/open_building_map")
-        # else:
-        #     self.logger.info(
-        #         "Buildings already present for geom, skipping writing to geom"
-        #     )
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
         buildings["lon"] = centroids.x
