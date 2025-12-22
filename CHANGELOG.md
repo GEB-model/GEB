@@ -1,3 +1,10 @@
+# v1.0.0b9
+- Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.
+- Add a new option for flood models. We now auto-detect whether a change in the code or model input is made. If no change in the model or model input, we do not rebuild the SFINCS model. This removes the option `force_overwrite` for sfincs models.
+- Fix JSON serialization error in hash file generation by properly converting NumPy scalar types (bool, int, float) to Python native types.
+- Update to new SFINCS version.
+- Migrated documentation to mkdocs
+
 # v1.0.0b8
 - Improve model startup time
 - Improve detection of outflow boundaries. Now uses intersection between river lines and geometry boundary.
@@ -19,7 +26,3 @@
 To support this version:
 
 - Re-run `setup_forcing` and `setup_spei`
-
-# v1.0.0b9
-- Updated numba to 0.63. This version fixes an error where changes in sub-functions were not always correctly detected when using caching behaviour.
-- Add a new option for flood models. We now auto-detect whether a change in the code or model input is made. If no change in the model or model input, we do not rebuild the SFINCS model. This removes the option `force_overwrite` for sfincs models.
