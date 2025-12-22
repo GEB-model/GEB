@@ -1,6 +1,7 @@
 """This script downloads all CSV files from a specific country folder in the global_exposure_model GitHub repository."""
 
 from __future__ import annotations
+import unicodedata
 
 import os
 import tempfile
@@ -89,7 +90,7 @@ class GlobalExposureModel(Adapter):
                 os.makedirs(self.path.parent, exist_ok=True)
                 write_dict(
                     damages_per_sqm,
-                    self.path.with_name("damages_per_sqm.json"),
+                    self.path.with_name("global_exposure_model.json"),
                 )
 
     def _process_csv(self, df: pd.DataFrame) -> dict[str, dict[str, float]]:
@@ -147,6 +148,13 @@ class GlobalExposureModel(Adapter):
 
         csv_files = []
         for country in countries:
+            # clean country name for matching
+            country = (
+                unicodedata.normalize("NFKD", country)
+                .encode("ascii", "ignore")
+                .decode("ascii")
+            )
+
             self._filter_folders(tree, csv_files, country)
         self._download_and_process_csv(RAW_BASE, csv_files)
 
