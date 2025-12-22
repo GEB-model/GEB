@@ -1877,7 +1877,7 @@ class Households(AgentBaseClass):
             }
             damage_buildings: pd.Series = VectorScannerMultiCurves(
                 features=building_multicurve.rename(
-                    columns={"maximum_damage_m2": "maximum_damage"}
+                    columns={"TOTAL_REPL_COST_USD_SQM": "maximum_damage"}
                 ),
                 hazard=flood_map,
                 multi_curves=multi_curves,
