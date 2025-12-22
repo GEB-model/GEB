@@ -2,7 +2,7 @@
 
 import math
 from datetime import datetime
-
+import difflib
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -1599,16 +1599,64 @@ class Agents:
         farmers = pd.concat(all_agents, ignore_index=True)
         self.set_farmers_and_create_farms(farmers)
 
-    @build_method
-    def setup_building_reconstruction_costs(self) -> None:
+    # @build_method
+    def setup_building_reconstruction_costs(self, buildings) -> None:
+        # convert table to deal with name changes since GADM 2016
+        convert_table = {
+            "Hauts-de-France": "Nord-Pas-de-Calais",
+            "Veracruz": "Veracruz de Ignacio de la Llave",
+        }
+
         gadm_level1 = self.new_data_catalog.fetch("GADM_level1").read(
             geom=self.region.union_all(),
         )
         countries_in_model = gadm_level1["COUNTRY"].unique().tolist()
+
         global_exposure_model = self.new_data_catalog.fetch(
             "global_exposure_model",
             countries=countries_in_model,
         ).read()
+
+        # append the NAME_1 column to the buildings
+        buildings["NAME_1"] = gpd.sjoin(
+            buildings,
+            gadm_level1[["NAME_1", "geometry"]],
+            how="left",
+            predicate="within",
+        )["NAME_1"].values
+
+        for name_1 in gadm_level1["NAME_1"]:
+            # clean name_1
+
+            if name_1 in convert_table:
+                self.logger.warning(
+                    f"Region {name_1} not found in global exposure model. Taking {convert_table[name_1]}."
+                )
+                name_1_converted = convert_table[name_1]
+                exposure_model_region = global_exposure_model[name_1_converted]
+            else:
+                if name_1 not in global_exposure_model:
+                    similar_names = difflib.get_close_matches(
+                        name_1,
+                        global_exposure_model.keys(),
+                        n=1,
+                        cutoff=0.4,
+                    )
+                    if similar_names:
+                        self.logger.warning(
+                            f"Region {name_1} not found in global exposure model. Taking {similar_names[0]}."
+                        )
+                        name_1 = similar_names[0]
+                    else:
+                        raise ValueError(
+                            f"Region {name_1} not found in global exposure model. Skipping reconstruction cost assignment for this region."
+                        )
+                exposure_model_region = global_exposure_model[name_1]
+            for damage_type in exposure_model_region:
+                buildings.loc[buildings["NAME_1"] == name_1, damage_type] = int(
+                    exposure_model_region[damage_type]
+                )
+        return buildings
 
     def get_buildings_per_GDL_region(
         self, GDL_regions: gpd.GeoDataFrame
@@ -1627,14 +1675,15 @@ class Agents:
             geom=GDL_regions.union_all(),
             prefix="assets",
         ).read()
+        buildings = self.setup_building_reconstruction_costs(buildings)
 
-        # write to input folder
-        if "assets/open_building_map" not in self.files["geom"]:
-            self.set_geom(buildings, name="assets/open_building_map")
-        else:
-            self.logger.info(
-                "Buildings already present for geom, skipping writing to geom"
-            )
+        # # write to input folder
+        # if "assets/open_building_map" not in self.files["geom"]:
+        self.set_geom(buildings, name="assets/open_building_map")
+        # else:
+        #     self.logger.info(
+        #         "Buildings already present for geom, skipping writing to geom"
+        #     )
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
         buildings["lon"] = centroids.x
@@ -1687,9 +1736,10 @@ class Agents:
 
         # setup buildings in region for household allocation
         all_buildings_model_region = self.get_buildings_per_GDL_region(GDL_regions)
+        # append reconstruction costs to buildings
         residential_buildings_model_region = {}
 
-        # iterate over GDL regions and filter buildings to residential
+        # iterate over GDL regions and filter buildings to residential and set damage values
         for GDL_code in all_buildings_model_region:
             buildings = all_buildings_model_region[GDL_code]
             # filter to residential buildings
