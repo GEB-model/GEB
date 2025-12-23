@@ -155,7 +155,6 @@ class Adapter:
         elif self.path.suffix == ".json":
             with open(self.path, "r") as file:
                 return yaml.safe_load(file)
-            return xr.open_dataarray(self.path, **kwargs)
         elif self.path.suffix == ".parquet":
             if "columns" in kwargs and "geometry" not in kwargs["columns"]:
                 return pd.read_parquet(path=self.path, **kwargs)
