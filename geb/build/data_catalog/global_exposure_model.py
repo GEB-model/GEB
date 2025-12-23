@@ -49,7 +49,6 @@ class GlobalExposureModel(Adapter):
         ]
 
         if not matching_paths:
-            print("No matching country folders found.")
             raise ValueError(f"No folder found for country: {country}")
 
         print("Found matching country folders:")
