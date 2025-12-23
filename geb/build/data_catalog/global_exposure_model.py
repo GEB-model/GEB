@@ -38,6 +38,8 @@ class GlobalExposureModel(Adapter):
             tree: The repository tree from the GitHub API.
             csv_files: List to append found CSV file paths to.
             country: The country name to filter folders by.
+        Raises:
+            ValueError: If no matching country folder is found.
         """
         matching_paths = [
             item["path"]
@@ -48,7 +50,7 @@ class GlobalExposureModel(Adapter):
 
         if not matching_paths:
             print("No matching country folders found.")
-            exit()
+            raise ValueError(f"No folder found for country: {country}")
 
         print("Found matching country folders:")
         for p in matching_paths:
