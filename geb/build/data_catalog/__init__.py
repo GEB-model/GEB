@@ -11,6 +11,7 @@ from .fao import GMIA
 from .gadm import GADM
 from .gebco import GEBCO
 from .global_data_lab import GlobalDataLabShapefile
+from .global_exposure_model import GlobalExposureModel
 from .globgm import GlobGM, GlobGMDEM
 from .grdc import GRDC
 from .hydrolakes import HydroLakes
@@ -425,6 +426,23 @@ data_catalog: dict[str, dict[str, Any]] = {
             "author": "GADM",
             "version": "4.1",
             "license": "https://gadm.org/license.html",
+        },
+    },
+    "global_exposure_model": {
+        "adapter": GlobalExposureModel(
+            folder="global_exposure_model",
+            local_version=1,
+            filename="global_exposure_model.json",
+            cache="local",
+        ),
+        "url": "https://datapub.gfz.de/download/10.5880.GFZ.LKUT.2025.002-Caweb/2025-002_Oostwegel-et-al_data/",
+        "source": {
+            "name": "OpenBuildingMap",
+            "author": "Oostwegel et al. (2025)",
+            "version": "1",
+            "license": "CC BY-NC-SA 4.0",
+            "url": "https://dataservices.gfz-potsdam.de/panmetaworks/showshort.php?id=45829b80-e892-11ef-914a-f12b0080820d",
+            "paper_doi": "https://doi.org/10.5880/GFZ.LKUT.2025.002",
         },
     },
     "merit_hydro_dir": {
