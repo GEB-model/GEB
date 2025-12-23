@@ -107,7 +107,13 @@ class GlobalExposureModel(Adapter):
         )
 
     def _process_csv(self, df: pd.DataFrame) -> dict[str, dict[str, float]]:
-        # Example processing: just return the dataframe as is
+        """Process a single CSV DataFrame to compute damages per square meter.
+
+        Args:
+            df: The DataFrame to process.
+        Returns:
+            A dictionary with damages per square meter by admin_1 region.
+        """
         # filter on Res
         result = {}
         df = df[df["OCCUPANCY"] == "Res"]
