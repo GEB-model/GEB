@@ -90,7 +90,7 @@ class GlobalExposureModel(Adapter):
                 out_path = temp_dir / os.path.basename(csv)
                 with open(out_path, "wb") as f:
                     f.write(r.content)
-                # open the file with pandas and store as parquet
+                # open the file with pandas process
                 df = pd.read_csv(out_path)
                 damages_per_sqm.append(self._process_csv(df))
 
