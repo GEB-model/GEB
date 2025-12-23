@@ -143,17 +143,17 @@ class GlobalExposureModel(Adapter):
             GlobalExposureModel: The adapter instance with the processed data.
         """
         country = countries[0]  # For simplicity, only handle the first country
-        OUTPUT_DIR = f"./downloads/{country}"
-        BRANCH = "main"
-        TREE_URL = f"https://api.github.com/repos/gem/global_exposure_model/git/trees/{BRANCH}?recursive=1"
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        output_dir = f"./downloads/{country}"
+        branch = "main"
+        tree_url = f"https://api.github.com/repos/gem/global_exposure_model/git/trees/{branch}?recursive=1"
+        os.makedirs(output_dir, exist_ok=True)
 
         # ============================
         # 1. Get entire repo tree in ONE request
         # ============================
 
         print("Downloading repository index...")
-        resp = requests.get(TREE_URL)  # , headers=HEADERS)
+        resp = requests.get(tree_url)  # , headers=HEADERS)
         resp.raise_for_status()
 
         tree = resp.json()["tree"]
@@ -163,7 +163,7 @@ class GlobalExposureModel(Adapter):
         # ============================
 
         RAW_BASE = (
-            f"https://raw.githubusercontent.com/gem/global_exposure_model/{BRANCH}/"
+            f"https://raw.githubusercontent.com/gem/global_exposure_model/{branch}/"
         )
 
         csv_files = []
