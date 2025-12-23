@@ -1660,12 +1660,12 @@ class Agents:
                         name_1 = similar_names[0]
                     else:
                         raise ValueError(
-                            f"Region {name_1} not found in global exposure model. Skipping reconstruction cost assignment for this region."
+                            f"Region {name_1} not found in global exposure model."
                         )
                 exposure_model_region = global_exposure_model[name_1]
-            for damage_type in exposure_model_region:
-                buildings.loc[buildings["NAME_1"] == name_1, damage_type] = int(
-                    exposure_model_region[damage_type]
+            for reconstruction_type in exposure_model_region:
+                buildings.loc[buildings["NAME_1"] == name_1, reconstruction_type] = (
+                    float(exposure_model_region[reconstruction_type])
                 )
         return buildings
 
@@ -1688,7 +1688,7 @@ class Agents:
         ).read()
         buildings = self.setup_building_reconstruction_costs(buildings)
 
-        # # write to input folder
+        # write to input folder
         self.set_geom(buildings, name="assets/open_building_map")
         # Vectorized centroid extraction
         centroids = buildings.geometry.centroid
