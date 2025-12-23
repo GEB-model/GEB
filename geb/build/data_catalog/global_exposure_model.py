@@ -77,9 +77,7 @@ class GlobalExposureModel(Adapter):
             RAW_BASE: The base URL for raw file access in the GitHub repository.
             csv_files: List of CSV file paths to download and process.
         """
-        with tempfile.TemporaryDirectory() as temp_dir_str:
-            temp_dir: Path = Path(temp_dir_str)
-
+        damages_per_sqm = []
         for csv in csv_files:
             url = RAW_BASE + quote(csv)
             print("Downloading:", csv)
@@ -94,12 +92,19 @@ class GlobalExposureModel(Adapter):
                     f.write(r.content)
                 # open the file with pandas and store as parquet
                 df = pd.read_csv(out_path)
-                damages_per_sqm = self._process_csv(df)
-                os.makedirs(self.path.parent, exist_ok=True)
-                write_dict(
-                    damages_per_sqm,
-                    self.path.with_name("global_exposure_model.json"),
-                )
+                damages_per_sqm.append(self._process_csv(df))
+
+        # merge the dictionaries stored in the list
+        merged = {}
+        for d in damages_per_sqm:
+            merged.update(d)
+
+        # and write to file
+        os.makedirs(self.path.parent, exist_ok=True)
+        write_dict(
+            merged,
+            self.path.with_name("global_exposure_model.json"),
+        )
 
     def _process_csv(self, df: pd.DataFrame) -> dict[str, dict[str, float]]:
         # Example processing: just return the dataframe as is
