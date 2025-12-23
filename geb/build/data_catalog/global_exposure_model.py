@@ -71,6 +71,12 @@ class GlobalExposureModel(Adapter):
         print(f"\nCSV files found: {len(csv_files)}")
 
     def _download_and_process_csv(self, RAW_BASE: str, csv_files: list[str]) -> None:
+        """Download and process CSV files from the repository.
+
+        Args:
+            RAW_BASE: The base URL for raw file access in the GitHub repository.
+            csv_files: List of CSV file paths to download and process.
+        """
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir: Path = Path(temp_dir_str)
 
