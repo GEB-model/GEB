@@ -70,16 +70,16 @@ class GlobalExposureModel(Adapter):
 
         print(f"\nCSV files found: {len(csv_files)}")
 
-    def _download_and_process_csv(self, RAW_BASE: str, csv_files: list[str]) -> None:
+    def _download_and_process_csv(self, raw_base: str, csv_files: list[str]) -> None:
         """Download and process CSV files from the repository.
 
         Args:
-            RAW_BASE: The base URL for raw file access in the GitHub repository.
+            raw_base: The base URL for raw file access in the GitHub repository.
             csv_files: List of CSV file paths to download and process.
         """
         damages_per_sqm = []
         for csv in csv_files:
-            url = RAW_BASE + quote(csv)
+            url = raw_base + quote(csv)
             print("Downloading:", csv)
 
             r = requests.get(url)
@@ -162,7 +162,7 @@ class GlobalExposureModel(Adapter):
         # 4. Download CSVs via raw URLs
         # ============================
 
-        RAW_BASE = (
+        raw_base = (
             f"https://raw.githubusercontent.com/gem/global_exposure_model/{branch}/"
         )
 
@@ -176,7 +176,7 @@ class GlobalExposureModel(Adapter):
             )
 
             self._filter_folders(tree, csv_files, country)
-        self._download_and_process_csv(RAW_BASE, csv_files)
+        self._download_and_process_csv(raw_base, csv_files)
 
         print("\nDone!")
 
