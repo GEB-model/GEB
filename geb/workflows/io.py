@@ -42,7 +42,7 @@ from zarr.codecs.zstd import ZstdCodec
 
 from geb.types import (
     ArrayDatetime64,
-    ArrayFloat32,
+    ArrayFloat64,
     ThreeDArray,
     ThreeDArrayFloat32,
     TwoDArray,
@@ -1100,21 +1100,21 @@ class AsyncGriddedForcingReader:
             self.thread.join(timeout=1)
 
     @property
-    def x(self) -> ArrayFloat32:
+    def x(self) -> ArrayFloat64:
         """The x-coordinates of the grid."""
         x_array = self.ds["x"]
         assert isinstance(x_array, zarr.Array)
         x = x_array[:]
-        assert isinstance(x, np.ndarray) and x.dtype == np.float32 and x.ndim == 1
+        assert isinstance(x, np.ndarray) and x.dtype == np.float64 and x.ndim == 1
         return x  # ty:ignore[invalid-return-type]
 
     @property
-    def y(self) -> ArrayFloat32:
+    def y(self) -> ArrayFloat64:
         """The y-coordinates of the grid."""
         y_array = self.ds["y"]
         assert isinstance(y_array, zarr.Array)
         y = y_array[:]
-        assert isinstance(y, np.ndarray) and y.dtype == np.float32 and y.ndim == 1
+        assert isinstance(y, np.ndarray) and y.dtype == np.float64 and y.ndim == 1
         return y  # ty:ignore[invalid-return-type]
 
 
