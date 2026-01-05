@@ -134,7 +134,7 @@ class HazardDriver:
                         threshold: int = self.config["hazards"]["floods"][
                             "discharge_threshold"
                         ]
-                        print(discharge_location)
+
                         # Check if discharge > threshold
                         if discharge_location > threshold:
                             print(
