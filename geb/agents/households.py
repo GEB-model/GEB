@@ -459,36 +459,49 @@ class Households(AgentBaseClass):
 
                     flood_map: xr.DataArray = read_zarr(flood_map_path)
 
-                    # Get the locations of the household locations and reproject to flood map
-                    households_proj = self.var.household_points.to_crs(
+                    buildings = (
+                        self.buildings.copy()
+                    )  # Make copy of buildings to be safe
+
+                    buildings_proj = buildings.to_crs(
                         flood_map.rio.crs
-                    )
+                    )  # Reproject buildings to flood map
 
-                    xs = households_proj.geometry.x.values
-                    ys = households_proj.geometry.y.values
+                    # get building centroids
+                    xs = buildings_proj.geometry.centroid.x.values
+                    ys = buildings_proj.geometry.centroid.y.values
 
-                    # Interpolate flood depths at household locations
+                    # Interpolate flood depths at building centroids
                     depths = flood_map.interp(x=("points", xs), y=("points", ys)).values
                     depths = np.nan_to_num(
                         depths, nan=0.0
                     )  # replace NaNs outside the raster with 0
 
-                    # Identify flooded households (more than 5cm of water)
-                    flooded = depths > 0.05  #
+                    # Identify flooded buildings (more than 5cm of water)
+                    buildings_proj["flooded"] = depths > 0.05
 
-                    # Print some statistics to check if the flooded households are identified correctly
-                    # print(flooded)
-                    # n_total = len(flooded)
-                    # n_true = np.sum(flooded)
-                    # n_false = n_total - n_true
-                    # print(f"Total households: {n_total}")
-                    # print(f"Flooded (True): {n_true} ({100 * n_true / n_total:.2f}%)")
-                    # print(
-                    #     f"Not flooded (False): {n_false} ({100 * n_false / n_total:.2f}%)"
-                    # )
+                    # Find households located in flooded buildings
+                    flooded_building_ids = set(
+                        buildings_proj.loc[buildings_proj["flooded"], "id"]
+                    )
+
+                    flooded_households = np.isin(
+                        self.var.building_id_of_household,
+                        list(flooded_building_ids),
+                    )
 
                     # Reset years_since_last_flood to 0 for flooded households
-                    self.var.years_since_last_flood.data[flooded] = 0
+                    self.var.years_since_last_flood.data[flooded_households] = 0
+
+                    # Some debugging print statements
+                    n_buildings = len(buildings_proj)
+                    n_flooded_buildings = buildings_proj["flooded"].sum()
+                    n_flooded_households = flooded_households.sum()
+
+                    print(
+                        f"Flooded buildings: {n_flooded_buildings}/{n_buildings}, "
+                        f"Flooded households: {n_flooded_households}"
+                    )
 
         else:
             if (
