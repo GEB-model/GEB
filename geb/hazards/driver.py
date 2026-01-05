@@ -138,7 +138,7 @@ class HazardDriver:
                         # Check if discharge > threshold
                         if discharge_location > threshold:
                             print(
-                                f"Flood detected at {self.current_time}, discharge = {discharge_location:.2f}"
+                                f"Flood detected at {self.current_time}, discharge = {discharge_location:.2f} m3/s"
                             )
 
                             start_time = self.current_time - timedelta(
