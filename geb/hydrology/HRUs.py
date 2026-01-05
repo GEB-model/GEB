@@ -1185,8 +1185,6 @@ class Data:
         if self.model.in_spinup:
             self.spinup()
 
-        self.load_water_demand()
-
     def spinup(self) -> None:
         """Spinup data class.
 
@@ -1194,15 +1192,6 @@ class Data:
         """
         self.HRU.var.cell_area = self.to_HRU(
             data=self.grid.var.cell_area, fn="weightedsplit"
-        )
-
-    def load_water_demand(self) -> None:
-        """Load water demand data."""
-        self.model.industry_water_consumption_ds: xr.Dataset = load_water_demand_xr(
-            self.model.files["other"]["water_demand/industry_water_consumption"]
-        )
-        self.model.industry_water_demand_ds: xr.Dataset = load_water_demand_xr(
-            self.model.files["other"]["water_demand/industry_water_demand"]
         )
 
     def to_HRU(
