@@ -77,6 +77,7 @@ dependencies = [
     "matplotlib>=3.10.7",
     "zensical>=0.0.13",
     "planetary-computer>=1.0.0",
+    "netcdf4==1.7.3" # fixed until https://github.com/Unidata/netcdf4-python/issues/1461 is resolved
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"
