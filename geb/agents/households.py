@@ -448,7 +448,9 @@ class Households(AgentBaseClass):
             for event in self.flood_events:
                 end: datetime = event["end_time"]
 
-                if self.model.current_time == end + timedelta(days=14):
+                if (
+                    self.model.current_time == end + timedelta(days=14)
+                ):  # Households won't start to immediately think about adapting after a flood occurs. For now an assumption, that after 2 weeks they will start adapting
                     # Open the flood map
                     flood_map_name: str = f"{event['start_time'].strftime('%Y%m%dT%H%M%S')} - {event['end_time'].strftime('%Y%m%dT%H%M%S')}.zarr"
                     flood_map_path: Path = (
