@@ -468,6 +468,7 @@ def rasterize_like(
 
     Raises:
         ValueError: If both `column` and `burn_value` are provided or if neither is provided.
+        ValueError: If the CRS of the raster and GeoDataFrame do not match.
 
     """
     if (column is None and burn_value is None) or (
@@ -494,7 +495,8 @@ def rasterize_like(
 
     geoms: gpd.GeoSeries = gdf.geometry
 
-    assert da.rio.crs == gdf.crs, "CRS of raster and GeoDataFrame must match"
+    if not da.rio.crs == gdf.crs:
+        raise ValueError("CRS of raster and GeoDataFrame must match")
 
     if burn_value is not None:
         values = [burn_value] * len(gdf)
