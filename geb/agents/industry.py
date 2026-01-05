@@ -6,7 +6,9 @@ import calendar
 from typing import TYPE_CHECKING
 
 import numpy as np
+import xarray as xr
 
+from geb.hydrology.HRUs import load_water_demand_xr
 from geb.types import ArrayFloat32
 
 from ..hydrology.landcovers import SEALED
@@ -49,6 +51,12 @@ class Industry(AgentBaseClass):
             else {}
         )
 
+        self.industry_water_consumption_ds: xr.Dataset = load_water_demand_xr(
+            self.model.files["other"]["water_demand/industry_water_consumption"]
+        )
+        self.industry_water_demand_ds: xr.Dataset = load_water_demand_xr(
+            self.model.files["other"]["water_demand/industry_water_demand"]
+        )
         if self.model.in_spinup:
             self.spinup()
 
@@ -93,7 +101,7 @@ class Industry(AgentBaseClass):
             days_in_year = 366 if calendar.isleap(self.model.current_time.year) else 365
 
             water_demand = (
-                self.model.industry_water_demand_ds.sel(
+                self.industry_water_demand_ds.sel(
                     time=self.model.current_time, method="ffill", tolerance="366D"
                 ).industry_water_demand
                 * 1_000_000
@@ -126,7 +134,7 @@ class Industry(AgentBaseClass):
             )
 
             water_consumption = (
-                self.model.industry_water_consumption_ds.sel(
+                self.industry_water_consumption_ds.sel(
                     time=self.model.current_time, method="ffill"
                 ).industry_water_consumption
                 * 1_000_000
@@ -180,7 +188,7 @@ class Industry(AgentBaseClass):
         """
         if (
             np.datetime64(self.model.current_time, "ns")
-            in self.model.industry_water_consumption_ds.time
+            in self.industry_water_consumption_ds.time
         ):
             water_demand, efficiency = self.update_water_demand()
             self.var.current_water_demand = water_demand

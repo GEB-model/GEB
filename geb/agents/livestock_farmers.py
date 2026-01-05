@@ -66,12 +66,12 @@ class LiveStockFarmers(AgentBaseClass):
             else {}
         )
 
-        if self.model.in_spinup:
-            self.spinup()
-
         self.livestock_water_consumption_ds: xr.Dataset = load_water_demand_xr(
             self.model.files["other"]["water_demand/livestock_water_consumption"]
         )
+
+        if self.model.in_spinup:
+            self.spinup()
 
     @property
     def name(self) -> str:
