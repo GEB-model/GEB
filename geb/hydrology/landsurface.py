@@ -526,9 +526,6 @@ def land_surface_model(
     transpiration_m = np.nan_to_num(transpiration_m)
     potential_transpiration_m = np.nan_to_num(potential_transpiration_m)
 
-    print(np.nanmean(groundwater_recharge_m))
-    print("bare soil evaporation", np.nanmean(bare_soil_evaporation))
-
     return (
         rain_m,
         snow_m,
