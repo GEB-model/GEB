@@ -2134,14 +2134,16 @@ class Households(AgentBaseClass):
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
 
         if self.config["adapt"]:
-            # print(buildings["flooded"].value_counts())
-            # print(buildings["flood_proofed"].value_counts())
-            household_points = gpd.sjoin_nearest(
-                household_points,
-                buildings[["geometry", "flood_proofed"]],
+            household_points["building_id"] = (
+                self.var.building_id_of_household
+            )  # first assign building id to household points gdf
+            household_points = household_points.merge(
+                buildings[["id", "flood_proofed"]],
+                left_on="building_id",
+                right_on="id",
                 how="left",
-                distance_col=None,  # optional
-            )
+            )  # now merge to get flood proofed status
+
             buildings_centroid = household_points.to_crs(flood_depth.rio.crs)
 
             buildings_centroid["maximum_damage"] = self.var.max_dam_buildings_content
