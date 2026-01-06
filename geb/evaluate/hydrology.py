@@ -535,7 +535,7 @@ class Hydrology:
                 # Get available years from validation_df (intersection of obs & sim time range)
                 if include_yearly_plots:
                     print("yearly plots!!!")
-                    years_to_plot = sorted(validation_df.index.year.unique())
+                    years_to_plot = sorted(validation_df.index.year.unique())  # ty:ignore[possibly-missing-attribute]
                     print(years_to_plot)
                     for year in years_to_plot:
                         # Filter data for the current year
@@ -1409,7 +1409,7 @@ class Hydrology:
 
         def parse_flood_forecast_initialisation(
             filename: str,
-        ) -> tuple[str | None, str | None, str, str, str]:
+        ) -> tuple[str | None, str | None, str, str, str] | None:
             """Parse flood map filename to extract components.
 
             Expected format: YYYYMMDDTHHMMSS - MEMBER - EVENT_START - EVENT_END.zarr
@@ -1453,7 +1453,7 @@ class Hydrology:
                     f"Skipping file '{filename}': does not match expected flood map format.",
                     RuntimeWarning,
                 )
-                return None
+                return
 
             return forecast_init, member, event_start, event_end, event_name
 
@@ -2126,7 +2126,7 @@ class Hydrology:
                 observation_files = [Path(obs_raw)]
             else:
                 observation_files = [Path(p) for p in obs_raw]
-            obs_file: Path = find_exact_observation_file(event_name, observation_files)
+            obs_file = find_exact_observation_file(event_name, observation_files)
 
             # check if observation file exists, if not, raise an error
             if obs_file is None:
