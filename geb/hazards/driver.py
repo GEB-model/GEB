@@ -94,21 +94,21 @@ class HazardDriver(Module):
             if self.model.config["hazards"]["floods"]["events"] is None:
                 return
 
-            if self.config["hazards"]["floods"]["detect_floods_from_discharge"]:
+            if self.model.config["hazards"]["floods"]["detect_floods_from_discharge"]:
                 print("Detecting floods from discharge...")
                 if self.model.in_spinup:
                     return
                 else:
                     if (
                         self.next_detection_time
-                        and self.current_time < self.next_detection_time
+                        and self.model.current_time < self.next_detection_time
                     ):
                         print(
                             "Flood has recently happened, no detection"
                         )  # Within 10 days of the first flood, no second flood can happen
                     else:
                         discharge_grid: ThreeDArrayFloat32 = (
-                            self.hydrology.grid.decompress(
+                            self.model.hydrology.grid.decompress(
                                 np.vstack(list(self.floods.var.discharge_per_timestep))
                             )
                         )
@@ -121,8 +121,8 @@ class HazardDriver(Module):
                         discharge_grid: xr.DataArray = xr.DataArray(
                             data=discharge_grid_current_timestep,
                             coords={
-                                "y": self.hydrology.grid.lat,
-                                "x": self.hydrology.grid.lon,
+                                "y": self.model.hydrology.grid.lat,
+                                "x": self.model.hydrology.grid.lon,
                             },
                             dims=["y", "x"],
                             name="forcing",
@@ -133,7 +133,7 @@ class HazardDriver(Module):
                         )
 
                         # Get location of the threshold from config file
-                        threshold_location: tuple[float, float] = self.config[
+                        threshold_location: tuple[float, float] = self.model.config[
                             "hazards"
                         ]["floods"]["threshold_location"]
                         x, y = threshold_location
@@ -145,26 +145,26 @@ class HazardDriver(Module):
 
                         self.discharge_log.append(
                             {
-                                "time": self.current_time,
+                                "time": self.model.current_time,
                                 "discharge": float(discharge_location.values),
                             }
                         )
 
                         # Load in discharge_threshold after which there is a flood from the config file
-                        threshold: int = self.config["hazards"]["floods"][
+                        threshold: int = self.model.config["hazards"]["floods"][
                             "discharge_threshold"
                         ]
 
                         # Check if discharge > threshold
                         if discharge_location > threshold:
                             print(
-                                f"Flood detected at {self.current_time}, discharge = {discharge_location:.2f} m3/s"
+                                f"Flood detected at {self.model.current_time}, discharge = {discharge_location:.2f} m3/s"
                             )
 
-                            start_time = self.current_time - timedelta(
+                            start_time = self.model.current_time - timedelta(
                                 days=5
                             )  # Here we assume a flood duration of 10 days
-                            end_time = self.current_time + timedelta(days=5)
+                            end_time = self.model.current_time + timedelta(days=5)
 
                             new_event_mem = {
                                 "start_time": start_time,
@@ -176,7 +176,7 @@ class HazardDriver(Module):
                                 "end_time": end_time.strftime("%Y-%m-%d %H:%M:%S"),
                             }
 
-                            hazards_cfg = self.config.setdefault("hazards", {})
+                            hazards_cfg = self.model.config.setdefault("hazards", {})
                             floods_cfg = hazards_cfg.setdefault("floods", {})
                             events_mem = floods_cfg.setdefault("events", [])
 
@@ -218,8 +218,8 @@ class HazardDriver(Module):
                             else:
                                 print("Flood event already in model.yml.")
 
-                            self.next_detection_time = self.current_time + timedelta(
-                                days=10
+                            self.next_detection_time = (
+                                self.model.current_time + timedelta(days=10)
                             )
 
                     end_time: datetime = datetime.combine(
@@ -233,7 +233,7 @@ class HazardDriver(Module):
                             index=False,
                         )
 
-            for event in self.config["hazards"]["floods"]["events"]:
+            for event in self.model.config["hazards"]["floods"]["events"]:
                 assert isinstance(event["start_time"], datetime), (
                     f"Start time {event['start_time']} must be a datetime object."
                 )
