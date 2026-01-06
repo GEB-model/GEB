@@ -4,6 +4,10 @@
 - Fix JSON serialization error in hash file generation by properly converting NumPy scalar types (bool, int, float) to Python native types.
 - Update to new SFINCS version.
 - Migrated documentation to mkdocs
+- Added a new option to detect floods based on actual discharge values from the hydrological model
+- Added a new option so that households can adapt to actual floods in the model
+- Implemented a simple version on runoff concentration so runoff is slowed down on its way to become discharge
+- Updated the performance_hydrodynamics function so it uses a list of observation files and matches these to the right flood map per event from sfincs. The name of the observation file has to be the same of the flood event (i.e. startdate - enddate.zarr)
 
 # v1.0.0b8
 - Improve model startup time

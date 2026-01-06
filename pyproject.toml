@@ -75,6 +75,7 @@ dependencies = [
     "osmnx>=2.0.6",
     "joblib>=1.5.2",
     "matplotlib>=3.10.7",
+    "netcdf4==1.7.3" 
 ]
 requires-python = ">=3.13, <3.14"
 readme = "README.md"
