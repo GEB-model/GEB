@@ -31,7 +31,6 @@ from pyflwdir.dem import fill_depressions
 from scipy.ndimage import value_indices
 from shapely import line_locate_point
 from shapely.geometry import MultiPoint, Point
-from tqdm import tqdm
 
 from geb.hydrology.routing import get_river_width
 from geb.types import (
@@ -59,10 +58,6 @@ from geb.workflows.raster import (
 
 from .workflows import get_river_depth, get_river_manning
 from .workflows.outflow import create_outflow_in_mask
-from .workflows.return_periods import (
-    assign_calculation_group,
-    get_topological_stream_order,
-)
 from .workflows.utils import (
     assign_return_periods,
     create_hourly_hydrograph,
@@ -70,7 +65,6 @@ from .workflows.utils import (
     get_discharge_and_river_parameters_by_river,
     get_representative_river_points,
     get_start_point,
-    import_rivers,
     make_relative_paths,
     read_flood_depth,
     run_sfincs_simulation,
@@ -213,7 +207,7 @@ class SFINCSRootModel:
             current_hash: str = create_hash_from_parameters(
                 parameters, code_path=Path(__file__)
             )
-            if hash_file.exists():
+            if hash_file.exists() and (self.path / "sfincs.inp").exists():
                 previous_hash = read_hash(hash_file)
                 if previous_hash == current_hash:
                     print("Model and SFINCS code unchanged, reading existing model...")
@@ -498,9 +492,10 @@ class SFINCSRootModel:
 
         # write all components, except forcing which must be done after the model building
         sf.write_grid()
+        sf.write_subgrid()
         sf.write_geoms()
+        sf.write_states()
         sf.write_config()
-        sf.write()
 
         self.region.to_parquet(self.path / "region.geoparquet")
         self.rivers.to_parquet(self.path / "rivers.geoparquet")
@@ -546,12 +541,19 @@ class SFINCSRootModel:
         self.rivers["outflow_point_xy"] = None
         self.rivers["is_outflow_boundary"] = False
 
-        for river_idx, river in self.rivers.iterrows():
+        for river_idx, river in self.rivers[
+            self.rivers["is_downstream_outflow_basin"]
+        ].iterrows():
             # outflow point is the intersection of the river geometry with the region boundary
             # this will be used as the central point of the outflow boundary condition
-            subbasin_boundary = self.region.loc[river_idx]
+            subbasin_boundary: gpd.GeoDataFrame = self.region[
+                self.region.index == river_idx
+            ]
+            assert len(subbasin_boundary) == 1, (
+                "Subbasin boundary must be a single geometry"
+            )
             outflow_point: Point | MultiPoint = river.geometry.intersection(
-                subbasin_boundary.geometry.boundary
+                subbasin_boundary.iloc[0].geometry.boundary
             )
             if not isinstance(outflow_point, Point):
                 export_diagnostics()
@@ -601,6 +603,7 @@ class SFINCSRootModel:
                 outflow_point.x,
                 outflow_point.y,
             )
+            self.rivers.at[river_idx, "is_outflow_boundary"] = True
 
     def setup_river_outflow_boundary(
         self,
@@ -925,7 +928,7 @@ class SFINCSRootModel:
             **kwargs,
         )
 
-    def create_coastal_simulation(
+    def create_coastal_return_period_simulation(
         self, return_period: int, locations: gpd.GeoDataFrame, offset: xr.DataArray
     ) -> SFINCSSimulation:
         """
@@ -977,165 +980,6 @@ class SFINCSRootModel:
             timeseries=timeseries, locations=locations_copy, offset=offset
         )
         return simulation
-
-    def create_simulation_for_return_period(
-        self,
-        return_period: int,
-        locations: gpd.GeoDataFrame,
-        offset: xr.DataArray,
-        coastal: bool = False,
-        coastal_only: bool = False,
-    ) -> MultipleSFINCSSimulations:
-        """Creates multiple SFINCS simulations for a specified return period.
-
-        The method groups rivers by their calculation group and creates a separate
-        simulation for each group. Each simulation is configured with discharge
-        hydrographs corresponding to the specified return period.
-
-        Args:
-            return_period: The return period for which to create simulations.
-            locations: A GeoDataFrame containing the locations of GTSM forcing stations.
-            offset: The offset to apply to the coastal water level forcing based on mean sea level topography.
-            coastal: Whether to create a coastal simulation.
-            coastal_only: Whether to only include coastal subbasins in the model.
-
-        Returns:
-            An instance of MultipleSFINCSSimulations containing the created simulations.
-                This class aims to emulate a single SFINCSSimulation instance as if
-                it was one.
-        """
-        working_dir: Path = self.path / "working_dir"
-        working_dir_return_period: Path = working_dir / f"rp_{return_period}"
-
-        print(f"Running SFINCS for return period {return_period} years")
-        simulations: list[SFINCSSimulation] = []
-
-        # create coastal simulation
-        if coastal:
-            simulation: SFINCSSimulation = self.create_coastal_simulation(
-                return_period, locations, offset
-            )
-            simulations.append(simulation)
-        if coastal_only:
-            return MultipleSFINCSSimulations(simulations=simulations)
-
-        rivers: gpd.GeoDataFrame = import_rivers(self.path, postfix="_return_periods")
-        assert (~rivers["is_downstream_outflow_subbasin"]).all()
-
-        rivers["topological_stream_order"] = get_topological_stream_order(rivers)
-        rivers: gpd.GeoDataFrame = assign_calculation_group(rivers)
-
-        # create river inflow simulations
-        for group, group_rivers in tqdm(rivers.groupby("calculation_group")):
-            simulation_root = working_dir_return_period / str(group)
-
-            shutil.rmtree(simulation_root, ignore_errors=True)
-            simulation_root.mkdir(parents=True, exist_ok=True)
-
-            inflow_nodes = group_rivers.copy()
-            # Keep the original index (river IDs) so they don't collide with existing forcing points.
-            inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(get_start_point)
-
-            # Build list of hydrograph DataFrames using the original node indices as column names
-            Q: list[pd.DataFrame] = []
-            for node_idx in inflow_nodes.index:
-                hydro = inflow_nodes.at[node_idx, f"hydrograph_{return_period}"]
-                # hydro is expected to be dict-like {iso_timestamp: Q} — convert to DataFrame with column named node_idx
-                df = pd.DataFrame.from_dict(
-                    hydro, orient="index", columns=np.array([node_idx])
-                )
-                Q.append(df)
-
-            # Concatenate the per-node series into a single DataFrame; index -> timestamps
-            Q: pd.DataFrame = pd.concat(Q, axis=1)
-            Q.index = pd.to_datetime(Q.index)
-
-            assert not np.isnan(Q.values).any(), (
-                "NaN values found in discharge hydrographs"
-            )
-
-            simulation: SFINCSSimulation = self.create_simulation(
-                simulation_name=f"rp_{return_period}_group_{group}",
-                start_time=Q.index[0],
-                end_time=Q.index[-1],
-            )
-
-            # to keep the calculation groups separated, we need to set up thin dams
-            # between the model domains
-            subbasin_boundaries = []
-            for idx, river in group_rivers.iterrows():
-                downstream_ID = river["downstream_ID"]
-                # skip if the downstream ID is a coastal outflow (-1)
-                if downstream_ID == -1:
-                    continue
-                # skip if the downstream subbasin is the outflow subbasin
-                # in this case it is the model boundary anyway
-                downstream_river = self.rivers.loc[downstream_ID]
-                if downstream_river["is_downstream_outflow_subbasin"]:
-                    continue
-
-                downstream_subbasin = self.region.loc[downstream_ID]
-
-                # since the outflow subbbasin is already excluded,
-                # we can safely get the current subbasin
-                downstream_downstream_subbasin = self.region.loc[
-                    downstream_river["downstream_ID"]
-                ]
-
-                # get all basins that drain into the downstream downstream subbasin
-                other_contributing_rivers = self.rivers[
-                    (self.rivers["downstream_ID"] == downstream_river["downstream_ID"])
-                    & (self.rivers.index != downstream_ID)
-                ]
-                other_contributing_subbasins = self.region.loc[
-                    other_contributing_rivers.index
-                ].unary_union
-
-                if self.is_geographic:
-                    buffer = 0.00001  # ~1 m buffer for geographic coordinates
-                else:
-                    buffer = 1.0  # 1 m buffer for projected coordinates
-
-                # get the overlapping boundary between the downstream subbasin
-                # and all contributing subbasins.
-                outflow_boundary_geometry_contributing_basins = (
-                    downstream_subbasin.geometry.boundary.intersection(
-                        other_contributing_subbasins.buffer(buffer)
-                    )
-                )
-                subbasin_boundaries.append(
-                    outflow_boundary_geometry_contributing_basins
-                )
-
-                outflow_boundary_geometry_downstream_basin = (
-                    downstream_downstream_subbasin.geometry.boundary.intersection(
-                        downstream_subbasin.geometry.buffer(buffer)
-                    )
-                )
-                subbasin_boundaries.append(outflow_boundary_geometry_downstream_basin)
-
-            # Create a GeoDataFrame from the list of linestring geometries representing subbasin boundaries.
-            # This ensures proper handling of the geometries as a GeoDataFrame for further processing,
-            # such as setting up thin dams in the simulation.
-            subbasin_boundaries: gpd.GeoDataFrame = (
-                gpd.GeoDataFrame(
-                    geometry=subbasin_boundaries,
-                    crs=self.rivers.crs,
-                )
-                .explode(index_parts=False)
-                .reset_index(drop=True)
-            )  # ty:ignore[invalid-assignment]
-
-            simulation.setup_thin_dams(subbasin_boundaries)
-
-            simulation.set_discharge_forcing_from_nodes(
-                nodes=inflow_nodes.to_crs(self.sfincs_model.crs),
-                timeseries=Q,
-            )
-
-            simulations.append(simulation)
-
-        return MultipleSFINCSSimulations(simulations=simulations)
 
     @property
     def active_cells(self) -> xr.DataArray:
