@@ -252,6 +252,7 @@ class GridVariables(Bucket):
     discharge_m3_s_substep: ArrayFloat32
     river_width_alpha: ArrayFloat32
     river_width_beta: ArrayFloat32
+    buffer: TwoDArrayFloat64
 
 
 class Grid(BaseVariables):
