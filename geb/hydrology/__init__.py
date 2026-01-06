@@ -29,14 +29,14 @@ import numpy as np
 
 from geb.hydrology.HRUs import Data
 from geb.module import Module
-from geb.types import TwoDArrayFloat32
+from geb.types import TwoDArrayFloat32 as TwoDArrayFloat32
 from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion
 from .groundwater import GroundWater
 from .landsurface import LandSurface
 from .routing import Routing
-from .runoff_concentration import concentrate_runoff
+from .runoff_concentration import RunoffConcentrator
 from .water_demand import WaterDemand
 from .waterbodies import WaterBodies
 
@@ -72,6 +72,7 @@ class Hydrology(Data, Module):
         self.waterbodies = WaterBodies(self.model, self)
         self.water_demand = WaterDemand(self.model, self)
         self.hillslope_erosion = HillSlopeErosion(self.model, self)
+        self.runoff_concentrator = RunoffConcentrator(self.model, self)
 
     def get_current_storage(self) -> np.float64:
         """Get the current water storage in the hydrological system.
@@ -101,6 +102,7 @@ class Hydrology(Data, Module):
             .sum()
             + self.waterbodies.var.storage.astype(np.float64).sum()
             + self.groundwater.groundwater_content_m3.astype(np.float64).sum()
+            + self.runoff_concentrator.overland_runoff_storage_end_m3  # is already a float64
         )
 
     def step(self) -> None:
@@ -222,9 +224,10 @@ class Hydrology(Data, Module):
 
         timer.finish_split("GW")
 
-        total_runoff_m: TwoDArrayFloat32 = concentrate_runoff(
-            interflow_m, baseflow_m, overland_runoff_m
+        self.grid.var.total_runoff_m = self.runoff_concentrator.step(
+            interflow=interflow_m, baseflow=baseflow_m, runoff=overland_runoff_m
         )
+
         timer.finish_split("Runoff concentration")
 
         routing_loss_m3, over_abstraction_m3 = self.routing.step(

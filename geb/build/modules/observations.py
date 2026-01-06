@@ -180,6 +180,7 @@ def add_station_Q_obs(
             "id": [station_id],  # Assign the station ID
         },
     )
+
     # Add the new station to the Q_obs dataset
     Q_obs_merged = xr.concat([Q_obs, new_station_ds], dim="id")
 
@@ -393,7 +394,6 @@ class Observations(BuildModelBase):
                     raise ValueError(f"File {station} is not a csv file")
                 else:
                     station_name = station[:-4]
-
                     if not (
                         Path(self.root).parent / Path(custom_river_stations)
                     ).is_dir():
@@ -427,6 +427,7 @@ class Observations(BuildModelBase):
                             station_coords,
                             Q_station,
                         )  # name, coordinates, dataframe
+
                     else:
                         station_id = int(
                             Q_obs.id.values[Q_obs.station_name.values == station_name][

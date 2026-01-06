@@ -1072,6 +1072,10 @@ class Bucket:
                     compression_level=9,
                 )
             elif isinstance(value, (list, dict, float, int, str, datetime)):
+                if isinstance(value, np.generic):
+                    value = (
+                        value.item()
+                    )  # If it's a numpy scalar, convert to native Python type
                 with open((path / name).with_suffix(".yml"), "w") as f:
                     yaml.safe_dump(value, f, default_flow_style=False)
             elif isinstance(value, np.ndarray):
