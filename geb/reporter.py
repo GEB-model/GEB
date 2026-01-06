@@ -529,7 +529,6 @@ class Reporter:
         elif np.isscalar(value):
             value = value.item()
             assert not np.isnan(value) and not np.isinf(value)
-
         self.process_value(module_name, name, value, config)
 
     def process_value(
@@ -755,7 +754,11 @@ class Reporter:
                         else -1,
                     )
                 # Batch write
-                config["_buffers"].append((index, value))
+                arr = value.data if isinstance(value, DynamicArray) else value
+                arr = arr.copy()
+                config["_buffers"].append((index, arr))
+                if name == "irrigation_efficiency":
+                    pass
                 if len(config["_buffers"]) == ZARR_TIME_CHUNK_SIZE:
                     self._flush_buffer_agents(config, name)
                 return None
@@ -822,6 +825,8 @@ class Reporter:
         time_indices = np.array([t for t, v in buffer])
         values = np.stack([v for t, v in buffer])
         zarr_group[name][time_indices] = values
+        if name == "irrigation_efficiency":
+            pass
         config["_buffers"] = []
 
     def finalize(self) -> None:
