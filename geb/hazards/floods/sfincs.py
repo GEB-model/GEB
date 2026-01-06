@@ -89,7 +89,6 @@ class SFINCSRootModel:
         and has methods to create simulations with actual forcing.
 
         Args:
-            files: A dictionary containing file paths for model components.
             root: The root directory for all SFINCS models.
             name: A string representing the name of the event (e.g., "flood_event_2023").
                 Also used to create the path to write the file to disk.
@@ -814,7 +813,6 @@ class SFINCSRootModel:
         """Estimate discharge for specified return periods and create hydrographs.
 
         Args:
-            model_root: path to the SFINC model root directory
             discharge: xr.DataArray containing the discharge data
             rivers: GeoDataFrame containing river segments
             rising_limb_hours: number of hours for the rising limb of the hydrograph.
