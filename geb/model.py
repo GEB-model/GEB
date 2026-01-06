@@ -48,6 +48,7 @@ class GEBModel(Module):
     """
 
     var: GEBModelVariables
+    plantFATE: list[Any]
 
     def __init__(
         self,
