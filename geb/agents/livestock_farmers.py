@@ -111,7 +111,9 @@ class LiveStockFarmers(AgentBaseClass):
         # transform from mio m3 per year to m3/day
         water_consumption = (
             self.livestock_water_consumption_ds.sel(
-                time=self.model.current_time, method="ffill", tolerance="366D"
+                time=self.model.current_time,
+                method="ffill",
+                tolerance="366D",  # ty:ignore[invalid-argument-type]
             ).livestock_water_consumption
             * 1_000_000
             / days_in_year

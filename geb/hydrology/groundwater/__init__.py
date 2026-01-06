@@ -197,7 +197,9 @@ class GroundWater(Module):
         channel_ratio = np.float32(1.0)
 
         # this is the capillary rise for the NEXT timestep
-        self.grid.var.capillar = groundwater_drainage * (1 - channel_ratio)
+        self.grid.var.capillar = (groundwater_drainage * (1 - channel_ratio)).astype(
+            np.float32
+        )
         baseflow = (groundwater_drainage * channel_ratio).astype(np.float32)
 
         self.report(locals())

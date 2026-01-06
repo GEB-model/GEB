@@ -5637,7 +5637,7 @@ class CropFarmers(AgentBaseClass):
 
     def add_agent(
         self,
-        indices: tuple[np.ndarray, np.ndarray],
+        indices: ArrayInt32,
         values: dict[str, object] = {
             "risk_aversion": 1,
             "interest_rate": 1,
@@ -5688,7 +5688,7 @@ class CropFarmers(AgentBaseClass):
             values: Per-array initialization values
                 keyed by agent array name.
         """
-        HRU = self.model.hydrology.HRU.split(indices)
+        HRU = self.model.hydrology.split(indices)
         assert self.HRU.var.land_owners[HRU] == -1, "There is already a farmer here."
         self.HRU.var.land_owners[HRU] = self.var.n
 

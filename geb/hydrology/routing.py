@@ -1122,7 +1122,7 @@ class Routing(Module):
             )[~self.grid.mask]
 
         # kinematic wave parameter: 0.6 is for broad sheet flow
-        self.var.river_beta = 0.6  # TODO: Make this a parameter
+        self.var.river_beta = np.float32(0.6)  # TODO: Make this a parameter
 
         # Channel Manning's n
         self.grid.var.river_mannings = (

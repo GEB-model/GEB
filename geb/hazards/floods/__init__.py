@@ -246,7 +246,7 @@ class Floods(Module):
         self,
         name: str,
         rivers: gpd.GeoDataFrame,
-        region: gpd.GeoDataFrame | None = None,
+        region: gpd.GeoDataFrame,
         coastal: bool = False,
         low_elevation_coastal_zone_mask: gpd.GeoDataFrame | None = None,
         coastal_boundary_exclude_mask: gpd.GeoDataFrame | None = None,
@@ -275,9 +275,6 @@ class Floods(Module):
             entry["elevtn"] = read_zarr(
                 self.model.files["other"][entry["path"]]
             ).to_dataset(name="elevtn")
-
-        if region is None:
-            region = read_geom(self.model.files["geom"]["routing/subbasins"])
 
         sfincs_model.build(
             region=region,
@@ -461,9 +458,12 @@ class Floods(Module):
                 rivers.loc[rivers.index.isin(group)]["downstream_ID"]
             )
             subbasins_group = subbasins[subbasins.index.isin(group)]
+            rivers_group = rivers[rivers.index.isin(group)]
 
             sfincs_root_model = self.build(
-                f"group_{group_id}", subbasins_group
+                f"group_{group_id}",
+                rivers=rivers_group,
+                region=subbasins_group,
             )  # build or read the model
             sfincs_simulation = self.set_forcing(  # set the forcing
                 sfincs_root_model, start_time, end_time
@@ -492,7 +492,7 @@ class Floods(Module):
         )  # save the flood depth to a zarr file
 
         # This check is done to compute damages (using ERA5) only after multiverse is finished
-        if self.model.multiverse_name is None:
+        if self.model.multiverse_name is None and self.model.config["forecasts"]["use"]:
             print("Multiverse no longer active, now compute flood damages...")
             self.model.agents.households.flood(flood_depth=flood_depth)
 
@@ -572,8 +572,10 @@ class Floods(Module):
         if not coastal_only:
             sfincs_inland_root_models: list[SFINCSRootModel] = []
 
-            for subbasin_id, subbasin in subbasins.iterrows():
-                downstream_basin = subbasin["downstream_ID"]
+            for subbasin_id, subbasin in subbasins[
+                ~subbasins["is_downstream_outflow_subbasin"]
+            ].iterrows():
+                downstream_basin = rivers.loc[subbasin_id]["downstream_ID"]
 
                 region_subbasins = subbasins[
                     subbasins.index.isin([subbasin_id, downstream_basin])
@@ -582,6 +584,9 @@ class Floods(Module):
                     downstream_basin, "is_downstream_outflow_subbasin"
                 ] = True
                 region_rivers = rivers[rivers.index.isin(region_subbasins.index)]
+                region_rivers.at[downstream_basin, "is_downstream_outflow_subbasin"] = (
+                    True
+                )
 
                 sfincs_inland_root_model = self.build(
                     name=f"inland_subbasin_{subbasin_id}",
@@ -591,7 +596,6 @@ class Floods(Module):
                 )
                 sfincs_inland_root_model.estimate_discharge_for_return_periods(
                     discharge=self.discharge_spinup_ds,
-                    rivers=region_rivers,
                     return_periods=self.config["return_periods"],
                 )
                 sfincs_inland_root_models.append(sfincs_inland_root_model)
@@ -609,9 +613,11 @@ class Floods(Module):
 
             if not coastal_only:
                 for sfincs_inland_root_model in sfincs_inland_root_models:
-                    inflow_nodes = sfincs_inland_root_model.region[
-                        ~rivers["is_downstream_outflow_subbasin"]
-                    ].copy()
+                    inflow_nodes = sfincs_inland_root_model.rivers[
+                        ~sfincs_inland_root_model.rivers[
+                            "is_downstream_outflow_subbasin"
+                        ]
+                    ]
                     inflow_nodes["geometry"] = inflow_nodes["geometry"].apply(
                         get_start_point
                     )

@@ -11,7 +11,7 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 
-from geb.types import ArrayFloat32, ThreeDArrayFloat32
+from geb.types import ArrayFloat32, ArrayFloat64, ThreeDArrayFloat32
 from geb.workflows.io import read_grid
 
 from .module import Module
@@ -22,10 +22,10 @@ if TYPE_CHECKING:
 
 
 def generate_bilinear_interpolation_weights(
-    src_x: ArrayFloat32,
-    src_y: ArrayFloat32,
-    tgt_x: ArrayFloat32,
-    tgt_y: ArrayFloat32,
+    src_x: ArrayFloat64,
+    src_y: ArrayFloat64,
+    tgt_x: ArrayFloat64,
+    tgt_y: ArrayFloat64,
 ) -> tuple[ArrayFloat32, ArrayFloat32]:
     """
     Generates indices and weights for bilinear interpolation.

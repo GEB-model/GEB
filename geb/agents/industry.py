@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import calendar
+import datetime
 from typing import TYPE_CHECKING
 
 import numpy as np
 import xarray as xr
 
 from geb.hydrology.HRUs import load_water_demand_xr
+from geb.store import Bucket
 from geb.types import ArrayFloat32
 
 from ..hydrology.landcovers import SEALED
@@ -17,6 +19,14 @@ from .general import AgentBaseClass, downscale_volume
 if TYPE_CHECKING:
     from geb.agents import Agents
     from geb.model import GEBModel
+
+
+class IndustryVariables(Bucket):
+    """Variables for the LivestockFarmers agent."""
+
+    current_water_demand: ArrayFloat32
+    current_efficiency: ArrayFloat32
+    last_water_demand_update: datetime.datetime
 
 
 class Industry(AgentBaseClass):
@@ -30,6 +40,8 @@ class Industry(AgentBaseClass):
         model: The GEB model.
         agents: The class that includes all agent types (allowing easier communication between agents).
     """
+
+    var: IndustryVariables
 
     def __init__(self, model: GEBModel, agents: Agents) -> None:
         """Initialize the Industry agent module.
@@ -102,7 +114,9 @@ class Industry(AgentBaseClass):
 
             water_demand = (
                 self.industry_water_demand_ds.sel(
-                    time=self.model.current_time, method="ffill", tolerance="366D"
+                    time=self.model.current_time,
+                    method="ffill",
+                    tolerance="366D",  # ty:ignore[invalid-argument-type]
                 ).industry_water_demand
                 * 1_000_000
                 / days_in_year

@@ -28,6 +28,7 @@ from hydromt_sfincs import SfincsModel
 from hydromt_sfincs.workflows import burn_river_rect
 from pyflwdir import FlwdirRaster
 from pyflwdir.dem import fill_depressions
+from rioxarray.merge import merge_arrays
 from scipy.ndimage import value_indices
 from shapely import line_locate_point
 from shapely.geometry import MultiPoint, Point
@@ -547,7 +548,7 @@ class SFINCSRootModel:
         self.rivers["is_outflow_boundary"] = False
 
         for river_idx, river in self.rivers[
-            self.rivers["is_downstream_outflow_basin"]
+            self.rivers["is_downstream_outflow_subbasin"]
         ].iterrows():
             # outflow point is the intersection of the river geometry with the region boundary
             # this will be used as the central point of the outflow boundary condition
@@ -617,6 +618,9 @@ class SFINCSRootModel:
 
         Uses pre-calculated outflow points to set up boundary conditions for
         downstream-most rivers.
+
+        Raises:
+            ValueError: if no downstream-most rivers are found for outflow boundary setup.
         """
         downstream_most_rivers: gpd.GeoDataFrame = self.rivers.loc[
             self.rivers["is_downstream_outflow_subbasin"]
@@ -624,7 +628,9 @@ class SFINCSRootModel:
         ]
 
         if downstream_most_rivers.empty:
-            return
+            raise ValueError(
+                "No downstream-most rivers found for outflow boundary setup"
+            )
 
         for river_idx, river in downstream_most_rivers.iterrows():
             outflow_point_xy = river["outflow_point_xy"]
@@ -842,7 +848,6 @@ class SFINCSRootModel:
     def estimate_discharge_for_return_periods(
         self,
         discharge: xr.DataArray,
-        rivers: gpd.GeoDataFrame,
         rising_limb_hours: int = 72,
         return_periods: list[int | float] = [2, 5, 10, 20, 50, 100, 250, 500, 1000],
     ) -> None:
@@ -850,38 +855,37 @@ class SFINCSRootModel:
 
         Args:
             discharge: xr.DataArray containing the discharge data
-            rivers: GeoDataFrame containing river segments
             rising_limb_hours: number of hours for the rising limb of the hydrograph.
             return_periods: list of return periods for which to estimate discharge.
         """
         recession_limb_hours: int = rising_limb_hours
 
         # here we only select the rivers that have an upstream forcing point
-        rivers_with_forcing_point: gpd.GeoDataFrame = rivers[
-            ~rivers["is_downstream_outflow_subbasin"]
+        rivers_with_return_period: gpd.GeoDataFrame = self.rivers[
+            ~self.rivers["is_downstream_outflow_subbasin"]
         ]
 
         river_representative_points: list[list[tuple[int, int]]] = []
-        for ID in rivers_with_forcing_point.index:
+        for ID in rivers_with_return_period.index:
             river_representative_points.append(
-                get_representative_river_points(ID, rivers_with_forcing_point)
+                get_representative_river_points(ID, rivers_with_return_period)
             )
 
         discharge_by_river, _ = get_discharge_and_river_parameters_by_river(
-            rivers_with_forcing_point.index,
+            rivers_with_return_period.index,
             river_representative_points,
             discharge=discharge,
         )
-        rivers_with_forcing_point: gpd.GeoDataFrame = assign_return_periods(
-            rivers_with_forcing_point, discharge_by_river, return_periods=return_periods
+        rivers_with_return_period: gpd.GeoDataFrame = assign_return_periods(
+            rivers_with_return_period, discharge_by_river, return_periods=return_periods
         )
 
         for return_period in return_periods:
-            rivers_with_forcing_point[f"hydrograph_{return_period}"] = None
+            self.rivers[f"hydrograph_{return_period}"] = None
 
-        for river_idx in rivers_with_forcing_point.index:
+        for river_idx in rivers_with_return_period.index:
             for return_period in return_periods:
-                discharge_for_return_period = rivers_with_forcing_point.at[
+                discharge_for_return_period = rivers_with_return_period.at[
                     river_idx, f"Q_{return_period}"
                 ]
                 hydrograph: pd.DataFrame = create_hourly_hydrograph(
@@ -893,11 +897,9 @@ class SFINCSRootModel:
                     time.isoformat(): Q.item()  # ty: ignore[unresolved-attribute]
                     for time, Q in hydrograph.iterrows()
                 }
-                rivers_with_forcing_point.at[
-                    river_idx, f"hydrograph_{return_period}"
-                ] = hydrograph
+                self.rivers.at[river_idx, f"hydrograph_{return_period}"] = hydrograph
 
-        export_rivers(self.path, rivers_with_forcing_point, postfix="_return_periods")
+        export_rivers(self.path, rivers_with_return_period, postfix="_return_periods")
 
     @property
     def root(self) -> Path:
@@ -1107,11 +1109,20 @@ class MultipleSFINCSSimulations:
         """
         flood_depths: list[xr.DataArray] = []
         for simulation in self.simulations:
-            flood_depths.append(simulation.read_max_flood_depth(minimum_flood_depth))
+            simulation_max_flood_depth: xr.DataArray = simulation.read_max_flood_depth(
+                minimum_flood_depth
+            )
+            # merge_arrays expects the origin to be bottom-left, so we flip the y-axis
+            simulation_max_flood_depth = simulation_max_flood_depth.isel(
+                y=slice(None, None, -1)
+            )
+            flood_depths.append(simulation_max_flood_depth)
 
-        rp_map: xr.DataArray = xr.concat(flood_depths, dim="node")
-        rp_map: xr.DataArray = rp_map.max(dim="node")
-        rp_map.attrs["_FillValue"] = flood_depths[0].attrs["_FillValue"]
+        rp_map: xr.DataArray = merge_arrays(flood_depths, method="max")
+        rp_map = rp_map.isel(
+            y=slice(None, None, -1)
+        )  # flip back to original orientation
+
         assert rp_map.rio.crs is not None
 
         return rp_map

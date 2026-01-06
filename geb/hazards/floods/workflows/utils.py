@@ -128,9 +128,11 @@ def read_flood_depth(
         else:
             raise ValueError(f"Unknown method: {method}")
         # read subgrid elevation
-        surface_elevation: xr.DataArray = xr.open_dataarray(
-            model_root / "subgrid" / "dep_subgrid.tif"
-        ).sel(band=1)
+        surface_elevation: xr.DataArray = (
+            xr.open_dataarray(model_root / "subgrid" / "dep_subgrid.tif")
+            .sel(band=1)
+            .drop_vars(["band"])
+        )
 
         flood_depth_m: xr.DataArray = utils.downscale_floodmap(
             zsmax=water_surface_elevation,

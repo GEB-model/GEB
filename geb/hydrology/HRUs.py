@@ -246,8 +246,8 @@ class GridVariables(Bucket):
     discharge_m3_s: ArrayFloat32
     discharge_in_rivers_m3_s_substep: ArrayFloat32
     waterbody_outflow_points: ArrayInt32
-    interception_capacity_grassland: TwoDArrayFloat32
-    forest_crop_factor_per_10_days: TwoDArrayFloat32
+    interception_capacity_grassland: ThreeDArrayFloat32
+    forest_crop_factor_per_10_days: ThreeDArrayFloat32
     discharge_m3_s_per_substep: TwoDArrayFloat32
     discharge_m3_s_substep: ArrayFloat32
     river_width_alpha: ArrayFloat32
@@ -1341,7 +1341,7 @@ class Data:
         """
         return self.grid.decompress(self.HRU.var.grid_to_HRU, fillvalue=-1).ravel()
 
-    def split(self, HRU_indices: npt.NDArray[np.int32]) -> int:
+    def split(self, HRU_indices: ArrayInt32) -> int:
         """Function to split an HRU into two HRUs.
 
         Args:
