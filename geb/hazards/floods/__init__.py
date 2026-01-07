@@ -492,8 +492,9 @@ class Floods(Module):
         )  # save the flood depth to a zarr file
 
         # This check is done to compute damages (using ERA5) only after multiverse is finished
-        if self.model.multiverse_name is None and self.model.config["forecasts"]["use"]:
-            print("Multiverse no longer active, now compute flood damages...")
+        if self.model.multiverse_name is None:
+            if self.model.config["general"]["forecasts"]["use"]:
+                print("Multiverse no longer active, now compute flood damages...")
             self.model.agents.households.flood(flood_depth=flood_depth)
 
     def get_return_period_maps(self) -> None:
