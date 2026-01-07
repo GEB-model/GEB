@@ -21,13 +21,13 @@ from geb.cli import (
     alter_fn,
     build_fn,
     init_fn,
-    parse_config,
     run_model_with_method,
     share_fn,
     update_fn,
 )
 from geb.hydrology.landcovers import FOREST, GRASSLAND_LIKE
 from geb.model import GEBModel
+from geb.runner import parse_config
 from geb.workflows.io import WorkingDirectory, read_zarr, write_params
 
 from .testconfig import IN_GITHUB_ACTIONS, tmp_folder

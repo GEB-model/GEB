@@ -7,7 +7,7 @@ import pandas as pd
 import xarray as xr
 from numba import njit
 
-from geb.types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.geb_types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.raster import pixels_to_coords
 
 

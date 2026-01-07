@@ -3,7 +3,7 @@
 import numpy as np
 from numba import njit
 
-from geb.types import ArrayFloat32, Shape
+from geb.geb_types import ArrayFloat32, Shape
 
 from .landcovers import OPEN_WATER, PADDY_IRRIGATED, SEALED
 

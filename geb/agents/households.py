@@ -19,7 +19,7 @@ from rasterstats import point_query, zonal_stats
 from scipy import interpolate
 from shapely.geometry import shape
 
-from geb.types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
+from geb.geb_types import ArrayFloat32, TwoDArrayBool, TwoDArrayInt
 from geb.workflows.io import read_params
 
 from ..hydrology.landcovers import (

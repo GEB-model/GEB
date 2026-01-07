@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xarray as xr
 
+from geb.geb_types import ArrayFloat32
 from geb.hydrology.HRUs import load_water_demand_xr
 from geb.store import Bucket
-from geb.types import ArrayFloat32
 
 from ..hydrology.landcovers import SEALED
 from .general import AgentBaseClass, downscale_volume

@@ -69,6 +69,7 @@ nav:
     - Configuration: getting_started/configuration.md
     - Building a model: getting_started/building_a_model.md
     - Running the model: getting_started/running.md
+    - MCP server: getting_started/mcp_server.md
     - Reporting: getting_started/reporting.md
   - Model:
     - Model: model/model.md

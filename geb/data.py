@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from geb.types import ArrayDatetime64, ThreeDArrayFloat32
+from geb.geb_types import ArrayDatetime64, ThreeDArrayFloat32
 from geb.workflows.io import read_params
 
 if TYPE_CHECKING:

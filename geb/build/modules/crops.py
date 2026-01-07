@@ -19,7 +19,7 @@ from geb.agents.crop_farmers import (
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
-from geb.types import ArrayBool, TwoDArrayInt32
+from geb.geb_types import ArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
     get_linear_indices,

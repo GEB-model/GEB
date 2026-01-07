@@ -9,8 +9,8 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from geb.geb_types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 from geb.store import DynamicArray
-from geb.types import ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 
 from ..hydrology.waterbodies import RESERVOIR
 from .general import AgentBaseClass

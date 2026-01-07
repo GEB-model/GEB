@@ -27,9 +27,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
+from geb.geb_types import ArrayFloat32
 from geb.module import Module
 from geb.store import Bucket
-from geb.types import ArrayFloat32
 
 if TYPE_CHECKING:
     from geb.model import GEBModel, Hydrology

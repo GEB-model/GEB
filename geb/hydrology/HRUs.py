@@ -15,8 +15,7 @@ from affine import Affine
 from numba import njit
 from scipy.spatial import KDTree
 
-from geb.store import Bucket
-from geb.types import (
+from geb.geb_types import (
     AnyDArrayWithScalar,
     Array,
     ArrayBool,
@@ -36,6 +35,7 @@ from geb.types import (
     TwoDArrayInt32,
     TwoDArrayWithScalar,
 )
+from geb.store import Bucket
 from geb.workflows.io import read_grid, read_zarr
 from geb.workflows.raster import compress, decompress_with_mask
 

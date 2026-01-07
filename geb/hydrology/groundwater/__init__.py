@@ -32,8 +32,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
+from geb.geb_types import ArrayFloat32, TwoDArrayFloat64
 from geb.module import Module
-from geb.types import ArrayFloat32, TwoDArrayFloat64
 from geb.workflows import balance_check
 
 from .model import ModFlowSimulation

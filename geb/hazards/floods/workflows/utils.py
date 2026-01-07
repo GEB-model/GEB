@@ -23,7 +23,7 @@ from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, LineString, Point
 from tqdm import tqdm
 
-from geb.types import ArrayFloat32, ArrayInt64
+from geb.geb_types import ArrayFloat32, ArrayInt64
 
 
 def export_rivers(

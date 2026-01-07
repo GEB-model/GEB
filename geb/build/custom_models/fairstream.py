@@ -30,7 +30,7 @@ from geb.agents.crop_farmers import (
     WELL_ADAPTATION,
 )
 from geb.build.methods import build_method
-from geb.types import ArrayBool, ArrayFloat64, ThreeDArrayInt32
+from geb.geb_types import ArrayBool, ArrayFloat64, ThreeDArrayInt32
 from geb.workflows.raster import repeat_grid
 
 from .. import GEBModel

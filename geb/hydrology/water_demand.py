@@ -28,8 +28,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
+from geb.geb_types import ArrayFloat32
 from geb.module import Module
-from geb.types import ArrayFloat32
 from geb.workflows import TimingModule, balance_check
 from geb.workflows.io import read_grid
 from geb.workflows.raster import write_to_array

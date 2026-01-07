@@ -12,9 +12,9 @@ import pandas as pd
 import xarray as xr
 import yaml
 
+from geb.geb_types import ThreeDArrayFloat32, TwoDArrayFloat32
 from geb.hazards.floods import Floods
 from geb.module import Module
-from geb.types import ThreeDArrayFloat32, TwoDArrayFloat32
 
 if TYPE_CHECKING:
     from geb.model import GEBModel

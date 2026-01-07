@@ -29,9 +29,9 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
+from geb.geb_types import Array, ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 from geb.module import Module
 from geb.store import Bucket
-from geb.types import Array, ArrayBool, ArrayFloat32, ArrayFloat64, ArrayInt32
 from geb.workflows import balance_check
 from geb.workflows.io import read_grid
 

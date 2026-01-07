@@ -18,7 +18,7 @@ import pandas as pd
 import yaml
 from numpy.typing import NDArray
 
-from geb.types import ArrayStr
+from geb.geb_types import ArrayStr
 from geb.workflows.io import read_geom
 
 if TYPE_CHECKING:

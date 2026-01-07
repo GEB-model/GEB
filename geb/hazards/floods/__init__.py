@@ -14,15 +14,15 @@ import pandas as pd
 import xarray as xr
 from shapely.geometry.point import Point
 
-from geb.hazards.floods.workflows.utils import get_start_point
-from geb.module import Module
-from geb.store import Bucket
-from geb.types import (
+from geb.geb_types import (
     ArrayFloat32,
     TwoDArrayFloat as TwoDArrayFloat,
     TwoDArrayFloat32,
     TwoDArrayInt32,
 )
+from geb.hazards.floods.workflows.utils import get_start_point
+from geb.module import Module
+from geb.store import Bucket
 from geb.workflows.io import read_geom
 
 from ...hydrology.landcovers import OPEN_WATER as OPEN_WATER, SEALED as SEALED

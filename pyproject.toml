@@ -31,6 +31,7 @@ dependencies = [
     "geopandas>=1.0.1",
     "hydromt==0.10.1",
     "hydromt-sfincs>=1.2.0",
+    "mcp",
     "networkx",
     "numba>=0.63.0",
     "numpy>=2.1",

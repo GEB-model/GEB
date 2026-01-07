@@ -33,14 +33,14 @@ from scipy.ndimage import value_indices
 from shapely import line_locate_point
 from shapely.geometry import GeometryCollection, MultiPoint, Point
 
-from geb.hydrology.routing import get_river_width
-from geb.types import (
+from geb.geb_types import (
     ArrayInt64,
     TwoDArrayBool,
     TwoDArrayFloat32,
     TwoDArrayFloat64,
     TwoDArrayInt32,
 )
+from geb.hydrology.routing import get_river_width
 from geb.workflows.io import (
     create_hash_from_parameters,
     read_geom,

@@ -9,7 +9,7 @@ import numpy as np
 import statsmodels.api as sm
 from numpy.linalg import LinAlgError
 
-from geb.types import TwoDArrayFloat32
+from geb.geb_types import TwoDArrayFloat32
 from geb.workflows.io import read_params
 
 from ..data import DateIndex, load_regional_crop_data_from_dict

@@ -40,7 +40,7 @@ from zarr.abc.codec import BytesBytesCodec
 from zarr.codecs import BloscCodec
 from zarr.codecs.zstd import ZstdCodec
 
-from geb.types import (
+from geb.geb_types import (
     ArrayDatetime64,
     ArrayFloat64,
     ThreeDArray,

@@ -18,6 +18,7 @@ geb/examples/*/*
 **.code-workspace
 libmf6.so
 ssh_script
+.gemini/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

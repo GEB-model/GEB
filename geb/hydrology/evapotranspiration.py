@@ -6,7 +6,7 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit
 
-from geb.types import ArrayFloat32
+from geb.geb_types import ArrayFloat32
 
 from .landcovers import (
     FOREST,

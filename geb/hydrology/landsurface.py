@@ -9,15 +9,15 @@ import zarr
 import zarr.storage
 from numba import njit, prange  # noqa: F401
 
-from geb.module import Module
-from geb.store import Bucket
-from geb.types import (
+from geb.geb_types import (
     ArrayFloat32,
     ArrayInt32,
     ThreeDArrayFloat32,
     TwoDArrayBool,
     TwoDArrayFloat32,
 )
+from geb.module import Module
+from geb.store import Bucket
 from geb.workflows import balance_check
 from geb.workflows.io import read_grid
 

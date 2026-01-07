@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from geb.geb_types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
 from geb.module import Module
-from geb.types import ArrayFloat32, ArrayFloat64, TwoDArrayFloat64
 from geb.workflows import balance_check
 
 if TYPE_CHECKING:

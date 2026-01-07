@@ -12,7 +12,7 @@ from dateutil.relativedelta import relativedelta
 from tqdm import tqdm
 
 from geb.build.methods import build_method
-from geb.types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
+from geb.geb_types import ArrayInt32, TwoDArrayBool, TwoDArrayInt32
 from geb.workflows.io import get_window
 from geb.workflows.raster import (
     clip_with_grid,

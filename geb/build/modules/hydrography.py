@@ -17,8 +17,7 @@ from shapely.geometry import LineString, Point, shape
 
 from geb.build.data_catalog import NewDataCatalog
 from geb.build.methods import build_method
-from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
-from geb.types import (
+from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
     ArrayInt32,
@@ -26,6 +25,7 @@ from geb.types import (
     TwoDArrayInt32,
     TwoDArrayInt64,
 )
+from geb.hydrology.waterbodies import LAKE, LAKE_CONTROL, RESERVOIR
 from geb.workflows.raster import rasterize_like, snap_to_grid
 
 from .base import BuildModelBase

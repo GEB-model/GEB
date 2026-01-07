@@ -13,9 +13,7 @@ import pyflwdir.core
 from numba import njit
 from pyflwdir import core, core_d8, core_ldd
 
-from geb.module import Module
-from geb.store import Bucket
-from geb.types import (
+from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
     ArrayFloat64,
@@ -27,6 +25,8 @@ from geb.types import (
     TwoDArrayInt32,
     TwoDArrayUint8,
 )
+from geb.module import Module
+from geb.store import Bucket
 from geb.workflows import balance_check
 from geb.workflows.io import read_geom
 

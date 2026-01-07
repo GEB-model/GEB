@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from hydromt.data_catalog import DataCatalog
 
-from geb.types import TwoDArrayInt32
+from geb.geb_types import TwoDArrayInt32
 
 
 def get_day_index(date: date) -> int:

@@ -26,7 +26,7 @@ from scipy.interpolate import griddata
 from shapely.geometry import Polygon
 from xarray.core.coordinates import DataArrayCoordinates
 
-from geb.types import (
+from geb.geb_types import (
     ArrayWithScalar,
     ThreeDArrayWithScalar,
     TwoDArrayBool,

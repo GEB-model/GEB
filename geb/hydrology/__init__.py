@@ -27,9 +27,9 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from geb.geb_types import TwoDArrayFloat32 as TwoDArrayFloat32
 from geb.hydrology.HRUs import Data
 from geb.module import Module
-from geb.types import TwoDArrayFloat32 as TwoDArrayFloat32
 from geb.workflows import TimingModule, balance_check
 
 from .erosion.hillslope import HillSlopeErosion

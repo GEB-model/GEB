@@ -14,7 +14,7 @@ import pandas as pd
 from numba import njit
 from scipy.stats import genextreme
 
-from geb.types import (
+from geb.geb_types import (
     ArrayFloat64,
     ArrayInt32,
     ArrayInt64,

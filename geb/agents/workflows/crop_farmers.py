@@ -4,17 +4,17 @@ import numpy as np
 import numpy.typing as npt
 from numba import njit, prange
 
-from geb.hydrology.evapotranspiration import get_root_ratios
-from geb.hydrology.soil import (
-    get_infiltration_capacity,
-)
-from geb.types import (
+from geb.geb_types import (
     ArrayBool,
     ArrayFloat32,
     ArrayInt32,
     ThreeDArrayInt32,
     TwoDArrayFloat32,
     TwoDArrayInt32,
+)
+from geb.hydrology.evapotranspiration import get_root_ratios
+from geb.hydrology.soil import (
+    get_infiltration_capacity,
 )
 
 

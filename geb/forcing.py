@@ -11,7 +11,7 @@ import numpy.typing as npt
 import pandas as pd
 import xarray as xr
 
-from geb.types import ArrayFloat32, ArrayFloat64, ThreeDArrayFloat32
+from geb.geb_types import ArrayFloat32, ArrayFloat64, ThreeDArrayFloat32
 from geb.workflows.io import read_grid
 
 from .module import Module

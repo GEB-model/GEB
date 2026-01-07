@@ -37,7 +37,7 @@ from pyproj import CRS, Transformer
 from xmipy import XmiWrapper
 from xmipy.errors import InputError
 
-from geb.types import (
+from geb.geb_types import (
     ArrayFloat32,
     ArrayFloat64,
     ArrayWithScalar,
