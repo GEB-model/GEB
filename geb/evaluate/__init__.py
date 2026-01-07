@@ -51,7 +51,7 @@ class Evaluate:
             correct_Q_obs: If True, corrects the observed discharge values.
 
         Raises:
-            ValueError: If a specified method is not implemented in the Evaluate class.
+            AttributeError: If a specified method is not implemented in the Evaluate class.
         """
         if methods is None:
             methods: list = [
