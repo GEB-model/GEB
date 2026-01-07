@@ -65,11 +65,11 @@ The routing module uses hourly substeps. Each day, the `step` [method](../model/
 
 ## Interaction with Water Bodies
 
-The routing module integrates tightly with lakes and reservoirs (collectively "water bodies"). Water bodies are represented as specific areas on the grid, covering one or more cells.
+The routing module integrates tightly with lakes and reservoirs (collectively "water bodies"). Water bodies are represented as specific areas on the grid, covering one or more cells. This interaction occurs in every hourly substep.
 
-1.  **Interception of Flow**: Any river flow or surface runoff entering a cell designated as a water body is intercepted. Instead of continuing downstream via the river routing equations, this water is added directly to the **Water Body Storage**. This effectively breaks the continuous river routing at the inlet of a lake or reservoir.
+1.  **Interception of Flow**: Any river flow or surface runoff entering a cell designated as a water body is intercepted. Instead of continuing downstream via the river routing equations, this water is added directly to the water body storage. This effectively breaks the continuous river routing at the inlet of a lake or reservoir.
 2.  **Storage Update**: The total inflow (accumulated from all cells belonging to the water body) is passed to the water body module, which manages the storage volume. Note that evaporation from the water surface is handled by the water body module, not the routing module.
-3.  **Release**: Water leaves the water body based on specific rules (e.g., reservoir operating rules or a lake rating curve). This **Water Body Outflow** is explicitly re-injected into the river network at a designated **Outflow Cell**. This outflow becomes the upstream boundary condition for the river segment immediately downstream of the water body.
+3.  **Release**: Water leaves the water body based on specific rules (e.g., reservoir operating rules or a lake rating curve). This water body outflow is re-injected into the river network at a designated outflow cell for the water body. This outflow becomes the upstream boundary condition for the river segment immediately downstream of the water body.
 
 ## Routing Algorithms
 
