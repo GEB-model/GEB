@@ -8,11 +8,25 @@ The river network topology is derived from a Local Drain Direction (LDD) map usi
 
 The LDD is a 2D array where each cell contains a value representing the direction of flow to its downstream neighbor. The coding scheme corresponds to the layout of a numeric keypad:
 
-|   |   |   |
-|---|---|---|
-| 7 (NW) | 8 (N) | 9 (NE) |
-| 4 (W) | 5 (Pit) | 6 (E) |
-| 1 (SW) | 2 (S) | 3 (SE) |
+<table style="border: 1px solid black; border-collapse: collapse; text-align: center; margin: auto;">
+  <tbody>
+    <tr>
+      <td style="border: 1px solid black; padding: 10px;">7 (NW)</td>
+      <td style="border: 1px solid black; padding: 10px;">8 (N)</td>
+      <td style="border: 1px solid black; padding: 10px;">9 (NE)</td>
+    </tr>
+    <tr>
+      <td style="border: 1px solid black; padding: 10px;">4 (W)</td>
+      <td style="border: 1px solid black; padding: 10px;">5 (Pit)</td>
+      <td style="border: 1px solid black; padding: 10px;">6 (E)</td>
+    </tr>
+    <tr>
+      <td style="border: 1px solid black; padding: 10px;">1 (SW)</td>
+      <td style="border: 1px solid black; padding: 10px;">2 (S)</td>
+      <td style="border: 1px solid black; padding: 10px;">3 (SE)</td>
+    </tr>
+  </tbody>
+</table>
 
 *   **1-4, 6-9**: Direction of flow to one of the 8 neighbors.
 *   **5**: Represents a **Pit** or sink (locally lowest point), where flow ends or leaves the domain.
@@ -27,12 +41,14 @@ All routing algorithms in GEB inherit from a common `Router` base class. This cl
 *   Identifying waterbody locations and their outflow points.
 
 In each timestep, the routing module takes the following inputs:
+
 *   **Previous Discharge**: The water flowing in the river from the previous step.
 *   **Sideflow**: New water entering the river channel from the land surface (runoff + return flow from irrigation).
 *   **Evaporation**: Water loss from the river surface.
 *   **Waterbody Outflows**: Water released from reservoirs or lakes.
 
 The router then calculates:
+
 *   **New Discharge**: The flow rate in each river cell for the current step.
 *   **Waterbody Inflow**: The volume of water entering lakes/reservoirs.
 *   **River Storage**: The volume of water stored in the channel.
@@ -62,6 +78,7 @@ with a simplified **momentum equation** expressed as a power law relationship be
 $$ A = \alpha Q^{\beta} $$
 
 Where:
+
 *   $Q$ is discharge [$m^3/s$].
 *   $A$ is wetted cross-sectional area [$m^2$].
 *   $q_{lat}$ is lateral inflow per unit length [$m^2/s$].
@@ -79,18 +96,21 @@ Rearranging to solve for the unknown discharge $Q_{new}$:
 $$ \frac{\Delta t}{\Delta x} Q_{new} + \alpha Q_{new}^{\beta} = \frac{\Delta t}{\Delta x} Q_{in} + \alpha Q_{old}^{\beta} + \Delta t \cdot q_{lat} $$
 
 Where:
+
 *   $Q_{new}$: Discharge leaving the cell at the current timestep.
 *   $Q_{old}$: Discharge leaving the cell at the previous timestep.
 *   $Q_{in}$: Total discharge entering the cell from upstream at the current timestep.
 
-Since this equation is non-linear in $Q_{new}$, it is solved iteratively using the **Newton-Raphson method** for every cell in the network, proceeding from upstream to downstream. This implicit scheme ensures numerical stability even for large timesteps, although accuracy improves with smaller timesteps.
+Since this equation is non-linear in $Q_{new}$, it is solved iteratively using the Newton-Raphson method for every cell in the network, proceeding from upstream to downstream. This implicit scheme ensures numerical stability even for large timesteps, although accuracy improves with smaller timesteps.
 
 ### Accuflux (Simple Accumulation)
 
 The `Accuflux` router is a simple accumulation scheme. It assumes that all water entering a river cell (from upstream or sideflow) flows out of that cell within the same timestep. This algorithm is mostly used for debugging and testing purposes because it is very easy to close the water balance.
 
 **Mechanism:**
+
 For every cell (processed from upstream to downstream):
+
 $$ Q_{out} = \sum Q_{in} + Q_{sideflow} - E_{evaporation} $$
 
 ## Code
